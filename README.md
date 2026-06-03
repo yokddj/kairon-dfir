@@ -29,7 +29,7 @@ The project is intended for trusted labs and controlled private beta deployments
 ## Quick Start
 
 ```bash
-git clone git@github.com:yokddj/kairon-dfir.git
+git clone https://github.com/yokddj/kairon-dfir.git
 cd kairon-dfir
 cp .env.example .env
 docker compose up -d --build
