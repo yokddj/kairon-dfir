@@ -1,0 +1,11 @@
+>>>  [Device Install (Hardware initiated) - USBSTOR\Disk&Ven_SanDisk&Prod_Ultra&Rev_1.00\1234567890ABCDEF&0]
+>>>  Section start 2026/05/03 10:30:00.000
+dvi:      Device Instance ID - USBSTOR\Disk&Ven_SanDisk&Prod_Ultra&Rev_1.00\1234567890ABCDEF&0
+dvi:      Class GUID - {4d36e967-e325-11ce-bfc1-08002be10318}
+dvi:      Service - disk
+inf:      INF path - C:\Windows\INF\disk.inf
+inf:      Provider - Microsoft
+inf:      Driver Date - 06/21/2006
+inf:      Driver Version - 10.0.22621.1
+dvi:      Device Description - SanDisk Ultra USB Device
+<<<  Section end 2026/05/03 10:30:05.000

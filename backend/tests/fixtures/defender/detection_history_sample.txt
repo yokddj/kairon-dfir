@@ -1,0 +1,17 @@
+ThreatName: Trojan:Win32/Test
+ThreatID: 1337
+Severity: Severe
+Category: Trojan
+Action: Quarantine
+Status: Quarantined
+DetectionTime: 2026-05-10T08:00:00Z
+Resource: file:_C:\Users\alex\Downloads\invoice.pdf.exe
+ContainerFile: containerfile:_C:\Users\alex\Downloads\archive.zip
+SHA1: 1111111111111111111111111111111111111111
+SHA256: 2222222222222222222222222222222222222222222222222222222222222222
+MD5: 33333333333333333333333333333333
+User: alex
+SID: S-1-5-21-111-222-333-1001
+ProductName: Microsoft Defender Antivirus
+EngineVersion: 1.1.25000.1
+SignatureVersion: 1.425.1234.0

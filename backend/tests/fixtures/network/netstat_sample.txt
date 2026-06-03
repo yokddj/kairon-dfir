@@ -1,0 +1,2 @@
+  Proto  Local Address          Foreign Address        State           PID
+  TCP    192.168.1.10:49734     198.51.100.24:8080     ESTABLISHED     4242

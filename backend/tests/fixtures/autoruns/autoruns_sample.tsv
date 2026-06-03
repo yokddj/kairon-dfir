@@ -1,0 +1,2 @@
+Time	Entry Location	Entry	Enabled	Category	Profile	Publisher	Signer	Signed	Verified	Image Path	Launch String	VT detection
+2026-05-10T07:05:00+00:00	HKCU\Software\Microsoft\Windows\CurrentVersion\Run	Updater	True	Logon	alex			False	False	C:\Users\alex\AppData\Roaming\updater.exe	"C:\Users\alex\AppData\Roaming\updater.exe --silent"	7/72

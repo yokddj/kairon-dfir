@@ -1,0 +1,15 @@
+:root {
+  --kairon-bg: #07111f;
+  --kairon-surface: #0b1728;
+  --kairon-surface-2: #111f33;
+  --kairon-primary: #1e8cff;
+  --kairon-primary-soft: #5ab7ff;
+  --kairon-accent: #28e0c5;
+  --kairon-text: #e6edf7;
+  --kairon-text-muted: #94a3b8;
+  --kairon-border: #203047;
+  --kairon-success: #35d07f;
+  --kairon-warning: #f7b955;
+  --kairon-danger: #ff5d6c;
+  --kairon-critical: #c084fc;
+}

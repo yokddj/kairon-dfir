@@ -1,0 +1,63 @@
+.git
+.gitignore
+.dockerignore
+
+# Local secrets/config
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime data and evidence
+data/
+uploads/
+backups/
+logs/
+reports/generated/
+opensearch_data/
+postgres_data/
+.tmp-backend-data/
+
+# Dependency/build caches
+frontend/node_modules/
+frontend/dist/
+node_modules/
+dist/
+build/
+coverage/
+backend/.pytest_cache/
+backend/.tmp_data/
+backend/*.egg-info/
+**/__pycache__/
+**/*.pyc
+
+# Local archives and forensic evidence
+*.7z
+*.zip
+*.E01
+*.e01
+*.Ex01
+*.raw
+*.dd
+*.aff4
+*.ad1
+*.vhd
+*.vhdx
+*.ost
+*.pst
+*.eml
+*.msg
+!backend/tests/fixtures/**/*.zip
+!backend/tests/fixtures/**/*.evtx
+!backend/tests/fixtures/**/*.log
+
+# Local temporary files
+.DS_Store
+__MACOSX/
+._*
+tmp_*/
+tmp_*.sh
+demo/output/

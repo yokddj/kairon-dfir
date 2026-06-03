@@ -1,0 +1,14 @@
+[
+  {
+    "Provider": "GoogleDrive",
+    "AccountEmail": "alex@example.com",
+    "SyncRoot": "G:\\My Drive",
+    "LocalPath": "G:\\My Drive\\backup.zip",
+    "Status": "Synced",
+    "SyncStatus": "UpToDate",
+    "Modified": "2026-05-11T11:01:00Z",
+    "LastSync": "2026-05-11T11:02:00Z",
+    "LastUpload": "2026-05-11T11:03:00Z",
+    "URL": "https://drive.google.com/file/d/abc"
+  }
+]

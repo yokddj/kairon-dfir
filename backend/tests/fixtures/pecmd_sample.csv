@@ -1,0 +1,5 @@
+ExecutableName,RunCount,LastRun,PreviousRun0,PreviousRun1,SourceFilename,FilesLoaded,Directories,FileSize,Hash
+POWERSHELL.EXE,5,2026-05-03T10:00:00Z,2026-05-02T09:30:00Z,2026-05-01T08:15:00Z,C:\Windows\Prefetch\POWERSHELL.EXE-12345678.pf,C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe|C:\Users\alex\Downloads\stage.ps1,C:\Windows\System32|C:\Users\alex\Downloads,65536,ABCDEF01
+CMD.EXE,3,2026-05-03T09:45:00Z,2026-05-02T18:10:00Z,,C:\Windows\Prefetch\CMD.EXE-11111111.pf,C:\Windows\System32\cmd.exe|C:\Users\Public\dropper.bat,C:\Windows\System32|C:\Users\Public,45056,ABCDEF02
+NOTEPAD.EXE,2,2026-05-03T08:00:00Z,,,C:\Windows\Prefetch\NOTEPAD.EXE-22222222.pf,C:\Windows\System32\notepad.exe|C:\Users\alex\Desktop\note.txt,C:\Windows\System32|C:\Users\alex\Desktop,32768,ABCDEF03
+UNKNOWN.EXE,,,"",,C:\Windows\Prefetch\UNKNOWN.EXE-33333333.pf,,C:\Temp,16384,

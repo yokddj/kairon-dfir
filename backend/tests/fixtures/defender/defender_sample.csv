@@ -1,0 +1,3 @@
+ThreatName,ThreatID,DetectionTime,Path,Action,Severity,Category,Status,User,SID,SHA1,SHA256,MD5,ProcessName,SourceFile
+Trojan:Win32/Test,1337,2026-05-10T08:00:00Z,C:\Users\alex\Downloads\invoice.pdf.exe,Quarantine,Severe,Trojan,Quarantined,alex,S-1-5-21-111-222-333-1001,1111111111111111111111111111111111111111,2222222222222222222222222222222222222222222222222222222222222222,33333333333333333333333333333333,C:\Users\alex\Downloads\invoice.pdf.exe,defender_sample.csv
+PUA:Win32/RemoteTool,7331,2026-05-10T08:15:00Z,C:\Users\alex\AppData\Local\Temp\runme.ps1,Allowed,Moderate,PUA,Active,alex,S-1-5-21-111-222-333-1001,aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,,,powershell.exe,defender_sample.csv

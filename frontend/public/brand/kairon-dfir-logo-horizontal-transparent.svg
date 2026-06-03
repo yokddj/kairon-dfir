@@ -1,0 +1,41 @@
+<svg width="960" height="256" viewBox="0 0 960 256" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Kairon DFIR Horizontal Logo</title>
+  <desc id="desc">Kairon DFIR wordmark with forensic evidence brand mark.</desc>
+  <defs>
+    <linearGradient id="lensGradient" x1="42" y1="42" x2="214" y2="214" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#1e8cff"/>
+      <stop offset="0.55" stop-color="#28e0c5"/>
+      <stop offset="1" stop-color="#5ab7ff"/>
+    </linearGradient>
+    <linearGradient id="blueGradient" x1="48" y1="64" x2="194" y2="197" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#5ab7ff"/>
+      <stop offset="0.46" stop-color="#1e8cff"/>
+      <stop offset="1" stop-color="#0c5ce8"/>
+    </linearGradient>
+    <filter id="softGlow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.109 0 0 0 0 0.549 0 0 0 0 1 0 0 0 0.35 0" result="glow"/>
+      <feMerge>
+        <feMergeNode in="glow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <g transform="translate(42 24) scale(0.8125)">
+    <path d="M51 174C33 139 35 96 57 63C79 30 118 14 157 22" fill="none" stroke="#203047" stroke-width="10" stroke-linecap="round"/>
+    <path d="M109 33A76 76 0 1 1 77 173" fill="none" stroke="url(#blueGradient)" stroke-width="17" stroke-linecap="round" filter="url(#softGlow)"/>
+    <path d="M158 158L204 204" stroke="url(#lensGradient)" stroke-width="19" stroke-linecap="round" filter="url(#softGlow)"/>
+    <path d="M89 72V143" stroke="#e6edf7" stroke-width="12" stroke-linecap="round"/>
+    <path d="M91 108L137 72" stroke="#28e0c5" stroke-width="11" stroke-linecap="round"/>
+    <path d="M92 109L139 144" stroke="#28e0c5" stroke-width="11" stroke-linecap="round"/>
+    <path d="M90 108H117" stroke="#e6edf7" stroke-width="10" stroke-linecap="round"/>
+    <circle cx="89" cy="72" r="11" fill="#e6edf7"/>
+    <circle cx="89" cy="143" r="11" fill="#28e0c5"/>
+    <circle cx="137" cy="72" r="11" fill="#28e0c5"/>
+    <circle cx="139" cy="144" r="11" fill="#28e0c5"/>
+    <circle cx="117" cy="108" r="7" fill="#e6edf7"/>
+  </g>
+  <text x="250" y="116" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="72" font-weight="760" letter-spacing="-3" fill="#e6edf7">Kairon</text>
+  <text x="520" y="116" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="72" font-weight="760" letter-spacing="-3" fill="#1e8cff">DFIR</text>
+  <text x="253" y="164" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="28" font-weight="450" fill="#94a3b8">Automated Digital Forensics &amp; Incident Response</text>
+</svg>

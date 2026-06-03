@@ -1,0 +1,4 @@
+Browser,Profile,URL,Title,Visit Time,Visit Count,Typed Count,SourceFile
+Chrome,Default,https://example.com/welcome,Example welcome,2026-05-03T09:00:00Z,5,1,C:\Users\alex\AppData\Local\Google\Chrome\User Data\Default\History
+Edge,Profile 1,https://pastebin.com/abcd1234,Paste dump,2026-05-03T09:05:00Z,1,0,C:\Users\alex\AppData\Local\Microsoft\Edge\User Data\Profile 1\History
+Chrome,Default,https://www.google.com/search?q=credential+dump+powershell,Google Search,2026-05-03T09:10:00Z,1,1,C:\Users\alex\AppData\Local\Google\Chrome\User Data\Default\History

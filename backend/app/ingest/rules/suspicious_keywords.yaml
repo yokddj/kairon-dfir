@@ -1,0 +1,89 @@
+process_names:
+  - powershell.exe
+  - pwsh.exe
+  - cmd.exe
+  - wscript.exe
+  - cscript.exe
+  - mshta.exe
+  - rundll32.exe
+  - regsvr32.exe
+  - certutil.exe
+  - bitsadmin.exe
+  - schtasks.exe
+  - sc.exe
+  - psexec.exe
+  - psexesvc.exe
+  - wmic.exe
+  - wmiprvse.exe
+  - rclone.exe
+  - anydesk.exe
+  - teamviewer.exe
+  - nc.exe
+  - ncat.exe
+
+command_line_patterns:
+  - "powershell.*-enc"
+  - "powershell.*EncodedCommand"
+  - "Invoke-WebRequest"
+  - "IEX"
+  - "FromBase64String"
+  - "DownloadString"
+  - "bypass"
+  - "hidden"
+  - "nop"
+  - "schtasks.*/create"
+  - "sc.exe.*create"
+  - "wmic.*process.*call.*create"
+  - "psexec"
+  - "rclone.*copy"
+  - "rclone.*sync"
+
+paths:
+  - "C:\\Users\\Public\\"
+  - "C:\\ProgramData\\"
+  - "C:\\Windows\\Temp\\"
+  - "C:\\Temp\\"
+  - "AppData\\Roaming"
+  - "AppData\\Local\\Temp"
+
+event_ids:
+  security:
+    - 4624
+    - 4625
+    - 4648
+    - 4672
+    - 4697
+    - 4698
+    - 4702
+    - 4720
+    - 4776
+    - 5140
+    - 5145
+  system:
+    - 7034
+    - 7035
+    - 7036
+    - 7040
+    - 7045
+  powershell:
+    - 400
+    - 403
+    - 4103
+    - 4104
+    - 600
+    - 800
+  task_scheduler:
+    - 106
+    - 140
+    - 141
+    - 200
+    - 201
+  rdp:
+    - 21
+    - 22
+    - 25
+    - 41
+    - 98
+    - 1149
+    - 131
+

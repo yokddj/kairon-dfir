@@ -1,0 +1,9 @@
+Profiles on interface Wi-Fi:
+
+    Group policy profiles (read only)
+    ---------------------------------
+
+    User profiles
+    -------------
+        All User Profile     : CorpWifi
+        All User Profile     : Free Public Wifi

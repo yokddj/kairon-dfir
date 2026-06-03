@@ -1,0 +1,68 @@
+program_execution:
+  artifacts:
+    - prefetch
+    - amcache
+    - shimcache
+    - bam
+    - dam
+    - userassist
+    - recentapps
+    - jumplist
+    - windows_timeline
+
+file_folder_opening:
+  artifacts:
+    - lnk
+    - jumplist
+    - shellbags
+    - opensave_mru
+    - recentdocs
+    - office_recent
+    - ie_edge_file
+
+browser_usage:
+  artifacts:
+    - chrome_history
+    - firefox_places
+    - edge_history
+    - cookies
+    - cache
+    - downloads
+    - session_restore
+
+account_usage:
+  artifacts:
+    - security_evtx
+    - logon_events
+    - authentication_events
+    - rdp_usage
+    - services_events
+
+usb_usage:
+  artifacts:
+    - usbstor
+    - setupapi
+    - mounteddevices
+    - portable_devices
+    - lnk_usb
+    - recentdocs_usb
+
+network_activity:
+  artifacts:
+    - netstat
+    - srum
+    - wlan_events
+    - network_list
+    - dns
+    - zeek
+    - pcap
+    - netflow
+
+persistence:
+  artifacts:
+    - services
+    - scheduled_tasks
+    - run_keys
+    - wmi
+    - powershell_profile
+

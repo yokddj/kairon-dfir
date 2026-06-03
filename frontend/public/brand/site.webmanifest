@@ -1,0 +1,20 @@
+{
+  "name": "Kairon DFIR",
+  "short_name": "Kairon",
+  "description": "Kairon DFIR supports analysts by centralizing forensic artifacts, reducing noise, and reconstructing what happened.",
+  "theme_color": "#07111f",
+  "background_color": "#07111f",
+  "display": "standalone",
+  "icons": [
+    {
+      "src": "/brand/kairon-dfir-mark-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/brand/kairon-dfir-mark-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

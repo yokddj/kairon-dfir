@@ -1,0 +1,7 @@
+SourceFile,TargetPath,Arguments,WorkingDirectory,MachineID,DriveType,DriveSerialNumber,VolumeLabel,NetworkPath,TargetAccessed,TargetModified,SourceModified
+C:\Users\alex\AppData\Roaming\Microsoft\Windows\Recent\report.lnk,C:\Users\alex\Documents\report.docx,,C:\Users\alex\Documents,MOVISTAR-PC,Fixed,,SYSTEM,,"2026-05-03T08:10:00Z","2026-05-03T08:00:00Z","2026-05-03T08:11:00Z"
+C:\Users\alex\Desktop\runme.lnk,C:\Users\alex\Downloads\runme.ps1,powershell -enc aQ==,C:\Users\alex\Downloads,MOVISTAR-PC,Fixed,,SYSTEM,,"2026-05-03T10:00:00Z","2026-05-03T09:59:00Z","2026-05-03T10:01:00Z"
+C:\Users\alex\Desktop\tool.lnk,C:\Temp\tool.exe,,C:\Temp,MOVISTAR-PC,Fixed,,SYSTEM,,"2026-05-03T09:00:00Z","2026-05-03T08:55:00Z","2026-05-03T09:01:00Z"
+C:\Users\alex\Desktop\share.lnk,\\SERVER\Share\tool.exe,,\\SERVER\Share,MOVISTAR-PC,Removable,ABCD1234,USBVOL,\\SERVER\Share\tool.exe,"2026-05-03T11:00:00Z","2026-05-03T10:59:00Z","2026-05-03T11:01:00Z"
+C:\Users\dfir\Desktop\Collection-movistar-pc-2026-05-03T11_30_24Z\uploads\auto\C%3A\Users\alex\AppData\Roaming\Microsoft\Windows\Recent\DFIRLab-training dataset-20260503-132748.lnk,Desktop\\\\,,,"movistar-pc",Fixed storage media (Hard drive),30764BF4,,,"2026-05-03T12:00:00Z",,"2026-05-03T12:05:00Z"
+C:\Users\alex\Desktop\blank.lnk,,,,,,,,"",,

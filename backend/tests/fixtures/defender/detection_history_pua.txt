@@ -1,0 +1,11 @@
+ThreatName: PUA:Win32/RemoteTool
+ThreatID: 7331
+Severity: Moderate
+Category: PUA
+Action: Detected
+Status: Active
+DetectionTime: 2026-05-10T08:15:00Z
+Resource: C:\Users\alex\AppData\Local\Temp\runme.ps1
+SHA1: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+User: alex
+SID: S-1-5-21-111-222-333-1001

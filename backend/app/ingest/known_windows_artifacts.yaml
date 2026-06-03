@@ -1,0 +1,15 @@
+known_artifacts:
+  - prefetch
+  - amcache
+  - shimcache
+  - bam
+  - dam
+  - userassist
+  - jumplist
+  - lnk
+  - evtx
+  - srum
+  - browser
+  - services
+  - scheduled_tasks
+

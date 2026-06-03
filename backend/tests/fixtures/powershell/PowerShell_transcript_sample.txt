@@ -1,0 +1,21 @@
+**********************
+PowerShell transcript start
+Start time: 20260510083000
+Username: DESKTOP-K6F8D3D\alex
+RunAs User: DESKTOP-K6F8D3D\alex
+Machine: DESKTOP-K6F8D3D (Microsoft Windows NT 10.0.22631.0)
+Host Application: powershell.exe -NoP -ExecutionPolicy Bypass
+Process ID: 4567
+PSVersion: 5.1.22621.2506
+PSEdition: Desktop
+OS: Microsoft Windows NT 10.0.22631.0
+Platform: Win32NT
+**********************
+Command start time: 20260510083100
+PS C:\Users\alex> whoami
+desktop-k6f8d3d\alex
+Command start time: 20260510083200
+PS C:\Users\alex> Invoke-WebRequest https://example.org/tool.ps1 -OutFile C:\Users\alex\Downloads\tool.ps1
+**********************
+PowerShell transcript end
+End time: 20260510083300

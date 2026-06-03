@@ -1,0 +1,85 @@
+# OS/editor noise
+__MACOSX/
+.DS_Store
+._*
+*.swp
+*.swo
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python / backend build artifacts
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+backend/.pytest_cache/
+backend/.tmp_data/
+backend/*.egg-info/
+
+# Frontend artifacts
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+build/
+coverage/
+
+# Evidence, uploads, generated data and local volumes
+data/*
+!data/.gitkeep
+!data/evidence/
+data/evidence/*
+!data/evidence/.gitkeep
+!data/tmp/
+data/tmp/*
+!data/tmp/.gitkeep
+uploads/
+backups/
+logs/
+reports/generated/
+opensearch_data/
+postgres_data/
+.tmp-backend-data/
+
+# Parser/debug/generated outputs
+parser-output/
+parser_outputs/
+parsed-output/
+parsed_outputs/
+exports/
+*.log
+
+# Forensic evidence and case archives should never be added accidentally.
+*.7z
+*.zip
+*.E01
+*.e01
+*.Ex01
+*.raw
+*.dd
+*.aff4
+*.ad1
+*.vhd
+*.vhdx
+*.ost
+*.pst
+*.eml
+*.msg
+!backend/tests/fixtures/**/*.evtx
+!backend/tests/fixtures/**/*.log
+
+# Local synthetic/temp packs
+/tmp_*/
+/tmp_*.sh
+/demo/output/
+/demo/evidence/*.zip

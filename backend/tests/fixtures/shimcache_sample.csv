@@ -1,0 +1,6 @@
+SourceFile,ControlSet,EntryNumber,CacheEntryPosition,Path,LastModifiedTime,LastUpdate,Executed
+C:\Windows\System32\Config\SYSTEM,ControlSet001,1,1,C:\Windows\System32\cmd.exe,2026-05-03T09:00:00Z,2026-05-03T09:05:00Z,
+C:\Windows\System32\Config\SYSTEM,ControlSet001,2,2,C:\Users\alex\Downloads\invoice.pdf.exe,2026-05-03T11:14:00Z,2026-05-03T11:20:00Z,true
+C:\Windows\System32\Config\SYSTEM,ControlSet001,3,3,C:\Users\alex\AppData\Local\Temp\runme.ps1,2026-05-03T11:19:00Z,2026-05-03T11:21:00Z,
+C:\Windows\System32\Config\SYSTEM,ControlSet001,4,4,C:\Users\alex\Downloads\AnyDesk.exe,,2026-05-03T12:10:00Z,
+C:\Windows\System32\Config\SYSTEM,ControlSet001,5,5,\\SERVER\share\remote.exe,2026-05-03T13:00:00Z,2026-05-03T13:02:00Z,

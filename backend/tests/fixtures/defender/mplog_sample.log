@@ -1,0 +1,5 @@
+2026-05-10T08:20:00Z Info: Defender service started
+2026-05-10T08:21:00Z Threat: Trojan:Win32/Test | Action: Quarantine | Resource: file:_C:\Users\alex\Downloads\invoice.pdf.exe
+Noise line that should be ignored by the parser
+2026-05-10T08:22:00Z Threat: PUA:Win32/RemoteTool | Remediation: Failed | Path: C:\Users\alex\AppData\Local\Temp\runme.ps1
+2026-05-10T08:23:00Z Quarantine completed for file:_C:\Users\alex\Downloads\invoice.pdf.exe

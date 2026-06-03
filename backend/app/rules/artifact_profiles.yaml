@@ -1,0 +1,6 @@
+program_execution:
+  artifacts:
+    - prefetch
+    - amcache
+    - shimcache
+

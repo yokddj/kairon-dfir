@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Date>2026-05-03T10:00:00Z</Date>
+    <Author>Microsoft Corporation</Author>
+    <URI>\Microsoft\Windows\UpdateOrchestrator\Schedule Scan</URI>
+    <Description>Benign Microsoft task.</Description>
+  </RegistrationInfo>
+  <Principals>
+    <Principal id="Author">
+      <UserId>S-1-5-18</UserId>
+      <RunLevel>HighestAvailable</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+  </Settings>
+  <Triggers>
+    <CalendarTrigger>
+      <StartBoundary>2026-05-03T10:00:00Z</StartBoundary>
+      <Enabled>true</Enabled>
+    </CalendarTrigger>
+  </Triggers>
+  <Actions Context="Author">
+    <Exec>
+      <Command>C:\Windows\System32\UsoClient.exe</Command>
+      <Arguments>StartScan</Arguments>
+      <WorkingDirectory>C:\Windows\System32</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>

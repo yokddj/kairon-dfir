@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Task version="1.2" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>alex</Author>
+    <URI>\OneDrive Update</URI>
+  </RegistrationInfo>
+  <Settings>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>\\server\share\tool.exe</Command>
+    </Exec>
+  </Actions>
+</Task>

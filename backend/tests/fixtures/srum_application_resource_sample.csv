@@ -1,0 +1,5 @@
+Timestamp,Table,AppName,ExePath,UserSid,Duration,CycleTime,EnergyUsage,BytesSent,BytesReceived,PackageFullName,SourceFile
+2026-05-03T10:30:00Z,ApplicationResourceUsage,Calculator.exe,C:\Program Files\WindowsApps\Calculator.exe,S-1-5-21-111-222-333-1001,120,3000,42,2048,1024,,SrumECmd_Output.csv
+2026-05-03T10:35:00Z,ApplicationResourceUsage,ApplicationFrameHost.exe,,S-1-5-21-111-222-333-1001,60,1000,10,512,512,Microsoft.WindowsCalculator_8wekyb3d8bbwe,SrumECmd_Output.csv
+2026-05-03T10:40:00Z,EnergyUsage,RuntimeBroker.exe,C:\Windows\System32\RuntimeBroker.exe,S-1-5-21-111-222-333-1001,30,500,5,,,,SrumECmd_Output.csv
+2026-05-03T10:45:00Z,SomethingElse,GenericApp,,S-1-5-21-111-222-333-1001,,,,,,,SrumECmd_Output.csv

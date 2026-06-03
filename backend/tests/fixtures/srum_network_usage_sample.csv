@@ -1,0 +1,8 @@
+Timestamp,AppName,ExePath,UserSid,BytesSent,BytesReceived,ForegroundBytesSent,ForegroundBytesReceived,BackgroundBytesSent,BackgroundBytesReceived,InterfaceProfile,NetworkProfile,SourceFile
+2026-05-03T10:05:00Z,chrome.exe,C:\Program Files\Google\Chrome\Application\chrome.exe,S-1-5-21-111-222-333-1001,1024,20480,,,,,Wi-Fi,CorpWiFi,SrumECmd_Output.csv
+2026-05-03T10:10:00Z,msedge.exe,C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe,S-1-5-21-111-222-333-1001,,,100,500,200,700,Ethernet,LAN,SrumECmd_Output.csv
+2026-05-03T10:15:00Z,AnyDesk.exe,C:\Program Files\AnyDesk\AnyDesk.exe,S-1-5-21-111-222-333-1001,5242880,2097152,,,,,Ethernet,LAN,SrumECmd_Output.csv
+2026-05-03T10:18:00Z,rclone.exe,C:\Users\alex\Downloads\rclone.exe,S-1-5-21-111-222-333-1001,268435456,1048576,,,,,Wi-Fi,CorpWiFi,SrumECmd_Output.csv
+2026-05-03T10:20:00Z,powershell.exe,C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe,S-1-5-21-111-222-333-1001,15728640,1048576,,,,,Wi-Fi,CorpWiFi,SrumECmd_Output.csv
+2026-05-03T10:25:00Z,updater.exe,C:\Users\alex\AppData\Local\Temp\updater.exe,S-1-5-21-111-222-333-1001,5120,1024,,,,,Wi-Fi,CorpWiFi,SrumECmd_Output.csv
+,,C:\Users\alex\Desktop\mystery.exe,S-1-5-21-111-222-333-1001,,,,,,,CorpWiFi,SrumECmd_Output.csv

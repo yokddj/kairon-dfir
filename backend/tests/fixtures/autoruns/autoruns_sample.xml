@@ -1,0 +1,15 @@
+<Autoruns>
+  <Item>
+    <Time>2026-05-10T07:15:00+00:00</Time>
+    <EntryLocation>HKLM\Software\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\notepad.exe</EntryLocation>
+    <Entry>Debugger</Entry>
+    <Enabled>True</Enabled>
+    <Category>Image Hijacks</Category>
+    <ImagePath>C:\Windows\System32\cmd.exe</ImagePath>
+    <LaunchString>cmd.exe /c calc.exe</LaunchString>
+    <Publisher></Publisher>
+    <Signer></Signer>
+    <Signed>False</Signed>
+    <Verified>False</Verified>
+  </Item>
+</Autoruns>

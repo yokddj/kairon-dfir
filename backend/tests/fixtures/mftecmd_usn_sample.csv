@@ -1,0 +1,8 @@
+Timestamp,FileName,Extension,FilePath,ParentPath,FileReference,ParentFileReference,Reason,SourceInfo,SecurityId,Usn,FileAttributes,SourceFile
+2026-05-03T15:00:00Z,payload.exe,.exe,C:\Users\alex\Downloads\payload.exe,C:\Users\alex\Downloads,100,50,FILE_CREATE,DATA_MANAGEMENT,1,12345,Archive,C:\evidence\$J
+2026-05-03T15:05:00Z,payload.exe,.exe,C:\Users\alex\Downloads\payload.exe,C:\Users\alex\Downloads,100,50,FILE_DELETE,DATA_MANAGEMENT,1,12346,Archive,C:\evidence\$J
+2026-05-03T15:06:00Z,oldname.tmp,.tmp,C:\Users\alex\AppData\Local\Temp\oldname.tmp,C:\Users\alex\AppData\Local\Temp,101,50,RENAME_OLD_NAME,DATA_MANAGEMENT,1,12347,Archive,C:\evidence\$J
+2026-05-03T15:06:01Z,newname.tmp,.tmp,C:\Users\alex\AppData\Local\Temp\newname.tmp,C:\Users\alex\AppData\Local\Temp,101,50,RENAME_NEW_NAME,DATA_MANAGEMENT,1,12348,Archive,C:\evidence\$J
+2026-05-03T15:07:00Z,script.ps1,.ps1,C:\Users\alex\AppData\Local\Temp\script.ps1,C:\Users\alex\AppData\Local\Temp,102,50,DATA_EXTEND,DATA_MANAGEMENT,1,12349,Archive,C:\evidence\$J
+2026-05-03T15:08:00Z,meta.txt,.txt,C:\Users\alex\Desktop\meta.txt,C:\Users\alex\Desktop,103,50,BASIC_INFO_CHANGE,DATA_MANAGEMENT,1,12350,Archive,C:\evidence\$J
+,,,.\\odd\path,,,104,50,FILE_CREATE,DATA_MANAGEMENT,1,12351,Archive,C:\evidence\$J

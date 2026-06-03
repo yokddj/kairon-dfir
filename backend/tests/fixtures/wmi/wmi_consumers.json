@@ -1,0 +1,12 @@
+[
+  {
+    "Namespace": "root\\subscription",
+    "ClassName": "CommandLineEventConsumer",
+    "Name": "JsonConsumer",
+    "CommandLineTemplate": "powershell.exe -nop -w hidden -enc SQBFAFgA",
+    "ExecutablePath": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "CreatorSID": "S-1-5-21-1000-1000-1000-1001",
+    "LastWriteTime": "2026-05-11T08:08:00+00:00",
+    "SourceFile": "C:\\temp\\wmi_consumers.json"
+  }
+]
