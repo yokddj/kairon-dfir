@@ -265,16 +265,21 @@ def test_parse_velociraptor_selection_preserves_requested_usable_ingest_mode(mon
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
     db = Session()
+    case_id = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+    evidence_id = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
     try:
-        case = Case(id="case-1", name="Case 1", status=CaseStatus.open)
+        case = Case(id=case_id, name="Case 1", status=CaseStatus.open)
         evidence = Evidence(
-            id="evidence-1",
-            case_id="case-1",
+            id=evidence_id,
+            case_id=case_id,
             original_filename="HOSTA.zip",
             stored_path="/tmp/HOSTA.zip",
+            sha256="0" * 64,
+            size_bytes=1,
             ingest_status=IngestStatus.pending,
             evidence_type=EvidenceType.velociraptor_zip,
             metadata_json={
+                "provided_host": "HOSTA",
                 "velociraptor_discovery": {
                     "candidates": [
                         {
@@ -297,9 +302,10 @@ def test_parse_velociraptor_selection_preserves_requested_usable_ingest_mode(mon
 
         result = parse_velociraptor_selection(
             VelociraptorParseRequest(
-                evidence_id="evidence-1",
+                evidence_id=evidence_id,
                 selected_candidate_ids=["evtx-1"],
                 ingest_mode="usable_search",
+                provided_host="HOSTA",
             ),
             db,
         )
@@ -310,6 +316,79 @@ def test_parse_velociraptor_selection_preserves_requested_usable_ingest_mode(mon
         assert evidence.metadata_json["skip_rules"] is True
         assert evidence.metadata_json["skip_detections"] is True
         assert evidence.ingest_source["ingest_mode"] == "usable_search"
+    finally:
+        db.close()
+
+
+def test_parse_velociraptor_selection_accepts_shimcache_category(monkeypatch: pytest.MonkeyPatch) -> None:
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False)
+    db = Session()
+    case_id = "cccccccc-3333-4333-8333-cccccccccccc"
+    evidence_id = "dddddddd-4444-4444-8444-dddddddddddd"
+    try:
+        case = Case(id=case_id, name="Case 1", status=CaseStatus.open)
+        evidence = Evidence(
+            id=evidence_id,
+            case_id=case_id,
+            original_filename="HOSTA.zip",
+            stored_path="/tmp/HOSTA.zip",
+            sha256="1" * 64,
+            size_bytes=1,
+            ingest_status=IngestStatus.pending,
+            evidence_type=EvidenceType.velociraptor_zip,
+            metadata_json={
+                "provided_host": "HOSTA",
+                "velociraptor_discovery": {
+                    "candidates": [
+                        {
+                            "id": "evtx-1",
+                            "supported": True,
+                            "category": "evtx",
+                            "artifact_type": "windows_event",
+                            "parser": "evtx_raw",
+                            "parser_status": "parsed_native",
+                            "original_path": "Windows/System32/winevt/Logs/Security.evtx",
+                        },
+                        {
+                            "id": "shimcache-1",
+                            "supported": True,
+                            "category": "shimcache",
+                            "artifact_type": "shimcache",
+                            "parser": "shimcache_raw",
+                            "parser_status": "parsed_native",
+                            "original_path": "Windows/System32/config/SYSTEM",
+                            "companion_files": ["Windows/System32/config/SYSTEM.LOG1"],
+                        },
+                    ]
+                },
+            },
+            ingest_source={},
+            error_log={},
+        )
+        db.add(case)
+        db.add(evidence)
+        db.commit()
+
+        monkeypatch.setattr("app.api.routes_velociraptor.enqueue_ingest", lambda evidence_id: None)
+
+        result = parse_velociraptor_selection(
+            VelociraptorParseRequest(
+                evidence_id=evidence_id,
+                categories=["shimcache"],
+                ingest_mode="usable_search",
+                provided_host="HOSTA",
+            ),
+            db,
+        )
+
+        db.refresh(evidence)
+        assert result["job"] == "queued"
+        assert result["selected_candidate_ids"] == ["shimcache-1"]
+        assert evidence.metadata_json["velociraptor_selected_candidate_ids"] == ["shimcache-1"]
+        assert evidence.metadata_json["velociraptor_selected_categories"] == ["shimcache"]
+        assert evidence.metadata_json["selected_candidates"] == 1
     finally:
         db.close()
 
@@ -7813,8 +7892,8 @@ def test_finalize_artifact_status_marks_zero_event_native_prefetch_as_failed_or_
     assert _finalize_artifact_status(parser_name="prefetch_raw", record_count=1, raw_parser_status="parsed_native") == "completed"
 
 
-def test_finalize_artifact_status_marks_empty_evtx_as_completed_not_failed() -> None:
-    assert _finalize_artifact_status(parser_name="evtx_raw", record_count=0, raw_parser_status="parsed_empty") == "completed"
+def test_finalize_artifact_status_marks_empty_evtx_as_skipped_empty_not_failed() -> None:
+    assert _finalize_artifact_status(parser_name="evtx_raw", record_count=0, raw_parser_status="parsed_empty") == "skipped_empty"
     assert _finalize_artifact_status(parser_name="evtx_raw", record_count=0, raw_parser_status=None) == "failed"
 
 
@@ -13676,6 +13755,7 @@ def test_problematic_artifact_status_classification() -> None:
     assert classify_problematic_artifact_status(records_read=1000, records_indexed=1000, error_type="timeout") == ("parsed_with_warning", True, False)
     assert classify_problematic_artifact_status(records_read=6000, records_indexed=5000, error_type="timeout") == ("partially_parsed", True, True)
     assert classify_problematic_artifact_status(records_read=0, records_indexed=0, error_type="timeout") == ("skipped_timeout", False, True)
+    assert classify_problematic_artifact_status(records_read=0, records_indexed=0, error_type="no_records") == ("skipped_empty", False, False)
     assert classify_problematic_artifact_status(records_read=500, records_indexed=0, error_type="stalled") == ("stalled", False, True)
 
 
@@ -13687,6 +13767,10 @@ def test_problematic_artifact_health_classification_distinguishes_loss() -> None
     assert classify_problematic_artifact_health(status="skipped_timeout", records_read=0, records_indexed=0, data_loss_expected=True) == (
         "Not parsed",
         "Data loss expected",
+    )
+    assert classify_problematic_artifact_health(status="skipped_empty", records_read=0, records_indexed=0, data_loss_expected=False) == (
+        "No records produced",
+        "No expected data loss",
     )
 
 
@@ -13764,6 +13848,61 @@ def test_build_problematic_artifacts_report_summarizes_retryable_evtxs() -> None
     assert by_name["bits_openvpn.evtx"]["retry_history"][0]["status"] == "parsed_with_warning"
     assert by_name["CA_PetiPotam_etw_rpc_efsr_5_6.evtx"]["status"] == "partially_parsed"
     assert by_name["CA_PetiPotam_etw_rpc_efsr_5_6.evtx"]["importance"] == "high"
+
+
+def test_build_problematic_artifacts_report_treats_zero_record_evtx_as_informational() -> None:
+    evidence = Evidence(
+        id="evidence-1",
+        case_id="case-1",
+        original_filename="EVTX.zip",
+        stored_path="/mnt/evidence/EVTX.zip",
+        evidence_type=EvidenceType.velociraptor_zip,
+        sha256="00",
+        size_bytes=1,
+        ingest_status=IngestStatus.completed,
+        metadata_json={},
+        error_log={},
+    )
+    manifest = {
+        "artifacts": [
+            {
+                "name": "HardwareEvents.evtx",
+                "source_path": "Windows/System32/winevt/Logs/HardwareEvents.evtx",
+                "artifact_type": "windows_event",
+                "parser": "evtx_raw",
+                "status": "skipped_empty",
+                "ingest_audit": {
+                    "records_read": 0,
+                    "records_indexed": 0,
+                    "events_indexed": 0,
+                    "parser_status": "parsed_empty",
+                    "warnings": ["evtx_file_empty"],
+                    "evtx_parser_backend": "evtxecmd_csv",
+                },
+            }
+        ],
+        "errors": [],
+    }
+
+    report = build_problematic_artifacts_report(
+        evidence,
+        manifest,
+        artifact_id_by_key={("Windows/System32/winevt/Logs/HardwareEvents.evtx", "evtx_raw"): "artifact-1"},
+    )
+
+    assert report["summary"]["problematic_count"] == 1
+    assert report["summary"]["skipped_empty"] == 1
+    assert report["summary"]["retryable"] == 0
+    assert report["summary"]["unresolved_count"] == 0
+    assert report["summary"]["data_loss_expected_count"] == 0
+    assert problematic_artifacts_require_error_status(report) is False
+    item = report["items"][0]
+    assert item["status"] == "skipped_empty"
+    assert item["effective_status"] == "skipped_empty"
+    assert item["current_data_loss_expected"] is False
+    assert item["retryable"] is False
+    assert item["health_summary"] == "No records produced"
+    assert item["loss_summary"] == "No expected data loss"
 
 
 def test_problematic_artifact_effective_status_marks_recovered_retry() -> None:
