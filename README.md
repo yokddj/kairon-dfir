@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/kairon-dfir-investigation-workspace.png" alt="Synthetic screenshot of the Kairon DFIR investigation workspace with case, indexing, search, artifacts, findings, and timeline panels." width="900" />
+  <img src="docs/assets/kairon-dfir-execution-story.png" alt="Synthetic screenshot of the Kairon DFIR investigation workspace with case, indexing, search, artifacts, findings, and timeline panels." width="900" />
 </p>
 
 <p align="center">
@@ -18,6 +18,7 @@
   <img alt="Docker" src="https://img.shields.io/badge/runtime-docker-2496ed" />
   <img alt="Python and TypeScript" src="https://img.shields.io/badge/stack-python%20%2B%20typescript-111827" />
 </p>
+
 
 Kairon DFIR supports the analyst; it does not replace them. It provides a clear lens over forensic evidence so critical moments can be interpreted faster and with more context.
 
