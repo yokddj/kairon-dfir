@@ -751,7 +751,7 @@ def _finalize_artifact_status(*, parser_name: str | None, record_count: int, raw
     raw_parser_status = str(raw_parser_status or "").lower()
     native_raw_parsers = {"evtx_raw", "lnk_raw", "prefetch_raw", "amcache_raw", "shimcache_raw", "windows_service_registry"}
     if parser_name == "evtx_raw" and record_count == 0 and raw_parser_status == "parsed_empty":
-        return "completed"
+        return "skipped_empty"
     if parser_name in native_raw_parsers and record_count == 0:
         if raw_parser_status in {"partial", "failed", "failed_unsupported"}:
             return raw_parser_status
@@ -5168,6 +5168,21 @@ def ingest_evidence(evidence_id: str) -> None:
             metadata["evtx_partial_count"] = int(len(metadata.get("evtx_partial_files") or []))
             metadata.setdefault("evtx_coverage_status", "full")
         parser_breakdown = build_parser_breakdown(manifest, None)
+        skipped_empty_artifacts = sum(
+            1
+            for item in (manifest.get("artifacts") or [])
+            if str(item.get("status") or "").lower() in {"skipped_empty", "completed_no_records", "unsupported_no_records"}
+        )
+        metadata["skipped_empty_artifacts"] = skipped_empty_artifacts
+        metadata["real_failed_artifacts"] = len(errors)
+        metadata["investigation_ready"] = indexed_count > 0
+        metadata["searchable_documents_count"] = indexed_count
+        if indexed_count > 0 and skipped_empty_artifacts > 0 and not errors:
+            metadata["display_status"] = "completed_with_warnings"
+            metadata["status_reason"] = "indexed_with_empty_or_no_record_artifacts"
+        elif indexed_count > 0:
+            metadata["display_status"] = "completed_with_errors" if errors else "completed"
+            metadata["status_reason"] = "indexed_with_parser_errors" if errors else "indexed"
         evtx_backend_audits = [
             dict(item.get("ingest_audit") or {})
             for item in (manifest.get("artifacts") or [])
@@ -5217,6 +5232,7 @@ def ingest_evidence(evidence_id: str) -> None:
             "metadata_events_indexed": indexed_count,
             "slow_artifacts": slow_artifacts,
             "failed_artifacts": list(errors),
+            "skipped_empty_artifacts": skipped_empty_artifacts,
             "by_parser": parser_breakdown,
             "indexed_document_counts_by_artifact_type": build_indexed_document_counts_by_artifact_type(list(manifest.get("artifacts") or [])),
         }
