@@ -37,23 +37,38 @@ function launcherLabel(item: CommandHistoryItem): string {
   return valueOrDash(item.launcher || item.process?.name || item.process?.executable);
 }
 
+function commandRowSourceEventId(item: CommandHistoryItem): string {
+  return String(item.source_event_id || item.supporting_events?.[0]?.event_id || item.supporting_events?.[0]?.stable_event_id || "").trim();
+}
+
 function processGraphUrl(caseId: string, item: CommandHistoryItem): string {
   const params = new URLSearchParams();
+  const sourceEventId = commandRowSourceEventId(item);
   params.set("mode", "execution_story");
+  params.set("origin", "command_history");
+  params.set("command_history_row_id", item.id);
   if (item.evidence_id) params.set("evidence_id", item.evidence_id);
   if (item.host) params.set("host", item.host);
   if (item.process?.pid !== undefined && item.process?.pid !== null) params.set("pid", String(item.process.pid));
   if (item.process?.guid) params.set("process_guid", item.process.guid);
   if (item.process?.name || item.process?.executable) params.set("process_name", item.process.name || item.process.executable || "");
-  if (item.source_event_id) {
-    params.set("source_event_id", item.source_event_id);
-    params.set("story_event_id", item.source_event_id);
+  if (sourceEventId) {
+    params.set("source_event_id", sourceEventId);
+    params.set("story_event_id", sourceEventId);
   }
   if (item.timestamp) params.set("timestamp", item.timestamp);
   return `/cases/${caseId}/process-graph?${params.toString()}`;
 }
 
 function buildParams(searchParams: URLSearchParams) {
+  const sortOrder = searchParams.get("sort_order");
+  const legacySort = searchParams.get("sort");
+  const resolvedSort =
+    legacySort === "timestamp_asc" || legacySort === "timestamp_desc"
+      ? legacySort
+      : sortOrder === "asc"
+        ? "timestamp_asc"
+        : "timestamp_desc";
   return {
     evidence_id: searchParams.get("evidence_id") || undefined,
     host: searchParams.get("host") || undefined,
@@ -68,7 +83,9 @@ function buildParams(searchParams: URLSearchParams) {
     has_supporting_sources: searchParams.get("has_supporting_sources") === "true" || undefined,
     page: searchParams.get("page") ? Number(searchParams.get("page")) : 1,
     page_size: searchParams.get("page_size") ? Number(searchParams.get("page_size")) : PAGE_SIZE,
-    sort: (searchParams.get("sort") as "timestamp_asc" | "timestamp_desc" | null) ?? "timestamp_asc",
+    sort: resolvedSort as "timestamp_asc" | "timestamp_desc",
+    sort_by: "timestamp" as const,
+    sort_order: (resolvedSort === "timestamp_asc" ? "asc" : "desc") as "asc" | "desc",
   };
 }
 
@@ -143,6 +160,22 @@ export default function CommandHistoryPage() {
 
   const items = data?.items ?? [];
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1;
+  const sortOrder = params.sort === "timestamp_asc" ? "asc" : "desc";
+  const paginationControls = (
+    <div className="flex flex-col gap-2 text-sm text-zinc-300 sm:flex-row sm:items-center sm:justify-between">
+      <div>
+        Page {data?.page ?? 1} of {totalPages} · {data?.total ?? 0} commands
+      </div>
+      <div className="flex gap-2">
+        <button className="rounded border border-zinc-700 px-3 py-2 disabled:opacity-40" disabled={(data?.page ?? 1) <= 1} onClick={() => update({ page: Math.max(1, (data?.page ?? 1) - 1) })}>
+          Previous
+        </button>
+        <button className="rounded border border-zinc-700 px-3 py-2 disabled:opacity-40" disabled={(data?.page ?? 1) >= totalPages} onClick={() => update({ page: (data?.page ?? 1) + 1 })}>
+          Next
+        </button>
+      </div>
+    </div>
+  );
 
   return (
     <div className="space-y-5">
@@ -239,11 +272,28 @@ export default function CommandHistoryPage() {
 
       {error ? <div className="rounded-lg border border-red-800 bg-red-950/40 p-3 text-sm text-red-200">{error}</div> : null}
 
+      {paginationControls}
+
       <div className="overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950/60">
         <table className="min-w-[1180px] w-full text-left text-sm">
           <thead className="border-b border-zinc-800 text-xs uppercase text-zinc-500">
             <tr>
-              <th className="px-3 py-2">Timestamp</th>
+              <th className="px-3 py-2">
+                <button
+                  type="button"
+                  className="text-left uppercase text-zinc-400 hover:text-zinc-100"
+                  onClick={() =>
+                    update({
+                      sort: sortOrder === "asc" ? "timestamp_desc" : "timestamp_asc",
+                      sort_by: "timestamp",
+                      sort_order: sortOrder === "asc" ? "desc" : "asc",
+                    })
+                  }
+                  aria-label={`Sort timestamp ${sortOrder === "asc" ? "descending" : "ascending"}`}
+                >
+                  Timestamp {sortOrder === "asc" ? "↑" : "↓"}
+                </button>
+              </th>
               <th className="px-3 py-2">Family</th>
               <th className="px-3 py-2">Launcher</th>
               <th className="w-[38%] px-3 py-2">Command</th>
@@ -331,19 +381,7 @@ export default function CommandHistoryPage() {
         </table>
       </div>
 
-      <div className="flex items-center justify-between text-sm text-zinc-300">
-        <div>
-          Page {data?.page ?? 1} of {totalPages} · {data?.total ?? 0} commands
-        </div>
-        <div className="flex gap-2">
-          <button className="rounded border border-zinc-700 px-3 py-2 disabled:opacity-40" disabled={(data?.page ?? 1) <= 1} onClick={() => update({ page: Math.max(1, (data?.page ?? 1) - 1) })}>
-            Previous
-          </button>
-          <button className="rounded border border-zinc-700 px-3 py-2 disabled:opacity-40" disabled={(data?.page ?? 1) >= totalPages} onClick={() => update({ page: (data?.page ?? 1) + 1 })}>
-            Next
-          </button>
-        </div>
-      </div>
+      {paginationControls}
     </div>
   );
 }

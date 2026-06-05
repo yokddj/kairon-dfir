@@ -27,7 +27,9 @@ def case_command_history(
     has_supporting_sources: bool | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
-    sort: str = Query(default="timestamp_asc"),
+    sort: str | None = Query(default=None),
+    sort_by: str | None = Query(default=None),
+    sort_order: str | None = Query(default=None),
 ) -> dict:
     return get_command_history(
         case_id,
@@ -49,5 +51,7 @@ def case_command_history(
             "page": page,
             "page_size": page_size,
             "sort": sort,
+            "sort_by": sort_by,
+            "sort_order": sort_order,
         },
     )

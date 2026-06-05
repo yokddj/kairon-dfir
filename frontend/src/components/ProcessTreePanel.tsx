@@ -35,6 +35,8 @@ type Props = {
   initialSourceEventId?: string;
   initialTimestamp?: string;
   initialProcessName?: string;
+  initialCommandHistoryRowId?: string;
+  initialOrigin?: string;
   initialHighlightedNodeIds?: string[];
   initialFindingId?: string;
   openedFromSearchEventId?: string;
@@ -640,6 +642,8 @@ export default function ProcessTreePanel({
   initialSourceEventId = "",
   initialTimestamp = "",
   initialProcessName = "",
+  initialCommandHistoryRowId = "",
+  initialOrigin = "",
   initialHighlightedNodeIds = [],
   initialFindingId = "",
   openedFromSearchEventId = "",
@@ -702,6 +706,7 @@ export default function ProcessTreePanel({
   const [storyError, setStoryError] = useState<string | null>(null);
   const requestedStoryEventId = initialSourceEventId;
   const searchOriginEventId = openedFromSearchEventId;
+  const commandHistoryOrigin = initialOrigin === "command_history" || Boolean(initialCommandHistoryRowId);
   const isExactStoryContext =
     Boolean(requestedStoryEventId) ||
     executionStory?.quality?.identity_resolution?.method === "source_event_id" ||
@@ -1137,7 +1142,15 @@ export default function ProcessTreePanel({
       ? "process guid"
       : executionStory?.quality?.identity_resolution?.method === "pid_time"
         ? "PID and time"
-        : executionStory?.quality?.identity_resolution?.method || "process identity";
+      : executionStory?.quality?.identity_resolution?.method || "process identity";
+  const commandHistoryTargetActive = Boolean(
+    commandHistoryOrigin ||
+    executionStory?.auto_focus_reason === "explicit_command_history_row" ||
+    executionStory?.quality?.origin === "command_history",
+  );
+  const highRiskRelatedProcess = executionStory?.children
+    ?.filter((node) => node.id !== executionStory.target_node_id && Number(node.risk_score || 0) >= 50)
+    .sort((a, b) => Number(b.risk_score || 0) - Number(a.risk_score || 0))[0];
   const storyHasParentUncertainty = Boolean(
     executionStory?.quality?.missing_parent ||
     (selectedNode?.parent_link_status && !["linked", "unknown"].includes(selectedNode.parent_link_status)),
@@ -1366,6 +1379,7 @@ export default function ProcessTreePanel({
             ) : executionStory ? (
               <Pill className="border-warning/40 bg-warning/10 text-warning">Fallback resolved</Pill>
             ) : null}
+            {commandHistoryTargetActive ? <Pill className="border-accent/40 bg-accent/10 text-accent">Target from Command History</Pill> : null}
             {searchOriginEventId ? <Pill className="border-accent/40 bg-accent/10 text-accent">Opened from Search event</Pill> : null}
             {executionStory ? <Pill className="border-line bg-white/5 text-muted">Identity: {storyIdentityLabel}</Pill> : null}
             {storyTarget.host ? <Pill className="border-cyan-400/40 bg-cyan-500/10 text-cyan-100">Host {storyTarget.host}</Pill> : null}
@@ -1391,6 +1405,16 @@ export default function ProcessTreePanel({
       {requestedStoryEventId && executionStory && executionStory.quality?.identity_resolution?.method !== "source_event_id" ? (
         <p className="mt-4 rounded-2xl border border-warning/40 bg-warning/10 p-3 text-sm text-warning">
           Exact event id was not available in the resolved graph; the story was resolved by {executionStory.quality?.identity_resolution?.method || "fallback"}.
+        </p>
+      ) : null}
+      {commandHistoryTargetActive && storyTarget ? (
+        <p className="mt-4 rounded-2xl border border-accent/40 bg-accent/10 p-3 text-sm text-accent">
+          Process selected from Command History: {toNodeLabel(storyTarget)}. Related high-risk processes stay secondary unless you choose them.
+        </p>
+      ) : null}
+      {commandHistoryTargetActive && highRiskRelatedProcess ? (
+        <p className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-3 text-sm text-amber-100">
+          High-risk related process: {toNodeLabel(highRiskRelatedProcess)}.
         </p>
       ) : null}
       {mode === "focused" && riskMin > 0 ? (
@@ -1454,7 +1478,7 @@ export default function ProcessTreePanel({
       {storyTarget ? (
         <div className="mt-5 grid gap-4 xl:grid-cols-[0.95fr_1.2fr]">
           <div className="rounded-2xl border border-line bg-abyss/70 p-4">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Investigation target</p>
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{commandHistoryTargetActive ? "Process selected" : "Investigation target"}</p>
             <div className="mt-3 space-y-2 text-sm text-muted">
               <p><span className="text-white/90">Process:</span> {normalizeValue(storyTarget.name)}</p>
               <p><span className="text-white/90">PID:</span> {storyTarget.pid ?? "—"}</p>
@@ -1838,6 +1862,8 @@ export default function ProcessTreePanel({
         pid: exactPid,
         process_guid: exactProcessGuid,
         source_event_id: exactSourceEventId,
+        command_history_row_id: commandHistoryOrigin ? initialCommandHistoryRowId || undefined : undefined,
+        origin: commandHistoryOrigin ? "command_history" : undefined,
         q: fallbackProcessName,
         timestamp: exactTimestamp,
         parent_depth: 2,
@@ -1913,6 +1939,10 @@ export default function ProcessTreePanel({
       if (exactPid !== undefined) urlParams.set("pid", String(exactPid));
       if (exactTimestamp) urlParams.set("timestamp", exactTimestamp);
       if (searchOriginEventId) urlParams.set("from_search_event_id", searchOriginEventId);
+      if (commandHistoryOrigin) {
+        urlParams.set("origin", "command_history");
+        if (initialCommandHistoryRowId) urlParams.set("command_history_row_id", initialCommandHistoryRowId);
+      }
       navigate(`/cases/${caseId}/process-graph?${urlParams.toString()}`, { replace: false });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Execution story failed.";
