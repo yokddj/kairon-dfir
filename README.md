@@ -5,7 +5,18 @@
 <h1 align="center">Kairon DFIR</h1>
 
 <p align="center">
-  <strong>A local-first DFIR investigation platform built to help analysts centralize artifacts, reduce noise, and reconstruct what happened.</strong>
+  <strong>Local-first DFIR investigation platform for centralizing artifacts, reducing noise, and reconstructing incidents.</strong>
+</p>
+
+<p align="center">
+  <img src="docs/assets/kairon-dfir-investigation-workspace.png" alt="Synthetic screenshot of the Kairon DFIR investigation workspace with case, indexing, search, artifacts, findings, and timeline panels." width="900" />
+</p>
+
+<p align="center">
+  <img alt="Beta" src="https://img.shields.io/badge/status-beta-7dd3fc" />
+  <img alt="Local-first" src="https://img.shields.io/badge/deployment-local--first-8fd694" />
+  <img alt="Docker" src="https://img.shields.io/badge/runtime-docker-2496ed" />
+  <img alt="Python and TypeScript" src="https://img.shields.io/badge/stack-python%20%2B%20typescript-111827" />
 </p>
 
 Kairon DFIR supports the analyst; it does not replace them. It provides a clear lens over forensic evidence so critical moments can be interpreted faster and with more context.
@@ -19,14 +30,14 @@ The project is intended for trusted labs and controlled private beta deployments
 - Provides analyst workflows for Search, Artifact Views, Command History, Execution Stories, Incident Timeline, Findings, and Reports.
 - Keeps demo and validation features optional and disabled by default for normal investigations.
 
-## Requirements
+## Quick Start
+
+Requirements:
 
 - Docker and Docker Compose plugin.
 - 4 CPU cores minimum; 8+ preferred for multi-host evidence.
 - 16 GB RAM minimum; 32 GB preferred for full MFT and large OpenSearch indices.
 - Persistent disk sized for uploaded evidence plus extracted/indexed data.
-
-## Quick Start
 
 ```bash
 git clone https://github.com/yokddj/kairon-dfir.git
@@ -41,8 +52,6 @@ Open:
 - Backend health: http://127.0.0.1:8000/health
 - API docs: http://127.0.0.1:8000/docs
 
-## Local Deployment Notes
-
 Default beta/investigation mode is clean:
 
 ```bash
@@ -52,6 +61,57 @@ DFIR_DEFAULT_CASE_MODE=investigation
 ```
 
 Use demo/validation flags only in training, QA, or controlled product demonstrations. This repository does not include evidence archives, processed data, OpenSearch indexes, Postgres dumps, public challenge datasets, or answer keys.
+
+## First Investigation Workflow
+
+1. Create a case
+   - Open Kairon DFIR.
+   - Go to Cases.
+   - Click Create case.
+   - Give it a name and timezone.
+
+2. Add evidence
+   - Open the case.
+   - Go to Evidence & Ingest.
+   - Upload a supported evidence archive or collection.
+   - Wait for raw discovery.
+
+3. Index evidence for investigation
+   - Click Index evidence for investigation.
+   - Use recommended indexing for the normal path.
+   - Use Index selected artifact types only when you want a focused parse.
+
+4. Start triage
+   - Use Investigation Home.
+   - Review Search.
+   - Review Command History.
+   - Review Artifact Views.
+   - Check Startup & Persistence, MOTW/Downloaded Files, and Email Artifacts if present.
+
+5. Build findings
+   - Promote relevant evidence into Findings.
+   - Use correlation carefully with visible scope.
+   - Add important events to Incident Timeline.
+
+6. Generate a report
+   - Use Reports after evidence and findings exist.
+   - Export Markdown for review.
+
+Kairon DFIR assists the analyst; final interpretation remains the analyst's responsibility.
+
+## Supported Evidence And Artifact Overview
+
+Coverage depends on the artifacts present in the uploaded evidence and on parser availability in the deployment.
+
+| Area | Examples |
+| --- | --- |
+| Event logs | EVTX, Sysmon, Security, PowerShell |
+| Filesystem | MFT, MOTW/Zone.Identifier |
+| Execution | Prefetch, Shimcache, Amcache, LNK, Jump Lists |
+| User activity | RecentDocs, UserAssist, OpenSaveMRU |
+| Persistence | Scheduled Tasks, Services, registry autoruns, startup folders |
+| Browser/email triage | Browser history/downloads, mail stores, webmail traces |
+| Investigation outputs | Findings, Incident Timeline, Reports |
 
 ## Security Warning
 
@@ -72,13 +132,14 @@ Never commit real evidence, secrets, logs, backups, database dumps, or generated
 
 ## Documentation
 
-- `docs/index.md` — documentation index.
-- `docs/feature_map.md` — current capability map.
-- `docs/artifacts_matrix.md` — artifact support matrix.
-- `docs/deployment/beta-deployment.md` — private beta deployment guidance.
-- `docs/deployment/beta-vs-demo-mode.md` — investigation vs demo/validation modes.
-- `docs/validation/README.md` — optional validation matrix workflow.
-- `docs/demo/README.md` — generic demo mode guidance.
+- [Documentation index](docs/index.md)
+- [User guide](docs/user_guide.md)
+- [Feature map](docs/feature_map.md)
+- [Artifact support matrix](docs/artifacts_matrix.md)
+- [Private beta deployment](docs/deployment/beta-deployment.md)
+- [Investigation vs demo/validation modes](docs/deployment/beta-vs-demo-mode.md)
+- [Security notes](docs/SECURITY.md)
+- [Validation workflow](docs/validation/README.md)
 
 ## Known Limitations
 
@@ -87,12 +148,8 @@ Never commit real evidence, secrets, logs, backups, database dumps, or generated
 - SRUM parsing requires a Windows-capable worker or backend alternative.
 - Some advanced Windows artifacts may require additional parser workers or tooling.
 - Validation Matrix is optional QA/demo metadata; it is not part of normal investigations.
-- Kairon DFIR assists analysis, but final interpretation remains the analyst’s responsibility.
-
-## Demo / Validation Data
-
-No bundled datasets or evidence are included in `main`. Optional demo or validation datasets can be imported separately by the operator. Validation metadata should reference expected findings only; evidence must be uploaded/indexed as a separate analyst action.
+- Kairon DFIR assists analysis, but final interpretation remains the analyst's responsibility.
 
 ## License
 
-See `LICENSE`.
+See [LICENSE](LICENSE).

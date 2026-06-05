@@ -57,6 +57,8 @@ export default function CaseProcessGraphPage() {
         initialSourceEventId={sourceEventId}
         initialTimestamp={searchParams.get("timestamp") ?? ""}
         initialProcessName={searchParams.get("process_name") ?? ""}
+        initialCommandHistoryRowId={searchParams.get("command_history_row_id") ?? ""}
+        initialOrigin={searchParams.get("origin") ?? ""}
         initialHighlightedNodeIds={highlightedNodeIds}
         initialFindingId={searchParams.get("finding_id") ?? ""}
         openedFromSearchEventId={searchParams.get("from_search_event_id") ?? (requestedMode === "execution_story" ? sourceEventId : "")}

@@ -81,7 +81,8 @@ def get_command_history(case_id: str, params: dict[str, Any]) -> dict[str, Any]:
     events = _fetch_candidate_events(case_id, params)
     commands = _dedupe_commands([item for event in events for item in _commands_from_event(case_id, event)])
     commands = _apply_filters(commands, params)
-    reverse = str(params.get("sort") or "timestamp_asc") == "timestamp_desc"
+    sort = _resolve_sort(params)
+    reverse = sort == "timestamp_desc"
     dated = [item for item in commands if item.get("timestamp")]
     undated = [item for item in commands if not item.get("timestamp")]
     dated.sort(key=lambda item: (_safe_dt(item.get("timestamp")), item.get("command_normalized") or ""), reverse=reverse)
@@ -93,6 +94,9 @@ def get_command_history(case_id: str, params: dict[str, Any]) -> dict[str, Any]:
         "total": total,
         "page": page,
         "page_size": page_size,
+        "sort": sort,
+        "sort_by": "timestamp",
+        "sort_order": "desc" if reverse else "asc",
         "items": items,
         "facets": _facets(commands),
         "summary": {
@@ -142,7 +146,12 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> list[dict[s
         "sort": [{"@timestamp": {"order": "asc", "missing": "_last"}}, {"event_id": {"order": "asc", "missing": "_last"}}],
     }
     result = search_documents(get_events_index(case_id), body)
-    return [{"id": hit.get("_id"), **(hit.get("_source") or {})} for hit in result.get("hits", {}).get("hits", [])]
+    events: list[dict[str, Any]] = []
+    for hit in result.get("hits", {}).get("hits", []):
+        source = dict(hit.get("_source") or {})
+        source["id"] = source.get("id") or hit.get("_id")
+        events.append(source)
+    return events
 
 
 def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, Any]]:
@@ -177,7 +186,8 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
         classification = _classify_command(command, process, parent, source_type)
         risk_score, risk_reasons = _risk(command, process, parent)
         timestamp = event.get("@timestamp")
-        event_doc_id = str(event.get("id") or "")
+        event_doc_id = str(event.get("id") or event.get("search_doc_id") or event.get("opensearch_id") or event.get("event_id") or "")
+        windows_event_id = str(event_id or event.get("event_id") or "")
         item = {
             "id": _command_id(case_id, event_doc_id, command),
             "case_id": case_id,
@@ -195,7 +205,8 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
             "parent_shell": classification["parent_shell"],
             "parent_context": classification["parent_context"],
             "source_type": source_type,
-            "source_event_id": str(event_id or event.get("event_id") or ""),
+            "source_event_id": event_doc_id,
+            "windows_event_id": windows_event_id,
             "source_file": event.get("source_file"),
             "user": _first(_obj(event.get("user")).get("name"), powershell.get("user")),
             "process": {
@@ -223,6 +234,17 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
         item["dedupe_key"] = _dedupe_key(item)
         output.append(item)
     return output
+
+
+def _resolve_sort(params: dict[str, Any]) -> str:
+    raw_sort = str(params.get("sort") or "").strip().lower()
+    raw_by = str(params.get("sort_by") or "").strip().lower()
+    raw_order = str(params.get("sort_order") or "").strip().lower()
+    if raw_sort in {"timestamp_asc", "timestamp_desc"}:
+        return raw_sort
+    if raw_by in {"", "timestamp", "@timestamp"} and raw_order in {"asc", "desc"}:
+        return f"timestamp_{raw_order}"
+    return "timestamp_desc"
 
 
 def _dedupe_commands(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

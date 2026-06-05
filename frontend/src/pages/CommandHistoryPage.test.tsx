@@ -41,9 +41,12 @@ function renderPage(path = "/cases/case-1/command-history?evidence_id=ev-1&host=
 }
 
 const response = {
-  total: 1,
+  total: 125,
   page: 1,
   page_size: 100,
+  sort: "timestamp_desc",
+  sort_by: "timestamp",
+  sort_order: "desc",
   items: [
     {
       id: "cmd-1",
@@ -62,7 +65,8 @@ const response = {
       parent_shell: "",
       parent_context: "",
       source_type: "sysmon_1",
-      source_event_id: "1",
+      source_event_id: "event-1",
+      windows_event_id: "1",
       source_file: "Sysmon.evtx",
       user: "EXAMPLECORP\\usera",
       process: { name: "powershell.exe", executable: "powershell.exe", pid: 4444, guid: "{GUID-1}", command_line: "powershell.exe -ep bypass -File C:\\Users\\Public\\maintenance.ps1" },
@@ -150,7 +154,25 @@ describe("CommandHistoryPage", () => {
     expect(screen.getByTestId("location")).toHaveTextContent("mode=execution_story");
     expect(screen.getByTestId("location")).toHaveTextContent("pid=4444");
     expect(screen.getByTestId("location")).toHaveTextContent("process_guid=%7BGUID-1%7D");
-    expect(screen.getByTestId("location")).toHaveTextContent("source_event_id=1");
+    expect(screen.getByTestId("location")).toHaveTextContent("source_event_id=event-1");
+    expect(screen.getByTestId("location")).toHaveTextContent("story_event_id=event-1");
+    expect(screen.getByTestId("location")).toHaveTextContent("origin=command_history");
+    expect(screen.getByTestId("location")).toHaveTextContent("command_history_row_id=cmd-1");
     expect(screen.getByTestId("location")).toHaveTextContent("timestamp=2024-03-22T12%3A00%3A00Z");
+  });
+
+  it("toggles timestamp sorting and renders pagination above and below the table", async () => {
+    const user = userEvent.setup();
+    renderPage();
+
+    await screen.findByText(/powershell.exe -ep bypass/i);
+    expect(screen.getAllByRole("button", { name: /Next/i })).toHaveLength(2);
+    expect(screen.getAllByText(/Page 1 of 2/i)).toHaveLength(2);
+
+    await user.click(screen.getByRole("button", { name: /Sort timestamp ascending/i }));
+
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("sort=timestamp_asc"));
+    expect(screen.getByTestId("location")).toHaveTextContent("sort_by=timestamp");
+    expect(screen.getByTestId("location")).toHaveTextContent("sort_order=asc");
   });
 });

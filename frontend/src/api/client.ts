@@ -2119,6 +2119,9 @@ export type ExecutionStory = {
   target?: ProcessTreeNode | null;
   target_node_id?: string | null;
   default_selected_node_id?: string | null;
+  requested_target?: Record<string, unknown>;
+  resolved_target?: Record<string, unknown> | null;
+  auto_focus_reason?: "explicit_command_history_row" | "risk_based_fallback" | "candidate_child" | "manual" | string;
   story: {
     summary: string;
     parent_sentence: string;
@@ -2192,6 +2195,7 @@ export type CommandHistoryItem = {
   parent_context?: string | null;
   source_type: string;
   source_event_id?: string | null;
+  windows_event_id?: string | number | null;
   source_file?: string | null;
   user?: string | null;
   process: {
@@ -2221,6 +2225,9 @@ export type CommandHistoryResponse = {
   total: number;
   page: number;
   page_size: number;
+  sort?: "timestamp_asc" | "timestamp_desc" | string;
+  sort_by?: "timestamp" | string;
+  sort_order?: "asc" | "desc" | string;
   items: CommandHistoryItem[];
   facets: {
     shell: Record<string, number>;
@@ -3349,6 +3356,8 @@ export const api = {
       pid?: number | null;
       process_guid?: string | null;
       source_event_id?: string | null;
+      command_history_row_id?: string | null;
+      origin?: string | null;
       q?: string | null;
       timestamp?: string | null;
       parent_depth?: number;
@@ -3366,6 +3375,8 @@ export const api = {
     if (params.pid !== undefined && params.pid !== null) query.set("pid", String(params.pid));
     if (params.process_guid) query.set("process_guid", params.process_guid);
     if (params.source_event_id) query.set("source_event_id", params.source_event_id);
+    if (params.command_history_row_id) query.set("command_history_row_id", params.command_history_row_id);
+    if (params.origin) query.set("origin", params.origin);
     if (params.q) query.set("q", params.q);
     if (params.timestamp) query.set("timestamp", params.timestamp);
     if (params.parent_depth !== undefined) query.set("parent_depth", String(params.parent_depth));
@@ -3397,6 +3408,8 @@ export const api = {
       page?: number;
       page_size?: number;
       sort?: "timestamp_asc" | "timestamp_desc";
+      sort_by?: "timestamp";
+      sort_order?: "asc" | "desc";
     },
   ) => {
     const query = new URLSearchParams();

@@ -409,6 +409,103 @@ def test_execution_story_source_event_id_wins_over_similar_text(monkeypatch) -> 
     assert any(node["id"] == "guid-a" for node in result["visual_tree"]["nodes"])
     assert result["quality"]["identity_resolution"]["method"] == "source_event_id"
     assert result["quality"]["identity_resolution"]["target_identity_matches"] is True
+    assert result["auto_focus_reason"] == "manual"
+    assert result["requested_target"]["source_event_id"] == "search-doc-a"
+    assert result["resolved_target"]["source_event_id"] == "search-doc-a"
+
+
+def test_execution_story_command_history_explicit_target_metadata(monkeypatch) -> None:
+    selected = _process_event(
+        "evt-a",
+        ts="2024-03-22T12:26:39Z",
+        name="powershell.exe",
+        pid=6996,
+        entity_id="guid-ps",
+    )
+    selected["search_doc_id"] = "search-doc-a"
+    selected["process"]["command_line"] = r"powershell.exe -ep bypass -nop -w hidden -NoExit .\f\p.ps1"
+    risky_child = _process_event(
+        "evt-child",
+        ts="2024-03-22T12:26:43Z",
+        name="CyLR.exe",
+        pid=7000,
+        entity_id="guid-cylr",
+        parent_entity_id="guid-ps",
+        parent_pid=6996,
+        parent_name="powershell.exe",
+    )
+
+    def fake_search(*_args, **_kwargs):
+        return [selected], 1, {}
+
+    def fake_bundle(*_args, **_kwargs):
+        return {
+            "graph": {
+                "nodes": [
+                    {
+                        "id": "guid-cylr",
+                        "pid": 7000,
+                        "name": "CyLR.exe",
+                        "command_line": "CyLR.exe",
+                        "host": "HOSTA",
+                        "first_seen": risky_child["@timestamp"],
+                        "source_event_id": "search-doc-child",
+                        "source_events": ["search-doc-child"],
+                        "risk_score": 90,
+                        "risk_reasons": ["high-risk child"],
+                        "badges": [],
+                        "data_quality": [],
+                        "confidence": "high",
+                    },
+                    {
+                        "id": "guid-ps",
+                        "pid": 6996,
+                        "name": "powershell.exe",
+                        "command_line": selected["process"]["command_line"],
+                        "host": "HOSTA",
+                        "first_seen": selected["@timestamp"],
+                        "source_event_id": "search-doc-a",
+                        "source_events": ["search-doc-a", "evt-a"],
+                        "risk_score": 80,
+                        "risk_reasons": ["PowerShell execution policy bypass"],
+                        "badges": ["powershell"],
+                        "data_quality": [],
+                        "confidence": "high",
+                    },
+                ],
+                "edges": [],
+                "groups": [],
+                "omitted_counts": {},
+                "summary": {},
+            },
+            "report": {},
+            "sample_chains": [],
+        }
+
+    monkeypatch.setattr(debug_export, "_search_scope_events", fake_search)
+    monkeypatch.setattr(debug_export, "build_process_tree_bundle", fake_bundle)
+    monkeypatch.setattr(debug_export, "build_process_tree_expansion", lambda *_args, **_kwargs: {"added_nodes": [], "added_edges": [], "activity_groups": [], "omitted_counts": {}, "warnings": []})
+
+    result = debug_export.build_execution_story(
+        SimpleNamespace(id="case-1"),
+        [],
+        scope="evidence",
+        evidence_id="ev-1",
+        host="HOSTA",
+        source_event_id="search-doc-a",
+        command_history_row_id="cmd-1",
+        origin="command_history",
+        q="powershell.exe",
+    )
+
+    assert result["target"]["id"] == "guid-ps"
+    assert result["target"]["name"] == "powershell.exe"
+    assert result["target"]["id"] != "guid-cylr"
+    assert result["auto_focus_reason"] == "explicit_command_history_row"
+    assert result["requested_target"]["command_history_row_id"] == "cmd-1"
+    assert result["requested_target"]["origin"] == "command_history"
+    assert result["resolved_target"]["source_event_id"] == "search-doc-a"
+    assert result["quality"]["origin"] == "command_history"
 
 
 def test_execution_story_exact_identity_does_not_fallback_to_similar_node(monkeypatch) -> None:
