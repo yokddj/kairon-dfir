@@ -643,6 +643,10 @@ class EvidenceIndexingPlanRunRequest(BaseModel):
     force: bool = False
 
 
+class EvidenceIndexingCancelRequest(BaseModel):
+    reason: str | None = None
+
+
 class CoreEzRebuildRequest(BaseModel):
     force: bool = True
 
@@ -1113,6 +1117,25 @@ def _prepare_reprocess_state(item: Evidence, existing_metadata: dict) -> tuple[d
 
 def _preview_selected_candidate_ids(preview: dict) -> list[str]:
     return [str(item.get("candidate_id") or "") for item in (preview.get("selected_candidates") or []) if item.get("candidate_id")]
+
+
+def _recommended_supported_candidate_ids(metadata: dict) -> list[str]:
+    requested_plan = metadata.get("requested_ingest_plan") if isinstance(metadata.get("requested_ingest_plan"), dict) else None
+    ingest_plan = metadata.get("ingest_plan") if isinstance(metadata.get("ingest_plan"), dict) else None
+    for plan in (requested_plan, ingest_plan):
+        selected = [
+            str(item.get("candidate_id") or item.get("id") or "")
+            for item in ((plan or {}).get("selected_candidates") or [])
+            if str(item.get("candidate_id") or item.get("id") or "").strip()
+        ]
+        if selected:
+            return selected
+    discovery = metadata.get("velociraptor_discovery") if isinstance(metadata.get("velociraptor_discovery"), dict) else {}
+    return [
+        str(candidate.get("id") or "")
+        for candidate in (discovery.get("candidates") or [])
+        if candidate.get("supported") and str(candidate.get("id") or "").strip()
+    ]
 
 
 def _persist_generic_ingest_plan(db: Session, evidence: Evidence, *, discovery_mode: str = "manual") -> Evidence:
@@ -2670,6 +2693,68 @@ def _enqueue_indexing_plan_steps(item: Evidence, steps: list[dict[str, Any]], *,
     return queued
 
 
+def _queue_recommended_raw_discovery_ingest(item: Evidence, metadata: dict, *, profile: str, force: bool, db: Session) -> dict | None:
+    if not _is_raw_collection_with_discovery(item, metadata):
+        return None
+    indexed_docs = _count_evidence_indexed_docs(item)
+    current_phase = str(metadata.get("current_phase") or metadata.get("phase") or "").strip().lower()
+    if indexed_docs > 0 and not force:
+        return None
+    selected_candidate_ids = _recommended_supported_candidate_ids(metadata)
+    if not selected_candidate_ids:
+        return {
+            "accepted": False,
+            "reason": "no_supported_artifacts",
+            "selected_candidate_ids": [],
+        }
+    requested_ingest_mode = normalize_ingest_mode(metadata.get("ingest_mode") or USABLE_INGEST_MODE)
+    requested_provided_host = _normalize_provided_host(metadata.get("provided_host")) or _normalize_provided_host((item.ingest_source or {}).get("provided_host"))
+    if not requested_provided_host:
+        raise HTTPException(status_code=400, detail="Host name is required for evidence indexing.")
+    requested_evtx_profile = str(metadata.get("evtx_profile") or "").strip() or None
+    new_metadata = _apply_reprocess_selection_metadata(
+        item,
+        metadata,
+        selected_candidate_ids,
+        "recommended_indexing" if current_phase in {"waiting_selection", "selection_pending"} else "recommended",
+        parser_options={"ingest_mode": requested_ingest_mode, "evtx_profile": requested_evtx_profile},
+    )
+    new_metadata = merge_evidence_metadata(new_metadata, ingest_mode_metadata(requested_ingest_mode))
+    new_metadata["ingest_mode"] = requested_ingest_mode
+    new_metadata["provided_host"] = requested_provided_host
+    new_metadata["current_phase"] = "extracting_selected"
+    new_metadata["progress_pct"] = 25
+    new_metadata["selected_files_extracted"] = 0
+    new_metadata["current_item"] = None
+    new_metadata["indexing_profile"] = profile
+    new_metadata["indexing_plan_recovered_waiting_selection"] = current_phase in {"waiting_selection", "selection_pending"}
+    item.metadata_json = merge_evidence_metadata(metadata, new_metadata)
+    item.ingest_source = {
+        **(item.ingest_source or {}),
+        "ingest_mode": requested_ingest_mode,
+        "provided_host": requested_provided_host,
+        "evtx_profile": new_metadata.get("evtx_profile"),
+    }
+    item.ingest_status = IngestStatus.pending
+    item.error_log = {}
+    item.processed_at = None
+    flag_modified(item, "metadata_json")
+    db.commit()
+    db.refresh(item)
+    try:
+        run_id = enqueue_ingest(item.id)
+    except OpenSearchIngestBlockedError as exc:
+        _mark_evidence_blocked_before_ingest(db, item, exc)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return {
+        "accepted": True,
+        "run_id": str(run_id or ""),
+        "status": "queued",
+        "selected_candidate_ids": list(new_metadata.get("velociraptor_selected_candidate_ids") or []),
+        "selected_categories": list(new_metadata.get("velociraptor_selected_categories") or []),
+    }
+
+
 @router.post("/api/evidences/{evidence_id}/indexing-plan/run")
 def run_evidence_indexing_plan(evidence_id: str, payload: EvidenceIndexingPlanRunRequest | None = None, db: Session = Depends(get_db)) -> dict:
     item = db.get(Evidence, evidence_id)
@@ -2697,6 +2782,40 @@ def run_evidence_indexing_plan(evidence_id: str, payload: EvidenceIndexingPlanRu
     )
     if profile == "advanced_custom":
         raise HTTPException(status_code=400, detail="Advanced custom exposes individual actions and is not executed as a bundled plan.")
+    core_ingest = _queue_recommended_raw_discovery_ingest(item, metadata, profile=profile, force=bool(payload.force if payload else False), db=db)
+    if core_ingest and core_ingest.get("accepted"):
+        run = create_indexing_plan_run(plan, [])
+        run["status"] = "queued"
+        run["queued_jobs"] = [{"step_id": "core_artifacts", "run_id": core_ingest.get("run_id") or "", "status": "queued"}]
+        metadata = dict(item.metadata_json or {})
+        metadata["indexing_profile"] = profile
+        metadata["indexing_plan_run"] = run
+        metadata["indexing_plan_steps"] = run["steps"]
+        item.metadata_json = metadata
+        flag_modified(item, "metadata_json")
+        db.commit()
+        return {
+            "accepted": True,
+            "evidence_id": item.id,
+            "profile": profile,
+            "run_id": run["run_id"],
+            "status": "queued",
+            "queued_jobs": run["queued_jobs"],
+            "plan": run,
+            "selected_candidate_ids": core_ingest.get("selected_candidate_ids") or [],
+            "selected_categories": core_ingest.get("selected_categories") or [],
+        }
+    if core_ingest and core_ingest.get("reason") == "no_supported_artifacts":
+        metadata = dict(item.metadata_json or {})
+        metadata["current_phase"] = "no_supported_artifacts"
+        metadata["status_reason"] = "No supported artifacts were found for recommended indexing."
+        metadata["current_ingest_run_id"] = None
+        item.metadata_json = metadata
+        item.ingest_status = IngestStatus.failed
+        item.processed_at = datetime.now(UTC).replace(tzinfo=None)
+        flag_modified(item, "metadata_json")
+        db.commit()
+        raise HTTPException(status_code=400, detail="No supported artifacts found for recommended indexing.")
     queued_jobs = _enqueue_indexing_plan_steps(item, list(plan.get("runnable_steps") or []), force=bool(payload.force if payload else False))
     run = create_indexing_plan_run(plan, queued_jobs)
     metadata["indexing_profile"] = profile
@@ -2713,6 +2832,68 @@ def run_evidence_indexing_plan(evidence_id: str, payload: EvidenceIndexingPlanRu
         "status": run["status"],
         "queued_jobs": queued_jobs,
         "plan": run,
+    }
+
+
+@router.post("/api/evidences/{evidence_id}/indexing/cancel")
+def cancel_evidence_indexing(evidence_id: str, payload: EvidenceIndexingCancelRequest | None = None, db: Session = Depends(get_db)) -> dict:
+    item = db.get(Evidence, evidence_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    metadata = dict(item.metadata_json or {})
+    now = datetime.now(UTC).isoformat()
+    previous_status = str(getattr(item.ingest_status, "value", item.ingest_status) or "")
+    previous_phase = str(metadata.get("current_phase") or metadata.get("phase") or "")
+    run_id = str(metadata.get("current_ingest_run_id") or metadata.get("latest_ingest_run_id") or "").strip()
+    reason = str((payload.reason if payload else None) or "Cancelled by analyst to recover indexing state.").strip()
+    if run_id:
+        metadata = upsert_ingest_run(
+            metadata,
+            run_id,
+            {
+                "status": "cancelled",
+                "phase": "cancelled",
+                "finished_at": now,
+                "last_error": reason,
+            },
+        )
+    metadata["current_ingest_run_id"] = None
+    metadata["reprocess_request"] = None
+    metadata["benchmark_request"] = None
+    metadata["indexing_plan_run"] = {
+        **dict(metadata.get("indexing_plan_run") or {}),
+        "status": "cancelled",
+        "updated_at": now,
+        "cancelled_at": now,
+        "cancel_reason": reason,
+    }
+    metadata["current_phase"] = "cancelled"
+    metadata["progress_pct"] = 0 if int(metadata.get("events_indexed") or 0) <= 0 else metadata.get("progress_pct", 0)
+    metadata["status_reason"] = reason
+    metadata["stale_recovery"] = {
+        "previous_status": previous_status,
+        "previous_phase": previous_phase,
+        "reason": reason,
+        "recovered_at": now,
+    }
+    if int(metadata.get("events_indexed") or metadata.get("searchable_documents_count") or 0) > 0:
+        item.ingest_status = IngestStatus.completed_with_errors
+    else:
+        item.ingest_status = IngestStatus.failed
+    item.metadata_json = metadata
+    item.error_log = dict(item.error_log or {})
+    item.processed_at = datetime.now(UTC).replace(tzinfo=None)
+    flag_modified(item, "metadata_json")
+    db.commit()
+    db.refresh(item)
+    return {
+        "accepted": True,
+        "evidence_id": item.id,
+        "status": "cancelled",
+        "previous_status": previous_status,
+        "previous_phase": previous_phase,
+        "lock_released": True,
+        "retry_allowed": True,
     }
 
 

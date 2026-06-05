@@ -70,6 +70,8 @@ def _lookup_artifact_id(
 
 def classify_problematic_artifact_status(*, records_read: int, records_indexed: int, error_type: str | None = None) -> tuple[str, bool, bool]:
     error_type = str(error_type or "").strip().lower()
+    if records_read == 0 and records_indexed == 0 and error_type in {"no_records", "empty", "skipped_empty"}:
+        return "skipped_empty", False, False
     if records_read > 0 and records_indexed == records_read:
         return "parsed_with_warning", True, False
     if records_read > records_indexed > 0:
@@ -84,6 +86,8 @@ def classify_problematic_artifact_status(*, records_read: int, records_indexed: 
 
 
 def classify_problematic_artifact_health(*, status: str, records_read: int, records_indexed: int, data_loss_expected: bool) -> tuple[str, str]:
+    if status in {"skipped_empty", "completed_no_records", "unsupported_no_records"} and records_read == 0 and records_indexed == 0:
+        return "No records produced", "No expected data loss"
     if status == "parsed_with_warning" and records_read > 0 and records_indexed == records_read and not data_loss_expected:
         return "Indexed records available", "No expected data loss"
     if status in {"skipped_timeout", "failed", "stalled", "failed_timeout", "stalled_timeout", "failed_aborted", "deferred_long_tail", "partial_indexed_deferred"} and records_read == 0 and records_indexed == 0:
@@ -156,7 +160,12 @@ def _effective_problematic_state(item: dict[str, Any], *, health_check: dict[str
     recovered_records = 0
     suggested_primary_action = "check_health"
 
-    if retry_recovered:
+    if original_status in {"skipped_empty", "completed_no_records", "unsupported_no_records"} and effective_records_read == 0 and effective_records_indexed == 0:
+        effective_status = original_status
+        effective_resolution = "no_records_produced"
+        current_data_loss_expected = False
+        suggested_primary_action = "no_action_needed"
+    elif retry_recovered:
         recovered = True
         recovered_records = retry_records_indexed
         current_data_loss_expected = not (effective_records_read > 0 and effective_records_read == effective_records_indexed)
@@ -480,7 +489,8 @@ def build_problematic_artifacts_report(
             if str(error.get("artifact") or "") == artifact_name:
                 error_text = str(error.get("error") or "")
                 break
-        if not error_text and not any(flag in str(artifact.get("status") or "") for flag in ("failed", "partial")):
+        original_manifest_status = str(artifact.get("status") or "").strip().lower()
+        if not error_text and not any(flag in original_manifest_status for flag in ("failed", "partial")) and original_manifest_status not in {"skipped_empty", "completed_no_records", "unsupported_no_records"}:
             continue
         records_read = int(ingest_audit.get("records_read") or artifact.get("record_count") or 0)
         records_indexed = int(ingest_audit.get("records_indexed") or ingest_audit.get("events_indexed") or artifact.get("record_count") or 0)
@@ -489,8 +499,13 @@ def build_problematic_artifacts_report(
             if match:
                 records_read = int(match.group("read") or 0)
                 records_indexed = int(match.group("indexed") or 0)
-        error_type = "timeout" if "timed out" in str(error_text or "").lower() or "stalled" in str(error_text or "").lower() else None
-        original_manifest_status = str(artifact.get("status") or "").strip().lower()
+        error_type = (
+            "no_records"
+            if original_manifest_status in {"skipped_empty", "completed_no_records", "unsupported_no_records"}
+            else "timeout"
+            if "timed out" in str(error_text or "").lower() or "stalled" in str(error_text or "").lower()
+            else None
+        )
         if original_manifest_status in DEFERRED_PROBLEMATIC_STATUSES:
             fine_status = original_manifest_status
             partial_data_indexed = records_indexed > 0
@@ -517,11 +532,11 @@ def build_problematic_artifacts_report(
             "records_indexed": records_indexed,
             "bulk_batches": int(ingest_audit.get("bulk_batches") or 0),
             "error_type": error_type or ("warning" if partial_data_indexed else "failure"),
-            "error_message": error_text,
+            "error_message": error_text or ("No records produced / empty or unsupported EVTX channel." if error_type == "no_records" else None),
             "timeout_seconds": int(ingest_audit.get("timeout_seconds") or 0),
             "partial_data_indexed": partial_data_indexed,
             "data_loss_expected": data_loss_expected,
-            "retryable": str(artifact.get("parser") or "").lower() == "evtx_raw",
+            "retryable": str(artifact.get("parser") or "").lower() == "evtx_raw" and fine_status not in {"skipped_empty", "completed_no_records", "unsupported_no_records"},
             "suggested_retry_mode": "deep_safe_mode" if data_loss_expected else "no_detections",
             "retry_history": retry_history_by_key.get((str(artifact.get("source_path") or ""), str(artifact.get("parser") or "")), []),
         }
@@ -559,6 +574,9 @@ def build_problematic_artifacts_report(
         "worker_lost_reconciled",
         "deferred_long_tail",
         "partial_indexed_deferred",
+        "skipped_empty",
+        "completed_no_records",
+        "unsupported_no_records",
     }
     for artifact_row in artifact_rows or []:
         status = str(getattr(artifact_row, "status", None) or (artifact_row.get("status") if isinstance(artifact_row, dict) else "")).strip().lower()
@@ -573,8 +591,9 @@ def build_problematic_artifacts_report(
             continue
         records_indexed = int(getattr(artifact_row, "record_count", None) or (artifact_row.get("record_count") if isinstance(artifact_row, dict) else 0) or 0)
         records_read = records_indexed
-        error_type = "timeout" if "timeout" in status or "stalled" in status else "aborted"
-        retryable = bool(source_path)
+        no_records_status = status in {"skipped_empty", "completed_no_records", "unsupported_no_records"}
+        error_type = "no_records" if no_records_status else "timeout" if "timeout" in status or "stalled" in status else "aborted"
+        retryable = bool(source_path) and not no_records_status
         suggested_retry_mode = "deep_safe_mode" if parser_name.lower() == "evtx_raw" else "safe_mode"
         error_message = (
             "Artifact did not reach terminal parser completion before worker/run abort."
@@ -583,6 +602,8 @@ def build_problematic_artifacts_report(
             if status in {"deferred_long_tail", "partial_indexed_deferred"}
             else "Artifact did not finish before timeout."
             if status in {"failed_timeout", "stalled_timeout"}
+            else "No records produced / empty or unsupported EVTX channel."
+            if no_records_status
             else "Artifact failed during ingest."
         )
         item = {
@@ -604,7 +625,7 @@ def build_problematic_artifacts_report(
             "error_message": error_message,
             "timeout_seconds": 0,
             "partial_data_indexed": records_indexed > 0,
-            "data_loss_expected": True,
+            "data_loss_expected": not no_records_status,
             "retryable": retryable,
             "suggested_retry_mode": suggested_retry_mode,
             "retry_history": retry_history_by_key.get((source_path, parser_name), []),
@@ -613,7 +634,7 @@ def build_problematic_artifacts_report(
             status=status,
             records_read=records_read,
             records_indexed=records_indexed,
-            data_loss_expected=True,
+            data_loss_expected=not no_records_status,
         )
         item["health_summary"] = summary_label
         item["loss_summary"] = loss_label
@@ -628,7 +649,7 @@ def build_problematic_artifacts_report(
         )
         item["original_status"] = status
         item["effective_status"] = str(item.get("effective_status") or status)
-        item["data_loss_expected"] = bool(item.get("current_data_loss_expected", True))
+        item["data_loss_expected"] = bool(item.get("current_data_loss_expected", not no_records_status))
         importance, reasons = score_problematic_artifact_importance(item)
         item["importance"] = importance
         item["importance_reasons"] = reasons
@@ -736,6 +757,7 @@ def build_problematic_artifacts_report(
             "parsed_with_warning": status_counts.get("parsed_with_warning", 0),
             "partially_parsed": status_counts.get("partially_parsed", 0),
             "failed": status_counts.get("failed", 0),
+            "skipped_empty": status_counts.get("skipped_empty", 0) + status_counts.get("completed_no_records", 0) + status_counts.get("unsupported_no_records", 0),
             "retryable": sum(1 for item in items if item.get("retryable")),
             "indexed_with_warning": sum(1 for item in items if item.get("effective_status") in {"parsed_with_warning", "accepted_warning", "health_check_only_valid"}),
             "recovered_count": sum(1 for item in items if item.get("recovered")),
@@ -768,7 +790,7 @@ def problematic_artifacts_require_error_status(report: dict[str, Any] | None) ->
                 effective_status = "parsed_with_warning"
             else:
                 effective_status = str(item.get("status") or "").strip().lower()
-        if effective_status in {"parsed_with_warning", "recovered", "recovered_with_warning", "accepted_warning", "source_missing_but_indexed", "health_check_only_valid"}:
+        if effective_status in {"parsed_with_warning", "recovered", "recovered_with_warning", "accepted_warning", "source_missing_but_indexed", "health_check_only_valid", "skipped_empty", "completed_no_records", "unsupported_no_records"}:
             continue
         if effective_status in {"partially_parsed", "failed", "skipped_timeout", "stalled", "unresolved_timeout", "unresolved_failed", "health_check_failed"}:
             return True

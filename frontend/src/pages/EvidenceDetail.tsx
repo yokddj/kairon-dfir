@@ -93,6 +93,10 @@ function formatProblematicStatusLabel(status: string | null | undefined) {
 
 function problematicStatusTone(status: string | null | undefined) {
   switch (String(status || "").trim().toLowerCase()) {
+    case "skipped_empty":
+    case "completed_no_records":
+    case "unsupported_no_records":
+      return "border-mint/25 bg-mint/10 text-mint";
     case "recovered":
     case "recovered_with_warning":
       return "border-emerald-400/30 bg-emerald-400/10 text-emerald-200";
@@ -118,6 +122,9 @@ function problematicRecoveryText(artifact: ProblematicArtifact) {
   if (effectiveStatus === "source_missing_but_indexed") {
     return "The original or staged file is no longer available for health check, but indexed events are searchable.";
   }
+  if (["skipped_empty", "completed_no_records", "unsupported_no_records"].includes(effectiveStatus)) {
+    return "No records produced. Empty or unsupported EVTX channels are not investigation blockers.";
+  }
   if (effectiveStatus === "parsed_with_warning" || effectiveStatus === "accepted_warning" || effectiveStatus === "health_check_only_valid") {
     return "All read records were indexed.";
   }
@@ -131,6 +138,9 @@ function problematicImpact(artifact: ProblematicArtifact): { group: "critical" |
   }
   if (text.includes("tooling_missing") || text.includes("requires windows") || text.includes("srum")) {
     return { group: "tooling_missing", label: "Unsupported/tooling missing", action: "Requires optional parser tooling or a Windows worker." };
+  }
+  if (text.includes("skipped_empty") || text.includes("completed_no_records") || text.includes("unsupported_no_records") || text.includes("no records produced")) {
+    return { group: "informational", label: "Empty/no records", action: "No retry needed. The parser completed but the log produced no parseable records." };
   }
   if ((artifact.effective_records_indexed ?? artifact.records_indexed ?? 0) > 0 && !(artifact.current_data_loss_expected ?? artifact.data_loss_expected)) {
     return { group: "warning", label: "Warning", action: "Searchable data exists. Review details only if this artifact matters." };
@@ -154,6 +164,38 @@ function formatIndexingStatus(status: string | null | undefined) {
   return String(status || "unknown").replaceAll("_", " ");
 }
 
+type EvidenceIndexingState = "not_started" | "action_required" | "planning_or_waiting" | "indexing" | "stale" | "completed" | "completed_with_warnings" | "completed_with_errors" | "failed";
+
+function formatEvidenceStatusForDisplay(status: string | null | undefined) {
+  const value = String(status || "unknown").replaceAll("_", " ");
+  if (value === "completed with warnings") return "ready with warnings";
+  if (value === "completed") return "ready";
+  return value;
+}
+
+function formatIndexingPhaseForDisplay(phase: string | null | undefined) {
+  const value = String(phase || "").trim();
+  switch (value) {
+    case "selection_pending":
+    case "waiting_selection":
+      return "Preparing indexing plan";
+    case "pending":
+      return "Indexing job queued";
+    case "extracting_selected":
+      return "Extracting selected artifacts";
+    case "processing":
+      return "Indexing in progress";
+    case "completed":
+      return "Evidence ready for investigation";
+    case "completed_with_errors":
+      return "Indexing completed with errors";
+    case "failed":
+      return "Indexing failed";
+    default:
+      return value ? value.replaceAll("_", " ") : "Unknown";
+  }
+}
+
 function isRawDiscoveryEvidenceLike(evidence: { evidence_type?: string; metadata_json?: Record<string, unknown> } | null | undefined, discoveryCandidatesCount: number) {
   if (!evidence || !discoveryCandidatesCount) return false;
   const metadata = evidence.metadata_json ?? {};
@@ -169,6 +211,7 @@ export default function EvidenceDetail() {
   const { notify } = useNotifications();
   const [nowMs, setNowMs] = useState(() => Date.now());
   const parseSelectionRef = useRef<HTMLDetailsElement | null>(null);
+  const selectedArtifactTypesRef = useRef<HTMLDivElement | null>(null);
   const [filters, setFilters] = useState<ArtifactFilters>({ status: "", artifactType: "", parser: "", sourcePath: "" });
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
   const [parseEvtxProfile, setParseEvtxProfile] = useState<EvtxProfile>("full");
@@ -248,6 +291,19 @@ export default function EvidenceDetail() {
     },
     onError: (error) => {
       notify({ title: "Indexing plan blocked", description: error instanceof Error ? error.message : "The indexing profile could not be started.", tone: "warning" });
+    },
+  });
+  const cancelIndexingMutation = useMutation({
+    mutationFn: () => api.cancelEvidenceIndexing(evidenceId, { reason: "Cancelled from Evidence Detail to recover a waiting selection or stale indexing state." }),
+    onSuccess: async () => {
+      notify({ title: "Indexing cancelled", description: "The active indexing state was cleared. Recommended indexing can be started again.", tone: "success" });
+      await queryClient.invalidateQueries({ queryKey: ["evidence-indexing-plan", evidenceId] });
+      await queryClient.invalidateQueries({ queryKey: ["evidence", evidenceId] });
+      await queryClient.invalidateQueries({ queryKey: ["evidence-runs", evidenceId] });
+      await queryClient.invalidateQueries({ queryKey: ["evidence-search-summary", evidenceId] });
+    },
+    onError: (error) => {
+      notify({ title: "Cancel indexing failed", description: error instanceof Error ? error.message : "The indexing state could not be cancelled.", tone: "error" });
     },
   });
   const indexMftSummaryMutation = useMutation({
@@ -617,8 +673,86 @@ export default function EvidenceDetail() {
         : typeof (metadata.parallel_ingest as { bottleneck?: unknown } | undefined)?.bottleneck === "string"
           ? String((metadata.parallel_ingest as { bottleneck?: unknown }).bottleneck)
           : data?.ingest_status ?? "unknown";
+  const rawDiscoveryCandidatesForState = ((metadata.velociraptor_discovery as { candidates?: unknown[] } | undefined)?.candidates ?? []);
+  const rawDiscoveryCandidateCountForState = Array.isArray(rawDiscoveryCandidatesForState) ? rawDiscoveryCandidatesForState.length : 0;
+  const waitingSelectionPhase = currentPhase === "selection_pending" || currentPhase === "waiting_selection";
   const isActive = data?.ingest_status === "pending" || data?.ingest_status === "processing";
-  const benchmarkLaunchDisabled = benchmarkMutation.isPending || isActive || Boolean(activeBenchmark);
+  const metadataRunId = String(metadata.current_ingest_run_id ?? metadata.latest_ingest_run_id ?? "").trim();
+  const latestRunId = String(latestRun?.run_id ?? "").trim();
+  const activeRun =
+    isActive && metadataRunId && latestRun && (!latestRunId || latestRunId === metadataRunId) && ["queued", "running", "pending", "processing"].includes(String(latestRun.status || "").toLowerCase())
+      ? latestRun
+      : null;
+  const activeIndexingJob = Boolean(indexingPlan?.active || activeRun || (isActive && !(waitingSelectionPhase && rawDiscoveryCandidateCountForState > 0 && !metadata.current_ingest_run_id)));
+  const waitingSelectionNeedsAction = isActive && !activeIndexingJob && waitingSelectionPhase && rawDiscoveryCandidateCountForState > 0;
+  const staleIndexingState = isActive && !activeIndexingJob && !waitingSelectionNeedsAction;
+  const activeIndexingPhase = String(indexingPlan?.active_job?.step || indexingPlan?.active_job?.status || activeRun?.status || currentPhase || "");
+  const activeRecommendedIndexing = activeIndexingJob && (indexingPlan?.profile === "recommended" || indexingProfile === "recommended");
+  const displayStatus = String(data?.display_status ?? metadata.display_status ?? data?.ingest_status ?? "unknown");
+  const investigationReady = Boolean(data?.investigation_ready ?? metadata.investigation_ready ?? false);
+  const hasSearchableDocs = Number(searchSummaryQuery.data?.total_indexed_docs ?? metadata.events_indexed ?? manifest?.stats?.indexed_events ?? 0) > 0;
+  const indexingState: EvidenceIndexingState = waitingSelectionNeedsAction
+    ? "action_required"
+    : staleIndexingState
+      ? "stale"
+      : activeIndexingJob
+        ? ["pending", "queued", "selection_pending", "waiting_selection", "planning", "preparing"].some((item) => activeIndexingPhase.toLowerCase().includes(item))
+          ? "planning_or_waiting"
+          : "indexing"
+        : displayStatus === "completed_with_warnings"
+          ? "completed_with_warnings"
+          : data?.ingest_status === "completed_with_errors"
+            ? hasSearchableDocs || investigationReady
+              ? "completed_with_errors"
+              : "failed"
+            : data?.ingest_status === "failed"
+              ? "failed"
+              : investigationReady || hasSearchableDocs || data?.ingest_status === "completed"
+                ? "completed"
+                : "not_started";
+  const indexingStateTitle =
+    indexingState === "not_started"
+      ? "Index evidence for investigation"
+      : indexingState === "action_required"
+        ? "Action required: select what to index"
+        : indexingState === "stale"
+          ? "Indexing appears stuck"
+      : indexingState === "planning_or_waiting"
+        ? activeIndexingPhase.toLowerCase().includes("queued") || activeRun
+          ? "Indexing job queued"
+          : "Preparing indexing plan"
+        : indexingState === "indexing"
+          ? activeRecommendedIndexing
+            ? "Recommended indexing is running"
+            : "Indexing in progress"
+          : indexingState === "completed"
+            ? "Evidence ready for investigation"
+            : indexingState === "completed_with_warnings"
+              ? "Evidence ready with warnings"
+              : indexingState === "completed_with_errors"
+                ? "Indexing completed with errors"
+                : "Indexing failed";
+  const indexingStateSubcopy = indexingState === "action_required"
+    ? "Discovery found supported artifacts, but indexing has not started yet. Continue with recommended indexing or choose categories manually."
+    : indexingState === "stale"
+      ? "The evidence is marked active but no worker run is visible. Cancel the stale state, then retry recommended indexing."
+      : activeIndexingJob
+    ? "An indexing job is already running for this evidence. Wait for it to finish or open Jobs & Activity."
+    : indexingState === "not_started"
+      ? "Recommended indexing prepares event logs, filesystem, user activity, Defender, downloaded-file evidence and core artifacts. Rules and reports are run later."
+      : indexingState === "completed" || indexingState === "completed_with_warnings"
+        ? "Search, timeline, artifact views, rules and reports are available as post-indexing actions."
+        : indexingState === "completed_with_errors"
+          ? "Searchable data may already be available. Review real parser failures before retrying only the affected artifacts."
+          : "Review the failure details and retry indexing only after checking the reported cause.";
+  const primaryIndexingDisabled = runIndexingPlanMutation.isPending || activeIndexingJob || indexingProfile === "advanced_custom" || !indexingPlan?.can_run;
+  const conflictingIndexingActionsDisabled = activeIndexingJob;
+  const evidenceLifecycleStatus = String(data?.ingest_status ?? "").toLowerCase();
+  const evidenceCanShowInvestigationActions = !["uploaded", "pending", "processing"].includes(evidenceLifecycleStatus);
+  const evidenceReadyForActions =
+    evidenceCanShowInvestigationActions && !activeIndexingJob && (investigationReady || hasSearchableDocs || indexingState === "completed" || indexingState === "completed_with_warnings" || indexingState === "completed_with_errors");
+  const benchmarkLaunchDisabled = benchmarkMutation.isPending || activeIndexingJob || Boolean(activeBenchmark);
+  const benchmarkToolsEnabled = import.meta.env.VITE_DFIR_ENABLE_BENCHMARK_TOOLS === "true";
   const latestWatchdogAction = latestBenchmark?.watchdog_actions?.length ? latestBenchmark.watchdog_actions[latestBenchmark.watchdog_actions.length - 1] : null;
   const latestBenchmarkAttempts = Array.isArray(latestBenchmark?.attempts) ? latestBenchmark?.attempts ?? [] : [];
   const onDemandModules = onDemandModulesQuery.data?.modules ?? {};
@@ -642,7 +776,8 @@ export default function EvidenceDetail() {
   const orderedModuleIds = ["rules", "reports", "host_enrichment", "deep_retry", "benchmark", "advanced_exports"];
   const onDemandEntries = orderedModuleIds
     .map((moduleId) => onDemandModules[moduleId] as OnDemandModule | undefined)
-    .filter((entry): entry is OnDemandModule => Boolean(entry));
+    .filter((entry): entry is OnDemandModule => Boolean(entry))
+    .filter((entry) => entry.id !== "benchmark" || benchmarkToolsEnabled);
   const stableOnDemandEntries = onDemandEntries.filter((entry) => entry.module_category === "on_demand_stable");
   const advancedEntries = onDemandEntries.filter((entry) => entry.module_category !== "on_demand_stable");
   const evidenceRuleRuns = evidenceRuleRunsQuery.data ?? [];
@@ -660,11 +795,13 @@ export default function EvidenceDetail() {
   const rulesLaunchDisabled =
     rulesModule?.status === "disabled" ||
     onDemandRulesMutation.isPending ||
+    activeIndexingJob ||
     Boolean(activeEvidenceRuleRun) ||
     !data?.case_id;
   const reportLaunchDisabled =
     reportsModule?.status === "disabled" ||
     generateReportMutation.isPending ||
+    activeIndexingJob ||
     Boolean(activeEvidenceReport) ||
     !data?.case_id;
 
@@ -730,9 +867,7 @@ export default function EvidenceDetail() {
       : evtxParserBackend
         ? `EVTX parser · ${formatEvtxBackend(evtxParserBackend)}${evtxParserBackendVersion ? ` ${evtxParserBackendVersion}` : ""}`
         : "EVTX coverage not reported";
-  const browserCandidates = discoveryCandidates.filter((candidate) => candidate.category === "browser");
-  const scheduledTaskCandidates = discoveryCandidates.filter((candidate) => candidate.category === "scheduled_task");
-  const selectionPending = (currentPhase === "selection_pending" || currentPhase === "waiting_selection") && Boolean(discoveryCandidates.length);
+  const selectionPending = !activeIndexingJob && (currentPhase === "selection_pending" || currentPhase === "waiting_selection") && Boolean(discoveryCandidates.length);
   const startedAt = typeof data?.metadata_json?.started_at === "string" ? (data.metadata_json.started_at as string) : null;
   const elapsedSeconds = typeof data?.metadata_json?.elapsed_seconds === "number" ? (data.metadata_json.elapsed_seconds as number) : null;
   const startedAtTimestamp = startedAt ? Date.parse(startedAt) : Number.NaN;
@@ -966,7 +1101,65 @@ export default function EvidenceDetail() {
   const originalPath = data?.original_path ?? "-";
   const hasPowerShellCategory = supportedCategoryOptions.some((option) => option.category === "powershell");
   const hasEvtxCategory = supportedCategoryOptions.some((option) => option.category === "evtx");
+  const selectedCategoryNames = supportedCategoryOptions
+    .filter((option) => option.supportedIds.some((id) => selectedCandidateIds.includes(id)))
+    .map((option) => option.label);
+  const manualSelectionActive = selectedCandidateIds.length > 0;
   const enabledArtifactCategories = modeEffectivePlan?.enabled_artifact_categories ?? [];
+  const activeRunCategoryNames = useMemo(() => {
+    const parserCategoryMap: Record<string, string> = {
+      evtx_raw: "evtx",
+      evtxecmd_csv: "evtx",
+      sysmon_evtx: "evtx",
+      powershell_evtx: "evtx",
+      scheduled_task_xml: "scheduled_task",
+      windows_service_registry: "service",
+      shimcache_raw: "shimcache",
+      prefetch_raw: "prefetch",
+      lnk_raw: "lnk",
+      jumplist_raw: "jumplist",
+      mft_raw: "mft",
+      ntfs_raw: "mft",
+      defender_evtx: "defender",
+      recmd_user_activity: "user_activity",
+      motw: "motw",
+      startup_persistence: "startup_persistence",
+    };
+    const categoryAliases: Record<string, string> = {
+      windows_event: "evtx",
+      services: "service",
+      scheduled_tasks: "scheduled_task",
+      startup: "startup_persistence",
+      startup_folder: "startup_persistence",
+      autoruns: "startup_persistence",
+    };
+    const preferredOrder = ["evtx", "scheduled_task", "service", "shimcache", "prefetch", "lnk", "jumplist", "mft", "defender", "user_activity", "motw", "startup_persistence"];
+    const values: string[] = [];
+    const pushValue = (value: unknown) => {
+      const raw = String(value ?? "").trim();
+      if (!raw) return;
+      const normalized = raw.toLowerCase().replaceAll("-", "_").replaceAll(" ", "_");
+      values.push(categoryAliases[normalized] ?? parserCategoryMap[normalized] ?? normalized);
+    };
+    const metadataCategories = metadata.velociraptor_selected_categories;
+    if (Array.isArray(metadataCategories)) metadataCategories.forEach(pushValue);
+    const selectedByParser = ingestPlan?.selected_by_parser;
+    if (selectedByParser && typeof selectedByParser === "object" && !Array.isArray(selectedByParser)) Object.keys(selectedByParser).forEach(pushValue);
+    const selectedByArtifactType = ingestPlan?.selected_by_artifact_type;
+    if (selectedByArtifactType && typeof selectedByArtifactType === "object" && !Array.isArray(selectedByArtifactType)) Object.keys(selectedByArtifactType).forEach(pushValue);
+    enabledArtifactCategories.forEach(pushValue);
+    const unique = Array.from(new Set(values));
+    return unique.sort((left, right) => {
+      const leftIndex = preferredOrder.indexOf(left);
+      const rightIndex = preferredOrder.indexOf(right);
+      if (leftIndex === -1 && rightIndex === -1) return left.localeCompare(right);
+      if (leftIndex === -1) return 1;
+      if (rightIndex === -1) return -1;
+      return leftIndex - rightIndex;
+    });
+  }, [enabledArtifactCategories, ingestPlan, metadata.velociraptor_selected_categories]);
+  const selectedIndexingLocked = activeIndexingJob;
+  const selectedIndexingAvailable = supportsGranularReprocess && supportedCategoryOptions.length > 0;
   const skippedFeatures = modeEffectivePlan?.skipped_features ?? [];
   const currentBottleneck = parallelIngest?.running_artifact_types?.includes("windows_event")
     ? "EVTX parsing/indexing"
@@ -1002,35 +1195,27 @@ export default function EvidenceDetail() {
     setSelectedCandidateIds(discoveryCandidates.filter((candidate) => candidate.supported).map((candidate) => candidate.id));
   }
 
-  function selectBrowserOnly() {
-    setSelectedCandidateIds(browserCandidates.filter((candidate) => candidate.supported).map((candidate) => candidate.id));
-  }
-
-  function selectScheduledTasksOnly() {
-    setSelectedCandidateIds(scheduledTaskCandidates.filter((candidate) => candidate.supported).map((candidate) => candidate.id));
-  }
-
   function selectEventLogsOnly() {
     setSelectedCandidateIds(discoveryCandidates.filter((candidate) => (candidate.category === "evtx" || candidate.category === "windows_event") && candidate.supported).map((candidate) => candidate.id));
   }
 
+  function selectCategories(categories: string[]) {
+    const categorySet = new Set(categories);
+    setSelectedCandidateIds(discoveryCandidates.filter((candidate) => categorySet.has(candidate.category) && candidate.supported).map((candidate) => candidate.id));
+  }
+
+  function selectExecutionArtifacts() {
+    selectCategories(["evtx", "windows_event", "prefetch", "shimcache", "amcache", "lnk", "jumplist"]);
+  }
+
+  function selectPersistenceArtifacts() {
+    selectCategories(["scheduled_task", "service", "registry_autoruns", "autoruns", "startup", "startup_folder", "wmi", "defender"]);
+  }
+
   function scrollToParseSelection() {
-    setAdvancedProcessingDetailsOpen(true);
-    if (typeof parseSelectionRef.current?.scrollIntoView === "function") {
-      parseSelectionRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    if (typeof selectedArtifactTypesRef.current?.scrollIntoView === "function") {
+      selectedArtifactTypesRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }
-
-  function indexCategory(category: string) {
-    const selectedIds = discoveryCandidates.filter((candidate) => candidate.category === category && candidate.supported).map((candidate) => candidate.id);
-    if (!selectedIds.length) return;
-    parseVelociraptorMutation.mutate({ selected_candidate_ids: selectedIds });
-  }
-
-  function indexEventLogsOnly() {
-    const selectedIds = discoveryCandidates.filter((candidate) => (candidate.category === "evtx" || candidate.category === "windows_event") && candidate.supported).map((candidate) => candidate.id);
-    if (!selectedIds.length) return;
-    parseVelociraptorMutation.mutate({ selected_candidate_ids: selectedIds });
   }
 
   function selectCategory(category: string) {
@@ -1051,6 +1236,11 @@ export default function EvidenceDetail() {
 
   function clearSelection() {
     setSelectedCandidateIds([]);
+  }
+
+  function indexSelectedArtifactTypes() {
+    if (!selectedCandidateIds.length || selectedIndexingLocked) return;
+    parseVelociraptorMutation.mutate({ selected_candidate_ids: selectedCandidateIds });
   }
 
   function toggleCategoryExpanded(category: string) {
@@ -1202,9 +1392,9 @@ function formatReportStatus(status: string | null | undefined) {
             <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Evidence summary</p>
             <h2 className="mt-2 break-words text-3xl font-semibold">{data?.original_filename}</h2>
             <div className="mt-4 flex flex-wrap items-center gap-3">
-              <span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${data?.ingest_status === "completed" ? "border-mint/30 bg-mint/10 text-mint" : data?.ingest_status === "completed_with_errors" ? "border-amber/30 bg-amber/10 text-amber" : data?.ingest_status === "failed" ? "border-danger/30 bg-danger/10 text-danger" : "border-accent/30 bg-accent/10 text-accent"}`}>{data?.ingest_status ?? "unknown"}</span>
+              <span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${indexingState === "completed" ? "border-mint/30 bg-mint/10 text-mint" : indexingState === "completed_with_warnings" || indexingState === "completed_with_errors" ? "border-amber/30 bg-amber/10 text-amber" : indexingState === "failed" ? "border-danger/30 bg-danger/10 text-danger" : "border-accent/30 bg-accent/10 text-accent"}`}>{formatEvidenceStatusForDisplay(displayStatus)}</span>
               <span className="rounded-full border border-line bg-abyss/60 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{productModeLabel}</span>
-              <span className="font-mono text-xs text-muted">{isActive ? "Auto-refresh every 3s" : "Stable state"}</span>
+              <span className="font-mono text-xs text-muted">{activeIndexingJob ? "Auto-refresh every 3s" : "Stable state"}</span>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -1249,35 +1439,87 @@ function formatReportStatus(status: string | null | undefined) {
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0">
               <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Investigation indexing</p>
-              <h3 className="mt-1 text-xl font-semibold text-ink">Index evidence for investigation</h3>
+              <h3 className="mt-1 text-xl font-semibold text-ink">{indexingStateTitle}</h3>
               <p className="mt-1 max-w-4xl text-sm text-muted">
-                Recommended indexing prepares event logs, filesystem, user activity, Defender, downloaded-file evidence and core artifacts. Rules and reports are run later.
+                {indexingStateSubcopy}
               </p>
-              <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Indexing profiles">
+              {activeIndexingJob ? (
+                <>
+                  {activeRecommendedIndexing ? <p className="mt-2 text-sm font-semibold text-amber">Recommended indexing is running</p> : null}
+                  {activeRunCategoryNames.length ? (
+                    <p className="mt-1 text-sm text-muted">Categories in this run: <span className="font-semibold text-ink">{activeRunCategoryNames.join(", ")}</span></p>
+                  ) : null}
+                  <p className="mt-2 text-sm text-amber">Current step: {formatIndexingPhaseForDisplay(activeIndexingPhase || currentPhase)} · {progressPct}% · {indexedDocumentsTotal.toLocaleString()} indexed docs</p>
+                </>
+              ) : waitingSelectionNeedsAction ? (
+                <p className="mt-2 text-sm text-amber">{rawDiscoveryCandidateCountForState} discovered artifacts · {indexingPlan?.supported_candidate_count ?? 0} supported for recommended indexing</p>
+              ) : staleIndexingState ? (
+                <p className="mt-2 text-sm text-amber">No active worker run is visible for this evidence state.</p>
+              ) : null}
+              {!evidenceReadyForActions ? <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Indexing profiles">
                 {(["recommended", "fast", "advanced_custom"] as const).map((profile) => (
                   <button
                     key={profile}
                     type="button"
                     onClick={() => setIndexingProfile(profile)}
+                    disabled={conflictingIndexingActionsDisabled}
                     className={`rounded-full border px-3 py-1 text-xs font-semibold ${indexingProfile === profile ? "border-accent bg-accent text-abyss" : "border-line bg-abyss/70 text-muted"}`}
                   >
-                    {profile === "recommended" ? "Recommended indexing" : profile === "fast" ? "Fast indexing" : "Advanced custom"}
+                    {profile === "recommended" ? "Recommended" : profile === "fast" ? "Fast indexing" : "Advanced custom"}
                   </button>
                 ))}
-              </div>
+              </div> : null}
             </div>
             <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => runIndexingPlanMutation.mutate()}
-                disabled={runIndexingPlanMutation.isPending || indexingProfile === "advanced_custom" || !indexingPlan?.can_run}
-                className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {runIndexingPlanMutation.isPending ? "Queueing plan..." : indexingPlan?.active ? "Indexing already running" : "Index evidence for investigation"}
-              </button>
-              <button type="button" onClick={scrollToParseSelection} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted">
-                Advanced custom
-              </button>
+              {activeIndexingJob ? (
+                <>
+                  <a href="#indexing-progress" className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">View progress</a>
+                  <a href="#jobs-activity" className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted">Open Jobs & Activity</a>
+                </>
+              ) : waitingSelectionNeedsAction ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => runIndexingPlanMutation.mutate()}
+                    disabled={primaryIndexingDisabled}
+                    className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {runIndexingPlanMutation.isPending ? "Queueing plan..." : "Continue with recommended indexing"}
+                  </button>
+                  <button type="button" onClick={scrollToParseSelection} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted">
+                    Choose categories
+                  </button>
+                  <button type="button" onClick={() => cancelIndexingMutation.mutate()} disabled={cancelIndexingMutation.isPending} className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger disabled:opacity-60">
+                    {cancelIndexingMutation.isPending ? "Cancelling..." : "Cancel indexing"}
+                  </button>
+                </>
+              ) : staleIndexingState ? (
+                <>
+                  <button type="button" onClick={() => cancelIndexingMutation.mutate()} disabled={cancelIndexingMutation.isPending} className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
+                    {cancelIndexingMutation.isPending ? "Clearing..." : "Mark stale and retry"}
+                  </button>
+                  <a href="#jobs-activity" className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted">Open logs</a>
+                </>
+              ) : evidenceReadyForActions ? (
+                <>
+                  <Link to={coreSearchHref} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">Search this evidence</Link>
+                  <Link to={artifactViewsHref} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted">View artifacts</Link>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => runIndexingPlanMutation.mutate()}
+                    disabled={primaryIndexingDisabled}
+                    className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {runIndexingPlanMutation.isPending ? "Queueing plan..." : "Index evidence for investigation"}
+                  </button>
+                  <button type="button" onClick={scrollToParseSelection} disabled={conflictingIndexingActionsDisabled} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted disabled:opacity-60">
+                    Index selected types
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -1327,8 +1569,127 @@ function formatReportStatus(status: string | null | undefined) {
           )}
         </div>
 
+        <div ref={selectedArtifactTypesRef} className="mt-5 rounded-3xl border border-line bg-panel/60 p-5" data-testid="selected-artifact-types-section">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0">
+              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Selected artifact types</p>
+              <h3 className="mt-1 text-xl font-semibold text-ink">Index selected artifact types</h3>
+              <p className="mt-1 max-w-4xl text-sm text-muted">
+                Use this when you only want to parse specific artifact families, such as EVTX, Scheduled Tasks, Services or Shimcache.
+              </p>
+              {selectedIndexingLocked ? (
+                <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 px-4 py-3 text-sm text-amber">
+                  <p>{activeRecommendedIndexing ? "Manual selected indexing is locked while recommended indexing is running." : "Manual selected indexing is locked while another indexing job is running."}</p>
+                  {!manualSelectionActive ? <p className="mt-1 text-muted">No manual selection is active.</p> : null}
+                </div>
+              ) : !selectedIndexingAvailable ? (
+                <p className="mt-3 rounded-2xl border border-line bg-abyss/60 px-4 py-3 text-sm text-muted">
+                  No supported raw discovery artifact types are available for selected indexing.
+                </p>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={selectAllSupported} disabled={!selectedIndexingAvailable || selectedIndexingLocked} className="rounded-2xl border border-line bg-panel/50 px-4 py-2 text-sm text-muted disabled:opacity-60">
+                Select all supported
+              </button>
+              <button type="button" onClick={clearSelection} disabled={!selectedIndexingAvailable || selectedIndexingLocked} className="rounded-2xl border border-line bg-panel/50 px-4 py-2 text-sm text-muted disabled:opacity-60">
+                Clear selection
+              </button>
+            </div>
+          </div>
+
+          {selectedIndexingAvailable ? (
+            <>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {hasEvtxCategory ? (
+                  <button type="button" onClick={selectEventLogsOnly} disabled={selectedIndexingLocked} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-muted disabled:opacity-60">
+                    Event logs only
+                  </button>
+                ) : null}
+                <button type="button" onClick={selectExecutionArtifacts} disabled={selectedIndexingLocked} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-muted disabled:opacity-60">
+                  Execution artifacts
+                </button>
+                <button type="button" onClick={selectPersistenceArtifacts} disabled={selectedIndexingLocked} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-muted disabled:opacity-60">
+                  Persistence artifacts
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                {supportedCategoryOptions.map((option) => {
+                  const selectedCount = option.supportedIds.filter((id) => selectedCandidateIds.includes(id)).length;
+                  const fullySelected = selectedCount === option.supportedIds.length;
+                  return (
+                    <label key={option.category} className={`flex min-h-[96px] cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 transition ${fullySelected ? "border-accent/40 bg-accent/10" : "border-line bg-abyss/60 hover:border-accent/20"} ${selectedIndexingLocked ? "cursor-not-allowed opacity-60" : ""}`}>
+                      <input
+                        type="checkbox"
+                        className="mt-1"
+                        checked={fullySelected}
+                        disabled={selectedIndexingLocked}
+                        onChange={() => toggleCategorySelection(option.category)}
+                      />
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-ink">{option.label}</p>
+                        <p className="mt-1 text-xs text-muted">
+                          {option.parseableCount} parseable
+                          {option.partialCount ? ` · ${option.partialCount} partial` : ""}
+                          {` · ${option.supportedIds.length} selectable`}
+                        </p>
+                      </div>
+                    </label>
+                  );
+                })}
+              </div>
+
+              {manualSelectionActive ? (
+                <div className="mt-4 rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm text-muted">
+                  <p>
+                    Selected preview: <span className="font-semibold text-ink">{selectedCandidateIds.length}</span> candidates
+                  </p>
+                  {selectedCategoryNames.length ? <p className="mt-1">Selected categories: <span className="font-semibold text-ink">{selectedCategoryNames.join(", ")}</span></p> : null}
+                </div>
+              ) : selectedIndexingLocked ? null : (
+                <div className="mt-4 rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm text-muted">
+                  No manual selection is active.
+                </div>
+              )}
+
+              {hasPowerShellCategory ? (
+                <div className="mt-3 rounded-2xl border border-cyan-400/25 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">
+                  PowerShell selection covers PSReadLine, transcripts, script files and PowerShell exports. PowerShell events stored inside EVTX files are only scanned when you also select EVTX.
+                </div>
+              ) : null}
+              {hasEvtxCategory && !evtxecmdAvailable ? (
+                <div className="mt-3 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
+                  <p className="font-semibold text-ink">EVTX indexing profile</p>
+                  <p className="mt-1">Full EVTX indexing is unavailable because EvtxECmd is not available. Limited EVTX triage mode is partial and should only be used as a fallback.</p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button type="button" onClick={() => setParseEvtxProfile("fast_high_value")} disabled={selectedIndexingLocked} className={`rounded-2xl border px-4 py-2 text-sm ${parseEvtxProfile === "fast_high_value" ? "border-accent bg-accent/10 text-ink" : "border-line bg-panel/40 text-muted"}`}>
+                      Fast EVTX Search
+                    </button>
+                    <button type="button" onClick={() => setParseEvtxProfile("full")} disabled={selectedIndexingLocked} className={`rounded-2xl border px-4 py-2 text-sm ${parseEvtxProfile === "full" ? "border-amber bg-amber/10 text-ink" : "border-line bg-panel/40 text-muted"}`}>
+                      Full EVTX Indexing
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  type="button"
+                  onClick={indexSelectedArtifactTypes}
+                  disabled={!selectedCandidateIds.length || selectedIndexingLocked || parseVelociraptorMutation.isPending}
+                  className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {parseVelociraptorMutation.isPending ? "Queueing selected types..." : "Index selected types"}
+                </button>
+              </div>
+              {parseVelociraptorMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{parseVelociraptorMutation.error.message}</p> : null}
+            </>
+          ) : null}
+        </div>
+
         <details className="mt-5 rounded-3xl border border-line bg-panel/50 p-4">
-          <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Advanced custom indexing actions</summary>
+          <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Advanced recovery & diagnostics</summary>
           <p className="mt-2 text-sm text-muted">Use these scoped actions for rebuilds, parser diagnostics or explicit artifact-level control. They are intentionally outside the recommended indexing flow.</p>
 
         {mftDiagnostic ? (
@@ -1364,7 +1725,7 @@ function formatReportStatus(status: string | null | undefined) {
                       </Link>
                       <button
                         type="button"
-                        disabled={indexMftFullMutation.isPending || mftDiagnostic.mft_full_status === "running" || mftDiagnostic.mft_full_status === "queued"}
+                        disabled={conflictingIndexingActionsDisabled || indexMftFullMutation.isPending || mftDiagnostic.mft_full_status === "running" || mftDiagnostic.mft_full_status === "queued"}
                         onClick={() => {
                           const existing = mftDiagnostic.mft_full_records_indexed ?? 0;
                           const message = existing > 0
@@ -1379,12 +1740,12 @@ function formatReportStatus(status: string | null | undefined) {
                     </>
                   ) : (
                     <>
-                      <button type="button" disabled={indexMftSummaryMutation.isPending} onClick={() => indexMftSummaryMutation.mutate()} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent disabled:opacity-60">
+                      <button type="button" disabled={conflictingIndexingActionsDisabled || indexMftSummaryMutation.isPending} onClick={() => indexMftSummaryMutation.mutate()} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent disabled:opacity-60">
                         {indexMftSummaryMutation.isPending ? "Queueing..." : "Index MFT summary"}
                       </button>
                       <button
                         type="button"
-                        disabled={indexMftFullMutation.isPending || mftDiagnostic.mft_full_status === "running" || mftDiagnostic.mft_full_status === "queued"}
+                        disabled={conflictingIndexingActionsDisabled || indexMftFullMutation.isPending || mftDiagnostic.mft_full_status === "running" || mftDiagnostic.mft_full_status === "queued"}
                         onClick={() => {
                           if (window.confirm("Index full MFT? This advanced action can add hundreds of thousands of filesystem records.")) indexMftFullMutation.mutate();
                         }}
@@ -1432,7 +1793,7 @@ function formatReportStatus(status: string | null | undefined) {
               ) : null}
               <button
                 type="button"
-                disabled={indexRecmdUserActivityMutation.isPending || userActivityStatus === "queued" || userActivityStatus === "running"}
+                disabled={conflictingIndexingActionsDisabled || indexRecmdUserActivityMutation.isPending || userActivityStatus === "queued" || userActivityStatus === "running"}
                 onClick={() => {
                   const message = userActivityTotal > 0 ? "Rebuild RECmd user activity artifacts for this evidence? Existing RECmd user activity docs for this evidence will be replaced." : "Index RECmd user activity artifacts for this evidence?";
                   if (window.confirm(message)) indexRecmdUserActivityMutation.mutate();
@@ -1470,7 +1831,7 @@ function formatReportStatus(status: string | null | undefined) {
               ) : null}
               <button
                 type="button"
-                disabled={indexDefenderEvtxMutation.isPending || defenderStatus === "queued" || defenderStatus === "running"}
+                disabled={conflictingIndexingActionsDisabled || indexDefenderEvtxMutation.isPending || defenderStatus === "queued" || defenderStatus === "running"}
                 onClick={() => {
                   const message = defenderDocs > 0 ? "Rebuild Defender EVTX artifact docs for this evidence? Existing Defender docs for this evidence will be replaced." : "Index Defender EVTX artifact docs for this evidence?";
                   if (window.confirm(message)) indexDefenderEvtxMutation.mutate();
@@ -1520,7 +1881,7 @@ function formatReportStatus(status: string | null | undefined) {
               ) : null}
               <button
                 type="button"
-                disabled={indexSrumMutation.isPending || srumStatus === "queued" || srumStatus === "running"}
+                disabled={conflictingIndexingActionsDisabled || indexSrumMutation.isPending || srumStatus === "queued" || srumStatus === "running"}
                 onClick={() => {
                   const message = srumDocs > 0 ? "Rebuild SRUM artifact docs for this evidence? Existing SRUM docs for this evidence will be replaced." : "Index SRUM artifact docs for this evidence?";
                   if (window.confirm(message)) indexSrumMutation.mutate();
@@ -1542,20 +1903,25 @@ function formatReportStatus(status: string | null | undefined) {
         </div>
         </details>
 
-        <div className="mt-5 flex flex-wrap gap-3">
-          {coreActions.slice(0, 4).map((action) => (
-            <Link key={action.id} to={action.href} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm text-muted transition hover:border-accent hover:text-ink">
-              <span className="font-medium text-ink">{action.label}</span>
-              <span className="ml-2 text-xs text-muted">{action.description}</span>
+        {evidenceReadyForActions ? (
+          <div className="mt-5 flex flex-wrap gap-3">
+            {coreActions.slice(0, 4).map((action) => (
+              <Link key={action.id} to={action.href} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm text-muted transition hover:border-accent hover:text-ink">
+                <span className="font-medium text-ink">{action.label}</span>
+                <span className="ml-2 text-xs text-muted">{action.description}</span>
+              </Link>
+            ))}
+            <button type="button" onClick={() => onDemandRulesMutation.mutate()} disabled={rulesLaunchDisabled} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-medium text-ink disabled:opacity-60">
+              {onDemandRulesMutation.isPending ? "Launching rules..." : activeEvidenceRuleRun ? "Rules running" : "Run rules"}
+            </button>
+            <button type="button" onClick={() => generateReportMutation.mutate()} disabled={reportLaunchDisabled} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-medium text-ink disabled:opacity-60">
+              {generateReportMutation.isPending ? "Generating report..." : activeEvidenceReport ? "Report running" : "Generate report"}
+            </button>
+            <Link to={data?.case_id ? `/cases/${data.case_id}/evidence` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-medium text-ink">
+              Add more evidence
             </Link>
-          ))}
-          <button type="button" onClick={() => onDemandRulesMutation.mutate()} disabled={rulesLaunchDisabled} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-medium text-ink disabled:opacity-60">
-            {onDemandRulesMutation.isPending ? "Launching rules..." : activeEvidenceRuleRun ? "Rules running" : "Run rules"}
-          </button>
-          <button type="button" onClick={() => generateReportMutation.mutate()} disabled={reportLaunchDisabled} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-medium text-ink disabled:opacity-60">
-            {generateReportMutation.isPending ? "Generating report..." : activeEvidenceReport ? "Report running" : "Generate report"}
-          </button>
-        </div>
+          </div>
+        ) : null}
 
         <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
           <div className="rounded-3xl border border-line bg-panel/60 p-4">
@@ -1599,19 +1965,22 @@ function formatReportStatus(status: string | null | undefined) {
           </div>
         </div>
 
-        <div className="mt-5 rounded-3xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">
+        <div className="mt-5 rounded-3xl border border-line bg-panel/50 p-4 text-sm text-muted">
           {selectionPending
-            ? "Evidence ready to index. The app found supported artifacts and can index them now."
-            : "Raw artifacts from evidence collections are preserved and inventoried here. Parse the supported categories directly from this evidence, or upload already parsed outputs when needed."}
+            ? "Raw discovery inventory is available below. Use Index selected artifact types for scoped parsing."
+            : activeIndexingJob
+              ? "Raw discovery inventory remains readable while indexing is running; selected indexing is locked until the job finishes."
+              : "Raw discovery inventory is preserved for candidate counts, support status and parser availability."}
         </div>
         {selectionPending ? (
-          <div className="mt-3 rounded-3xl border border-accent/30 bg-accent/10 p-4">
+          <details className="mt-3 rounded-3xl border border-line bg-panel/50 p-4">
+            <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Raw discovery inventory</summary>
             <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
               <div>
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Raw discovery details</p>
+                <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Raw discovery inventory</p>
                 <p className="mt-1 text-sm font-semibold text-ink">Supported artifacts detected</p>
                 <p className="mt-1 text-sm text-muted">
-                  Review the discovered raw artifacts here. The primary recommended indexing plan above replaces the older “index all supported artifacts” path.
+                  Read-only inventory of discovered candidates, support status and parser availability. Use Index selected artifact types above for scoped parsing.
                 </p>
                 <div className="mt-3 grid gap-2 text-sm text-muted md:grid-cols-2 xl:grid-cols-4">
                   <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2">
@@ -1632,30 +2001,17 @@ function formatReportStatus(status: string | null | undefined) {
                   </div>
                 </div>
                 <div className="mt-3 rounded-2xl border border-line bg-panel/40 px-4 py-3 text-sm text-muted">
-                  <p className="font-semibold text-ink">Recommended indexing</p>
-                  <p className="mt-1">Extract supported investigation data, index searchable events and preserve raw files. Use Fast indexing to skip filesystem-heavy work, or Advanced options for individual artifact control.</p>
+                  <p className="font-semibold text-ink">Inventory only</p>
+                  <p className="mt-1">Discovered candidates are preserved for traceability. Scoped parsing controls live in Index selected artifact types.</p>
                 </div>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button onClick={() => runIndexingPlanMutation.mutate()} disabled={runIndexingPlanMutation.isPending || !indexingPlan?.can_run} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">
-                  Use recommended indexing
-                </button>
-                {browserCandidates.some((candidate) => candidate.supported) ? (
-                  <button onClick={() => indexCategory("browser")} disabled={parseVelociraptorMutation.isPending} className="rounded-2xl border border-line bg-panel/50 px-4 py-2 text-sm text-muted disabled:opacity-60">
-                    Browser only
-                  </button>
-                ) : null}
-                {hasEvtxCategory ? (
-                  <button onClick={indexEventLogsOnly} disabled={parseVelociraptorMutation.isPending} className="rounded-2xl border border-line bg-panel/50 px-4 py-2 text-sm text-muted disabled:opacity-60">
-                    Event logs only
-                  </button>
-                ) : null}
-                <button onClick={scrollToParseSelection} className="rounded-2xl border border-line bg-panel/50 px-4 py-2 text-sm text-muted">
-                  Advanced custom
+                <button onClick={scrollToParseSelection} disabled={conflictingIndexingActionsDisabled} className="rounded-2xl border border-line bg-panel/50 px-4 py-2 text-sm text-muted disabled:opacity-60">
+                  Index selected types
                 </button>
               </div>
             </div>
-          </div>
+          </details>
         ) : null}
         {!selectionPending && selectedArtifactTypes.length ? (
           <div className="mt-3 rounded-3xl border border-line bg-panel/60 p-4 text-sm text-muted">
@@ -1701,11 +2057,12 @@ function formatReportStatus(status: string | null | undefined) {
           </div>
         ) : null}
 
-        <div data-testid="evidence-progress-primary" className="mt-5 rounded-3xl border border-accent/30 bg-panel/70 p-4 shadow-panel">
+        <div id="indexing-progress" data-testid="evidence-progress-primary" className="mt-5 rounded-3xl border border-accent/30 bg-panel/70 p-4 shadow-panel">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Indexing progress</p>
-              <h3 className="mt-1 text-lg font-semibold text-ink">{currentPhase}</h3>
+              <h3 className="mt-1 text-lg font-semibold text-ink">{activeIndexingJob ? indexingStateTitle : formatIndexingPhaseForDisplay(currentPhase)}</h3>
+              <p className="mt-1 text-xs text-muted">Current step: {formatIndexingPhaseForDisplay(currentPhase)}</p>
               <p className="mt-1 text-sm text-muted">{progressStatusLabel}</p>
               {currentDisplayArtifact ? <p className="mt-1 max-w-[760px] truncate text-xs text-muted" title={currentDisplayArtifact}>Current artifact: {currentDisplayArtifact}</p> : null}
               {currentBottleneck ? <p className="mt-1 text-xs text-muted">Current bottleneck: {currentBottleneck}</p> : null}
@@ -1716,7 +2073,7 @@ function formatReportStatus(status: string | null | undefined) {
             </div>
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-5">
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Status</p><p className="mt-1 text-sm text-ink">{data?.ingest_status ?? "-"}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Status</p><p className="mt-1 text-sm text-ink">{indexingStateTitle}</p></div>
             <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifacts</p><p className="mt-1 text-sm text-ink">{artifactsDone} / {String(data?.metadata_json?.artifacts_total ?? 0)}</p></div>
             <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Indexed docs</p><p className="mt-1 text-sm text-ink">{String(data?.metadata_json?.events_indexed ?? manifest?.stats?.indexed_events ?? 0)}</p></div>
             <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Last progress</p><p className="mt-1 text-sm text-ink">{lastProgressAgeLabel}</p></div>
@@ -2262,7 +2619,7 @@ function formatReportStatus(status: string | null | undefined) {
         </details>
       </section>
 
-      <section id="problematic-artifacts" className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
+      <section id="jobs-activity" className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Ingest &amp; Reprocess Runs</p>
@@ -2329,8 +2686,9 @@ function formatReportStatus(status: string | null | undefined) {
         ) : null}
       </section>
 
+      {benchmarkToolsEnabled ? (
       <details className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-        <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.18em] text-accent">Advanced / Debug benchmarks</summary>
+        <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.18em] text-accent">Benchmark &amp; tuning · Developer/Performance</summary>
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Benchmark &amp; Tuning · Advanced/Beta</p>
@@ -2485,15 +2843,21 @@ function formatReportStatus(status: string | null | undefined) {
           <div className="mt-4 rounded-2xl border border-line bg-abyss/70 p-4 text-sm text-muted">No benchmarks recorded yet.</div>
         )}
       </details>
+      ) : null}
 
       {problematicSummary && problematicSummary.problematic_count > 0 ? (
-        <section className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
+        <section id="problematic-artifacts" className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Problematic artifacts</p>
               <p className="mt-1 text-sm text-muted">
                 These artifacts had issues during ingest. Historical failures stay visible, but the current status below reflects health checks, retries and recovered indexed data.
               </p>
+              {(problematicSummary.skipped_empty ?? 0) > 0 ? (
+                <p className="mt-2 text-sm text-muted">
+                  Some Windows event log files do not contain parseable records. These are informational and do not block investigation.
+                </p>
+              ) : null}
               <p className="mt-2 text-sm text-ink">
                 {problematicSummary.problematic_count} artifacts had issues during ingest. {problematicSummary.indexed_with_warning + problematicSummary.recovered_count + problematicSummary.source_missing_but_indexed} have indexed records available; {problematicSummary.recovered_count} recovered by retry; {problematicSummary.unresolved_count} still unresolved.
               </p>
@@ -2515,7 +2879,7 @@ function formatReportStatus(status: string | null | undefined) {
               <span className="text-xs text-muted">{retryModeDescriptions[problematicRetryMode] ?? ""}</span>
               <button
                 onClick={() => retryProblematicArtifactsMutation.mutate({ artifactIds: selectedProblematicArtifactIds, mode: problematicRetryMode })}
-                disabled={!selectedProblematicArtifactIds.length || retryProblematicArtifactsMutation.isPending}
+                disabled={activeIndexingJob || !selectedProblematicArtifactIds.length || retryProblematicArtifactsMutation.isPending}
                 className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50"
               >
                 Retry selected
@@ -2535,6 +2899,7 @@ function formatReportStatus(status: string | null | undefined) {
             <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Data loss expected</p><p className="mt-1 text-sm text-orange-300">{problematicSummary.data_loss_expected_count}</p></div>
             <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source missing, indexed</p><p className="mt-1 text-sm text-amber">{problematicSummary.source_missing_but_indexed}</p></div>
             <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Retryable</p><p className="mt-1 text-sm text-ink">{problematicSummary.retryable}</p></div>
+            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">No records</p><p className="mt-1 text-sm text-mint">{problematicSummary.skipped_empty ?? 0}</p></div>
           </div>
           <div className="mt-4 overflow-x-auto rounded-3xl border border-line">
             <table className="min-w-full divide-y divide-line text-sm">
@@ -2567,7 +2932,7 @@ function formatReportStatus(status: string | null | undefined) {
                     </td>
                     <td className="px-3 py-3 align-top text-muted">
                       <span className={`rounded-full border px-2 py-1 font-mono text-[11px] uppercase tracking-[0.14em] ${problematicStatusTone(artifact.effective_status ?? artifact.status)}`}>
-                        {artifact.effective_status === "parsed_with_warning" ? "Indexed with warning" : artifact.effective_status === "recovered_with_warning" ? "Recovered by retry" : artifact.effective_status === "source_missing_but_indexed" ? "Source missing, indexed data available" : artifact.effective_status === "unresolved_timeout" || artifact.effective_status === "unresolved_failed" || artifact.effective_status === "health_check_failed" ? "Still unresolved" : formatProblematicStatusLabel(artifact.effective_status ?? artifact.status)}
+                        {artifact.effective_status === "parsed_with_warning" ? "Indexed with warning" : artifact.effective_status === "recovered_with_warning" ? "Recovered by retry" : artifact.effective_status === "source_missing_but_indexed" ? "Source missing, indexed data available" : artifact.effective_status === "skipped_empty" || artifact.effective_status === "completed_no_records" || artifact.effective_status === "unsupported_no_records" ? "No records produced" : artifact.effective_status === "unresolved_timeout" || artifact.effective_status === "unresolved_failed" || artifact.effective_status === "health_check_failed" ? "Still unresolved" : formatProblematicStatusLabel(artifact.effective_status ?? artifact.status)}
                       </span>
                       {artifact.health_summary ? <p className="mt-2 text-xs">{artifact.health_summary}</p> : null}
                     </td>
@@ -2592,7 +2957,7 @@ function formatReportStatus(status: string | null | undefined) {
                         {artifact.retryable && artifact.artifact_id ? (
                           <button
                             onClick={() => evtxHealthCheckMutation.mutate({ artifactId: artifact.artifact_id! })}
-                            disabled={evtxHealthCheckMutation.isPending}
+                            disabled={activeIndexingJob || evtxHealthCheckMutation.isPending}
                             className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50"
                           >
                             Check EVTX health
@@ -2601,7 +2966,7 @@ function formatReportStatus(status: string | null | undefined) {
                         {(artifact.effective_status === "unresolved_timeout" || artifact.effective_status === "unresolved_failed" || artifact.effective_status === "health_check_only_valid" || artifact.effective_status === "health_check_failed") && artifact.artifact_id ? (
                           <button
                             onClick={() => retryProblematicArtifactsMutation.mutate({ singleArtifactId: artifact.artifact_id!, mode: "deep_safe_mode" })}
-                            disabled={retryProblematicArtifactsMutation.isPending}
+                            disabled={activeIndexingJob || retryProblematicArtifactsMutation.isPending}
                             className="rounded-full border border-amber/30 bg-amber/10 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-amber disabled:opacity-50"
                           >
                             Retry deep safe mode
@@ -2610,7 +2975,7 @@ function formatReportStatus(status: string | null | undefined) {
                         {!artifact.accepted_warning && !(artifact.current_data_loss_expected ?? artifact.data_loss_expected) && artifact.artifact_id ? (
                           <button
                             onClick={() => acceptProblematicWarningMutation.mutate({ artifactId: artifact.artifact_id! })}
-                            disabled={acceptProblematicWarningMutation.isPending}
+                            disabled={activeIndexingJob || acceptProblematicWarningMutation.isPending}
                             className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50"
                           >
                             Accept warning
@@ -2619,7 +2984,7 @@ function formatReportStatus(status: string | null | undefined) {
                         {artifact.retryable && artifact.artifact_id ? (
                           <button
                             onClick={() => retryProblematicArtifactsMutation.mutate({ singleArtifactId: artifact.artifact_id!, mode: problematicRetryMode })}
-                            disabled={retryProblematicArtifactsMutation.isPending}
+                            disabled={activeIndexingJob || retryProblematicArtifactsMutation.isPending}
                             className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50"
                           >
                             Retry artifact
@@ -2643,109 +3008,14 @@ function formatReportStatus(status: string | null | undefined) {
           onToggle={(event) => setAdvancedProcessingDetailsOpen(event.currentTarget.open)}
           className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel"
         >
-          <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.18em] text-accent">Advanced / Debug details</summary>
-          <div className="mt-4 sticky top-4 z-10 rounded-3xl border border-line bg-abyss/95 p-5 shadow-panel backdrop-blur">
+          <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.18em] text-accent">Raw discovery candidate details</summary>
+          <div className="mt-4 rounded-3xl border border-line bg-abyss/80 p-5">
             <div className="flex flex-col gap-2">
-              <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Advanced selection</p>
-              <p className="text-lg font-semibold text-ink">Choose artifact categories manually</p>
+              <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Candidate inventory</p>
+              <p className="text-lg font-semibold text-ink">Discovered artifact candidates</p>
               <p className="text-sm text-muted">
-                The recommended path is indexing all supported artifacts. Use this section only when you want to limit indexing to a specific category.
+                Category-level indexing controls are available in Index selected artifact types. This detail view is for inspecting individual raw candidates and parser status.
               </p>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {supportedCategoryOptions.map((option) => {
-                const selectedCount = option.supportedIds.filter((id) => selectedCandidateIds.includes(id)).length;
-                const fullySelected = selectedCount === option.supportedIds.length;
-                return (
-                  <label key={option.category} className={`flex cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 transition ${fullySelected ? "border-accent/40 bg-accent/10" : "border-line bg-panel/50 hover:border-accent/20"}`}>
-                    <input
-                      type="checkbox"
-                      className="mt-1"
-                      checked={fullySelected}
-                      onChange={() => toggleCategorySelection(option.category)}
-                    />
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-ink">{option.label}</p>
-                      <p className="mt-1 text-xs text-muted">
-                        {option.parseableCount} parseable
-                        {option.partialCount ? ` · ${option.partialCount} partial` : ""}
-                        {` · ${option.supportedIds.length} selectable`}
-                      </p>
-                    </div>
-                  </label>
-                );
-              })}
-            </div>
-            {hasPowerShellCategory ? (
-              <div className="mt-4 rounded-2xl border border-cyan-400/25 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">
-                PowerShell selection covers PSReadLine, transcripts, script files and PowerShell exports. PowerShell events stored inside <span className="font-semibold">EVTX</span> files such as <span className="font-mono">Microsoft-Windows-PowerShell/Operational.evtx</span> are only scanned when you also select <span className="font-semibold">EVTX</span>.
-                {!hasEvtxCategory ? " No parseable EVTX category is available in this collection." : ""}
-              </div>
-            ) : null}
-            {hasEvtxCategory && !evtxecmdAvailable ? (
-              <div className="mt-4 rounded-2xl border border-line bg-panel/40 p-4">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">EVTX indexing profile</p>
-                <p className="mt-2 text-sm text-muted">
-                  Full EVTX indexing is unavailable because EvtxECmd is not available. Limited EVTX triage mode is partial and should only be used as a fallback.
-                </p>
-                {evtxParserBackend ? <p className="mt-1 text-xs text-muted">Current EVTX parser: <span className="font-semibold text-ink">{formatEvtxBackend(evtxParserBackend)}{evtxParserBackendVersion ? ` ${evtxParserBackendVersion}` : ""}</span></p> : null}
-                <div className="mt-3 grid gap-3 md:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setParseEvtxProfile("fast_high_value")}
-                    className={`rounded-2xl border px-4 py-3 text-left ${parseEvtxProfile === "fast_high_value" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/60 text-muted"}`}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm font-semibold">Fast EVTX Search</span>
-                      <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Beta / Triage</span>
-                    </div>
-                    <p className="mt-2 text-xs">Bounded fast-profile coverage for large EVTX files. This is not full EVTX coverage.</p>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setParseEvtxProfile("full")}
-                    className={`rounded-2xl border px-4 py-3 text-left ${parseEvtxProfile === "full" ? "border-amber bg-amber/10 text-ink" : "border-line bg-abyss/60 text-muted"}`}
-                  >
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="text-sm font-semibold">Full EVTX Indexing</span>
-                      <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-amber">{evtxParserBackend === "evtxecmd_csv" ? "Recommended with EvtxECmd" : "Full coverage"}</span>
-                    </div>
-                  </button>
-                </div>
-                {parseEvtxProfile === "full" ? <p className="mt-3 text-xs text-amber">This can take a long time on evidence with many EVTX files.</p> : null}
-              </div>
-            ) : hasEvtxCategory ? (
-              <div className="mt-4 rounded-2xl border border-mint/20 bg-mint/10 p-4 text-sm text-mint">
-                Event logs will be fully indexed with EvtxECmd automatically. No EVTX profile selection is needed.
-              </div>
-            ) : null}
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <button onClick={selectAllSupported} className="rounded-2xl border border-line bg-panel/40 px-4 py-2 text-sm text-muted">
-                Select all supported
-              </button>
-              <button onClick={clearSelection} className="rounded-2xl border border-line bg-panel/40 px-4 py-2 text-sm text-muted">
-                Clear selection
-              </button>
-              {browserCandidates.some((candidate) => candidate.supported) ? (
-                <button onClick={selectBrowserOnly} className="rounded-2xl border border-line bg-panel/40 px-4 py-2 text-sm text-muted">
-                  Browser only
-                </button>
-              ) : null}
-              {scheduledTaskCandidates.some((candidate) => candidate.supported) ? (
-                <button onClick={selectScheduledTasksOnly} className="rounded-2xl border border-line bg-panel/40 px-4 py-2 text-sm text-muted">
-                  Scheduled Tasks only
-                </button>
-              ) : null}
-              <button
-                onClick={() => parseVelociraptorMutation.mutate({ selected_candidate_ids: selectedCandidateIds })}
-                disabled={!selectedCandidateIds.length || parseVelociraptorMutation.isPending}
-                className="ml-auto rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
-              >
-                Index selected artifacts
-              </button>
-            </div>
-            <div className="mt-3 rounded-2xl border border-line bg-panel/40 px-4 py-3 text-sm text-muted">
-              Selected artifacts to parse: <span className="font-semibold text-ink">{selectedCandidateIds.length}</span>
             </div>
           </div>
 
@@ -2859,7 +3129,7 @@ function formatReportStatus(status: string | null | undefined) {
       ) : null}
 
       <details className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-        <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.18em] text-accent">Advanced / Debug inventory</summary>
+        <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.18em] text-accent">Raw discovery inventory</summary>
       <section className="mt-4 grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="space-y-6">
           <div id="artifact-manifest" className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">

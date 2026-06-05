@@ -246,6 +246,12 @@ export type Evidence = {
   size_bytes: number;
   file_count: number | null;
   ingest_status: string;
+  display_status?: string | null;
+  investigation_ready?: boolean;
+  searchable_documents_count?: number;
+  status_reason?: string | null;
+  warning_count?: number;
+  error_count?: number;
   provided_host?: string | null;
   detected_host: string | null;
   detected_user: string | null;
@@ -328,6 +334,7 @@ export type ProblematicArtifactsResponse = {
     parsed_with_warning: number;
     partially_parsed: number;
     failed: number;
+    skipped_empty?: number;
     retryable: number;
     indexed_with_warning: number;
     recovered_count: number;
@@ -451,6 +458,8 @@ export type EvidenceIndexingPlan = {
   runnable_steps: EvidenceIndexingStep[];
   active: boolean;
   active_job?: { step?: string; run_id?: string; status?: string } | null;
+  requires_user_action?: boolean;
+  supported_candidate_count?: number;
   can_run: boolean;
 };
 
@@ -3016,6 +3025,7 @@ export const api = {
   getEvidenceMftDiagnostic: (evidenceId: string) => request<MftDiagnostic>(`/evidences/${evidenceId}/mft-diagnostic`),
   getEvidenceIndexingPlan: (evidenceId: string, profile: "recommended" | "fast" | "advanced_custom" = "recommended") => request<EvidenceIndexingPlan>(`/evidences/${evidenceId}/indexing-plan?profile=${encodeURIComponent(profile)}`),
   runEvidenceIndexingPlan: (evidenceId: string, payload: { profile?: "recommended" | "fast" | "advanced_custom"; force?: boolean } = {}) => request<EvidenceIndexingPlanRunResponse>(`/evidences/${evidenceId}/indexing-plan/run`, { method: "POST", body: JSON.stringify(payload) }),
+  cancelEvidenceIndexing: (evidenceId: string, payload: { reason?: string } = {}) => request<{ accepted: boolean; evidence_id: string; status: string; previous_status?: string; previous_phase?: string; lock_released?: boolean; retry_allowed?: boolean }>(`/evidences/${evidenceId}/indexing/cancel`, { method: "POST", body: JSON.stringify(payload) }),
   indexEvidenceMftSummary: (evidenceId: string, payload: { max_records?: number | null; force?: boolean } = {}) => request<{ accepted: boolean; run_id: string; evidence_id: string; status: string; backend: string; mode: string }>(`/evidences/${evidenceId}/mft-summary-index`, { method: "POST", body: JSON.stringify(payload) }),
   indexEvidenceMftFull: (evidenceId: string, payload: { max_records?: number | null; force?: boolean } = {}) => request<{ accepted: boolean; run_id: string; evidence_id: string; status: string; backend: string; mode: string }>(`/evidences/${evidenceId}/mft-full-index`, { method: "POST", body: JSON.stringify(payload) }),
   indexEvidenceRecmdUserActivity: (evidenceId: string, payload: { force?: boolean } = {}) => request<{ accepted: boolean; run_id: string; evidence_id: string; status: string; backend: string; mode: string }>(`/evidences/${evidenceId}/recmd-user-activity-index`, { method: "POST", body: JSON.stringify(payload) }),

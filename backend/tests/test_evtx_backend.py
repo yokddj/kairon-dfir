@@ -4,6 +4,7 @@ from types import SimpleNamespace
 from app.ingest.raw_parsers.evtxecmd_backend import (
     EVTXECMD_BACKEND_CSV,
     EVTX_RAW_PYTHON_BACKEND,
+    EvtxECmdCsvBackend,
     detect_evtx_parser_backends,
     normalize_evtx_parser_backend,
     select_evtx_parser_backend,
@@ -114,6 +115,37 @@ def test_evtxecmd_csv_normalizes_to_searchable_windows_event_contract(tmp_path: 
     assert doc["event"]["provider"] == "Microsoft-Windows-Security-Auditing"
     assert doc["host"]["name"] == "hosta"
     assert "4624" in doc["search_text"]
+
+
+def test_evtxecmd_zero_record_csv_is_parsed_empty_not_failed(tmp_path: Path, monkeypatch) -> None:
+    source = tmp_path / "HardwareEvents.evtx"
+    source.write_bytes(b"ElfFile\x00" + b"\x00" * 4096)
+
+    def fake_run(source_path: Path, output_dir: Path, output_name: str):  # noqa: ARG001
+        (output_dir / output_name).write_text(
+            "RecordNumber,EventRecordId,TimeCreated,EventId,Level,Provider,Channel,ProcessId,ThreadId,Computer,ChunkNumber,UserId,MapDescription,UserName,RemoteHost,PayloadData1,PayloadData2,PayloadData3,PayloadData4,PayloadData5,PayloadData6,ExecutableInfo,HiddenRecord,SourceFile,Keywords,ExtraDataOffset,Payload\n",
+            encoding="utf-8",
+        )
+        return SimpleNamespace(returncode=0, stdout="Total event log records found: 0\nRecords included: 0 Errors: 0 Events dropped: 0\n", stderr="")
+
+    monkeypatch.setattr("app.ingest.raw_parsers.evtxecmd_backend._run_evtxecmd_csv", fake_run)
+
+    results = list(
+        EvtxECmdCsvBackend().iter_batches(
+            source,
+            case_id="case-1",
+            evidence_id="evidence-1",
+            artifact_id="artifact-1",
+            artifact_meta={"source_path": "Windows/System32/winevt/Logs/HardwareEvents.evtx"},
+            batch_size=1000,
+        )
+    )
+
+    assert len(results) == 1
+    assert results[0].parser_status == "parsed_empty"
+    assert results[0].records_read == 0
+    assert results[0].events == []
+    assert "evtx_file_empty" in results[0].warnings
 
 
 def test_security_4663_normalizes_object_access_fields() -> None:

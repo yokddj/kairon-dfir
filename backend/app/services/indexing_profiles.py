@@ -21,13 +21,27 @@ def _status(metadata: dict[str, Any], *keys: str) -> str:
     return ""
 
 
+def _supported_discovery_candidate_count(metadata: dict[str, Any]) -> int:
+    discovery = metadata.get("velociraptor_discovery")
+    if not isinstance(discovery, dict):
+        return 0
+    candidates = discovery.get("candidates")
+    if not isinstance(candidates, list):
+        return 0
+    return sum(1 for candidate in candidates if isinstance(candidate, dict) and candidate.get("supported"))
+
+
 def evidence_has_active_indexing(metadata: dict[str, Any] | None, ingest_status: object | None = None) -> tuple[bool, dict[str, Any] | None]:
     metadata = dict(metadata or {})
     ingest_value = str(getattr(ingest_status, "value", ingest_status) or "").strip().lower()
     if ingest_value in {"pending", "processing"}:
+        run_id = str(metadata.get("current_ingest_run_id") or metadata.get("latest_ingest_run_id") or "").strip()
+        phase = str(metadata.get("current_phase") or metadata.get("phase") or "").strip().lower()
+        if ingest_value == "pending" and phase in {"waiting_selection", "selection_pending"} and not run_id:
+            return False, None
         return True, {
             "step": "core_ingest",
-            "run_id": str(metadata.get("current_ingest_run_id") or metadata.get("latest_ingest_run_id") or ""),
+            "run_id": run_id,
             "status": ingest_value,
         }
     checks = [
@@ -38,11 +52,22 @@ def evidence_has_active_indexing(metadata: dict[str, Any] | None, ingest_status:
     ]
     current_plan = dict(metadata.get("indexing_plan_run") or {})
     if str(current_plan.get("status") or "").lower() in ACTIVE_STATUSES:
-        return True, {
-            "step": "indexing_plan",
-            "run_id": str(current_plan.get("run_id") or ""),
-            "status": str(current_plan.get("status") or ""),
-        }
+        queued_jobs = [item for item in current_plan.get("queued_jobs") or [] if isinstance(item, dict)]
+        active_jobs: list[dict[str, Any]] = []
+        for queued_job in queued_jobs:
+            status = str(queued_job.get("status") or current_plan.get("status") or "").strip().lower()
+            step_id = str(queued_job.get("step_id") or "").strip()
+            if status not in ACTIVE_STATUSES:
+                continue
+            if step_id == "core_artifacts" and ingest_value not in {"pending", "processing"}:
+                continue
+            active_jobs.append(queued_job)
+        if active_jobs:
+            return True, {
+                "step": "indexing_plan",
+                "run_id": str(current_plan.get("run_id") or ""),
+                "status": str(current_plan.get("status") or ""),
+            }
     for step, status in checks:
         if status in ACTIVE_STATUSES:
             return True, {"step": step, "run_id": "", "status": status}
@@ -150,6 +175,8 @@ def build_indexing_plan(
         excluded = [{"name": "Automatic execution", "reason": "Advanced custom exposes individual actions instead of running a bundle."}]
 
     runnable_steps = [item for item in steps if item.get("status") == "ready" and item.get("endpoint")]
+    core_supported_candidates = _supported_discovery_candidate_count(metadata)
+    core_ready = core_status == "ready" and core_supported_candidates > 0
     return {
         "profile": profile_name,
         "label": {
@@ -164,7 +191,13 @@ def build_indexing_plan(
         "runnable_steps": runnable_steps,
         "active": active,
         "active_job": active_job,
-        "can_run": not active and profile_name != "advanced_custom" and bool(runnable_steps),
+        "requires_user_action": bool(
+            not active
+            and str(metadata.get("current_phase") or metadata.get("phase") or "").strip().lower() in {"waiting_selection", "selection_pending"}
+            and core_supported_candidates > 0
+        ),
+        "supported_candidate_count": core_supported_candidates,
+        "can_run": not active and profile_name != "advanced_custom" and (bool(runnable_steps) or core_ready),
     }
 
 

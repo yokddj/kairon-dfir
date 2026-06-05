@@ -84,6 +84,44 @@ def test_evidence_lock_detects_active_ingest_and_artifact_jobs():
     assert job and job["step"] == "full_mft"
 
 
+def test_waiting_selection_without_run_is_action_required_not_active():
+    metadata = _metadata(
+        current_phase="waiting_selection",
+        velociraptor_discovery={"candidates": [{"id": "evtx-1", "supported": True, "category": "evtx"}]},
+    )
+
+    active, job = evidence_has_active_indexing(metadata, "pending")
+    plan = build_indexing_plan(profile="recommended", metadata=metadata, mft_diagnostic=_mft(mft_present_in_evidence=False), indexed_docs=0, active=active, active_job=job)
+
+    assert active is False
+    assert job is None
+    assert plan["requires_user_action"] is True
+    assert plan["supported_candidate_count"] == 1
+    assert plan["can_run"] is True
+
+
+def test_waiting_selection_with_run_id_remains_active():
+    active, job = evidence_has_active_indexing({"current_phase": "waiting_selection", "current_ingest_run_id": "run-1"}, "pending")
+
+    assert active is True
+    assert job and job["run_id"] == "run-1"
+
+
+def test_completed_core_plan_run_does_not_leave_active_lock():
+    metadata = _metadata(
+        indexing_plan_run={
+            "run_id": "plan-1",
+            "status": "queued",
+            "queued_jobs": [{"step_id": "core_artifacts", "run_id": "ingest-1", "status": "queued"}],
+        }
+    )
+
+    active, job = evidence_has_active_indexing(metadata, "completed")
+
+    assert active is False
+    assert job is None
+
+
 def test_create_indexing_plan_run_persists_step_statuses():
     plan = build_indexing_plan(profile="recommended", metadata=_metadata(), mft_diagnostic=_mft(), indexed_docs=0)
     run = create_indexing_plan_run(plan, [{"step_id": "mft_full", "run_id": "job-1", "status": "queued"}])

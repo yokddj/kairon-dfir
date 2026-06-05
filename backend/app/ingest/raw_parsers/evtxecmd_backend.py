@@ -205,6 +205,8 @@ class EvtxECmdCsvBackend:
                     batch = []
             if progress_cb:
                 progress_cb({"records_read": records_read, "events_buffered": len(batch), "errors_count": len(errors), "completed": True})
+            if records_read == 0 and not errors:
+                warnings.append("evtx_file_empty")
             yield self._result(
                 source_path=str(csv_meta["source_path"]),
                 records_read=records_read,
@@ -234,7 +236,7 @@ class EvtxECmdCsvBackend:
             events=events,
             warnings=list(warnings),
             errors=list(errors),
-            parser_status="parsed_native" if not errors else "failed",
+            parser_status="parsed_empty" if records_read == 0 and not errors else "parsed_native" if not errors else "failed",
             metadata={
                 "completed": completed,
                 "parse_duration_ms": int((time.perf_counter() - start) * 1000),
