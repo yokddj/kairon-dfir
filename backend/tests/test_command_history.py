@@ -171,3 +171,67 @@ def test_lolbin_remote_exec_discovery_and_prefetch_classification() -> None:
     assert prefetch["launcher"] == "powershell.exe"
     assert prefetch["shell_family"] == "powershell"
     assert prefetch["classification_confidence"] in {"low", "medium"}
+
+
+def _hit(doc_id: str, *, ts: str, command: str, pid: int) -> dict:
+    return {
+        "_id": doc_id,
+        "_source": {
+            "case_id": "case-1",
+            "evidence_id": "ev-1",
+            "@timestamp": ts,
+            "windows": {"event_id": 1},
+            "event": {"channel": "Microsoft-Windows-Sysmon/Operational"},
+            "artifact": {"type": "windows_event"},
+            "host": {"name": "HOSTA"},
+            "user": {"name": "usera"},
+            "process": {
+                "name": "powershell.exe",
+                "executable": "powershell.exe",
+                "pid": pid,
+                "guid": f"guid-{pid}",
+                "command_line": command,
+                "parent": {"name": "explorer.exe", "pid": 1000},
+            },
+            "source_file": "Sysmon.evtx",
+        },
+    }
+
+
+def test_command_history_timestamp_sort_asc_desc_and_source_doc_id(monkeypatch) -> None:
+    hits = [
+        _hit("event-new", ts="2024-03-22T12:30:00Z", command="powershell.exe -File C:\\new.ps1", pid=2000),
+        _hit("event-old", ts="2024-03-22T12:00:00Z", command="powershell.exe -File C:\\old.ps1", pid=1000),
+    ]
+
+    monkeypatch.setattr(command_history, "get_events_index", lambda case_id: f"events-{case_id}")
+    monkeypatch.setattr(command_history, "search_documents", lambda *_args, **_kwargs: {"hits": {"hits": hits}})
+
+    asc = command_history.get_command_history("case-1", {"sort_by": "timestamp", "sort_order": "asc", "page_size": 10})
+    desc = command_history.get_command_history("case-1", {"sort_by": "timestamp", "sort_order": "desc", "page_size": 10})
+
+    assert asc["sort"] == "timestamp_asc"
+    assert asc["sort_order"] == "asc"
+    assert [item["source_event_id"] for item in asc["items"]] == ["event-old", "event-new"]
+    assert asc["items"][0]["windows_event_id"] == "1"
+
+    assert desc["sort"] == "timestamp_desc"
+    assert desc["sort_order"] == "desc"
+    assert [item["source_event_id"] for item in desc["items"]] == ["event-new", "event-old"]
+
+
+def test_command_history_filters_preserve_sort_count(monkeypatch) -> None:
+    hits = [
+        _hit("event-new", ts="2024-03-22T12:30:00Z", command="powershell.exe -File C:\\new.ps1", pid=2000),
+        _hit("event-old", ts="2024-03-22T12:00:00Z", command="cmd.exe /c whoami", pid=1000),
+    ]
+
+    monkeypatch.setattr(command_history, "get_events_index", lambda case_id: f"events-{case_id}")
+    monkeypatch.setattr(command_history, "search_documents", lambda *_args, **_kwargs: {"hits": {"hits": hits}})
+
+    result = command_history.get_command_history("case-1", {"q": "new.ps1", "sort_by": "timestamp", "sort_order": "desc", "page_size": 10})
+
+    assert result["total"] == 1
+    assert result["sort_order"] == "desc"
+    assert result["items"][0]["source_event_id"] == "event-new"
+    assert "new.ps1" in result["items"][0]["command"]

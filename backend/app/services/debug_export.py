@@ -3809,8 +3809,16 @@ _EXECUTION_STORY_LIGHT_CACHE: dict[str, tuple[datetime, dict[str, Any]]] = {}
 _EXECUTION_STORY_LIGHT_CACHE_SECONDS = 300
 
 
-def _execution_story_cache_key(case_id: str, *, source_event_id: str | None, scope: str, evidence_id: str | None) -> str:
-    return "|".join([case_id, scope, str(evidence_id or ""), str(source_event_id or "")])
+def _execution_story_cache_key(
+    case_id: str,
+    *,
+    source_event_id: str | None,
+    scope: str,
+    evidence_id: str | None,
+    origin: str | None = None,
+    command_history_row_id: str | None = None,
+) -> str:
+    return "|".join([case_id, scope, str(evidence_id or ""), str(source_event_id or ""), str(origin or ""), str(command_history_row_id or "")])
 
 
 def _execution_story_cache_get(key: str) -> dict[str, Any] | None:
@@ -4800,6 +4808,9 @@ def _light_execution_story_for_generic_event(
     target_quality: str,
     identity_method: str,
     confidence: str,
+    requested_target: dict[str, Any] | None = None,
+    auto_focus_reason: str = "manual",
+    origin: str = "search_event",
 ) -> dict:
     event_summary = _event_to_light_summary(source_event, source_event_id)
     candidates = _related_process_candidates_for_event(
@@ -4850,6 +4861,9 @@ def _light_execution_story_for_generic_event(
             "host": event_summary.get("host") or host,
         },
         "recommended_action": "build_exact_story_from_candidate" if candidates else "search_around_event",
+        "requested_target": requested_target or {},
+        "resolved_target": None,
+        "auto_focus_reason": auto_focus_reason,
         "quality": {
             "confidence": confidence,
             "missing_parent": False,
@@ -4869,7 +4883,7 @@ def _light_execution_story_for_generic_event(
                 "requested_process_guid": None,
             },
             "exact_story": False,
-            "origin": "search_event",
+            "origin": origin,
             "filter_scope": "candidate_search",
             "visual_tree_contains_target": False,
             "target_quality": target_quality,
@@ -4879,6 +4893,75 @@ def _light_execution_story_for_generic_event(
             "activity_lazy": True,
             "response_mode": "lightweight",
         },
+    }
+
+
+def _execution_story_requested_target(
+    *,
+    evidence_id: str | None,
+    host: str | None,
+    pid: int | None,
+    process_guid: str | None,
+    source_event_id: str | None,
+    command_history_row_id: str | None,
+    origin: str | None,
+    q: str | None,
+    timestamp: str | None,
+) -> dict[str, Any]:
+    return {
+        "origin": origin or None,
+        "command_history_row_id": command_history_row_id or None,
+        "evidence_id": evidence_id or None,
+        "host": host or None,
+        "pid": pid,
+        "process_guid": process_guid or None,
+        "source_event_id": source_event_id or None,
+        "process_name": q or None,
+        "timestamp": timestamp or None,
+    }
+
+
+def _execution_story_focus_reason(
+    *,
+    origin: str | None,
+    command_history_row_id: str | None,
+    source_event_id: str | None,
+    process_guid: str | None,
+    pid: int | None,
+    q: str | None,
+) -> str:
+    if str(origin or "").strip().lower() == "command_history" or command_history_row_id:
+        return "explicit_command_history_row"
+    if source_event_id or process_guid or pid is not None or q:
+        return "manual"
+    return "risk_based_fallback"
+
+
+def _execution_story_origin(origin: str | None, *, source_event_id: str | None, q: str | None, pid: int | None, process_guid: str | None) -> str:
+    normalized = str(origin or "").strip().lower()
+    if normalized == "command_history":
+        return "command_history"
+    if source_event_id:
+        return "search_event"
+    if q or pid is not None or process_guid:
+        return "direct_search"
+    return "advanced_graph"
+
+
+def _execution_story_resolved_target(target: dict | None) -> dict[str, Any] | None:
+    if not target:
+        return None
+    source_events = [str(item) for item in (target.get("source_events") or []) if item]
+    return {
+        "id": target.get("id"),
+        "source_event_id": target.get("source_event_id") or (source_events[0] if source_events else None),
+        "source_events": source_events,
+        "process_guid": target.get("id"),
+        "pid": target.get("pid"),
+        "host": target.get("host"),
+        "process_name": target.get("name"),
+        "command_line": target.get("command_line"),
+        "first_seen": target.get("first_seen"),
     }
 
 
@@ -4892,6 +4975,8 @@ def build_execution_story(
     pid: int | None = None,
     process_guid: str | None = None,
     source_event_id: str | None = None,
+    command_history_row_id: str | None = None,
+    origin: str | None = None,
     q: str | None = None,
     timestamp: str | None = None,
     parent_depth: int = 3,
@@ -4901,8 +4986,35 @@ def build_execution_story(
     time_window_after: int = 1800,
     max_nodes: int = 100,
 ) -> dict:
+    requested_target = _execution_story_requested_target(
+        evidence_id=evidence_id,
+        host=host,
+        pid=pid,
+        process_guid=process_guid,
+        source_event_id=source_event_id,
+        command_history_row_id=command_history_row_id,
+        origin=origin,
+        q=q,
+        timestamp=timestamp,
+    )
+    auto_focus_reason = _execution_story_focus_reason(
+        origin=origin,
+        command_history_row_id=command_history_row_id,
+        source_event_id=source_event_id,
+        process_guid=process_guid,
+        pid=pid,
+        q=q,
+    )
+    story_origin = _execution_story_origin(origin, source_event_id=source_event_id, q=q, pid=pid, process_guid=process_guid)
     if source_event_id:
-        cache_key = _execution_story_cache_key(case.id, source_event_id=source_event_id, scope=scope, evidence_id=evidence_id)
+        cache_key = _execution_story_cache_key(
+            case.id,
+            source_event_id=source_event_id,
+            scope=scope,
+            evidence_id=evidence_id,
+            origin=story_origin,
+            command_history_row_id=command_history_row_id,
+        )
         cached = _execution_story_cache_get(cache_key)
         if cached:
             return cached
@@ -4934,6 +5046,9 @@ def build_execution_story(
                     target_quality=target_quality,
                     identity_method=identity_method,
                     confidence=source_confidence,
+                    requested_target=requested_target,
+                    auto_focus_reason=auto_focus_reason,
+                    origin=story_origin,
                 ),
             )
     focused = build_process_tree_focused(
@@ -5004,6 +5119,9 @@ def build_execution_story(
             "nodes": visual_nodes,
             "edges": visual_edges,
         },
+        "requested_target": requested_target,
+        "resolved_target": _execution_story_resolved_target(target),
+        "auto_focus_reason": auto_focus_reason,
         "quality": {
             "confidence": str(identity.get("confidence") or "unknown"),
             "missing_parent": bool(target and (target.get("parent_link_status") or "") != "linked"),
@@ -5011,7 +5129,7 @@ def build_execution_story(
             "warnings": list(dict.fromkeys([warning for warning in warnings if warning])),
             "identity_resolution": identity,
             "exact_story": exact_story,
-            "origin": "search_event" if source_event_id else "direct_search" if q or pid or process_guid else "advanced_graph",
+            "origin": story_origin,
             "filter_scope": "exact_chain" if exact_story else "candidate_search",
             "visual_tree_contains_target": visual_tree_contains_target,
             "target_quality": "exact" if exact_story else "generic",
