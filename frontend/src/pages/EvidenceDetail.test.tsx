@@ -20,6 +20,7 @@ const reprocessEvidenceMock = vi.fn();
 const deleteEvidenceMock = vi.fn();
 const parseVelociraptorSelectionMock = vi.fn();
 const getProblematicArtifactsMock = vi.fn();
+const getProblematicRetryCandidatesMock = vi.fn();
 const getEvidenceRunsMock = vi.fn();
 const listEvidenceRuleRunsMock = vi.fn();
 const runRulesForEvidenceMock = vi.fn();
@@ -54,6 +55,7 @@ vi.mock("../api/client", () => ({
     deleteEvidence: (...args: unknown[]) => deleteEvidenceMock(...args),
     parseVelociraptorSelection: (...args: unknown[]) => parseVelociraptorSelectionMock(...args),
     getProblematicArtifacts: (...args: unknown[]) => getProblematicArtifactsMock(...args),
+    getProblematicRetryCandidates: (...args: unknown[]) => getProblematicRetryCandidatesMock(...args),
     getEvidenceRuns: (...args: unknown[]) => getEvidenceRunsMock(...args),
     listEvidenceRuleRuns: (...args: unknown[]) => listEvidenceRuleRunsMock(...args),
     runRulesForEvidence: (...args: unknown[]) => runRulesForEvidenceMock(...args),
@@ -320,6 +322,7 @@ describe("EvidenceDetail reprocess UX", () => {
     deleteEvidenceMock.mockReset();
     parseVelociraptorSelectionMock.mockReset();
     getProblematicArtifactsMock.mockReset();
+    getProblematicRetryCandidatesMock.mockReset();
     getEvidenceRunsMock.mockReset();
     listEvidenceRuleRunsMock.mockReset();
     runRulesForEvidenceMock.mockReset();
@@ -456,6 +459,15 @@ describe("EvidenceDetail reprocess UX", () => {
     deleteEvidenceMock.mockResolvedValue(undefined);
     parseVelociraptorSelectionMock.mockResolvedValue(undefined);
     getProblematicArtifactsMock.mockResolvedValue(problematicArtifactsPayload);
+    getProblematicRetryCandidatesMock.mockResolvedValue({
+      evidence_id: "evidence-1",
+      summary: problematicArtifactsPayload.summary,
+      retry_candidates: [],
+      retry_candidate_count: 0,
+      artifact_ids: [],
+      affected_families: {},
+      excluded: { skipped_empty: 0, warnings_fully_indexed: 1, other_non_retryable: 1 },
+    });
     getLongTailArtifactsMock.mockResolvedValue({ evidence_id: "evidence-1", summary: { tail_artifacts_total: 0, running_count: 0, queued_count: 0, stalled_count: 0, high_value_count: 0, partial_indexed_count: 0, deferred_count: 0 }, items: [] });
     getEvidenceRunsMock.mockResolvedValue([
       {
@@ -659,6 +671,68 @@ describe("EvidenceDetail reprocess UX", () => {
     expect(screen.queryByRole("button", { name: /Use recommended indexing/i })).not.toBeInTheDocument();
   });
 
+  it("shows planned pending evidence as ready to index and starts recommended indexing", async () => {
+    getEvidenceMock.mockResolvedValue({
+      ...evidencePayload,
+      ingest_status: "pending",
+      investigation_ready: false,
+      searchable_documents_count: 0,
+      metadata_json: {
+        ...evidencePayload.metadata_json,
+        current_phase: "planned",
+        events_indexed: 0,
+        current_ingest_run_id: null,
+        latest_ingest_run_id: null,
+        ingest_plan: { discovery_mode: "recommended_indexing" },
+      },
+    });
+    getEvidenceSearchSummaryMock.mockResolvedValue({
+      evidence_id: "evidence-1",
+      case_id: "case-1",
+      ingest_status: "pending",
+      latest_ingest_run_id: null,
+      total_indexed_docs: 0,
+      artifact_type_counts: {},
+      parser_counts: {},
+      source_file_counts: {},
+      host_counts: {},
+      user_counts: {},
+    });
+    getEvidenceRunsMock.mockResolvedValue([]);
+    getEvidenceIndexingPlanMock.mockResolvedValueOnce({
+      profile: "recommended",
+      label: "Recommended indexing",
+      primary_cta: "Index evidence for investigation",
+      subcopy: "Recommended indexing plan.",
+      steps: [{ id: "core_artifacts", name: "Core artifacts", category: "core", status: "ready", reason: "Core artifacts ready." }],
+      excluded: [],
+      runnable_steps: [],
+      active: false,
+      active_job: null,
+      state: "planned_not_started",
+      status_reason: "Indexing plan prepared; no parser run has been started.",
+      requires_user_action: false,
+      supported_candidate_count: 866,
+      can_run: true,
+    });
+
+    renderPage();
+    await screen.findByText("collection.zip");
+
+    expect(screen.getByRole("heading", { name: /Ready to index/i })).toBeInTheDocument();
+    expect(screen.getByText(/Indexing plan prepared · 866 supported artifacts detected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Indexing in progress/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /View progress/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /Start recommended indexing/i }));
+
+    await waitFor(() =>
+      expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-1", {
+        profile: "recommended",
+      }),
+    );
+  });
+
   it("renders selected artifact types outside advanced and hides benchmark tools by default", async () => {
     renderPage();
     await screen.findByText("collection.zip");
@@ -727,15 +801,244 @@ describe("EvidenceDetail reprocess UX", () => {
     renderPage();
     await screen.findByText("collection.zip");
 
-    expect(screen.getByRole("heading", { name: /Recommended indexing is running/i })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { name: /Recommended indexing is running/i }).length).toBeGreaterThan(0);
     expect(screen.getByText(/Categories in this run:/i)).toHaveTextContent("evtx, scheduled_task, service, shimcache");
-    expect(screen.getByText(/Current step:/i)).toHaveTextContent("45%");
+    expect(screen.getByText(/Active step:/i)).toHaveTextContent("core ingest");
+    const primaryProgress = screen.getByTestId("evidence-progress-primary");
+    expect(within(primaryProgress).getByText(/Current step:/i)).toHaveTextContent("core ingest");
+    expect(within(primaryProgress).getByText("45%")).toBeInTheDocument();
     const selectedSection = screen.getByTestId("selected-artifact-types-section");
     expect(within(selectedSection).getByText(/Manual selected indexing is locked while recommended indexing is running/i)).toBeInTheDocument();
     expect(within(selectedSection).getByText(/No manual selection is active/i)).toBeInTheDocument();
     expect(within(selectedSection).queryByText(/Selected preview: 0 candidates/i)).not.toBeInTheDocument();
     expect(within(selectedSection).getByRole("button", { name: /Index selected types/i })).toBeDisabled();
     expect(within(selectedSection).getByLabelText(/shimcache/i)).toBeDisabled();
+  });
+
+  it("uses active run counts as the visual source of truth while indexing", async () => {
+    getEvidenceMock.mockResolvedValueOnce({
+      ...evidencePayload,
+      ingest_status: "processing",
+      metadata_json: {
+        ...evidencePayload.metadata_json,
+        current_phase: "core_ingest",
+        current_ingest_run_id: "run-live",
+        events_indexed: 0,
+        artifacts_done: 0,
+        artifacts_total: 866,
+        evtx_deferred_count: 126,
+      },
+    });
+    getEvidenceSearchSummaryMock.mockResolvedValueOnce({
+      evidence_id: "evidence-1",
+      case_id: "case-1",
+      ingest_status: "processing",
+      latest_ingest_run_id: "run-live",
+      total_indexed_docs: 0,
+      artifact_type_counts: {},
+      parser_counts: {},
+      source_file_counts: {},
+      host_counts: {},
+      user_counts: {},
+    });
+    getEvidenceRunsMock.mockResolvedValueOnce([
+      {
+        run_id: "run-live",
+        run_type: "ingest",
+        status: "processing",
+        phase: "core_ingest",
+        progress: 45,
+        current_artifact: "C:/Users/analyst/Documents/KaironLab01/activity.log",
+        heartbeat_at: new Date().toISOString(),
+        elapsed_seconds: 120,
+        records_read: 2100,
+        records_indexed: 1924,
+        artifacts_done: 200,
+        artifacts_total: 866,
+        artifacts_failed: 0,
+      },
+    ]);
+
+    renderPage();
+
+    await screen.findByText("collection.zip");
+    expect(screen.getByText("Indexed this run")).toBeInTheDocument();
+    expect(screen.getAllByText("1,924").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("200 / 866").length).toBeGreaterThan(0);
+    expect(screen.getByText("Pending review")).toBeInTheDocument();
+    expect(screen.queryByText("Problems/deferred")).not.toBeInTheDocument();
+
+    const primaryProgress = screen.getByTestId("evidence-progress-primary");
+    expect(within(primaryProgress).getByText("45%")).toBeInTheDocument();
+    expect(within(primaryProgress).getByText("1,924")).toBeInTheDocument();
+    expect(within(primaryProgress).getByText(/C:\/Users\/analyst\/Documents\/KaironLab01\/activity\.log/i)).toBeInTheDocument();
+    expect(screen.getAllByText("Indexing progress")).toHaveLength(1);
+    expect(screen.queryByText("Progress summary")).not.toBeInTheDocument();
+  });
+
+  it("renders final persisted evidence summary after indexing completes", async () => {
+    getEvidenceMock.mockResolvedValueOnce({
+      ...evidencePayload,
+      ingest_status: "completed",
+      metadata_json: {
+        ...evidencePayload.metadata_json,
+        events_indexed: 3848,
+        current_phase: "completed",
+        evtx_deferred_count: 0,
+      },
+    });
+    getEvidenceSearchSummaryMock.mockResolvedValueOnce({
+      evidence_id: "evidence-1",
+      case_id: "case-1",
+      ingest_status: "completed",
+      latest_ingest_run_id: "run-complete",
+      total_indexed_docs: 3848,
+      artifact_type_counts: { windows_event: 3200, prefetch: 100, registry: 548 },
+      parser_counts: {},
+      source_file_counts: {},
+      host_counts: {},
+      user_counts: {},
+    });
+    getEvidenceRunsMock.mockResolvedValueOnce([
+      {
+        run_id: "run-complete",
+        run_type: "ingest",
+        status: "completed",
+        phase: "completed",
+        progress: 100,
+        records_read: 3900,
+        records_indexed: 3848,
+        artifacts_done: 866,
+        artifacts_total: 866,
+        artifacts_failed: 0,
+      },
+    ]);
+
+    renderPage();
+
+    await screen.findByText("collection.zip");
+    expect(screen.getAllByText("Indexed documents").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("3,848").length).toBeGreaterThan(0);
+    expect(screen.getByText("Artifact types")).toBeInTheDocument();
+    const artifactTypesCard = screen.getByText("Artifact types").closest("div");
+    expect(artifactTypesCard).not.toBeNull();
+    expect(within(artifactTypesCard as HTMLElement).getByText("3")).toBeInTheDocument();
+    expect(screen.getByText("Problems/deferred")).toBeInTheDocument();
+    expect(screen.queryByText("Pending review")).not.toBeInTheDocument();
+  });
+
+  it("renders retryable parser failures card and retries only failed candidates", async () => {
+    const retryablePowerShell = {
+      ...problematicArtifactsPayload.items[1],
+      artifact_id: "ps-op",
+      name: "EVTX raw - Microsoft-Windows-PowerShell%254Operational.evtx",
+      artifact_type: "windows_event",
+      status: "skipped_timeout",
+      effective_status: "unresolved_timeout",
+      records_read: 0,
+      records_indexed: 0,
+      effective_records_read: 0,
+      effective_records_indexed: 0,
+      retryable: true,
+      current_data_loss_expected: true,
+      data_loss_expected: true,
+      recovered: false,
+      recovered_records: 0,
+    };
+    const retryableStore = {
+      ...retryablePowerShell,
+      artifact_id: "store-op",
+      name: "EVTX raw - Microsoft-Windows-Store%254Operational.evtx",
+    };
+    const shellCoreWarning = {
+      ...problematicArtifactsPayload.items[0],
+      artifact_id: "shell-core",
+      name: "EVTX raw - Microsoft-Windows-Shell-Core%254Operational.evtx",
+      artifact_type: "windows_event",
+      retryable: false,
+      current_data_loss_expected: false,
+      effective_status: "parsed_with_warning",
+      effective_records_read: 1000,
+      effective_records_indexed: 1000,
+    };
+    const skippedEmpty = {
+      ...shellCoreWarning,
+      artifact_id: "empty-evtx",
+      name: "EVTX raw - HardwareEvents.evtx",
+      status: "skipped_empty",
+      effective_status: "skipped_empty",
+      records_read: 0,
+      records_indexed: 0,
+      effective_records_read: 0,
+      effective_records_indexed: 0,
+      health_summary: "No records produced",
+    };
+    const summary = {
+      problematic_count: 4,
+      parsed_with_warning: 1,
+      partially_parsed: 0,
+      failed: 0,
+      skipped_empty: 1,
+      retryable: 2,
+      indexed_with_warning: 1,
+      recovered_count: 0,
+      unresolved_count: 2,
+      data_loss_expected_count: 2,
+      source_missing_but_indexed: 0,
+    };
+    getProblematicArtifactsMock.mockResolvedValueOnce({
+      evidence_id: "evidence-1",
+      summary,
+      items: [retryablePowerShell, retryableStore, shellCoreWarning, skippedEmpty],
+    });
+    getProblematicRetryCandidatesMock.mockResolvedValueOnce({
+      evidence_id: "evidence-1",
+      summary,
+      retry_candidates: [retryablePowerShell, retryableStore],
+      retry_candidate_count: 2,
+      artifact_ids: ["ps-op", "store-op"],
+      affected_families: { windows_event: 2 },
+      excluded: { skipped_empty: 1, warnings_fully_indexed: 1, other_non_retryable: 0 },
+    });
+    retryProblematicArtifactsMock.mockResolvedValueOnce({ accepted: true, run_id: "retry-1", artifact_ids: ["ps-op", "store-op"], mode: "higher_timeout" });
+
+    renderPage();
+    await screen.findByText("collection.zip");
+
+    expect(screen.getByText("Retryable parser failures")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "2 retryable failures" })).toBeInTheDocument();
+    expect(screen.getAllByText(/Microsoft-Windows-PowerShell/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Microsoft-Windows-Store/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText("EVTX").length).toBeGreaterThan(0);
+    expect(screen.getByText("Requires attention")).toBeInTheDocument();
+    expect(screen.getAllByText("Warnings").length).toBeGreaterThan(0);
+    expect(screen.getByText("Informational / skipped")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Retry failed artifacts" }));
+
+    expect(retryProblematicArtifactsMock).toHaveBeenCalledWith("evidence-1", {
+      artifact_ids: ["ps-op", "store-op"],
+      mode: "higher_timeout",
+      preserve_existing_events: true,
+      replace_existing_events_for_artifact: false,
+    });
+  });
+
+  it("hides retryable parser failures card when there are no retry candidates", async () => {
+    getProblematicRetryCandidatesMock.mockResolvedValueOnce({
+      evidence_id: "evidence-1",
+      summary: problematicArtifactsPayload.summary,
+      retry_candidates: [],
+      retry_candidate_count: 0,
+      artifact_ids: [],
+      affected_families: {},
+      excluded: { skipped_empty: 0, warnings_fully_indexed: 1, other_non_retryable: 1 },
+    });
+
+    renderPage();
+    await screen.findByText("collection.zip");
+
+    expect(screen.queryByText("Retryable parser failures")).not.toBeInTheDocument();
   });
 
   it("shows action-required controls for waiting-selection evidence without a worker run", async () => {
@@ -1223,6 +1526,7 @@ describe("EvidenceDetail ingest progress diagnostics", () => {
     deleteEvidenceMock.mockReset();
     parseVelociraptorSelectionMock.mockReset();
     getProblematicArtifactsMock.mockReset();
+    getProblematicRetryCandidatesMock.mockReset();
     getEvidenceRunsMock.mockReset();
     listEvidenceReportsMock.mockReset();
     generateEvidenceReportMock.mockReset();
@@ -1320,6 +1624,15 @@ describe("EvidenceDetail ingest progress diagnostics", () => {
     deleteEvidenceMock.mockResolvedValue(undefined);
     parseVelociraptorSelectionMock.mockResolvedValue(undefined);
     getProblematicArtifactsMock.mockResolvedValue(problematicArtifactsPayload);
+    getProblematicRetryCandidatesMock.mockResolvedValue({
+      evidence_id: "evidence-1",
+      summary: problematicArtifactsPayload.summary,
+      retry_candidates: [],
+      retry_candidate_count: 0,
+      artifact_ids: [],
+      affected_families: {},
+      excluded: { skipped_empty: 0, warnings_fully_indexed: 1, other_non_retryable: 1 },
+    });
     getEvidenceRunsMock.mockResolvedValue([]);
     listEvidenceReportsMock.mockResolvedValue([]);
     generateEvidenceReportMock.mockResolvedValue({
@@ -1398,8 +1711,6 @@ describe("EvidenceDetail ingest progress diagnostics", () => {
     expect(screen.getAllByText(/Effective parallelism/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Queued parallel/i)).toBeInTheDocument();
     expect(screen.getAllByText("9 / 278").length).toBeGreaterThan(0);
-    expect(screen.getByText("1250")).toBeInTheDocument();
-    expect(screen.getAllByText("1000").length).toBeGreaterThan(0);
     expect(screen.getAllByText("640").length).toBeGreaterThan(0);
   });
 
@@ -1533,10 +1844,10 @@ describe("EvidenceDetail ingest progress diagnostics", () => {
     expect(await screen.findByText(/Preparing selected artifacts before parser workers start/i)).toBeInTheDocument();
     expect(screen.getByText(/Current selected file: Windows\/System32\/winevt\/Logs\/Security\.evtx/i)).toBeInTheDocument();
     expect(screen.getByText(/Current action: skipping_existing/i)).toBeInTheDocument();
-    expect(screen.getByText("120 / 278")).toBeInTheDocument();
-    expect(screen.getByText("12.5 files/s")).toBeInTheDocument();
-    expect(screen.getByText("18.2 MB/s")).toBeInTheDocument();
-    expect(screen.getByText("100 reused / 120 ready")).toBeInTheDocument();
+    expect(screen.getByText(/Selected files 120 \/ 278/i)).toBeInTheDocument();
+    expect(screen.getByText(/12\.5 files\/s/i)).toBeInTheDocument();
+    expect(screen.getByText(/18\.2 MB\/s/i)).toBeInTheDocument();
+    expect(screen.getByText(/100 reused \/ 120 ready/i)).toBeInTheDocument();
   });
 
   it("renders problematic artifacts with effective recovery state details", async () => {

@@ -100,6 +100,25 @@ def test_waiting_selection_without_run_is_action_required_not_active():
     assert plan["can_run"] is True
 
 
+def test_pending_plan_without_run_is_planned_not_started_not_active():
+    metadata = _metadata(
+        current_phase="planned",
+        ingest_plan={"discovery_mode": "recommended_indexing"},
+        velociraptor_discovery={"candidates": [{"id": "evtx-1", "supported": True, "category": "evtx"}]},
+    )
+
+    active, job = evidence_has_active_indexing(metadata, "pending")
+    plan = build_indexing_plan(profile="recommended", metadata=metadata, mft_diagnostic=_mft(mft_present_in_evidence=False), indexed_docs=0, active=active, active_job=job)
+
+    assert active is False
+    assert job is None
+    assert plan["state"] == "planned_not_started"
+    assert plan["status_reason"] == "Indexing plan prepared; no parser run has been started."
+    assert plan["requires_user_action"] is False
+    assert plan["supported_candidate_count"] == 1
+    assert plan["can_run"] is True
+
+
 def test_waiting_selection_with_run_id_remains_active():
     active, job = evidence_has_active_indexing({"current_phase": "waiting_selection", "current_ingest_run_id": "run-1"}, "pending")
 

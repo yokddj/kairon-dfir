@@ -1,6 +1,6 @@
 # Demo Route Quick Guide
 
-Use this walkthrough with case `dd9b0e56-bc58-479b-91ae-cd870eddae5c`.
+Use this walkthrough with your generated demo case.
 
 ## Route 5-10 min
 
@@ -61,7 +61,7 @@ Use this walkthrough with case `dd9b0e56-bc58-479b-91ae-cd870eddae5c`.
 
 9. `OpenSearch`
    - In Discover, run:
-     - `case_id:"dd9b0e56-bc58-479b-91ae-cd870eddae5c"`
+     - `case_id:"<demo_case_id>"`
      - `host.name:"TEST-WIN10-01"`
      - `artifact.type:"ntfs"`
 

@@ -23,7 +23,7 @@ from app.core.app_settings import (
 )
 from app.core.config import get_settings
 from app.core.evidence_paths import storage_capabilities
-from app.core.opensearch import get_opensearch_client
+from app.core.opensearch import get_opensearch_client, get_opensearch_ingest_preflight
 
 
 settings = get_settings()
@@ -31,6 +31,8 @@ settings = get_settings()
 LOW_DISK_FREE_BYTES = 10 * 1024 * 1024 * 1024
 LOW_DISK_FREE_PERCENT = 15.0
 LOW_MEMORY_AVAILABLE_BYTES = 2 * 1024 * 1024 * 1024
+DISK_DEGRADED_PERCENT = 80.0
+DISK_CRITICAL_PERCENT = 90.0
 
 SETTING_ALIASES = {
     "INGEST_BATCH_SIZE": "ingest_batch_size",
@@ -253,18 +255,44 @@ def _deployment_pending_settings(db: Session) -> dict[str, Any]:
     return pending
 
 
-def _services_snapshot(connection: Redis | None = None) -> dict[str, Any]:
+def _disk_status(used_percent: float) -> str:
+    if used_percent >= DISK_CRITICAL_PERCENT:
+        return "critical"
+    if used_percent >= DISK_DEGRADED_PERCENT:
+        return "degraded"
+    return "healthy"
+
+
+def _opensearch_watermark_risk(disk_used_percent: float, write_blocked: bool | None = None) -> str:
+    if write_blocked or disk_used_percent >= DISK_CRITICAL_PERCENT:
+        return "high"
+    if disk_used_percent >= DISK_DEGRADED_PERCENT:
+        return "medium"
+    return "low"
+
+
+def _services_snapshot(connection: Redis | None = None, *, disk_used_percent: float | None = None) -> dict[str, Any]:
     connection = connection or Redis.from_url(settings.redis_url)
     workers = Worker.all(connection=connection)
     worker_names = [worker.name for worker in workers]
     worker_queues = {worker.name: _worker_queue_names(worker) for worker in workers}
     worker_status = "ok" if worker_names else "warning"
-    opensearch = {"status": "unknown", "cluster_status": "unknown", "heap_used_percent": None, "disk_watermark": None}
+    opensearch = {
+        "status": "unknown",
+        "cluster_status": "unknown",
+        "heap_used_percent": None,
+        "disk_watermark": None,
+        "write_blocked": None,
+        "ingest_writable": None,
+        "watermark_risk": "unknown",
+        "blocking_reasons": [],
+    }
     try:
         client = get_opensearch_client()
         health = client.cluster.health()
         nodes = client.nodes.stats(metric="jvm")
         cluster_settings = client.cluster.get_settings(include_defaults=True)
+        preflight = get_opensearch_ingest_preflight(None)
         heap_used_percent = None
         for node in (nodes.get("nodes") or {}).values():
             heap_used_percent = node.get("jvm", {}).get("mem", {}).get("heap_used_percent")
@@ -275,14 +303,34 @@ def _services_snapshot(connection: Redis | None = None) -> dict[str, Any]:
             or ((cluster_settings.get("persistent") or {}).get("cluster") or {}).get("routing", {}).get("allocation", {}).get("disk", {}).get("watermark", {})
             or ((cluster_settings.get("defaults") or {}).get("cluster") or {}).get("routing", {}).get("allocation", {}).get("disk", {}).get("watermark", {})
         )
+        write_blocked = bool(
+            preflight.get("cluster_create_index_blocked")
+            or preflight.get("cluster_write_blocked")
+            or preflight.get("cluster_read_only_allow_delete")
+            or preflight.get("target_index_write_blocked")
+            or preflight.get("target_index_read_only_allow_delete")
+        )
         opensearch = {
-            "status": "ok",
+            "status": "critical" if write_blocked else "ok",
             "cluster_status": health.get("status", "unknown"),
             "heap_used_percent": heap_used_percent,
-            "disk_watermark": disk_watermark or None,
+            "disk_watermark": preflight.get("disk_watermark") or disk_watermark or None,
+            "write_blocked": write_blocked,
+            "ingest_writable": bool(preflight.get("ingest_writable")),
+            "watermark_risk": _opensearch_watermark_risk(float(disk_used_percent or 0), write_blocked),
+            "blocking_reasons": list(preflight.get("blocking_reasons") or []),
         }
     except Exception:  # noqa: BLE001
-        opensearch = {"status": "error", "cluster_status": "unreachable", "heap_used_percent": None, "disk_watermark": None}
+        opensearch = {
+            "status": "error",
+            "cluster_status": "unreachable",
+            "heap_used_percent": None,
+            "disk_watermark": None,
+            "write_blocked": None,
+            "ingest_writable": False,
+            "watermark_risk": "unknown",
+            "blocking_reasons": ["opensearch_unreachable"],
+        }
     return {
         "backend": {"status": "ok", "workers": settings.backend_uvicorn_workers},
         "worker": {"status": worker_status, "active": len(worker_names), "known": worker_names, "queues": worker_queues},
@@ -296,14 +344,25 @@ def build_resource_warnings(system: dict[str, Any], profile: str | None = None) 
     disk_free = int(system.get("disk_free_bytes") or 0)
     disk_total = max(int(system.get("disk_total_bytes") or 0), 1)
     disk_free_percent = (disk_free / disk_total) * 100
+    disk_used_percent = float(system.get("disk_used_percent") or (100.0 - disk_free_percent))
     if disk_free < LOW_DISK_FREE_BYTES or disk_free_percent < LOW_DISK_FREE_PERCENT:
         warnings.append("low_disk_space")
+    if disk_used_percent >= DISK_DEGRADED_PERCENT:
+        warnings.append("disk_usage_degraded")
+    if disk_used_percent >= DISK_CRITICAL_PERCENT:
+        warnings.append("disk_usage_critical")
     if int(system.get("memory_available_bytes") or 0) < LOW_MEMORY_AVAILABLE_BYTES:
         warnings.append("low_available_memory")
     if profile == "max" and int(system.get("memory_available_bytes") or 0) < 8 * 1024 * 1024 * 1024:
         warnings.append("max_profile_low_memory_risk")
     if str(system.get("opensearch_status") or "") != "ok":
         warnings.append("opensearch_unavailable")
+    services = system.get("services") or {}
+    opensearch = services.get("opensearch") or {}
+    if opensearch.get("write_blocked"):
+        warnings.append("opensearch_write_blocked")
+    if opensearch.get("watermark_risk") in {"medium", "high"}:
+        warnings.append(f"opensearch_watermark_risk_{opensearch.get('watermark_risk')}")
     return warnings
 
 
@@ -327,7 +386,7 @@ def system_snapshot() -> dict[str, Any]:
         "dfir-ingest": _queue_stats(connection, "dfir-ingest"),
         "dfir-rules": _queue_stats(connection, "dfir-rules"),
     }
-    services = _services_snapshot(connection=connection)
+    services = _services_snapshot(connection=connection, disk_used_percent=float(disk.percent))
     opensearch_status = services.get("opensearch", {}).get("status")
     return {
         "cpu_count": cpu_count,
@@ -344,6 +403,9 @@ def system_snapshot() -> dict[str, Any]:
         "disk_total_bytes": disk.total,
         "disk_free_bytes": disk.free,
         "disk_used_percent": disk.percent,
+        "disk_status": _disk_status(float(disk.percent)),
+        "disk_warning_threshold_percent": DISK_DEGRADED_PERCENT,
+        "disk_critical_threshold_percent": DISK_CRITICAL_PERCENT,
         "storage_used_bytes": storage_used_bytes,
         "queues": queues,
         "services": services,
@@ -441,9 +503,14 @@ def performance_resources(db: Session) -> dict[str, Any]:
         "memory_limit_source": snapshot.get("memory_limit_source"),
         "memory_explanation": "The app can only use memory available to the container or VM. Your physical machine may have more RAM.",
         "disk_free": snapshot.get("disk_free_bytes"),
+        "disk_status": snapshot.get("disk_status"),
+        "disk_used_percent": snapshot.get("disk_used_percent"),
         "opensearch_health": services.get("opensearch", {}).get("cluster_status"),
         "opensearch_heap_percent": services.get("opensearch", {}).get("heap_used_percent"),
         "opensearch_disk_watermark": services.get("opensearch", {}).get("disk_watermark"),
+        "opensearch_write_blocked": services.get("opensearch", {}).get("write_blocked"),
+        "opensearch_ingest_writable": services.get("opensearch", {}).get("ingest_writable"),
+        "opensearch_watermark_risk": services.get("opensearch", {}).get("watermark_risk"),
         "redis_queue_status": snapshot.get("queues"),
         "active_workers": services.get("worker", {}).get("active"),
         "worker_queues": services.get("worker", {}).get("queues"),

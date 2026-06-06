@@ -345,6 +345,20 @@ export type ProblematicArtifactsResponse = {
   items: ProblematicArtifact[];
 };
 
+export type ProblematicRetryCandidatesResponse = {
+  evidence_id: string;
+  summary: ProblematicArtifactsResponse["summary"];
+  retry_candidates: ProblematicArtifact[];
+  retry_candidate_count: number;
+  artifact_ids: string[];
+  affected_families: Record<string, number>;
+  excluded: {
+    skipped_empty: number;
+    warnings_fully_indexed: number;
+    other_non_retryable: number;
+  };
+};
+
 export type LongTailArtifact = {
   artifact_id: string | null;
   name?: string | null;
@@ -458,6 +472,8 @@ export type EvidenceIndexingPlan = {
   runnable_steps: EvidenceIndexingStep[];
   active: boolean;
   active_job?: { step?: string; run_id?: string; status?: string } | null;
+  state?: "planned_not_started" | "active" | "ready" | string;
+  status_reason?: string;
   requires_user_action?: boolean;
   supported_candidate_count?: number;
   can_run: boolean;
@@ -2564,9 +2580,27 @@ export type RuleSetListResponse = {
 export type SystemStatus = {
   cpu: { percent: number; count: number };
   memory: { total: number; used: number; percent: number };
-  disk: { data_dir_total: number; data_dir_used: number; data_dir_percent: number };
+  disk: {
+    data_dir_total: number;
+    data_dir_used: number;
+    data_dir_free?: number;
+    data_dir_percent: number;
+    status?: "healthy" | "degraded" | "critical" | string;
+    warning_threshold_percent?: number;
+    critical_threshold_percent?: number;
+  };
   queues: Record<string, { queued: number; started: number; failed: number; finished: number }>;
-  opensearch: { available: boolean; cluster_status: string; heap_used_percent: number | null; indices: number; docs_count: number };
+  opensearch: {
+    available: boolean;
+    cluster_status: string;
+    heap_used_percent: number | null;
+    indices: number;
+    docs_count: number;
+    write_blocked?: boolean | null;
+    ingest_writable?: boolean | null;
+    watermark_risk?: "low" | "medium" | "high" | "unknown" | string;
+    blocking_reasons?: string[];
+  };
   workers: { active: number; known: string[] };
   evtx_parser_backends?: {
     evtxecmd?: { available?: boolean; version?: string; path?: string; supports_csv?: boolean; supports_json?: boolean };
@@ -2629,6 +2663,9 @@ export type PerformanceState = {
     disk_total_bytes: number;
     disk_free_bytes: number;
     disk_used_percent: number;
+    disk_status?: "healthy" | "degraded" | "critical" | string;
+    disk_warning_threshold_percent?: number;
+    disk_critical_threshold_percent?: number;
     storage_used_bytes: number;
     warnings: string[];
     allowed_roots: string[];
@@ -2693,9 +2730,14 @@ export type PerformanceState = {
     memory_limit_source?: string | null;
     memory_explanation?: string | null;
     disk_free: number | null;
+    disk_status?: "healthy" | "degraded" | "critical" | string;
+    disk_used_percent?: number | null;
     opensearch_health: string | null;
     opensearch_heap_percent: number | null;
     opensearch_disk_watermark: Record<string, unknown> | null;
+    opensearch_write_blocked?: boolean | null;
+    opensearch_ingest_writable?: boolean | null;
+    opensearch_watermark_risk?: "low" | "medium" | "high" | "unknown" | string;
     redis_queue_status: Record<string, { queued: number; started: number; failed: number; finished: number }>;
     active_workers: number | null;
     worker_queues: Record<string, string[]>;
@@ -3040,6 +3082,7 @@ export const api = {
   indexEvidenceSrum: (evidenceId: string, payload: { force?: boolean } = {}) => request<{ accepted: boolean; run_id: string; evidence_id: string; status: string; backend: string; mode: string }>(`/evidences/${evidenceId}/srum-index`, { method: "POST", body: JSON.stringify(payload) }),
   rebuildEvidenceCoreEzArtifact: (evidenceId: string, artifactType: string, payload: { force?: boolean } = {}) => request<{ accepted: boolean; run_id: string; evidence_id: string; status: string; artifact_type: string; tool: string; backend: string; backend_variant: string }>(`/evidences/${evidenceId}/core-ez-rebuild/${artifactType}`, { method: "POST", body: JSON.stringify(payload) }),
   getProblematicArtifacts: (evidenceId: string) => request<ProblematicArtifactsResponse>(`/evidences/${evidenceId}/problematic-artifacts`),
+  getProblematicRetryCandidates: (evidenceId: string) => request<ProblematicRetryCandidatesResponse>(`/evidences/${evidenceId}/problematic-artifacts/retry-candidates`),
   getLongTailArtifacts: (evidenceId: string) => request<LongTailArtifactsResponse>(`/evidences/${evidenceId}/long-tail-artifacts`),
   getEvidenceRuns: (evidenceId: string) => request<EvidenceRun[]>(`/evidences/${evidenceId}/runs`),
   getEvidenceRun: (evidenceId: string, runId: string) => request<EvidenceRun>(`/evidences/${evidenceId}/runs/${runId}`),

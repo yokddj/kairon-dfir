@@ -12,6 +12,8 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.opensearch import get_opensearch_client, get_opensearch_ingest_preflight
 from app.core.performance import (
+    DISK_CRITICAL_PERCENT,
+    DISK_DEGRADED_PERCENT,
     apply_recommended_profile,
     build_recommendation_payload,
     manual_restart_instructions,
@@ -75,8 +77,9 @@ DOCS_CATALOG = [
     {"slug": "app-sections", "title": "Secciones de la app", "summary": "Qué hace cada página del sidebar y cómo usarla en una investigación.", "filename": "app_sections.md"},
     {"slug": "opensearch", "title": "OpenSearch", "summary": "Mapping, índices por caso, campos buscables y troubleshooting de indexación.", "filename": "opensearch.md"},
     {"slug": "troubleshooting", "title": "Troubleshooting", "summary": "Problemas frecuentes y qué comprobar cuando algo no aparece.", "filename": "troubleshooting.md"},
-    {"slug": "demo-mvp", "title": "Demo MVP", "summary": "Guía operativa para enseñar el MVP con un caso sintético reproducible.", "filename": "demo_mvp.md"},
-    {"slug": "demo-checklist", "title": "Demo Checklist", "summary": "Checklist técnica para validar que la demo está lista antes de presentarla.", "filename": "demo_checklist.md"},
+    {"slug": "demo-mvp", "title": "Demo MVP", "summary": "Guía operativa para enseñar el MVP con un caso sintético reproducible.", "filename": "demo/mvp-demo-guide.md"},
+    {"slug": "demo-checklist", "title": "Demo Checklist", "summary": "Checklist técnica para validar que la demo está lista antes de presentarla.", "filename": "demo/mvp-demo-checklist.md"},
+    {"slug": "kairon-lab01", "title": "Kairon Lab 01", "summary": "Laboratorio público de PowerShell sospechoso simulado basado en una colección Velociraptor.", "filename": "demo/kairon-lab01/README.md"},
     {"slug": "demo-readme", "title": "Demo mode", "summary": "Cómo usar modo demo sin incluir datasets concretos en main.", "filename": "demo/README.md"},
     {"slug": "generic-demo-guide", "title": "Generic demo guide", "summary": "Guía neutra para enseñar la plataforma con un dataset propio o sintético.", "filename": "demo/generic-demo-guide.md"},
     {"slug": "validation-readme", "title": "Validation features", "summary": "Uso genérico de Validation Matrix para QA/training con datasets importados.", "filename": "validation/README.md"},
@@ -90,12 +93,13 @@ DOCS_CATALOG = [
     {"slug": "known-limitations", "title": "Known limitations", "summary": "Limitaciones beta explícitas por parser, búsqueda, detecciones y despliegue.", "filename": "KNOWN_LIMITATIONS.md"},
     {"slug": "beta-notes", "title": "Beta notes", "summary": "Notas prácticas para testers de beta privada.", "filename": "BETA_NOTES.md"},
     {"slug": "roadmap", "title": "Roadmap", "summary": "Siguientes evidencias y prioridades recomendadas.", "filename": "roadmap.md"},
-    {"slug": "documentation-maintenance", "title": "Mantenimiento de documentación", "summary": "Checklist para que la documentación no se quede atrás.", "filename": "documentation_maintenance.md"},
+    {"slug": "documentation-maintenance", "title": "Mantenimiento de documentación", "summary": "Checklist para que la documentación no se quede atrás.", "filename": "maintenance/documentation-maintenance.md"},
 ]
 
 DEMO_DOC_SLUGS = {
     "demo-mvp",
     "demo-checklist",
+    "kairon-lab01",
     "demo-readme",
     "generic-demo-guide",
     "validation-readme",
@@ -117,6 +121,22 @@ def _queue_stats(connection: Redis, name: str) -> dict:
         "failed": len(FailedJobRegistry(name, connection=connection)),
         "finished": len(FinishedJobRegistry(name, connection=connection)),
     }
+
+
+def _disk_status(used_percent: float) -> str:
+    if used_percent >= DISK_CRITICAL_PERCENT:
+        return "critical"
+    if used_percent >= DISK_DEGRADED_PERCENT:
+        return "degraded"
+    return "healthy"
+
+
+def _opensearch_watermark_risk(disk_used_percent: float, write_blocked: bool | None = None) -> str:
+    if write_blocked or disk_used_percent >= DISK_CRITICAL_PERCENT:
+        return "high"
+    if disk_used_percent >= DISK_DEGRADED_PERCENT:
+        return "medium"
+    return "low"
 
 
 @router.get("/api/system/status")
@@ -171,6 +191,23 @@ def system_status(db: Session = Depends(get_db)) -> dict:
             "ingest_writable": preflight.get("ingest_writable"),
             "blocking_reasons": list(preflight.get("blocking_reasons") or []),
             "disk_allocation": list(preflight.get("disk_allocation") or []),
+            "write_blocked": bool(
+                preflight.get("cluster_create_index_blocked")
+                or preflight.get("cluster_write_blocked")
+                or preflight.get("cluster_read_only_allow_delete")
+                or preflight.get("target_index_write_blocked")
+                or preflight.get("target_index_read_only_allow_delete")
+            ),
+            "watermark_risk": _opensearch_watermark_risk(
+                float(disk.percent),
+                bool(
+                    preflight.get("cluster_create_index_blocked")
+                    or preflight.get("cluster_write_blocked")
+                    or preflight.get("cluster_read_only_allow_delete")
+                    or preflight.get("target_index_write_blocked")
+                    or preflight.get("target_index_read_only_allow_delete")
+                ),
+            ),
         }
     except Exception:  # noqa: BLE001
         pass
@@ -178,7 +215,15 @@ def system_status(db: Session = Depends(get_db)) -> dict:
     return {
         "cpu": {"percent": psutil.cpu_percent(interval=0.1), "count": psutil.cpu_count() or 1},
         "memory": {"total": vm.total, "used": vm.used, "percent": vm.percent},
-        "disk": {"data_dir_total": disk.total, "data_dir_used": disk.used, "data_dir_percent": disk.percent},
+        "disk": {
+            "data_dir_total": disk.total,
+            "data_dir_used": disk.used,
+            "data_dir_free": disk.free,
+            "data_dir_percent": disk.percent,
+            "status": _disk_status(float(disk.percent)),
+            "warning_threshold_percent": DISK_DEGRADED_PERCENT,
+            "critical_threshold_percent": DISK_CRITICAL_PERCENT,
+        },
         "queues": queues,
         "opensearch": opensearch_info,
         "evtx_parser_backends": detect_evtx_parser_backends(),

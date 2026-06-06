@@ -56,8 +56,21 @@ class EvidenceRead(BaseModel):
         data["investigation_ready"] = bool(metadata.get("investigation_ready"))
         data["searchable_documents_count"] = int(metadata.get("searchable_documents_count") or metadata.get("events_indexed") or 0)
         data["status_reason"] = str(metadata.get("status_reason") or "").strip() or None
-        data["warning_count"] = int(metadata.get("warning_count") or len(metadata.get("warnings") or []))
-        data["error_count"] = int(metadata.get("error_count") or len(error_log.get("errors") or []))
+        problematic_summary = metadata.get("problematic_artifacts_summary") if isinstance(metadata.get("problematic_artifacts_summary"), dict) else {}
+        data["warning_count"] = int(
+            metadata.get("warning_count")
+            if metadata.get("warning_count") is not None
+            else problematic_summary.get("indexed_with_warning")
+            if problematic_summary
+            else len(metadata.get("warnings") or [])
+        )
+        data["error_count"] = int(
+            metadata.get("error_count")
+            if metadata.get("error_count") is not None
+            else problematic_summary.get("data_loss_expected_count")
+            if problematic_summary
+            else len(error_log.get("errors") or [])
+        )
         data["last_successful_ingest_run_id"] = str(metadata.get("last_successful_ingest_run_id") or "").strip() or None
         data["evidence_type"] = resolve_public_evidence_type(
             data.get("evidence_type"),

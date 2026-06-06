@@ -6,7 +6,7 @@ Una colección Velociraptor suele contener:
 
 - `uploads/`
 - `results/`
-- rutas percent-encoded como `C%3A/Users/...`
+- rutas percent-encoded como `C%3A/<Windows-profile>/...`
 
 La app normaliza esas rutas para poder inferir usuario, navegador, perfil y tipo de evidencia.
 
@@ -102,9 +102,9 @@ No extrae por defecto:
 
 La app convierte conceptualmente:
 
-- `C%3A/Users/alex/...`
-- `C:/Users/alex/...`
-- `C:\\Users\\alex\\...`
+- `C%3A/<Windows-profile>/...`
+- `C:/<Windows-profile>/...`
+- `C:\\<Windows-profile>\\...`
 
 en una forma útil para investigación:
 

@@ -100,6 +100,14 @@ Use demo/validation flags only in training, QA, or controlled product demonstrat
 
 Kairon DFIR assists the analyst; final interpretation remains the analyst's responsibility.
 
+## Demo DFIR Lab
+
+Kairon DFIR includes a small Windows DFIR demo case designed to help analysts test ingest, search, timeline reconstruction and artifact pivoting using a controlled Velociraptor collection.
+
+Start here: [Demo documentation](docs/demo/README.md) or open [Kairon Lab 01 - Suspicious PowerShell Activity](docs/demo/kairon-lab01/README.md).
+
+Do not commit private evidence archives, processed case data, customer datasets or generated case data. Keep local demo archives under `demo/evidence/`; they are ignored by git.
+
 ## Supported Evidence And Artifact Overview
 
 Coverage depends on the artifacts present in the uploaded evidence and on parser availability in the deployment.
@@ -137,9 +145,11 @@ Never commit real evidence, secrets, logs, backups, database dumps, or generated
 - [User guide](docs/user_guide.md)
 - [Feature map](docs/feature_map.md)
 - [Artifact support matrix](docs/artifacts_matrix.md)
+- [Demo labs](docs/demo/README.md)
 - [Private beta deployment](docs/deployment/beta-deployment.md)
 - [Investigation vs demo/validation modes](docs/deployment/beta-vs-demo-mode.md)
 - [Security notes](docs/SECURITY.md)
+- [Known limitations](docs/KNOWN_LIMITATIONS.md)
 - [Validation workflow](docs/validation/README.md)
 
 ## Known Limitations

@@ -13837,7 +13837,7 @@ def test_build_problematic_artifacts_report_summarizes_retryable_evtxs() -> None
     assert report["summary"]["problematic_count"] == 2
     assert report["summary"]["parsed_with_warning"] == 1
     assert report["summary"]["partially_parsed"] == 1
-    assert report["summary"]["retryable"] == 2
+    assert report["summary"]["retryable"] == 1
     by_name = {item["name"]: item for item in report["items"]}
     assert by_name["bits_openvpn.evtx"]["status"] == "parsed_with_warning"
     assert by_name["bits_openvpn.evtx"]["data_loss_expected"] is False
@@ -13845,9 +13845,11 @@ def test_build_problematic_artifacts_report_summarizes_retryable_evtxs() -> None
     assert by_name["bits_openvpn.evtx"]["loss_summary"] == "No expected data loss"
     assert by_name["bits_openvpn.evtx"]["records_read"] == 1000
     assert by_name["bits_openvpn.evtx"]["records_indexed"] == 1000
+    assert by_name["bits_openvpn.evtx"]["retryable"] is False
     assert by_name["bits_openvpn.evtx"]["retry_history"][0]["status"] == "parsed_with_warning"
     assert by_name["CA_PetiPotam_etw_rpc_efsr_5_6.evtx"]["status"] == "partially_parsed"
     assert by_name["CA_PetiPotam_etw_rpc_efsr_5_6.evtx"]["importance"] == "high"
+    assert by_name["CA_PetiPotam_etw_rpc_efsr_5_6.evtx"]["retryable"] is True
 
 
 def test_build_problematic_artifacts_report_treats_zero_record_evtx_as_informational() -> None:
@@ -13956,6 +13958,11 @@ def test_problematic_artifact_effective_status_marks_recovered_retry() -> None:
     assert item["effective_status"] == "recovered_with_warning"
     assert item["recovered"] is True
     assert item["recovered_records"] == 869
+    assert item["current_data_loss_expected"] is False
+    assert item["retryable"] is False
+    assert report["summary"]["retryable"] == 0
+    assert report["summary"]["data_loss_expected_count"] == 0
+    assert problematic_artifacts_require_error_status(report) is False
     assert item["current_data_loss_expected"] is False
     assert report["summary"]["recovered_count"] == 1
     assert report["summary"]["unresolved_count"] == 0

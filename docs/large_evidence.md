@@ -33,9 +33,9 @@ La app no puede leer rutas del equipo desde el que abres el navegador solo porqu
 
 Ejemplos que `no` funcionan por sí solos:
 
-- `C:\Users\alex\Desktop\Evidence`
-- `/Users/alex/Desktop/Evidence`
-- `/home/alex/Evidence`
+- `C:\Users\analyst\Desktop\Evidence`
+- `/home/user/Evidence`
+- `/opt/evidence`
 
 Esas rutas solo sirven si:
 
@@ -67,7 +67,7 @@ La app valida:
 - que la ruta exista
 - que no escape por symlink o path traversal
 - que el muestreo inicial no exceda límites razonables
-- si parece una ruta del cliente (`C:\...`, `/Users/...`, `\\server\share`, etc.)
+- si parece una ruta del cliente (`C:\...`, `/home/user/...`, `\\server\share`, etc.)
 
 ## Why my local path does not work?
 

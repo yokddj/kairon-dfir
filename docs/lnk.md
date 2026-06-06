@@ -45,8 +45,8 @@ El parser nativo `lnk_raw` ahora puede ingerir directamente shortcuts raw desde 
 
 ## Diferencia entre source file y target path
 
-- `source file`: el `.lnk` en sí, por ejemplo `C:\Users\alex\Desktop\runme.lnk`
-- `target path`: el recurso al que apunta, por ejemplo `C:\Users\alex\Downloads\runme.ps1`
+- `source file`: el `.lnk` en sí, por ejemplo `C:\Users\analyst\Desktop\runme.lnk`
+- `target path`: el recurso al que apunta, por ejemplo `C:\Users\analyst\Downloads\runme.ps1`
 
 Esto es importante porque el `.lnk` puede seguir existiendo aunque el target ya haya desaparecido.
 
@@ -85,13 +85,13 @@ Por eso la app calcula:
 Si `LECmd` devuelve:
 
 - `TargetIDAbsolutePath = Desktop\\`
-- `LocalPath = C:\Users\alex\Desktop\DFIRLabEvidence\DFIRLab-training dataset-20260503-132748`
+- `LocalPath = C:\Users\analyst\Desktop\DFIRLabEvidence\DFIRLab-training-dataset`
 
 el evento normalizado mostrará:
 
-- `lnk.effective_path = C:\Users\alex\Desktop\DFIRLabEvidence\DFIRLab-training dataset-20260503-132748`
+- `lnk.effective_path = C:\Users\analyst\Desktop\DFIRLabEvidence\DFIRLab-training-dataset`
 - `lnk.effective_path_source = local_path`
-- `file.path = C:\Users\alex\Desktop\DFIRLabEvidence\DFIRLab-training dataset-20260503-132748`
+- `file.path = C:\Users\analyst\Desktop\DFIRLabEvidence\DFIRLab-training-dataset`
 
 Así `Search`, `Artifact Explorer` y `Análisis semiautomático` dejan de enseñar resúmenes inútiles como `Desktop\\`.
 

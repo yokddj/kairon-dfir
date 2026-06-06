@@ -65,6 +65,9 @@ const basePerformanceState = {
     disk_total_bytes: 100 * 1024 * 1024 * 1024,
     disk_free_bytes: 40 * 1024 * 1024 * 1024,
     disk_used_percent: 60,
+    disk_status: "healthy",
+    disk_warning_threshold_percent: 80,
+    disk_critical_threshold_percent: 90,
     storage_used_bytes: 5 * 1024 * 1024 * 1024,
     warnings: [],
     allowed_roots: ["/mnt/evidence", "/data/evidence", "/cases"],
@@ -150,7 +153,7 @@ const basePerformanceState = {
     backend: { status: "ok" },
     worker: { status: "ok", active: 2, known: ["worker-1"], queues: { "worker-1": ["dfir-ingest", "dfir-rules"] } },
     frontend: { status: "ok" },
-    opensearch: { status: "ok", cluster_status: "green", heap_used_percent: 30, disk_watermark: { high: "90%" } },
+    opensearch: { status: "ok", cluster_status: "green", heap_used_percent: 30, disk_watermark: { high: "90%" }, write_blocked: false, ingest_writable: true, watermark_risk: "low", blocking_reasons: [] },
     queues: {
       "dfir-ingest": { queued: 1, started: 0, failed: 0, finished: 5 },
     },
@@ -167,9 +170,14 @@ const basePerformanceState = {
     memory_limit_source: "cgroup",
     memory_explanation: "The app can only use memory available to the container or VM. Your physical machine may have more RAM.",
     disk_free: 40 * 1024 * 1024 * 1024,
+    disk_status: "healthy",
+    disk_used_percent: 60,
     opensearch_health: "green",
     opensearch_heap_percent: 30,
     opensearch_disk_watermark: { high: "90%" },
+    opensearch_write_blocked: false,
+    opensearch_ingest_writable: true,
+    opensearch_watermark_risk: "low",
     redis_queue_status: {
       "dfir-ingest": { queued: 1, started: 0, failed: 0, finished: 5 },
     },
@@ -350,7 +358,47 @@ describe("SystemPage", () => {
     expect(screen.getByRole("tab", { name: /deployment/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /advanced/i })).toBeInTheDocument();
     expect(screen.getByText(/container visible RAM/i)).toBeInTheDocument();
+    expect(screen.getByText(/Disk guard: healthy/i)).toBeInTheDocument();
+    expect(screen.getByText(/OpenSearch ingest writable: yes/i)).toBeInTheDocument();
     expect(screen.getByText(/Ingest concurrency: desired 8 · effective 4/i)).toBeInTheDocument();
+  });
+
+  it("shows disk and OpenSearch watermark warnings", async () => {
+    getAdminPerformanceMock.mockResolvedValue({
+      ...basePerformanceState,
+      system: {
+        ...basePerformanceState.system,
+        disk_free_bytes: 8 * 1024 * 1024 * 1024,
+        disk_used_percent: 92,
+        disk_status: "critical",
+        warnings: ["disk_usage_critical", "opensearch_write_blocked"],
+      },
+      services: {
+        ...basePerformanceState.services,
+        opensearch: {
+          ...basePerformanceState.services.opensearch,
+          status: "critical",
+          write_blocked: true,
+          ingest_writable: false,
+          watermark_risk: "high",
+          blocking_reasons: ["cluster_create_index_blocked"],
+        },
+      },
+      resources: {
+        ...basePerformanceState.resources,
+        disk_free: 8 * 1024 * 1024 * 1024,
+        disk_status: "critical",
+        disk_used_percent: 92,
+        opensearch_write_blocked: true,
+        opensearch_ingest_writable: false,
+        opensearch_watermark_risk: "high",
+      },
+    });
+    renderPage();
+
+    expect(await screen.findByText(/Disk usage is high. Indexing may be blocked by OpenSearch watermarks./i)).toBeInTheDocument();
+    expect(screen.getByText(/OpenSearch ingest writable: no/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/write blocked/i).length).toBeGreaterThan(0);
   });
 
   it("renders discrete build identity metadata", async () => {

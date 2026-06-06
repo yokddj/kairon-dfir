@@ -108,7 +108,7 @@ Comprueba:
 - el path existe
 - no hay symlink escape
 
-Si introduces una ruta como `C:\Users\...` o `/Users/...`, eso suele ser una ruta del equipo cliente, no del servidor.
+Si introduces una ruta como `C:\Users\...` o `/home/user/...`, eso suele ser una ruta del equipo cliente, no del servidor.
 
 Acción:
 

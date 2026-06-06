@@ -71,20 +71,47 @@ OpenSearch may become read-only or unhealthy when disk is low. Free disk, then c
 
 ## Disk Space
 
-The System page and `/api/system/status` report data directory disk usage. Treat these thresholds as beta defaults:
+The System page and `/api/system/status` report data directory disk usage and OpenSearch write-block risk. Treat these thresholds as beta defaults:
 
-- below 75%: healthy
-- 75-85%: monitor
-- above 85%: degraded
+- below 80%: healthy
+- 80-90%: degraded; plan cleanup before demos or large ingest jobs
 - above 90%: stop ingest and free space
+- OpenSearch write blocked: critical; do not start ingest until disk pressure is resolved and write blocks are cleared
 
-Clean only safe targets:
+Safe immediate cleanup targets:
 
-- Docker build cache after confirming images are not needed.
-- old backups after validating newer backups.
-- temporary files under `./data/tmp`.
+- Docker build cache with `docker builder prune` after confirming no image build is active.
+- stopped containers with `docker container prune`.
+- dangling images with `docker image prune`.
+- Python `__pycache__`, `.pytest_cache`, npm cache and old local build caches.
+- rotated logs that are not needed for incident review.
+- temporary parser directories under `./data/tmp` only when no ingest/reprocess job is active.
 
-Do not delete `postgres_data`, `opensearch_data`, or uploaded evidence unless restoring intentionally.
+Require explicit operator confirmation before deleting:
+
+- old backups, exports, report previews or debug packs
+- duplicated uploaded evidence archives
+- parsed CSV/output caches that can be regenerated
+- old demo/lab evidence duplicates
+
+Do not delete:
+
+- `postgres_data`
+- `opensearch_data` or active `dfir-events-*` indices
+- current uploaded evidence archives
+- `.env`, `docker-compose.yml` or the deployed repo
+- the latest known-good backup
+
+If OpenSearch entered `read_only_allow_delete` or create-index protection, first confirm disk is below the safe threshold, then clear blocks:
+
+```bash
+curl -fsS http://127.0.0.1:9200/_all/_settings/index.blocks.read_only_allow_delete
+curl -X PUT http://127.0.0.1:9200/_all/_settings \
+  -H 'Content-Type: application/json' \
+  -d '{"index.blocks.read_only_allow_delete": null}'
+```
+
+Do not lower OpenSearch watermarks as a routine fix. Free disk instead.
 
 ## Parser Tooling Missing
 
@@ -99,4 +126,3 @@ These are `tooling_missing` or planned states, not evidence failures.
 ## Security Reminder
 
 If the stack is reachable without VPN/reverse proxy authentication, assume evidence is exposed. Do not publish beta deployments directly to the Internet.
-
