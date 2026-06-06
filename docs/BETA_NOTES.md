@@ -2,7 +2,7 @@
 
 ## Intended Audience
 
-This beta is for controlled DFIR labs, demos and private tester environments. It is not a hosted SaaS or public Internet deployment.
+This beta is for controlled DFIR labs, validation runs and private tester environments. It is not a hosted SaaS or public Internet deployment.
 
 ## What To Test
 
@@ -31,4 +31,3 @@ Useful beta feedback includes:
 - approximate evidence size and artifact type.
 
 Avoid sharing raw evidence or screenshots with sensitive values.
-

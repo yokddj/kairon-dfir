@@ -8,7 +8,7 @@ Status: private beta repository hygiene baseline.
 |---|---|---|
 | `backend/` | keep | FastAPI backend, parser integrations, services, tests and fixtures. |
 | `frontend/` | keep | React/Vite UI and tests. |
-| `docs/` | keep | Current user, deployment, demo, feature map and troubleshooting documentation. |
+| `docs/` | keep | Current user, deployment, validation, feature map and troubleshooting documentation. |
 | `scripts/dfir-healthcheck.sh` | keep | Beta operational healthcheck helper. |
 | `scripts/dfir-backup.sh` | keep | Safe dry-run backup helper and optional backup runner. |
 | `docker-compose.yml` | keep | Primary beta deployment stack. |
@@ -22,7 +22,7 @@ Status: private beta repository hygiene baseline.
 | `frontend/node_modules/`, `frontend/dist/` | gitignore/dockerignore | Generated dependency/build output. |
 | `backend/.pytest_cache/`, `__pycache__/`, `*.egg-info` | gitignore/dockerignore | Generated Python test/build output. |
 | `*.7z`, `*.zip`, `*.E01`, `*.raw`, `*.dd`, `*.ost`, `*.pst`, `*.vhd*` | gitignore/dockerignore | Evidence archives, mail stores and disk images must not be committed accidentally. |
-| `tmp_*`, `.tmp-backend-data/`, `demo/output/` | gitignore | Local scratch and generated demo output. |
+| `tmp_*`, `.tmp-backend-data/` | gitignore | Local scratch and generated output. |
 
 ## Secret Scan Summary
 
@@ -38,7 +38,7 @@ Findings:
 
 - No production secrets were identified in versioned release files.
 - `.env` exists locally and is ignored.
-- Test/demo strings such as `demosecret`, `SuperSecret`, `access_token=...` exist only in tests/demo fixtures used to validate redaction behavior.
+- Test strings such as `demosecret`, `SuperSecret`, `access_token=...` exist only in fixtures used to validate redaction behavior.
 - Development defaults such as `dfir`/`admin` exist in code/config for local Docker defaults; `.env.example` uses `CHANGE_ME` placeholders for beta deployments.
 
 ## Data Cleanup Policy
@@ -78,4 +78,3 @@ Current beta-facing docs include:
 - Eric Zimmerman Tools download/build-time usage and redistribution terms;
 - any bundled Sigma/YARA/rule content license requirements;
 - dependency attribution expectations.
-

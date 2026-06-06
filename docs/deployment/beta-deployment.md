@@ -21,7 +21,7 @@ Rules, reports, parser rebuilds and SRUM Windows-worker parsing are not part of 
 - Docker and Docker Compose plugin.
 - 4 CPU cores minimum for small beta use; 8+ preferred for multi-host evidence.
 - 16 GB RAM minimum; 32 GB preferred when using full MFT and OpenSearch.
-- Persistent disk sized for evidence plus indexed data. For demo/training evidence, size storage according to the dataset owner's guidance.
+- Persistent disk sized for evidence plus indexed data. For validation or training evidence, size storage according to the dataset owner's guidance.
 - Private network access only. Do not expose the stack directly to the Internet.
 
 ## First-Time Setup
@@ -117,18 +117,16 @@ Recommended reverse proxy controls:
 - HTTP basic auth or SSO in front of frontend/backend.
 - No public access to Postgres, Redis or OpenSearch.
 
-## Demo / Validation Datasets
+## Validation Datasets
 
-The main branch does not bundle concrete demo evidence, public challenge datasets or answer keys. Demo/validation datasets should be maintained as separate packages and imported only into environments where users expect training material.
+The main branch does not bundle evidence archives, public challenge datasets or answer keys. Validation datasets should be maintained as separate packages and imported only into environments where users expect QA or training material.
 
 Relevant docs:
 
-- `docs/demo/README.md`
-- `docs/demo/generic-demo-guide.md`
 - `docs/validation/README.md`
 - `docs/validation/validation-matrix-format.md`
 
-If you import a demo dataset, treat it as evidence data and back it up like any other case.
+If you import a validation dataset, treat it as evidence data and back it up like any other case.
 
 ## Operational Smoke After Deploy
 
@@ -141,7 +139,6 @@ Run:
 Then validate in the UI:
 
 - open Case Home
-- run Search for a known demo term if demo data exists, such as `powershell -ep bypass`
+- run Search for a known term from a controlled validation case, if one is loaded
 - open Artifact Views
 - preview or export a report
-

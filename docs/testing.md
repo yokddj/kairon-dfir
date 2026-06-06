@@ -22,21 +22,6 @@ This covers:
 - targeted ingest families with debug export
 - route-level lazy loading and the main frontend workspaces
 
-## Demo MVP smoke
-
-Before a live MVP demo, also run:
-
-```bash
-python3 tools/demo/generate_demo_evidence.py
-pytest -q /app/tests/test_demo_pack.py
-```
-
-Optional end-to-end bootstrap on a running stack:
-
-```bash
-python3 tools/demo/bootstrap_demo_case.py
-```
-
 ## Backend
 
 ### Validación básica

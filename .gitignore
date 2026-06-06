@@ -44,6 +44,9 @@ data/evidence/*
 data/tmp/*
 !data/tmp/.gitkeep
 uploads/
+evidence/
+evidences/
+cases/
 backups/
 logs/
 reports/generated/
@@ -73,6 +76,7 @@ exports/
 *.vhdx
 *.ost
 *.pst
+*.evtx
 *.eml
 *.msg
 !backend/tests/fixtures/**/*.evtx
@@ -81,18 +85,4 @@ exports/
 # Local synthetic/temp packs
 /tmp_*/
 /tmp_*.sh
-/demo/output/
-/demo/evidence/*.zip
-/demo/evidence/*.7z
-/demo/evidence/*.E01
-/demo/evidence/*.e01
-/demo/evidence/*.Ex01
-/demo/evidence/*.raw
-/demo/evidence/*.dd
-/demo/evidence/*.aff4
-/demo/evidence/*.ad1
-/demo/evidence/*.vhd
-/demo/evidence/*.vhdx
-/demo/evidence/*.ost
-/demo/evidence/*.pst
-!/demo/evidence/.gitkeep
+demo/evidence/

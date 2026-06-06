@@ -74,7 +74,7 @@ OpenSearch may become read-only or unhealthy when disk is low. Free disk, then c
 The System page and `/api/system/status` report data directory disk usage and OpenSearch write-block risk. Treat these thresholds as beta defaults:
 
 - below 80%: healthy
-- 80-90%: degraded; plan cleanup before demos or large ingest jobs
+- 80-90%: degraded; plan cleanup before validation runs or large ingest jobs
 - above 90%: stop ingest and free space
 - OpenSearch write blocked: critical; do not start ingest until disk pressure is resolved and write blocks are cleared
 
@@ -92,7 +92,7 @@ Require explicit operator confirmation before deleting:
 - old backups, exports, report previews or debug packs
 - duplicated uploaded evidence archives
 - parsed CSV/output caches that can be regenerated
-- old demo/lab evidence duplicates
+- old validation or training evidence duplicates
 
 Do not delete:
 
