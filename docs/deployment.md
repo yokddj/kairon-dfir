@@ -95,9 +95,9 @@ Esas rutas son las bases esperadas para `server-mounted path` si `DFIR_ALLOW_HOS
 
 Si escribes en la UI una ruta como:
 
-- `C:\Users\alex\Desktop\Evidence`
-- `/Users/alex/Desktop/Evidence`
-- `/home/alex/Evidence`
+- `C:\Users\analyst\Desktop\Evidence`
+- `/home/user/Evidence`
+- `/opt/evidence`
 
 el backend no podrá leerla solo porque exista en tu equipo.
 

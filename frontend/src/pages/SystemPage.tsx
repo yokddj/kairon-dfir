@@ -120,6 +120,12 @@ function displayDraftValue(entry: PerformanceSettingEntry, draftSettings: Record
   return String(draftSettings[entry.name] ?? fallback ?? "");
 }
 
+function statusTone(status: string | null | undefined) {
+  if (status === "critical" || status === "high") return "border-danger/30 bg-danger/10 text-danger";
+  if (status === "degraded" || status === "medium" || status === "warning") return "border-amber/30 bg-amber/10 text-amber";
+  return "border-mint/25 bg-mint/10 text-mint";
+}
+
 function buildDraftPayload(_profile: ProfileName, draftSettings: Record<string, unknown>) {
   return draftSettings;
 }
@@ -290,6 +296,14 @@ export default function SystemPage() {
   const resources = data?.resources;
   const recommendation = recommendationQuery.data ?? data?.recommendation;
   const evidenceStorage = data?.evidence_storage;
+  const diskStatus = String(data?.system.disk_status ?? resources?.disk_status ?? "healthy");
+  const diskUsedPercent = Number(data?.system.disk_used_percent ?? resources?.disk_used_percent ?? 0);
+  const diskWarningThreshold = Number(data?.system.disk_warning_threshold_percent ?? 80);
+  const diskCriticalThreshold = Number(data?.system.disk_critical_threshold_percent ?? 90);
+  const openSearchWriteBlocked = Boolean(data?.services.opensearch.write_blocked ?? resources?.opensearch_write_blocked);
+  const openSearchIngestWritable = data?.services.opensearch.ingest_writable ?? resources?.opensearch_ingest_writable;
+  const openSearchWatermarkRisk = String(data?.services.opensearch.watermark_risk ?? resources?.opensearch_watermark_risk ?? "unknown");
+  const openSearchBlockingReasons = Array.isArray(data?.services.opensearch.blocking_reasons) ? data?.services.opensearch.blocking_reasons as string[] : [];
 
   const performanceSettings = settings.filter((entry) => settingSection(entry) === "performance");
   const brandingSettings = settings.filter((entry) => settingSection(entry) === "branding");
@@ -626,12 +640,19 @@ export default function SystemPage() {
             <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
               <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Disk</p>
               <p className="mt-3 text-2xl font-semibold">{formatBytes(data.system.disk_free_bytes)}</p>
-              <p className="mt-1 text-sm text-muted">free of {formatBytes(data.system.disk_total_bytes)}</p>
+              <p className="mt-1 text-sm text-muted">free of {formatBytes(data.system.disk_total_bytes)} · {diskUsedPercent.toFixed(0)}% used</p>
+              <span className={`mt-3 inline-flex rounded-full border px-2 py-1 text-[11px] uppercase tracking-[0.14em] ${statusTone(diskStatus)}`}>{diskStatus}</span>
+              {diskStatus !== "healthy" ? (
+                <p className="mt-2 text-xs text-amber">Disk usage is high. Indexing may be blocked by OpenSearch watermarks.</p>
+              ) : null}
             </div>
             <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
               <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">OpenSearch</p>
               <p className="mt-3 text-2xl font-semibold">{String(data.services.opensearch.cluster_status ?? data.services.opensearch.status ?? "unknown")}</p>
-              <p className="mt-1 text-sm text-muted">heap {String(data.services.opensearch.heap_used_percent ?? "n/a")}%</p>
+              <p className="mt-1 text-sm text-muted">heap {String(data.services.opensearch.heap_used_percent ?? "n/a")}% · watermark risk {openSearchWatermarkRisk}</p>
+              <span className={`mt-3 inline-flex rounded-full border px-2 py-1 text-[11px] uppercase tracking-[0.14em] ${statusTone(openSearchWriteBlocked ? "critical" : openSearchWatermarkRisk)}`}>
+                {openSearchWriteBlocked ? "write blocked" : openSearchIngestWritable === false ? "not writable" : "writable"}
+              </span>
             </div>
           </div>
 
@@ -643,6 +664,8 @@ export default function SystemPage() {
                 <p>Worker: {String(data.services.worker.status ?? "unknown")} · active {String(data.services.worker.active ?? 0)}</p>
                 <p>Frontend: {String(data.services.frontend.status ?? "unknown")}</p>
                 <p>OpenSearch: {String(data.services.opensearch.status ?? "unknown")}</p>
+                <p>Disk guard: {diskStatus} · warning {diskWarningThreshold}% · critical {diskCriticalThreshold}%</p>
+                <p>OpenSearch ingest writable: {openSearchIngestWritable === false ? "no" : "yes"} · watermark risk {openSearchWatermarkRisk}</p>
                 <p>Ingest concurrency: desired {String(resources?.current_concurrency.desired_ingest_parallelism ?? resources?.current_concurrency.ingest_parallelism ?? 1)} · effective {String(resources?.current_concurrency.effective_ingest_parallelism ?? resources?.current_concurrency.ingest_parallelism ?? 1)}</p>
                 {resources?.current_concurrency.ingest_parallelism_reason ? <p>Parallelism limit: {String(resources.current_concurrency.ingest_parallelism_reason)}</p> : null}
               </div>
@@ -915,7 +938,21 @@ export default function SystemPage() {
                 <p className="text-xs uppercase tracking-[0.16em] text-muted">Data view status</p>
                 <p className="mt-2 text-lg font-semibold">Bootstrap ready</p>
               </div>
+              <div className="rounded-2xl border border-line bg-abyss/80 p-4">
+                <p className="text-xs uppercase tracking-[0.16em] text-muted">Write block</p>
+                <p className="mt-2 text-lg font-semibold">{openSearchWriteBlocked ? "blocked" : "clear"}</p>
+              </div>
+              <div className="rounded-2xl border border-line bg-abyss/80 p-4">
+                <p className="text-xs uppercase tracking-[0.16em] text-muted">Watermark risk</p>
+                <p className="mt-2 text-lg font-semibold">{openSearchWatermarkRisk}</p>
+              </div>
             </div>
+            {openSearchWriteBlocked || openSearchWatermarkRisk === "medium" || openSearchWatermarkRisk === "high" ? (
+              <div className="mt-4 rounded-2xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">
+                Disk usage is high. Indexing may be blocked by OpenSearch watermarks.
+                {openSearchBlockingReasons.length ? <span className="block text-xs text-muted">Reasons: {openSearchBlockingReasons.join(", ")}</span> : null}
+              </div>
+            ) : null}
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               {openSearchSettings.map((entry) => (
                 <SettingInput

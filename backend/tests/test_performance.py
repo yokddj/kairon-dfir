@@ -57,17 +57,21 @@ def _patch_system(monkeypatch: pytest.MonkeyPatch):
             "memory_total_bytes": 16 * 1024 * 1024 * 1024,
             "memory_available_bytes": 10 * 1024 * 1024 * 1024,
             "memory_container_limit_bytes": 12 * 1024 * 1024 * 1024,
+            "memory_limit_source": "cgroup",
             "memory_used_percent": 35.0,
             "disk_total_bytes": 500 * 1024 * 1024 * 1024,
             "disk_free_bytes": 300 * 1024 * 1024 * 1024,
             "disk_used_percent": 40.0,
+            "disk_status": "healthy",
+            "disk_warning_threshold_percent": 80.0,
+            "disk_critical_threshold_percent": 90.0,
             "storage_used_bytes": 5 * 1024 * 1024 * 1024,
             "queues": {},
             "services": {
                 "backend": {"status": "ok"},
                 "worker": {"status": "ok", "active": 2, "known": ["worker-1", "worker-2"], "queues": {"worker-1": ["dfir-ingest"], "worker-2": ["dfir-rules"]}},
                 "frontend": {"status": "ok"},
-                "opensearch": {"status": "ok", "cluster_status": "green", "heap_used_percent": 35, "disk_watermark": {"high": "90%"}},
+                "opensearch": {"status": "ok", "cluster_status": "green", "heap_used_percent": 35, "disk_watermark": {"high": "90%"}, "write_blocked": False, "ingest_writable": True, "watermark_risk": "low", "blocking_reasons": []},
             },
             "opensearch_status": "ok",
         },
@@ -115,6 +119,8 @@ def test_get_performance_defaults(monkeypatch: pytest.MonkeyPatch):
     assert state["deployment"]["restart_enabled"] is False
     assert state["resources"]["cpu_count_container"] == 8
     assert state["queue_architecture"]["recommended_workers"][0] == "worker-ingest"
+    assert state["system"]["disk_status"] == "healthy"
+    assert state["services"]["opensearch"]["write_blocked"] is False
 
 
 def test_set_profile_max(monkeypatch: pytest.MonkeyPatch):
@@ -236,7 +242,28 @@ def test_performance_resources_return_safe_structure(monkeypatch: pytest.MonkeyP
     assert resources["memory_container_limit"] == 12 * 1024 * 1024 * 1024
     assert resources["worker_queues"]["worker-1"] == ["dfir-ingest"]
     assert resources["current_profile"] == "balanced"
-    assert resources["memory_limit_source"] == "cgroup"
+    assert "memory_limit_source" in resources
+    assert resources["disk_status"] == "healthy"
+    assert resources["opensearch_write_blocked"] is False
+
+
+def test_resource_warnings_include_disk_thresholds_and_opensearch_block():
+    warnings = build_resource_warnings(
+        {
+            "disk_total_bytes": 100,
+            "disk_free_bytes": 8,
+            "disk_used_percent": 92,
+            "memory_available_bytes": 8 * 1024 * 1024 * 1024,
+            "opensearch_status": "ok",
+            "services": {"opensearch": {"write_blocked": True, "watermark_risk": "high"}},
+        },
+        "balanced",
+    )
+
+    assert "disk_usage_degraded" in warnings
+    assert "disk_usage_critical" in warnings
+    assert "opensearch_write_blocked" in warnings
+    assert "opensearch_watermark_risk_high" in warnings
 
 
 def test_describe_ingest_parallelism_respects_profile_and_cpu_limit(monkeypatch: pytest.MonkeyPatch):

@@ -112,6 +112,69 @@ def _load_evidence_manifest(item: Evidence) -> dict:
     return default_manifest(item)
 
 
+def _artifact_id_lookup(artifact_rows: list[Artifact]) -> dict[tuple[str, str], str]:
+    artifact_id_by_key: dict[tuple[str, str], str] = {}
+    for artifact in artifact_rows:
+        source_path = str(artifact.source_path or "")
+        parser_name = str(artifact.parser or "")
+        artifact_name = str(artifact.name or "")
+        for key in (
+            (source_path, parser_name),
+            (source_path, ""),
+            (artifact_name, parser_name),
+            (artifact_name, ""),
+        ):
+            if key[0]:
+                artifact_id_by_key[key] = artifact.id
+    return artifact_id_by_key
+
+
+def _problematic_artifacts_report_for_evidence(item: Evidence, db: Session) -> dict[str, Any]:
+    manifest = _load_evidence_manifest(item)
+    artifact_rows = db.query(Artifact).filter(Artifact.evidence_id == item.id).all()
+    return build_problematic_artifacts_report(item, manifest, artifact_id_by_key=_artifact_id_lookup(artifact_rows), artifact_rows=artifact_rows)
+
+
+def _build_problematic_retry_candidates(report: dict[str, Any]) -> dict[str, Any]:
+    items = list(report.get("items") or [])
+    candidates: list[dict[str, Any]] = []
+    excluded_skipped_empty = 0
+    excluded_warnings = 0
+    excluded_other = 0
+    affected_families: dict[str, int] = {}
+    for item in items:
+        effective_status = str(item.get("effective_status") or item.get("status") or "").strip().lower()
+        status = str(item.get("status") or "").strip().lower()
+        records_read = int(item.get("effective_records_read") or item.get("records_read") or 0)
+        records_indexed = int(item.get("effective_records_indexed") or item.get("records_indexed") or 0)
+        retryable = bool(item.get("retryable"))
+        data_loss_expected = bool(item.get("current_data_loss_expected") if item.get("current_data_loss_expected") is not None else item.get("data_loss_expected"))
+        fully_indexed_warning = effective_status in {"parsed_with_warning", "accepted_warning", "health_check_only_valid", "source_missing_but_indexed"} and records_read > 0 and records_read == records_indexed
+        no_records = effective_status in {"skipped_empty", "completed_no_records", "unsupported_no_records"} or status in {"skipped_empty", "completed_no_records", "unsupported_no_records"}
+        if retryable and data_loss_expected and not no_records and not fully_indexed_warning and item.get("artifact_id"):
+            candidate = dict(item)
+            candidates.append(candidate)
+            family = str(candidate.get("artifact_type") or candidate.get("parser") or "unknown").strip() or "unknown"
+            affected_families[family] = affected_families.get(family, 0) + 1
+        elif no_records:
+            excluded_skipped_empty += 1
+        elif fully_indexed_warning:
+            excluded_warnings += 1
+        else:
+            excluded_other += 1
+    return {
+        "retry_candidates": candidates,
+        "retry_candidate_count": len(candidates),
+        "artifact_ids": [str(item.get("artifact_id")) for item in candidates if item.get("artifact_id")],
+        "affected_families": affected_families,
+        "excluded": {
+            "skipped_empty": excluded_skipped_empty,
+            "warnings_fully_indexed": excluded_warnings,
+            "other_non_retryable": excluded_other,
+        },
+    }
+
+
 def _fetch_evidence_sample_events(item: Evidence, *, size: int = 200) -> list[dict[str, Any]]:
     index = get_events_index(item.case_id)
     query = {"term": {"evidence_id": item.id}}
@@ -209,6 +272,23 @@ def _build_evidence_search_summary(item: Evidence) -> dict[str, Any]:
             values[key] = int(bucket.get("doc_count") or 0)
         return values
 
+    problematic_summary = (item.metadata_json or {}).get("problematic_artifacts_summary")
+    problematic_summary = problematic_summary if isinstance(problematic_summary, dict) else {}
+    warning_count = int(
+        (item.metadata_json or {}).get("warning_count")
+        if (item.metadata_json or {}).get("warning_count") is not None
+        else problematic_summary.get("indexed_with_warning")
+        if problematic_summary
+        else len((item.metadata_json or {}).get("warnings") or [])
+    )
+    error_count = int(
+        (item.metadata_json or {}).get("error_count")
+        if (item.metadata_json or {}).get("error_count") is not None
+        else problematic_summary.get("data_loss_expected_count")
+        if problematic_summary
+        else 0
+    )
+
     return {
         "evidence_id": item.id,
         "case_id": item.case_id,
@@ -219,8 +299,8 @@ def _build_evidence_search_summary(item: Evidence) -> dict[str, Any]:
         "investigation_ready": bool((item.metadata_json or {}).get("investigation_ready")) or total > 0,
         "searchable_documents_count": int((item.metadata_json or {}).get("searchable_documents_count") or total),
         "status_reason": str((item.metadata_json or {}).get("status_reason") or "").strip() or None,
-        "warning_count": int((item.metadata_json or {}).get("warning_count") or len((item.metadata_json or {}).get("warnings") or [])),
-        "error_count": int((item.metadata_json or {}).get("error_count") or 0),
+        "warning_count": warning_count,
+        "error_count": error_count,
         "last_successful_ingest_run_id": str((item.metadata_json or {}).get("last_successful_ingest_run_id") or "").strip() or None,
         "artifact_type_counts": _bucket_map("artifact_type"),
         "parser_counts": _bucket_map("parser"),
@@ -1538,23 +1618,21 @@ def get_problematic_artifacts(evidence_id: str, db: Session = Depends(get_db)) -
     item = db.get(Evidence, evidence_id)
     if not item:
         raise HTTPException(status_code=404, detail="Evidence not found")
-    path = evidence_manifest_path(item.case_id, item.id)
-    manifest = json.loads(path.read_text(encoding="utf-8")) if path.exists() else default_manifest(item)
-    artifact_rows = db.query(Artifact).filter(Artifact.evidence_id == item.id).all()
-    artifact_id_by_key: dict[tuple[str, str], str] = {}
-    for artifact in artifact_rows:
-        source_path = str(artifact.source_path or "")
-        parser_name = str(artifact.parser or "")
-        artifact_name = str(artifact.name or "")
-        for key in (
-            (source_path, parser_name),
-            (source_path, ""),
-            (artifact_name, parser_name),
-            (artifact_name, ""),
-        ):
-            if key[0]:
-                artifact_id_by_key[key] = artifact.id
-    return build_problematic_artifacts_report(item, manifest, artifact_id_by_key=artifact_id_by_key, artifact_rows=artifact_rows)
+    return _problematic_artifacts_report_for_evidence(item, db)
+
+
+@router.get("/api/evidences/{evidence_id}/problematic-artifacts/retry-candidates")
+def get_problematic_artifact_retry_candidates(evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    item = db.get(Evidence, evidence_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    report = _problematic_artifacts_report_for_evidence(item, db)
+    candidates = _build_problematic_retry_candidates(report)
+    return {
+        "evidence_id": item.id,
+        "summary": report.get("summary") or {},
+        **candidates,
+    }
 
 
 @router.get("/api/evidences/{evidence_id}/long-tail-artifacts")
@@ -2037,8 +2115,8 @@ def retry_problematic_artifacts(
         raise HTTPException(status_code=400, detail="Replacing existing events for selected artifacts is not supported yet.")
     artifact_ids = list(dict.fromkeys(payload.artifact_ids))
     if not artifact_ids:
-        report = get_problematic_artifacts(evidence_id, db)
-        artifact_ids = [str(entry.get("artifact_id")) for entry in report.get("items", []) if entry.get("retryable") and entry.get("artifact_id")]
+        report = _problematic_artifacts_report_for_evidence(item, db)
+        artifact_ids = _build_problematic_retry_candidates(report)["artifact_ids"]
     if not artifact_ids:
         raise HTTPException(status_code=400, detail="No retryable problematic artifacts found for this evidence.")
     run_id = enqueue_problematic_artifact_retry(
@@ -2744,7 +2822,7 @@ def _queue_recommended_raw_discovery_ingest(item: Evidence, metadata: dict, *, p
     try:
         run_id = enqueue_ingest(item.id)
     except OpenSearchIngestBlockedError as exc:
-        _mark_evidence_blocked_before_ingest(db, item, exc)
+        _mark_evidence_blocked_before_ingest(db, item, exc=exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return {
         "accepted": True,

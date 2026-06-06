@@ -481,6 +481,7 @@ def build_problematic_artifacts_report(
 
     items: list[dict[str, Any]] = []
     seen_keys: set[str] = set()
+    seen_source_parser_keys: set[str] = set()
     for artifact in manifest.get("artifacts") or []:
         ingest_audit = dict(artifact.get("ingest_audit") or {})
         error_text = None
@@ -536,7 +537,7 @@ def build_problematic_artifacts_report(
             "timeout_seconds": int(ingest_audit.get("timeout_seconds") or 0),
             "partial_data_indexed": partial_data_indexed,
             "data_loss_expected": data_loss_expected,
-            "retryable": str(artifact.get("parser") or "").lower() == "evtx_raw" and fine_status not in {"skipped_empty", "completed_no_records", "unsupported_no_records"},
+            "retryable": str(artifact.get("parser") or "").lower() == "evtx_raw" and data_loss_expected,
             "suggested_retry_mode": "deep_safe_mode" if data_loss_expected else "no_detections",
             "retry_history": retry_history_by_key.get((str(artifact.get("source_path") or ""), str(artifact.get("parser") or "")), []),
         }
@@ -558,11 +559,13 @@ def build_problematic_artifacts_report(
             )
         )
         item["data_loss_expected"] = bool(item.get("current_data_loss_expected"))
+        item["retryable"] = bool(item.get("retryable")) and bool(item.get("current_data_loss_expected"))
         importance, reasons = score_problematic_artifact_importance(item)
         item["importance"] = importance
         item["importance_reasons"] = reasons
         items.append(item)
         seen_keys.add(_artifact_key(item))
+        seen_source_parser_keys.add(f"{str(artifact.get('source_path') or '')}|{str(artifact.get('parser') or '')}")
 
     fallback_problematic_statuses = {
         "failed",
@@ -587,13 +590,14 @@ def build_problematic_artifacts_report(
         artifact_name = str(getattr(artifact_row, "name", None) or (artifact_row.get("name") if isinstance(artifact_row, dict) else "") or "")
         artifact_id = str(getattr(artifact_row, "id", None) or (artifact_row.get("id") if isinstance(artifact_row, dict) else "") or "") or None
         fallback_key = artifact_id or f"{source_path}|{parser_name or status}"
-        if fallback_key in seen_keys:
+        source_parser_key = f"{source_path}|{parser_name}"
+        if fallback_key in seen_keys or source_parser_key in seen_source_parser_keys:
             continue
         records_indexed = int(getattr(artifact_row, "record_count", None) or (artifact_row.get("record_count") if isinstance(artifact_row, dict) else 0) or 0)
         records_read = records_indexed
         no_records_status = status in {"skipped_empty", "completed_no_records", "unsupported_no_records"}
         error_type = "no_records" if no_records_status else "timeout" if "timeout" in status or "stalled" in status else "aborted"
-        retryable = bool(source_path) and not no_records_status
+        retryable = bool(source_path) and not no_records_status and records_indexed == 0
         suggested_retry_mode = "deep_safe_mode" if parser_name.lower() == "evtx_raw" else "safe_mode"
         error_message = (
             "Artifact did not reach terminal parser completion before worker/run abort."
@@ -650,11 +654,13 @@ def build_problematic_artifacts_report(
         item["original_status"] = status
         item["effective_status"] = str(item.get("effective_status") or status)
         item["data_loss_expected"] = bool(item.get("current_data_loss_expected", not no_records_status))
+        item["retryable"] = bool(item.get("retryable")) and bool(item.get("current_data_loss_expected"))
         importance, reasons = score_problematic_artifact_importance(item)
         item["importance"] = importance
         item["importance_reasons"] = reasons
         items.append(item)
         seen_keys.add(_artifact_key(item))
+        seen_source_parser_keys.add(source_parser_key)
 
     for deferred in metadata.get("evtx_deferred_files") or []:
         if not isinstance(deferred, dict):

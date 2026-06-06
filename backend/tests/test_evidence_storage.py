@@ -130,6 +130,100 @@ def test_recompute_evidence_status_keeps_unsearchable_failed_evidence_failed(mon
     assert evidence.metadata_json["status_reason"] == "no_searchable_documents_indexed"
 
 
+def test_evidence_read_prefers_problematic_summary_counts_over_historical_error_log():
+    evidence = Evidence(
+        id="evidence-3",
+        case_id="case-1",
+        original_filename="collection.zip",
+        stored_path="/tmp/collection.zip",
+        evidence_type=EvidenceType.raw_collection,
+        storage_mode=EvidenceStorageMode.uploaded,
+        is_external=False,
+        copy_to_storage=True,
+        sha256="c" * 64,
+        size_bytes=1,
+        ingest_status=IngestStatus.completed_with_errors,
+        path_validation={},
+        ingest_source={},
+        metadata_json={
+            "display_status": "completed_with_errors",
+            "investigation_ready": True,
+            "searchable_documents_count": 10314,
+            "problematic_artifacts_summary": {
+                "indexed_with_warning": 1,
+                "data_loss_expected_count": 2,
+            },
+        },
+        error_log={"errors": ["historical timeout 1", "historical timeout 2", "historical timeout 3"]},
+        created_at=datetime.now(UTC),
+    )
+
+    read = EvidenceRead.model_validate(evidence)
+
+    assert read.warning_count == 1
+    assert read.error_count == 2
+
+
+def test_problematic_retry_candidates_include_only_real_retryable_failures():
+    report = {
+        "summary": {"problematic_count": 4},
+        "items": [
+            {
+                "artifact_id": "retry-1",
+                "name": "PowerShell Operational",
+                "artifact_type": "windows_event",
+                "status": "skipped_timeout",
+                "effective_status": "unresolved_timeout",
+                "records_read": 0,
+                "records_indexed": 0,
+                "retryable": True,
+                "current_data_loss_expected": True,
+            },
+            {
+                "artifact_id": "warning-1",
+                "name": "Shell-Core",
+                "artifact_type": "windows_event",
+                "status": "parsed_with_warning",
+                "effective_status": "parsed_with_warning",
+                "effective_records_read": 1000,
+                "effective_records_indexed": 1000,
+                "retryable": False,
+                "current_data_loss_expected": False,
+            },
+            {
+                "artifact_id": "empty-1",
+                "name": "HardwareEvents",
+                "artifact_type": "windows_event",
+                "status": "skipped_empty",
+                "effective_status": "skipped_empty",
+                "records_read": 0,
+                "records_indexed": 0,
+                "retryable": False,
+                "current_data_loss_expected": False,
+            },
+            {
+                "artifact_id": "retry-2",
+                "name": "Store Operational",
+                "artifact_type": "windows_event",
+                "status": "skipped_timeout",
+                "effective_status": "unresolved_timeout",
+                "records_read": 0,
+                "records_indexed": 0,
+                "retryable": True,
+                "current_data_loss_expected": True,
+            },
+        ],
+    }
+
+    result = routes_evidence._build_problematic_retry_candidates(report)
+
+    assert result["artifact_ids"] == ["retry-1", "retry-2"]
+    assert result["retry_candidate_count"] == 2
+    assert result["excluded"]["skipped_empty"] == 1
+    assert result["excluded"]["warnings_fully_indexed"] == 1
+    assert result["affected_families"] == {"windows_event": 2}
+
+
 def test_mft_diagnostic_detects_present_but_not_indexed_mft(monkeypatch):
     evidence = Evidence(
         id="evidence-mft",

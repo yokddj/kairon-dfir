@@ -39,6 +39,15 @@ def evidence_has_active_indexing(metadata: dict[str, Any] | None, ingest_status:
         phase = str(metadata.get("current_phase") or metadata.get("phase") or "").strip().lower()
         if ingest_value == "pending" and phase in {"waiting_selection", "selection_pending"} and not run_id:
             return False, None
+        has_runs = any(isinstance(item, dict) for item in metadata.get("ingest_runs") or [])
+        current_plan = dict(metadata.get("indexing_plan_run") or {})
+        current_plan_status = str(current_plan.get("status") or "").strip().lower()
+        current_plan_jobs = [item for item in current_plan.get("queued_jobs") or [] if isinstance(item, dict)]
+        plan_has_active_job = current_plan_status in ACTIVE_STATUSES and any(
+            str(item.get("status") or current_plan_status).strip().lower() in ACTIVE_STATUSES for item in current_plan_jobs
+        )
+        if ingest_value == "pending" and not run_id and not has_runs and not plan_has_active_job:
+            return False, None
         return True, {
             "step": "core_ingest",
             "run_id": run_id,
@@ -177,6 +186,15 @@ def build_indexing_plan(
     runnable_steps = [item for item in steps if item.get("status") == "ready" and item.get("endpoint")]
     core_supported_candidates = _supported_discovery_candidate_count(metadata)
     core_ready = core_status == "ready" and core_supported_candidates > 0
+    run_id = str(metadata.get("current_ingest_run_id") or metadata.get("latest_ingest_run_id") or "").strip()
+    has_runs = any(isinstance(item, dict) for item in metadata.get("ingest_runs") or [])
+    planned_not_started = (
+        not active
+        and indexed_docs <= 0
+        and core_supported_candidates > 0
+        and not run_id
+        and not has_runs
+    )
     return {
         "profile": profile_name,
         "label": {
@@ -191,6 +209,8 @@ def build_indexing_plan(
         "runnable_steps": runnable_steps,
         "active": active,
         "active_job": active_job,
+        "state": "planned_not_started" if planned_not_started else "active" if active else "ready",
+        "status_reason": "Indexing plan prepared; no parser run has been started." if planned_not_started else "",
         "requires_user_action": bool(
             not active
             and str(metadata.get("current_phase") or metadata.get("phase") or "").strip().lower() in {"waiting_selection", "selection_pending"}
