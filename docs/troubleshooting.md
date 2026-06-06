@@ -401,16 +401,16 @@ Si reaparece un warning de chunk grande:
 - evita importar helpers de reportes, markdown o graph fuera de su ruta
 - revisa `vite.config.ts` y los `manualChunks`
 
-## Demo bootstrap falla
+## Validation case bootstrap fails
 
 Comprueba:
 
 - backend accesible en `http://127.0.0.1:8000`
 - worker activo para ingestas y rule runs
-- `python3 tools/demo/generate_demo_evidence.py` generó `demo/evidence/acme_incident_001.zip`
-- el caso demo se creó con nombres genéricos
+- el archivo de validación existe fuera del repositorio
+- el caso de validación se creó con nombres genéricos
 
-Si faltan detecciones YARA pero el resto de la demo funciona:
+Si faltan detecciones YARA pero el resto del flujo de validación funciona:
 
 - revisa `GET /api/rules/engines/status`
 - confirma si `yara-python` está disponible en la imagen backend

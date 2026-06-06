@@ -13,13 +13,11 @@ Esta documentación describe el estado real de la plataforma. Las capacidades pa
 
 - [user_guide.md](user_guide.md): flujo de analista de upload a reporte.
 - [quickstart.md](quickstart.md): arranque rápido.
-- [demo/README.md](demo/README.md): índice de demos y laboratorios controlados.
-- [demo/kairon-lab01/README.md](demo/kairon-lab01/README.md): laboratorio público de PowerShell sospechoso simulado basado en una colección Velociraptor.
-- [demo/generic-demo-guide.md](demo/generic-demo-guide.md): guía genérica para demos con datasets propios o sintéticos.
 - [search.md](search.md): Search workspace, filtros, frases de comandos y Timeline.
 - [timeline_reports.md](timeline_reports.md): timeline y reportes.
 - [process_graph.md](process_graph.md): Execution Story / Process Graph.
 - [rules_sigma_yara.md](rules_sigma_yara.md): Sigma, YARA y detections.
+- [validation/README.md](validation/README.md): uso genérico de Validation Matrix para QA y datasets importados.
 
 ## Artefactos y parsers
 

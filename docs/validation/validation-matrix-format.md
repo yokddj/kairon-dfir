@@ -1,6 +1,6 @@
 # Validation Matrix Format
 
-A validation matrix is a metadata-only checklist used to evaluate whether a demo or QA case covers expected findings.
+A validation matrix is a metadata-only checklist used to evaluate whether a QA or training case covers expected findings.
 
 Suggested JSON shape:
 

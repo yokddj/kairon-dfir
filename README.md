@@ -29,7 +29,7 @@ The project is intended for trusted labs and controlled private beta deployments
 - Ingests Windows forensic evidence into case-centered investigations.
 - Normalizes artifacts for search, triage, timelines, detections, findings, and reports.
 - Provides analyst workflows for Search, Artifact Views, Command History, Execution Stories, Incident Timeline, Findings, and Reports.
-- Keeps demo and validation features optional and disabled by default for normal investigations.
+- Keeps validation features optional and disabled by default for normal investigations.
 
 ## Quick Start
 
@@ -61,7 +61,7 @@ DFIR_ENABLE_VALIDATION_FEATURES=false
 DFIR_DEFAULT_CASE_MODE=investigation
 ```
 
-Use demo/validation flags only in training, QA, or controlled product demonstrations. This repository does not include evidence archives, processed data, OpenSearch indexes, Postgres dumps, public challenge datasets, or answer keys.
+Use validation flags only in QA, training, or controlled product presentations. This repository does not include evidence archives, processed data, OpenSearch indexes, Postgres dumps, public challenge datasets, or answer keys.
 
 ## First Investigation Workflow
 
@@ -100,14 +100,6 @@ Use demo/validation flags only in training, QA, or controlled product demonstrat
 
 Kairon DFIR assists the analyst; final interpretation remains the analyst's responsibility.
 
-## Demo DFIR Lab
-
-Kairon DFIR includes a small Windows DFIR demo case designed to help analysts test ingest, search, timeline reconstruction and artifact pivoting using a controlled Velociraptor collection.
-
-Start here: [Demo documentation](docs/demo/README.md) or open [Kairon Lab 01 - Suspicious PowerShell Activity](docs/demo/kairon-lab01/README.md).
-
-Do not commit private evidence archives, processed case data, customer datasets or generated case data. Keep local demo archives under `demo/evidence/`; they are ignored by git.
-
 ## Supported Evidence And Artifact Overview
 
 Coverage depends on the artifacts present in the uploaded evidence and on parser availability in the deployment.
@@ -139,15 +131,15 @@ Treat these as sensitive:
 
 Never commit real evidence, secrets, logs, backups, database dumps, or generated reports.
 
+Do not commit private evidence archives, processed case data, customer datasets, generated reports, indexes, database dumps or local environment files. Keep all evidence and generated case data outside version control.
+
 ## Documentation
 
 - [Documentation index](docs/index.md)
 - [User guide](docs/user_guide.md)
 - [Feature map](docs/feature_map.md)
 - [Artifact support matrix](docs/artifacts_matrix.md)
-- [Demo labs](docs/demo/README.md)
 - [Private beta deployment](docs/deployment/beta-deployment.md)
-- [Investigation vs demo/validation modes](docs/deployment/beta-vs-demo-mode.md)
 - [Security notes](docs/SECURITY.md)
 - [Known limitations](docs/KNOWN_LIMITATIONS.md)
 - [Validation workflow](docs/validation/README.md)
@@ -158,7 +150,7 @@ Never commit real evidence, secrets, logs, backups, database dumps, or generated
 - OST/PST content parsing is not part of the current core parser set.
 - SRUM parsing requires a Windows-capable worker or backend alternative.
 - Some advanced Windows artifacts may require additional parser workers or tooling.
-- Validation Matrix is optional QA/demo metadata; it is not part of normal investigations.
+- Validation Matrix is optional QA metadata; it is not part of normal investigations.
 - Kairon DFIR assists analysis, but final interpretation remains the analyst's responsibility.
 
 ## License

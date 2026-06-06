@@ -77,15 +77,10 @@ DOCS_CATALOG = [
     {"slug": "app-sections", "title": "Secciones de la app", "summary": "Qué hace cada página del sidebar y cómo usarla en una investigación.", "filename": "app_sections.md"},
     {"slug": "opensearch", "title": "OpenSearch", "summary": "Mapping, índices por caso, campos buscables y troubleshooting de indexación.", "filename": "opensearch.md"},
     {"slug": "troubleshooting", "title": "Troubleshooting", "summary": "Problemas frecuentes y qué comprobar cuando algo no aparece.", "filename": "troubleshooting.md"},
-    {"slug": "demo-mvp", "title": "Demo MVP", "summary": "Guía operativa para enseñar el MVP con un caso sintético reproducible.", "filename": "demo/mvp-demo-guide.md"},
-    {"slug": "demo-checklist", "title": "Demo Checklist", "summary": "Checklist técnica para validar que la demo está lista antes de presentarla.", "filename": "demo/mvp-demo-checklist.md"},
-    {"slug": "kairon-lab01", "title": "Kairon Lab 01", "summary": "Laboratorio público de PowerShell sospechoso simulado basado en una colección Velociraptor.", "filename": "demo/kairon-lab01/README.md"},
-    {"slug": "demo-readme", "title": "Demo mode", "summary": "Cómo usar modo demo sin incluir datasets concretos en main.", "filename": "demo/README.md"},
-    {"slug": "generic-demo-guide", "title": "Generic demo guide", "summary": "Guía neutra para enseñar la plataforma con un dataset propio o sintético.", "filename": "demo/generic-demo-guide.md"},
     {"slug": "validation-readme", "title": "Validation features", "summary": "Uso genérico de Validation Matrix para QA/training con datasets importados.", "filename": "validation/README.md"},
     {"slug": "validation-matrix-format", "title": "Validation matrix format", "summary": "Formato recomendado para matrices de validación metadata-only.", "filename": "validation/validation-matrix-format.md"},
     {"slug": "beta-deployment", "title": "Beta deployment", "summary": "Guía de despliegue reproducible para beta privada controlada.", "filename": "deployment/beta-deployment.md"},
-    {"slug": "beta-vs-demo-mode", "title": "Beta vs demo mode", "summary": "Separación entre investigaciones reales y funciones demo/validation.", "filename": "deployment/beta-vs-demo-mode.md"},
+    {"slug": "beta-vs-validation-mode", "title": "Beta vs validation mode", "summary": "Separación entre investigaciones reales y funciones de validation/training.", "filename": "deployment/beta-vs-validation-mode.md"},
     {"slug": "backup-restore", "title": "Backup and restore", "summary": "Qué respaldar, cómo probar backups y cómo restaurar datos de la plataforma.", "filename": "deployment/backup-restore.md"},
     {"slug": "update-rollback", "title": "Update and rollback", "summary": "Procedimiento de actualización, smoke test y rollback para beta privada.", "filename": "deployment/update-rollback.md"},
     {"slug": "beta-troubleshooting", "title": "Beta troubleshooting", "summary": "Diagnóstico operativo de servicios, colas, disco, parsers y exposición de red.", "filename": "deployment/troubleshooting.md"},
@@ -96,15 +91,7 @@ DOCS_CATALOG = [
     {"slug": "documentation-maintenance", "title": "Mantenimiento de documentación", "summary": "Checklist para que la documentación no se quede atrás.", "filename": "maintenance/documentation-maintenance.md"},
 ]
 
-DEMO_DOC_SLUGS = {
-    "demo-mvp",
-    "demo-checklist",
-    "kairon-lab01",
-    "demo-readme",
-    "generic-demo-guide",
-    "validation-readme",
-    "validation-matrix-format",
-}
+DEMO_DOC_SLUGS: set[str] = set()
 
 
 def _visible_docs_catalog() -> list[dict]:
