@@ -7336,6 +7336,22 @@ def index_mft_summary_for_evidence(evidence_id: str, max_records: int | None = N
             raise RuntimeError("Evidence not found")
         existing_count = _mft_docs_count(evidence.case_id, evidence.id)
         if existing_count > 0 and not force:
+            existing_metadata = dict(evidence.metadata_json or {})
+            previous_summary = dict(existing_metadata.get("mft_summary") or {})
+            def _safe_int(value: object) -> int:
+                try:
+                    return int(value or 0)
+                except (TypeError, ValueError):
+                    return 0
+
+            previous_totals = [
+                _safe_int(previous_summary.get("records_total")),
+                _safe_int(existing_metadata.get("mft_records_total")),
+            ]
+            for previous_run in existing_metadata.get("mft_summary_runs") or []:
+                if isinstance(previous_run, dict):
+                    previous_totals.append(_safe_int(previous_run.get("records_total")))
+            preserved_total = max([existing_count, *previous_totals])
             (
                 db.query(Artifact)
                 .filter(Artifact.evidence_id == evidence.id, Artifact.artifact_type == "mft", Artifact.parser == MFTECMD_BACKEND_CSV)
@@ -7350,10 +7366,10 @@ def index_mft_summary_for_evidence(evidence_id: str, max_records: int | None = N
                 "backend": MFTECMD_BACKEND_CSV,
                 "backend_version": detect_mftecmd_backend().get("version") or "",
                 "mode": "summary",
-                "records_total": existing_count,
+                "records_total": preserved_total,
                 "records_indexed": existing_count,
-                "records_skipped": 0,
-                "coverage_status": "partial_summary",
+                "records_skipped": max(preserved_total - existing_count, 0),
+                "coverage_status": "full_summary" if existing_count >= preserved_total else "partial_summary",
                 "limits": {"existing_docs_reused": True},
                 "elapsed_seconds": 0,
                 "warnings": ["mft_summary_partial", "mft_summary_already_indexed"],

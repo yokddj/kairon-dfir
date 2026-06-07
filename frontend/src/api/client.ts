@@ -1003,6 +1003,19 @@ export type EvidenceSearchSummary = {
 export type MftDiagnostic = {
   evidence_id: string;
   case_id: string;
+  mft_status?: {
+    available: boolean;
+    status: "not_present" | "available_on_demand" | "indexed" | "indexing" | "failed" | "tooling_missing" | string;
+    raw_mft_found: boolean;
+    raw_mft_size_bytes: number;
+    usn_found: boolean;
+    usn_size_bytes: number;
+    mftecmd_output_found: boolean;
+    indexed_docs: number;
+    tool_available: boolean;
+    recommended_mode: "summary" | "full" | "none" | string;
+    actions: string[];
+  };
   mft_present_in_evidence: boolean;
   mft_detected_by_inventory: boolean;
   mft_selected_for_indexing: boolean;

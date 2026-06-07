@@ -39,6 +39,19 @@ function formatDateTime(value: string | null | undefined) {
   return new Date(timestamp).toLocaleString();
 }
 
+function formatBytes(value: unknown) {
+  const bytes = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  if (bytes <= 0) return "-";
+  const units = ["bytes", "KB", "MB", "GB", "TB"];
+  let size = bytes;
+  let index = 0;
+  while (size >= 1024 && index < units.length - 1) {
+    size /= 1024;
+    index += 1;
+  }
+  return `${size >= 10 || index === 0 ? Math.round(size).toLocaleString() : size.toFixed(1)} ${units[index]}`;
+}
+
 function formatHeartbeatAge(heartbeatAt: string | null) {
   if (!heartbeatAt) return "-";
   const timestamp = Date.parse(heartbeatAt);
@@ -875,6 +888,11 @@ export default function EvidenceDetail() {
   const evtxCoverageIsFull = evtxCoverageStatus === "full" && evtxDeferredCount === 0 && evtxPartialCount === 0;
   const indexedDocumentsTotal = Number(searchSummaryQuery.data?.total_indexed_docs ?? data?.metadata_json?.events_indexed ?? manifest?.stats?.indexed_events ?? 0);
   const mftDiagnostic = mftDiagnosticQuery.data ?? searchSummaryQuery.data?.mft_diagnostic ?? null;
+  const mftStatus = mftDiagnostic?.mft_status;
+  const mftVisibleInParseMode = Boolean(mftDiagnostic?.mft_present_in_evidence || mftStatus?.available || mftStatus?.status === "tooling_missing" || mftStatus?.status === "indexed" || mftStatus?.status === "indexing" || mftStatus?.status === "failed");
+  const mftIndexedDocs = Number(mftStatus?.indexed_docs ?? mftDiagnostic?.mft_indexed_docs ?? 0);
+  const mftIsIndexing = mftStatus?.status === "indexing" || mftDiagnostic?.mft_summary_status === "queued" || mftDiagnostic?.mft_summary_status === "running" || mftDiagnostic?.mft_full_status === "queued" || mftDiagnostic?.mft_full_status === "running";
+  const mftToolAvailable = Boolean(mftStatus?.tool_available ?? mftDiagnostic?.mft_backend_available);
   const userActivityCounts = (data?.metadata_json?.registry_user_activity_counts as Record<string, number> | undefined) ?? {};
   const userActivityTotal = Number(data?.metadata_json?.registry_user_activity_records_indexed ?? Object.values(userActivityCounts).reduce((sum, value) => sum + Number(value || 0), 0));
   const userActivityStatus = String(data?.metadata_json?.registry_user_activity_status ?? "not_indexed");
@@ -1619,6 +1637,59 @@ function formatReportStatus(status: string | null | undefined) {
                   </label>
                 ))}
               </div>
+              {mftVisibleInParseMode ? (
+                <div className={`mt-4 rounded-3xl border p-4 ${mftIndexedDocs > 0 ? "border-mint/25 bg-mint/10" : mftStatus?.status === "tooling_missing" ? "border-warning/40 bg-warning/10" : "border-accent/30 bg-accent/10"}`}>
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">NTFS / MFT</p>
+                      <h4 className="mt-1 text-base font-semibold text-ink">
+                        {mftIndexedDocs > 0 ? `MFT indexed · ${mftIndexedDocs.toLocaleString()} docs` : mftIsIndexing ? "MFT indexing in progress" : mftStatus?.status === "tooling_missing" ? "MFT detected · tooling missing" : "MFT detected · available on demand"}
+                      </h4>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
+                        {mftStatus?.raw_mft_found || mftDiagnostic?.mft_present_in_evidence ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">$MFT detected{mftStatus?.raw_mft_size_bytes ? ` · ${formatBytes(mftStatus.raw_mft_size_bytes)}` : ""}</span> : null}
+                        {mftStatus?.usn_found ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">$UsnJrnl detected{mftStatus.usn_size_bytes ? ` · ${formatBytes(mftStatus.usn_size_bytes)}` : ""}</span> : null}
+                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">MFTECmd {mftToolAvailable ? "available" : "missing"}</span>
+                        {mftStatus?.mftecmd_output_found ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">MFTECmd output detected</span> : null}
+                      </div>
+                      <p className="mt-2 text-sm text-muted">
+                        {mftIndexedDocs > 0
+                          ? "Filesystem metadata is searchable and available in Artifact Views."
+                          : mftToolAvailable
+                          ? "Full MFT indexing can produce many records and may take longer. Use summary for quick triage or full indexing when file-level timeline/search is needed."
+                          : "MFTECmd is required before raw MFT can be indexed."}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      {mftIndexedDocs > 0 && data?.case_id ? (
+                        <>
+                          <Link to={`/search?q=${encodeURIComponent("$MFT")}&evidence_id=${encodeURIComponent(evidenceId)}`} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">Search MFT</Link>
+                          <Link to={`/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=mft`} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">Open MFT artifacts</Link>
+                        </>
+                      ) : null}
+                      {mftToolAvailable ? (
+                        <>
+                          <button type="button" disabled={conflictingIndexingActionsDisabled || mftIsIndexing || indexMftSummaryMutation.isPending} onClick={() => indexMftSummaryMutation.mutate()} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-60">
+                            {indexMftSummaryMutation.isPending || mftDiagnostic?.mft_summary_status === "queued" ? "Queueing summary..." : mftDiagnostic?.mft_summary_status === "running" ? "Indexing summary..." : mftIndexedDocs > 0 ? "Re-index MFT summary" : "Index MFT summary"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={conflictingIndexingActionsDisabled || mftIsIndexing || indexMftFullMutation.isPending}
+                            onClick={() => {
+                              const message = mftIndexedDocs > 0
+                                ? "Re-index full MFT for this evidence? This replaces existing MFT docs scoped to this evidence only."
+                                : "Index full MFT for this evidence? This can add many filesystem records and may take longer than summary indexing.";
+                              if (window.confirm(message)) indexMftFullMutation.mutate();
+                            }}
+                            className="rounded-2xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm font-semibold text-warning disabled:opacity-60"
+                          >
+                            {indexMftFullMutation.isPending || mftDiagnostic?.mft_full_status === "queued" ? "Queueing full MFT..." : mftDiagnostic?.mft_full_status === "running" ? "Indexing full MFT..." : mftIndexedDocs > 0 ? "Re-index full MFT" : "Index full MFT"}
+                          </button>
+                        </>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
               <details className="mt-4 rounded-2xl border border-line bg-panel/40 p-3">
                 <summary className="cursor-pointer text-sm font-semibold text-muted">Advanced custom</summary>
                 <div className="mt-3 flex flex-wrap gap-2">
@@ -2119,83 +2190,6 @@ function formatReportStatus(status: string | null | undefined) {
         <details className="mt-5 rounded-3xl border border-line bg-panel/50 p-4">
           <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Advanced recovery & diagnostics</summary>
           <p className="mt-2 text-sm text-muted">Use these scoped actions for rebuilds, parser diagnostics or explicit artifact-level control. They are intentionally outside the recommended indexing flow.</p>
-
-        {mftDiagnostic ? (
-          mftDiagnostic.mft_present_in_evidence ? (
-            <div className={`mt-5 rounded-3xl border p-4 ${mftDiagnostic.mft_indexed_docs > 0 ? "border-mint/25 bg-mint/10" : "border-amber/30 bg-amber/10"}`}>
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                <div>
-                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">MFT / Filesystem</p>
-                  <p className="mt-1 text-sm font-semibold text-ink">
-                    {mftDiagnostic.mft_indexed_docs > 0 ? `MFT indexed · ${mftDiagnostic.mft_indexed_docs.toLocaleString()} docs` : "MFT detected but not indexed"}
-                  </p>
-                  <p className="mt-1 text-sm text-muted">
-                    {mftDiagnostic.mft_indexed_docs > 0
-                      ? `Filesystem metadata is searchable and available in Artifact Views. Coverage: ${mftDiagnostic.mft_coverage_status || "summary"}. Backend: ${mftDiagnostic.mft_parser_backend || "mftecmd_csv"}.`
-                      : `Reason: ${mftDiagnostic.mft_skipped_reason || "detected_not_indexed"}. ${mftDiagnostic.recommended_action}`}
-                  </p>
-                  {mftDiagnostic.mft_indexed_docs > 0 ? (
-                    <p className="mt-2 text-xs text-muted">
-                      Records indexed: {(mftDiagnostic.mft_records_indexed ?? mftDiagnostic.mft_indexed_docs).toLocaleString()}
-                      {mftDiagnostic.mft_records_total ? ` / ${mftDiagnostic.mft_records_total.toLocaleString()}` : ""}.
-                      {mftDiagnostic.mft_full_status ? ` Full MFT: ${mftDiagnostic.mft_full_status}${mftDiagnostic.mft_full_records_indexed ? ` · ${mftDiagnostic.mft_full_records_indexed.toLocaleString()} records` : ""}.` : ""}
-                    </p>
-                  ) : null}
-                  {mftDiagnostic.detected_candidates?.[0]?.source_path ? (
-                    <p className="mt-2 break-all font-mono text-xs text-muted">{mftDiagnostic.detected_candidates[0].source_path}</p>
-                  ) : null}
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  {mftDiagnostic.mft_indexed_docs > 0 ? (
-                    <>
-                      <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=mft` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
-                        Open MFT / Filesystem view
-                      </Link>
-                      <button
-                        type="button"
-                        disabled={conflictingIndexingActionsDisabled || indexMftFullMutation.isPending || mftDiagnostic.mft_full_status === "running" || mftDiagnostic.mft_full_status === "queued"}
-                        onClick={() => {
-                          const existing = mftDiagnostic.mft_full_records_indexed ?? 0;
-                          const message = existing > 0
-                            ? `Rebuild full MFT for this evidence? This replaces existing MFT docs only and may add about ${(mftDiagnostic.mft_records_total || existing).toLocaleString()} filesystem records.`
-                            : `Index full MFT for this evidence? This may add about ${(mftDiagnostic.mft_records_total || 0).toLocaleString()} filesystem records.`;
-                          if (window.confirm(message)) indexMftFullMutation.mutate();
-                        }}
-                        className="rounded-2xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning disabled:opacity-60"
-                      >
-                        {indexMftFullMutation.isPending || mftDiagnostic.mft_full_status === "queued" ? "Queueing full MFT..." : mftDiagnostic.mft_full_status === "running" ? "Full MFT indexing..." : mftDiagnostic.mft_full_records_indexed ? "Rebuild full MFT" : "Index full MFT"}
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <button type="button" disabled={conflictingIndexingActionsDisabled || indexMftSummaryMutation.isPending} onClick={() => indexMftSummaryMutation.mutate()} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent disabled:opacity-60">
-                        {indexMftSummaryMutation.isPending ? "Queueing..." : "Index MFT summary"}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={conflictingIndexingActionsDisabled || indexMftFullMutation.isPending || mftDiagnostic.mft_full_status === "running" || mftDiagnostic.mft_full_status === "queued"}
-                        onClick={() => {
-                          if (window.confirm("Index full MFT? This advanced action can add hundreds of thousands of filesystem records.")) indexMftFullMutation.mutate();
-                        }}
-                        className="rounded-2xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning disabled:opacity-60"
-                      >
-                        Index full MFT
-                      </button>
-                    </>
-                  )}
-                  <a href="#artifact-manifest" className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-muted">
-                    View raw artifact
-                  </a>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <details className="mt-5 rounded-3xl border border-line bg-panel/50 p-4">
-              <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Advanced filesystem diagnostics</summary>
-              <p className="mt-3 text-sm text-muted">No MFT artifact detected in this evidence.</p>
-            </details>
-          )
-        ) : null}
 
         <div className={`mt-5 rounded-3xl border p-4 ${userActivityTotal > 0 ? "border-mint/25 bg-mint/10" : "border-line bg-panel/50"}`}>
           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">

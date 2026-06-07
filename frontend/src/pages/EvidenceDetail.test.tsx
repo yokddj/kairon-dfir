@@ -987,6 +987,19 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     getEvidenceMftDiagnosticMock.mockResolvedValueOnce({
       evidence_id: "evidence-1",
       case_id: "case-1",
+      mft_status: {
+        available: true,
+        status: "available_on_demand",
+        raw_mft_found: true,
+        raw_mft_size_bytes: 267649024,
+        usn_found: true,
+        usn_size_bytes: 34035216,
+        mftecmd_output_found: false,
+        indexed_docs: 0,
+        tool_available: true,
+        recommended_mode: "summary",
+        actions: ["index_mft_summary", "index_full_mft"],
+      },
       mft_present_in_evidence: true,
       mft_detected_by_inventory: true,
       mft_selected_for_indexing: false,
@@ -1002,8 +1015,9 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     renderPage();
     await screen.findByText("collection.zip");
 
-    expect(await screen.findByText(/MFT detected but not indexed/i)).toBeInTheDocument();
-    expect(screen.getByText(/HOSTA\/C\/\$MFT/i)).toBeInTheDocument();
+    expect(await screen.findByText(/MFT detected · available on demand/i)).toBeInTheDocument();
+    expect(screen.getByText(/\$MFT detected/i)).toBeInTheDocument();
+    expect(screen.getByText(/\$UsnJrnl detected/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Index MFT summary/i })).toBeEnabled();
     expect(screen.getByRole("button", { name: /Index full MFT/i })).toBeEnabled();
   });
