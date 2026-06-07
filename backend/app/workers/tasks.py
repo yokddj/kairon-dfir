@@ -2,13 +2,11 @@ import logging
 import math
 import multiprocessing as mp
 import queue
-import signal
 import shutil
 import subprocess
 import time
 from collections import Counter
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from contextlib import contextmanager
 from datetime import datetime
 import hashlib
 import json
@@ -276,27 +274,6 @@ def _safe_persist_benchmark_snapshot(
             },
             exc_info=True,
         )
-
-
-@contextmanager
-def _timed_evtx_operation(seconds: int | None, label: str):
-    timeout_seconds = max(int(seconds or 0), 0)
-    if timeout_seconds <= 0 or threading.current_thread() is not threading.main_thread() or not hasattr(signal, "setitimer"):
-        yield
-        return
-
-    previous_handler = signal.getsignal(signal.SIGALRM)
-
-    def _handle_timeout(signum, frame):  # noqa: ARG001
-        raise TimeoutError(f"{label} timed out after {timeout_seconds}s")
-
-    signal.signal(signal.SIGALRM, _handle_timeout)
-    signal.setitimer(signal.ITIMER_REAL, timeout_seconds)
-    try:
-        yield
-    finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, previous_handler)
 
 
 def _update_rule_run(db: Session, rule_run: RuleRun | None, **fields) -> RuleRun | None:
@@ -4635,27 +4612,46 @@ def ingest_evidence(evidence_id: str) -> None:
                                     for document in batch_documents
                                     if normalize_hostname(document.get("host", {}).get("name"))
                                 )
-                                with _timed_evtx_operation(settings.evtx_artifact_stall_seconds, f"EVTX bulk index stalled for {artifact_info['name']}"):
-                                    bulk_report = bulk_index_events_with_report(
-                                        evidence.case_id,
-                                        batch_documents,
-                                        index=index_name,
-                                        refresh=False,
-                                        max_bulk_docs=max_bulk_docs,
-                                        max_bulk_bytes=max_bulk_bytes,
+                                bulk_started = time.perf_counter()
+                                bulk_report = bulk_index_events_with_report(
+                                    evidence.case_id,
+                                    batch_documents,
+                                    index=index_name,
+                                    refresh=False,
+                                    max_bulk_docs=max_bulk_docs,
+                                    max_bulk_bytes=max_bulk_bytes,
+                                )
+                                bulk_elapsed = time.perf_counter() - bulk_started
+                                if settings.evtx_artifact_stall_seconds and bulk_elapsed > float(settings.evtx_artifact_stall_seconds):
+                                    detection_warnings.append(
+                                        {
+                                            "artifact": artifact_info["name"],
+                                            "warning": "evtx_bulk_index_slow_but_completed",
+                                            "elapsed_seconds": round(bulk_elapsed, 2),
+                                            "records_indexed": len(batch_documents),
+                                        }
                                     )
                                 _merge_bulk_report(opensearch_bulk, bulk_report, detection_warnings)
-                                with _timed_evtx_operation(settings.evtx_artifact_stall_seconds, f"EVTX detections stalled for {artifact_info['name']}"):
-                                    created_count = 0
-                                    warning = None
-                                    if detections_enabled:
-                                        created_count, warning = _safe_create_builtin_detections_isolated(
-                                            case_id=evidence.case_id,
-                                            evidence_id=evidence.id,
-                                            artifact_id=artifact_id,
-                                            artifact_name=artifact_info["name"],
-                                            documents=batch_documents,
-                                        )
+                                detection_started = time.perf_counter()
+                                created_count = 0
+                                warning = None
+                                if detections_enabled:
+                                    created_count, warning = _safe_create_builtin_detections_isolated(
+                                        case_id=evidence.case_id,
+                                        evidence_id=evidence.id,
+                                        artifact_id=artifact_id,
+                                        artifact_name=artifact_info["name"],
+                                        documents=batch_documents,
+                                    )
+                                detection_elapsed = time.perf_counter() - detection_started
+                                if settings.evtx_artifact_stall_seconds and detection_elapsed > float(settings.evtx_artifact_stall_seconds):
+                                    detection_warnings.append(
+                                        {
+                                            "artifact": artifact_info["name"],
+                                            "warning": "evtx_detection_pass_slow_but_completed",
+                                            "elapsed_seconds": round(detection_elapsed, 2),
+                                        }
+                                    )
                                 detection_count += created_count
                                 if warning:
                                     detection_warnings.append({"artifact": artifact_info["name"], "warning": warning})
@@ -6051,6 +6047,7 @@ def retry_problematic_artifacts(
         write_manifest(evidence_manifest_path(evidence.case_id, evidence.id), manifest)
         refreshed_evidence = db.get(Evidence, evidence.id)
         if refreshed_evidence:
+            db.refresh(refreshed_evidence)
             refreshed_manifest = _manifest_for_evidence(refreshed_evidence)
             refreshed_artifact_rows = db.query(Artifact).filter(Artifact.evidence_id == refreshed_evidence.id).all()
             refreshed_artifact_id_by_key: dict[tuple[str, str], str] = {}

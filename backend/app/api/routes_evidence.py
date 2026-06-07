@@ -527,6 +527,39 @@ def _recompute_evidence_status(item: Evidence, db: Session) -> dict[str, Any]:
         metadata["problematic_artifacts_summary"] = problematic_summary
         metadata["last_successful_ingest_run_id"] = latest_run_id or str(metadata.get("run_id") or "")
         if not has_real_parser_failures and not has_fatal_infrastructure_error:
+            historical_parser_errors = list(metadata.get("parser_errors") or [])
+            historical_bulk_errors = list(metadata.get("bulk_index_errors") or [])
+            if historical_parser_errors:
+                metadata.setdefault("historical_parser_errors", historical_parser_errors)
+            if historical_bulk_errors:
+                metadata.setdefault("historical_bulk_index_errors", historical_bulk_errors)
+            metadata["parser_errors"] = []
+            metadata["bulk_index_errors"] = []
+            if isinstance(metadata.get("error_log"), dict):
+                next_error_log = dict(metadata.get("error_log") or {})
+                if next_error_log.get("errors"):
+                    next_error_log["historical_errors"] = list(next_error_log.get("historical_errors") or next_error_log.get("errors") or [])
+                next_error_log["errors"] = []
+                metadata["error_log"] = next_error_log
+            cleaned_runs = []
+            for run in metadata.get("ingest_runs") or []:
+                if not isinstance(run, dict):
+                    cleaned_runs.append(run)
+                    continue
+                next_run = dict(run)
+                if str(next_run.get("run_id") or "") == (latest_run_id or str(metadata.get("run_id") or "")):
+                    next_run["status"] = "completed"
+                    next_run["phase"] = metadata["display_status"]
+                    next_run["progress"] = 100
+                    next_run["last_error"] = None
+                    next_run["artifacts_failed"] = 0
+                    next_run["failed_artifacts_count"] = 0
+                    next_run["recovered_count"] = int(problematic_summary.get("recovered_count") or metadata.get("retry_recovered_count") or 0)
+                    next_run["still_failed_count"] = 0
+                    next_run["final_message"] = "Recovered parser failures; evidence is ready with warnings." if problematic_summary.get("recovered_count") else next_run.get("final_message")
+                cleaned_runs.append(next_run)
+            if cleaned_runs:
+                metadata["ingest_runs"] = cleaned_runs
             metadata["progress_pct"] = 100
             metadata["current_phase"] = metadata["display_status"]
             metadata["artifacts_failed"] = 0

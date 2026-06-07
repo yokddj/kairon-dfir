@@ -5,6 +5,7 @@ from pathlib import Path
 import re
 from typing import Any
 
+from app.core.opensearch import count_documents, get_events_index
 from app.core.config import get_settings
 from app.core.storage import build_evidence_root, evidence_extract_dir, evidence_staging_dir
 
@@ -138,7 +139,47 @@ def _latest_retry(item: dict[str, Any]) -> dict[str, Any] | None:
     return dict(retry_history[-1])
 
 
-def _effective_problematic_state(item: dict[str, Any], *, health_check: dict[str, Any] | None, accepted_warning: dict[str, Any] | None) -> dict[str, Any]:
+def _indexed_docs_for_source(evidence: Any, source_path: str, cache: dict[str, int]) -> int:
+    source_path = str(source_path or "").strip()
+    if not source_path:
+        return 0
+    if source_path in cache:
+        return cache[source_path]
+    evidence_id = str(getattr(evidence, "id", "") or "")
+    case_id = str(getattr(evidence, "case_id", "") or "")
+    if not evidence_id or not case_id:
+        cache[source_path] = 0
+        return 0
+    try:
+        query = {
+            "bool": {
+                "filter": [
+                    {"term": {"evidence_id": evidence_id}},
+                    {
+                        "bool": {
+                            "should": [
+                                {"term": {"source_file": source_path}},
+                                {"wildcard": {"source_file": {"value": f"*{source_path}", "case_insensitive": True}}},
+                            ],
+                            "minimum_should_match": 1,
+                        }
+                    },
+                ]
+            }
+        }
+        cache[source_path] = int(count_documents(get_events_index(case_id), query).get("count") or 0)
+    except Exception:
+        cache[source_path] = 0
+    return cache[source_path]
+
+
+def _effective_problematic_state(
+    item: dict[str, Any],
+    *,
+    health_check: dict[str, Any] | None,
+    accepted_warning: dict[str, Any] | None,
+    indexed_docs_for_source: int = 0,
+) -> dict[str, Any]:
     original_status = str(item.get("status") or "").strip().lower()
     records_read = int(item.get("records_read") or 0)
     records_indexed = int(item.get("records_indexed") or 0)
@@ -149,8 +190,9 @@ def _effective_problematic_state(item: dict[str, Any], *, health_check: dict[str
     retry_records_read = int((latest_retry or {}).get("records_read") or 0)
     retry_records_indexed = int((latest_retry or {}).get("records_indexed") or 0)
     retry_recovered = latest_retry_outcome == "recovered_more_data" and retry_records_indexed > 0
+    source_recovered = indexed_docs_for_source > max(records_indexed, retry_records_indexed, 0)
     effective_records_read = retry_records_read if retry_records_read > 0 else records_read
-    effective_records_indexed = retry_records_indexed if retry_records_indexed > 0 else records_indexed
+    effective_records_indexed = max(retry_records_indexed, records_indexed, indexed_docs_for_source)
     health_diagnosis = str(latest_health_check.get("diagnosis") or "").strip().lower()
 
     effective_status = original_status or "failed"
@@ -171,6 +213,13 @@ def _effective_problematic_state(item: dict[str, Any], *, health_check: dict[str
         current_data_loss_expected = not (effective_records_read > 0 and effective_records_read == effective_records_indexed)
         effective_status = "recovered_with_warning" if latest_retry_status == "parsed_with_warning" else "recovered"
         effective_resolution = "recovered_by_retry"
+        suggested_primary_action = "search_indexed_events"
+    elif source_recovered:
+        recovered = True
+        recovered_records = indexed_docs_for_source
+        current_data_loss_expected = False
+        effective_status = "recovered_with_warning"
+        effective_resolution = "indexed_records_available_after_retry_or_reprocess"
         suggested_primary_action = "search_indexed_events"
     elif effective_records_read > 0 and effective_records_indexed == effective_records_read and not current_data_loss_expected:
         effective_status = "parsed_with_warning"
@@ -211,6 +260,7 @@ def _effective_problematic_state(item: dict[str, Any], *, health_check: dict[str
         "current_data_loss_expected": current_data_loss_expected,
         "recovered": recovered,
         "recovered_records": recovered_records,
+        "indexed_docs_for_source": indexed_docs_for_source,
         "latest_retry": latest_retry,
         "latest_health_check": latest_health_check or None,
         "accepted_warning": bool(accepted_warning),
@@ -472,6 +522,7 @@ def build_problematic_artifacts_report(
     metadata = dict(getattr(evidence, "metadata_json", {}) or {})
     health_checks = _health_check_by_key(metadata)
     accepted_warnings = _accepted_warning_by_key(metadata)
+    indexed_source_cache: dict[str, int] = {}
     retry_history = list(metadata.get("artifact_retry_runs") or [])
     retry_history_by_key: dict[tuple[str, str], list[dict[str, Any]]] = {}
     for run in retry_history:
@@ -551,11 +602,13 @@ def build_problematic_artifacts_report(
         item["loss_summary"] = loss_label
         item["deep_retry_history"] = _deep_retry_history(item)
         item["health_check"] = health_checks.get(_artifact_key(item))
+        indexed_docs_for_source = _indexed_docs_for_source(evidence, str(item.get("source_path") or ""), indexed_source_cache) if item.get("data_loss_expected") else 0
         item.update(
             _effective_problematic_state(
                 item,
                 health_check=item.get("health_check"),
                 accepted_warning=accepted_warnings.get(_artifact_key(item)),
+                indexed_docs_for_source=indexed_docs_for_source,
             )
         )
         item["data_loss_expected"] = bool(item.get("current_data_loss_expected"))
@@ -644,11 +697,13 @@ def build_problematic_artifacts_report(
         item["loss_summary"] = loss_label
         item["deep_retry_history"] = _deep_retry_history(item)
         item["health_check"] = health_checks.get(_artifact_key(item))
+        indexed_docs_for_source = _indexed_docs_for_source(evidence, source_path, indexed_source_cache) if item.get("data_loss_expected") else 0
         item.update(
             _effective_problematic_state(
                 item,
                 health_check=item.get("health_check"),
                 accepted_warning=accepted_warnings.get(_artifact_key(item)),
+                indexed_docs_for_source=indexed_docs_for_source,
             )
         )
         item["original_status"] = status

@@ -123,6 +123,41 @@ def test_partial_evtx_appears_in_problematic_report() -> None:
     assert report["items"][0]["effective_resolution"] == "evtx_profile_partial"
 
 
+def test_stale_evtx_timeout_is_recovered_when_source_docs_are_indexed(monkeypatch) -> None:
+    evidence = _evidence()
+    source_path = "uploads/auto/C%3A/Windows/System32/winevt/Logs/Microsoft-Windows-PowerShell%254Operational.evtx"
+    manifest = {
+        "artifacts": [
+            {
+                "name": "EVTX raw - Microsoft-Windows-PowerShell%254Operational.evtx",
+                "source_path": source_path,
+                "parser": "evtx_raw",
+                "artifact_type": "windows_event",
+                "status": "failed",
+                "ingest_audit": {"records_read": 0, "records_indexed": 0},
+            }
+        ],
+        "errors": [
+            {
+                "artifact": "EVTX raw - Microsoft-Windows-PowerShell%254Operational.evtx",
+                "error": "EVTX bulk index stalled for EVTX raw - Microsoft-Windows-PowerShell%254Operational.evtx timed out after 45s",
+            }
+        ],
+    }
+
+    monkeypatch.setattr("app.services.problematic_artifacts.count_documents", lambda *_args, **_kwargs: {"count": 1246})
+
+    report = build_problematic_artifacts_report(evidence, manifest)
+    item = report["items"][0]
+
+    assert item["effective_status"] == "recovered_with_warning"
+    assert item["effective_resolution"] == "indexed_records_available_after_retry_or_reprocess"
+    assert item["data_loss_expected"] is False
+    assert item["retryable"] is False
+    assert report["summary"]["data_loss_expected_count"] == 0
+    assert report["summary"]["retryable"] == 0
+
+
 def test_fast_profile_keeps_selected_evtx_as_windows_event_candidates() -> None:
     candidates = [_candidate("security", "Security.evtx"), _candidate("application", "Application.evtx"), _candidate("noise", "Noise.evtx")]
     result = apply_evtx_profile_to_selection(
