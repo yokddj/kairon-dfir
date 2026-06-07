@@ -75,6 +75,7 @@ from app.services.parser_registry import (
 from app.services.problematic_artifacts import (
     build_long_tail_artifacts_report,
     build_problematic_artifacts_report,
+    problematic_artifacts_require_error_status,
     resolve_problematic_artifact_path,
     run_evtx_health_check,
 )
@@ -500,11 +501,16 @@ def _recompute_evidence_status(item: Evidence, db: Session) -> dict[str, Any]:
     error_log = dict(metadata.get("error_log") or item.error_log or {})
     has_searchable_data = indexed_docs > 0
     fatal_type = str(error_log.get("fatal_type") or "").strip()
-    has_noncritical_errors = bool(warnings or error_log)
+    problematic_report = _problematic_artifacts_report_for_evidence(item, db)
+    problematic_summary = dict(problematic_report.get("summary") or {})
+    has_real_parser_failures = problematic_artifacts_require_error_status(problematic_report)
+    skipped_empty_count = int(problematic_summary.get("skipped_empty") or 0)
+    warning_count = int(problematic_summary.get("indexed_with_warning") or 0) + len(warnings)
+    has_noncritical_errors = bool(warning_count or skipped_empty_count or (error_log and not has_real_parser_failures))
     latest_run_id = str(metadata.get("latest_ingest_run_id") or "").strip() or None
 
     if has_searchable_data:
-        new_status = IngestStatus.completed_with_errors if has_noncritical_errors else IngestStatus.completed
+        new_status = IngestStatus.completed_with_errors if has_real_parser_failures else IngestStatus.completed
         reason = (
             "reconciled_failed_status_with_searchable_documents"
             if previous_status == IngestStatus.failed.value
@@ -514,9 +520,10 @@ def _recompute_evidence_status(item: Evidence, db: Session) -> dict[str, Any]:
         metadata["investigation_ready"] = True
         metadata["searchable_documents_count"] = indexed_docs
         metadata["status_reason"] = reason
-        metadata["display_status"] = "completed_with_warnings" if new_status == IngestStatus.completed_with_errors else new_status.value
-        metadata["warning_count"] = len(warnings)
-        metadata["error_count"] = 1 if error_log else 0
+        metadata["display_status"] = new_status.value if has_real_parser_failures else "completed_with_warnings" if has_noncritical_errors else new_status.value
+        metadata["warning_count"] = warning_count + skipped_empty_count
+        metadata["error_count"] = int(problematic_summary.get("data_loss_expected_count") or 0) if has_real_parser_failures else 0
+        metadata["problematic_artifacts_summary"] = problematic_summary
         metadata["last_successful_ingest_run_id"] = latest_run_id or str(metadata.get("run_id") or "")
         metadata.setdefault("status_repairs", []).append(
             {
@@ -527,6 +534,8 @@ def _recompute_evidence_status(item: Evidence, db: Session) -> dict[str, Any]:
                 "indexed_documents": indexed_docs,
                 "fatal_type": fatal_type or None,
                 "run_id": latest_run_id,
+                "real_parser_failures": has_real_parser_failures,
+                "skipped_empty": skipped_empty_count,
             }
         )
         item.metadata_json = metadata

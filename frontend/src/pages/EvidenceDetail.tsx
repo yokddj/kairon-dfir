@@ -235,6 +235,8 @@ export default function EvidenceDetail() {
   const [benchmarkNoProgressTimeoutSeconds, setBenchmarkNoProgressTimeoutSeconds] = useState(600);
   const [benchmarkHeartbeatTimeoutSeconds, setBenchmarkHeartbeatTimeoutSeconds] = useState(300);
   const [advancedProcessingDetailsOpen, setAdvancedProcessingDetailsOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const evidenceQuery = useQuery({
     queryKey: ["evidence", evidenceId],
     queryFn: () => api.getEvidence(evidenceId),
@@ -1449,6 +1451,342 @@ function formatReportStatus(status: string | null | undefined) {
     if (candidate.parser_status === "partial") return "partial";
     if (candidate.parser_status) return candidate.parser_status;
     return "parseable";
+  }
+
+  const noRecordStatuses = new Set(["skipped_empty", "completed_no_records", "unsupported_no_records"]);
+  const isNoRecordProblem = (artifact: ProblematicArtifact) => noRecordStatuses.has(String(artifact.effective_status ?? artifact.status ?? "").toLowerCase());
+  const isFullyIndexedWarning = (artifact: ProblematicArtifact) => {
+    const effectiveStatus = String(artifact.effective_status ?? artifact.status ?? "").toLowerCase();
+    const recordsRead = artifact.effective_records_read ?? artifact.records_read ?? 0;
+    const recordsIndexed = artifact.effective_records_indexed ?? artifact.records_indexed ?? 0;
+    return recordsRead > 0 && recordsRead === recordsIndexed && ["parsed_with_warning", "accepted_warning", "health_check_only_valid", "source_missing_but_indexed"].includes(effectiveStatus);
+  };
+  const realFailureArtifacts = problematicArtifacts.filter((artifact) => {
+    if (isNoRecordProblem(artifact) || isFullyIndexedWarning(artifact)) return false;
+    return Boolean((artifact.current_data_loss_expected ?? artifact.data_loss_expected) || artifact.retryable || problematicImpact(artifact).group === "critical");
+  });
+  const realFailureCount = realFailureArtifacts.length;
+  const skippedEmptyCount = informationalProblems.length || Number(problematicSummary?.skipped_empty ?? 0);
+  const warningCount = warningProblems.length + Math.max(0, Number(problematicSummary?.indexed_with_warning ?? 0) - warningProblems.length);
+  const minimalStatusLabel =
+    activeIndexingJob
+      ? "Processing"
+      : realFailureCount > 0
+        ? "Completed with errors"
+        : indexingState === "completed_with_warnings" || warningCount > 0 || skippedEmptyCount > 0
+          ? "Ready with warnings"
+          : evidenceReadyForActions
+            ? "Ready"
+            : plannedNotStarted || waitingSelectionNeedsAction || indexingState === "not_started"
+              ? "Not indexed"
+              : formatEvidenceStatusForDisplay(displayStatus);
+  const latestRetryRun = evidenceRuns.find((run) => run.run_type === "artifact_retry") ?? null;
+  const retryRunData = (latestRetryRun ?? {}) as EvidenceRun & {
+    artifact_ids?: string[];
+    retry_of_artifact_ids?: string[];
+    recovered_count?: number;
+    still_failed_count?: number;
+    skipped_count?: number;
+    final_message?: string;
+  };
+  const retryRunItems = Array.isArray(latestRetryRun?.items) ? latestRetryRun.items : [];
+  const retryArtifactsTotal = Number(
+    retryRunData.artifacts_total ??
+      retryRunData.retry_of_artifact_ids?.length ??
+      retryRunData.artifact_ids?.length ??
+      retryRunItems.length ??
+      0,
+  );
+  const retryArtifactsDone = Number(retryRunData.artifacts_done ?? (["completed", "completed_with_errors", "failed"].includes(String(latestRetryRun?.status ?? "")) ? retryArtifactsTotal : 0));
+  const retryProgressPct = retryArtifactsTotal > 0 ? Math.round((retryArtifactsDone / retryArtifactsTotal) * 100) : Number(latestRetryRun?.progress ?? 0);
+  const retryActive = latestRetryRun ? ["queued", "running", "pending", "processing"].includes(String(latestRetryRun.status).toLowerCase()) : false;
+  const progressTitle = retryActive ? "Retrying failed artifacts" : activeIndexingJob ? "Processing" : "Processing summary";
+  const progressPercent = retryActive ? retryProgressPct : displayCounts.progressPct;
+  const progressArtifactsDone = retryActive ? retryArtifactsDone : displayCounts.artifactsDone;
+  const progressArtifactsTotal = retryActive ? retryArtifactsTotal : displayCounts.artifactsTotal;
+  const progressRecordsRead = retryActive ? Number(latestRetryRun?.records_read ?? 0) : Number(activeRun?.records_read ?? currentArtifactRecordsRead ?? tailRecordsRead ?? data?.metadata_json?.records_read ?? 0);
+  const progressRecordsIndexed = retryActive ? Number(latestRetryRun?.records_indexed ?? latestRetryRun?.events_indexed ?? 0) : Number(activeRun?.records_indexed ?? currentArtifactRecordsIndexed ?? tailRecordsIndexed ?? displayCounts.indexedDocs ?? 0);
+  const progressCurrentArtifact = retryActive ? latestRetryRun?.current_artifact : currentDisplayArtifact;
+  const minimalCategoryOptions = [
+    { id: "evtx", label: "Event logs" },
+    { id: "powershell", label: "PowerShell" },
+    { id: "prefetch", label: "Prefetch" },
+    { id: "shimcache", label: "Shimcache" },
+    { id: "service", label: "Services" },
+    { id: "scheduled_task", label: "Scheduled Tasks" },
+    { id: "browser", label: "Browser" },
+    { id: "defender", label: "Defender" },
+    { id: "lnk", label: "LNK" },
+    { id: "jumplist", label: "Jump Lists" },
+    { id: "recycle_bin", label: "Recycle Bin" },
+    { id: "usb", label: "USB" },
+    { id: "amcache", label: "Amcache" },
+  ].map((option) => {
+    const supported = supportedCategoryOptions.find((entry) => entry.category === option.id);
+    const selectedCount = supported?.supportedIds.filter((id) => selectedCandidateIds.includes(id)).length ?? 0;
+    return { ...option, supported, selectedCount, disabled: !supported || selectedIndexingLocked };
+  });
+  const commandHistoryHref = data?.case_id ? `/cases/${data.case_id}/command-history?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
+  const findingsHref = data?.case_id ? `/cases/${data.case_id}/findings?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
+  const deleteConfirmationValid = deleteConfirmText.trim() === "DELETE";
+  const minimalProcessingView = true;
+  if (minimalProcessingView) {
+    return (
+      <div className="min-w-0 space-y-5">
+        <section className="rounded-[28px] border border-line bg-panel/75 p-6 shadow-panel">
+          <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0">
+              <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Evidence</p>
+              <h2 className="mt-2 break-words text-3xl font-semibold">{data?.original_filename}</h2>
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted">
+                <span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${minimalStatusLabel === "Ready" ? "border-mint/30 bg-mint/10 text-mint" : minimalStatusLabel === "Completed with errors" ? "border-danger/30 bg-danger/10 text-danger" : minimalStatusLabel === "Ready with warnings" ? "border-amber/30 bg-amber/10 text-amber" : "border-accent/30 bg-accent/10 text-accent"}`}>{minimalStatusLabel}</span>
+                <span>Host: <span className="text-ink">{data?.provided_host || data?.detected_host || "-"}</span></span>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => void handleRefresh()} disabled={evidenceQuery.isFetching || manifestQuery.isFetching} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted disabled:opacity-50">
+                {evidenceQuery.isFetching || manifestQuery.isFetching ? "Refreshing..." : "Refresh"}
+              </button>
+              <button type="button" onClick={() => reprocessMutation.mutate({ mode: "previous_selection" })} disabled={activeIndexingJob || reprocessMutation.isPending || !lastSuccessfulIngestPlan} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted disabled:opacity-50">
+                {reprocessMutation.isPending ? "Queueing..." : "Re-index evidence"}
+              </button>
+              <button type="button" onClick={() => setDeleteDialogOpen(true)} className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
+                Delete evidence
+              </button>
+              {data?.case_id ? <Link to={`/cases/${data.case_id}`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back to case</Link> : null}
+            </div>
+          </div>
+
+          {(activeIndexingJob || retryActive) ? (
+            <div className="mt-5 rounded-3xl border border-accent/30 bg-accent/10 p-5">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">{progressTitle}</p>
+                  <h3 className="mt-1 text-2xl font-semibold text-ink">{progressPercent}%</h3>
+                  <p className="mt-1 text-sm text-muted">{retryActive ? "Retrying failed artifacts" : formatIndexingPhaseForDisplay(displayCounts.phase)}</p>
+                </div>
+                <div className="h-3 min-w-[220px] flex-1 overflow-hidden rounded-full bg-abyss/80">
+                  <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${Math.max(0, Math.min(100, progressPercent))}%` }} />
+                </div>
+              </div>
+            </div>
+          ) : null}
+
+          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+            <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Indexed documents</p><p className="mt-1 text-lg font-semibold text-ink">{indexedDocumentsTotal.toLocaleString()}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact types</p><p className="mt-1 text-lg font-semibold text-ink">{artifactTypeCount}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Real failures</p><p className={`mt-1 text-lg font-semibold ${realFailureCount ? "text-danger" : "text-mint"}`}>{realFailureCount}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Warnings</p><p className="mt-1 text-lg font-semibold text-amber">{warningCount}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Skipped empty</p><p className="mt-1 text-lg font-semibold text-muted">{skippedEmptyCount}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Completed</p><p className="mt-1 text-sm font-semibold text-ink">{formatDateTime(completedAt)}</p></div>
+          </div>
+        </section>
+
+        <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
+          <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Choose what to parse</p>
+          <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+            <div className="rounded-3xl border border-accent/30 bg-accent/10 p-5">
+              <h3 className="text-lg font-semibold text-ink">Recommended indexing</h3>
+              <p className="mt-1 text-sm text-muted">Parse all supported artifact types. Recommended for most investigations.</p>
+              <button type="button" onClick={() => runIndexingPlanMutation.mutate()} disabled={primaryIndexingDisabled} className="mt-4 rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:cursor-not-allowed disabled:opacity-60">
+                {runIndexingPlanMutation.isPending ? "Queueing..." : evidenceReadyForActions ? "Run recommended indexing again" : "Start recommended indexing"}
+              </button>
+            </div>
+            <div className="rounded-3xl border border-line bg-abyss/60 p-5">
+              <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                <div>
+                  <h3 className="text-lg font-semibold text-ink">Selected artifact types</h3>
+                  <p className="mt-1 text-sm text-muted">Choose focused families when you do not want to parse everything.</p>
+                </div>
+                <button type="button" onClick={indexSelectedArtifactTypes} disabled={!selectedCandidateIds.length || selectedIndexingLocked || parseVelociraptorMutation.isPending} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-50">
+                  {parseVelociraptorMutation.isPending ? "Queueing..." : "Start selected parsing"}
+                </button>
+              </div>
+              <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                {minimalCategoryOptions.map((option) => (
+                  <label key={option.id} className={`flex min-h-[70px] items-start gap-3 rounded-2xl border px-3 py-3 ${option.selectedCount ? "border-accent/40 bg-accent/10" : "border-line bg-panel/40"} ${option.disabled ? "opacity-50" : "cursor-pointer"}`}>
+                    <input type="checkbox" className="mt-1" disabled={option.disabled} checked={Boolean(option.supported && option.selectedCount === option.supported.supportedIds.length)} onChange={() => toggleCategorySelection(option.id)} />
+                    <span>
+                      <span className="block text-sm font-semibold text-ink">{option.label}</span>
+                      <span className="mt-1 block text-xs text-muted">{option.supported ? `${option.supported.supportedIds.length} candidates` : "Not detected"}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <details className="mt-4 rounded-2xl border border-line bg-panel/40 p-3">
+                <summary className="cursor-pointer text-sm font-semibold text-muted">Advanced custom</summary>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" onClick={selectAllSupported} disabled={!selectedIndexingAvailable || selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Select all supported</button>
+                  <button type="button" onClick={clearSelection} disabled={!selectedIndexingAvailable || selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Clear selection</button>
+                  <button type="button" onClick={selectExecutionArtifacts} disabled={selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Execution artifacts</button>
+                  <button type="button" onClick={selectPersistenceArtifacts} disabled={selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Persistence artifacts</button>
+                </div>
+              </details>
+            </div>
+          </div>
+        </section>
+
+        <section id="indexing-progress" data-testid="evidence-progress-primary" className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Processing progress</p>
+              <h3 className="mt-2 text-2xl font-semibold text-ink">{progressTitle}</h3>
+              <p className="mt-1 text-sm text-muted">Current step: {retryActive ? String(latestRetryRun?.status ?? "retry") : formatIndexingPhaseForDisplay(displayCounts.phase)}</p>
+              {progressCurrentArtifact ? <p className="mt-1 max-w-3xl truncate text-sm text-muted" title={progressCurrentArtifact}>Current artifact: {progressCurrentArtifact}</p> : null}
+            </div>
+            <div className="rounded-3xl border border-accent/30 bg-accent/10 px-6 py-4 text-right">
+              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Progress</p>
+              <p className="mt-1 text-4xl font-semibold text-ink">{progressPercent}%</p>
+            </div>
+          </div>
+          <div className="mt-5 grid gap-3 md:grid-cols-3 xl:grid-cols-7">
+            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifacts</p><p className="mt-1 text-sm text-ink">{progressArtifactsDone} / {progressArtifactsTotal}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Records read</p><p className="mt-1 text-sm text-ink">{progressRecordsRead.toLocaleString()}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Records indexed</p><p className="mt-1 text-sm text-ink">{progressRecordsIndexed.toLocaleString()}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Indexed docs</p><p className="mt-1 text-sm text-ink">{displayCounts.indexedDocs.toLocaleString()}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Elapsed</p><p className="mt-1 text-sm text-ink">{formatDuration(retryActive ? latestRetryRun?.elapsed_seconds : displayedElapsedSeconds)}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Heartbeat</p><p className="mt-1 text-sm text-ink">{retryActive ? formatHeartbeatAge(latestRetryRun?.heartbeat_at ?? null) : lastProgressAgeLabel}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Run ID</p><p className="mt-1 truncate text-sm text-ink" title={retryActive ? latestRetryRun?.run_id : latestRun?.run_id}>{retryActive ? latestRetryRun?.run_id ?? "-" : latestRun?.run_id ?? "-"}</p></div>
+          </div>
+          {latestRetryRun ? (
+            <div className="mt-4 rounded-2xl border border-line bg-abyss/60 px-4 py-3 text-sm text-muted">
+              <p className="font-semibold text-ink">{retryActive ? "Retry in progress" : "Latest retry outcome"}</p>
+              <p className="mt-1">
+                Recovered {Number(retryRunData.recovered_count ?? 0)} · Still failing {Number(retryRunData.still_failed_count ?? latestRetryRun.artifacts_failed ?? 0)} · Skipped {Number(retryRunData.skipped_count ?? 0)}
+              </p>
+              {retryRunData.final_message ? <p className="mt-1 text-muted">{retryRunData.final_message}</p> : null}
+            </div>
+          ) : null}
+        </section>
+
+        <section id="problematic-artifacts" className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+            <div>
+              <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Real failures / retry</p>
+              <h3 className="mt-2 text-2xl font-semibold text-ink">{realFailureCount ? `${realFailureCount} parser failure${realFailureCount === 1 ? "" : "s"} need attention` : "No real parser failures"}</h3>
+              {skippedEmptyCount ? <p className="mt-1 text-sm text-muted">{skippedEmptyCount} empty/no-record logs skipped. These are informational and hidden from the main failures list.</p> : null}
+            </div>
+            {retryCandidateIds.length ? (
+              <button type="button" onClick={() => retryProblematicArtifactsMutation.mutate({ artifactIds: retryCandidateIds, mode: "higher_timeout" })} disabled={activeIndexingJob || retryProblematicArtifactsMutation.isPending} className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:opacity-50">
+                {retryProblematicArtifactsMutation.isPending ? `Retrying ${retryCandidateIds.length} failed artifacts` : "Retry failed artifacts"}
+              </button>
+            ) : null}
+          </div>
+          {realFailureArtifacts.length ? (
+            <div className="mt-5 overflow-x-auto rounded-3xl border border-line">
+              <table className="min-w-full divide-y divide-line text-sm">
+                <thead className="bg-abyss/70">
+                  <tr className="text-left text-xs uppercase tracking-[0.16em] text-muted">
+                    <th className="px-3 py-3">Artifact</th>
+                    <th className="px-3 py-3">Type</th>
+                    <th className="px-3 py-3">Reason</th>
+                    <th className="px-3 py-3">Data loss</th>
+                    <th className="px-3 py-3">Retryable</th>
+                    <th className="px-3 py-3">Last attempt</th>
+                    <th className="px-3 py-3">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-line">
+                  {realFailureArtifacts.map((artifact, index) => (
+                    <tr key={`${artifact.artifact_id ?? `${artifact.source_path}:${artifact.parser}`}:${index}`} className="bg-panel/40">
+                      <td className="px-3 py-3 align-top"><p className="font-semibold text-ink">{artifact.name}</p><p className="mt-1 max-w-[420px] break-all text-xs text-muted">{artifact.source_path}</p></td>
+                      <td className="px-3 py-3 align-top text-muted">{artifact.artifact_type || artifact.parser || "-"}</td>
+                      <td className="px-3 py-3 align-top text-muted">{artifact.error_message || artifact.health_summary || formatProblematicStatusLabel(artifact.effective_status ?? artifact.status)}</td>
+                      <td className="px-3 py-3 align-top text-muted">{artifact.current_data_loss_expected ?? artifact.data_loss_expected ? "Yes" : "No"}</td>
+                      <td className="px-3 py-3 align-top text-muted">{artifact.retryable ? "Yes" : "No"}</td>
+                      <td className="px-3 py-3 align-top text-muted">{artifact.latest_retry?.finished_at ? formatDateTime(String(artifact.latest_retry.finished_at)) : artifact.latest_retry?.status ? String(artifact.latest_retry.status) : "-"}</td>
+                      <td className="px-3 py-3 align-top">
+                        <div className="flex flex-wrap gap-2">
+                          {artifact.retryable && artifact.artifact_id ? <button type="button" onClick={() => retryProblematicArtifactsMutation.mutate({ singleArtifactId: artifact.artifact_id!, mode: "higher_timeout" })} disabled={activeIndexingJob || retryProblematicArtifactsMutation.isPending} className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 text-xs text-accent disabled:opacity-50">Retry</button> : null}
+                          <details className="rounded-full border border-line bg-abyss/80 px-3 py-1 text-xs text-muted">
+                            <summary className="cursor-pointer">View logs/details</summary>
+                            <pre className="mt-3 max-w-xl whitespace-pre-wrap rounded-2xl border border-line bg-panel/80 p-3 text-left text-[11px] text-muted">{JSON.stringify({ status: artifact.status, effective_status: artifact.effective_status, error_type: artifact.error_type, error_message: artifact.error_message, health_summary: artifact.health_summary, retry_history: artifact.retry_history }, null, 2)}</pre>
+                          </details>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="mt-4 rounded-2xl border border-mint/25 bg-mint/10 px-4 py-3 text-sm text-mint">No real parser failures.</p>
+          )}
+          <details className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4">
+            <summary className="cursor-pointer text-sm font-semibold text-muted">Warnings and informational skipped items</summary>
+            <div className="mt-3 grid gap-3 md:grid-cols-2">
+              <div className="rounded-2xl border border-amber/30 bg-amber/10 p-3"><p className="font-semibold text-amber">Warnings</p><p className="mt-1 text-sm text-muted">{warningCount} warnings, including fully indexed artifacts with non-critical parser warnings.</p></div>
+              <div className="rounded-2xl border border-mint/25 bg-mint/10 p-3"><p className="font-semibold text-mint">Informational skipped</p><p className="mt-1 text-sm text-muted">{skippedEmptyCount} empty/no-record artifacts skipped.</p></div>
+            </div>
+          </details>
+        </section>
+
+        {evidenceReadyForActions ? (
+          <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Investigation actions</p>
+            <div className="mt-4 flex flex-wrap gap-3">
+              <Link to={coreSearchHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Search</Link>
+              <Link to={commandHistoryHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Command History</Link>
+              <Link to={artifactViewsHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Artifact Views</Link>
+              <Link to={timelineHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Timeline</Link>
+              <Link to={findingsHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Findings</Link>
+              <Link to={reportsHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Report</Link>
+            </div>
+          </section>
+        ) : null}
+
+        <details className="rounded-[28px] border border-line bg-panel/50 p-5">
+          <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.18em] text-muted">Advanced diagnostics</summary>
+          <div className="mt-4 grid gap-4 xl:grid-cols-2">
+            <div className="rounded-2xl border border-line bg-abyss/60 p-4">
+              <p className="font-semibold text-ink">Ingest & reprocess runs</p>
+              <div className="mt-3 space-y-2">
+                {evidenceRuns.slice(0, 6).map((run) => (
+                  <div key={run.run_id} className="rounded-xl border border-line bg-panel/40 px-3 py-2 text-xs text-muted">
+                    <p className="font-semibold text-ink">{run.run_type} · {run.status}</p>
+                    <p>Artifacts {run.artifacts_done ?? 0}/{run.artifacts_total ?? 0} · records {run.records_read ?? 0}/{run.records_indexed ?? run.events_indexed ?? 0}</p>
+                    {run.current_artifact ? <p className="truncate" title={run.current_artifact}>{run.current_artifact}</p> : null}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="rounded-2xl border border-line bg-abyss/60 p-4">
+              <p className="font-semibold text-ink">Raw discovery inventory</p>
+              <p className="mt-1 text-sm text-muted">Hidden from the main flow. Discovery found {discoveryCandidates.length} candidates across {supportedCategoryOptions.length} supported categories.</p>
+              <div className="mt-3 max-h-80 overflow-auto rounded-xl border border-line bg-panel/40 p-3 text-xs text-muted">
+                {supportedCategoryOptions.map((option) => <p key={option.category}>{option.label}: {option.supportedIds.length} supported</p>)}
+              </div>
+            </div>
+          </div>
+        </details>
+
+        {deleteDialogOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <div className="w-full max-w-xl rounded-[28px] border border-danger/40 bg-panel p-6 shadow-panel">
+              <p className="font-mono text-xs uppercase tracking-[0.24em] text-danger">Delete evidence</p>
+              <h3 className="mt-2 text-2xl font-semibold text-ink">{data?.original_filename}</h3>
+              <p className="mt-3 text-sm text-muted">
+                This removes the evidence record, parsed artifacts and indexed documents for this evidence. Original uploaded archive removal depends on storage policy.
+              </p>
+              <div className="mt-4 grid gap-2 text-sm text-muted">
+                <p>Host: <span className="text-ink">{data?.provided_host || data?.detected_host || "-"}</span></p>
+                <p>Indexed docs: <span className="text-ink">{indexedDocumentsTotal.toLocaleString()}</span></p>
+              </div>
+              <label className="mt-5 block text-sm text-muted">
+                Type DELETE to confirm.
+                <input value={deleteConfirmText} onChange={(event) => setDeleteConfirmText(event.target.value)} className="mt-2 w-full rounded-2xl border border-line bg-abyss px-4 py-3 font-mono text-sm text-ink outline-none focus:border-danger" />
+              </label>
+              <div className="mt-5 flex flex-wrap justify-end gap-2">
+                <button type="button" onClick={() => { setDeleteDialogOpen(false); setDeleteConfirmText(""); }} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Cancel</button>
+                <button type="button" onClick={() => deleteMutation.mutate()} disabled={!deleteConfirmationValid || deleteMutation.isPending} className="rounded-2xl bg-danger px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                  {deleteMutation.isPending ? "Deleting..." : "Delete evidence"}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
   }
 
   return (

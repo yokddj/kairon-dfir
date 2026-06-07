@@ -5801,28 +5801,79 @@ def retry_problematic_artifacts(
             run_id,
             {
                 "status": "running",
+                "phase": "retry_running",
+                "progress": 0,
                 "started_at": utc_now().isoformat(),
                 "mode": mode,
                 "artifact_ids": artifact_ids,
+                "retry_candidates_count": len(artifact_ids),
+                "retry_of_artifact_ids": artifact_ids,
+                "artifacts_total": len(artifact_ids),
+                "artifacts_done": 0,
+                "artifacts_failed": 0,
+                "records_read": 0,
+                "records_indexed": 0,
+                "recovered_count": 0,
+                "still_failed_count": 0,
+                "skipped_count": 0,
                 "items": selected_items,
                 "retry_profile": retry_profile,
             },
         )
         if not selected_candidates:
-            _update_artifact_retry_run_metadata(evidence.id, run_id, {"status": "failed", "error": "No retryable discovery candidates matched the selected artifacts."})
+            _update_artifact_retry_run_metadata(
+                evidence.id,
+                run_id,
+                {
+                    "status": "failed",
+                    "phase": "retry_completed_still_failed",
+                    "progress": 100,
+                    "artifacts_total": len(artifact_ids),
+                    "artifacts_done": 0,
+                    "artifacts_failed": len(artifact_ids),
+                    "still_failed_count": len(artifact_ids),
+                    "final_message": "No retryable discovery candidates matched the selected artifacts.",
+                    "error": "No retryable discovery candidates matched the selected artifacts.",
+                },
+            )
             return
         staging_dir, prepared_candidates, _extracted_files, _stats = _prepare_velociraptor_selected_staging_from_candidates(evidence, selected_candidates)
-        artifacts = list_velociraptor_artifacts(staging_dir, prepared_candidates)
+        artifacts = [artifact for artifact in list_velociraptor_artifacts(staging_dir, prepared_candidates) if str(artifact.get("parser") or "").lower() == "evtx_raw"]
+        artifacts_total = len(artifacts) or len(selected_candidates) or len(artifact_ids)
+        _update_artifact_retry_run_metadata(
+            evidence.id,
+            run_id,
+            {
+                "artifacts_total": artifacts_total,
+                "artifacts_done": 0,
+                "artifacts_failed": 0,
+                "progress": 0,
+            },
+        )
         performance_mode = str(retry_profile["retry_mode"])
         effective_timeout = int((retry_profile.get("effective_timeouts") or {}).get("record_timeout_seconds") or settings.evtx_artifact_stall_seconds or 45)
         ingest_batch_size = int(retry_profile.get("bulk_batch_size") or 250)
         max_artifact_seconds = int(retry_profile.get("max_artifact_seconds") or 0)
         retry_results: list[dict] = []
         retry_errors: list[dict] = []
-        for artifact_info in artifacts:
-            if str(artifact_info.get("parser") or "").lower() != "evtx_raw":
-                continue
+        total_records_read = 0
+        total_records_indexed = 0
+        for artifact_index, artifact_info in enumerate(artifacts, start=1):
             source_path = str(artifact_info.get("source_path") or "")
+            _update_artifact_retry_run_metadata(
+                evidence.id,
+                run_id,
+                {
+                    "status": "running",
+                    "phase": "retry_running",
+                    "current_artifact": artifact_info.get("name") or source_path,
+                    "current_artifact_source": source_path,
+                    "artifacts_total": artifacts_total,
+                    "artifacts_done": artifact_index - 1,
+                    "progress": int(((artifact_index - 1) / artifacts_total) * 100) if artifacts_total else 0,
+                    "heartbeat_at": utc_now().isoformat(),
+                },
+            )
             retry_artifact_id = _create_artifact_row_isolated(
                 case_id=evidence.case_id,
                 evidence_id=evidence.id,
@@ -5883,6 +5934,8 @@ def retry_problematic_artifacts(
                     if performance_mode != "parse_only":
                         docs_processed = len(final_result.events)
                 records_read = int(final_result.records_read or 0)
+                total_records_read += records_read
+                total_records_indexed += docs_processed
                 if records_read > 0 and docs_processed == records_read:
                     fine_status = "parsed_with_warning"
                 elif records_read > docs_processed > 0:
@@ -5910,6 +5963,19 @@ def retry_problematic_artifacts(
                         "outcome": outcome,
                     }
                 )
+                _update_artifact_retry_run_metadata(
+                    evidence.id,
+                    run_id,
+                    {
+                        "artifacts_total": artifacts_total,
+                        "artifacts_done": artifact_index,
+                        "records_read": total_records_read,
+                        "records_indexed": total_records_indexed,
+                        "events_indexed": total_records_indexed,
+                        "progress": int((artifact_index / artifacts_total) * 100) if artifacts_total else 100,
+                        "heartbeat_at": utc_now().isoformat(),
+                    },
+                )
             except Exception as exc:  # noqa: BLE001
                 _update_artifact_row_isolated(retry_artifact_id, status="failed", record_count=0)
                 retry_errors.append(
@@ -5927,14 +5993,47 @@ def retry_problematic_artifacts(
                         "outcome": "failed_different_reason" if docs_processed > 0 else "same_failure",
                     }
                 )
+                total_records_indexed += docs_processed
+                _update_artifact_retry_run_metadata(
+                    evidence.id,
+                    run_id,
+                    {
+                        "artifacts_total": artifacts_total,
+                        "artifacts_done": artifact_index,
+                        "artifacts_failed": len(retry_errors),
+                        "records_read": total_records_read,
+                        "records_indexed": total_records_indexed,
+                        "events_indexed": total_records_indexed,
+                        "progress": int((artifact_index / artifacts_total) * 100) if artifacts_total else 100,
+                        "heartbeat_at": utc_now().isoformat(),
+                    },
+                )
         elapsed_seconds = max(time.perf_counter() - started_monotonic, 0.001)
+        recovered_count = sum(1 for item in retry_results if int(item.get("records_indexed") or 0) > 0)
+        still_failed_count = len(retry_errors) + sum(1 for item in retry_results if int(item.get("records_indexed") or 0) <= 0 and item.get("outcome") != "parsed_only_ok")
+        skipped_count = max(0, artifacts_total - recovered_count - still_failed_count)
+        retry_phase = "retry_completed_recovered" if recovered_count and not still_failed_count else "retry_completed_still_failed" if still_failed_count and not recovered_count else "retry_completed_partial" if still_failed_count else "retry_completed_recovered"
+        final_message = "Recovered" if retry_phase == "retry_completed_recovered" else "Still failing" if retry_phase == "retry_completed_still_failed" else "Partially recovered"
         _update_artifact_retry_run_metadata(
             evidence.id,
             run_id,
             {
-                "status": "completed_with_errors" if retry_errors else "completed",
+                "status": "completed_with_errors" if still_failed_count else "completed",
+                "phase": retry_phase,
+                "progress": 100,
                 "finished_at": utc_now().isoformat(),
                 "elapsed_seconds": round(elapsed_seconds, 2),
+                "artifacts_total": artifacts_total,
+                "artifacts_done": artifacts_total,
+                "artifacts_failed": still_failed_count,
+                "records_read": total_records_read,
+                "records_indexed": total_records_indexed,
+                "events_indexed": total_records_indexed,
+                "current_artifact": None,
+                "recovered_count": recovered_count,
+                "still_failed_count": still_failed_count,
+                "skipped_count": skipped_count,
+                "final_message": final_message,
                 "items": retry_results + retry_errors,
                 "retry_profile": retry_profile,
             },

@@ -71,6 +71,63 @@ def _sort_runs(runs: list[dict]) -> list[dict]:
     return sorted(runs, key=_sort_key, reverse=True)
 
 
+def _int_or_none(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    try:
+        if value is None or str(value).strip() == "":
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _normalize_artifact_retry_run(run: dict) -> dict:
+    normalized = dict(run)
+    items = [dict(item) for item in normalized.get("items") or [] if isinstance(item, dict)]
+    artifact_ids = [
+        str(value)
+        for value in (normalized.get("retry_of_artifact_ids") or normalized.get("artifact_ids") or [])
+        if str(value or "").strip()
+    ]
+    inferred_total = len(items) or len(artifact_ids) or None
+    terminal_statuses = {"completed", "completed_with_errors", "failed", "cancelled"}
+    status = str(normalized.get("status") or "").strip().lower()
+
+    if _int_or_none(normalized.get("artifacts_total")) is None and inferred_total is not None:
+        normalized["artifacts_total"] = inferred_total
+    if _int_or_none(normalized.get("artifacts_done")) is None and inferred_total is not None and status in terminal_statuses:
+        normalized["artifacts_done"] = inferred_total
+    if _int_or_none(normalized.get("records_read")) is None and items:
+        normalized["records_read"] = sum(int(item.get("records_read") or 0) for item in items)
+    if _int_or_none(normalized.get("records_indexed")) is None and items:
+        normalized["records_indexed"] = sum(int(item.get("records_indexed") or 0) for item in items)
+    if _int_or_none(normalized.get("events_indexed")) is None and normalized.get("records_indexed") is not None:
+        normalized["events_indexed"] = normalized.get("records_indexed")
+    if _int_or_none(normalized.get("artifacts_failed")) is None and items:
+        failed_statuses = {"failed", "skipped_timeout", "timeout", "parser_crash", "normalization_failed", "opensearch_index_failed"}
+        normalized["artifacts_failed"] = sum(1 for item in items if str(item.get("status") or item.get("outcome") or "").strip().lower() in failed_statuses)
+    if _int_or_none(normalized.get("recovered_count")) is None and items:
+        normalized["recovered_count"] = sum(1 for item in items if int(item.get("records_indexed") or 0) > 0 or str(item.get("outcome") or "").startswith("recovered"))
+    if _int_or_none(normalized.get("still_failed_count")) is None and items:
+        normalized["still_failed_count"] = int(normalized.get("artifacts_failed") or 0)
+    if _int_or_none(normalized.get("skipped_count")) is None:
+        normalized["skipped_count"] = 0
+    if _int_or_none(normalized.get("progress")) is None and inferred_total and status in terminal_statuses:
+        normalized["progress"] = 100
+    if not normalized.get("phase") and status in terminal_statuses:
+        normalized["phase"] = "retry_completed_still_failed" if int(normalized.get("still_failed_count") or 0) else "retry_completed_recovered"
+    if not normalized.get("final_message") and status in terminal_statuses and inferred_total:
+        recovered = int(normalized.get("recovered_count") or 0)
+        still_failed = int(normalized.get("still_failed_count") or 0)
+        normalized["final_message"] = f"Recovered {recovered} artifact(s); {still_failed} still failing."
+    return normalized
+
+
 def upsert_ingest_run(metadata: dict | None, run_id: str, updates: dict[str, Any]) -> dict:
     next_metadata = dict(metadata or {})
     runs = _coerce_run_list(next_metadata)
@@ -285,7 +342,11 @@ def sync_ingest_run_from_metadata(metadata: dict | None, *, run_id: str, ingest_
 def list_evidence_runs(metadata: dict | None) -> list[dict]:
     next_metadata = dict(metadata or {})
     ingest_runs = _coerce_run_list(next_metadata)
-    artifact_retry_runs = [dict(item, run_type="artifact_retry") for item in (next_metadata.get("artifact_retry_runs") or []) if isinstance(item, dict)]
+    artifact_retry_runs = [
+        _normalize_artifact_retry_run(dict(item, run_type="artifact_retry"))
+        for item in (next_metadata.get("artifact_retry_runs") or [])
+        if isinstance(item, dict)
+    ]
     return _sort_runs(ingest_runs + artifact_retry_runs)
 
 
