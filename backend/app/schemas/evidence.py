@@ -123,6 +123,13 @@ class EvidenceRunRead(BaseModel):
     selected_by_parser: dict = {}
     parsed_by_artifact_type: dict = {}
     failed_artifacts_count: int | None = None
+    retry_candidates_count: int | None = None
+    retry_of_artifact_ids: list = []
+    artifact_ids: list = []
+    recovered_count: int | None = None
+    still_failed_count: int | None = None
+    skipped_count: int | None = None
+    final_message: str | None = None
     retry_profile: dict = {}
     items: list = []
 

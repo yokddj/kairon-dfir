@@ -23,6 +23,7 @@ from rq.registry import StartedJobRegistry
 from opensearchpy.exceptions import RequestError
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.orm.exc import ObjectDeletedError, StaleDataError
 
 from app.core.activity import log_activity
@@ -6070,12 +6071,38 @@ def retry_problematic_artifacts(
                 refreshed_manifest,
                 artifact_id_by_key=refreshed_artifact_id_by_key,
             )
-            if refreshed_evidence.ingest_status == IngestStatus.completed_with_errors and not problematic_artifacts_require_error_status(refreshed_report):
+            refreshed_summary = dict(refreshed_report.get("summary") or {})
+            has_real_parser_failures = problematic_artifacts_require_error_status(refreshed_report)
+            refreshed_metadata = dict(refreshed_evidence.metadata_json or {})
+            refreshed_metadata["problematic_artifacts_summary"] = refreshed_summary
+            refreshed_metadata["investigation_ready"] = True
+            refreshed_metadata["retry_recovered_count"] = recovered_count
+            refreshed_metadata["retry_still_failed_count"] = still_failed_count
+            refreshed_metadata["retry_skipped_count"] = skipped_count
+            refreshed_metadata["latest_retry_run_id"] = run_id
+            refreshed_metadata["error_count"] = int(refreshed_summary.get("data_loss_expected_count") or 0) if has_real_parser_failures else 0
+            refreshed_metadata["warning_count"] = int(refreshed_summary.get("indexed_with_warning") or 0) + int(refreshed_summary.get("skipped_empty") or 0)
+            if has_real_parser_failures:
+                refreshed_metadata["display_status"] = "completed_with_errors"
+                refreshed_metadata["current_phase"] = "completed_with_errors"
+                refreshed_metadata["status_reason"] = "retry_completed_still_has_parser_failures"
+                refreshed_evidence.ingest_status = IngestStatus.completed_with_errors
+            else:
                 refreshed_evidence.ingest_status = IngestStatus.completed
-                refreshed_metadata = dict(refreshed_evidence.metadata_json or {})
-                refreshed_metadata["problematic_artifacts_summary"] = refreshed_report.get("summary") or {}
+                refreshed_metadata["display_status"] = "completed_with_warnings" if refreshed_metadata["warning_count"] else "completed"
+                refreshed_metadata["current_phase"] = refreshed_metadata["display_status"]
+                refreshed_metadata["progress_pct"] = 100
+                if refreshed_metadata.get("artifacts_total"):
+                    refreshed_metadata["artifacts_done"] = refreshed_metadata.get("artifacts_total")
+                    refreshed_metadata["artifacts_processed"] = refreshed_metadata.get("artifacts_total")
+                refreshed_metadata["artifacts_failed"] = 0
                 refreshed_metadata["problematic_artifacts_resolved_at"] = utc_now().isoformat()
-                refreshed_evidence.metadata_json = merge_evidence_metadata(refreshed_evidence.metadata_json or {}, refreshed_metadata)
+                refreshed_metadata["status_reason"] = "retry_resolved_real_parser_failures"
+            refreshed_evidence.metadata_json = merge_evidence_metadata(refreshed_evidence.metadata_json or {}, refreshed_metadata)
+            flag_modified(refreshed_evidence, "metadata_json")
+            db.commit()
+            if refreshed_evidence.ingest_status == IngestStatus.completed_with_errors and not has_real_parser_failures:
+                refreshed_evidence.ingest_status = IngestStatus.completed
                 db.commit()
     except Exception as exc:  # noqa: BLE001
         logger.exception("Problematic artifact retry failed for evidence %s", evidence_id)

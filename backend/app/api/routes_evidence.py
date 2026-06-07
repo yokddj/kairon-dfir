@@ -510,7 +510,8 @@ def _recompute_evidence_status(item: Evidence, db: Session) -> dict[str, Any]:
     latest_run_id = str(metadata.get("latest_ingest_run_id") or "").strip() or None
 
     if has_searchable_data:
-        new_status = IngestStatus.completed_with_errors if has_real_parser_failures else IngestStatus.completed
+        has_fatal_infrastructure_error = bool(fatal_type)
+        new_status = IngestStatus.completed_with_errors if has_real_parser_failures or has_fatal_infrastructure_error else IngestStatus.completed
         reason = (
             "reconciled_failed_status_with_searchable_documents"
             if previous_status == IngestStatus.failed.value
@@ -520,11 +521,20 @@ def _recompute_evidence_status(item: Evidence, db: Session) -> dict[str, Any]:
         metadata["investigation_ready"] = True
         metadata["searchable_documents_count"] = indexed_docs
         metadata["status_reason"] = reason
-        metadata["display_status"] = new_status.value if has_real_parser_failures else "completed_with_warnings" if has_noncritical_errors else new_status.value
+        metadata["display_status"] = new_status.value if has_real_parser_failures or has_fatal_infrastructure_error else "completed_with_warnings" if has_noncritical_errors else new_status.value
         metadata["warning_count"] = warning_count + skipped_empty_count
-        metadata["error_count"] = int(problematic_summary.get("data_loss_expected_count") or 0) if has_real_parser_failures else 0
+        metadata["error_count"] = int(problematic_summary.get("data_loss_expected_count") or 0) if has_real_parser_failures else 1 if has_fatal_infrastructure_error else 0
         metadata["problematic_artifacts_summary"] = problematic_summary
         metadata["last_successful_ingest_run_id"] = latest_run_id or str(metadata.get("run_id") or "")
+        if not has_real_parser_failures and not has_fatal_infrastructure_error:
+            metadata["progress_pct"] = 100
+            metadata["current_phase"] = metadata["display_status"]
+            metadata["artifacts_failed"] = 0
+            if metadata.get("artifacts_total"):
+                metadata["artifacts_done"] = metadata.get("artifacts_total")
+                metadata["artifacts_processed"] = metadata.get("artifacts_total")
+            metadata["retry_recovered_count"] = int(problematic_summary.get("recovered_count") or metadata.get("retry_recovered_count") or 0)
+            metadata["retry_still_failed_count"] = 0
         metadata.setdefault("status_repairs", []).append(
             {
                 "repaired_at": datetime.now(UTC).isoformat(),
