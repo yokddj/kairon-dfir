@@ -161,12 +161,13 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
     parent = _obj(process.get("parent")) or _obj(_obj(event.get("parent")).get("process"))
     powershell = _obj(event.get("powershell"))
     task = _obj(event.get("task"))
+    windows_event_data = _obj(windows.get("event_data"))
     source_type = _source_type(event, event_id)
     commands: list[str] = []
     if source_type in {"sysmon_1", "security_4688"}:
         commands.append(_first(process.get("command_line"), process.get("executable"), process.get("path"), process.get("name")))
     elif source_type == "powershell_operational":
-        commands.append(_first(powershell.get("command"), powershell.get("command_preview"), process.get("command_line"), event.get("search_text")))
+        commands.append(_extract_powershell_command(event, powershell, process, windows_event_data))
     elif source_type == "scheduled_task":
         command = " ".join(part for part in [task.get("command"), task.get("arguments")] if part)
         commands.append(command or _first(process.get("command_line"), event.get("search_text")))
@@ -180,14 +181,17 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
         commands.append(_first(process.get("command_line"), powershell.get("command"), task.get("command"), event.get("key_entity")))
     output = []
     for command in commands:
-        command = _clean(command)
+        command = _clean_command_value(command)
         if not command:
             continue
+        user_value = _extract_user(event, powershell, windows_event_data)
+        raw_payload = _extract_raw_payload(event, windows_event_data)
         classification = _classify_command(command, process, parent, source_type)
         risk_score, risk_reasons = _risk(command, process, parent)
         timestamp = event.get("@timestamp")
         event_doc_id = str(event.get("id") or event.get("search_doc_id") or event.get("opensearch_id") or event.get("event_id") or "")
         windows_event_id = str(event_id or event.get("event_id") or "")
+        process_command_line = _clean_command_value(process.get("command_line"))
         item = {
             "id": _command_id(case_id, event_doc_id, command),
             "case_id": case_id,
@@ -208,13 +212,13 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
             "source_event_id": event_doc_id,
             "windows_event_id": windows_event_id,
             "source_file": event.get("source_file"),
-            "user": _first(_obj(event.get("user")).get("name"), powershell.get("user")),
+            "user": user_value,
             "process": {
                 "name": process.get("name"),
                 "executable": _first(process.get("executable"), process.get("path")),
                 "pid": process.get("pid"),
                 "guid": _first(process.get("guid"), process.get("entity_id")),
-                "command_line": process.get("command_line"),
+                "command_line": process_command_line,
             },
             "parent_process": {
                 "name": _first(parent.get("name"), process.get("parent_name")),
@@ -228,6 +232,7 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
             "risk_reasons": risk_reasons,
             "confidence": _confidence(source_type, command, timestamp),
             "dedupe_key": "",
+            "raw_payload": raw_payload,
             "supporting_events": [_supporting_event(event, source_type)],
             "linked_search_url": _search_url(case_id, event.get("evidence_id"), event_doc_id),
         }
@@ -281,7 +286,7 @@ def _apply_filters(items: list[dict[str, Any]], params: dict[str, Any]) -> list[
     has_supporting = _truthy(params.get("has_supporting_sources"))
     output = []
     for item in items:
-        haystack = " ".join(str(item.get(key) or "") for key in ("command", "user", "host", "source_file")).lower()
+        haystack = " ".join(str(item.get(key) or "") for key in ("command", "raw_payload", "user", "host", "source_file")).lower()
         if q and q not in haystack:
             continue
         if shell and str(item.get("shell_family") or item.get("shell") or "").lower() != shell:
@@ -456,6 +461,178 @@ def _normalize_launcher(value: Any) -> str:
     text = text.rsplit("\\", 1)[-1]
     text = text.split(" ", 1)[0]
     return text.lower() or "unknown"
+
+
+def _extract_powershell_command(event: dict[str, Any], powershell: dict[str, Any], process: dict[str, Any], event_data: dict[str, Any]) -> str:
+    candidates = [
+        powershell.get("host_application"),
+        event_data.get("HostApplication"),
+        event_data.get("Host Application"),
+        _extract_prefixed_payload_value(event, event_data, ["Aplicación host", "HostApplication", "Host Application"]),
+        _extract_labeled_payload_value(event, event_data, ["Aplicación host", "HostApplication", "Host Application"]),
+        powershell.get("command"),
+        event_data.get("CommandLine"),
+        event_data.get("Command"),
+        powershell.get("command_preview"),
+        process.get("command_line"),
+        event_data.get("ScriptBlockText"),
+        powershell.get("script_block_text"),
+        _extract_labeled_payload_value(event, event_data, ["ScriptBlockText", "Script Block Text", "Texto de bloque de script"]),
+        event_data.get("ProcessCommandLine"),
+        event_data.get("ContextInfo"),
+        powershell.get("context_info"),
+        _extract_prefixed_payload_value(event, event_data, ["CommandLine", "ProcessCommandLine", "ContextInfo"]),
+        _extract_labeled_payload_value(event, event_data, ["CommandLine", "ProcessCommandLine", "ContextInfo"]),
+        _extract_payload_command_invocation(event, event_data),
+        _extract_labeled_payload_value(event, event_data, ["Command Name", "Nombre de comando"]),
+        _obj(event.get("event")).get("message"),
+        event.get("search_text"),
+    ]
+    for candidate in candidates:
+        text = _clean_command_value(candidate)
+        if text:
+            return text
+    return ""
+
+
+def _extract_user(event: dict[str, Any], powershell: dict[str, Any], event_data: dict[str, Any]) -> str:
+    event_user = _obj(event.get("user"))
+    candidates = [
+        event_data.get("User"),
+        event_data.get("UserName"),
+        event_data.get("AccountName"),
+        event_data.get("SubjectUserName"),
+        event_data.get("SecurityUserID"),
+        _extract_prefixed_payload_value(event, event_data, ["UserId", "User", "Usuario"]),
+        _extract_labeled_payload_value(event, event_data, ["User", "Usuario"]),
+        powershell.get("user"),
+        event_user.get("name"),
+        event_user.get("user"),
+        event_user.get("sid"),
+        event_data.get("UserId"),
+    ]
+    for candidate in candidates:
+        text = _clean_user_value(candidate)
+        if text:
+            return text
+    return ""
+
+
+def _extract_raw_payload(event: dict[str, Any], event_data: dict[str, Any]) -> str:
+    payload_values = _payload_text_values(event, event_data)
+    if payload_values:
+        return "\n".join(_clean(value) for value in payload_values if _clean(value))
+    return _clean(_obj(event.get("event")).get("message") or event.get("search_text"))
+
+
+def _extract_payload_command_invocation(event: dict[str, Any], event_data: dict[str, Any]) -> str:
+    for value in _payload_text_values(event, event_data):
+        text = _clean(value)
+        match = re.search(r"(?i)CommandInvocation\(([^)]+)\):\s*\"?([^\"\r\n]+)", text)
+        if match:
+            invoked = _clean(match.group(2) or match.group(1))
+            if invoked:
+                return invoked
+    return ""
+
+
+def _extract_prefixed_payload_value(event: dict[str, Any], event_data: dict[str, Any], labels: list[str]) -> str:
+    lowered = [(label, label.lower()) for label in labels]
+    for value in _payload_text_values(event, event_data):
+        for line in _clean(value).splitlines():
+            text = line.strip(" \t,;")
+            lower = text.lower()
+            for label, lower_label in lowered:
+                if not lower.startswith(lower_label):
+                    continue
+                remainder = text[len(label):].strip()
+                if not remainder.startswith(("=", ":")):
+                    continue
+                candidate = _clean(remainder[1:].strip(" ,;"))
+                if candidate and not _is_placeholder_command(candidate) and not _looks_like_payload(candidate):
+                    return candidate
+    return ""
+
+
+def _extract_labeled_payload_value(event: dict[str, Any], event_data: dict[str, Any], labels: list[str]) -> str:
+    payload = "\n".join(_payload_text_values(event, event_data) + [_clean(_obj(event.get("event")).get("message")), _clean(event.get("search_text"))])
+    if not payload:
+        return ""
+    stop_labels = [
+        "EngineVersion",
+        "RunspaceId",
+        "PipelineId",
+        "Command Name",
+        "Command Type",
+        "Script Name",
+        "Command Path",
+        "Sequence Number",
+        "User",
+        "Connected User",
+        "Shell ID",
+        "Versión del motor",
+        "Id. de espacio de ejecución",
+        "Id. de canalización",
+        "Nombre de comando",
+        "Tipo de comando",
+        "Nombre de script",
+        "Ruta de acceso de comando",
+        "Número de secuencia",
+        "Usuario",
+        "Usuario conectado",
+        "Id. de shell",
+    ]
+    stop_pattern = "|".join(re.escape(label) for label in stop_labels)
+    for label in labels:
+        pattern = rf"(?is)(?:^|[,;\n{{]\s*['\"]?){re.escape(label)}\s*(?:=|:)\s*(.*?)(?=(?:[,;\n]\s*(?:{stop_pattern})\s*(?:=|:))|$)"
+        match = re.search(pattern, payload)
+        if match:
+            value = _clean(match.group(1).strip(" ,;"))
+            if value and not _is_placeholder_command(value) and not _looks_like_payload(value):
+                return value
+    return ""
+
+
+def _payload_text_values(event: dict[str, Any], event_data: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for source in (event_data, _obj(windows_payload := event_data.get("payload_columns")), _obj(event_data.get("payload")), _obj(_obj(event.get("windows")).get("payload"))):
+        if not isinstance(source, dict):
+            continue
+        for key, value in source.items():
+            if str(key).lower().startswith("payload") or str(key).lower() in {"message", "contextinfo", "hostapplication"}:
+                if isinstance(value, (dict, list)):
+                    continue
+                values.append(_clean(value))
+    if isinstance(windows_payload, dict):
+        values.extend(_clean(value) for value in windows_payload.values())
+    return [value for value in values if value]
+
+
+def _clean_command_value(value: Any) -> str:
+    text = _clean(value)
+    if _is_placeholder_command(text) or _looks_like_payload(text):
+        return ""
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _clean_user_value(value: Any) -> str:
+    text = _clean(value)
+    if not text or _looks_like_payload(text):
+        return ""
+    text = re.sub(r"\\\\+", r"\\", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _is_placeholder_command(value: Any) -> bool:
+    text = _clean(value).lower()
+    return text in {"", "-", "0x", "0x0", "0x00", "0x00000000"} or bool(re.fullmatch(r"0x[0-9a-f]{1,8}", text))
+
+
+def _looks_like_payload(value: str) -> bool:
+    text = _clean(value).lower()
+    if len(text) > 160 and any(token in text for token in ("hostapplication", "host application", "aplicación host", "scriptblocktext", "eventdata", "payloaddata", "nombre de comando")):
+        return True
+    return False
 
 
 def _first_executable(command: str) -> str:

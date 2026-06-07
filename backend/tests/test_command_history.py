@@ -83,6 +83,110 @@ def test_powershell_4104_extracts_script_block() -> None:
     assert "Synthetic indicator" in items[0]["risk_reasons"]
 
 
+def test_powershell_placeholder_command_falls_back_to_host_application_payload() -> None:
+    payload = (
+        "Gravedad = Informational, Nombre de host = ConsoleHost, "
+        "Aplicación host = C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe "
+        "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "
+        "C:\\Users\\analyst\\Documents\\KaironLab01\\run_key_payload.ps1, "
+        "Versión del motor = 5.1, Nombre de comando = run_key_payload.ps1, "
+        "Usuario = KAIRON-LAB01\\analyst, Id. de shell = Microsoft.PowerShell,"
+    )
+
+    items = command_history._commands_from_event(
+        "case-1",
+        _event(
+            4103,
+            event={"provider": "Microsoft-Windows-PowerShell", "channel": "Microsoft-Windows-PowerShell/Operational"},
+            artifact={"type": "powershell", "parser": "powershell_evtx"},
+            process={"name": "powershell.exe", "command_line": "0x0", "pid": 8288},
+            user={"name": payload, "sid": "S-1-5-21-1000"},
+            windows={
+                "event_id": 4103,
+                "event_data": {
+                    "UserId": "S-1-5-21-1000",
+                    "payload_columns": {
+                        "PayloadData1": f"Command Name: {payload}",
+                        "PayloadData2": f"Host Application = {payload}",
+                        "PayloadData6": 'Payload: CommandInvocation(run_key_payload.ps1): "run_key_payload.ps1"',
+                        "Payload": "0x0",
+                    },
+                },
+            },
+        ),
+    )
+
+    assert len(items) == 1
+    item = items[0]
+    assert "powershell.exe" in item["command"]
+    assert "run_key_payload.ps1" in item["command"]
+    assert item["process"]["command_line"] == ""
+    assert item["user"] == "KAIRON-LAB01\\analyst"
+    assert "Aplicación host" in item["raw_payload"]
+    assert "Nombre de comando" not in item["user"]
+
+
+def test_powershell_placeholder_command_falls_back_to_script_block() -> None:
+    items = command_history._commands_from_event(
+        "case-1",
+        _event(
+            4104,
+            event={"provider": "Microsoft-Windows-PowerShell", "channel": "Microsoft-Windows-PowerShell/Operational"},
+            artifact={"type": "powershell", "parser": "powershell_evtx"},
+            process={"name": "powershell.exe", "command_line": "0x"},
+            windows={
+                "event_id": 4104,
+                "event_data": {
+                    "ScriptBlockText": "Write-Host KAIRON-LAB01-MARKER",
+                    "User": "KAIRON-LAB01\\analyst",
+                },
+            },
+        ),
+    )
+
+    assert items[0]["command"] == "Write-Host KAIRON-LAB01-MARKER"
+    assert items[0]["user"] == "KAIRON-LAB01\\analyst"
+
+
+def test_powershell_json_payload_command_falls_back_to_host_application() -> None:
+    raw_json = (
+        '{"EventData":{"Data":"Stopped, Available, \\tNewEngineState=Stopped\\n'
+        '\\tHostApplication=C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe '
+        '-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File '
+        'C:\\\\Users\\\\analyst\\\\Documents\\\\KaironLab01\\\\run_key_payload.ps1\\n'
+        '\\tCommandLine=","Binary":""}}'
+    )
+
+    items = command_history._commands_from_event(
+        "case-1",
+        _event(
+            403,
+            event={"provider": "Microsoft-Windows-PowerShell", "channel": "Windows PowerShell"},
+            artifact={"type": "powershell", "parser": "powershell_evtx"},
+            process={"name": "powershell.exe", "command_line": raw_json, "pid": 8288},
+            windows={
+                "event_id": 403,
+                "event_data": {
+                    "payload_columns": {
+                        "PayloadData1": (
+                            "HostApplication=C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe "
+                            "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "
+                            "C:\\Users\\analyst\\Documents\\KaironLab01\\run_key_payload.ps1"
+                        ),
+                        "Payload": raw_json,
+                    },
+                },
+            },
+        ),
+    )
+
+    assert len(items) == 1
+    assert items[0]["command"].startswith("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+    assert "run_key_payload.ps1" in items[0]["command"]
+    assert not items[0]["command"].startswith("{")
+    assert items[0]["process"]["command_line"] == ""
+
+
 def test_dedupes_same_process_guid_and_preserves_supporting_events() -> None:
     first = command_history._commands_from_event(
         "case-1",

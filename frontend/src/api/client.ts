@@ -2233,6 +2233,7 @@ export type CommandHistoryItem = {
   risk_reasons: string[];
   confidence: "high" | "medium" | "low";
   dedupe_key?: string;
+  raw_payload?: string | null;
   supporting_events: CommandHistorySupportingEvent[];
   linked_search_url: string;
 };
