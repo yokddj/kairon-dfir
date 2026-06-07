@@ -1500,12 +1500,18 @@ function formatReportStatus(status: string | null | undefined) {
   const retryArtifactsDone = Number(retryRunData.artifacts_done ?? (["completed", "completed_with_errors", "failed"].includes(String(latestRetryRun?.status ?? "")) ? retryArtifactsTotal : 0));
   const retryProgressPct = retryArtifactsTotal > 0 ? Math.round((retryArtifactsDone / retryArtifactsTotal) * 100) : Number(latestRetryRun?.progress ?? 0);
   const retryActive = latestRetryRun ? ["queued", "running", "pending", "processing"].includes(String(latestRetryRun.status).toLowerCase()) : false;
-  const progressTitle = retryActive ? "Retrying failed artifacts" : activeIndexingJob ? "Processing" : "Processing summary";
-  const progressPercent = retryActive ? retryProgressPct : displayCounts.progressPct;
-  const progressArtifactsDone = retryActive ? retryArtifactsDone : displayCounts.artifactsDone;
+  const latestRetryRecoveredCount = Number(retryRunData.recovered_count ?? 0);
+  const latestRetryStillFailedCount = Number(retryRunData.still_failed_count ?? latestRetryRun?.artifacts_failed ?? 0);
+  const latestRetrySkippedCount = Number(retryRunData.skipped_count ?? 0);
+  const finalProcessingStatus = realFailureCount > 0 ? "Completed with parser errors" : minimalStatusLabel === "Ready with warnings" ? "Ready with warnings" : "Ready for investigation";
+  const terminalProcessingResult = !activeIndexingJob && !retryActive;
+  const terminalArtifactsDone = realFailureCount === 0 && displayCounts.artifactsTotal > 0 ? displayCounts.artifactsTotal : displayCounts.artifactsDone;
+  const progressTitle = retryActive ? "Retrying failed artifacts" : activeIndexingJob ? "Processing" : "Processing result";
+  const progressPercent = retryActive ? retryProgressPct : activeIndexingJob ? displayCounts.progressPct : realFailureCount === 0 ? 100 : displayCounts.progressPct;
+  const progressArtifactsDone = retryActive ? retryArtifactsDone : terminalProcessingResult ? terminalArtifactsDone : displayCounts.artifactsDone;
   const progressArtifactsTotal = retryActive ? retryArtifactsTotal : displayCounts.artifactsTotal;
-  const progressRecordsRead = retryActive ? Number(latestRetryRun?.records_read ?? 0) : Number(activeRun?.records_read ?? currentArtifactRecordsRead ?? tailRecordsRead ?? data?.metadata_json?.records_read ?? 0);
-  const progressRecordsIndexed = retryActive ? Number(latestRetryRun?.records_indexed ?? latestRetryRun?.events_indexed ?? 0) : Number(activeRun?.records_indexed ?? currentArtifactRecordsIndexed ?? tailRecordsIndexed ?? displayCounts.indexedDocs ?? 0);
+  const progressRecordsRead = retryActive ? Number(latestRetryRun?.records_read ?? 0) : activeIndexingJob ? Number(activeRun?.records_read ?? currentArtifactRecordsRead ?? tailRecordsRead ?? data?.metadata_json?.records_read ?? 0) : Number(latestRetryRun?.records_read ?? 0);
+  const progressRecordsIndexed = retryActive ? Number(latestRetryRun?.records_indexed ?? latestRetryRun?.events_indexed ?? 0) : activeIndexingJob ? Number(activeRun?.records_indexed ?? currentArtifactRecordsIndexed ?? tailRecordsIndexed ?? displayCounts.indexedDocs ?? 0) : Number(latestRetryRun?.records_indexed ?? latestRetryRun?.events_indexed ?? 0);
   const progressCurrentArtifact = retryActive ? latestRetryRun?.current_artifact : currentDisplayArtifact;
   const minimalCategoryOptions = [
     { id: "evtx", label: "Event logs" },
@@ -1629,32 +1635,45 @@ function formatReportStatus(status: string | null | undefined) {
         <section id="indexing-progress" data-testid="evidence-progress-primary" className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div>
-              <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Processing progress</p>
+              <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">{terminalProcessingResult ? "Processing result" : "Processing progress"}</p>
               <h3 className="mt-2 text-2xl font-semibold text-ink">{progressTitle}</h3>
-              <p className="mt-1 text-sm text-muted">Current step: {retryActive ? String(latestRetryRun?.status ?? "retry") : formatIndexingPhaseForDisplay(displayCounts.phase)}</p>
-              {progressCurrentArtifact ? <p className="mt-1 max-w-3xl truncate text-sm text-muted" title={progressCurrentArtifact}>Current artifact: {progressCurrentArtifact}</p> : null}
+              {terminalProcessingResult ? (
+                <p className="mt-1 text-sm text-muted">
+                  {finalProcessingStatus}
+                  {latestRetryRun && latestRetryRecoveredCount > 0 ? ` · ${latestRetryRecoveredCount} failed artifact${latestRetryRecoveredCount === 1 ? " was" : "s were"} recovered by retry.` : ""}
+                  {realFailureCount === 0 && retryCandidateIds.length === 0 ? " No retryable failures remain." : ""}
+                </p>
+              ) : (
+                <>
+                  <p className="mt-1 text-sm text-muted">Current step: {retryActive ? String(latestRetryRun?.status ?? "retry") : formatIndexingPhaseForDisplay(displayCounts.phase)}</p>
+                  {progressCurrentArtifact ? <p className="mt-1 max-w-3xl truncate text-sm text-muted" title={progressCurrentArtifact}>Current artifact: {progressCurrentArtifact}</p> : null}
+                </>
+              )}
             </div>
-            <div className="rounded-3xl border border-accent/30 bg-accent/10 px-6 py-4 text-right">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Progress</p>
-              <p className="mt-1 text-4xl font-semibold text-ink">{progressPercent}%</p>
-            </div>
+            {!terminalProcessingResult ? (
+              <div className="rounded-3xl border border-accent/30 bg-accent/10 px-6 py-4 text-right">
+                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Progress</p>
+                <p className="mt-1 text-4xl font-semibold text-ink">{progressPercent}%</p>
+              </div>
+            ) : null}
           </div>
           <div className="mt-5 grid gap-3 md:grid-cols-3 xl:grid-cols-7">
             <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifacts</p><p className="mt-1 text-sm text-ink">{progressArtifactsDone} / {progressArtifactsTotal}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Records read</p><p className="mt-1 text-sm text-ink">{progressRecordsRead.toLocaleString()}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Records indexed</p><p className="mt-1 text-sm text-ink">{progressRecordsIndexed.toLocaleString()}</p></div>
+            {!terminalProcessingResult || latestRetryRun ? <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{retryActive || terminalProcessingResult ? "Retry records read" : "Records read"}</p><p className="mt-1 text-sm text-ink">{progressRecordsRead.toLocaleString()}</p></div> : null}
+            {!terminalProcessingResult || latestRetryRun ? <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{retryActive || terminalProcessingResult ? "Retry records indexed" : "Records indexed"}</p><p className="mt-1 text-sm text-ink">{progressRecordsIndexed.toLocaleString()}</p></div> : null}
             <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Indexed docs</p><p className="mt-1 text-sm text-ink">{displayCounts.indexedDocs.toLocaleString()}</p></div>
             <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Elapsed</p><p className="mt-1 text-sm text-ink">{formatDuration(retryActive ? latestRetryRun?.elapsed_seconds : displayedElapsedSeconds)}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Heartbeat</p><p className="mt-1 text-sm text-ink">{retryActive ? formatHeartbeatAge(latestRetryRun?.heartbeat_at ?? null) : lastProgressAgeLabel}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Run ID</p><p className="mt-1 truncate text-sm text-ink" title={retryActive ? latestRetryRun?.run_id : latestRun?.run_id}>{retryActive ? latestRetryRun?.run_id ?? "-" : latestRun?.run_id ?? "-"}</p></div>
+            {!terminalProcessingResult ? <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Heartbeat</p><p className="mt-1 text-sm text-ink">{retryActive ? formatHeartbeatAge(latestRetryRun?.heartbeat_at ?? null) : lastProgressAgeLabel}</p></div> : null}
+            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{terminalProcessingResult ? "Last run" : "Run ID"}</p><p className="mt-1 truncate text-sm text-ink" title={retryActive ? latestRetryRun?.run_id : latestRun?.run_id}>{retryActive ? latestRetryRun?.run_id ?? "-" : latestRetryRun?.run_id ?? latestRun?.run_id ?? "-"}</p></div>
+            {terminalProcessingResult ? <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Recovered by retry</p><p className="mt-1 text-sm text-mint">{latestRetryRecoveredCount}</p></div> : null}
           </div>
           {latestRetryRun ? (
             <div className="mt-4 rounded-2xl border border-line bg-abyss/60 px-4 py-3 text-sm text-muted">
-              <p className="font-semibold text-ink">{retryActive ? "Retry in progress" : "Latest retry outcome"}</p>
+              <p className="font-semibold text-ink">{retryActive ? "Retry in progress" : latestRetryRecoveredCount > 0 && latestRetryStillFailedCount === 0 ? "Retry completed successfully" : "Latest retry outcome"}</p>
               <p className="mt-1">
-                Recovered {Number(retryRunData.recovered_count ?? 0)} · Still failing {Number(retryRunData.still_failed_count ?? latestRetryRun.artifacts_failed ?? 0)} · Skipped {Number(retryRunData.skipped_count ?? 0)}
+                Recovered {latestRetryRecoveredCount} · Still failing {latestRetryStillFailedCount} · Skipped {latestRetrySkippedCount}
               </p>
-              {retryRunData.final_message ? <p className="mt-1 text-muted">{retryRunData.final_message}</p> : null}
+              {retryRunData.final_message ? <p className="mt-1 text-muted">{retryRunData.final_message}</p> : latestRetryRecoveredCount === 0 && latestRetryStillFailedCount === 0 ? <p className="mt-1 text-muted">No retryable failures remain.</p> : null}
             </div>
           ) : null}
         </section>

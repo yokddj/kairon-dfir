@@ -464,7 +464,7 @@ describe("EvidenceDetail minimal processing UX", () => {
 
     expect(await screen.findByText("collection.zip")).toBeInTheDocument();
     expect(screen.getByText("Choose what to parse")).toBeInTheDocument();
-    expect(screen.getByText("Processing progress")).toBeInTheDocument();
+    expect(screen.getAllByText("Processing result").length).toBeGreaterThan(0);
     expect(screen.getByText("Real failures / retry")).toBeInTheDocument();
     expect(screen.getByText("Investigation actions")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete evidence" })).toBeInTheDocument();
@@ -566,6 +566,107 @@ describe("EvidenceDetail minimal processing UX", () => {
     expect((await screen.findAllByText("Retrying failed artifacts")).length).toBeGreaterThan(0);
     expect(screen.getByText("0 / 1")).toBeInTheDocument();
     expect(screen.getAllByText("Store Operational.evtx").length).toBeGreaterThan(0);
+  });
+
+  it("renders final retry recovery as a processing result without stale ingest progress", async () => {
+    setupMinimalEvidenceDetail({
+      evidence: {
+        ingest_status: "completed_with_errors",
+        display_status: "completed_with_errors",
+        investigation_ready: true,
+        metadata_json: {
+          ...evidencePayload.metadata_json,
+          display_status: "completed_with_errors",
+          investigation_ready: true,
+          current_phase: "completed_with_errors",
+          progress_pct: 95,
+          artifacts_total: 866,
+          artifacts_done: 865,
+        },
+      },
+      problematicArtifacts: {
+        evidence_id: "evidence-1",
+        summary: {
+          problematic_count: 284,
+          failed: 0,
+          skipped_empty: 283,
+          retryable: 0,
+          indexed_with_warning: 0,
+          recovered_count: 1,
+          unresolved_count: 0,
+          data_loss_expected_count: 0,
+        },
+        items: [
+          {
+            artifact_id: "empty-evtx",
+            name: "Empty Operational.evtx",
+            source_path: "Empty Operational.evtx",
+            artifact_type: "windows_event",
+            parser: "evtx_raw",
+            status: "skipped_empty",
+            effective_status: "skipped_empty",
+            data_loss_expected: false,
+            current_data_loss_expected: false,
+            retryable: false,
+            records_read: 0,
+            records_indexed: 0,
+            effective_records_read: 0,
+            effective_records_indexed: 0,
+          },
+        ],
+      },
+      retryCandidates: {
+        evidence_id: "evidence-1",
+        summary: { skipped_empty: 283, retryable: 0, data_loss_expected_count: 0 },
+        retry_candidates: [],
+        retry_candidate_count: 0,
+        artifact_ids: [],
+        affected_families: {},
+        excluded: { skipped_empty: 283, warnings_fully_indexed: 0, other_non_retryable: 0 },
+      },
+      runs: [
+        {
+          run_id: "retry-1",
+          run_type: "artifact_retry",
+          mode: "higher_timeout",
+          status: "completed",
+          phase: "retry_completed_recovered",
+          progress: 100,
+          artifacts_total: 1,
+          artifacts_done: 1,
+          artifacts_failed: 0,
+          records_read: 3217,
+          records_indexed: 3217,
+          events_indexed: 3217,
+          recovered_count: 1,
+          still_failed_count: 0,
+          skipped_count: 0,
+          final_message: "Recovered",
+          retry_of_artifact_ids: ["store-operational"],
+        },
+        {
+          run_id: "ingest-1",
+          run_type: "ingest",
+          status: "completed_with_errors",
+          phase: "completed_with_errors",
+          progress: 95,
+          artifacts_total: 866,
+          artifacts_done: 865,
+          artifacts_failed: 1,
+        },
+      ],
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("Ready with warnings")).toBeInTheDocument();
+    expect(screen.getAllByText("Processing result").length).toBeGreaterThan(0);
+    expect(screen.getByText("Retry completed successfully")).toBeInTheDocument();
+    expect(screen.getByText(/Recovered 1 · Still failing 0 · Skipped 0/)).toBeInTheDocument();
+    expect(screen.getByText("No real parser failures.")).toBeInTheDocument();
+    expect(screen.queryByText(/Current step: Indexing completed with errors/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("95%")).not.toBeInTheDocument();
+    expect(screen.getByText("866 / 866")).toBeInTheDocument();
   });
 
   it("requires DELETE before evidence deletion is submitted", async () => {

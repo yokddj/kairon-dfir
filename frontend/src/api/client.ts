@@ -439,6 +439,13 @@ export type EvidenceRun = {
   selected_by_parser?: Record<string, number>;
   parsed_by_artifact_type?: Record<string, number>;
   failed_artifacts_count?: number | null;
+  retry_candidates_count?: number | null;
+  retry_of_artifact_ids?: string[];
+  artifact_ids?: string[];
+  recovered_count?: number | null;
+  still_failed_count?: number | null;
+  skipped_count?: number | null;
+  final_message?: string | null;
   retry_profile?: Record<string, unknown>;
   items?: Array<Record<string, unknown>>;
 };
