@@ -173,7 +173,7 @@ from app.services.usable_ingest import (
     parser_capability_profile,
     should_process_artifact_in_mode,
 )
-from app.services.evidence_runs import merge_evidence_metadata, start_ingest_run, sync_ingest_run_from_metadata, upsert_ingest_run
+from app.services.evidence_runs import list_evidence_runs, merge_evidence_metadata, start_ingest_run, sync_ingest_run_from_metadata, upsert_ingest_run
 from app.services.ingest_plan import build_plan, build_reprocess_preview, persist_plan, rebuild_ingest_plan_from_last_run
 from app.services.correlation_engine import run_correlation_engine
 from app.workers.tasks import (
@@ -14400,6 +14400,45 @@ def test_merge_evidence_metadata_preserves_artifact_retry_runs() -> None:
     assert len(merged["artifact_retry_runs"]) == 1
     assert merged["artifact_retry_runs"][0]["run_id"] == "retry-1"
     assert {item["run_id"] for item in merged["ingest_runs"]} == {"ingest-1", "ingest-2"}
+
+
+def test_list_evidence_runs_derives_retry_progress_from_items() -> None:
+    from app.services import evidence_runs as evidence_runs_service
+
+    runs = evidence_runs_service.list_evidence_runs(
+        {
+            "artifact_retry_runs": [
+                {
+                    "run_id": "retry-1",
+                    "status": "completed",
+                    "mode": "higher_timeout",
+                    "started_at": "2026-06-06T21:51:19+00:00",
+                    "finished_at": "2026-06-06T21:55:58+00:00",
+                    "items": [
+                        {
+                            "artifact_id": "artifact-1",
+                            "name": "Store Operational.evtx",
+                            "status": "parsed_with_warning",
+                            "outcome": "recovered_more_data",
+                            "records_read": 3217,
+                            "records_indexed": 3217,
+                        }
+                    ],
+                }
+            ]
+        }
+    )
+    retry_run = runs[0]
+    assert retry_run["run_type"] == "artifact_retry"
+    assert retry_run["artifacts_total"] == 1
+    assert retry_run["artifacts_done"] == 1
+    assert retry_run["records_read"] == 3217
+    assert retry_run["records_indexed"] == 3217
+    assert retry_run["events_indexed"] == 3217
+    assert retry_run["progress"] == 100
+    assert retry_run["recovered_count"] == 1
+    assert retry_run["still_failed_count"] == 0
+    assert retry_run["phase"] == "retry_completed_recovered"
 
 
 def test_sync_ingest_run_update_does_not_drop_artifact_retry_runs() -> None:
