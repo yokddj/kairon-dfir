@@ -148,6 +148,27 @@ function executionArtifactInterpretation(item: Record<string, unknown>): string 
   return String(execution.interpretation ?? appcompat.interpretation ?? "-");
 }
 
+function powershellKeyEntity(item: Record<string, unknown>): string {
+  const powershell = (item.powershell as Record<string, unknown>) ?? {};
+  const process = (item.process as Record<string, unknown>) ?? {};
+  const event = (item.event as Record<string, unknown>) ?? {};
+  return String(
+    item.key_entity
+      ?? powershell.script_path
+      ?? powershell.command
+      ?? powershell.host_application
+      ?? process.command_line
+      ?? event.type
+      ?? "-",
+  );
+}
+
+function powershellSnippet(item: Record<string, unknown>): string {
+  const powershell = (item.powershell as Record<string, unknown>) ?? {};
+  const event = (item.event as Record<string, unknown>) ?? {};
+  return String(powershell.command_preview ?? powershell.command ?? event.message ?? "-");
+}
+
 export function resolveView(view: EventView, items: Record<string, unknown>[]): EventView {
   if (view !== "auto") return view;
   const first = items[0];
@@ -290,7 +311,8 @@ function getColumns(view: EventView): Column[] {
         user,
         { key: "source", label: "Source", render: (item) => String(((item.powershell as Record<string, unknown>) ?? {}).artifact_type ?? ((item.artifact as Record<string, unknown>) ?? {}).parser ?? "-") },
         { key: "type", label: "Type", render: (item) => String(((item.event as Record<string, unknown>) ?? {}).type ?? "-") },
-        { key: "command_preview", label: "Command Preview", render: (item) => String(((item.powershell as Record<string, unknown>) ?? {}).command_preview ?? ((item.event as Record<string, unknown>) ?? {}).message ?? "-") },
+        { key: "key_entity", label: "Key Entity", render: (item) => powershellKeyEntity(item) },
+        { key: "command_preview", label: "Snippet", render: (item) => powershellSnippet(item) },
         { key: "urls_domains", label: "URLs / Domains", render: (item) => String((((item.powershell as Record<string, unknown>) ?? {}).urls as string[] | undefined)?.[0] ?? (((item.powershell as Record<string, unknown>) ?? {}).domains as string[] | undefined)?.[0] ?? "-") },
         { key: "indicators", label: "Indicators", render: (item) => String((((item.powershell as Record<string, unknown>) ?? {}).indicators as string[] | undefined)?.join(", ") ?? "-") },
         tags,
@@ -734,6 +756,9 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
               const id = String(item.id ?? item.event_id);
               const file = (item.file as Record<string, unknown>) ?? {};
               const process = (item.process as Record<string, unknown>) ?? {};
+              const powershell = (item.powershell as Record<string, unknown>) ?? {};
+              const keyEntity = String(item.key_entity ?? powershellKeyEntity(item) ?? "");
+              const fullCommand = String(powershell.command ?? process.command_line ?? "");
               return (
                 <Fragment key={id}>
                   <tr key={id} className="hover:bg-white/5">
@@ -745,7 +770,7 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                     {columns.map((column) => (
                       <td key={`${id}-${column.key}`} className="max-w-[320px] px-4 py-3 align-top">
                         <button type="button" onClick={() => setOpenId(openId === id ? null : id)} className="w-full text-left">
-                          <span className="block whitespace-pre-wrap break-words text-ink" title={column.key === "timestamp" ? String(item["@timestamp"] ?? "") : column.render(item)}>
+                          <span className={`block whitespace-pre-wrap break-words text-ink ${column.key === "key_entity" || column.key === "command_preview" ? "max-h-12 overflow-hidden font-mono text-xs leading-4" : ""}`} title={column.key === "timestamp" ? String(item["@timestamp"] ?? "") : column.render(item)}>
                             {column.key === "timestamp" ? formatTimestamp(item["@timestamp"], effectiveTimezone) : column.render(item)}
                           </span>
                         </button>
@@ -759,6 +784,8 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                           <div className="flex flex-wrap gap-2">
                             {file.path ? <button type="button" onClick={() => void copyToClipboard(String(file.path))} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy path</button> : null}
                             {process.command_line ? <button type="button" onClick={() => void copyToClipboard(String(process.command_line))} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy command line</button> : null}
+                            {fullCommand && fullCommand !== process.command_line ? <button type="button" onClick={() => void copyToClipboard(fullCommand)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy PowerShell command</button> : null}
+                            {keyEntity && keyEntity !== "-" ? <button type="button" onClick={() => void copyToClipboard(keyEntity)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy key entity</button> : null}
                             {file.sha256 ? <button type="button" onClick={() => void copyToClipboard(String(file.sha256))} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy hash</button> : null}
                             {item.event_id ? <button type="button" onClick={() => void copyToClipboard(String(item.event_id))} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy event id</button> : null}
                             {onViewProcessTree && hasProcessTreeContext(item) ? <button type="button" onClick={() => onViewProcessTree(item)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">View process tree</button> : null}
