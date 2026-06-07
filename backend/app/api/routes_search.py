@@ -21,6 +21,7 @@ from app.core.database import SessionLocal, get_db
 from app.core.opensearch import count_documents, get_events_index, get_index_health, get_opensearch_client, index_exists, is_index_queryable, resolve_aggregatable_field
 from app.models.evidence import Evidence
 from app.schemas.event import SearchRequest, SearchResponse, SiemRequest
+from app.ingest.normalization.field_quality import normalize_event_fields
 from app.ingest.powershell.entity_normalization import normalize_powershell_entities
 from app.services.host_identity import expand_host_filter, normalize_host_alias, resolve_canonical_host
 from app.services.search_service import build_search_v2_params, event_context as event_context_v2, quick_filters as search_quick_filters, search_around_event as search_around_event_v2, search_case_v2, search_related_to_finding as search_related_to_finding_v2
@@ -1077,8 +1078,8 @@ def run_search(payload: SearchRequest, timeline: bool = False) -> SearchResponse
 def _normalize_search_item(item: dict) -> dict:
     artifact = item.get("artifact") if isinstance(item.get("artifact"), dict) else {}
     if str(artifact.get("type") or "").lower() == "powershell":
-        return normalize_powershell_entities(item)
-    return item
+        item = normalize_powershell_entities(item)
+    return normalize_event_fields(item)
 
 
 def build_siem_query(payload: SiemRequest) -> dict:
