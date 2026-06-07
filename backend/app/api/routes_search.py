@@ -21,6 +21,7 @@ from app.core.database import SessionLocal, get_db
 from app.core.opensearch import count_documents, get_events_index, get_index_health, get_opensearch_client, index_exists, is_index_queryable, resolve_aggregatable_field
 from app.models.evidence import Evidence
 from app.schemas.event import SearchRequest, SearchResponse, SiemRequest
+from app.ingest.powershell.entity_normalization import normalize_powershell_entities
 from app.services.host_identity import expand_host_filter, normalize_host_alias, resolve_canonical_host
 from app.services.search_service import build_search_v2_params, event_context as event_context_v2, quick_filters as search_quick_filters, search_around_event as search_around_event_v2, search_case_v2, search_related_to_finding as search_related_to_finding_v2
 
@@ -1056,7 +1057,7 @@ def run_search(payload: SearchRequest, timeline: bool = False) -> SearchResponse
         total_relation = "eq"
     total_pages = (total + payload.page_size - 1) // payload.page_size if total else 0
     total_pages_visible = min(total_pages, result_window_limit // payload.page_size if payload.page_size else 0)
-    items = [{"id": hit["_id"], **hit["_source"]} for hit in hits]
+    items = [_normalize_search_item({"id": hit["_id"], **hit["_source"]}) for hit in hits]
     return SearchResponse(
         total=total,
         total_relation=total_relation,
@@ -1071,6 +1072,13 @@ def run_search(payload: SearchRequest, timeline: bool = False) -> SearchResponse
         result_profile=_build_result_profile(payload, items),
         items=items,
     )
+
+
+def _normalize_search_item(item: dict) -> dict:
+    artifact = item.get("artifact") if isinstance(item.get("artifact"), dict) else {}
+    if str(artifact.get("type") or "").lower() == "powershell":
+        return normalize_powershell_entities(item)
+    return item
 
 
 def build_siem_query(payload: SiemRequest) -> dict:

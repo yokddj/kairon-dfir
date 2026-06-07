@@ -21,6 +21,7 @@ from app.ingest.powershell.helpers import (
     preview_command,
     try_decode_powershell_encoded_command,
 )
+from app.ingest.powershell.entity_normalization import normalize_powershell_entities
 
 
 def normalize_powershell_row(document: dict, row: dict, artifact_meta: dict) -> dict:
@@ -313,4 +314,4 @@ def normalize_powershell_row(document: dict, row: dict, artifact_meta: dict) -> 
     document["_preserve_risk_score"] = True
     if not timestamp:
         document["timestamp_precision"] = timestamp_precision
-    return document
+    return normalize_powershell_entities(document)
