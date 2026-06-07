@@ -330,7 +330,7 @@ def _is_mft_candidate(entry: dict[str, Any]) -> bool:
     lowered_path = " ".join(str(value or "").lower() for value in path_values)
     if artifact_type in {"mft", "usn"} or parser in {"mftecmd", "mftecmd_csv", "mft_csv", "mft_json", "mft_jsonl", "mft_raw"}:
         return True
-    return any(token in lowered_path for token in ("$mft", "mftecmd", "_mft.csv", "ntfs_raw"))
+    return any(token in lowered_path for token in ("$mft", "$usnjrnl", "$logfile", "mftecmd", "_mft.csv", "ntfs_raw"))
 
 
 def _mft_backend_available() -> bool:
@@ -340,6 +340,34 @@ def _mft_backend_available() -> bool:
         return bool(detect_mftecmd_backend().get("available"))
     except Exception:
         return False
+
+
+def _mft_candidate_size(mft_candidates: list[dict[str, Any]], *tokens: str) -> int:
+    lowered_tokens = [token.lower() for token in tokens if token]
+    best_size = 0
+    for entry in mft_candidates:
+        path_blob = " ".join(
+            str(entry.get(key) or "")
+            for key in ("name", "display_name", "source_path", "relative_path", "path")
+        ).lower()
+        if all(token in path_blob for token in lowered_tokens):
+            try:
+                best_size = max(best_size, int(entry.get("size") or 0))
+            except (TypeError, ValueError):
+                continue
+    return best_size
+
+
+def _mft_candidate_present(mft_candidates: list[dict[str, Any]], *tokens: str) -> bool:
+    lowered_tokens = [token.lower() for token in tokens if token]
+    for entry in mft_candidates:
+        path_blob = " ".join(
+            str(entry.get(key) or "")
+            for key in ("name", "display_name", "source_path", "relative_path", "path")
+        ).lower()
+        if all(token in path_blob for token in lowered_tokens):
+            return True
+    return False
 
 
 def _safe_count_mft_docs(item: Evidence) -> int:
@@ -410,6 +438,11 @@ def build_mft_diagnostic(item: Evidence, db: Session) -> dict[str, Any]:
     backend_available = _mft_backend_available()
     present = bool(mft_candidates)
     selected = indexed_docs > 0 or bool(selected_candidates) or any(str(key).lower() in {"mft", "mftecmd", "ntfs_raw"} for key in plan_selected)
+    raw_mft_found = _mft_candidate_present(mft_candidates, "$mft")
+    raw_mft_size = _mft_candidate_size(mft_candidates, "$mft")
+    usn_found = _mft_candidate_present(mft_candidates, "usnjrnl", "$j") or _mft_candidate_present(mft_candidates, "usn")
+    usn_size = _mft_candidate_size(mft_candidates, "usnjrnl", "$j") or _mft_candidate_size(mft_candidates, "usn")
+    mftecmd_output_found = any("mftecmd" in " ".join(str(entry.get(key) or "") for key in ("name", "display_name", "source_path", "relative_path", "path", "parser")).lower() for entry in mft_candidates)
 
     skipped_reason = ""
     if indexed_docs > 0:
@@ -441,6 +474,18 @@ def build_mft_diagnostic(item: Evidence, db: Session) -> dict[str, Any]:
     full_metadata = dict(metadata.get("mft_full") or {})
     full_is_current = str(metadata.get("mft_index_mode") or "").lower() == "full"
     current_records_total = metadata.get("mft_records_total") if full_is_current else mft_summary.get("records_total")
+    if not full_is_current:
+        summary_totals = [
+            int(mft_summary.get("records_total") or 0),
+            int(metadata.get("mft_records_total") or 0),
+        ]
+        for previous_run in metadata.get("mft_summary_runs") or []:
+            if isinstance(previous_run, dict):
+                try:
+                    summary_totals.append(int(previous_run.get("records_total") or 0))
+                except (TypeError, ValueError):
+                    pass
+        current_records_total = max(summary_totals or [0])
     current_records_indexed = metadata.get("mft_records_indexed") if full_is_current else mft_summary.get("records_indexed")
     current_records_skipped = metadata.get("mft_records_skipped") if full_is_current else mft_summary.get("records_skipped")
     current_elapsed_seconds = metadata.get("mft_elapsed_seconds") if full_is_current else mft_summary.get("elapsed_seconds")
@@ -448,10 +493,40 @@ def build_mft_diagnostic(item: Evidence, db: Session) -> dict[str, Any]:
     current_selection_strategy = None if full_is_current else mft_summary.get("selection_strategy")
     current_source_hits = {} if full_is_current else dict(mft_summary.get("source_hits") or {})
     current_records_selected = current_records_indexed if full_is_current else (mft_summary.get("records_selected") or mft_summary.get("records_indexed") or indexed_docs)
+    mft_summary_status = dict(metadata.get("mft_summary") or {}).get("status") or None
+    mft_full_status = metadata.get("mft_full_status") or (dict(metadata.get("mft_full") or {}).get("status") or "not_indexed")
+    if indexed_docs > 0:
+        mft_status_value = "indexed"
+    elif str(mft_summary_status or "").lower() in {"queued", "running"} or str(mft_full_status or "").lower() in {"queued", "running"}:
+        mft_status_value = "indexing"
+    elif str(mft_summary_status or "").lower() == "failed" or str(mft_full_status or "").lower() == "failed":
+        mft_status_value = "failed"
+    elif not present:
+        mft_status_value = "not_present"
+    elif not backend_available:
+        mft_status_value = "tooling_missing"
+    else:
+        mft_status_value = "available_on_demand"
+    mft_actions = []
+    if mft_status_value in {"available_on_demand", "indexed", "failed"} and backend_available:
+        mft_actions = ["index_mft_summary", "index_full_mft"]
 
     return {
         "evidence_id": item.id,
         "case_id": item.case_id,
+        "mft_status": {
+            "available": bool(present and backend_available),
+            "status": mft_status_value,
+            "raw_mft_found": raw_mft_found,
+            "raw_mft_size_bytes": raw_mft_size,
+            "usn_found": usn_found,
+            "usn_size_bytes": usn_size,
+            "mftecmd_output_found": mftecmd_output_found,
+            "indexed_docs": indexed_docs,
+            "tool_available": backend_available,
+            "recommended_mode": "summary" if present and backend_available and indexed_docs <= 0 else "full" if indexed_docs > 0 else "none",
+            "actions": mft_actions,
+        },
         "mft_present_in_evidence": present,
         "mft_detected_by_inventory": bool(mft_candidates),
         "mft_selected_for_indexing": selected,
@@ -470,9 +545,9 @@ def build_mft_diagnostic(item: Evidence, db: Session) -> dict[str, Any]:
         "mft_selection_strategy": current_selection_strategy,
         "mft_source_hits": current_source_hits,
         "mft_records_selected": int(current_records_selected or indexed_docs or 0),
-        "mft_summary_status": (dict(metadata.get("mft_summary") or {}).get("status") or None),
+        "mft_summary_status": mft_summary_status,
         "mft_summary_records_indexed": int((dict(metadata.get("mft_summary") or {}).get("records_indexed") or 0)),
-        "mft_full_status": metadata.get("mft_full_status") or (dict(metadata.get("mft_full") or {}).get("status") or "not_indexed"),
+        "mft_full_status": mft_full_status,
         "mft_full_records_total": int(metadata.get("mft_full_records_total") or (dict(metadata.get("mft_full") or {}).get("records_total") or 0)),
         "mft_full_records_indexed": int(metadata.get("mft_full_records_indexed") or (dict(metadata.get("mft_full") or {}).get("records_indexed") or 0)),
         "mft_full_started_at": metadata.get("mft_full_started_at") or (dict(metadata.get("mft_full") or {}).get("started_at")),

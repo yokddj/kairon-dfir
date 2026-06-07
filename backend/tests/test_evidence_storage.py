@@ -268,6 +268,11 @@ def test_mft_diagnostic_detects_present_but_not_indexed_mft(monkeypatch):
     assert diagnostic["mft_skipped_reason"] == "available_on_demand"
     assert diagnostic["mft_backend_available"] is True
     assert "scoped MFT summary or full MFT indexing" in diagnostic["recommended_action"]
+    assert diagnostic["mft_status"]["available"] is True
+    assert diagnostic["mft_status"]["status"] == "available_on_demand"
+    assert diagnostic["mft_status"]["raw_mft_found"] is True
+    assert diagnostic["mft_status"]["tool_available"] is True
+    assert diagnostic["mft_status"]["actions"] == ["index_mft_summary", "index_full_mft"]
 
 
 def test_mft_diagnostic_reports_absent_cleanly(monkeypatch):
@@ -294,6 +299,8 @@ def test_mft_diagnostic_reports_absent_cleanly(monkeypatch):
 
     assert diagnostic["mft_present_in_evidence"] is False
     assert diagnostic["mft_skipped_reason"] == "not_present"
+    assert diagnostic["mft_status"]["status"] == "not_present"
+    assert diagnostic["mft_status"]["available"] is False
     assert diagnostic["recommended_action"].startswith("No action needed")
 
 
