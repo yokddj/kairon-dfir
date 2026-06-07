@@ -416,6 +416,8 @@ def build_mft_diagnostic(item: Evidence, db: Session) -> dict[str, Any]:
         skipped_reason = ""
     elif not present:
         skipped_reason = "not_present"
+    elif backend_available:
+        skipped_reason = "available_on_demand"
     elif disabled_candidates:
         first = disabled_candidates[0]
         status = str(first.get("status") or "detected_not_indexed").strip()
@@ -429,8 +431,10 @@ def build_mft_diagnostic(item: Evidence, db: Session) -> dict[str, Any]:
 
     if indexed_docs > 0:
         recommended_action = "Open MFT / Filesystem view."
+    elif present and backend_available:
+        recommended_action = "Raw $MFT is present and MFTECmd is available. Use a scoped MFT summary or full MFT indexing action; it was not indexed in the main workflow."
     elif present:
-        recommended_action = "Use MFT Summary Indexing with MFTECmd in a future scoped job; raw NTFS artifacts are preserved but were not indexed in the main workflow."
+        recommended_action = "Raw NTFS artifacts are present, but MFT indexing requires an available MFTECmd backend."
     else:
         recommended_action = "No action needed unless another evidence source contains MFT output."
 
