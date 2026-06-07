@@ -991,9 +991,9 @@ describe.skip("EvidenceDetail reprocess UX", () => {
       mft_detected_by_inventory: true,
       mft_selected_for_indexing: false,
       mft_indexed_docs: 0,
-      mft_skipped_reason: "not_selected",
+      mft_skipped_reason: "available_on_demand",
       mft_backend_available: true,
-      recommended_action: "Use MFT Summary Indexing with MFTECmd in a future scoped job.",
+      recommended_action: "Raw $MFT is present and MFTECmd is available. Use a scoped MFT summary or full MFT indexing action.",
       detected_candidates: [
         { name: "$MFT", source_path: "HOSTA/C/$MFT", artifact_type: "ntfs_raw", parser: "ntfs_raw", status: "unsupported", reason: "not_selected", size: 252182528 },
       ],

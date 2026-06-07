@@ -1501,7 +1501,7 @@ def _detect_raw_candidate(entry: ContainerEntry, entry_map: dict[str, ContainerE
     if Path(entry.path).suffix.lower() in TEXT_SUFFIXES:
         return _raw_candidate(entry, category="other", artifact_type="text_raw", reason="Detected text artifact candidate. Parser not implemented yet.", container_path=container_path, container_type=container_type)
     if any(token in lower_relative for token in ["$extend/$usnjrnl", "$mft", "$logfile"]):
-        return _raw_candidate(entry, category="filesystem", artifact_type="ntfs_raw", reason="Detected NTFS raw file. Use MFTECmd output for now.", container_path=container_path, container_type=container_type)
+        return _raw_candidate(entry, category="filesystem", artifact_type="ntfs_raw", reason="Detected NTFS raw file. Use scoped MFT/USN indexing when needed.", container_path=container_path, container_type=container_type)
     if any(token in lower_relative for token in ["appcompatcache", "shimcache", "recentfilecache"]):
         return _raw_candidate(entry, category="execution_artifact", artifact_type="shimcache_registry_hive", reason="Detected raw ShimCache/AppCompat artifact. Raw parser not implemented yet. Use AppCompatCacheParser/RECmd parsed CSV for now.", container_path=container_path, container_type=container_type)
     if "windows\\system32\\sru\\" in normalized_lower and lower_name == "srudb.dat":

@@ -265,8 +265,9 @@ def test_mft_diagnostic_detects_present_but_not_indexed_mft(monkeypatch):
     assert diagnostic["mft_detected_by_inventory"] is True
     assert diagnostic["mft_selected_for_indexing"] is False
     assert diagnostic["mft_indexed_docs"] == 0
-    assert diagnostic["mft_skipped_reason"] == "not_selected"
+    assert diagnostic["mft_skipped_reason"] == "available_on_demand"
     assert diagnostic["mft_backend_available"] is True
+    assert "scoped MFT summary or full MFT indexing" in diagnostic["recommended_action"]
 
 
 def test_mft_diagnostic_reports_absent_cleanly(monkeypatch):
