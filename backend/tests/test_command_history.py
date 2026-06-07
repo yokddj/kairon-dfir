@@ -85,12 +85,12 @@ def test_powershell_4104_extracts_script_block() -> None:
 
 def test_powershell_placeholder_command_falls_back_to_host_application_payload() -> None:
     payload = (
-        "Gravedad = Informational, Nombre de host = ConsoleHost, "
-        "Aplicación host = C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe "
+        "Level = Informational, HostName = ConsoleHost, "
+        "HostApplication = C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe "
         "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "
         "C:\\Users\\analyst\\Documents\\KaironLab01\\run_key_payload.ps1, "
-        "Versión del motor = 5.1, Nombre de comando = run_key_payload.ps1, "
-        "Usuario = KAIRON-LAB01\\analyst, Id. de shell = Microsoft.PowerShell,"
+        "EngineVersion = 5.1, Command Name = run_key_payload.ps1, "
+        "User = KAIRON-LAB01\\analyst, ShellId = Microsoft.PowerShell,"
     )
 
     items = command_history._commands_from_event(
@@ -100,11 +100,11 @@ def test_powershell_placeholder_command_falls_back_to_host_application_payload()
             event={"provider": "Microsoft-Windows-PowerShell", "channel": "Microsoft-Windows-PowerShell/Operational"},
             artifact={"type": "powershell", "parser": "powershell_evtx"},
             process={"name": "powershell.exe", "command_line": "0x0", "pid": 8288},
-            user={"name": payload, "sid": "S-1-5-21-1000"},
+            user={"name": payload},
             windows={
                 "event_id": 4103,
                 "event_data": {
-                    "UserId": "S-1-5-21-1000",
+                        "UserId": "KAIRON-LAB01\\analyst",
                     "payload_columns": {
                         "PayloadData1": f"Command Name: {payload}",
                         "PayloadData2": f"Host Application = {payload}",
@@ -122,8 +122,8 @@ def test_powershell_placeholder_command_falls_back_to_host_application_payload()
     assert "run_key_payload.ps1" in item["command"]
     assert item["process"]["command_line"] == ""
     assert item["user"] == "KAIRON-LAB01\\analyst"
-    assert "Aplicación host" in item["raw_payload"]
-    assert "Nombre de comando" not in item["user"]
+    assert "HostApplication" in item["raw_payload"]
+    assert "Command Name" not in item["user"]
 
 
 def test_powershell_placeholder_command_falls_back_to_script_block() -> None:

@@ -150,10 +150,13 @@ function executionArtifactInterpretation(item: Record<string, unknown>): string 
 
 function powershellKeyEntity(item: Record<string, unknown>): string {
   const powershell = (item.powershell as Record<string, unknown>) ?? {};
+  const normalized = (item.powershell_event_normalized as Record<string, unknown>) ?? {};
   const process = (item.process as Record<string, unknown>) ?? {};
   const event = (item.event as Record<string, unknown>) ?? {};
   return String(
-    item.key_entity
+    item.display_key_entity
+      ?? normalized.key_entity
+      ?? item.key_entity
       ?? powershell.script_path
       ?? powershell.command
       ?? powershell.host_application
@@ -165,8 +168,9 @@ function powershellKeyEntity(item: Record<string, unknown>): string {
 
 function powershellSnippet(item: Record<string, unknown>): string {
   const powershell = (item.powershell as Record<string, unknown>) ?? {};
+  const normalized = (item.powershell_event_normalized as Record<string, unknown>) ?? {};
   const event = (item.event as Record<string, unknown>) ?? {};
-  return String(powershell.command_preview ?? powershell.command ?? event.message ?? "-");
+  return String(item.display_snippet ?? normalized.snippet ?? powershell.command_preview ?? powershell.command ?? event.message ?? "-");
 }
 
 export function resolveView(view: EventView, items: Record<string, unknown>[]): EventView {
@@ -207,7 +211,7 @@ function getColumns(view: EventView): Column[] {
   const timestamp = { key: "timestamp", label: "Timestamp", render: (item: Record<string, unknown>) => String(item["@timestamp"] ?? "No timestamp") };
   const severity = { key: "severity", label: "Severity", render: (item: Record<string, unknown>) => String(((item.event as Record<string, unknown>) ?? {}).severity ?? "info") };
   const host = { key: "host", label: "Host", render: (item: Record<string, unknown>) => String(((item.host as Record<string, unknown>) ?? {}).name ?? "-") };
-  const user = { key: "user", label: "User", render: (item: Record<string, unknown>) => String(((item.user as Record<string, unknown>) ?? {}).name ?? "-") };
+  const user = { key: "user", label: "User", render: (item: Record<string, unknown>) => String(item.display_user ?? ((item.user as Record<string, unknown>) ?? {}).name ?? "-") };
   const tags = { key: "tags", label: "Tags", render: (item: Record<string, unknown>) => String(((item.tags as string[]) ?? []).join(", ")) };
   const summary = { key: "summary", label: "Summary", render: (item: Record<string, unknown>) => String(((item.event as Record<string, unknown>) ?? {}).message ?? "") };
 
@@ -757,8 +761,9 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
               const file = (item.file as Record<string, unknown>) ?? {};
               const process = (item.process as Record<string, unknown>) ?? {};
               const powershell = (item.powershell as Record<string, unknown>) ?? {};
-              const keyEntity = String(item.key_entity ?? powershellKeyEntity(item) ?? "");
-              const fullCommand = String(powershell.command ?? process.command_line ?? "");
+              const normalized = (item.powershell_event_normalized as Record<string, unknown>) ?? {};
+              const keyEntity = powershellKeyEntity(item);
+              const fullCommand = String(item.display_command ?? normalized.command ?? powershell.command ?? process.command_line ?? "");
               return (
                 <Fragment key={id}>
                   <tr key={id} className="hover:bg-white/5">
