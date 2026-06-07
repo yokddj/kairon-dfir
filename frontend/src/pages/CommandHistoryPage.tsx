@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type CommandHistoryItem } from "../api/client";
 
@@ -89,6 +89,25 @@ function buildParams(searchParams: URLSearchParams) {
   };
 }
 
+async function copyText(text: string) {
+  const clipboard = window.navigator.clipboard;
+  if (clipboard?.writeText) {
+    await clipboard.writeText(text);
+    return;
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  if (typeof document.execCommand === "function") {
+    document.execCommand("copy");
+  }
+  textarea.remove();
+}
+
 export default function CommandHistoryPage() {
   const { caseId = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -98,6 +117,8 @@ export default function CommandHistoryPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [marking, setMarking] = useState<string | null>(null);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => setQDraft(params.q ?? ""), [params.q]);
 
@@ -156,6 +177,11 @@ export default function CommandHistoryPage() {
     } finally {
       setMarking(null);
     }
+  }
+
+  async function copyCommand(item: CommandHistoryItem) {
+    await copyText(item.command);
+    setCopiedId(item.id);
   }
 
   const items = data?.items ?? [];
@@ -274,11 +300,11 @@ export default function CommandHistoryPage() {
 
       {paginationControls}
 
-      <div className="overflow-x-auto rounded-lg border border-zinc-800 bg-zinc-950/60">
-        <table className="min-w-[1180px] w-full text-left text-sm">
+      <div className="rounded-lg border border-zinc-800 bg-zinc-950/60">
+        <table data-testid="command-history-table" className="w-full table-fixed text-left text-sm">
           <thead className="border-b border-zinc-800 text-xs uppercase text-zinc-500">
             <tr>
-              <th className="px-3 py-2">
+              <th className="w-[150px] px-3 py-2">
                 <button
                   type="button"
                   className="text-left uppercase text-zinc-400 hover:text-zinc-100"
@@ -294,87 +320,125 @@ export default function CommandHistoryPage() {
                   Timestamp {sortOrder === "asc" ? "↑" : "↓"}
                 </button>
               </th>
-              <th className="px-3 py-2">Family</th>
-              <th className="px-3 py-2">Launcher</th>
-              <th className="w-[38%] px-3 py-2">Command</th>
-              <th className="px-3 py-2">User</th>
-              <th className="px-3 py-2">Host</th>
-              <th className="px-3 py-2">Parent</th>
-              <th className="px-3 py-2">Source(s)</th>
-              <th className="px-3 py-2">Risk</th>
-              <th className="px-3 py-2">Actions</th>
+              <th className="w-[96px] px-3 py-2">Family</th>
+              <th className="w-[130px] px-3 py-2">Launcher</th>
+              <th className="px-3 py-2">Command</th>
+              <th className="w-[150px] px-3 py-2">User</th>
+              <th className="w-[130px] px-3 py-2">Host</th>
+              <th className="w-[96px] px-3 py-2">Risk</th>
+              <th className="w-[210px] px-3 py-2">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-900">
             {loading ? (
               <tr>
-                <td className="px-3 py-5 text-zinc-400" colSpan={10}>
+                <td className="px-3 py-5 text-zinc-400" colSpan={8}>
                   Loading command history...
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td className="px-3 py-5 text-zinc-400" colSpan={10}>
+                <td className="px-3 py-5 text-zinc-400" colSpan={8}>
                   No command executions matched the current filters.
                 </td>
               </tr>
             ) : (
               items.map((item) => (
-                <tr key={item.id} className="align-top hover:bg-zinc-900/50">
-                  <td className="whitespace-nowrap px-3 py-3 text-zinc-300" title={item.timestamp ?? ""}>
-                    {formatTimestamp(item.timestamp)}
-                  </td>
-                  <td className="px-3 py-3 text-zinc-300" title={`Confidence: ${item.classification_confidence || item.confidence}`}>
-                    {familyLabel(item)}
-                  </td>
-                  <td className="px-3 py-3 text-zinc-300" title={item.launcher_path || item.process?.executable || item.process?.name || ""}>
-                    {launcherLabel(item)}
-                    {item.parent_shell ? <div className="text-xs text-zinc-500">parent: {item.parent_shell}</div> : null}
-                  </td>
-                  <td className="px-3 py-3">
-                    <div className="whitespace-pre-wrap break-words font-mono text-xs leading-relaxed text-zinc-100" title={item.command}>
-                      {item.command}
-                    </div>
-                    {item.risk_reasons.length ? <div className="mt-1 text-xs text-amber-300">{item.risk_reasons.join(" · ")}</div> : null}
-                  </td>
-                  <td className="px-3 py-3 text-zinc-300" title={item.user ?? ""}>
-                    {valueOrDash(item.user)}
-                  </td>
-                  <td className="px-3 py-3 text-zinc-300" title={item.host ?? ""}>
-                    {valueOrDash(item.host)}
-                  </td>
-                  <td className="px-3 py-3 text-zinc-300" title={item.parent_process?.command_line ?? item.parent_process?.name ?? ""}>
-                    <div className="max-w-[220px] truncate">{valueOrDash(item.parent_process?.name || item.parent_process?.executable)}</div>
-                  </td>
-                  <td className="px-3 py-3 text-zinc-300" title={sourceLabel(item)}>
-                    <div>{sourceLabel(item)}</div>
-                    <div className="text-xs text-zinc-500">{item.supporting_events.length} event(s)</div>
-                  </td>
-                  <td className="px-3 py-3">
-                    <span className="rounded-full border border-zinc-700 px-2 py-1 text-xs text-zinc-200" title={item.risk_reasons.join("; ")}>
-                      {riskLabel(item.risk_score)} {item.risk_score}
-                    </span>
-                  </td>
-                  <td className="px-3 py-3">
-                    <div className="flex flex-wrap gap-2">
-                      <Link className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" to={item.linked_search_url}>
-                        Source
-                      </Link>
-                      <Link
-                        className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
-                        to={processGraphUrl(caseId, item)}
+                <Fragment key={item.id}>
+                  <tr className="align-top hover:bg-zinc-900/50">
+                    <td className="whitespace-normal px-3 py-3 text-zinc-300" title={item.timestamp ?? ""}>
+                      {formatTimestamp(item.timestamp)}
+                    </td>
+                    <td className="px-3 py-3 text-zinc-300" title={`Confidence: ${item.classification_confidence || item.confidence}`}>
+                      <div className="truncate">{familyLabel(item)}</div>
+                    </td>
+                    <td className="px-3 py-3 text-zinc-300" title={item.launcher_path || item.process?.executable || item.process?.name || ""}>
+                      <div className="truncate">{launcherLabel(item)}</div>
+                      {item.parent_shell ? <div className="truncate text-xs text-zinc-500">parent: {item.parent_shell}</div> : null}
+                    </td>
+                    <td className="px-3 py-3">
+                      <div
+                        data-testid="command-cell"
+                        className="overflow-hidden break-words font-mono text-xs leading-relaxed text-zinc-100"
+                        title={item.command}
+                        style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}
                       >
-                        Open process tree
-                      </Link>
-                      <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => navigator.clipboard?.writeText(item.command)}>
-                        Copy
-                      </button>
-                      <button className="rounded border border-amber-700 px-2 py-1 text-xs text-amber-200 hover:bg-amber-950" disabled={marking === item.id} onClick={() => markSuspicious(item)}>
-                        Suspicious
-                      </button>
-                    </div>
-                  </td>
-                </tr>
+                        {item.command}
+                      </div>
+                      {item.risk_reasons.length ? <div className="mt-1 truncate text-xs text-amber-300">{item.risk_reasons.join(" · ")}</div> : null}
+                    </td>
+                    <td className="px-3 py-3 text-zinc-300" title={item.user ?? ""}>
+                      <div className="truncate">{valueOrDash(item.user)}</div>
+                    </td>
+                    <td className="px-3 py-3 text-zinc-300" title={item.host ?? ""}>
+                      <div className="truncate">{valueOrDash(item.host)}</div>
+                    </td>
+                    <td className="px-3 py-3">
+                      <span className="rounded-full border border-zinc-700 px-2 py-1 text-xs text-zinc-200" title={item.risk_reasons.join("; ")}>
+                        {riskLabel(item.risk_score)} {item.risk_score}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3">
+                      <div className="flex flex-wrap gap-2">
+                        <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => setExpandedId(expandedId === item.id ? null : item.id)}>
+                          {expandedId === item.id ? "Hide details" : "Details"}
+                        </button>
+                        <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => void copyCommand(item)}>
+                          {copiedId === item.id ? "Copied" : "Copy"}
+                        </button>
+                        <Link
+                          className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
+                          to={processGraphUrl(caseId, item)}
+                        >
+                          Open process tree
+                        </Link>
+                      </div>
+                    </td>
+                  </tr>
+                  {expandedId === item.id ? (
+                    <tr className="bg-zinc-950/90">
+                      <td colSpan={8} className="px-3 pb-4">
+                        <div className="grid gap-4 rounded-lg border border-zinc-800 bg-zinc-950 p-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.6fr)]">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <p className="text-xs uppercase tracking-wide text-zinc-500">Full command</p>
+                              <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => void copyCommand(item)}>
+                                {copiedId === item.id ? "Copied" : "Copy command"}
+                              </button>
+                            </div>
+                            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-zinc-800 bg-zinc-900/60 p-3 font-mono text-xs leading-relaxed text-zinc-100">{item.command}</pre>
+                            {item.raw_payload ? (
+                              <>
+                                <p className="mt-4 text-xs uppercase tracking-wide text-zinc-500">Raw payload</p>
+                                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-zinc-800 bg-zinc-900/60 p-3 font-mono text-xs leading-relaxed text-zinc-300">{item.raw_payload}</pre>
+                              </>
+                            ) : null}
+                          </div>
+                          <div className="space-y-3 text-sm text-zinc-300">
+                            <div><span className="text-zinc-500">User:</span> {valueOrDash(item.user)}</div>
+                            <div><span className="text-zinc-500">Host:</span> {valueOrDash(item.host)}</div>
+                            <div><span className="text-zinc-500">Source:</span> {sourceLabel(item)} · {item.supporting_events.length} event(s)</div>
+                            <div><span className="text-zinc-500">Source event:</span> {valueOrDash(item.source_event_id)}</div>
+                            <div><span className="text-zinc-500">Parent:</span> {valueOrDash(item.parent_process?.name || item.parent_process?.executable)}</div>
+                            <div><span className="text-zinc-500">Parent command:</span> <span className="break-words font-mono text-xs">{valueOrDash(item.parent_process?.command_line)}</span></div>
+                            <div><span className="text-zinc-500">Risk reasons:</span> {item.risk_reasons.length ? item.risk_reasons.join(" · ") : "-"}</div>
+                            <div className="flex flex-wrap gap-2 pt-2">
+                              <Link className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" to={item.linked_search_url}>
+                                Open search
+                              </Link>
+                              <Link className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" to={processGraphUrl(caseId, item)}>
+                                Open process tree
+                              </Link>
+                              <button className="rounded border border-amber-700 px-2 py-1 text-xs text-amber-200 hover:bg-amber-950" disabled={marking === item.id} onClick={() => markSuspicious(item)}>
+                                Mark suspicious
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               ))
             )}
           </tbody>
