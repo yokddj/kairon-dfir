@@ -23,6 +23,7 @@ from app.ingest.powershell.helpers import (
 )
 from app.ingest.normalization.field_quality import normalize_event_fields
 from app.ingest.powershell.entity_normalization import normalize_powershell_entities
+from app.ingest.powershell.semantic_evtx import normalize_powershell_evtx_semantics
 
 
 def normalize_powershell_row(document: dict, row: dict, artifact_meta: dict) -> dict:
@@ -315,4 +316,4 @@ def normalize_powershell_row(document: dict, row: dict, artifact_meta: dict) -> 
     document["_preserve_risk_score"] = True
     if not timestamp:
         document["timestamp_precision"] = timestamp_precision
-    return normalize_event_fields(normalize_powershell_entities(document))
+    return normalize_event_fields(normalize_powershell_evtx_semantics(normalize_powershell_entities(document)))

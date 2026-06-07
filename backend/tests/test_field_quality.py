@@ -6,8 +6,8 @@ from app.ingest.normalization.field_quality import (
 )
 
 
-def test_clean_user_rejects_localized_message() -> None:
-    value = "Gravedad = Informational, Nombre de host = ConsoleHost, Versión de host = 5.1.22621.6133"
+def test_clean_user_rejects_structured_rendered_message_blob() -> None:
+    value = "Level = Informational, HostName = ConsoleHost, HostVersion = 5.1.22621.6133, EngineVersion = 5.1"
 
     result = clean_user(value)
 
@@ -47,7 +47,7 @@ def test_clean_user_extracts_user_from_context_payload() -> None:
 
 
 def test_normalize_event_fields_preserves_raw_payload_and_cleans_visible_fields() -> None:
-    payload = "Gravedad = Informational, Nombre de host = ConsoleHost\nUserId=KAIRON-LAB01\\analyst\nHostApplication=powershell.exe"
+    payload = "Level=Informational\nHostName=ConsoleHost\nUserId=KAIRON-LAB01\\analyst\nHostApplication=powershell.exe"
     document = {
         "artifact": {"type": "powershell"},
         "event": {"type": "module_logging", "message": payload},
@@ -61,7 +61,7 @@ def test_normalize_event_fields_preserves_raw_payload_and_cleans_visible_fields(
 
     assert normalized["user"]["name"] == "KAIRON-LAB01\\analyst"
     assert normalized["key_entity"] == "powershell.exe"
-    assert "Gravedad" not in normalized["user"]["name"]
+    assert "HostName" not in normalized["user"]["name"]
     assert normalized["normalized_raw_payload"] == payload
     assert any(warning.startswith("user_") for warning in normalized["field_quality_warnings"])
 

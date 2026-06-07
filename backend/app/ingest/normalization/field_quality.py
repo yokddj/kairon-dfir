@@ -8,15 +8,6 @@ from typing import Any, Iterable
 
 PLACEHOLDER_VALUES = {"", "-", "--", "0x", "0x0", "0x00", "0x00000000", "null", "none", "n/a", "na", "unknown", "{}", "[]"}
 SYSTEM_SIDS = {"s-1-5-18", "s-1-5-19", "s-1-5-20"}
-LOCALIZED_PAYLOAD_TOKENS = (
-    "gravedad =",
-    "nombre de host =",
-    "versión de host =",
-    "version de host =",
-    "aplicación host =",
-    "aplicacion host =",
-    "usuario =",
-)
 PAYLOAD_TOKENS = (
     "eventdata",
     "contextinfo",
@@ -30,7 +21,7 @@ PAYLOAD_TOKENS = (
     "data name=",
     "\"@name\"",
     "\"\"@name\"\"",
-) + LOCALIZED_PAYLOAD_TOKENS
+)
 GENERIC_USER_NAMES = {"system", "local service", "network service", "nt authority\\system"}
 WINDOWS_PATH_RE = re.compile(r"(?i)([a-z]:\\[^\r\n\"'<>|]+|\\\\[^\r\n\"'<>|]+)")
 SCRIPT_OR_EXECUTABLE_RE = re.compile(r"(?i)([a-z]:\\[^\r\n\"'<>|]+\.(?:ps1|psm1|psd1|exe|bat|cmd|js|vbs|dll|msc|msi))")
@@ -182,6 +173,8 @@ def is_payload_blob(value: Any) -> bool:
     if any(token in lower for token in PAYLOAD_TOKENS):
         return True
     if text.count("\n") >= 3 or text.count("\\n") >= 3:
+        return True
+    if _key_value_pair_count(text) >= 3:
         return True
     if len(text) > 200 and any(token in text for token in ("{", "}", "<", ">", "=", ":")):
         return True
@@ -335,7 +328,7 @@ def _extract_user_from_context(document: dict[str, Any]) -> str | None:
         text = _clean(value)
         if not text:
             continue
-        for label in ("UserId", "User", "UserName", "AccountName", "SubjectUserName", "Connected User", "ConnectedUser", "Usuario"):
+        for label in ("UserId", "User", "UserName", "AccountName", "SubjectUserName", "Connected User", "ConnectedUser"):
             match = re.search(rf"(?im)(?:^|[\n,;]\s*|\b){re.escape(label)}\s*(?:=|:)\s*([^\n,;]+)", text)
             if match:
                 candidate = match.group(1).strip()
@@ -429,6 +422,10 @@ def _clean(value: Any) -> str:
 def _looks_like_machine_or_field(value: str) -> bool:
     lower = value.lower()
     return lower in {"consolehost", "powershell", "eventdata", "hostapplication"} or lower.endswith("=")
+
+
+def _key_value_pair_count(value: str) -> int:
+    return len(re.findall(r"(?im)(?:^|[\n,;]\s*)[A-Za-z][A-Za-z0-9 _.-]{1,40}\s*(?:=|:)\s*[^,\n;]+", value))
 
 
 def _obj(value: Any) -> dict[str, Any]:
