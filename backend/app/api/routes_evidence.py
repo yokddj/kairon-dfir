@@ -572,6 +572,130 @@ def build_mft_diagnostic(item: Evidence, db: Session) -> dict[str, Any]:
     }
 
 
+REGISTRY_HIVE_NAMES = {"software", "system", "sam", "security", "default", "ntuser.dat", "usrclass.dat", "amcache.hve", "components"}
+
+
+def _registry_candidate_path(entry: dict[str, Any]) -> str:
+    return str(entry.get("source_path") or entry.get("relative_path") or entry.get("path") or entry.get("original_path") or entry.get("display_name") or entry.get("name") or "")
+
+
+def _registry_candidate_basename(entry: dict[str, Any]) -> str:
+    raw = _registry_candidate_path(entry)
+    if not raw:
+        return ""
+    return raw.replace("/", "\\").rstrip("\\").rsplit("\\", 1)[-1].lower()
+
+
+def _is_registry_hive_candidate(entry: dict[str, Any]) -> bool:
+    artifact_type = str(entry.get("artifact_type") or "").lower()
+    parser = str(entry.get("parser") or entry.get("planned_parser") or "").lower()
+    if "registry" in artifact_type or "registry" in parser or "recmd" in parser:
+        return True
+    return _registry_candidate_basename(entry) in REGISTRY_HIVE_NAMES
+
+
+def _registry_hive_name(entry: dict[str, Any]) -> str:
+    basename = _registry_candidate_basename(entry)
+    if basename in REGISTRY_HIVE_NAMES:
+        return basename.upper() if "." not in basename else basename
+    return str(entry.get("artifact_type") or "registry_hive")
+
+
+def _registry_backend_available() -> bool:
+    try:
+        from app.ingest.raw_parsers.recmd_backend import detect_recmd_backend
+
+        return bool(detect_recmd_backend().get("available"))
+    except Exception:
+        return False
+
+
+def _safe_count_registry_docs(item: Evidence, artifact_type: str | None = None, event_codes: list[str] | None = None) -> int:
+    filters: list[dict[str, Any]] = [{"term": {"evidence_id": item.id}}]
+    if artifact_type:
+        filters.append({"term": {"artifact.type": artifact_type}})
+    if event_codes:
+        filters.append({"terms": {"event.code": event_codes}})
+    try:
+        return int((count_documents(get_events_index(item.case_id), {"bool": {"filter": filters}}).get("count") or 0))
+    except Exception:
+        return 0
+
+
+def build_registry_diagnostic(item: Evidence, db: Session) -> dict[str, Any]:
+    metadata = dict(item.metadata_json or {})
+    manifest = _load_evidence_manifest(item)
+    discovery = dict(metadata.get("velociraptor_discovery") or {})
+    ingest_plan = dict(metadata.get("ingest_plan") or {})
+    candidates: list[dict[str, Any]] = []
+    for container in (
+        manifest.get("artifacts") or [],
+        manifest.get("files") or [],
+        discovery.get("candidates") or [],
+        metadata.get("folder_entries") or [],
+        ingest_plan.get("disabled_candidates") or [],
+    ):
+        for entry in container if isinstance(container, list) else []:
+            if isinstance(entry, dict) and _is_registry_hive_candidate(entry):
+                candidates.append(dict(entry))
+    hive_candidates = list({str(entry.get("source_path") or entry.get("relative_path") or entry.get("path") or entry.get("original_path") or entry.get("display_name") or entry): entry for entry in candidates}.values())
+    hive_names = sorted({_registry_hive_name(entry) for entry in hive_candidates})
+    backend_available = _registry_backend_available()
+    registry_docs = _safe_count_registry_docs(item, "registry")
+    registry_event_docs = _safe_count_registry_docs(item, "registry_event")
+    sysmon_registry_events = _safe_count_registry_docs(item, event_codes=["12", "13", "14"])
+    security_registry_events = _safe_count_registry_docs(item, event_codes=["4657"])
+    service_docs = _safe_count_registry_docs(item, "service")
+    user_activity_counts = metadata.get("registry_user_activity_counts") if isinstance(metadata.get("registry_user_activity_counts"), dict) else {}
+    user_activity_docs = int(metadata.get("registry_user_activity_records_indexed") or (sum(int(value or 0) for value in user_activity_counts.values()) if user_activity_counts else 0))
+    user_activity_status = str(metadata.get("registry_user_activity_status") or "not_indexed")
+    status = "indexed" if registry_docs > 0 or user_activity_docs > 0 else "indexing" if user_activity_status in {"queued", "running"} else "tooling_missing" if hive_candidates and not backend_available else "available_on_demand" if hive_candidates else "not_present"
+    return {
+        "evidence_id": item.id,
+        "case_id": item.case_id,
+        "available": bool(hive_candidates and backend_available),
+        "status": status,
+        "hives_present": bool(hive_candidates),
+        "hive_count": len(hive_candidates),
+        "hive_names": hive_names,
+        "hives_indexed": registry_docs > 0,
+        "registry_docs": registry_docs,
+        "registry_events_present": bool(sysmon_registry_events or security_registry_events),
+        "registry_events_indexed": registry_event_docs > 0,
+        "registry_event_docs": registry_event_docs,
+        "sysmon_registry_events": sysmon_registry_events,
+        "security_4657_events": security_registry_events,
+        "derived_persistence_indexed": service_docs > 0 or user_activity_docs > 0,
+        "service_registry_docs": service_docs,
+        "user_activity_docs": user_activity_docs,
+        "user_activity_status": user_activity_status,
+        "tool_available": backend_available,
+        "recommended_mode": "persistence_summary" if hive_candidates and backend_available and not registry_docs else "none",
+        "actions": ["index_registry_user_activity"] if hive_candidates and backend_available else [],
+        "coverage_gaps": [
+            gap
+            for gap, present in {
+                "full_registry_hive_artifact_view_not_indexed": bool(hive_candidates and registry_docs == 0),
+                "registry_modification_events_not_present": not bool(sysmon_registry_events or security_registry_events),
+                "registry_events_not_materialized_as_registry_event": bool((sysmon_registry_events or security_registry_events) and registry_event_docs == 0),
+            }.items()
+            if present
+        ],
+        "detected_hives": [
+            {
+                "name": _registry_hive_name(entry),
+                "source_path": entry.get("source_path") or entry.get("relative_path") or entry.get("path") or entry.get("original_path") or "",
+                "artifact_type": entry.get("artifact_type") or "",
+                "parser": entry.get("parser") or "",
+                "status": entry.get("status") or "",
+                "reason": entry.get("reason") or "",
+                "size": entry.get("size"),
+            }
+            for entry in hive_candidates[:20]
+        ],
+    }
+
+
 def _recompute_evidence_status(item: Evidence, db: Session) -> dict[str, Any]:
     previous_status = item.ingest_status.value if hasattr(item.ingest_status, "value") else str(item.ingest_status or "")
     indexed_docs = _count_evidence_indexed_docs(item)
@@ -2825,6 +2949,7 @@ def get_evidence_search_summary(evidence_id: str, db: Session = Depends(get_db))
         raise HTTPException(status_code=404, detail="Evidence not found")
     summary = _build_evidence_search_summary(item)
     summary["mft_diagnostic"] = build_mft_diagnostic(item, db)
+    summary["registry_diagnostic"] = build_registry_diagnostic(item, db)
     return summary
 
 
@@ -2834,6 +2959,14 @@ def get_evidence_mft_diagnostic(evidence_id: str, db: Session = Depends(get_db))
     if not item:
         raise HTTPException(status_code=404, detail="Evidence not found")
     return build_mft_diagnostic(item, db)
+
+
+@router.get("/api/evidences/{evidence_id}/registry-diagnostic")
+def get_evidence_registry_diagnostic(evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    item = db.get(Evidence, evidence_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    return build_registry_diagnostic(item, db)
 
 
 @router.get("/api/evidences/{evidence_id}/indexing-plan")

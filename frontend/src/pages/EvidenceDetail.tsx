@@ -283,6 +283,12 @@ export default function EvidenceDetail() {
     enabled: Boolean(evidenceId),
     staleTime: 30_000,
   });
+  const registryDiagnosticQuery = useQuery({
+    queryKey: ["evidence-registry-diagnostic", evidenceId],
+    queryFn: () => api.getEvidenceRegistryDiagnostic(evidenceId),
+    enabled: Boolean(evidenceId),
+    staleTime: 30_000,
+  });
   const indexingPlanQuery = useQuery({
     queryKey: ["evidence-indexing-plan", evidenceId, indexingProfile],
     queryFn: () => api.getEvidenceIndexingPlan(evidenceId, indexingProfile),
@@ -351,6 +357,7 @@ export default function EvidenceDetail() {
       notify({ title: "User activity queued", description: `RECmd user activity run ${result.run_id.slice(0, 8)} was queued.`, tone: "success" });
       void queryClient.invalidateQueries({ queryKey: ["evidence", evidenceId] });
       void queryClient.invalidateQueries({ queryKey: ["evidence-search-summary", evidenceId] });
+      void queryClient.invalidateQueries({ queryKey: ["evidence-registry-diagnostic", evidenceId] });
     },
     onError: (error) => {
       notify({ title: "User activity failed", description: error instanceof Error ? error.message : "The RECmd user activity job could not be queued.", tone: "error" });
@@ -893,6 +900,9 @@ export default function EvidenceDetail() {
   const mftIndexedDocs = Number(mftStatus?.indexed_docs ?? mftDiagnostic?.mft_indexed_docs ?? 0);
   const mftIsIndexing = mftStatus?.status === "indexing" || mftDiagnostic?.mft_summary_status === "queued" || mftDiagnostic?.mft_summary_status === "running" || mftDiagnostic?.mft_full_status === "queued" || mftDiagnostic?.mft_full_status === "running";
   const mftToolAvailable = Boolean(mftStatus?.tool_available ?? mftDiagnostic?.mft_backend_available);
+  const registryDiagnostic = registryDiagnosticQuery.data ?? searchSummaryQuery.data?.registry_diagnostic ?? null;
+  const registryVisibleInParseMode = Boolean(registryDiagnostic?.hives_present || registryDiagnostic?.registry_events_present || registryDiagnostic?.derived_persistence_indexed);
+  const registryIsIndexing = registryDiagnostic?.status === "indexing" || registryDiagnostic?.user_activity_status === "queued" || registryDiagnostic?.user_activity_status === "running";
   const userActivityCounts = (data?.metadata_json?.registry_user_activity_counts as Record<string, number> | undefined) ?? {};
   const userActivityTotal = Number(data?.metadata_json?.registry_user_activity_records_indexed ?? Object.values(userActivityCounts).reduce((sum, value) => sum + Number(value || 0), 0));
   const userActivityStatus = String(data?.metadata_json?.registry_user_activity_status ?? "not_indexed");
@@ -1685,6 +1695,63 @@ function formatReportStatus(status: string | null | undefined) {
                             {indexMftFullMutation.isPending || mftDiagnostic?.mft_full_status === "queued" ? "Queueing full MFT..." : mftDiagnostic?.mft_full_status === "running" ? "Indexing full MFT..." : mftIndexedDocs > 0 ? "Re-index full MFT" : "Index full MFT"}
                           </button>
                         </>
+                      ) : null}
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+              {registryVisibleInParseMode ? (
+                <div className={`mt-4 rounded-3xl border p-4 ${registryDiagnostic?.registry_docs || registryDiagnostic?.user_activity_docs ? "border-mint/25 bg-mint/10" : registryDiagnostic?.status === "tooling_missing" ? "border-warning/40 bg-warning/10" : "border-accent/30 bg-accent/10"}`}>
+                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                    <div className="min-w-0">
+                      <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Registry</p>
+                      <h4 className="mt-1 text-base font-semibold text-ink">
+                        {registryDiagnostic?.status === "indexed"
+                          ? "Registry-derived artifacts indexed"
+                          : registryIsIndexing
+                          ? "Registry indexing in progress"
+                          : registryDiagnostic?.status === "tooling_missing"
+                          ? "Registry hives detected · tooling missing"
+                          : "Registry hives detected · available on demand"}
+                      </h4>
+                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
+                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">{registryDiagnostic?.hive_count ?? 0} hives</span>
+                        {(registryDiagnostic?.hive_names ?? []).slice(0, 6).map((name) => (
+                          <span key={name} className="rounded-full border border-line bg-abyss/60 px-2 py-1">{name}</span>
+                        ))}
+                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">RECmd {registryDiagnostic?.tool_available ? "available" : "missing"}</span>
+                        {registryDiagnostic?.sysmon_registry_events ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Sysmon registry events: {registryDiagnostic.sysmon_registry_events.toLocaleString()}</span> : null}
+                        {registryDiagnostic?.security_4657_events ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Security 4657: {registryDiagnostic.security_4657_events.toLocaleString()}</span> : null}
+                      </div>
+                      <p className="mt-2 text-sm text-muted">
+                        {registryDiagnostic?.registry_docs
+                          ? `${registryDiagnostic.registry_docs.toLocaleString()} registry records are indexed.`
+                          : registryDiagnostic?.tool_available
+                          ? "Startup & Persistence uses derived registry evidence, but full hive records are not indexed by default. Use scoped RECmd indexing for user activity and persistence-adjacent registry evidence."
+                          : "RECmd is required before registry hives can be parsed on demand."}
+                      </p>
+                      {registryDiagnostic?.coverage_gaps?.length ? <p className="mt-2 text-xs text-muted">Coverage: {registryDiagnostic.coverage_gaps.join(", ")}</p> : null}
+                    </div>
+                    <div className="flex shrink-0 flex-wrap gap-2">
+                      {registryDiagnostic?.registry_docs || registryDiagnostic?.user_activity_docs ? (
+                        <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=registry` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
+                          Open registry artifacts
+                        </Link>
+                      ) : null}
+                      {registryDiagnostic?.tool_available ? (
+                        <button
+                          type="button"
+                          disabled={conflictingIndexingActionsDisabled || registryIsIndexing || indexRecmdUserActivityMutation.isPending}
+                          onClick={() => {
+                            const message = registryDiagnostic?.user_activity_docs
+                              ? "Rebuild registry user activity with RECmd? This replaces existing user activity docs scoped to this evidence."
+                              : "Index registry user activity with RECmd? This is scoped to selected user activity registry artifacts, not full hive expansion.";
+                            if (window.confirm(message)) indexRecmdUserActivityMutation.mutate();
+                          }}
+                          className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-60"
+                        >
+                          {indexRecmdUserActivityMutation.isPending || registryDiagnostic?.user_activity_status === "queued" ? "Queueing registry..." : registryDiagnostic?.user_activity_status === "running" ? "Indexing registry..." : registryDiagnostic?.user_activity_docs ? "Rebuild registry user activity" : "Index registry user activity"}
+                        </button>
                       ) : null}
                     </div>
                   </div>
