@@ -998,6 +998,33 @@ export type EvidenceSearchSummary = {
   host_counts: Record<string, number>;
   user_counts: Record<string, number>;
   mft_diagnostic?: MftDiagnostic;
+  registry_diagnostic?: RegistryDiagnostic;
+};
+
+export type RegistryDiagnostic = {
+  evidence_id: string;
+  case_id: string;
+  available: boolean;
+  status: "not_present" | "available_on_demand" | "indexed" | "indexing" | "failed" | "tooling_missing" | string;
+  hives_present: boolean;
+  hive_count: number;
+  hive_names: string[];
+  hives_indexed: boolean;
+  registry_docs: number;
+  registry_events_present: boolean;
+  registry_events_indexed: boolean;
+  registry_event_docs: number;
+  sysmon_registry_events: number;
+  security_4657_events: number;
+  derived_persistence_indexed: boolean;
+  service_registry_docs: number;
+  user_activity_docs: number;
+  user_activity_status: string;
+  tool_available: boolean;
+  recommended_mode: string;
+  actions: string[];
+  coverage_gaps: string[];
+  detected_hives: Array<{ name: string; source_path: string; artifact_type: string; parser: string; status: string; reason: string; size?: number | null }>;
 };
 
 export type MftDiagnostic = {
@@ -3093,6 +3120,7 @@ export const api = {
   getEvidenceOnDemandModules: (evidenceId: string) => request<OnDemandModulesResponse>(`/evidences/${evidenceId}/on-demand-modules`),
   getEvidenceSearchSummary: (evidenceId: string) => request<EvidenceSearchSummary>(`/evidences/${evidenceId}/search-summary`),
   getEvidenceMftDiagnostic: (evidenceId: string) => request<MftDiagnostic>(`/evidences/${evidenceId}/mft-diagnostic`),
+  getEvidenceRegistryDiagnostic: (evidenceId: string) => request<RegistryDiagnostic>(`/evidences/${evidenceId}/registry-diagnostic`),
   getEvidenceIndexingPlan: (evidenceId: string, profile: "recommended" | "fast" | "advanced_custom" = "recommended") => request<EvidenceIndexingPlan>(`/evidences/${evidenceId}/indexing-plan?profile=${encodeURIComponent(profile)}`),
   runEvidenceIndexingPlan: (evidenceId: string, payload: { profile?: "recommended" | "fast" | "advanced_custom"; force?: boolean } = {}) => request<EvidenceIndexingPlanRunResponse>(`/evidences/${evidenceId}/indexing-plan/run`, { method: "POST", body: JSON.stringify(payload) }),
   cancelEvidenceIndexing: (evidenceId: string, payload: { reason?: string } = {}) => request<{ accepted: boolean; evidence_id: string; status: string; previous_status?: string; previous_phase?: string; lock_released?: boolean; retry_allowed?: boolean }>(`/evidences/${evidenceId}/indexing/cancel`, { method: "POST", body: JSON.stringify(payload) }),

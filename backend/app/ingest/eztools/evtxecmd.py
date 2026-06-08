@@ -711,6 +711,9 @@ def _apply_sysmon_normalization(document: dict, event_id: int | None, event_data
         registry_value = _basename(str(registry_path)) if registry_path else None
         registry_data = _normalize_windows_value(event_data.get("Details"))
         document["registry"].update(_compact({"path": registry_path, "key_path": registry_path, "key": registry_key, "value": registry_value, "value_name": registry_value, "data": registry_data, "value_data": registry_data, "event_type": _normalize_windows_value(event_data.get("EventType")) or action}))
+        document["artifact"]["type"] = "registry_event"
+        document["artifact"]["parser"] = document["artifact"].get("parser") or "sysmon_registry"
+        document["event"]["type"] = "registry_value_set" if event_id == 13 else "registry_key_or_value_renamed" if event_id == 14 else "registry_key_created_or_deleted"
         document["event"]["message"] = f"{default_message}: {registry_path or 'unknown'}"
         document["key_entity"] = registry_path
 

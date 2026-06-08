@@ -317,6 +317,9 @@ def _apply_sysmon_event_normalization(document: dict, row: dict, event_id: int |
         if key_path and "\\" in key_path:
             value_name = PureWindowsPath(key_path).name
         document.setdefault("registry", {}).update(_compact_dict({"path": key_path, "key_path": key_path, "key": _safe_windows_parent(key_path), "value": value_name, "value_name": value_name, "data": details, "value_data": details, "event_type": reg_event_type}))
+        document.setdefault("artifact", {})["type"] = "registry_event"
+        document.setdefault("artifact", {})["parser"] = document.get("artifact", {}).get("parser") or "sysmon_registry"
+        document["event"]["type"] = "registry_value_set" if event_id == 13 else "registry_key_or_value_renamed" if event_id == 14 else "registry_key_created_or_deleted"
         document["event"]["message"] = f"{default_message}: {target_object or 'unknown'}"
         document["key_entity"] = target_object
 

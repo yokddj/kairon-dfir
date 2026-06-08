@@ -304,6 +304,71 @@ def test_mft_diagnostic_reports_absent_cleanly(monkeypatch):
     assert diagnostic["recommended_action"].startswith("No action needed")
 
 
+def test_registry_diagnostic_detects_hives_available_on_demand(monkeypatch):
+    evidence = Evidence(
+        id="evidence-registry",
+        case_id="case-1",
+        original_filename="HOSTA.zip",
+        stored_path="/tmp/HOSTA.zip",
+        evidence_type=EvidenceType.raw_collection,
+        storage_mode=EvidenceStorageMode.uploaded,
+        is_external=False,
+        copy_to_storage=True,
+        sha256="e" * 64,
+        size_bytes=1,
+        ingest_status=IngestStatus.completed,
+        metadata_json={
+            "velociraptor_discovery": {
+                "candidates": [
+                    {"path": "uploads/auto/C%3A/Windows/System32/config/SOFTWARE", "size": 1024},
+                    {"path": "uploads/auto/C%3A/Users/analyst/NTUSER.DAT", "size": 2048},
+                ]
+            }
+        },
+        error_log={},
+    )
+    db = FakeSession(evidence=evidence)
+    monkeypatch.setattr(routes_evidence, "_load_evidence_manifest", lambda _item: {"artifacts": [], "files": []})
+    monkeypatch.setattr(routes_evidence, "_registry_backend_available", lambda: True)
+    monkeypatch.setattr(routes_evidence, "_safe_count_registry_docs", lambda *_args, **_kwargs: 0)
+
+    diagnostic = routes_evidence.build_registry_diagnostic(evidence, db)
+
+    assert diagnostic["hives_present"] is True
+    assert diagnostic["hive_count"] == 2
+    assert diagnostic["status"] == "available_on_demand"
+    assert diagnostic["tool_available"] is True
+    assert diagnostic["actions"] == ["index_registry_user_activity"]
+    assert "full_registry_hive_artifact_view_not_indexed" in diagnostic["coverage_gaps"]
+
+
+def test_registry_diagnostic_reports_absent_cleanly(monkeypatch):
+    evidence = Evidence(
+        id="evidence-no-registry",
+        case_id="case-1",
+        original_filename="triage.zip",
+        stored_path="/tmp/triage.zip",
+        evidence_type=EvidenceType.raw_collection,
+        storage_mode=EvidenceStorageMode.uploaded,
+        is_external=False,
+        copy_to_storage=True,
+        sha256="f" * 64,
+        size_bytes=1,
+        ingest_status=IngestStatus.completed,
+        metadata_json={},
+        error_log={},
+    )
+    db = FakeSession(evidence=evidence)
+    monkeypatch.setattr(routes_evidence, "_load_evidence_manifest", lambda _item: {"artifacts": [], "files": []})
+    monkeypatch.setattr(routes_evidence, "_safe_count_registry_docs", lambda *_args, **_kwargs: 0)
+
+    diagnostic = routes_evidence.build_registry_diagnostic(evidence, db)
+
+    assert diagnostic["hives_present"] is False
+    assert diagnostic["status"] == "not_present"
+    assert diagnostic["available"] is False
+
+
 def test_validate_allowed_path_file(monkeypatch, tmp_path: Path):
     allowed_root = _patch_allowed_roots(monkeypatch, tmp_path)
     sample = allowed_root / "case.zip"
