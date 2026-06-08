@@ -916,6 +916,10 @@ export default function EvidenceDetail() {
   const registryVisibleInParseMode = Boolean(registryDiagnostic?.hives_present || registryDiagnostic?.registry_events_present || registryDiagnostic?.derived_persistence_indexed);
   const registrySummaryStatus = registryDiagnostic?.registry_status?.persistence_summary_status ?? registryDiagnostic?.persistence_summary_status ?? "not_indexed";
   const registryPersistenceDocs = Number(registryDiagnostic?.registry_status?.persistence_summary_docs ?? registryDiagnostic?.registry_persistence_docs ?? 0);
+  const registryModificationCoverage = registryDiagnostic?.registry_modification_coverage;
+  const registryEventDocs = Number(registryModificationCoverage?.registry_event_docs_indexed ?? registryDiagnostic?.registry_event_docs ?? 0);
+  const registryCommandEvidenceCount = Number(registryModificationCoverage?.registry_command_evidence_count ?? registryDiagnostic?.registry_command_evidence_count ?? 0);
+  const registryModificationStatus = registryModificationCoverage?.status ?? (registryEventDocs ? "indexed" : registryDiagnostic?.registry_events_present ? "available_from_event_logs" : "not_present");
   const registryIsIndexing = registryDiagnostic?.status === "indexing" || registrySummaryStatus === "queued" || registrySummaryStatus === "running" || registrySummaryStatus === "indexing" || registryDiagnostic?.user_activity_status === "queued" || registryDiagnostic?.user_activity_status === "running";
   const registryHiveList = registryDiagnostic?.registry_status?.hives?.length ? registryDiagnostic.registry_status.hives : registryDiagnostic?.detected_hives ?? [];
   const userActivityCounts = (data?.metadata_json?.registry_user_activity_counts as Record<string, number> | undefined) ?? {};
@@ -1735,6 +1739,8 @@ function formatReportStatus(status: string | null | undefined) {
                           <span key={`${hive.name ?? hive.hive ?? index}`} className="rounded-full border border-line bg-abyss/60 px-2 py-1">{hive.name ?? hive.hive}{hive.size_bytes || hive.size ? ` · ${formatBytes(Number(hive.size_bytes ?? hive.size))}` : ""}</span>
                         ))}
                         <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Persistence summary: {registryPersistenceDocs ? `${registryPersistenceDocs.toLocaleString()} docs` : registrySummaryStatus.replaceAll("_", " ")}</span>
+                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Modification events: {registryEventDocs ? `${registryEventDocs.toLocaleString()} observed` : registryModificationStatus.replaceAll("_", " ")}</span>
+                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Registry commands: {registryCommandEvidenceCount.toLocaleString()}</span>
                         <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Full hive: {registryDiagnostic?.registry_status?.full_hive_status?.replaceAll("_", " ") ?? "available on demand"}</span>
                         {registryDiagnostic?.sysmon_registry_events ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Sysmon registry events: {registryDiagnostic.sysmon_registry_events.toLocaleString()}</span> : null}
                         {registryDiagnostic?.security_4657_events ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Security 4657: {registryDiagnostic.security_4657_events.toLocaleString()}</span> : null}
@@ -1746,12 +1752,27 @@ function formatReportStatus(status: string | null | undefined) {
                           ? "Extracts common persistence and configuration keys from registry hives without indexing the full registry. LastWrite is shown as key LastWrite, not a value modification event."
                           : "The python-registry backend is required before registry hives can be parsed on demand."}
                       </p>
+                      <p className="mt-2 text-xs text-muted">
+                        {registryEventDocs
+                          ? "Registry modification events are observed telemetry from Sysmon/Security logs."
+                          : "Registry modification events were not present in the collected event logs. Registry persistence LastWrite remains separate from observed modifications."}
+                      </p>
                       {registryDiagnostic?.coverage_gaps?.length ? <p className="mt-2 text-xs text-muted">Coverage: {registryDiagnostic.coverage_gaps.join(", ")}</p> : null}
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-2">
                       {registryPersistenceDocs ? (
                         <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=registry_persistence` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
                           Open Registry Persistence
+                        </Link>
+                      ) : null}
+                      {registryEventDocs ? (
+                        <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=registry_event` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
+                          Open Registry Events
+                        </Link>
+                      ) : null}
+                      {registryCommandEvidenceCount ? (
+                        <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=registry_command` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
+                          Open Registry Commands
                         </Link>
                       ) : null}
                       {registryDiagnostic?.tool_available ? (

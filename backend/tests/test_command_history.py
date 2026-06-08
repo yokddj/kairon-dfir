@@ -66,6 +66,27 @@ def test_security_4688_extracts_command_execution() -> None:
     assert "reconnaissance command" in items[0]["risk_reasons"]
 
 
+def test_reg_add_command_is_registry_command_evidence_not_confirmed() -> None:
+    items = command_history._commands_from_event(
+        "case-1",
+        _event(
+            4688,
+            event={"provider": "Microsoft-Windows-Security-Auditing", "channel": "Security"},
+            process={
+                "name": "reg.exe",
+                "command_line": "reg add HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run /v KaironLab01Run /d test",
+                "pid": 1234,
+            },
+        ),
+    )
+
+    assert items[0]["artifact_type"] == "registry_command"
+    assert items[0]["registry_command"]["operation"] == "add"
+    assert items[0]["registry_command"]["confidence"] == "command_evidence"
+    assert items[0]["registry_command"]["confirmed_by_registry_event"] is False
+    assert "registry modification command evidence" in items[0]["risk_reasons"]
+
+
 def test_powershell_4104_extracts_script_block() -> None:
     items = command_history._commands_from_event(
         "case-1",

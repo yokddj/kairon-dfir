@@ -9,6 +9,7 @@ from typing import Any
 from dateutil import parser as date_parser
 
 from app.core.opensearch import get_events_index, search_documents
+from app.ingest.normalization.registry_modifications import correlate_registry_commands, detect_registry_command
 from app.services.host_identity import normalize_host_alias
 
 
@@ -80,6 +81,8 @@ def get_command_history(case_id: str, params: dict[str, Any]) -> dict[str, Any]:
     page_size = min(max(_to_int(params.get("page_size"), 100) or 100, 1), 500)
     events = _fetch_candidate_events(case_id, params)
     commands = _dedupe_commands([item for event in events for item in _commands_from_event(case_id, event)])
+    registry_events = [event for event in events if str(_obj(event.get("artifact")).get("type") or "").lower() == "registry_event" or _to_int(_obj(event.get("windows")).get("event_id") or event.get("event_id"), None) in {12, 13, 14, 4657}]
+    commands = correlate_registry_commands(commands, registry_events)
     commands = _apply_filters(commands, params)
     sort = _resolve_sort(params)
     reverse = sort == "timestamp_desc"
@@ -131,6 +134,7 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> list[dict[s
         {"term": {"windows.event_id": 4688}},
         {"terms": {"windows.event_id": [4103, 4104, 400, 403, 600]}},
         {"terms": {"windows.event_id": [4698, 4702, 4700, 4701]}},
+        {"terms": {"windows.event_id": [12, 13, 14, 4657]}},
         {"exists": {"field": "powershell.command"}},
         {"exists": {"field": "powershell.command_preview"}},
         {"exists": {"field": "task.command"}},
@@ -157,6 +161,9 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> list[dict[s
 def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, Any]]:
     windows = _obj(event.get("windows"))
     event_id = _to_int(windows.get("event_id") or event.get("event_id"), None)
+    artifact_type = str(_obj(event.get("artifact")).get("type") or "").lower()
+    if artifact_type == "registry_event" or event_id in {12, 13, 14, 4657}:
+        return []
     process = _obj(event.get("process"))
     parent = _obj(process.get("parent")) or _obj(_obj(event.get("parent")).get("process"))
     powershell = _obj(event.get("powershell"))
@@ -188,6 +195,10 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
         raw_payload = _extract_raw_payload(event, windows_event_data)
         classification = _classify_command(command, process, parent, source_type)
         risk_score, risk_reasons = _risk(command, process, parent)
+        registry_command = detect_registry_command(command)
+        if registry_command:
+            risk_score = max(risk_score, 35)
+            risk_reasons = sorted(set(risk_reasons) | {"registry modification command evidence"})
         timestamp = event.get("@timestamp")
         event_doc_id = str(event.get("id") or event.get("search_doc_id") or event.get("opensearch_id") or event.get("event_id") or "")
         windows_event_id = str(event_id or event.get("event_id") or "")
@@ -209,6 +220,7 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
             "parent_shell": classification["parent_shell"],
             "parent_context": classification["parent_context"],
             "source_type": source_type,
+            "artifact_type": "registry_command" if registry_command else str(_obj(event.get("artifact")).get("type") or ""),
             "source_event_id": event_doc_id,
             "windows_event_id": windows_event_id,
             "source_file": event.get("source_file"),
@@ -233,6 +245,7 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
             "confidence": _confidence(source_type, command, timestamp),
             "dedupe_key": "",
             "raw_payload": raw_payload,
+            "registry_command": registry_command,
             "supporting_events": [_supporting_event(event, source_type)],
             "linked_search_url": _search_url(case_id, event.get("evidence_id"), event_doc_id),
         }

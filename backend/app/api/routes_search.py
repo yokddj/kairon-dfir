@@ -22,6 +22,7 @@ from app.core.opensearch import count_documents, get_events_index, get_index_hea
 from app.models.evidence import Evidence
 from app.schemas.event import SearchRequest, SearchResponse, SiemRequest
 from app.ingest.normalization.field_quality import normalize_event_fields
+from app.ingest.normalization.registry_modifications import enrich_registry_command_document, normalize_registry_modification_event
 from app.ingest.powershell.entity_normalization import normalize_powershell_entities
 from app.ingest.powershell.semantic_evtx import normalize_powershell_evtx_semantics
 from app.services.host_identity import expand_host_filter, normalize_host_alias, resolve_canonical_host
@@ -867,6 +868,8 @@ def _cache_put(cache: dict[str, tuple[float, dict]], key: str, ttl_seconds: floa
 
 def build_search_query(payload: SearchRequest, timeline: bool = False, db: Session | None = None) -> dict:
     filters = []
+    registry_command_requested = any(str(value).lower() == "registry_command" for value in (payload.filters.artifact_type or []))
+    registry_event_requested = any(str(value).lower() == "registry_event" for value in (payload.filters.artifact_type or []))
     def _expand_artifact_types(values: list[str] | None) -> list[str]:
         expanded: list[str] = []
         for value in values or []:
@@ -884,11 +887,71 @@ def build_search_query(payload: SearchRequest, timeline: bool = False, db: Sessi
                 expanded.extend(["shellbag", "userassist", "recentdocs", "runmru", "opensavemru"])
             elif lowered in {"shellbag", "userassist", "recentdocs", "runmru", "opensavemru"}:
                 expanded.append("user_activity")
+            elif lowered == "registry_command":
+                expanded.extend(["windows_event", "powershell", "evtx"])
+            elif lowered == "registry_event":
+                expanded.extend(["windows_event", "evtx", "registry_event"])
         return sorted(set(expanded))
     if payload.case_id:
         filters.append({"term": {"case_id": payload.case_id}})
     if payload.filters.artifact_type:
         filters.append({"terms": {"artifact.type": _expand_artifact_types(payload.filters.artifact_type)}})
+        if registry_command_requested:
+            filters.append(
+                {
+                    "bool": {
+                        "filter": [
+                            {
+                                "query_string": {
+                                    "query": r'("reg add" OR "reg delete" OR "reg import" OR "reg load" OR "reg unload" OR Set-ItemProperty OR New-ItemProperty OR Remove-ItemProperty)',
+                                    "fields": ["process.command_line", "powershell.command", "powershell.command_preview", "search_text"],
+                                    "default_operator": "OR",
+                                }
+                            },
+                            {
+                                "bool": {
+                                    "should": [
+                                        {"wildcard": {field: {"value": pattern, "case_insensitive": True}}}
+                                        for field in ["process.command_line", "powershell.command", "powershell.command_preview", "search_text"]
+                                        for pattern in ["*HKLM\\\\*", "*HKCU\\\\*", "*HKU\\\\*", "*HKLM:\\\\*", "*HKCU:\\\\*", "*Registry::HKEY_LOCAL_MACHINE\\\\*", "*Registry::HKEY_CURRENT_USER\\\\*", "*HKEY_LOCAL_MACHINE\\\\*", "*HKEY_CURRENT_USER\\\\*", "*HKEY_USERS\\\\*"]
+                                    ],
+                                    "minimum_should_match": 1,
+                                }
+                            },
+                        ]
+                    }
+                }
+            )
+        if registry_event_requested:
+            filters.append(
+                {
+                    "bool": {
+                        "should": [
+                            {
+                                "bool": {
+                                    "filter": [
+                                        {"terms": {"windows.event_id": [12, 13, 14]}},
+                                        {
+                                            "bool": {
+                                                "should": [
+                                                    {"wildcard": {"event.provider": {"value": "*sysmon*", "case_insensitive": True}}},
+                                                    {"wildcard": {"windows.provider": {"value": "*sysmon*", "case_insensitive": True}}},
+                                                    {"wildcard": {"event.channel": {"value": "*sysmon*", "case_insensitive": True}}},
+                                                    {"wildcard": {"windows.channel": {"value": "*sysmon*", "case_insensitive": True}}},
+                                                ],
+                                                "minimum_should_match": 1,
+                                            }
+                                        },
+                                    ]
+                                }
+                            },
+                            {"terms": {"windows.event_id": [4657]}},
+                            {"term": {"artifact.type": "registry_event"}},
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                }
+            )
     if payload.filters.artifact_name:
         filters.append({"terms": {"artifact.name": payload.filters.artifact_name}})
     if payload.filters.event_category:
@@ -1080,6 +1143,8 @@ def _normalize_search_item(item: dict) -> dict:
     artifact = item.get("artifact") if isinstance(item.get("artifact"), dict) else {}
     if str(artifact.get("type") or "").lower() == "powershell":
         item = normalize_powershell_evtx_semantics(normalize_powershell_entities(item))
+    item = normalize_registry_modification_event(item)
+    item = enrich_registry_command_document(item)
     return normalize_event_fields(item)
 
 
