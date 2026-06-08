@@ -338,7 +338,11 @@ def test_registry_diagnostic_detects_hives_available_on_demand(monkeypatch):
     assert diagnostic["hive_count"] == 2
     assert diagnostic["status"] == "available_on_demand"
     assert diagnostic["tool_available"] is True
-    assert diagnostic["actions"] == ["index_registry_user_activity"]
+    assert diagnostic["actions"] == ["index_registry_persistence_summary", "index_registry_user_activity"]
+    assert diagnostic["registry_status"]["persistence_summary_status"] == "not_indexed"
+    assert diagnostic["registry_status"]["full_hive_status"] == "available_on_demand"
+    assert diagnostic["registry_status"]["hives"][1]["user_hint"] == "analyst"
+    assert "registry_persistence_summary_not_indexed" in diagnostic["coverage_gaps"]
     assert "full_registry_hive_artifact_view_not_indexed" in diagnostic["coverage_gaps"]
 
 
@@ -367,6 +371,40 @@ def test_registry_diagnostic_reports_absent_cleanly(monkeypatch):
     assert diagnostic["hives_present"] is False
     assert diagnostic["status"] == "not_present"
     assert diagnostic["available"] is False
+    assert diagnostic["registry_status"]["persistence_summary_status"] == "not_available"
+
+
+def test_registry_persistence_document_contract():
+    from app.ingest.raw_parsers.registry_persistence_summary import HiveSource, _build_document
+
+    hive = HiveSource(
+        hive="NTUSER.DAT",
+        source_path="uploads/auto/C%3A/Users/analyst/NTUSER.DAT",
+        local_path=Path("/tmp/NTUSER.DAT"),
+        root_key="HKCU",
+        user_hint="analyst",
+    )
+    row = {
+        "root_key": "HKCU",
+        "key_path": "Software\\Microsoft\\Windows\\CurrentVersion\\Run",
+        "value_name": "KaironLab01Run",
+        "value_type": "REG_SZ",
+        "value_data": "powershell.exe -ExecutionPolicy Bypass -File C:\\Users\\analyst\\Documents\\KaironLab01\\run_key_payload.ps1",
+        "category": "autorun",
+        "persistence_mechanism": "HKCU Run",
+        "last_write": "2026-06-06T18:23:56+00:00",
+    }
+
+    document = _build_document("case-1", "evidence-1", "artifact-1", {}, hive, row, "KAIRON-LAB01")
+
+    assert document["artifact"]["type"] == "registry_persistence"
+    assert document["artifact"]["parser"] == "registry_persistence_summary"
+    assert document["event"]["action"] == "registry_persistence_value_observed"
+    assert document["timestamp_semantics"] == "registry_key_last_write"
+    assert document["registry"]["timestamp_semantics"] == "registry_key_last_write"
+    assert document["user"]["name"] == "analyst"
+    assert document["risk_score"] >= 70
+    assert "registry_key_last_write_not_value_modification_time" in document["data_quality"]
 
 
 def test_validate_allowed_path_file(monkeypatch, tmp_path: Path):

@@ -363,6 +363,18 @@ export default function EvidenceDetail() {
       notify({ title: "User activity failed", description: error instanceof Error ? error.message : "The RECmd user activity job could not be queued.", tone: "error" });
     },
   });
+  const indexRegistryPersistenceSummaryMutation = useMutation({
+    mutationFn: () => api.indexEvidenceRegistryPersistenceSummary(evidenceId, { force: true }),
+    onSuccess: (result) => {
+      notify({ title: "Registry persistence queued", description: `Registry persistence summary run ${result.run_id.slice(0, 8)} was queued.`, tone: "success" });
+      void queryClient.invalidateQueries({ queryKey: ["evidence", evidenceId] });
+      void queryClient.invalidateQueries({ queryKey: ["evidence-search-summary", evidenceId] });
+      void queryClient.invalidateQueries({ queryKey: ["evidence-registry-diagnostic", evidenceId] });
+    },
+    onError: (error) => {
+      notify({ title: "Registry persistence failed", description: error instanceof Error ? error.message : "The registry persistence summary job could not be queued.", tone: "error" });
+    },
+  });
   const indexDefenderEvtxMutation = useMutation({
     mutationFn: () => api.indexEvidenceDefenderEvtx(evidenceId, { force: true }),
     onSuccess: (result) => {
@@ -902,7 +914,10 @@ export default function EvidenceDetail() {
   const mftToolAvailable = Boolean(mftStatus?.tool_available ?? mftDiagnostic?.mft_backend_available);
   const registryDiagnostic = registryDiagnosticQuery.data ?? searchSummaryQuery.data?.registry_diagnostic ?? null;
   const registryVisibleInParseMode = Boolean(registryDiagnostic?.hives_present || registryDiagnostic?.registry_events_present || registryDiagnostic?.derived_persistence_indexed);
-  const registryIsIndexing = registryDiagnostic?.status === "indexing" || registryDiagnostic?.user_activity_status === "queued" || registryDiagnostic?.user_activity_status === "running";
+  const registrySummaryStatus = registryDiagnostic?.registry_status?.persistence_summary_status ?? registryDiagnostic?.persistence_summary_status ?? "not_indexed";
+  const registryPersistenceDocs = Number(registryDiagnostic?.registry_status?.persistence_summary_docs ?? registryDiagnostic?.registry_persistence_docs ?? 0);
+  const registryIsIndexing = registryDiagnostic?.status === "indexing" || registrySummaryStatus === "queued" || registrySummaryStatus === "running" || registrySummaryStatus === "indexing" || registryDiagnostic?.user_activity_status === "queued" || registryDiagnostic?.user_activity_status === "running";
+  const registryHiveList = registryDiagnostic?.registry_status?.hives?.length ? registryDiagnostic.registry_status.hives : registryDiagnostic?.detected_hives ?? [];
   const userActivityCounts = (data?.metadata_json?.registry_user_activity_counts as Record<string, number> | undefined) ?? {};
   const userActivityTotal = Number(data?.metadata_json?.registry_user_activity_records_indexed ?? Object.values(userActivityCounts).reduce((sum, value) => sum + Number(value || 0), 0));
   const userActivityStatus = String(data?.metadata_json?.registry_user_activity_status ?? "not_indexed");
@@ -1701,42 +1716,58 @@ function formatReportStatus(status: string | null | undefined) {
                 </div>
               ) : null}
               {registryVisibleInParseMode ? (
-                <div className={`mt-4 rounded-3xl border p-4 ${registryDiagnostic?.registry_docs || registryDiagnostic?.user_activity_docs ? "border-mint/25 bg-mint/10" : registryDiagnostic?.status === "tooling_missing" ? "border-warning/40 bg-warning/10" : "border-accent/30 bg-accent/10"}`}>
+                <div className={`mt-4 rounded-3xl border p-4 ${registryPersistenceDocs || registryDiagnostic?.registry_docs || registryDiagnostic?.user_activity_docs ? "border-mint/25 bg-mint/10" : registryDiagnostic?.status === "tooling_missing" ? "border-warning/40 bg-warning/10" : "border-accent/30 bg-accent/10"}`}>
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0">
                       <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Registry</p>
                       <h4 className="mt-1 text-base font-semibold text-ink">
-                        {registryDiagnostic?.status === "indexed"
-                          ? "Registry-derived artifacts indexed"
+                        {registryPersistenceDocs
+                          ? "Registry persistence summary indexed"
                           : registryIsIndexing
                           ? "Registry indexing in progress"
                           : registryDiagnostic?.status === "tooling_missing"
                           ? "Registry hives detected · tooling missing"
-                          : "Registry hives detected · available on demand"}
+                          : "Registry hives detected · persistence summary available"}
                       </h4>
                       <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
                         <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">{registryDiagnostic?.hive_count ?? 0} hives</span>
-                        {(registryDiagnostic?.hive_names ?? []).slice(0, 6).map((name) => (
-                          <span key={name} className="rounded-full border border-line bg-abyss/60 px-2 py-1">{name}</span>
+                        {registryHiveList.slice(0, 6).map((hive, index) => (
+                          <span key={`${hive.name ?? hive.hive ?? index}`} className="rounded-full border border-line bg-abyss/60 px-2 py-1">{hive.name ?? hive.hive}{hive.size_bytes || hive.size ? ` · ${formatBytes(Number(hive.size_bytes ?? hive.size))}` : ""}</span>
                         ))}
-                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">RECmd {registryDiagnostic?.tool_available ? "available" : "missing"}</span>
+                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Persistence summary: {registryPersistenceDocs ? `${registryPersistenceDocs.toLocaleString()} docs` : registrySummaryStatus.replaceAll("_", " ")}</span>
+                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Full hive: {registryDiagnostic?.registry_status?.full_hive_status?.replaceAll("_", " ") ?? "available on demand"}</span>
                         {registryDiagnostic?.sysmon_registry_events ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Sysmon registry events: {registryDiagnostic.sysmon_registry_events.toLocaleString()}</span> : null}
                         {registryDiagnostic?.security_4657_events ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Security 4657: {registryDiagnostic.security_4657_events.toLocaleString()}</span> : null}
                       </div>
                       <p className="mt-2 text-sm text-muted">
-                        {registryDiagnostic?.registry_docs
-                          ? `${registryDiagnostic.registry_docs.toLocaleString()} registry records are indexed.`
+                        {registryPersistenceDocs
+                          ? "Common autorun, service, Winlogon, IFEO, Defender and RDP registry persistence/configuration keys are indexed with LastWrite semantics."
                           : registryDiagnostic?.tool_available
-                          ? "Startup & Persistence uses derived registry evidence, but full hive records are not indexed by default. Use scoped RECmd indexing for user activity and persistence-adjacent registry evidence."
-                          : "RECmd is required before registry hives can be parsed on demand."}
+                          ? "Extracts common persistence and configuration keys from registry hives without indexing the full registry. LastWrite is shown as key LastWrite, not a value modification event."
+                          : "The python-registry backend is required before registry hives can be parsed on demand."}
                       </p>
                       {registryDiagnostic?.coverage_gaps?.length ? <p className="mt-2 text-xs text-muted">Coverage: {registryDiagnostic.coverage_gaps.join(", ")}</p> : null}
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-2">
-                      {registryDiagnostic?.registry_docs || registryDiagnostic?.user_activity_docs ? (
-                        <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=registry` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
-                          Open registry artifacts
+                      {registryPersistenceDocs ? (
+                        <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=registry_persistence` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
+                          Open Registry Persistence
                         </Link>
+                      ) : null}
+                      {registryDiagnostic?.tool_available ? (
+                        <button
+                          type="button"
+                          disabled={conflictingIndexingActionsDisabled || registryIsIndexing || indexRegistryPersistenceSummaryMutation.isPending}
+                          onClick={() => {
+                            const message = registryPersistenceDocs
+                              ? "Rebuild registry persistence summary? This replaces existing registry_persistence docs scoped to this evidence only."
+                              : "Index registry persistence summary? This is scoped to common persistence/configuration keys and does not index full hives.";
+                            if (window.confirm(message)) indexRegistryPersistenceSummaryMutation.mutate();
+                          }}
+                          className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-60"
+                        >
+                          {indexRegistryPersistenceSummaryMutation.isPending || registrySummaryStatus === "queued" ? "Queueing summary..." : registrySummaryStatus === "running" || registrySummaryStatus === "indexing" ? "Indexing summary..." : registryPersistenceDocs ? "Re-index persistence summary" : "Index registry persistence summary"}
+                        </button>
                       ) : null}
                       {registryDiagnostic?.tool_available ? (
                         <button

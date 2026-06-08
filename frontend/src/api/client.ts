@@ -1011,6 +1011,8 @@ export type RegistryDiagnostic = {
   hive_names: string[];
   hives_indexed: boolean;
   registry_docs: number;
+  registry_persistence_docs: number;
+  persistence_summary_status: string;
   registry_events_present: boolean;
   registry_events_indexed: boolean;
   registry_event_docs: number;
@@ -1023,8 +1025,15 @@ export type RegistryDiagnostic = {
   tool_available: boolean;
   recommended_mode: string;
   actions: string[];
+  registry_status?: {
+    hives_present: boolean;
+    hives: Array<{ hive?: string; name?: string; path?: string; source_path?: string; size_bytes?: number | null; size?: number | null; user_hint?: string | null; available?: boolean }>;
+    persistence_summary_status: string;
+    persistence_summary_docs: number;
+    full_hive_status: string;
+  };
   coverage_gaps: string[];
-  detected_hives: Array<{ name: string; source_path: string; artifact_type: string; parser: string; status: string; reason: string; size?: number | null }>;
+  detected_hives: Array<{ name: string; hive?: string; source_path: string; artifact_type: string; parser: string; status: string; reason: string; size?: number | null; size_bytes?: number | null; user_hint?: string | null }>;
 };
 
 export type MftDiagnostic = {
@@ -3127,6 +3136,7 @@ export const api = {
   indexEvidenceMftSummary: (evidenceId: string, payload: { max_records?: number | null; force?: boolean } = {}) => request<{ accepted: boolean; run_id: string; evidence_id: string; status: string; backend: string; mode: string }>(`/evidences/${evidenceId}/mft-summary-index`, { method: "POST", body: JSON.stringify(payload) }),
   indexEvidenceMftFull: (evidenceId: string, payload: { max_records?: number | null; force?: boolean } = {}) => request<{ accepted: boolean; run_id: string; evidence_id: string; status: string; backend: string; mode: string }>(`/evidences/${evidenceId}/mft-full-index`, { method: "POST", body: JSON.stringify(payload) }),
   indexEvidenceRecmdUserActivity: (evidenceId: string, payload: { force?: boolean } = {}) => request<{ accepted: boolean; run_id: string; evidence_id: string; status: string; backend: string; mode: string }>(`/evidences/${evidenceId}/recmd-user-activity-index`, { method: "POST", body: JSON.stringify(payload) }),
+  indexEvidenceRegistryPersistenceSummary: (evidenceId: string, payload: { force?: boolean } = {}) => request<{ accepted: boolean; run_id: string; evidence_id: string; status: string; backend: string; mode: string }>(`/evidences/${evidenceId}/registry-persistence-summary-index`, { method: "POST", body: JSON.stringify(payload) }),
   indexEvidenceDefenderEvtx: (evidenceId: string, payload: { force?: boolean } = {}) => request<{ accepted: boolean; run_id: string; evidence_id: string; status: string; parser: string; mode: string }>(`/evidences/${evidenceId}/defender-evtx-index`, { method: "POST", body: JSON.stringify(payload) }),
   indexEvidenceSrum: (evidenceId: string, payload: { force?: boolean } = {}) => request<{ accepted: boolean; run_id: string; evidence_id: string; status: string; backend: string; mode: string }>(`/evidences/${evidenceId}/srum-index`, { method: "POST", body: JSON.stringify(payload) }),
   rebuildEvidenceCoreEzArtifact: (evidenceId: string, artifactType: string, payload: { force?: boolean } = {}) => request<{ accepted: boolean; run_id: string; evidence_id: string; status: string; artifact_type: string; tool: string; backend: string; backend_variant: string }>(`/evidences/${evidenceId}/core-ez-rebuild/${artifactType}`, { method: "POST", body: JSON.stringify(payload) }),
