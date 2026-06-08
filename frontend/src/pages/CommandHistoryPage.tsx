@@ -365,6 +365,15 @@ export default function CommandHistoryPage() {
                       >
                         {item.command}
                       </div>
+                      {item.registry_command ? (
+                        <div className="mt-1 flex flex-wrap gap-1 text-[11px]">
+                          <span className="rounded-full border border-cyan-700/60 bg-cyan-950/40 px-2 py-0.5 text-cyan-200">Registry command evidence</span>
+                          <span className="rounded-full border border-zinc-700 px-2 py-0.5 text-zinc-300">{item.registry_command.operation || "unknown"}</span>
+                          <span className={`rounded-full border px-2 py-0.5 ${item.registry_command.confirmed_by_registry_event ? "border-emerald-700/60 text-emerald-200" : "border-amber-700/60 text-amber-200"}`}>
+                            {item.registry_command.confirmed_by_registry_event ? "confirmed by registry event" : "not confirmed by registry event"}
+                          </span>
+                        </div>
+                      ) : null}
                       {item.risk_reasons.length ? <div className="mt-1 truncate text-xs text-amber-300">{item.risk_reasons.join(" · ")}</div> : null}
                     </td>
                     <td className="px-3 py-3 text-zinc-300" title={item.user ?? ""}>
@@ -422,6 +431,14 @@ export default function CommandHistoryPage() {
                             <div><span className="text-zinc-500">Parent:</span> {valueOrDash(item.parent_process?.name || item.parent_process?.executable)}</div>
                             <div><span className="text-zinc-500">Parent command:</span> <span className="break-words font-mono text-xs">{valueOrDash(item.parent_process?.command_line)}</span></div>
                             <div><span className="text-zinc-500">Risk reasons:</span> {item.risk_reasons.length ? item.risk_reasons.join(" · ") : "-"}</div>
+                            {item.registry_command ? (
+                              <div className="rounded-md border border-cyan-900/60 bg-cyan-950/20 p-3 text-xs">
+                                <div><span className="text-zinc-500">Registry operation:</span> {valueOrDash(item.registry_command.operation)}</div>
+                                <div><span className="text-zinc-500">Registry path:</span> <span className="break-words font-mono">{valueOrDash(item.registry_command.registry_path)}</span></div>
+                                <div><span className="text-zinc-500">Confidence:</span> command evidence</div>
+                                <div><span className="text-zinc-500">Confirmed by registry event:</span> {item.registry_command.confirmed_by_registry_event ? "yes" : "no"}</div>
+                              </div>
+                            ) : null}
                             <div className="flex flex-wrap gap-2 pt-2">
                               <Link className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" to={item.linked_search_url}>
                                 Open search

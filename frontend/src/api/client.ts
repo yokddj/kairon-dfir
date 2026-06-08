@@ -1017,7 +1017,22 @@ export type RegistryDiagnostic = {
   registry_events_indexed: boolean;
   registry_event_docs: number;
   sysmon_registry_events: number;
+  sysmon_event_12_count?: number;
+  sysmon_event_13_count?: number;
+  sysmon_event_14_count?: number;
   security_4657_events: number;
+  registry_command_evidence_count?: number;
+  registry_modification_coverage?: {
+    sysmon_registry_events_present: boolean;
+    sysmon_event_12_count: number;
+    sysmon_event_13_count: number;
+    sysmon_event_14_count: number;
+    security_4657_present: boolean;
+    security_4657_count: number;
+    registry_command_evidence_count: number;
+    registry_event_docs_indexed: number;
+    status: "not_present" | "indexed" | "available_from_event_logs" | "not_collected" | string;
+  };
   derived_persistence_indexed: boolean;
   service_registry_docs: number;
   user_activity_docs: number;
@@ -2266,6 +2281,7 @@ export type CommandHistoryItem = {
   parent_shell?: string | null;
   parent_context?: string | null;
   source_type: string;
+  artifact_type?: string | null;
   source_event_id?: string | null;
   windows_event_id?: string | number | null;
   source_file?: string | null;
@@ -2290,6 +2306,16 @@ export type CommandHistoryItem = {
   confidence: "high" | "medium" | "low";
   dedupe_key?: string;
   raw_payload?: string | null;
+  registry_command?: {
+    command_line?: string | null;
+    registry_path?: string | null;
+    operation?: string | null;
+    confidence?: "command_evidence" | string | null;
+    confirmed_by_registry_event?: boolean;
+    linked_registry_event_ids?: string[];
+    key_entity?: string | null;
+    snippet?: string | null;
+  } | null;
   supporting_events: CommandHistorySupportingEvent[];
   linked_search_url: string;
 };

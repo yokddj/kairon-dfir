@@ -606,14 +606,71 @@ def _registry_backend_available() -> bool:
         return False
 
 
-def _safe_count_registry_docs(item: Evidence, artifact_type: str | None = None, event_codes: list[str] | None = None) -> int:
+def _safe_count_registry_docs(item: Evidence, artifact_type: str | None = None, event_codes: list[str] | None = None, provider_contains: str | None = None) -> int:
     filters: list[dict[str, Any]] = [{"term": {"evidence_id": item.id}}]
     if artifact_type:
         filters.append({"term": {"artifact.type": artifact_type}})
     if event_codes:
-        filters.append({"terms": {"event.code": event_codes}})
+        numeric_codes = [int(code) for code in event_codes if str(code).isdigit()]
+        filters.append(
+            {
+                "bool": {
+                    "should": [
+                        {"terms": {"event.code": event_codes}},
+                        {"terms": {"windows.event_id": numeric_codes}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
+    if provider_contains:
+        filters.append(
+            {
+                "bool": {
+                    "should": [
+                        {"wildcard": {"event.provider": {"value": f"*{provider_contains}*", "case_insensitive": True}}},
+                        {"wildcard": {"windows.provider": {"value": f"*{provider_contains}*", "case_insensitive": True}}},
+                        {"wildcard": {"event.channel": {"value": f"*{provider_contains}*", "case_insensitive": True}}},
+                        {"wildcard": {"windows.channel": {"value": f"*{provider_contains}*", "case_insensitive": True}}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            }
+        )
     try:
         return int((count_documents(get_events_index(item.case_id), {"bool": {"filter": filters}}).get("count") or 0))
+    except Exception:
+        return 0
+
+
+def _safe_count_registry_command_docs(item: Evidence) -> int:
+    filters: list[dict[str, Any]] = [{"term": {"evidence_id": item.id}}]
+    query = {
+        "bool": {
+            "filter": filters,
+            "must": [
+                {
+                    "query_string": {
+                        "query": r'("reg add" OR "reg delete" OR "reg import" OR "reg load" OR "reg unload" OR Set-ItemProperty OR New-ItemProperty OR Remove-ItemProperty)',
+                        "fields": ["process.command_line", "powershell.command", "powershell.command_preview", "search_text"],
+                        "default_operator": "OR",
+                    }
+                },
+                {
+                    "bool": {
+                        "should": [
+                            {"wildcard": {field: {"value": pattern, "case_insensitive": True}}}
+                            for field in ["process.command_line", "powershell.command", "powershell.command_preview", "search_text"]
+                            for pattern in ["*HKLM\\\\*", "*HKCU\\\\*", "*HKU\\\\*", "*HKLM:\\\\*", "*HKCU:\\\\*", "*Registry::HKEY_LOCAL_MACHINE\\\\*", "*Registry::HKEY_CURRENT_USER\\\\*", "*HKEY_LOCAL_MACHINE\\\\*", "*HKEY_CURRENT_USER\\\\*", "*HKEY_USERS\\\\*"]
+                        ],
+                        "minimum_should_match": 1,
+                    }
+                }
+            ],
+        }
+    }
+    try:
+        return int((count_documents(get_events_index(item.case_id), query).get("count") or 0))
     except Exception:
         return 0
 
@@ -650,8 +707,12 @@ def build_registry_diagnostic(item: Evidence, db: Session) -> dict[str, Any]:
     registry_docs = _safe_count_registry_docs(item, "registry")
     registry_persistence_docs = _safe_count_registry_docs(item, "registry_persistence")
     registry_event_docs = _safe_count_registry_docs(item, "registry_event")
-    sysmon_registry_events = _safe_count_registry_docs(item, event_codes=["12", "13", "14"])
+    sysmon_event_12_count = _safe_count_registry_docs(item, event_codes=["12"], provider_contains="sysmon")
+    sysmon_event_13_count = _safe_count_registry_docs(item, event_codes=["13"], provider_contains="sysmon")
+    sysmon_event_14_count = _safe_count_registry_docs(item, event_codes=["14"], provider_contains="sysmon")
+    sysmon_registry_events = sysmon_event_12_count + sysmon_event_13_count + sysmon_event_14_count
     security_registry_events = _safe_count_registry_docs(item, event_codes=["4657"])
+    registry_command_evidence_count = _safe_count_registry_command_docs(item)
     service_docs = _safe_count_registry_docs(item, "service")
     user_activity_counts = metadata.get("registry_user_activity_counts") if isinstance(metadata.get("registry_user_activity_counts"), dict) else {}
     user_activity_docs = int(metadata.get("registry_user_activity_records_indexed") or (sum(int(value or 0) for value in user_activity_counts.values()) if user_activity_counts else 0))
@@ -668,6 +729,7 @@ def build_registry_diagnostic(item: Evidence, db: Session) -> dict[str, Any]:
     else:
         persistence_summary_status = "not_available"
     status = "indexed" if registry_persistence_docs > 0 or registry_docs > 0 else "indexing" if persistence_summary_status in {"queued", "running", "indexing"} or user_activity_status in {"queued", "running"} else "tooling_missing" if hive_candidates and not backend_available else "available_on_demand" if hive_candidates else "not_present"
+    modification_status = "indexed" if registry_event_docs > 0 else "available_from_event_logs" if sysmon_registry_events or security_registry_events else "not_present"
     detected_hives = [
         {
             "name": _registry_hive_name(entry),
@@ -705,7 +767,22 @@ def build_registry_diagnostic(item: Evidence, db: Session) -> dict[str, Any]:
         "registry_events_indexed": registry_event_docs > 0,
         "registry_event_docs": registry_event_docs,
         "sysmon_registry_events": sysmon_registry_events,
+        "sysmon_event_12_count": sysmon_event_12_count,
+        "sysmon_event_13_count": sysmon_event_13_count,
+        "sysmon_event_14_count": sysmon_event_14_count,
         "security_4657_events": security_registry_events,
+        "registry_command_evidence_count": registry_command_evidence_count,
+        "registry_modification_coverage": {
+            "sysmon_registry_events_present": bool(sysmon_registry_events),
+            "sysmon_event_12_count": sysmon_event_12_count,
+            "sysmon_event_13_count": sysmon_event_13_count,
+            "sysmon_event_14_count": sysmon_event_14_count,
+            "security_4657_present": bool(security_registry_events),
+            "security_4657_count": security_registry_events,
+            "registry_command_evidence_count": registry_command_evidence_count,
+            "registry_event_docs_indexed": registry_event_docs,
+            "status": modification_status,
+        },
         "derived_persistence_indexed": service_docs > 0 or user_activity_docs > 0 or registry_persistence_docs > 0,
         "service_registry_docs": service_docs,
         "user_activity_docs": user_activity_docs,

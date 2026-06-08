@@ -342,6 +342,9 @@ def test_registry_diagnostic_detects_hives_available_on_demand(monkeypatch):
     assert diagnostic["registry_status"]["persistence_summary_status"] == "not_indexed"
     assert diagnostic["registry_status"]["full_hive_status"] == "available_on_demand"
     assert diagnostic["registry_status"]["hives"][1]["user_hint"] == "analyst"
+    assert diagnostic["registry_modification_coverage"]["status"] == "not_present"
+    assert diagnostic["registry_modification_coverage"]["sysmon_event_13_count"] == 0
+    assert diagnostic["registry_modification_coverage"]["security_4657_count"] == 0
     assert "registry_persistence_summary_not_indexed" in diagnostic["coverage_gaps"]
     assert "full_registry_hive_artifact_view_not_indexed" in diagnostic["coverage_gaps"]
 
@@ -372,6 +375,7 @@ def test_registry_diagnostic_reports_absent_cleanly(monkeypatch):
     assert diagnostic["status"] == "not_present"
     assert diagnostic["available"] is False
     assert diagnostic["registry_status"]["persistence_summary_status"] == "not_available"
+    assert diagnostic["registry_modification_coverage"]["status"] == "not_present"
 
 
 def test_registry_persistence_document_contract():
