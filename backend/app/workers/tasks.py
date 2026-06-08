@@ -58,6 +58,7 @@ from app.ingest.raw_parsers.evtxecmd_backend import EVTXECMD_BACKEND_CSV, EVTX_R
 from app.ingest.raw_parsers.defender_evtx_backend import DEFENDER_EVTX_BACKEND, build_defender_documents_from_sources, iter_defender_evtx_source_docs
 from app.ingest.raw_parsers.mftecmd_backend import MFTECMD_BACKEND_CSV, detect_mftecmd_backend, iter_mftecmd_raw_full_batches, iter_mftecmd_raw_summary_batches
 from app.ingest.raw_parsers.recmd_backend import RECMD_BACKEND_CSV, USER_ACTIVITY_ARTIFACT_TYPES, detect_recmd_backend, iter_recmd_user_activity_batches
+from app.ingest.raw_parsers.registry_persistence_summary import PARSER_NAME as REGISTRY_PERSISTENCE_PARSER, REGISTRY_ARTIFACT_TYPE as REGISTRY_PERSISTENCE_ARTIFACT_TYPE, detect_registry_persistence_backend, iter_registry_persistence_batches
 from app.ingest.raw_parsers.srumecmd_backend import SRUMECMD_BACKEND_CSV, detect_srumecmd_backend, find_srum_databases, iter_srumecmd_batches
 from app.ingest.raw_parsers.evtx_parser import EvtxRawParser
 from app.ingest.eztools.mftecmd import iter_mftecmd_batches
@@ -437,6 +438,16 @@ def enqueue_mft_full_index(evidence_id: str, *, max_records: int | None = None, 
 def enqueue_recmd_user_activity_index(evidence_id: str, *, force: bool = False) -> str:
     job = ingest_queue.enqueue(
         "app.workers.tasks.index_recmd_user_activity_for_evidence",
+        evidence_id,
+        force,
+        job_timeout=max(int(settings.artifact_retry_job_timeout_seconds or settings.ingest_job_timeout_seconds or 0), 60),
+    )
+    return job.id
+
+
+def enqueue_registry_persistence_summary_index(evidence_id: str, *, force: bool = False) -> str:
+    job = ingest_queue.enqueue(
+        "app.workers.tasks.index_registry_persistence_summary_for_evidence",
         evidence_id,
         force,
         job_timeout=max(int(settings.artifact_retry_job_timeout_seconds or settings.ingest_job_timeout_seconds or 0), 60),
@@ -6260,6 +6271,60 @@ def _update_recmd_user_activity_metadata(evidence_id: str, run: dict) -> None:
         isolated_db.close()
 
 
+def _registry_persistence_docs_count(case_id: str, evidence_id: str) -> int:
+    try:
+        return int(
+            (
+                count_documents(
+                    get_events_index(case_id),
+                    {
+                        "bool": {
+                            "filter": [
+                                {"term": {"case_id": case_id}},
+                                {"term": {"evidence_id": evidence_id}},
+                                {"term": {"artifact.type": REGISTRY_PERSISTENCE_ARTIFACT_TYPE}},
+                                {"term": {"artifact.parser": REGISTRY_PERSISTENCE_PARSER}},
+                            ]
+                        }
+                    },
+                ).get("count")
+                or 0
+            )
+        )
+    except Exception:
+        return 0
+
+
+def _update_registry_persistence_summary_metadata(evidence_id: str, run: dict) -> None:
+    isolated_db = SessionLocal()
+    try:
+        evidence = isolated_db.get(Evidence, evidence_id)
+        if not evidence:
+            return
+        metadata = dict(evidence.metadata_json or {})
+        runs = [item for item in list(metadata.get("registry_persistence_summary_runs") or []) if isinstance(item, dict) and str(item.get("run_id") or "") != str(run.get("run_id") or "")]
+        runs.append(run)
+        metadata["registry_persistence_summary_runs"] = runs[-10:]
+        metadata["registry_persistence_summary"] = dict(run)
+        metadata["registry_persistence_summary_status"] = run.get("status") or metadata.get("registry_persistence_summary_status")
+        metadata["registry_persistence_summary_records_indexed"] = int(run.get("records_indexed") or metadata.get("registry_persistence_summary_records_indexed") or 0)
+        metadata["registry_persistence_summary_hives_total"] = int(run.get("hives_total") or metadata.get("registry_persistence_summary_hives_total") or 0)
+        metadata["registry_persistence_summary_hives_processed"] = int(run.get("hives_processed") or metadata.get("registry_persistence_summary_hives_processed") or 0)
+        metadata["registry_persistence_summary_hives_failed"] = int(run.get("hives_failed") or metadata.get("registry_persistence_summary_hives_failed") or 0)
+        metadata["registry_persistence_summary_keys_scanned"] = int(run.get("keys_scanned") or metadata.get("registry_persistence_summary_keys_scanned") or 0)
+        metadata["registry_persistence_summary_backend"] = run.get("backend") or metadata.get("registry_persistence_summary_backend")
+        metadata["registry_persistence_summary_started_at"] = run.get("started_at") or metadata.get("registry_persistence_summary_started_at")
+        metadata["registry_persistence_summary_finished_at"] = run.get("finished_at") or metadata.get("registry_persistence_summary_finished_at")
+        metadata["registry_persistence_summary_elapsed_seconds"] = float(run.get("elapsed_seconds") or metadata.get("registry_persistence_summary_elapsed_seconds") or 0)
+        metadata["registry_persistence_summary_errors"] = list(run.get("errors") or metadata.get("registry_persistence_summary_errors") or [])
+        if run.get("status") == "completed" and int(run.get("records_indexed") or 0) > 0:
+            metadata["investigation_ready"] = True
+        evidence.metadata_json = merge_evidence_metadata(evidence.metadata_json or {}, metadata)
+        isolated_db.commit()
+    finally:
+        isolated_db.close()
+
+
 def _srum_docs_count(case_id: str, evidence_id: str) -> int:
     try:
         index = get_events_index(case_id)
@@ -7239,6 +7304,183 @@ def index_recmd_user_activity_for_evidence(evidence_id: str, force: bool = False
     except Exception as exc:  # noqa: BLE001
         logger.exception("RECmd user activity indexing failed for evidence %s", evidence_id)
         _update_recmd_user_activity_metadata(evidence_id, {"run_id": run_id, "status": "failed", "started_at": started_at, "finished_at": utc_now().isoformat(), "backend": RECMD_BACKEND_CSV, "error": str(exc)})
+        raise
+    finally:
+        db.close()
+
+
+def index_registry_persistence_summary_for_evidence(evidence_id: str, force: bool = False) -> dict:
+    run_id = f"registry-persistence-summary-{evidence_id}-{int(time.time())}"
+    started_at = utc_now().isoformat()
+    _update_registry_persistence_summary_metadata(
+        evidence_id,
+        {
+            "run_id": run_id,
+            "status": "running",
+            "started_at": started_at,
+            "finished_at": None,
+            "backend": "python-registry",
+            "records_indexed": 0,
+            "hives_total": 0,
+            "hives_processed": 0,
+            "hives_failed": 0,
+            "keys_scanned": 0,
+        },
+    )
+    db = SessionLocal()
+    try:
+        evidence = db.get(Evidence, evidence_id)
+        if not evidence:
+            raise RuntimeError("Evidence not found")
+        existing_count = _registry_persistence_docs_count(evidence.case_id, evidence.id)
+        if existing_count > 0 and not force:
+            result = {
+                "run_id": run_id,
+                "status": "completed",
+                "started_at": started_at,
+                "finished_at": utc_now().isoformat(),
+                "backend": "python-registry",
+                "records_indexed": existing_count,
+                "hives_total": int((evidence.metadata_json or {}).get("registry_persistence_summary_hives_total") or 0),
+                "hives_processed": int((evidence.metadata_json or {}).get("registry_persistence_summary_hives_processed") or 0),
+                "hives_failed": int((evidence.metadata_json or {}).get("registry_persistence_summary_hives_failed") or 0),
+                "keys_scanned": int((evidence.metadata_json or {}).get("registry_persistence_summary_keys_scanned") or 0),
+                "elapsed_seconds": 0,
+                "warnings": ["registry_persistence_summary_already_indexed"],
+            }
+            _update_registry_persistence_summary_metadata(evidence_id, result)
+            return result
+        backend = detect_registry_persistence_backend()
+        if not backend.get("available"):
+            raise RuntimeError(str(backend.get("error") or "Registry persistence backend is not available"))
+        index_name = ensure_case_index(evidence.case_id)
+        if existing_count > 0 and force:
+            try:
+                get_opensearch_client().delete_by_query(
+                    index=index_name,
+                    body={
+                        "query": {
+                            "bool": {
+                                "filter": [
+                                    {"term": {"case_id": evidence.case_id}},
+                                    {"term": {"evidence_id": evidence.id}},
+                                    {"term": {"artifact.type": REGISTRY_PERSISTENCE_ARTIFACT_TYPE}},
+                                    {"term": {"artifact.parser": REGISTRY_PERSISTENCE_PARSER}},
+                                ]
+                            }
+                        }
+                    },
+                    params={"refresh": "true", "ignore_unavailable": "true"},
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not clear previous registry persistence docs for evidence %s: %s", evidence.id, exc)
+        artifact = (
+            db.query(Artifact)
+            .filter(Artifact.evidence_id == evidence.id, Artifact.artifact_type == REGISTRY_PERSISTENCE_ARTIFACT_TYPE, Artifact.parser == REGISTRY_PERSISTENCE_PARSER)
+            .first()
+        )
+        if not artifact:
+            artifact = Artifact(case_id=evidence.case_id, evidence_id=evidence.id, name="Registry Persistence Summary", artifact_type=REGISTRY_PERSISTENCE_ARTIFACT_TYPE, source_path="registry hives", parser=REGISTRY_PERSISTENCE_PARSER, status="processing", record_count=0)
+            db.add(artifact)
+            db.commit()
+            db.refresh(artifact)
+        else:
+            artifact.status = "processing"
+            db.commit()
+        manifest_path = evidence_manifest_path(evidence.case_id, evidence.id)
+        if manifest_path.exists():
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except Exception:
+                manifest = default_manifest(evidence)
+        else:
+            manifest = default_manifest(evidence)
+        metadata = dict(evidence.metadata_json or {})
+        runtime_settings = load_runtime_settings(db)
+        batch_size = max(int(runtime_settings.get("OPENSEARCH_BULK_DOCS") or settings.opensearch_bulk_docs or 1000), 1)
+        artifact_meta = {
+            "name": artifact.name,
+            "source_path": artifact.source_path,
+            "artifact_type": REGISTRY_PERSISTENCE_ARTIFACT_TYPE,
+            "parser": REGISTRY_PERSISTENCE_PARSER,
+            "detected_host": str(metadata.get("provided_host") or evidence.detected_host or "").strip() or None,
+            "provided_host": str(metadata.get("provided_host") or "").strip() or None,
+            "detected_user": evidence.detected_user,
+            "run_id": run_id,
+        }
+        started = time.perf_counter()
+        indexed = 0
+        latest: dict = {}
+        for batch, progress in iter_registry_persistence_batches(
+            case_id=evidence.case_id,
+            evidence_id=evidence.id,
+            artifact_id=artifact.id,
+            artifact_meta=artifact_meta,
+            metadata=metadata,
+            manifest=manifest,
+            batch_size=batch_size,
+        ):
+            latest = dict(progress)
+            if batch:
+                bulk_index_events_with_report(
+                    evidence.case_id,
+                    batch,
+                    index=index_name,
+                    refresh=False,
+                    max_bulk_docs=batch_size,
+                    max_bulk_bytes=int(runtime_settings.get("OPENSEARCH_BULK_BYTES") or settings.opensearch_bulk_bytes or 10485760),
+                    apply_host_identity=False,
+                    apply_fingerprint=False,
+                )
+                indexed += len(batch)
+            latest["records_indexed"] = indexed
+            _update_registry_persistence_summary_metadata(
+                evidence_id,
+                {
+                    "run_id": run_id,
+                    "status": "running",
+                    "started_at": started_at,
+                    "finished_at": None,
+                    "backend": latest.get("backend") or "python-registry",
+                    "records_indexed": indexed,
+                    "hives_total": int(latest.get("hives_total") or 0),
+                    "hives_processed": int(latest.get("hives_processed") or 0),
+                    "hives_failed": int(latest.get("hives_failed") or 0),
+                    "keys_scanned": int(latest.get("keys_scanned") or 0),
+                    "current_hive": latest.get("current_hive"),
+                    "current_key": latest.get("current_key"),
+                    "errors": latest.get("errors") or [],
+                    "elapsed_seconds": round(time.perf_counter() - started, 2),
+                    "artifact_id": artifact.id,
+                },
+            )
+        refresh_index(index_name, raise_on_error=False)
+        final_count = _registry_persistence_docs_count(evidence.case_id, evidence.id)
+        artifact.record_count = final_count
+        artifact.status = "completed" if final_count else "parsed_empty"
+        db.commit()
+        result = {
+            "run_id": run_id,
+            "status": "completed",
+            "started_at": started_at,
+            "finished_at": utc_now().isoformat(),
+            "backend": latest.get("backend") or "python-registry",
+            "records_indexed": final_count,
+            "hives_total": int(latest.get("hives_total") or 0),
+            "hives_processed": int(latest.get("hives_processed") or 0),
+            "hives_failed": int(latest.get("hives_failed") or 0),
+            "keys_scanned": int(latest.get("keys_scanned") or 0),
+            "errors": latest.get("errors") or [],
+            "elapsed_seconds": round(time.perf_counter() - started, 2),
+            "artifact_id": artifact.id,
+            "warnings": [] if final_count else ["registry_persistence_summary_no_data"],
+        }
+        _update_registry_persistence_summary_metadata(evidence_id, result)
+        log_activity(db, activity_type="registry_persistence_summary_indexed", title="Registry persistence summary indexed", message=f"Indexed {final_count} registry persistence records for {evidence.original_filename}", case_id=evidence.case_id, evidence_id=evidence.id, metadata=result)
+        return result
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Registry persistence summary indexing failed for evidence %s", evidence_id)
+        _update_registry_persistence_summary_metadata(evidence_id, {"run_id": run_id, "status": "failed", "started_at": started_at, "finished_at": utc_now().isoformat(), "backend": "python-registry", "error": str(exc)})
         raise
     finally:
         db.close()

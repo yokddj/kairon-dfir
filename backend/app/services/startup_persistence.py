@@ -27,7 +27,7 @@ SOURCE_QUERIES: list[dict[str, Any]] = [
     {"source": "scheduled_tasks", "artifact_types": ["scheduled_task", "scheduled_tasks", "windows_event"], "queries": ["schtasks", "scheduled task", "TaskCache"], "limit": 40},
     {"source": "services", "artifact_types": ["service", "services", "windows_event", "process"], "queries": ["PSEXESVC", "service control manager", "sc create", "New-Service"], "limit": 40},
     {"source": "autoruns", "artifact_types": ["autoruns", "autorun"], "queries": ["Run", "RunOnce", "Startup"], "limit": 40},
-    {"source": "registry_autoruns", "artifact_types": ["registry", "windows_event"], "queries": ["RunOnce", "CurrentVersion Run", "Winlogon", "Userinit", "AppInit_DLLs", "IFEO Debugger"], "limit": 35},
+    {"source": "registry_autoruns", "artifact_types": ["registry", "registry_persistence", "windows_event"], "queries": ["RunOnce", "CurrentVersion Run", "Winlogon", "Userinit", "AppInit_DLLs", "IFEO Debugger", "Defender Exclusion"], "limit": 35},
     {"source": "startup_folders", "artifact_types": ["mft", "lnk", "jumplist"], "queries": ["Startup", "Start Menu Programs Startup"], "limit": 35},
     {"source": "wmi", "artifact_types": ["wmi", "windows_event"], "queries": ["EventConsumer", "EventFilter", "CommandLineEventConsumer", "__EventFilter"], "limit": 35},
     {"source": "defender_config", "artifact_types": ["defender", "windows_event"], "queries": ["DisableRealtimeMonitoring", "Exclusion", "SpyNetReporting", "Tamper Defender"], "limit": 35},
@@ -176,7 +176,15 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
     process = _obj(row.get("process"))
     user = _obj(row.get("user"))
     windows = _obj(row.get("windows"))
+    registry = _obj(row.get("registry"))
     raw = _obj(row.get("raw"))
+    source_doc = _obj(raw.get("raw"))
+    if not registry:
+        registry = _obj(source_doc.get("registry"))
+    if not persistence:
+        persistence = _obj(source_doc.get("persistence"))
+    if not user:
+        user = _obj(source_doc.get("user"))
     artifact_type = str(artifact.get("type") or row.get("artifact_type") or "").lower()
     text = " ".join(
         str(value or "")
@@ -185,6 +193,9 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
             task.get("arguments"),
             service.get("image_path"),
             service.get("path"),
+            registry.get("value_data"),
+            registry.get("value_data_summary"),
+            registry.get("key_path"),
             persistence.get("command"),
             persistence.get("path"),
             autoruns.get("image_path"),
@@ -201,6 +212,8 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
     item_type = _classify_type(source, artifact_type, row, text)
     name = _first(
         persistence.get("name"),
+        registry.get("value_name"),
+        registry.get("persistence_mechanism"),
         autoruns.get("entry"),
         task.get("name"),
         task.get("path"),
@@ -215,6 +228,7 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
     )
     command = _first(
         persistence.get("command"),
+        registry.get("value_data"),
         autoruns.get("command_line"),
         autoruns.get("launch_string"),
         task.get("command"),
@@ -227,7 +241,7 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
         process.get("command_line"),
         file.get("path"),
     )
-    path = _first(persistence.get("path"), autoruns.get("image_path"), task.get("path"), service.get("image_path"), service.get("path"), file.get("path"))
+    path = _first(persistence.get("path"), registry.get("value_data"), autoruns.get("image_path"), task.get("path"), service.get("image_path"), service.get("path"), file.get("path"))
     enabled = _bool_or_none(_first(task.get("enabled"), autoruns.get("enabled"), persistence.get("enabled")))
     risk_score, risk_reasons = _score_item(item_type, text, path, name, source)
     host = normalize_host_alias(str(_obj(row.get("host")).get("name") or row.get("host") or ""))
@@ -236,7 +250,7 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
     return {
         "id": _stable_id(case_id, source, source_event_id or name or command or path),
         "case_id": case_id,
-        "evidence_id": row.get("evidence_id"),
+        "evidence_id": row.get("evidence_id") or source_doc.get("evidence_id"),
         "host": host,
         "type": item_type,
         "name": name or "-",
@@ -246,10 +260,10 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
         "enabled": enabled,
         "start_type": _first(service.get("start_type"), service.get("start_mode"), persistence.get("start_type")) or "",
         "trigger": _first(task.get("trigger_summary"), task.get("trigger"), persistence.get("trigger")) or "",
-        "source_artifact": source,
+        "source_artifact": "registry_hive" if artifact_type == "registry_persistence" else source,
         "source_event_id": source_event_id,
         "first_seen": row.get("@timestamp") or row.get("timestamp"),
-        "last_modified": _first(file.get("modified"), task.get("modified"), persistence.get("last_modified"), row.get("@timestamp")),
+        "last_modified": _first(registry.get("last_write"), file.get("modified"), task.get("modified"), persistence.get("last_modified"), row.get("@timestamp")),
         "risk_score": risk_score,
         "risk_reasons": risk_reasons,
         "indicator_resolution": indicators[:10],
@@ -309,6 +323,10 @@ def _normalize_command(case_id: str, command: dict[str, Any], term: str) -> dict
 
 def _classify_type(source: str, artifact_type: str, row: dict[str, Any], text: str) -> str:
     lowered = f"{source} {artifact_type} {text}".lower()
+    if artifact_type == "registry_persistence":
+        category = str(_obj(row.get("registry")).get("category") or "").lower()
+        if category in {"autorun", "service", "winlogon", "ifeo", "defender_exclusion", "rdp", "task_cache", "active_setup"}:
+            return "run_key" if category == "autorun" else "defender_config" if category == "defender_exclusion" else "scheduled_task" if category == "task_cache" else category
     if "defender" in lowered and DEFENDER_CONFIG_RE.search(lowered):
         return "defender_config"
     if "wmi" in lowered or "eventconsumer" in lowered or "__eventfilter" in lowered:
