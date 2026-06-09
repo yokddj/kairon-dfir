@@ -19,6 +19,45 @@ const USER_ACTIVITY_TABS = [
   { value: "opensavemru", label: "OpenSaveMRU" },
 ];
 const USER_ACTIVITY_TYPES = new Set(USER_ACTIVITY_TABS.map((item) => item.value));
+const INTERNAL_ARTIFACT_TYPES_HIDDEN_FROM_MAIN = new Set(["registry_persistence"]);
+const ARTIFACT_VIEW_LABELS: Record<string, string> = {
+  amcache: "Amcache",
+  appcompat: "Shimcache",
+  autorun: "Autoruns",
+  autoruns: "Autoruns",
+  browser: "Browser History",
+  cloud_sync: "Cloud Sync",
+  defender: "Defender",
+  email: "Email Artifacts",
+  evtx: "Windows Events",
+  jumplist: "Jump Lists",
+  lnk: "LNK / Shortcuts",
+  mft: "MFT / Filesystem",
+  motw: "MOTW / Downloaded Files",
+  network: "Network",
+  powershell: "PowerShell",
+  prefetch: "Prefetch",
+  process: "Process / Execution",
+  recentdocs: "RecentDocs",
+  recycle_bin: "Recycle Bin",
+  registry: "Registry",
+  registry_command: "Registry Commands",
+  registry_event: "Registry Events",
+  scheduled_task: "Scheduled Tasks",
+  scheduled_tasks: "Scheduled Tasks",
+  service: "Services",
+  services: "Services",
+  shellbag: "Shellbags",
+  shimcache: "Shimcache",
+  srum: "SRUM",
+  startup_persistence: "Startup & Persistence",
+  usb: "USB",
+  user_activity: "User Activity",
+  userassist: "UserAssist",
+  windows_event: "Windows Events",
+  wmi: "WMI",
+  zone_identifier: "MOTW / Downloaded Files",
+};
 const EZ_BACKENDS: Record<string, { tool: string; backend: string; note: string }> = {
   lnk: { tool: "LECmd", backend: "lecmd_csv", note: "Lower coverage on HOSTA benchmark, richer target and argument fields." },
   jumplist: { tool: "JLECmd", backend: "jlecmd_csv", note: "Lower coverage on HOSTA benchmark, richer AppId, MRU and target fields." },
@@ -31,6 +70,14 @@ function riskLabel(score: number): string {
   if (score >= 70) return "High";
   if (score >= 40) return "Suspicious";
   return "Low";
+}
+
+function canonicalArtifactView(value: string | null | undefined): string {
+  return value === "registry_persistence" ? "startup_persistence" : (value ?? "");
+}
+
+function artifactViewLabel(value: string): string {
+  return ARTIFACT_VIEW_LABELS[value] ?? value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function StartupPersistenceView({
@@ -560,7 +607,7 @@ export default function ArtifactExplorer() {
   const { effectiveTimezone } = useTimezonePreference();
   const queryClient = useQueryClient();
   const [caseId, setCaseId] = useState(routeCaseId || activeCaseId);
-  const [artifactType, setArtifactType] = useState(searchParams.get("artifact_type") ?? "");
+  const [artifactType, setArtifactType] = useState(canonicalArtifactView(searchParams.get("artifact_type")));
   const [artifactName, setArtifactName] = useState("");
   const [query, setQuery] = useState(searchParams.get("q") ?? "");
   const [searchMode, setSearchMode] = useState<"smart" | "contains" | "ioc">("smart");
@@ -578,6 +625,7 @@ export default function ArtifactExplorer() {
   const [selectedEmailItem, setSelectedEmailItem] = useState<EmailArtifactItem | null>(null);
   const [persistenceSuspiciousOnly, setPersistenceSuspiciousOnly] = useState(searchParams.get("suspicious_only") === "true");
   const [persistenceType, setPersistenceType] = useState("");
+  const [persistenceSource, setPersistenceSource] = useState("");
   const [persistenceRiskMin, setPersistenceRiskMin] = useState("");
   const [motwZoneId, setMotwZoneId] = useState("");
   const [motwExtension, setMotwExtension] = useState("");
@@ -594,11 +642,11 @@ export default function ArtifactExplorer() {
   const facetsQuery = useQuery({ queryKey: ["artifact-explorer-facets", caseId], queryFn: () => api.searchFacets({ caseId: caseId || undefined }) });
   const artifactTypeOptions = Object.keys(facetsQuery.data?.["artifact.type"] ?? {});
   const artifactTypeSelectOptions = useMemo(() => {
-    const options = new Set(artifactTypeOptions);
+    const options = new Set(artifactTypeOptions.filter((option) => !INTERNAL_ARTIFACT_TYPES_HIDDEN_FROM_MAIN.has(option)));
     options.add("startup_persistence");
     options.add("motw");
     options.add("email");
-    return Array.from(options).sort();
+    return Array.from(options).sort((left, right) => artifactViewLabel(left).localeCompare(artifactViewLabel(right)));
   }, [artifactTypeOptions]);
   const artifactNameOptions = Object.keys(facetsQuery.data?.["artifact.name"] ?? {});
   const view: EventView =
@@ -630,7 +678,7 @@ export default function ArtifactExplorer() {
           ? "autoruns"
         : artifactType === "cloud_sync"
           ? "cloud_sync"
-        : artifactType === "registry"
+        : artifactType === "registry" || artifactType === "registry_event" || artifactType === "registry_command"
           ? "registry"
           : artifactType === "browser"
             ? "browser"
@@ -667,12 +715,13 @@ export default function ArtifactExplorer() {
   const isEmailView = artifactType === "email" || artifactType === "email_store" || artifactType === "webmail_activity";
   const result = useQuery({ queryKey: ["artifact-explorer", payload], queryFn: () => api.search(payload), enabled: !isStartupPersistenceView && !isMotwView && !isEmailView });
   const persistenceQuery = useQuery({
-    queryKey: ["startup-persistence", caseId, hostFilter, query, persistenceType, persistenceSuspiciousOnly, persistenceRiskMin, page, pageSize],
+    queryKey: ["startup-persistence", caseId, hostFilter, query, persistenceType, persistenceSource, persistenceSuspiciousOnly, persistenceRiskMin, page, pageSize],
     queryFn: () =>
       api.getStartupPersistence(caseId!, {
         host: hostFilter ? [hostFilter] : undefined,
         q: query || undefined,
         type: persistenceType ? [persistenceType] : undefined,
+        source: persistenceSource ? [persistenceSource] : undefined,
         suspicious_only: persistenceSuspiciousOnly,
         risk_min: persistenceRiskMin ? Number(persistenceRiskMin) : undefined,
         page,
@@ -810,7 +859,7 @@ export default function ArtifactExplorer() {
 
   useEffect(() => {
     setPage(1);
-  }, [artifactName, artifactType, backendVariant, caseId, pageSize, query, searchMode, persistenceType, persistenceSuspiciousOnly, persistenceRiskMin, motwZoneId, motwExtension, motwRiskMin, emailType, emailClient, emailInterestingOnly, emailRiskMin]);
+  }, [artifactName, artifactType, backendVariant, caseId, pageSize, query, searchMode, persistenceType, persistenceSource, persistenceSuspiciousOnly, persistenceRiskMin, motwZoneId, motwExtension, motwRiskMin, emailType, emailClient, emailInterestingOnly, emailRiskMin]);
 
   const contextualPlaceholder =
     artifactType === "mft" || artifactType === "usn"
@@ -906,9 +955,9 @@ export default function ArtifactExplorer() {
             <option value="">All cases</option>
             {(casesQuery.data ?? []).map((item: DfirCase) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
-          <select value={artifactType} onChange={(event) => setArtifactType(event.target.value)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
+          <select aria-label="Artifact view" value={artifactType} onChange={(event) => setArtifactType(canonicalArtifactView(event.target.value))} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
             <option value="">All artifact types</option>
-            {artifactTypeSelectOptions.map((option) => <option key={option} value={option}>{option === "startup_persistence" ? "Startup & Persistence" : option === "motw" ? "MOTW / Downloaded Files" : option === "email" ? "Email Artifacts" : option}</option>)}
+            {artifactTypeSelectOptions.map((option) => <option key={option} value={option}>{artifactViewLabel(option)}</option>)}
           </select>
           <select value={artifactName} onChange={(event) => setArtifactName(event.target.value)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
             <option value="">All artifact names</option>
@@ -1028,14 +1077,31 @@ export default function ArtifactExplorer() {
           <div className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4">
             <div className="flex flex-wrap items-center gap-3">
               <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Startup &amp; Persistence</span>
-              <select value={persistenceType} onChange={(event) => setPersistenceType(event.target.value)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm">
-                <option value="">All mechanisms</option>
+              <select aria-label="Persistence category" value={persistenceType} onChange={(event) => setPersistenceType(event.target.value)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm">
+                <option value="">All categories</option>
+                <option value="run_key">Run keys</option>
+                <option value="runonce">RunOnce</option>
                 <option value="scheduled_task">Scheduled Tasks</option>
                 <option value="service">Services</option>
-                <option value="run_key">Run keys</option>
                 <option value="startup_folder">Startup folders</option>
-                <option value="wmi">WMI</option>
+                <option value="winlogon">Winlogon</option>
+                <option value="ifeo">IFEO</option>
+                <option value="appinit">AppInit</option>
                 <option value="defender_config">Defender config</option>
+                <option value="task_cache">Task cache</option>
+                <option value="rdp">RDP</option>
+                <option value="active_setup">Active Setup</option>
+                <option value="wmi">WMI</option>
+              </select>
+              <select aria-label="Persistence source" value={persistenceSource} onChange={(event) => setPersistenceSource(event.target.value)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm">
+                <option value="">All sources</option>
+                <option value="registry_autoruns">Registry hive</option>
+                <option value="scheduled_tasks">Scheduled Tasks</option>
+                <option value="services">Services</option>
+                <option value="startup_folders">Startup folders</option>
+                <option value="defender_config">Defender config</option>
+                <option value="wmi">WMI</option>
+                <option value="command_history">Command evidence</option>
               </select>
               <select value={persistenceRiskMin} onChange={(event) => setPersistenceRiskMin(event.target.value)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm">
                 <option value="">Any risk</option>
@@ -1053,7 +1119,7 @@ export default function ArtifactExplorer() {
               ) : null}
             </div>
             <p className="mt-3 text-sm text-muted">
-              Aggregates Scheduled Tasks, Services, autoruns/Run keys, Startup folders, WMI indicators, Defender configuration changes and creation commands. Risk is explanatory and does not mark all OS services/tasks as malicious.
+              Aggregates Scheduled Tasks, Services, registry hive persistence, Startup folders, WMI indicators, Defender configuration changes and command evidence. Registry hive rows preserve LastWrite semantics and are not shown as observed registry modification events.
             </p>
           </div>
         ) : null}
