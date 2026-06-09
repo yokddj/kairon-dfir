@@ -388,6 +388,28 @@ describe("ArtifactExplorer", () => {
     expect(screen.getByRole("button", { name: /Export artifact debug pack/i })).toBeInTheDocument();
   });
 
+  it("uses user-facing artifact view labels and hides registry_persistence from the main selector", async () => {
+    searchFacetsMock.mockResolvedValueOnce({
+      "artifact.type": {
+        registry_persistence: 12,
+        scheduled_task: 3,
+        windows_event: 4,
+        powershell: 2,
+      },
+      "artifact.name": {},
+    });
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
+    const artifactSelector = screen.getByLabelText("Artifact view");
+    expect(artifactSelector).toHaveTextContent("Startup & Persistence");
+    expect(artifactSelector).toHaveTextContent("Scheduled Tasks");
+    expect(artifactSelector).toHaveTextContent("Windows Events");
+    expect(artifactSelector).not.toHaveTextContent("registry_persistence");
+    expect(artifactSelector).not.toHaveTextContent("scheduled_task");
+  });
+
   it("renders user activity tabs for RECmd artifacts", async () => {
     renderPage("/cases/case-1/artifact-search?artifact_type=shellbag");
     expect(await screen.findByText("User Activity")).toBeInTheDocument();
@@ -415,6 +437,8 @@ describe("ArtifactExplorer", () => {
   it("renders Startup & Persistence filters, risk reasons and actions", async () => {
     renderPage("/cases/case-1/artifact-search?artifact_type=startup_persistence&suspicious_only=true");
     expect(await screen.findByText("Startup & Persistence Items")).toBeInTheDocument();
+    expect(screen.getByLabelText("Persistence category")).toHaveTextContent("Run keys");
+    expect(screen.getByLabelText("Persistence source")).toHaveTextContent("Registry hive");
     expect(await screen.findByText("OneDriveUpdateTask")).toBeInTheDocument();
     expect(screen.getByText(/High 85/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Add to Finding/i })).toBeInTheDocument();
@@ -423,6 +447,15 @@ describe("ArtifactExplorer", () => {
     expect(await screen.findByText("Persistence detail")).toBeInTheDocument();
     expect(screen.getByText("scheduled_task_mechanism")).toBeInTheDocument();
     expect(await screen.findByText("Evidence resolution")).toBeInTheDocument();
+  });
+
+  it("routes legacy registry_persistence view requests into Startup & Persistence", async () => {
+    renderPage("/cases/case-1/artifact-search?artifact_type=registry_persistence");
+    expect(await screen.findByText("Startup & Persistence Items")).toBeInTheDocument();
+    expect(getStartupPersistenceMock).toHaveBeenCalledWith(
+      "case-1",
+      expect.objectContaining({ source: undefined, type: undefined }),
+    );
   });
 
   it("renders MOTW downloaded file details and pivots", async () => {

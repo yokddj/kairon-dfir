@@ -69,11 +69,43 @@ def test_run_key_registry_and_startup_folder_lnk_normalized(monkeypatch):
     monkeypatch.setattr(startup_persistence, "search_events_v2", fake_search)
     monkeypatch.setattr(startup_persistence, "get_command_history", lambda *_args, **_kwargs: {"items": []})
 
-    result = startup_persistence.list_startup_persistence_items(_Db(), "case-1", {"page_size": 50})
+    result = startup_persistence.list_startup_persistence_items(_Db(), "case-1", {"page_size": 50, "source": ["registry_autoruns", "startup_folders"]})
     types = {item["type"] for item in result["items"]}
 
     assert "run_key" in types
     assert "startup_folder" in types
+
+
+def test_default_startup_persistence_includes_registry_hive_source(monkeypatch):
+    seen_sources = []
+
+    def fake_search(_case_id, params, **_kwargs):
+        artifact_types = params.get("artifact_type") or []
+        if "registry_persistence" in artifact_types:
+            seen_sources.append("registry_autoruns")
+            return 1, [
+                _event(
+                    "registry_persistence",
+                    registry={
+                        "category": "autorun",
+                        "value_name": "KaironLab01Run",
+                        "value_data": r"powershell.exe -File C:\Users\analyst\Documents\KaironLab01\run_key_payload.ps1",
+                        "key_path": r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run",
+                        "last_write": "2024-03-22T11:00:00Z",
+                    },
+                )
+            ], [], {}
+        return 0, [], [], {}
+
+    monkeypatch.setattr(startup_persistence, "search_events_v2", fake_search)
+    monkeypatch.setattr(startup_persistence, "get_command_history", lambda *_args, **_kwargs: {"items": []})
+
+    result = startup_persistence.list_startup_persistence_items(_Db(), "case-1", {"page_size": 50})
+
+    assert "registry_autoruns" in seen_sources
+    assert result["items"][0]["type"] == "run_key"
+    assert result["items"][0]["source_artifact"] == "registry_hive"
+    assert result["items"][0]["name"] == "KaironLab01Run"
 
 
 def test_filters_by_host_type_and_risk(monkeypatch):

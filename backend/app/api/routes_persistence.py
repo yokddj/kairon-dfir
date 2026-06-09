@@ -24,7 +24,7 @@ def case_startup_persistence(
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> dict:
-    default_sources = ["services", "scheduled_tasks"] if not source and not q and not type else source
+    default_sources = ["services", "scheduled_tasks", "registry_autoruns"] if not source and not q and not type else source
     return list_startup_persistence_items(
         db,
         case_id,

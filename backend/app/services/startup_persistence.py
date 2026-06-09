@@ -32,16 +32,21 @@ SOURCE_QUERIES: list[dict[str, Any]] = [
     {"source": "wmi", "artifact_types": ["wmi", "windows_event"], "queries": ["EventConsumer", "EventFilter", "CommandLineEventConsumer", "__EventFilter"], "limit": 35},
     {"source": "defender_config", "artifact_types": ["defender", "windows_event"], "queries": ["DisableRealtimeMonitoring", "Exclusion", "SpyNetReporting", "Tamper Defender"], "limit": 35},
 ]
-DEFAULT_SOURCE_NAMES = {"scheduled_tasks", "services"}
+DEFAULT_SOURCE_NAMES = {"scheduled_tasks", "services", "registry_autoruns"}
 TYPE_SOURCE_HINTS = {
     "scheduled_task": {"scheduled_tasks"},
     "service": {"services"},
     "run_key": {"registry_autoruns", "autoruns"},
+    "runonce": {"registry_autoruns", "autoruns"},
     "startup_folder": {"startup_folders"},
     "wmi": {"wmi"},
     "defender_config": {"defender_config"},
     "winlogon": {"registry_autoruns"},
     "ifeo": {"registry_autoruns"},
+    "appinit": {"registry_autoruns"},
+    "task_cache": {"registry_autoruns", "scheduled_tasks"},
+    "rdp": {"registry_autoruns"},
+    "active_setup": {"registry_autoruns"},
 }
 
 
@@ -325,8 +330,8 @@ def _classify_type(source: str, artifact_type: str, row: dict[str, Any], text: s
     lowered = f"{source} {artifact_type} {text}".lower()
     if artifact_type == "registry_persistence":
         category = str(_obj(row.get("registry")).get("category") or "").lower()
-        if category in {"autorun", "service", "winlogon", "ifeo", "defender_exclusion", "rdp", "task_cache", "active_setup"}:
-            return "run_key" if category == "autorun" else "defender_config" if category == "defender_exclusion" else "scheduled_task" if category == "task_cache" else category
+        if category in {"autorun", "service", "winlogon", "ifeo", "appinit", "defender_exclusion", "rdp", "task_cache", "active_setup"}:
+            return "run_key" if category == "autorun" else "defender_config" if category == "defender_exclusion" else category
     if "defender" in lowered and DEFENDER_CONFIG_RE.search(lowered):
         return "defender_config"
     if "wmi" in lowered or "eventconsumer" in lowered or "__eventfilter" in lowered:
