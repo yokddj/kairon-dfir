@@ -24,18 +24,20 @@ This page records which parser backends are active in the current platform state
 - `tooling_missing`: source can be detected but parser cannot run in this deployment.
 - `planned`: not implemented yet.
 
-Memory backends are intentionally inactive in the current foundation. Do not add memory dumps, third-party memory-forensics outputs, symbol packs, malware samples, credentials, Volatility plugins, or MemProcFS binaries to the repository.
+Memory backends remain external and optional. Do not add memory dumps, third-party memory-forensics outputs, symbol packs, malware samples, credentials, Volatility plugins, or MemProcFS binaries to the repository.
 
 ## Memory Analysis Backends
 
-These backends are external, optional, not bundled, and not installed by Kairon. Current support is readiness detection only.
+These backends are external, optional, not bundled, and not installed by Kairon.
 
 | Backend | Distribution | Readiness detection | Evidence execution |
 | --- | --- | --- | --- |
-| Volatility 3 | external optional tool, not bundled | supported through configured executable detection and harmless help/version check | not implemented in this sprint |
+| Volatility 3 | external optional tool, not bundled | supported through configured executable detection and harmless help/version check | metadata execution supported conditionally for `windows.info` only |
 | MemProcFS | external optional tool, not bundled | supported through configured executable detection and harmless help/version check | not implemented in this sprint |
 
 Readiness detection does not supply a memory-image path, run plugins, mount devices, create artifacts, create MemoryScanRun rows, or write OpenSearch documents.
+
+Volatility 3 execution is disabled by default and controlled by administrator configuration. Kairon builds a fixed `shell=False` argv for `windows.info` and never accepts plugin names or command arguments from API/UI requests. It writes normalized metadata only to the isolated `dfir-memory-{case_id}` index.
 
 ## Advanced backend search behavior
 

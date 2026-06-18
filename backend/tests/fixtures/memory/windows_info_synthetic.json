@@ -1,0 +1,12 @@
+{
+  "fixture_notice": "Synthetic non-evidentiary windows.info metadata for unit tests only. Not produced from a real memory dump.",
+  "Kernel Base": "0xf800000000000000",
+  "Kernel Version": "10.0.19041",
+  "NT Major Version": 10,
+  "NT Minor Version": 0,
+  "Machine": "x64",
+  "Layer Name": "Intel32e",
+  "DTB": "0x1aa000",
+  "Kernel Symbols": "ntkrnlmp.pdb",
+  "System Time": "2026-06-16T00:00:00Z"
+}

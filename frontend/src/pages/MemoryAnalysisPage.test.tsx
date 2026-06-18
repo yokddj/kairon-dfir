@@ -6,12 +6,14 @@ import MemoryAnalysisPage from "./MemoryAnalysisPage";
 
 const getMemoryOverviewMock = vi.fn();
 const getMemoryBackendOverviewMock = vi.fn();
+const getCaseMemorySystemInfoMock = vi.fn();
 const startMemoryScanMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
     getMemoryBackendOverview: (...args: unknown[]) => getMemoryBackendOverviewMock(...args),
     getMemoryOverview: (...args: unknown[]) => getMemoryOverviewMock(...args),
+    getCaseMemorySystemInfo: (...args: unknown[]) => getCaseMemorySystemInfoMock(...args),
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
   },
 }));
@@ -89,7 +91,9 @@ describe("MemoryAnalysisPage", () => {
     vi.clearAllMocks();
     getMemoryOverviewMock.mockResolvedValue(overview());
     getMemoryBackendOverviewMock.mockResolvedValue(backendOverview());
-    startMemoryScanMock.mockResolvedValue({ accepted: true, evidence_id: "ev-memory", run_id: "run-1", status: "ready", message: "Memory evidence registered. External analysis is not enabled in this build.", run: null });
+    getCaseMemorySystemInfoMock.mockResolvedValue([]);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    startMemoryScanMock.mockResolvedValue({ accepted: true, evidence_id: "ev-memory", run_id: "run-1", status: "queued", message: "Memory metadata analysis queued for windows.info.", run: null });
   });
 
   it("shows disabled state by default", async () => {
@@ -185,7 +189,7 @@ describe("MemoryAnalysisPage", () => {
     expect(await screen.findByText("Disk only")).toBeInTheDocument();
   });
 
-  it("shows memory evidence list and registers metadata-only analysis", async () => {
+  it("shows memory evidence list and runs metadata-only analysis when ready", async () => {
     getMemoryOverviewMock.mockResolvedValueOnce(
       overview({
         memory_analysis_enabled: true,
@@ -194,9 +198,18 @@ describe("MemoryAnalysisPage", () => {
         evidences: [{ id: "ev-memory", case_id: "case-1", original_filename: "memory.mem", evidence_type: "memory_dump", size_bytes: 2048, ingest_status: "completed", created_at: "2026-06-16T00:00:00Z" }],
       }),
     );
+    getMemoryBackendOverviewMock.mockResolvedValueOnce(
+      backendOverview({
+        memory_analysis_enabled: true,
+        external_execution_allowed: true,
+        ready_backend_count: 1,
+        backends: [backendStatus({ executable_found: true, execution_allowed: true, available: true, ready: true, status: "available" })],
+      }),
+    );
     renderPage();
     expect(await screen.findByText("memory.mem")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /Register memory analysis/i }));
+    fireEvent.click(screen.getByRole("button", { name: /Run metadata analysis/i }));
+    expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("windows.info metadata plugin"));
     await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("ev-memory"));
   });
 
@@ -205,11 +218,38 @@ describe("MemoryAnalysisPage", () => {
       overview({
         memory_analysis_enabled: true,
         has_memory_evidence: true,
-        runs: [{ id: "run-1", case_id: "case-1", evidence_id: "ev-memory", backend: null, profile: "metadata_only", status: "ready", plugin_count: 0, plugins_completed: 0, plugins_failed: 0, started_at: null, completed_at: null, output_dir: null, metadata_json: {}, error_log: {}, created_at: "2026-06-16T00:00:00Z" }],
+        runs: [{ id: "run-1", case_id: "case-1", evidence_id: "ev-memory", backend: "volatility3", profile: "metadata_only", status: "completed", requested_plugin_count: 1, plugin_count: 1, plugins_completed: 1, plugins_failed: 0, started_at: null, completed_at: null, duration_ms: 1200, output_dir: null, metadata_json: {}, error_log: {}, backend_version: "Volatility 3 Framework 2.8.0", worker_task_id: "job-1", cancellation_requested: false, created_at: "2026-06-16T00:00:00Z" }],
       }),
     );
     renderPage();
     expect(await screen.findByText("Memory runs")).toBeInTheDocument();
     expect(screen.getByText("metadata_only")).toBeInTheDocument();
+    expect(screen.getByText("Volatility 3 Framework 2.8.0")).toBeInTheDocument();
+  });
+
+  it("shows completed system information without raw JSON", async () => {
+    getMemoryOverviewMock.mockResolvedValueOnce(overview({ memory_analysis_enabled: true }));
+    getCaseMemorySystemInfoMock.mockResolvedValueOnce([
+      {
+        case_id: "case-1",
+        evidence_id: "ev-memory",
+        memory_run_id: "run-1",
+        memory_plugin_run_id: "plugin-1",
+        source_layer: "memory",
+        memory_artifact_type: "memory_system_info",
+        backend: "volatility3",
+        plugin: "windows.info",
+        host: { name: null },
+        os: { family: "windows", kernel_base: "0xf8000000", kernel_version: null, machine_type: "x64" },
+        memory: { layer_name: "Intel32e", dtb: null, kernel_symbols: "ntkrnlmp.pdb", system_time: "2026-06-16T00:00:00Z" },
+        parsed_at: "2026-06-16T00:00:00Z",
+        raw: { fields: { private_field: "hidden" } },
+      },
+    ]);
+    renderPage();
+    expect(await screen.findByText("System information")).toBeInTheDocument();
+    expect(screen.getByText("0xf8000000")).toBeInTheDocument();
+    expect(screen.getByText("ntkrnlmp.pdb")).toBeInTheDocument();
+    expect(screen.queryByText("private_field")).not.toBeInTheDocument();
   });
 });

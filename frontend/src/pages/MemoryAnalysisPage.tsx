@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { api, type MemoryBackendStatus, type MemoryOverview } from "../api/client";
+import { api, type MemoryBackendStatus, type MemoryOverview, type MemorySystemInfo } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
 function modeLabel(mode: MemoryOverview["mode"]) {
@@ -44,6 +44,52 @@ function backendBadge(status: MemoryBackendStatus) {
   }
 }
 
+const ACTIVE_RUN_STATUSES = new Set(["pending", "queued", "running"]);
+
+function reported(value: unknown) {
+  if (value === null || value === undefined || value === "") return "Not reported";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  return String(value);
+}
+
+function durationLabel(value: number | null | undefined) {
+  if (!value) return "Not reported";
+  if (value < 1000) return `${value} ms`;
+  return `${(value / 1000).toFixed(1)} s`;
+}
+
+function SystemInformation({ item }: { item: MemorySystemInfo }) {
+  const fields = [
+    ["OS family", item.os.family],
+    ["Kernel base", item.os.kernel_base],
+    ["Kernel version", item.os.kernel_version],
+    ["Architecture", item.os.machine_type],
+    ["Memory layer", item.memory.layer_name],
+    ["DTB", item.memory.dtb],
+    ["Symbol table", item.memory.kernel_symbols],
+    ["System time", item.memory.system_time],
+  ];
+  return (
+    <article className="rounded-2xl border border-line bg-abyss/60 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h4 className="font-semibold">windows.info</h4>
+          <p className="mt-1 text-xs text-muted">Backend: {item.backend}</p>
+        </div>
+        <span className="rounded-xl border border-line bg-panel/70 px-3 py-1 text-xs text-muted">memory_system_info</span>
+      </div>
+      <dl className="mt-4 grid gap-3 md:grid-cols-2 text-sm">
+        {fields.map(([label, value]) => (
+          <div key={label as string}>
+            <dt className="text-xs uppercase tracking-[0.14em] text-muted">{label}</dt>
+            <dd className="mt-1 break-words text-ink">{reported(value)}</dd>
+          </div>
+        ))}
+      </dl>
+    </article>
+  );
+}
+
 export default function MemoryAnalysisPage() {
   const { caseId = "" } = useParams();
   const { setActiveCaseId } = useActiveCase();
@@ -58,6 +104,7 @@ export default function MemoryAnalysisPage() {
     queryFn: () => api.getMemoryOverview(caseId),
     enabled: Boolean(caseId),
     refetchOnWindowFocus: false,
+    refetchInterval: (query) => (query.state.data?.runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status)) ? 3000 : false),
   });
 
   const backendQuery = useQuery({
@@ -66,17 +113,33 @@ export default function MemoryAnalysisPage() {
     refetchOnWindowFocus: false,
   });
 
+  const systemInfoQuery = useQuery({
+    queryKey: ["memory-system-info", caseId],
+    queryFn: () => api.getCaseMemorySystemInfo(caseId),
+    enabled: Boolean(caseId),
+    refetchOnWindowFocus: false,
+    refetchInterval: overviewQuery.data?.runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status)) ? 3000 : false,
+  });
+
   const registerMutation = useMutation({
     mutationFn: (evidenceId: string) => api.startMemoryScan(evidenceId),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] }),
         queryClient.invalidateQueries({ queryKey: ["memory-runs", caseId] }),
+        queryClient.invalidateQueries({ queryKey: ["memory-system-info", caseId] }),
       ]);
     },
   });
 
   const overview = overviewQuery.data;
+  const volatilityBackend = backendQuery.data?.backends.find((backend) => backend.backend === "volatility3");
+  const canRunMetadata = Boolean(overview?.memory_analysis_enabled && volatilityBackend?.ready);
+
+  function runMetadataAnalysis(evidenceId: string) {
+    const confirmed = window.confirm("This will analyze the selected authorized memory image using the externally configured Volatility 3 backend and the windows.info metadata plugin.");
+    if (confirmed) registerMutation.mutate(evidenceId);
+  }
 
   if (!caseId) {
     return <div className="rounded-[28px] border border-line bg-panel/70 p-8 text-sm text-muted shadow-panel">Select a case first.</div>;
@@ -89,7 +152,7 @@ export default function MemoryAnalysisPage() {
         <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-3xl font-semibold">Authorized RAM evidence</h2>
-            <p className="mt-2 max-w-3xl text-sm text-muted">Isolated foundation for authorized memory evidence. This build does not execute external memory forensics tools or add RAM artifacts to global investigation sections.</p>
+            <p className="mt-2 max-w-3xl text-sm text-muted">Isolated metadata analysis for authorized memory evidence. This page can run only the Volatility 3 windows.info plugin when server configuration explicitly allows it.</p>
           </div>
           <Link to={`/cases/${caseId}/evidence`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Evidence &amp; Ingest</Link>
         </div>
@@ -191,7 +254,7 @@ export default function MemoryAnalysisPage() {
             <section className="overflow-hidden rounded-[28px] border border-line bg-panel/60">
               <div className="border-b border-line px-5 py-4">
                 <h3 className="text-lg font-semibold">Memory evidence</h3>
-                <p className="mt-1 text-sm text-muted">Only authorized RAM evidence appears here. Registering analysis records metadata only in this build.</p>
+                <p className="mt-1 text-sm text-muted">Only authorized RAM evidence appears here. Metadata analysis remains isolated from global disk views.</p>
               </div>
               <div className="overflow-x-auto">
                 <table className="min-w-full divide-y divide-line text-sm">
@@ -214,12 +277,13 @@ export default function MemoryAnalysisPage() {
                         <td className="px-4 py-3">
                           <button
                             type="button"
-                            disabled={!overview.memory_analysis_enabled || registerMutation.isPending}
-                            onClick={() => registerMutation.mutate(evidence.id)}
+                            disabled={!canRunMetadata || registerMutation.isPending}
+                            onClick={() => runMetadataAnalysis(evidence.id)}
                             className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50"
                           >
-                            Register memory analysis
+                            Run metadata analysis
                           </button>
+                          {!canRunMetadata ? <p className="mt-2 max-w-48 text-xs text-muted">{volatilityBackend?.message || "Volatility 3 is not ready for memory metadata analysis."}</p> : null}
                         </td>
                       </tr>
                     ))}
@@ -244,9 +308,12 @@ export default function MemoryAnalysisPage() {
                       <th className="px-4 py-3">Backend</th>
                       <th className="px-4 py-3">Profile</th>
                       <th className="px-4 py-3">Created</th>
+                      <th className="px-4 py-3">Duration</th>
+                      <th className="px-4 py-3">Version</th>
                       <th className="px-4 py-3">Plugins</th>
                       <th className="px-4 py-3">Completed</th>
                       <th className="px-4 py-3">Failed</th>
+                      <th className="px-4 py-3">Error</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-line">
@@ -256,9 +323,12 @@ export default function MemoryAnalysisPage() {
                         <td className="px-4 py-3 text-muted">{run.backend || "none"}</td>
                         <td className="px-4 py-3 text-muted">{run.profile}</td>
                         <td className="px-4 py-3 text-muted">{run.created_at}</td>
+                        <td className="px-4 py-3 text-muted">{durationLabel(run.duration_ms)}</td>
+                        <td className="px-4 py-3 text-muted">{run.backend_version || "Not reported"}</td>
                         <td className="px-4 py-3 text-muted">{run.plugin_count}</td>
                         <td className="px-4 py-3 text-muted">{run.plugins_completed}</td>
                         <td className="px-4 py-3 text-muted">{run.plugins_failed}</td>
+                        <td className="px-4 py-3 text-muted">{typeof run.error_log?.message === "string" ? run.error_log.message : "None"}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -266,6 +336,27 @@ export default function MemoryAnalysisPage() {
               </div>
             </section>
           ) : null}
+
+          <section className="rounded-[28px] border border-line bg-panel/60 p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold">System information</h3>
+                <p className="mt-1 text-sm text-muted">Normalized metadata from completed windows.info runs only.</p>
+              </div>
+              {systemInfoQuery.data ? <span className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">{systemInfoQuery.data.length} result{systemInfoQuery.data.length === 1 ? "" : "s"}</span> : null}
+            </div>
+            {systemInfoQuery.isLoading ? <p className="mt-4 text-sm text-muted">Loading system information...</p> : null}
+            {systemInfoQuery.error instanceof Error ? <p className="mt-4 text-sm text-rose-200">{systemInfoQuery.error.message}</p> : null}
+            {systemInfoQuery.data?.length ? (
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {systemInfoQuery.data.map((item) => (
+                  <SystemInformation key={item.memory_plugin_run_id} item={item} />
+                ))}
+              </div>
+            ) : !systemInfoQuery.isLoading ? (
+              <p className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">No memory system information has been reported.</p>
+            ) : null}
+          </section>
         </>
       ) : null}
     </div>

@@ -12,7 +12,7 @@ from app.models.evidence import Evidence
 from app.models.event_marking import EventMarking
 from app.models.finding import Finding
 from app.models.incident_timeline_draft import IncidentTimelineDraft
-from app.models.memory import MemoryArtifactSummary, MemoryScanRun
+from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
 from app.models.rule import Rule
 from app.models.rule_import_run import RuleImportRun
 from app.models.rule_set import RuleSet
