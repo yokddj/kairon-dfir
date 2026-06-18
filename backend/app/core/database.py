@@ -96,6 +96,19 @@ def _ensure_compatible_schema() -> None:
                 """
             )
         )
+
+        if "memory_scan_runs" in existing_tables:
+            memory_columns = {column["name"] for column in inspector.get_columns("memory_scan_runs")}
+            memory_column_defs = {
+                "requested_plugin_count": "INTEGER NOT NULL DEFAULT 0",
+                "duration_ms": "INTEGER",
+                "backend_version": "VARCHAR(255)",
+                "worker_task_id": "VARCHAR(255)",
+                "cancellation_requested": "BOOLEAN NOT NULL DEFAULT FALSE",
+            }
+            for column_name, column_type in memory_column_defs.items():
+                if column_name not in memory_columns:
+                    connection.execute(text(f"ALTER TABLE memory_scan_runs ADD COLUMN {column_name} {column_type}"))
         connection.execute(
             text(
                 """

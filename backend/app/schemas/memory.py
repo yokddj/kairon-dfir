@@ -54,17 +54,48 @@ class MemoryScanRunRead(BaseModel):
     backend: str | None = None
     profile: str
     status: str
+    requested_plugin_count: int = 0
     plugin_count: int = 0
     plugins_completed: int = 0
     plugins_failed: int = 0
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    duration_ms: int | None = None
     output_dir: str | None = None
     metadata_json: dict = {}
     error_log: dict = {}
+    backend_version: str | None = None
+    worker_task_id: str | None = None
+    cancellation_requested: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class MemoryPluginRunRead(BaseModel):
+    id: str
+    memory_scan_run_id: str
+    case_id: str
+    evidence_id: str
+    plugin: str
+    status: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    duration_ms: int | None = None
+    row_count: int = 0
+    output_relative_path: str | None = None
+    output_sha256: str | None = None
+    output_size: int | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    metadata_json: dict = {}
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MemoryRunDetailRead(MemoryScanRunRead):
+    plugin_runs: list[MemoryPluginRunRead] = []
 
 
 class MemoryOverviewRead(BaseModel):
@@ -80,8 +111,9 @@ class MemoryOverviewRead(BaseModel):
 
 
 class MemoryStartScanRequest(BaseModel):
-    backend: str | None = None
     profile: str = "metadata_only"
+
+    model_config = {"extra": "forbid"}
 
 
 class MemoryStartScanResponse(BaseModel):
@@ -91,3 +123,19 @@ class MemoryStartScanResponse(BaseModel):
     status: str
     message: str
     run: MemoryScanRunRead | None = None
+
+
+class MemorySystemInfoRead(BaseModel):
+    case_id: str
+    evidence_id: str
+    memory_run_id: str
+    memory_plugin_run_id: str
+    source_layer: str
+    memory_artifact_type: str
+    backend: str
+    plugin: str
+    host: dict
+    os: dict
+    memory: dict
+    parsed_at: datetime
+    raw: dict = {}

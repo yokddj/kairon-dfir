@@ -281,15 +281,60 @@ export type MemoryScanRun = {
   backend: string | null;
   profile: string;
   status: string;
+  requested_plugin_count: number;
   plugin_count: number;
   plugins_completed: number;
   plugins_failed: number;
   started_at: string | null;
   completed_at: string | null;
+  duration_ms: number | null;
   output_dir: string | null;
   metadata_json: Record<string, unknown>;
   error_log: Record<string, unknown>;
+  backend_version: string | null;
+  worker_task_id: string | null;
+  cancellation_requested: boolean;
   created_at: string;
+};
+
+export type MemoryPluginRun = {
+  id: string;
+  memory_scan_run_id: string;
+  case_id: string;
+  evidence_id: string;
+  plugin: string;
+  status: string;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_ms: number | null;
+  row_count: number;
+  output_relative_path: string | null;
+  output_sha256: string | null;
+  output_size: number | null;
+  error_code: string | null;
+  error_message: string | null;
+  metadata_json: Record<string, unknown>;
+  created_at: string;
+};
+
+export type MemoryRunDetail = MemoryScanRun & {
+  plugin_runs: MemoryPluginRun[];
+};
+
+export type MemorySystemInfo = {
+  case_id: string;
+  evidence_id: string;
+  memory_run_id: string;
+  memory_plugin_run_id: string;
+  source_layer: "memory";
+  memory_artifact_type: "memory_system_info";
+  backend: string;
+  plugin: string;
+  host: Record<string, unknown>;
+  os: Record<string, unknown>;
+  memory: Record<string, unknown>;
+  parsed_at: string;
+  raw: Record<string, unknown>;
 };
 
 export type MemoryOverview = {
@@ -3229,6 +3274,9 @@ export const api = {
   listMemoryEvidences: (caseId: string) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences`),
   listMemoryRuns: (caseId: string) => request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs`),
   startMemoryScan: (evidenceId: string) => request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan`, { method: "POST", body: JSON.stringify({ profile: "metadata_only" }) }),
+  getMemoryRun: (runId: string) => request<MemoryRunDetail>(`/memory/runs/${runId}`),
+  getMemoryRunSystemInfo: (runId: string) => request<MemorySystemInfo>(`/memory/runs/${runId}/system-info`),
+  getCaseMemorySystemInfo: (caseId: string) => request<MemorySystemInfo[]>(`/cases/${caseId}/memory/system-info`),
   getEvidence: (evidenceId: string) => request<Evidence>(`/evidences/${evidenceId}`),
   getEvidenceManifest: (evidenceId: string) => request<EvidenceManifest>(`/evidences/${evidenceId}/manifest`),
   getEvidenceOnDemandModules: (evidenceId: string) => request<OnDemandModulesResponse>(`/evidences/${evidenceId}/on-demand-modules`),

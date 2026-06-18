@@ -1,3 +1,5 @@
+import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -9,9 +11,14 @@ from app.core.database import Base
 from app.models.artifact import Artifact
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType, IngestStatus
-from app.models.memory import MemoryArtifactSummary, MemoryScanRun
+from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
 from app.services.memory import backend_readiness
+from app.services.memory import execution as memory_execution
+from app.services.memory import indexing as memory_indexing
+from app.services.memory import normalizers as memory_normalizers
 from app.services.memory import overview as memory_overview
+from app.services.memory import validation as memory_validation
+from app.services.memory import volatility_runner
 
 
 @pytest.fixture()
@@ -38,13 +45,13 @@ def _case(db, case_id: str = CASE_ID) -> Case:
     return item
 
 
-def _evidence(db, case_id: str = CASE_ID, evidence_id: str = MEMORY_EVIDENCE_ID, evidence_type=EvidenceType.memory_dump) -> Evidence:
+def _evidence(db, case_id: str = CASE_ID, evidence_id: str = MEMORY_EVIDENCE_ID, evidence_type=EvidenceType.memory_dump, stored_path: str = "/tmp/evidence") -> Evidence:
     item = Evidence(
         id=evidence_id,
         case_id=case_id,
         original_filename="memory.mem" if evidence_type == EvidenceType.memory_dump else "disk.evtx",
-        stored_path="/tmp/evidence",
-        original_path="/tmp/evidence",
+        stored_path=stored_path,
+        original_path=stored_path,
         evidence_type=evidence_type,
         sha256="0" * 64,
         size_bytes=1024,
@@ -128,25 +135,44 @@ def test_memory_scan_rejects_non_memory_evidence(db_session, monkeypatch: pytest
     assert getattr(exc_info.value, "status_code", None) == 400
 
 
-def test_memory_scan_registers_metadata_only_when_enabled(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_memory_scan_external_execution_disabled_rejects_without_run(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     evidence = _evidence(db_session)
-    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True))
+    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=False))
+
+    with pytest.raises(Exception) as exc_info:
+        routes_memory.start_memory_scan(evidence.id, None, db_session)
+
+    assert getattr(exc_info.value, "status_code", None) == 403
+    assert db_session.query(MemoryScanRun).count() == 0
+
+
+def test_memory_scan_queues_metadata_only_when_enabled(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    evidence = _evidence(db_session)
+    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
+    monkeypatch.setattr(routes_memory, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True}]})
+    monkeypatch.setattr(routes_memory, "validate_memory_execution_request", lambda _db, _evidence_id: object())
+    monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=evidence))
+    monkeypatch.setattr(routes_memory, "enqueue_memory_metadata_scan", lambda _run_id: "job-1")
 
     response = routes_memory.start_memory_scan(evidence.id, None, db_session)
     run = db_session.query(MemoryScanRun).one()
+    plugin_run = db_session.query(MemoryPluginRun).one()
 
     assert response.accepted is True
-    assert response.status == "ready"
+    assert response.status == "queued"
     assert run.profile == "metadata_only"
-    assert run.plugin_count == 0
-    assert "External analysis is not enabled" in response.message
+    assert run.backend == "volatility3"
+    assert run.plugin_count == 1
+    assert run.worker_task_id == "job-1"
+    assert plugin_run.plugin == "windows.info"
 
 
 def test_memory_evidence_does_not_create_normalized_events(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     evidence = _evidence(db_session)
-    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True))
+    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=False))
 
     routes_memory.start_memory_scan(evidence.id, None, db_session)
 
@@ -157,7 +183,7 @@ def test_memory_evidence_does_not_create_normalized_events(db_session, monkeypat
 def test_memory_evidence_does_not_write_to_existing_events_index(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     evidence = _evidence(db_session)
-    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True))
+    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=False))
     monkeypatch.setattr(memory_overview, "count_documents", lambda _index: {"count": 0})
 
     routes_memory.start_memory_scan(evidence.id, None, db_session)
@@ -346,3 +372,205 @@ def test_backend_readiness_response_does_not_expose_full_sensitive_paths(monkeyp
 
     assert status["command_display"] == "vol"
     assert "/opt/private" not in str(status)
+
+
+def test_memory_validation_rejects_non_regular_file(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    evidence_dir = tmp_path / "data" / "evidence" / CASE_ID / MEMORY_EVIDENCE_ID
+    evidence_dir.mkdir(parents=True)
+    evidence = _evidence(db_session, stored_path=str(evidence_dir))
+    monkeypatch.setattr(memory_validation, "get_settings", lambda: SimpleNamespace(backend_data_dir=tmp_path / "data", allowed_evidence_roots=[] , memory_max_upload_size=10_000))
+
+    with pytest.raises(memory_validation.MemoryExecutionValidationError) as exc_info:
+        memory_validation.validate_memory_execution_request(db_session, evidence.id)
+
+    assert exc_info.value.code == "UNSAFE_EVIDENCE_FILE"
+
+
+def test_memory_validation_accepts_regular_uploaded_file(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    evidence_file = tmp_path / "data" / "evidence" / CASE_ID / MEMORY_EVIDENCE_ID / "original" / "memory.mem"
+    evidence_file.parent.mkdir(parents=True)
+    evidence_file.write_bytes(b"synthetic")
+    evidence = _evidence(db_session, stored_path=str(evidence_file))
+    monkeypatch.setattr(memory_validation, "get_settings", lambda: SimpleNamespace(backend_data_dir=tmp_path / "data", allowed_evidence_roots=[] , memory_max_upload_size=10_000))
+
+    validated = memory_validation.validate_memory_execution_request(db_session, evidence.id)
+
+    assert validated.path == evidence_file.resolve()
+
+
+def test_memory_scan_prevents_duplicate_active_run(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    evidence = _evidence(db_session)
+    db_session.add(MemoryScanRun(case_id=CASE_ID, evidence_id=evidence.id, profile="metadata_only", status="running"))
+    db_session.commit()
+    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
+    monkeypatch.setattr(routes_memory, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True}]})
+    monkeypatch.setattr(routes_memory, "validate_memory_execution_request", lambda _db, _evidence_id: object())
+
+    with pytest.raises(Exception) as exc_info:
+        routes_memory.start_memory_scan(evidence.id, None, db_session)
+
+    assert getattr(exc_info.value, "status_code", None) == 409
+
+
+def test_volatility_runner_uses_fixed_argv_and_shell_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    evidence_path = tmp_path / "memory.mem"
+    evidence_path.write_bytes(b"synthetic")
+    calls: dict = {}
+
+    class FakeProcess:
+        pid = 12345
+        returncode = 0
+
+        def communicate(self, timeout):
+            calls["timeout"] = timeout
+            return b'{"Kernel Base":"0xf8000000"}', b""
+
+    def fake_popen(args, **kwargs):
+        calls["args"] = args
+        calls["kwargs"] = kwargs
+        return FakeProcess()
+
+    monkeypatch.setattr(volatility_runner, "get_settings", lambda: SimpleNamespace(volatility3_command="vol", memory_plugin_timeout_seconds=5, memory_plugin_output_max_bytes=10_000))
+    monkeypatch.setattr(volatility_runner, "resolve_configured_executable", lambda _command: (True, "/usr/bin/vol", "vol", None))
+    monkeypatch.setattr(volatility_runner.subprocess, "Popen", fake_popen)
+
+    result = volatility_runner.run_windows_info(evidence_path, tmp_path)
+
+    assert calls["args"] == ["/usr/bin/vol", "-f", str(evidence_path), "-r", "json", "windows.info"]
+    assert calls["kwargs"]["shell"] is False
+    assert result.argv_display == ["vol", "-f", "[evidence]", "-r", "json", "windows.info"]
+
+
+def test_volatility_runner_timeout_terminates_process_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    evidence_path = tmp_path / "memory.mem"
+    evidence_path.write_bytes(b"synthetic")
+    signals: list[int] = []
+
+    class FakeProcess:
+        pid = 12345
+        returncode = None
+
+        def communicate(self, timeout):
+            raise subprocess.TimeoutExpired(cmd=["vol"], timeout=timeout)
+
+        def wait(self, timeout):
+            raise TimeoutError()
+
+        def kill(self):
+            signals.append(9)
+
+    monkeypatch.setattr(volatility_runner, "get_settings", lambda: SimpleNamespace(volatility3_command="vol", memory_plugin_timeout_seconds=1, memory_plugin_output_max_bytes=10_000))
+    monkeypatch.setattr(volatility_runner, "resolve_configured_executable", lambda _command: (True, "/usr/bin/vol", "vol", None))
+    monkeypatch.setattr(volatility_runner.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+    monkeypatch.setattr(volatility_runner.os, "killpg", lambda _pid, sig: signals.append(sig))
+
+    with pytest.raises(volatility_runner.VolatilityRunnerError) as exc_info:
+        volatility_runner.run_windows_info(evidence_path, tmp_path)
+
+    assert exc_info.value.code == "PLUGIN_TIMEOUT"
+    assert signals
+
+
+def test_volatility_runner_output_size_enforced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    evidence_path = tmp_path / "memory.mem"
+    evidence_path.write_bytes(b"synthetic")
+
+    class FakeProcess:
+        pid = 12345
+        returncode = 0
+
+        def communicate(self, timeout):
+            return b"x" * 20, b""
+
+    monkeypatch.setattr(volatility_runner, "get_settings", lambda: SimpleNamespace(volatility3_command="vol", memory_plugin_timeout_seconds=1, memory_plugin_output_max_bytes=10))
+    monkeypatch.setattr(volatility_runner, "resolve_configured_executable", lambda _command: (True, "/usr/bin/vol", "vol", None))
+    monkeypatch.setattr(volatility_runner.subprocess, "Popen", lambda *_args, **_kwargs: FakeProcess())
+
+    with pytest.raises(volatility_runner.VolatilityRunnerError) as exc_info:
+        volatility_runner.run_windows_info(evidence_path, tmp_path)
+
+    assert exc_info.value.code == "OUTPUT_TOO_LARGE"
+
+
+def test_windows_info_normalizer_handles_missing_fields() -> None:
+    document = memory_normalizers.normalize_windows_info(
+        {"Kernel Base": "0xf8000000", "Machine": "x64"},
+        case_id=CASE_ID,
+        evidence_id=MEMORY_EVIDENCE_ID,
+        memory_run_id="run-1",
+        memory_plugin_run_id="plugin-1",
+        backend_version="Volatility 3 Framework 2.8.0",
+    )
+
+    assert document["memory_artifact_type"] == "memory_system_info"
+    assert document["plugin"] == "windows.info"
+    assert document["os"]["kernel_base"] == "0xf8000000"
+    assert document["os"]["machine_type"] == "x64"
+    assert document["memory"]["dtb"] is None
+
+
+def test_execution_indexing_failure_retains_raw_output(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    evidence_file = tmp_path / "data" / "evidence" / CASE_ID / MEMORY_EVIDENCE_ID / "original" / "memory.mem"
+    evidence_file.parent.mkdir(parents=True)
+    evidence_file.write_bytes(b"synthetic")
+    evidence = _evidence(db_session, stored_path=str(evidence_file))
+    run = MemoryScanRun(case_id=CASE_ID, evidence_id=evidence.id, backend="volatility3", profile="metadata_only", status="queued", requested_plugin_count=1, plugin_count=1)
+    db_session.add(run)
+    db_session.commit()
+    db_session.add(MemoryPluginRun(memory_scan_run_id=run.id, case_id=CASE_ID, evidence_id=evidence.id, plugin="windows.info", status="pending"))
+    db_session.commit()
+
+    class SessionContext:
+        def __enter__(self):
+            return db_session
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(memory_execution, "SessionLocal", lambda: SessionContext())
+    monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=evidence, path=evidence_file, size_bytes=evidence_file.stat().st_size))
+    monkeypatch.setattr(memory_execution.backend_readiness, "check_volatility3_backend", lambda: {"ready": True, "version": "Volatility 3 Framework 2.8.0"})
+    monkeypatch.setattr(memory_execution, "run_windows_info", lambda _path, _work_dir: SimpleNamespace(argv_display=["vol", "-f", "[evidence]", "-r", "json", "windows.info"], stdout=b'{"Kernel Base":"0xf8000000"}', stderr=b"", duration_ms=7))
+    monkeypatch.setattr(memory_execution, "index_memory_system_info", lambda _case_id, _document: (_ for _ in ()).throw(RuntimeError("/secret/index failed")))
+    monkeypatch.setattr(memory_execution, "memory_run_dir", lambda _case_id, _evidence_id, run_id: tmp_path / "data" / "evidence" / CASE_ID / MEMORY_EVIDENCE_ID / "memory" / "runs" / run_id)
+    monkeypatch.setattr(memory_execution, "relative_to_data_dir", lambda path: str(path.relative_to(tmp_path / "data")))
+    monkeypatch.setattr(memory_execution, "write_atomic_bytes", lambda path, data: {"path": str(path.relative_to(tmp_path / "data")), "sha256": "a" * 64, "size": len(data)})
+    monkeypatch.setattr(memory_execution, "write_atomic_json", lambda path, payload: {"path": str(path.relative_to(tmp_path / "data")), "sha256": "b" * 64, "size": 12})
+
+    memory_execution.run_memory_metadata_scan(run.id)
+    db_session.refresh(run)
+    plugin_run = db_session.query(MemoryPluginRun).filter(MemoryPluginRun.memory_scan_run_id == run.id).one()
+
+    assert run.status == "completed_with_errors"
+    assert run.error_log["code"] == "INDEXING_FAILED"
+    assert plugin_run.status == "completed"
+    assert plugin_run.output_sha256
+    assert "/secret" not in run.error_log["message"]
+
+
+def test_indexing_uses_memory_index_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = {}
+
+    class Indices:
+        def exists(self, index):
+            calls["exists"] = index
+            return True
+
+    class Client:
+        indices = Indices()
+
+        def index(self, index, id, body, refresh):
+            calls["index"] = index
+            calls["id"] = id
+            calls["body"] = body
+            return {"_id": id, "result": "created"}
+
+    monkeypatch.setattr(memory_indexing, "get_opensearch_client", lambda: Client())
+
+    memory_indexing.index_memory_system_info(CASE_ID, {"memory_plugin_run_id": "plugin-1", "memory_run_id": "run-1"})
+
+    assert calls["index"] == f"dfir-memory-{CASE_ID}"

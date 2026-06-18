@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     memory_backend_status_cache_seconds: int = 60
     memory_preferred_backend: str = "volatility3"
     memory_max_upload_size: int = 2147483648
+    memory_job_timeout_seconds: int = 900
+    memory_plugin_timeout_seconds: int = 600
+    memory_plugin_output_max_bytes: int = 10485760
+    memory_worker_concurrency: int = 1
+    memory_allowed_plugins: str = "windows.info"
+    memory_raw_output_retention_enabled: bool = True
+    memory_symbol_network_access_enabled: bool = False
     backend_multipart_max_files: int = 10000
     backend_multipart_max_fields: int = 20000
     backend_multipart_max_part_size: int = 1048576
@@ -167,6 +174,15 @@ class Settings(BaseSettings):
         if backend in {"volatility3", "memprocfs"}:
             return backend
         return "volatility3"
+
+    @property
+    def allowed_memory_plugins(self) -> list[str]:
+        values = self.memory_allowed_plugins
+        if isinstance(values, str):
+            plugins = [item.strip() for item in values.split(",") if item.strip()]
+        else:
+            plugins = [str(item).strip() for item in values if str(item).strip()]
+        return [plugin for plugin in plugins if plugin == "windows.info"] or ["windows.info"]
 
     @property
     def allowed_evidence_roots(self) -> list[Path]:

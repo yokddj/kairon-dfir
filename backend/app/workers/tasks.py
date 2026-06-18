@@ -544,6 +544,18 @@ def enqueue_semi_auto_analysis(job_run_id: str) -> str:
     return job.id
 
 
+def enqueue_memory_metadata_scan(memory_scan_run_id: str) -> str:
+    timeout = max(60, int(settings.memory_job_timeout_seconds))
+    job = analysis_queue.enqueue("app.workers.tasks.run_memory_metadata_scan", memory_scan_run_id, job_timeout=timeout)
+    return job.id
+
+
+def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
+    from app.services.memory.execution import run_memory_metadata_scan as execute_memory_metadata_scan
+
+    execute_memory_metadata_scan(memory_scan_run_id)
+
+
 def _metadata_phase_timings_snapshot(metadata: dict) -> list[dict]:
     snapshot = [dict(item) for item in metadata.get("phase_timings") or [] if isinstance(item, dict)]
     current = metadata.get("current_phase_timing")
