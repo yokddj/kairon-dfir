@@ -17,8 +17,10 @@ from app.services.memory import execution as memory_execution
 from app.services.memory import indexing as memory_indexing
 from app.services.memory import normalizers as memory_normalizers
 from app.services.memory import overview as memory_overview
+from app.services.memory import storage as memory_storage
 from app.services.memory import validation as memory_validation
 from app.services.memory import volatility_runner
+from app.services.memory import worker_capability
 
 
 @pytest.fixture()
@@ -235,6 +237,10 @@ def _backend_settings(**overrides) -> SimpleNamespace:
         "memory_max_process_rows": 100000,
         "memory_max_command_line_length": 16384,
         "memory_max_raw_field_length": 65536,
+        "memory_execution_mode": "external_command",
+        "memory_queue_name": "memory",
+        "memory_require_dedicated_worker": True,
+        "memory_symbol_network_access_enabled": False,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -672,3 +678,133 @@ def test_indexing_uses_memory_index_only(monkeypatch: pytest.MonkeyPatch) -> Non
     memory_indexing.index_memory_system_info(CASE_ID, {"memory_plugin_run_id": "plugin-1", "memory_run_id": "run-1"})
 
     assert calls["index"] == f"dfir-memory-{CASE_ID}"
+
+
+def test_dedicated_worker_readiness_does_not_require_backend_vol(monkeypatch: pytest.MonkeyPatch) -> None:
+    class RedisStub:
+        @classmethod
+        def from_url(cls, _url):
+            return cls()
+
+        def ping(self):
+            return True
+
+    capability = {
+        "healthy": True,
+        "queue": "memory",
+        "volatility_version": "Volatility 3 Framework 2.28.0",
+        "supported_profiles": ["metadata_only", "processes_basic", "processes_extended"],
+        "supported_plugins": ["windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"],
+        "symbol_network_enabled": False,
+    }
+    monkeypatch.setattr(backend_readiness, "get_settings", lambda: _backend_settings(memory_execution_mode="dedicated_worker", memory_analysis_enabled=True, memory_allow_external_tool_execution=True, memory_process_profile_enabled=True, redis_url="redis://redis:6379/0"))
+    monkeypatch.setattr(backend_readiness, "Redis", RedisStub)
+    monkeypatch.setattr(backend_readiness, "list_memory_worker_capabilities", lambda _redis: [capability])
+    monkeypatch.setattr(backend_readiness.shutil, "which", lambda _command: None)
+
+    status = backend_readiness.check_volatility3_backend()
+
+    assert status["ready"] is True
+    assert status["execution_mode"] == "dedicated_worker"
+    assert status["dedicated_worker_online"] is True
+    assert status["backend_version"] == "Volatility 3 Framework 2.28.0"
+
+
+def test_dedicated_worker_offline_is_not_ready(monkeypatch: pytest.MonkeyPatch) -> None:
+    class RedisStub:
+        @classmethod
+        def from_url(cls, _url):
+            return cls()
+
+        def ping(self):
+            return True
+
+    monkeypatch.setattr(backend_readiness, "get_settings", lambda: _backend_settings(memory_execution_mode="dedicated_worker", memory_analysis_enabled=True, memory_allow_external_tool_execution=True, redis_url="redis://redis:6379/0"))
+    monkeypatch.setattr(backend_readiness, "Redis", RedisStub)
+    monkeypatch.setattr(backend_readiness, "list_memory_worker_capabilities", lambda _redis: [])
+
+    status = backend_readiness.check_volatility3_backend()
+
+    assert status["ready"] is False
+    assert status["dedicated_worker_online"] is False
+    assert status["error_code"] == "memory_worker_offline"
+
+
+def test_external_mode_observes_optional_memory_worker(monkeypatch: pytest.MonkeyPatch) -> None:
+    class RedisStub:
+        @classmethod
+        def from_url(cls, _url):
+            return cls()
+
+        def ping(self):
+            return True
+
+    capability = {
+        "healthy": True,
+        "queue": "memory",
+        "volatility_version": "Volatility 3 Framework 2.28.0",
+        "supported_profiles": ["metadata_only"],
+        "supported_plugins": ["windows.info"],
+        "symbol_network_enabled": False,
+    }
+    monkeypatch.setattr(backend_readiness, "get_settings", lambda: _backend_settings(memory_execution_mode="external_command", memory_analysis_enabled=False, redis_url="redis://redis:6379/0"))
+    monkeypatch.setattr(backend_readiness, "Redis", RedisStub)
+    monkeypatch.setattr(backend_readiness, "list_memory_worker_capabilities", lambda _redis: [capability])
+    monkeypatch.setattr(backend_readiness.shutil, "which", lambda _command: None)
+
+    status = backend_readiness.check_volatility3_backend()
+
+    assert status["ready"] is False
+    assert status["status"] == "not_found"
+    assert status["dedicated_worker_online"] is True
+    assert status["backend_version"] == "Volatility 3 Framework 2.28.0"
+
+
+def test_memory_worker_capability_prefers_installed_package_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    class Result:
+        returncode = 0
+        stdout = "Change the default path (/volatility-cache)\n"
+        stderr = ""
+
+    monkeypatch.setattr(worker_capability, "get_settings", lambda: _backend_settings(volatility3_command="vol"))
+    monkeypatch.setattr(worker_capability.shutil, "which", lambda _command: "/usr/local/bin/vol")
+    monkeypatch.setattr(worker_capability.subprocess, "run", lambda *_args, **_kwargs: Result())
+    monkeypatch.setattr(worker_capability.metadata, "version", lambda package: "2.28.0" if package == "volatility3" else None)
+
+    capability = worker_capability.build_memory_worker_capability()
+
+    assert capability["healthy"] is True
+    assert capability["volatility_version"] == "Volatility 3 Framework 2.28.0"
+
+
+def test_memory_enqueue_uses_dedicated_queue(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.workers import tasks as worker_tasks
+
+    calls = []
+
+    class QueueStub:
+        def __init__(self, name):
+            self.name = name
+
+        def enqueue(self, func_name, run_id, job_timeout):
+            calls.append((self.name, func_name, run_id, job_timeout))
+            return SimpleNamespace(id=f"{self.name}-job")
+
+    monkeypatch.setattr(worker_tasks, "settings", SimpleNamespace(memory_execution_mode="dedicated_worker", memory_job_timeout_seconds=900))
+    monkeypatch.setattr(worker_tasks, "memory_queue", QueueStub("memory"))
+    monkeypatch.setattr(worker_tasks, "analysis_queue", QueueStub("dfir-analysis"))
+
+    job_id = worker_tasks.enqueue_memory_metadata_scan("run-1")
+
+    assert job_id == "memory-job"
+    assert calls == [("memory", "app.workers.tasks.run_memory_metadata_scan", "run-1", 900)]
+
+
+def test_memory_output_dir_relative_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    output_root = tmp_path / "memory-output"
+    monkeypatch.setattr(memory_storage, "get_settings", lambda: SimpleNamespace(backend_data_dir=tmp_path / "data", memory_output_root=output_root, memory_plugin_output_max_bytes=1024))
+
+    run_dir = memory_storage.memory_run_dir(CASE_ID, MEMORY_EVIDENCE_ID, "run-1")
+    info = memory_storage.write_atomic_bytes(run_dir / "windows.info.json", b"{}")
+
+    assert info["path"] == f"memory-output/evidence/{CASE_ID}/{MEMORY_EVIDENCE_ID}/memory/runs/run-1/windows.info.json"

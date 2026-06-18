@@ -403,6 +403,16 @@ export type MemoryBackendStatus = {
   execution_allowed: boolean;
   available: boolean;
   ready: boolean;
+  execution_mode?: string | null;
+  dedicated_worker_required?: boolean;
+  dedicated_worker_online?: boolean;
+  queue?: string | null;
+  queue_reachable?: boolean;
+  backend_available?: boolean | null;
+  backend_version?: string | null;
+  supported_profiles?: string[];
+  supported_plugins?: string[];
+  symbol_network_enabled?: boolean | null;
   version: string | null;
   command_display: string | null;
   status: "disabled" | "not_configured" | "blocked" | "not_found" | "available" | "check_failed";

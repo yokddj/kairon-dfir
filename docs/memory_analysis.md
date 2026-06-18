@@ -19,7 +19,9 @@ Memory Analysis is disabled by default:
 - `MEMORY_ANALYSIS_ENABLED=false`
 - `MEMORY_ALLOW_EXTERNAL_TOOL_EXECUTION=false`
 
-External tools such as Volatility 3 or MemProcFS are optional, external to Kairon, not bundled, and subject to their own licenses. Kairon does not auto-install them during Docker build, app startup, tests, or frontend build.
+External tools such as Volatility 3 or MemProcFS are optional, external to Kairon, not bundled, and subject to their own licenses. Kairon does not auto-install them during the default Docker build, app startup, tests, or frontend build.
+
+Operators may optionally build a dedicated `memory-worker` image with `docker compose --profile memory build memory-worker`. That image installs pinned Volatility 3 from official PyPI during the operator-initiated build and is not published by Kairon as a prebuilt image. Volatility 3 remains governed by its own license, and redistribution of a prebuilt image requires separate review.
 
 Kairon can report backend readiness for supported external tools. Readiness means only that the server-side configuration points to a valid executable and that a harmless help/version check can run. It does not mean any memory image has been analyzed.
 

@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     memory_job_timeout_seconds: int = 900
     memory_plugin_timeout_seconds: int = 600
     memory_plugin_output_max_bytes: int = 10485760
+    memory_output_dir: str = ""
+    memory_worker_mode: str = "external_command"
+    memory_task_queue: str = "memory"
+    memory_require_dedicated_worker: bool = True
     memory_worker_concurrency: int = 1
     memory_allowed_plugins: str = "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline"
     memory_allowed_profiles: str = "metadata_only,processes_basic,processes_extended"
@@ -201,6 +205,23 @@ class Settings(BaseSettings):
     def default_memory_profile(self) -> str:
         profile = str(self.memory_default_profile or "metadata_only").strip()
         return profile if profile in self.allowed_memory_profiles else "metadata_only"
+
+    @property
+    def memory_execution_mode(self) -> str:
+        mode = str(self.memory_worker_mode or "external_command").strip().lower()
+        return mode if mode in {"external_command", "dedicated_worker"} else "external_command"
+
+    @property
+    def memory_queue_name(self) -> str:
+        value = str(self.memory_task_queue or "memory").strip()
+        if not value or any(token in value for token in " ;&|`$<>\n\r/\\"):
+            return "memory"
+        return value
+
+    @property
+    def memory_output_root(self) -> Path | None:
+        value = str(self.memory_output_dir or "").strip()
+        return Path(value) if value else None
 
     @property
     def allowed_evidence_roots(self) -> list[Path]:

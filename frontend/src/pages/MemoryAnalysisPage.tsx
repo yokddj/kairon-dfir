@@ -26,6 +26,7 @@ function formatBytes(value: number) {
 
 function backendBadge(status: MemoryBackendStatus) {
   if (status.ready) return "Ready";
+  if (status.execution_mode === "dedicated_worker" && !status.dedicated_worker_online) return "Memory worker offline";
   switch (status.status) {
     case "disabled":
       return "Disabled";
@@ -251,6 +252,13 @@ export default function MemoryAnalysisPage() {
                     </div>
                   </dl>
                   <p className="mt-4 text-sm text-muted">{backend.message}</p>
+                  {backend.execution_mode === "dedicated_worker" ? (
+                    <div className="mt-4 rounded-xl border border-line bg-panel/50 p-3 text-xs text-muted">
+                      <p>Memory worker: {backend.dedicated_worker_online ? "Ready" : "Not enabled"}</p>
+                      <p>Queue: {backend.queue || "memory"} · Symbol mode: {backend.symbol_network_enabled ? "managed network access" : "offline only"}</p>
+                      <p>Supported profiles: {(backend.supported_profiles || []).join(", ") || "Not reported"}</p>
+                    </div>
+                  ) : null}
                 </article>
               ))}
             </div>

@@ -8,7 +8,10 @@ import shutil
 import subprocess
 import time
 
+from redis import Redis
+
 from app.core.config import get_settings
+from app.services.memory.worker_capability import list_memory_worker_capabilities
 
 
 logger = logging.getLogger(__name__)
@@ -57,8 +60,9 @@ def _status(
     version: str | None = None,
     command_display: str | None = None,
     error_code: str | None = None,
+    extra: dict | None = None,
 ) -> dict:
-    return {
+    payload = {
         "backend": backend,
         "display_name": BACKEND_DISPLAY_NAMES[backend],
         "configured": configured,
@@ -72,6 +76,107 @@ def _status(
         "message": message,
         "checked_at": checked_at,
         "error_code": error_code,
+    }
+    if extra:
+        payload.update(extra)
+    return payload
+
+
+def _dedicated_worker_status(command: str | None) -> dict:
+    settings = get_settings()
+    checked_at = _utc_now()
+    queue_reachable = False
+    capabilities: list[dict] = []
+    try:
+        redis_conn = Redis.from_url(settings.redis_url)
+        redis_conn.ping()
+        queue_reachable = True
+        capabilities = list_memory_worker_capabilities(redis_conn)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory worker capability check failed", extra={"error": sanitize_backend_error(exc)})
+
+    healthy = [item for item in capabilities if item.get("healthy") and item.get("queue") == settings.memory_queue_name]
+    selected = healthy[0] if healthy else (capabilities[0] if capabilities else {})
+    worker_online = bool(healthy)
+    execution_allowed = bool(settings.memory_allow_external_tool_execution)
+    feature_enabled = bool(settings.memory_analysis_enabled)
+    process_enabled = bool(settings.memory_process_profile_enabled)
+    supported_profiles = [str(item) for item in selected.get("supported_profiles") or []]
+    supported_plugins = [str(item) for item in selected.get("supported_plugins") or []]
+    backend_version = selected.get("volatility_version")
+    available = worker_online and queue_reachable
+    ready = bool(feature_enabled and execution_allowed and available)
+    if not worker_online:
+        status = "not_found" if queue_reachable else "check_failed"
+        message = "Kairon is running without the optional memory worker. Disk analysis remains fully available."
+        error_code = selected.get("error_code") or "memory_worker_offline"
+    elif not feature_enabled:
+        status = "disabled"
+        message = "The isolated memory worker is online, but Memory Analysis is disabled by server configuration."
+        error_code = None
+    elif not execution_allowed:
+        status = "blocked"
+        message = "The isolated memory worker is online, but external memory-tool execution is disabled."
+        error_code = None
+    else:
+        status = "available"
+        message = f"The isolated memory worker is ready. Volatility 3 {backend_version or ''} is available for authorized memory analysis.".strip()
+        error_code = None
+    return _status(
+        backend="volatility3",
+        configured=bool(str(command or "").strip()),
+        executable_found=worker_online,
+        execution_allowed=execution_allowed,
+        available=available,
+        ready=ready,
+        status=status,
+        message=message,
+        checked_at=checked_at,
+        version=backend_version,
+        command_display=_command_display(command or "vol"),
+        error_code=error_code,
+        extra={
+            "execution_mode": "dedicated_worker",
+            "dedicated_worker_required": bool(settings.memory_require_dedicated_worker),
+            "dedicated_worker_online": worker_online,
+            "queue": settings.memory_queue_name,
+            "queue_reachable": queue_reachable,
+            "backend_available": available,
+            "backend_version": backend_version,
+            "supported_profiles": supported_profiles or settings.allowed_memory_profiles,
+            "supported_plugins": supported_plugins or settings.allowed_memory_plugins,
+            "symbol_network_enabled": bool(selected.get("symbol_network_enabled", settings.memory_symbol_network_access_enabled)),
+            "process_profiles_enabled": process_enabled,
+        },
+    )
+
+
+def _memory_worker_observation(settings) -> dict:
+    try:
+        redis_conn = Redis.from_url(settings.redis_url)
+        redis_conn.ping()
+        capabilities = list_memory_worker_capabilities(redis_conn)
+    except Exception:
+        return {
+            "dedicated_worker_required": bool(settings.memory_require_dedicated_worker),
+            "dedicated_worker_online": False,
+            "queue": settings.memory_queue_name,
+            "queue_reachable": False,
+            "supported_profiles": [],
+            "supported_plugins": [],
+            "symbol_network_enabled": None,
+        }
+    healthy = [item for item in capabilities if item.get("healthy") and item.get("queue") == settings.memory_queue_name]
+    selected = healthy[0] if healthy else (capabilities[0] if capabilities else {})
+    return {
+        "dedicated_worker_required": bool(settings.memory_require_dedicated_worker),
+        "dedicated_worker_online": bool(healthy),
+        "queue": settings.memory_queue_name,
+        "queue_reachable": True,
+        "backend_version": selected.get("volatility_version"),
+        "supported_profiles": [str(item) for item in selected.get("supported_profiles") or []],
+        "supported_plugins": [str(item) for item in selected.get("supported_plugins") or []],
+        "symbol_network_enabled": selected.get("symbol_network_enabled") if selected else None,
     }
 
 
@@ -143,6 +248,9 @@ def _check_backend(backend: str, command: str | None) -> dict:
     checked_at = _utc_now()
     execution_allowed = bool(settings.memory_allow_external_tool_execution)
     logger.info("memory backend readiness check started", extra={"backend": backend})
+    if backend == "volatility3" and settings.memory_execution_mode == "dedicated_worker":
+        return _dedicated_worker_status(command)
+    worker_extra = _memory_worker_observation(settings) if backend == "volatility3" else {}
 
     configured, executable, command_display, config_error = resolve_configured_executable(command)
     if not configured:
@@ -163,8 +271,9 @@ def _check_backend(backend: str, command: str | None) -> dict:
             status=status,
             message=message,
             checked_at=checked_at,
-            command_display=command_display,
-            error_code=config_error,
+        command_display=command_display,
+        error_code=config_error,
+        extra={"execution_mode": settings.memory_execution_mode, "queue": settings.memory_queue_name, **worker_extra},
         )
 
     if not executable:
@@ -181,6 +290,7 @@ def _check_backend(backend: str, command: str | None) -> dict:
             checked_at=checked_at,
             command_display=command_display,
             error_code="executable_not_found",
+            extra={"execution_mode": settings.memory_execution_mode, "queue": settings.memory_queue_name, **worker_extra},
         )
 
     logger.info("memory backend executable found", extra={"backend": backend, "command": command_display})
@@ -198,6 +308,7 @@ def _check_backend(backend: str, command: str | None) -> dict:
             checked_at=checked_at,
             command_display=command_display,
             error_code=check_error,
+            extra={"execution_mode": settings.memory_execution_mode, "queue": settings.memory_queue_name, **worker_extra},
         )
 
     feature_enabled = bool(settings.memory_analysis_enabled)
@@ -225,6 +336,7 @@ def _check_backend(backend: str, command: str | None) -> dict:
         checked_at=checked_at,
         version=version,
         command_display=command_display,
+        extra={"execution_mode": settings.memory_execution_mode, "queue": settings.memory_queue_name, "backend_available": True, "backend_version": version, **worker_extra},
     )
 
 
