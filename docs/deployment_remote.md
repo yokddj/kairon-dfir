@@ -83,6 +83,17 @@ curl -fsS http://127.0.0.1:8000/api/memory/backends
 
 Confirm no `MemoryScanRun`, `MemoryArtifactSummary`, or `dfir-memory*` OpenSearch index is created by readiness checks.
 
+## Optional Memory Worker
+
+The optional Volatility memory worker is not built or started by default. To build it on the target server after reviewing `docker/memory-worker/THIRD_PARTY_NOTICES.md`:
+
+```sh
+docker compose --profile memory build memory-worker
+docker compose --profile memory up -d memory-worker
+```
+
+Do not publish the resulting image to a registry in this sprint. Do not install Volatility on the host, backend, or normal worker. Keep `MEMORY_ANALYSIS_ENABLED`, `MEMORY_ALLOW_EXTERNAL_TOOL_EXECUTION`, and `MEMORY_PROCESS_PROFILE_ENABLED` disabled unless an administrator intentionally enables authorized memory analysis.
+
 ## Rollback
 
 Rollback should use the prior known commit or image IDs and recreate only affected services:

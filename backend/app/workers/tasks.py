@@ -121,6 +121,7 @@ redis_conn = Redis.from_url(settings.redis_url)
 ingest_queue = Queue("dfir-ingest", connection=redis_conn)
 rules_queue = Queue("dfir-rules", connection=redis_conn)
 analysis_queue = Queue("dfir-analysis", connection=redis_conn)
+memory_queue = Queue(settings.memory_queue_name, connection=redis_conn)
 
 
 def _debug_db_trace(
@@ -546,7 +547,8 @@ def enqueue_semi_auto_analysis(job_run_id: str) -> str:
 
 def enqueue_memory_metadata_scan(memory_scan_run_id: str) -> str:
     timeout = max(60, int(settings.memory_job_timeout_seconds))
-    job = analysis_queue.enqueue("app.workers.tasks.run_memory_metadata_scan", memory_scan_run_id, job_timeout=timeout)
+    queue = memory_queue if settings.memory_execution_mode == "dedicated_worker" else analysis_queue
+    job = queue.enqueue("app.workers.tasks.run_memory_metadata_scan", memory_scan_run_id, job_timeout=timeout)
     return job.id
 
 

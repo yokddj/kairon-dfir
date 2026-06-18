@@ -39,6 +39,8 @@ Readiness detection does not supply a memory-image path, run plugins, mount devi
 
 Volatility 3 execution is disabled by default and controlled by administrator configuration. Kairon builds a fixed `shell=False` argv from named profiles and never accepts plugin names or command arguments from API/UI requests. It writes normalized metadata, memory process, and memory process edge documents only to the isolated `dfir-memory-{case_id}` index.
 
+An optional `memory-worker` Compose profile can be built by the operator to install pinned Volatility 3 from official PyPI inside an isolated worker image. Kairon does not commit or publish Volatility source, wheels, binaries, symbol packs, plugins, or prebuilt memory-worker images.
+
 ## Advanced backend search behavior
 
 Advanced EZ Tool rebuilds do not replace default artifact results automatically. Search keeps default/internal results unless the analyst selects an advanced backend filter such as:

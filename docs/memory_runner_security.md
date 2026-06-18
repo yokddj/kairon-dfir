@@ -34,7 +34,7 @@ The runner uses a minimal environment and a per-run working directory. It does n
 
 Plugins run sequentially to reduce CPU/memory pressure and keep the audit trail simple.
 
-The current deployment may run the task in the existing worker container. A future dedicated memory worker should run with constrained CPU/memory, no privileged mode, no host PID/device access, read-only evidence mounts, network disabled by default, and writable access only to approved temporary/output directories.
+The default deployment does not include Volatility. Operators may build an optional dedicated memory worker that runs with no privileged mode, no host PID/device access, read-only evidence mounts, and writable access only to approved temporary/output directories.
 
 ## Output limits and timeouts
 
@@ -68,4 +68,10 @@ Logs may include run ID, case ID, evidence ID, backend, plugin, state transition
 - Only `windows.info`, `windows.pslist`, `windows.pstree`, `windows.psscan`, and `windows.cmdline` are supported.
 - MemProcFS execution is not implemented.
 - No network, registry, credential, malware, file, string, injection, YARA, DLL, handle, driver, service, or hybrid-correlation analysis is implemented.
-- Real execution requires an administrator-installed Volatility 3 environment and authorized lab evidence.
+- Real execution requires either an administrator-provided Volatility 3 executable or the optional operator-built `memory-worker`, plus authorized lab evidence.
+
+## Optional dedicated worker
+
+The optional `memory-worker` Compose profile builds an isolated image locally on the operator's server and installs pinned Volatility 3 from official PyPI during that build. It is not part of the default deployment, is not published as a prebuilt Kairon image, and must not be redistributed without separate license review.
+
+In `MEMORY_WORKER_MODE=dedicated_worker`, memory jobs are routed to the dedicated memory queue. The normal worker continues disk ingest/rules/analysis work and does not need Volatility installed. The backend readiness endpoint relies on the memory worker heartbeat rather than running `vol` in the backend container.

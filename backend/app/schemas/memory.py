@@ -18,6 +18,16 @@ class MemoryBackendStatusRead(BaseModel):
     execution_allowed: bool
     available: bool
     ready: bool
+    execution_mode: str | None = None
+    dedicated_worker_required: bool = False
+    dedicated_worker_online: bool = False
+    queue: str | None = None
+    queue_reachable: bool = False
+    backend_available: bool | None = None
+    backend_version: str | None = None
+    supported_profiles: list[str] = []
+    supported_plugins: list[str] = []
+    symbol_network_enabled: bool | None = None
     version: str | None = None
     command_display: str | None = None
     status: str
