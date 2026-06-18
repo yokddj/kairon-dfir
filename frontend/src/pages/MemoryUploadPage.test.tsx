@@ -75,6 +75,7 @@ describe("MemoryUploadPage", () => {
     renderPage();
 
     expect(await screen.findByRole("heading", { name: /Add memory image/i })).toBeInTheDocument();
+    expect(await screen.findByText(/Memory image upload is available/i)).toBeInTheDocument();
     expect(screen.getByText(/5 GiB/i)).toBeInTheDocument();
     expect(screen.getByText(/Memory images may contain credentials, personal data, encryption material, browser data, access tokens/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/I confirm that I own this memory image/i)).toBeInTheDocument();
