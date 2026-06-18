@@ -8,6 +8,8 @@ The current memory runner supports Volatility 3 `windows.info` plus isolated pro
 
 Memory images can contain credentials, personal data, malware, private keys, and regulated information. Operators must analyze only evidence they own or are authorized to examine. Kairon must not expose memory contents to global disk workflows or third-party services.
 
+Browser memory upload is disabled by default and, when enabled, streams to staging in bounded chunks with incremental SHA-256 and size enforcement. Failed or oversized uploads do not become scannable evidence. Scan requests require an explicit authorization acknowledgement in the request context.
+
 ## Command injection protections
 
 - API and UI requests cannot provide executable paths, plugin names, command arguments, output paths, symbol URLs, or environment variables.

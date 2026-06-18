@@ -22,7 +22,21 @@ from app.core.database import get_db
 from app.core.evidence_paths import fingerprint_external_path, storage_capabilities, validate_external_path
 from app.core.manifest import default_manifest, write_manifest
 from app.core.opensearch import OpenSearchIngestBlockedError, count_documents, delete_events_by_evidence, get_events_index, get_opensearch_client, resolve_aggregatable_field, search_documents
-from app.core.storage import build_evidence_root, evidence_manifest_path, evidence_staging_dir, import_existing_path, reset_extracted_dir, reset_staging_dir, safe_remove, save_folder_uploads, save_upload, sha256_file
+from app.core.storage import (
+    MemoryUploadError,
+    build_evidence_root,
+    evidence_manifest_path,
+    evidence_staging_dir,
+    import_existing_path,
+    is_memory_upload_filename,
+    reset_extracted_dir,
+    reset_staging_dir,
+    safe_remove,
+    save_folder_uploads,
+    save_memory_upload,
+    save_upload,
+    sha256_file,
+)
 from app.ingest.detector import detect_evidence_type
 from app.ingest.velociraptor import discover_velociraptor_evidences, open_evidence_container
 from app.ingest.velociraptor.zip_inventory import is_supported_archive_container
@@ -101,6 +115,7 @@ RAW_COLLECTION_ENTRY_PATTERNS = (
     r"windows/system32/config/(system|software|sam|security)$",
     r"users/[^/]+/(ntuser\.dat|appdata/local/microsoft/windows/usrclass\.dat)$",
 )
+MEMORY_UPLOAD_CANDIDATE_EXTENSIONS = {".raw", ".mem", ".vmem", ".dmp", ".lime", ".aff4"}
 
 
 def _load_evidence_manifest(item: Evidence) -> dict:
@@ -1701,8 +1716,23 @@ def upload_evidence(
     if not db.get(Case, case_id):
         raise HTTPException(status_code=404, detail="Case not found")
     normalized_provided_host = _require_provided_host(provided_host)
-    evidence_id, stored_path, size = save_upload(case_id, file)
-    uploaded_name = file.filename or stored_path.name
+    uploaded_name = file.filename or "upload.bin"
+    uploaded_suffix = Path(uploaded_name).suffix.lower()
+    memory_upload = is_memory_upload_filename(uploaded_name)
+    if uploaded_suffix in MEMORY_UPLOAD_CANDIDATE_EXTENSIONS and not memory_upload:
+        raise HTTPException(status_code=400, detail="This memory image extension is not enabled for browser upload.")
+    uploaded_sha256: str | None = None
+    safe_memory_display_name: str | None = None
+    if memory_upload:
+        if not settings.memory_upload_enabled:
+            raise HTTPException(status_code=403, detail="Memory image upload is disabled by server configuration.")
+        try:
+            evidence_id, stored_path, size, uploaded_sha256, safe_memory_display_name = save_memory_upload(case_id, file)
+        except MemoryUploadError as exc:
+            code = 413 if exc.code == "rejected_size" else status.HTTP_400_BAD_REQUEST
+            raise HTTPException(status_code=code, detail=exc.message) from exc
+    else:
+        evidence_id, stored_path, size = save_upload(case_id, file)
     raw_collection = False
     folder_entries: list[dict] = []
     file_count: int | None = None
@@ -1725,7 +1755,7 @@ def upload_evidence(
             raw_collection = False
             folder_entries = []
             file_count = None
-    display_name = (folder_name or "").strip() or uploaded_name
+    display_name = (folder_name or "").strip() or safe_memory_display_name or uploaded_name
     detected_warnings = _evidence_intent_warnings(evidence_intent=normalized_intent, detected_type=detected_type, path=stored_path)
     source_tool = "raw_collection" if raw_collection else _source_tool_for_detected_evidence_type(detected_type)
     evidence = Evidence(
@@ -1738,7 +1768,7 @@ def upload_evidence(
         is_external=False,
         copy_to_storage=True,
         evidence_type=EvidenceType.velociraptor_zip if raw_collection else EvidenceType.parsed_folder if folder_upload else detected_type,
-        sha256=sha256_file(stored_path),
+        sha256=uploaded_sha256 or sha256_file(stored_path),
         size_bytes=size,
         file_count=file_count,
         ingest_status=IngestStatus.pending,
@@ -1754,6 +1784,9 @@ def upload_evidence(
             "ingest_mode": normalized_ingest_mode,
             "provided_host": normalized_provided_host,
             "evtx_profile": normalized_evtx_profile,
+            "upload_state": "uploaded",
+            "memory_upload": bool(memory_upload),
+            "canonical_relative_path": str(stored_path.relative_to(settings.backend_data_dir)) if memory_upload and stored_path.is_relative_to(settings.backend_data_dir) else None,
         },
         metadata_json=_raw_collection_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "folder_entries": folder_entries, "folder_upload": True, "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "evtx_profile": normalized_evtx_profile})
         if raw_collection and folder_upload

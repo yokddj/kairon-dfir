@@ -1,11 +1,14 @@
 import subprocess
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import UploadFile
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.api import routes_evidence
 from app.api import routes_memory
 from app.core.database import Base
 from app.models.artifact import Artifact
@@ -21,6 +24,8 @@ from app.services.memory import storage as memory_storage
 from app.services.memory import validation as memory_validation
 from app.services.memory import volatility_runner
 from app.services.memory import worker_capability
+from app.core import storage as core_storage
+from app.schemas.memory import MemoryStartScanRequest
 
 
 @pytest.fixture()
@@ -114,12 +119,98 @@ def test_memory_overview_hybrid_case(db_session, monkeypatch: pytest.MonkeyPatch
     assert overview["has_memory_evidence"] is True
 
 
+def test_standard_memory_upload_streams_to_canonical_storage(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    data = b"abc" * 4096
+    upload = UploadFile(filename="../authorized.raw", file=BytesIO(data))
+    settings = SimpleNamespace(
+        backend_data_dir=tmp_path / "data",
+        backend_temp_dir=tmp_path / "data" / "tmp",
+        memory_upload_enabled=True,
+        memory_upload_max_bytes=len(data) + 10,
+        memory_upload_chunk_size_bytes=1024,
+        memory_upload_extensions={".raw", ".mem", ".vmem", ".dmp", ".lime"},
+        memory_upload_staging_path=tmp_path / "data" / "tmp" / "memory-uploads",
+    )
+    monkeypatch.setattr(core_storage, "settings", settings)
+    monkeypatch.setattr(routes_evidence, "settings", settings)
+    enqueue_calls: list[str] = []
+    monkeypatch.setattr(routes_evidence, "enqueue_ingest", lambda evidence_id: enqueue_calls.append(evidence_id))
+
+    evidence = routes_evidence.upload_evidence(CASE_ID, upload, folder_upload=False, folder_name=None, evidence_intent=None, packaging=None, ingest_mode=None, provided_host="HOSTA", evtx_profile=None, db=db_session)
+
+    assert evidence.evidence_type == EvidenceType.memory_dump
+    assert evidence.ingest_status == IngestStatus.completed
+    assert evidence.sha256 == core_storage.hashlib.sha256(data).hexdigest()
+    assert evidence.size_bytes == len(data)
+    assert evidence.original_filename == "authorized.raw"
+    assert evidence.stored_path.endswith(f"/evidence/{CASE_ID}/{evidence.id}/original/memory-image.raw")
+    assert Path(evidence.stored_path).read_bytes() == data
+    assert not list(settings.memory_upload_staging_path.glob("*.part"))
+    assert enqueue_calls == []
+
+
+def test_memory_upload_rejects_oversized_file_without_evidence(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    upload = UploadFile(filename="too-large.mem", file=BytesIO(b"123456789"))
+    settings = SimpleNamespace(
+        backend_data_dir=tmp_path / "data",
+        backend_temp_dir=tmp_path / "data" / "tmp",
+        memory_upload_enabled=True,
+        memory_upload_max_bytes=4,
+        memory_upload_chunk_size_bytes=3,
+        memory_upload_extensions={".raw", ".mem", ".vmem", ".dmp", ".lime"},
+        memory_upload_staging_path=tmp_path / "data" / "tmp" / "memory-uploads",
+    )
+    monkeypatch.setattr(core_storage, "settings", settings)
+    monkeypatch.setattr(routes_evidence, "settings", settings)
+
+    with pytest.raises(Exception) as exc_info:
+        routes_evidence.upload_evidence(CASE_ID, upload, folder_upload=False, folder_name=None, evidence_intent=None, packaging=None, ingest_mode=None, provided_host="HOSTA", evtx_profile=None, db=db_session)
+
+    assert getattr(exc_info.value, "status_code", None) == 413
+    assert db_session.query(Evidence).count() == 0
+    assert not list((settings.backend_data_dir / "evidence").rglob("*.mem"))
+
+
+def test_memory_upload_disabled_rejects_memory_extension(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    upload = UploadFile(filename="memory.mem", file=BytesIO(b"data"))
+    settings = SimpleNamespace(
+        backend_data_dir=tmp_path / "data",
+        backend_temp_dir=tmp_path / "data" / "tmp",
+        memory_upload_enabled=False,
+        memory_upload_extensions={".raw", ".mem", ".vmem", ".dmp", ".lime"},
+    )
+    monkeypatch.setattr(core_storage, "settings", settings)
+    monkeypatch.setattr(routes_evidence, "settings", settings)
+
+    with pytest.raises(Exception) as exc_info:
+        routes_evidence.upload_evidence(CASE_ID, upload, folder_upload=False, folder_name=None, evidence_intent=None, packaging=None, ingest_mode=None, provided_host="HOSTA", evtx_profile=None, db=db_session)
+
+    assert getattr(exc_info.value, "status_code", None) == 403
+    assert db_session.query(Evidence).count() == 0
+
+
+def test_memory_scan_requires_authorization_acknowledgement_when_enabled(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    evidence = _evidence(db_session)
+    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
+
+    with pytest.raises(Exception) as exc_info:
+        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(profile="metadata_only"), db_session)
+
+    assert getattr(exc_info.value, "status_code", None) == 400
+    assert "Authorization acknowledgement" in str(getattr(exc_info.value, "detail", ""))
+    assert db_session.query(MemoryScanRun).count() == 0
+
+
 def test_memory_scan_disabled_by_default(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     evidence = _evidence(db_session)
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=False))
 
-    response = routes_memory.start_memory_scan(evidence.id, None, db_session)
+    response = routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), db_session)
 
     assert response.status == "disabled"
     assert response.accepted is False
@@ -132,7 +223,7 @@ def test_memory_scan_rejects_non_memory_evidence(db_session, monkeypatch: pytest
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True))
 
     with pytest.raises(Exception) as exc_info:
-        routes_memory.start_memory_scan(evidence.id, None, db_session)
+        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), db_session)
 
     assert getattr(exc_info.value, "status_code", None) == 400
 
@@ -143,7 +234,7 @@ def test_memory_scan_external_execution_disabled_rejects_without_run(db_session,
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=False))
 
     with pytest.raises(Exception) as exc_info:
-        routes_memory.start_memory_scan(evidence.id, None, db_session)
+        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), db_session)
 
     assert getattr(exc_info.value, "status_code", None) == 403
     assert db_session.query(MemoryScanRun).count() == 0
@@ -158,7 +249,7 @@ def test_memory_scan_queues_metadata_only_when_enabled(db_session, monkeypatch: 
     monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=evidence))
     monkeypatch.setattr(routes_memory, "enqueue_memory_metadata_scan", lambda _run_id: "job-1")
 
-    response = routes_memory.start_memory_scan(evidence.id, None, db_session)
+    response = routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), db_session)
     run = db_session.query(MemoryScanRun).one()
     plugin_run = db_session.query(MemoryPluginRun).one()
 
@@ -449,7 +540,7 @@ def test_memory_scan_prevents_duplicate_active_run(db_session, monkeypatch: pyte
     monkeypatch.setattr(routes_memory, "validate_memory_execution_request", lambda _db, _evidence_id: object())
 
     with pytest.raises(Exception) as exc_info:
-        routes_memory.start_memory_scan(evidence.id, None, db_session)
+        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), db_session)
 
     assert getattr(exc_info.value, "status_code", None) == 409
 

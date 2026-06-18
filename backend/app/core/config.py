@@ -58,6 +58,13 @@ class Settings(BaseSettings):
     memory_backend_status_cache_seconds: int = 60
     memory_preferred_backend: str = "volatility3"
     memory_max_upload_size: int = 2147483648
+    memory_upload_enabled: bool = False
+    memory_upload_max_bytes: int = 2147483648
+    memory_upload_chunk_size_bytes: int = 4194304
+    memory_upload_staging_root: str = ""
+    memory_upload_cleanup_age_seconds: int = 86400
+    memory_upload_request_timeout_seconds: int = 0
+    memory_upload_allowed_extensions: str = ".raw,.mem,.vmem,.dmp,.lime"
     memory_job_timeout_seconds: int = 900
     memory_plugin_timeout_seconds: int = 600
     memory_plugin_output_max_bytes: int = 10485760
@@ -222,6 +229,17 @@ class Settings(BaseSettings):
     def memory_output_root(self) -> Path | None:
         value = str(self.memory_output_dir or "").strip()
         return Path(value) if value else None
+
+    @property
+    def memory_upload_staging_path(self) -> Path:
+        value = str(self.memory_upload_staging_root or "").strip()
+        return Path(value) if value else self.backend_temp_dir / "memory-uploads"
+
+    @property
+    def memory_upload_extensions(self) -> set[str]:
+        values = str(self.memory_upload_allowed_extensions or "").split(",")
+        extensions = {item.strip().lower() for item in values if item.strip()}
+        return {item if item.startswith(".") else f".{item}" for item in extensions}
 
     @property
     def allowed_evidence_roots(self) -> list[Path]:

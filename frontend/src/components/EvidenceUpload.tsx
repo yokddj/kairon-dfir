@@ -133,11 +133,22 @@ function isArchiveFile(file: File) {
   return /\.(zip|7z|tar|tgz|gz|bz2|xz|txz|tbz2|rar)$/i.test(file.name);
 }
 
+function isMemoryImageFile(file: File) {
+  return /\.(raw|mem|vmem|dmp|lime|aff4)$/i.test(file.name);
+}
+
 function isParsedStructuredFile(file: File) {
   return /\.(csv|json|jsonl)$/i.test(file.name);
 }
 
 function buildDetectionPreview(file: File, intent: FileIntent): DetectionPreview {
+  if (isMemoryImageFile(file)) {
+    return {
+      title: "Detected: Memory image",
+      detail: "This will be uploaded as isolated memory_dump evidence and will not enter normal disk ingest.",
+      tone: "warning",
+    };
+  }
   if (isEvtxFile(file)) {
     return {
       title: "Detected: Windows Event Log (.evtx)",
@@ -225,6 +236,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
   const capabilities = capabilitiesQuery.data;
+  const uploadLimit = capabilities?.max_upload_size ?? 0;
   const allowedRoots = capabilities?.allowed_roots ?? [];
   const hostPathImportEnabled = Boolean(capabilities?.allow_host_path_import);
   const hostRequired = !providedHost.trim();
@@ -279,7 +291,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   function openPrimaryFilePicker() {
     if (uploading) return;
     setFileIntent(null);
-    setFileAccept(".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz,.evtx,.pf,.lnk,.reg,.dat,.db,.sqlite,.csv,.json,.jsonl,.log,.txt,.eml,.mbox,.pst,.ost,.xml");
+    setFileAccept(".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz,.evtx,.raw,.mem,.vmem,.dmp,.lime,.aff4,.pf,.lnk,.reg,.dat,.db,.sqlite,.csv,.json,.jsonl,.log,.txt,.eml,.mbox,.pst,.ost,.xml");
     fileInputRef.current?.click();
   }
 
@@ -303,7 +315,9 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
     setUploadBytes({ loaded: 0, total: file.size });
     setPhase("uploading");
     setStatus(
-      intent === "raw_archive"
+      isMemoryImageFile(file)
+        ? `Uploading memory image: ${file.name}`
+        : intent === "raw_archive"
         ? `Uploading RAW evidence archive: ${file.name}`
         : intent === "parsed_archive"
           ? `Uploading parsed evidence archive: ${file.name}`
@@ -356,9 +370,11 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
           discoveryEvidenceId = evidence.id;
         } else {
           setLatestEvidenceId(evidence.id);
-          setPhase("processing");
+          setPhase(evidence.evidence_type === "memory_dump" ? "completed" : "processing");
           setStatus(
-            isEvtxFile(file)
+            evidence.evidence_type === "memory_dump"
+              ? "Memory image uploaded and finalized. Open Memory Analysis to run authorized metadata or process analysis."
+              : isEvtxFile(file)
               ? "Detected: Windows Event Log (.evtx). Ingest started."
               : intent === "parsed_single_file" || intent === "parsed_archive"
                 ? "Parsed evidence accepted. Ingest started."
@@ -877,6 +893,14 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
             <div className="mt-3 rounded-2xl border border-line bg-abyss/60 p-3 text-sm">
               <p className="truncate text-ink" title={pendingFile.name}>{pendingFile.name}</p>
               <p className="mt-1 text-xs text-muted">{formatBytes(pendingFile.size)} · {detectionPreview?.title ?? "Ready to index"}</p>
+              {isMemoryImageFile(pendingFile) ? (
+                <div className="mt-3 rounded-xl border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+                  <p className="font-semibold">Memory image</p>
+                  <p className="mt-1">Memory images may contain credentials, personal data, encryption material, browser data, and other sensitive information. Upload only evidence that you own or are explicitly authorized to analyze.</p>
+                  <p className="mt-1 text-muted">It will be stored as memory_dump evidence, bypass normal disk ingest, and processing occurs later in Memory Analysis.</p>
+                  {uploadLimit > 0 ? <p className="mt-1 text-muted">Configured upload limit: {formatBytes(uploadLimit)}</p> : null}
+                </div>
+              ) : null}
             </div>
           ) : null}
           <button type="button" onClick={openPrimaryFilePicker} disabled={uploading} className="mt-4 rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted disabled:opacity-60">
@@ -1016,6 +1040,9 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
               </button>
               <button type="button" onClick={() => navigate(`/evidences/${latestEvidenceId}`)} className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted">
                 View indexing progress
+              </button>
+              <button type="button" onClick={() => navigate(`/cases/${caseId}/memory`)} className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted">
+                Open Memory Analysis
               </button>
               <button type="button" onClick={() => navigate(`/cases/${caseId}/rules?evidence_id=${latestEvidenceId}`)} className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted">
                 Run rules

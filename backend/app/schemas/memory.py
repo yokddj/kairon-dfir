@@ -123,6 +123,7 @@ class MemoryOverviewRead(BaseModel):
 
 class MemoryStartScanRequest(BaseModel):
     profile: str = "metadata_only"
+    authorization_acknowledged: bool = False
 
     model_config = {"extra": "forbid"}
 
