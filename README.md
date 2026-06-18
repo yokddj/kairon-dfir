@@ -135,7 +135,7 @@ Never commit real evidence, secrets, logs, backups, database dumps, or generated
 
 Do not commit private evidence archives, processed case data, customer datasets, generated reports, indexes, database dumps or local environment files. Keep all evidence and generated case data outside version control.
 
-Memory dumps can contain credentials, personal data, and third-party private data. Use only RAM evidence you own, are authorized to analyze, or lab/demo evidence created for that purpose. Do not commit memory dumps, extracted secrets, malware, symbol packs, or third-party memory-forensics outputs. External memory tools such as Volatility 3 and MemProcFS are not bundled and are not executed by the disabled-by-default foundation.
+Memory dumps can contain credentials, personal data, and third-party private data. Use only RAM evidence you own, are authorized to analyze, or lab/demo evidence created for that purpose. Do not commit memory dumps, extracted secrets, malware, symbol packs, or third-party memory-forensics outputs. External memory tools such as Volatility 3 and MemProcFS are not bundled. Optional Volatility 3 execution is disabled by default and requires administrator-controlled configuration plus an authorization acknowledgement per scan.
 
 Memory backend readiness checks use only trusted server-side command settings such as `VOLATILITY3_COMMAND` and `MEMPROCFS_COMMAND`. They reject shell fragments and arguments, run harmless help/version checks only, and never receive memory-image paths.
 
@@ -157,7 +157,7 @@ Memory backend readiness checks use only trusted server-side command settings su
 - OST/PST content parsing is not part of the current core parser set.
 - SRUM parsing requires a Windows-capable worker or backend alternative.
 - Some advanced Windows artifacts may require additional parser workers or tooling.
-- Memory Analysis is an isolated, disabled-by-default foundation; external memory forensics execution is not implemented.
+- Memory Analysis is isolated and disabled by default. Standard upload can register authorized `memory_dump` evidence when enabled, and the optional memory worker can run only the supported Volatility metadata/process profiles.
 - Validation Matrix is optional QA metadata; it is not part of normal investigations.
 - Kairon DFIR assists analysis, but final interpretation remains the analyst's responsibility.
 

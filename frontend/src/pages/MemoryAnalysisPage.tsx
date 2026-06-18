@@ -151,7 +151,7 @@ export default function MemoryAnalysisPage() {
   });
 
   const registerMutation = useMutation({
-    mutationFn: ({ evidenceId, profile }: { evidenceId: string; profile: "metadata_only" | "processes_basic" | "processes_extended" }) => api.startMemoryScan(evidenceId, profile),
+    mutationFn: ({ evidenceId, profile, authorizationAcknowledged }: { evidenceId: string; profile: "metadata_only" | "processes_basic" | "processes_extended"; authorizationAcknowledged: boolean }) => api.startMemoryScan(evidenceId, profile, authorizationAcknowledged),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] }),
@@ -169,6 +169,8 @@ export default function MemoryAnalysisPage() {
   const canRunProcessProfiles = Boolean(canRunMetadata && overview?.memory_process_profile_enabled);
 
   function runAnalysis(evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended") {
+    const authorizationCopy = "I confirm that I own this memory image or am explicitly authorized to analyze it, and I understand that RAM may contain sensitive personal or authentication data.";
+    if (!window.confirm(authorizationCopy)) return;
     const copy =
       profile === "processes_basic"
         ? "This will analyze the selected authorized memory image using the externally configured Volatility 3 backend and the windows.info, windows.pslist, windows.pstree, and windows.cmdline plugins."
@@ -176,12 +178,14 @@ export default function MemoryAnalysisPage() {
           ? "This also runs windows.psscan, which may return additional process structures requiring analyst interpretation."
           : "This will analyze the selected authorized memory image using the externally configured Volatility 3 backend and the windows.info metadata plugin.";
     const confirmed = window.confirm(copy);
-    if (confirmed) registerMutation.mutate({ evidenceId, profile });
+    if (confirmed) registerMutation.mutate({ evidenceId, profile, authorizationAcknowledged: true });
   }
 
   function runMetadataAnalysis(evidenceId: string) {
+    const authorizationCopy = "I confirm that I own this memory image or am explicitly authorized to analyze it, and I understand that RAM may contain sensitive personal or authentication data.";
+    if (!window.confirm(authorizationCopy)) return;
     const confirmed = window.confirm("This will analyze the selected authorized memory image using the externally configured Volatility 3 backend and the windows.info metadata plugin.");
-    if (confirmed) registerMutation.mutate({ evidenceId, profile: "metadata_only" });
+    if (confirmed) registerMutation.mutate({ evidenceId, profile: "metadata_only", authorizationAcknowledged: true });
   }
 
   if (!caseId) {

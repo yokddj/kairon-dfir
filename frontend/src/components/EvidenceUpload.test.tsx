@@ -164,6 +164,22 @@ describe("EvidenceUpload", () => {
     expect(await screen.findByRole("button", { name: /Search evidence/i })).toBeInTheDocument();
   });
 
+  it("detects a memory image, shows privacy warning, and does not auto-run analysis", async () => {
+    uploadEvidenceMock.mockResolvedValueOnce({ id: "ev-memory", evidence_type: "memory_dump", metadata_json: {}, ingest_status: "completed" });
+    renderComponent();
+    await userEvent.type(screen.getByLabelText(/Host name required/i), "HOSTA");
+    await selectPrimaryFile(makeFile("memory", "authorized.mem"));
+
+    expect(await screen.findByText(/Detected: Memory image/i)).toBeInTheDocument();
+    expect(screen.getByText(/Memory images may contain credentials, personal data, encryption material, browser data, and other sensitive information/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Index evidence/i }));
+
+    await waitFor(() => expect(uploadEvidenceMock).toHaveBeenCalled());
+    expect(await screen.findByText(/Memory image uploaded and finalized/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Open Memory Analysis/i })).toBeInTheDocument();
+    expect(discoverVelociraptorZipMock).not.toHaveBeenCalled();
+  });
+
   it("keeps advanced options collapsed by default", () => {
     renderComponent();
     expect(screen.getByText(/Advanced options/i)).toBeInTheDocument();

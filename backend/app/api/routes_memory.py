@@ -1,3 +1,5 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -73,6 +75,11 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
         )
     if not settings.memory_allow_external_tool_execution:
         raise HTTPException(status_code=403, detail="External memory-tool execution is disabled by server configuration.")
+    if not payload or not payload.authorization_acknowledged:
+        raise HTTPException(
+            status_code=400,
+            detail="Authorization acknowledgement is required before analyzing RAM evidence.",
+        )
     backend_overview = get_memory_backend_overview()
     volatility_status = next((item for item in backend_overview.get("backends", []) if item.get("backend") == "volatility3"), None)
     if not volatility_status or not volatility_status.get("ready"):
@@ -86,6 +93,11 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
         raise HTTPException(status_code=409, detail=f"An active metadata analysis run already exists for this memory evidence: {existing.id}")
 
     run = create_memory_metadata_run(db, evidence.id, profile)
+    run.metadata_json = {
+        **(run.metadata_json or {}),
+        "authorization_acknowledged": True,
+        "authorization_acknowledged_at": datetime.now(UTC).isoformat(),
+    }
     try:
         worker_task_id = enqueue_memory_metadata_scan(run.id)
     except Exception as exc:  # noqa: BLE001

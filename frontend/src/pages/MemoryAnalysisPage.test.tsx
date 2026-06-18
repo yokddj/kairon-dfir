@@ -216,7 +216,7 @@ describe("MemoryAnalysisPage", () => {
     expect(await screen.findByText("memory.mem")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Run metadata analysis/i }));
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("windows.info metadata plugin"));
-    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("ev-memory", "metadata_only"));
+    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("ev-memory", "metadata_only", true));
   });
 
   it("offers basic process analysis with exact confirmation copy", async () => {
@@ -239,8 +239,9 @@ describe("MemoryAnalysisPage", () => {
     renderPage();
     expect(await screen.findByText("memory.mem")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Run basic process analysis/i }));
+    expect(window.confirm).toHaveBeenCalledWith("I confirm that I own this memory image or am explicitly authorized to analyze it, and I understand that RAM may contain sensitive personal or authentication data.");
     expect(window.confirm).toHaveBeenCalledWith("This will analyze the selected authorized memory image using the externally configured Volatility 3 backend and the windows.info, windows.pslist, windows.pstree, and windows.cmdline plugins.");
-    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("ev-memory", "processes_basic"));
+    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("ev-memory", "processes_basic", true));
   });
 
   it("shows run list", async () => {

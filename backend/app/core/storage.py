@@ -12,6 +12,13 @@ from app.core.config import get_settings
 settings = get_settings()
 
 
+class MemoryUploadError(ValueError):
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+
+
 def case_storage_root(case_id: str) -> Path:
     return settings.backend_data_dir / "evidence" / case_id
 
@@ -35,6 +42,65 @@ def save_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int]:
             size += len(chunk)
             buffer.write(chunk)
     return evidence_id, stored_path, size
+
+
+def safe_display_filename(filename: str | None) -> str:
+    name = Path((filename or "memory-image").replace("\\", "/")).name.strip()
+    name = "".join(ch if ch.isalnum() or ch in "._- " else "_" for ch in name).strip(" .")
+    return name[:180] or "memory-image"
+
+
+def is_memory_upload_filename(filename: str | None) -> bool:
+    suffix = Path(filename or "").suffix.lower()
+    return bool(suffix and suffix in settings.memory_upload_extensions)
+
+
+def save_memory_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int, str, str]:
+    suffix = Path(upload.filename or "").suffix.lower()
+    if suffix not in settings.memory_upload_extensions:
+        raise MemoryUploadError("rejected_type", "This memory image extension is not enabled for browser upload.")
+    chunk_size = max(65536, int(settings.memory_upload_chunk_size_bytes or 4194304))
+    max_bytes = max(1, int(settings.memory_upload_max_bytes or settings.memory_max_upload_size or 1))
+    evidence_id = str(uuid4())
+    root = build_evidence_root(case_id, evidence_id)
+    original_dir = root / "original"
+    staging_root = settings.memory_upload_staging_path
+    staging_root.mkdir(parents=True, exist_ok=True)
+    original_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = staging_root / f"{case_id}-{evidence_id}.memory-upload.part"
+    final_path = original_dir / f"memory-image{suffix}"
+    digest = hashlib.sha256()
+    size = 0
+    safe_name = safe_display_filename(upload.filename)
+    try:
+        with temp_path.open("xb") as buffer:
+            while True:
+                chunk = upload.file.read(chunk_size)
+                if not chunk:
+                    break
+                size += len(chunk)
+                if size > max_bytes:
+                    raise MemoryUploadError("rejected_size", f"Memory image exceeds configured upload limit of {max_bytes} bytes.")
+                digest.update(chunk)
+                buffer.write(chunk)
+            buffer.flush()
+            os.fsync(buffer.fileno())
+        if size <= 0:
+            raise MemoryUploadError("rejected_empty", "Empty memory image uploads are not accepted.")
+        os.replace(temp_path, final_path)
+        dir_fd = os.open(str(final_path.parent), os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+        return evidence_id, final_path, size, digest.hexdigest(), safe_name
+    except Exception:
+        if temp_path.exists() and not temp_path.is_symlink():
+            temp_path.unlink()
+        if final_path.exists() and not final_path.is_symlink():
+            final_path.unlink()
+        safe_remove(root)
+        raise
 
 
 def import_existing_path(case_id: str, source_path: Path) -> tuple[str, Path, int]:
