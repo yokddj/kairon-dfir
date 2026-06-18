@@ -29,6 +29,7 @@ const SystemPage = lazy(() => import("./pages/SystemPage"));
 const DocsPage = lazy(() => import("./pages/DocsPage"));
 const DebugExportPage = lazy(() => import("./pages/DebugExportPage"));
 const MemoryAnalysisPage = lazy(() => import("./pages/MemoryAnalysisPage"));
+const MemoryUploadPage = lazy(() => import("./pages/MemoryUploadPage"));
 
 function WorkspaceLoadingFallback() {
   return (
@@ -122,6 +123,7 @@ export default function App() {
                 <Route path="/cases/:caseId/reports" element={<CaseReportsPage />} />
                 <Route path="/cases/:caseId/debug-export" element={<DebugExportPage />} />
                 <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
+                <Route path="/cases/:caseId/memory/upload" element={<MemoryUploadPage />} />
                 <Route path="/cases/:caseId/process-tree" element={<LegacyCaseParamRedirect suffix="/process-graph" />} />
                 <Route path="/cases/:caseId/dashboard" element={<LegacyCaseParamRedirect suffix="/overview" />} />
                 <Route path="/cases/:caseId" element={<CaseDetail />} />

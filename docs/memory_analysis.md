@@ -2,6 +2,14 @@
 
 Memory Analysis is the planned Kairon workspace for authorized RAM and memory evidence triage.
 
+The primary upload workflow is now:
+
+```text
+Case -> Memory Analysis -> Add memory image
+```
+
+This dedicated flow shows upload readiness, storage capacity, privacy warnings, and progress before the evidence appears in Memory Analysis. The generic Evidence Upload form remains compatible, but it is no longer the recommended memory workflow.
+
 ## Current status
 
 This version includes isolated Volatility 3 profiles:

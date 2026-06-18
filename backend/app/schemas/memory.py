@@ -121,6 +121,24 @@ class MemoryOverviewRead(BaseModel):
     message: str
 
 
+class MemoryUploadReadinessRead(BaseModel):
+    case_id: str
+    upload_enabled: bool
+    max_upload_bytes: int
+    max_upload_display: str
+    allowed_extensions: list[str]
+    staging_available_bytes: int
+    canonical_storage_available_bytes: int
+    memory_output_available_bytes: int
+    recommended_max_upload_bytes: int
+    required_capacity_bytes: int
+    can_accept_selected_size: bool
+    analysis_enabled: bool
+    dedicated_worker_online: bool
+    backend_ready: bool
+    message: str
+
+
 class MemoryStartScanRequest(BaseModel):
     profile: str = "metadata_only"
     authorization_acknowledged: bool = False

@@ -24,12 +24,17 @@ Kairon does not install Volatility on the host, backend, frontend, or normal wor
 
 ## Workflow
 
-1. Upload the authorized RAM image through Evidence Upload.
-2. Confirm it appears as `memory_dump` in Memory Analysis.
-3. Start with `metadata_only`.
-4. Run `processes_basic` or `processes_extended` only when process inventory is needed.
+1. Open the case and go to Memory Analysis.
+2. Select Add memory image.
+3. Review readiness and capacity.
+4. Upload the authorized RAM image.
+5. Confirm it appears as `memory_dump` in Memory Analysis.
+6. Start with `metadata_only`.
+7. Run `processes_basic` or `processes_extended` only when process inventory is needed.
 
 Each scan request must include the authorization acknowledgement. Kairon does not expose plugin checkboxes or command-line controls.
+
+The generic Evidence Upload page remains available for backward compatibility and links users to the dedicated memory upload flow when a memory extension is selected.
 
 ## Symbols
 
@@ -41,4 +46,3 @@ The default symbol policy is offline only. Kairon does not silently download sym
 - Worker offline: check `docker compose --profile memory ps memory-worker` and `/api/memory/backends`.
 - Queue not moving: the normal worker does not consume the memory queue; the dedicated memory worker must be healthy.
 - Do not attach RAM images, real Volatility JSON, command lines, symbols, or credentials to public GitHub issues.
-

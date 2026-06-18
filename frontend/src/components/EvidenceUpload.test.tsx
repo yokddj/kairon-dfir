@@ -174,6 +174,8 @@ describe("EvidenceUpload", () => {
     expect(await screen.findByText(/Detected: Memory image/i)).toBeInTheDocument();
     expect(screen.getByText(/Memory images may contain credentials, personal data, encryption material, browser data, and other sensitive information/i)).toBeInTheDocument();
     expect(screen.getByText(/Configured upload limit: 5\.0 GB/i)).toBeInTheDocument();
+    expect(screen.getByText(/For the best experience, use the dedicated Memory Image upload/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
     await userEvent.click(screen.getByRole("button", { name: /Index evidence/i }));
 
     await waitFor(() => expect(uploadEvidenceMock).toHaveBeenCalled());
