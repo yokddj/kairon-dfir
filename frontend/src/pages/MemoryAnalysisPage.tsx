@@ -59,7 +59,7 @@ function durationLabel(value: number | null | undefined) {
 }
 
 function SystemInformation({ item }: { item: MemorySystemInfo }) {
-  const fields = [
+  const fields: Array<[string, unknown]> = [
     ["OS family", item.os.family],
     ["Kernel base", item.os.kernel_base],
     ["Kernel version", item.os.kernel_version],
@@ -80,7 +80,7 @@ function SystemInformation({ item }: { item: MemorySystemInfo }) {
       </div>
       <dl className="mt-4 grid gap-3 md:grid-cols-2 text-sm">
         {fields.map(([label, value]) => (
-          <div key={label as string}>
+          <div key={label}>
             <dt className="text-xs uppercase tracking-[0.14em] text-muted">{label}</dt>
             <dd className="mt-1 break-words text-ink">{reported(value)}</dd>
           </div>
