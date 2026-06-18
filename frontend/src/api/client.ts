@@ -337,9 +337,46 @@ export type MemorySystemInfo = {
   raw: Record<string, unknown>;
 };
 
+export type MemoryProcess = {
+  document_id?: string | null;
+  case_id: string;
+  evidence_id: string;
+  memory_run_id: string;
+  source_layer: "memory";
+  memory_artifact_type: "memory_process";
+  backend: string;
+  plugins: string[];
+  process: Record<string, unknown>;
+  memory: Record<string, unknown>;
+  visibility: Record<string, unknown>;
+  state: Record<string, unknown>;
+  parsed_at: string;
+  raw: Record<string, unknown>;
+  warnings: string[];
+};
+
+export type MemoryProcessList = {
+  items: MemoryProcess[];
+  total: number;
+  page: number;
+  page_size: number;
+};
+
+export type MemoryProcessTree = {
+  run_id: string;
+  nodes: MemoryProcess[];
+  edges: Array<Record<string, unknown>>;
+  orphan_count: number;
+  root_count: number;
+  warnings: string[];
+  source_plugins: string[];
+  total_process_count: number;
+};
+
 export type MemoryOverview = {
   case_id: string;
   memory_analysis_enabled: boolean;
+  memory_process_profile_enabled: boolean;
   has_memory_evidence: boolean;
   has_memory_results: boolean;
   has_disk_events: boolean;
@@ -3273,10 +3310,21 @@ export const api = {
   getMemoryOverview: (caseId: string) => request<MemoryOverview>(`/cases/${caseId}/memory`),
   listMemoryEvidences: (caseId: string) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences`),
   listMemoryRuns: (caseId: string) => request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs`),
-  startMemoryScan: (evidenceId: string) => request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan`, { method: "POST", body: JSON.stringify({ profile: "metadata_only" }) }),
+  startMemoryScan: (evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only") => request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan`, { method: "POST", body: JSON.stringify({ profile }) }),
   getMemoryRun: (runId: string) => request<MemoryRunDetail>(`/memory/runs/${runId}`),
   getMemoryRunSystemInfo: (runId: string) => request<MemorySystemInfo>(`/memory/runs/${runId}/system-info`),
   getCaseMemorySystemInfo: (caseId: string) => request<MemorySystemInfo[]>(`/cases/${caseId}/memory/system-info`),
+  getCaseMemoryProcesses: (caseId: string, params?: { run_id?: string; pid?: number; process_name?: string; source_plugin?: string; page?: number; page_size?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.run_id) query.set("run_id", params.run_id);
+    if (params?.pid !== undefined) query.set("pid", String(params.pid));
+    if (params?.process_name) query.set("process_name", params.process_name);
+    if (params?.source_plugin) query.set("source_plugin", params.source_plugin);
+    if (params?.page) query.set("page", String(params.page));
+    if (params?.page_size) query.set("page_size", String(params.page_size));
+    return request<MemoryProcessList>(`/cases/${caseId}/memory/processes${query.size ? `?${query.toString()}` : ""}`);
+  },
+  getMemoryProcessTree: (runId: string) => request<MemoryProcessTree>(`/memory/runs/${runId}/process-tree`),
   getEvidence: (evidenceId: string) => request<Evidence>(`/evidences/${evidenceId}`),
   getEvidenceManifest: (evidenceId: string) => request<EvidenceManifest>(`/evidences/${evidenceId}/manifest`),
   getEvidenceOnDemandModules: (evidenceId: string) => request<OnDemandModulesResponse>(`/evidences/${evidenceId}/on-demand-modules`),

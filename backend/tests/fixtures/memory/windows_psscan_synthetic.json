@@ -1,0 +1,4 @@
+[
+  {"fixture_notice":"Synthetic non-evidentiary psscan fixture. Not from a real memory dump.","PID":1000,"PPID":4,"ImageFileName":"sample-app.exe","Offset(P)":"0x2200","CreateTime":"2026-06-16T00:00:00Z"},
+  {"PID":2200,"PPID":1000,"ImageFileName":"finished-task.exe","Offset(P)":"0x3300","ExitTime":"2026-06-16T00:05:00Z"}
+]

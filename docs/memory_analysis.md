@@ -4,11 +4,15 @@ Memory Analysis is the planned Kairon workspace for authorized RAM and memory ev
 
 ## Current status
 
-This version includes an isolated metadata runner for one Volatility 3 plugin:
+This version includes isolated Volatility 3 profiles:
 
 - `windows.info`
+- `windows.pslist`
+- `windows.pstree`
+- `windows.psscan`
+- `windows.cmdline`
 
-It does not extract processes, network connections, DLLs, handles, registry data, injected memory, credentials, files, strings, YARA results, or malware findings. MemProcFS remains readiness-only.
+It does not extract network connections, DLLs, handles, services, drivers, registry data, injected memory, credentials, files, strings, YARA results, or malware findings. MemProcFS remains readiness-only.
 
 Memory Analysis is disabled by default:
 
@@ -19,7 +23,7 @@ External tools such as Volatility 3 or MemProcFS are optional, external to Kairo
 
 Kairon can report backend readiness for supported external tools. Readiness means only that the server-side configuration points to a valid executable and that a harmless help/version check can run. It does not mean any memory image has been analyzed.
 
-When execution is explicitly enabled by an administrator, Kairon may run Volatility 3 only with `windows.info` against evidence registered as `memory_dump`. The command is built server-side, uses `shell=False`, receives no API-controlled plugin names or arguments, and stores output only under the isolated memory run directory.
+When execution is explicitly enabled by an administrator, Kairon may run Volatility 3 only through named server-controlled profiles against evidence registered as `memory_dump`. The command is built server-side, uses `shell=False`, receives no API-controlled plugin names or arguments, and stores output only under the isolated memory run directory.
 
 ## Legal and safety rules
 
@@ -55,18 +59,26 @@ The configured command must contain only one of:
 
 The readiness check may call a harmless help/version command with `shell=False`. No memory-image path is supplied, no plugins are run, no mounts are created, no files are written, no MemoryScanRun records are created, and no OpenSearch memory documents are written.
 
-## Metadata runner
+## Profiles
 
-The metadata runner is asynchronous. `POST /api/evidences/{evidence_id}/memory/scan` accepts only:
+The memory runner is asynchronous. `POST /api/evidences/{evidence_id}/memory/scan` accepts only a named profile:
 
 ```json
 {"profile":"metadata_only"}
 ```
 
-Kairon selects the backend and plugin server-side:
+Supported profiles:
+
+- `metadata_only`: `windows.info`
+- `processes_basic`: `windows.info`, `windows.pslist`, `windows.pstree`, `windows.cmdline`
+- `processes_extended`: `windows.info`, `windows.pslist`, `windows.pstree`, `windows.psscan`, `windows.cmdline`
+
+Process profiles are disabled by default with `MEMORY_PROCESS_PROFILE_ENABLED=false`.
+
+Kairon selects the backend and plugins server-side. Each plugin runs sequentially with this argv shape:
 
 ```text
-[resolved_volatility_executable, "-f", validated_evidence_path, "-r", "json", "windows.info"]
+[resolved_volatility_executable, "-f", validated_evidence_path, "-r", "json", plugin_from_profile]
 ```
 
 No executable path, evidence path, plugin name, output path, symbol URL, command argument, or environment variable is accepted from the API or UI.
@@ -78,9 +90,11 @@ The runner validates:
 - Volatility 3 readiness is ready
 - evidence exists and is `memory_dump`
 - evidence resolves to a regular file under trusted storage roots
-- no active metadata run already exists for the same evidence
+- no active run already exists for the same evidence/profile
 
-The runner writes bounded raw JSON and a manifest under the evidence storage tree, stores run metadata in PostgreSQL, and indexes normalized `memory_system_info` only into `dfir-memory-{case_id}`. It never writes to the existing disk events index.
+The runner writes bounded raw JSON and a manifest under the evidence storage tree, stores run metadata in PostgreSQL, and indexes normalized `memory_system_info`, `memory_process`, and `memory_process_edge` only into `dfir-memory-{case_id}`. It never writes to the existing disk events index.
+
+Process differences are presented neutrally. A `psscan`-only process is shown as “Not present in pslist result” and “Requires analyst review”; Kairon does not label it as malware, rootkit activity, or compromise.
 
 Automatic symbol download is not initiated by Kairon. If Volatility cannot satisfy plugin requirements, the run fails safely and reports a sanitized error such as `PLUGIN_REQUIREMENTS_UNSATISFIED`.
 
@@ -97,7 +111,13 @@ Configuration:
 - `MEMORY_PLUGIN_TIMEOUT_SECONDS=600`
 - `MEMORY_PLUGIN_OUTPUT_MAX_BYTES=10485760`
 - `MEMORY_WORKER_CONCURRENCY=1`
-- `MEMORY_ALLOWED_PLUGINS=windows.info`
+- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline`
+- `MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended`
+- `MEMORY_DEFAULT_PROFILE=metadata_only`
+- `MEMORY_PROCESS_PROFILE_ENABLED=false`
+- `MEMORY_MAX_PROCESS_ROWS=100000`
+- `MEMORY_MAX_COMMAND_LINE_LENGTH=16384`
+- `MEMORY_MAX_RAW_FIELD_LENGTH=65536`
 - `MEMORY_RAW_OUTPUT_RETENTION_ENABLED=true`
 - `MEMORY_SYMBOL_NETWORK_ACCESS_ENABLED=false`
 
@@ -105,4 +125,4 @@ Command settings are administrator-controlled and require trusted server access 
 
 ## Sprint boundary
 
-The current runner scope is metadata-only. It does not add MemProcFS execution, process parsing, memory graphs, malfind, netscan, credential extraction, file extraction, malware detection, hybrid correlation, or global Search/Timeline integration.
+The current runner scope is isolated metadata and process inventory only. It does not add MemProcFS execution, malfind, netscan, DLL/handle/service/driver extraction, credential extraction, file extraction, malware detection, hybrid correlation, or global Search/Timeline integration.

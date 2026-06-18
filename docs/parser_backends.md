@@ -32,12 +32,12 @@ These backends are external, optional, not bundled, and not installed by Kairon.
 
 | Backend | Distribution | Readiness detection | Evidence execution |
 | --- | --- | --- | --- |
-| Volatility 3 | external optional tool, not bundled | supported through configured executable detection and harmless help/version check | metadata execution supported conditionally for `windows.info` only |
+| Volatility 3 | external optional tool, not bundled | supported through configured executable detection and harmless help/version check | metadata and process profiles supported conditionally for `windows.info`, `windows.pslist`, `windows.pstree`, `windows.psscan`, and `windows.cmdline` only |
 | MemProcFS | external optional tool, not bundled | supported through configured executable detection and harmless help/version check | not implemented in this sprint |
 
 Readiness detection does not supply a memory-image path, run plugins, mount devices, create artifacts, create MemoryScanRun rows, or write OpenSearch documents.
 
-Volatility 3 execution is disabled by default and controlled by administrator configuration. Kairon builds a fixed `shell=False` argv for `windows.info` and never accepts plugin names or command arguments from API/UI requests. It writes normalized metadata only to the isolated `dfir-memory-{case_id}` index.
+Volatility 3 execution is disabled by default and controlled by administrator configuration. Kairon builds a fixed `shell=False` argv from named profiles and never accepts plugin names or command arguments from API/UI requests. It writes normalized metadata, memory process, and memory process edge documents only to the isolated `dfir-memory-{case_id}` index.
 
 ## Advanced backend search behavior
 

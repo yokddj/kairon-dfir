@@ -2,7 +2,7 @@
 
 ## Scope
 
-The current memory runner supports only Volatility 3 `windows.info` metadata execution. Volatility 3 is external, optional, not bundled, and governed by its own license. Kairon does not install it automatically.
+The current memory runner supports Volatility 3 `windows.info` plus isolated process inventory plugins: `windows.pslist`, `windows.pstree`, `windows.psscan`, and `windows.cmdline`. Volatility 3 is external, optional, not bundled, and governed by its own license. Kairon does not install it automatically.
 
 ## Threat model
 
@@ -19,7 +19,7 @@ Memory images can contain credentials, personal data, malware, private keys, and
 The fixed argv is:
 
 ```text
-[resolved_volatility_executable, "-f", validated_evidence_path, "-r", "json", "windows.info"]
+[resolved_volatility_executable, "-f", validated_evidence_path, "-r", "json", plugin_from_server_profile]
 ```
 
 ## Path validation
@@ -31,6 +31,8 @@ Uploaded or copied evidence must remain under Kairon's evidence storage tree. Mo
 ## Subprocess isolation
 
 The runner uses a minimal environment and a per-run working directory. It does not pass application secrets, raw environment files, Docker sockets, host devices, or arbitrary user-controlled values to Volatility.
+
+Plugins run sequentially to reduce CPU/memory pressure and keep the audit trail simple.
 
 The current deployment may run the task in the existing worker container. A future dedicated memory worker should run with constrained CPU/memory, no privileged mode, no host PID/device access, read-only evidence mounts, network disabled by default, and writable access only to approved temporary/output directories.
 
@@ -55,13 +57,15 @@ data/evidence/{case_id}/{evidence_id}/memory/runs/{run_id}/
 
 Database rows store relative paths, SHA-256 hashes, sizes, and status metadata. Normalized metadata is indexed only into `dfir-memory-{case_id}`. The existing disk events index is not written by the memory runner.
 
+Process command lines may contain sensitive user data. They are bounded, never logged in full, and exposed only in the isolated Memory Analysis process table/details surfaces.
+
 ## Logging redaction
 
 Logs may include run ID, case ID, evidence ID, backend, plugin, state transition, duration, row count, and sanitized error code. Logs must not include raw memory contents, full command lines with evidence paths, environment variables, credentials, raw plugin JSON, or unbounded stdout/stderr.
 
 ## Known limitations
 
-- Only `windows.info` is supported.
+- Only `windows.info`, `windows.pslist`, `windows.pstree`, `windows.psscan`, and `windows.cmdline` are supported.
 - MemProcFS execution is not implemented.
-- No process, network, registry, credential, malware, file, string, injection, YARA, or hybrid-correlation analysis is implemented.
+- No network, registry, credential, malware, file, string, injection, YARA, DLL, handle, driver, service, or hybrid-correlation analysis is implemented.
 - Real execution requires an administrator-installed Volatility 3 environment and authorized lab evidence.

@@ -1,7 +1,7 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { api, type MemoryBackendStatus, type MemoryOverview, type MemorySystemInfo } from "../api/client";
+import { api, type MemoryBackendStatus, type MemoryOverview, type MemoryProcess, type MemorySystemInfo } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
 function modeLabel(mode: MemoryOverview["mode"]) {
@@ -90,10 +90,22 @@ function SystemInformation({ item }: { item: MemorySystemInfo }) {
   );
 }
 
+function sourceBadges(item: MemoryProcess) {
+  return (item.plugins || []).map((plugin) => plugin.replace("windows.", ""));
+}
+
+function stateLabel(item: MemoryProcess) {
+  if (item.state?.terminated_candidate) return "Exited time reported";
+  if (item.visibility?.psscan && !item.visibility?.pslist) return "Not present in pslist result";
+  return "Listed";
+}
+
 export default function MemoryAnalysisPage() {
   const { caseId = "" } = useParams();
   const { setActiveCaseId } = useActiveCase();
   const queryClient = useQueryClient();
+  const [processPage, setProcessPage] = useState(1);
+  const [processName, setProcessName] = useState("");
 
   useEffect(() => {
     if (caseId) setActiveCaseId(caseId);
@@ -121,13 +133,31 @@ export default function MemoryAnalysisPage() {
     refetchInterval: overviewQuery.data?.runs.some((run) => ACTIVE_RUN_STATUSES.has(run.status)) ? 3000 : false,
   });
 
+  const latestProcessRun = overviewQuery.data?.runs.find((run) => run.profile === "processes_extended" || run.profile === "processes_basic");
+
+  const processQuery = useQuery({
+    queryKey: ["memory-processes", caseId, latestProcessRun?.id, processPage, processName],
+    queryFn: () => api.getCaseMemoryProcesses(caseId, { run_id: latestProcessRun?.id, page: processPage, page_size: 50, process_name: processName || undefined }),
+    enabled: Boolean(caseId && latestProcessRun?.id),
+    refetchOnWindowFocus: false,
+  });
+
+  const processTreeQuery = useQuery({
+    queryKey: ["memory-process-tree", latestProcessRun?.id],
+    queryFn: () => api.getMemoryProcessTree(latestProcessRun!.id),
+    enabled: Boolean(latestProcessRun?.id),
+    refetchOnWindowFocus: false,
+  });
+
   const registerMutation = useMutation({
-    mutationFn: (evidenceId: string) => api.startMemoryScan(evidenceId),
+    mutationFn: ({ evidenceId, profile }: { evidenceId: string; profile: "metadata_only" | "processes_basic" | "processes_extended" }) => api.startMemoryScan(evidenceId, profile),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] }),
         queryClient.invalidateQueries({ queryKey: ["memory-runs", caseId] }),
         queryClient.invalidateQueries({ queryKey: ["memory-system-info", caseId] }),
+        queryClient.invalidateQueries({ queryKey: ["memory-processes", caseId] }),
+        queryClient.invalidateQueries({ queryKey: ["memory-process-tree"] }),
       ]);
     },
   });
@@ -135,10 +165,22 @@ export default function MemoryAnalysisPage() {
   const overview = overviewQuery.data;
   const volatilityBackend = backendQuery.data?.backends.find((backend) => backend.backend === "volatility3");
   const canRunMetadata = Boolean(overview?.memory_analysis_enabled && volatilityBackend?.ready);
+  const canRunProcessProfiles = Boolean(canRunMetadata && overview?.memory_process_profile_enabled);
+
+  function runAnalysis(evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended") {
+    const copy =
+      profile === "processes_basic"
+        ? "This will analyze the selected authorized memory image using the externally configured Volatility 3 backend and the windows.info, windows.pslist, windows.pstree, and windows.cmdline plugins."
+        : profile === "processes_extended"
+          ? "This also runs windows.psscan, which may return additional process structures requiring analyst interpretation."
+          : "This will analyze the selected authorized memory image using the externally configured Volatility 3 backend and the windows.info metadata plugin.";
+    const confirmed = window.confirm(copy);
+    if (confirmed) registerMutation.mutate({ evidenceId, profile });
+  }
 
   function runMetadataAnalysis(evidenceId: string) {
     const confirmed = window.confirm("This will analyze the selected authorized memory image using the externally configured Volatility 3 backend and the windows.info metadata plugin.");
-    if (confirmed) registerMutation.mutate(evidenceId);
+    if (confirmed) registerMutation.mutate({ evidenceId, profile: "metadata_only" });
   }
 
   if (!caseId) {
@@ -152,7 +194,7 @@ export default function MemoryAnalysisPage() {
         <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-3xl font-semibold">Authorized RAM evidence</h2>
-            <p className="mt-2 max-w-3xl text-sm text-muted">Isolated metadata analysis for authorized memory evidence. This page can run only the Volatility 3 windows.info plugin when server configuration explicitly allows it.</p>
+            <p className="mt-2 max-w-3xl text-sm text-muted">Isolated analysis for authorized memory evidence. Process results remain only in Memory Analysis and never enter global disk views.</p>
           </div>
           <Link to={`/cases/${caseId}/evidence`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Evidence &amp; Ingest</Link>
         </div>
@@ -283,6 +325,10 @@ export default function MemoryAnalysisPage() {
                           >
                             Run metadata analysis
                           </button>
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <button type="button" disabled={!canRunProcessProfiles || registerMutation.isPending} onClick={() => runAnalysis(evidence.id, "processes_basic")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Run basic process analysis</button>
+                            <button type="button" disabled={!canRunProcessProfiles || registerMutation.isPending} onClick={() => runAnalysis(evidence.id, "processes_extended")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Run extended process analysis</button>
+                          </div>
                           {!canRunMetadata ? <p className="mt-2 max-w-48 text-xs text-muted">{volatilityBackend?.message || "Volatility 3 is not ready for memory metadata analysis."}</p> : null}
                         </td>
                       </tr>
@@ -356,6 +402,67 @@ export default function MemoryAnalysisPage() {
             ) : !systemInfoQuery.isLoading ? (
               <p className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">No memory system information has been reported.</p>
             ) : null}
+          </section>
+
+          <section className="rounded-[28px] border border-line bg-panel/60 p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold">Processes</h3>
+                <p className="mt-1 text-sm text-muted">Isolated Volatility process results. Neutral labels require analyst interpretation.</p>
+              </div>
+              {processQuery.data ? <span className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">{processQuery.data.total} processes</span> : null}
+            </div>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <input value={processName} onChange={(event) => { setProcessName(event.target.value); setProcessPage(1); }} placeholder="Filter by name" className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-sm outline-none" />
+            </div>
+            {processQuery.error instanceof Error ? <p className="mt-4 text-sm text-rose-200">{processQuery.error.message}</p> : null}
+            {processQuery.data?.items.length ? (
+              <div className="mt-4 overflow-x-auto">
+                <table className="min-w-full divide-y divide-line text-sm">
+                  <thead className="bg-abyss/70 text-left text-xs uppercase tracking-[0.14em] text-muted">
+                    <tr><th className="px-4 py-3">PID</th><th className="px-4 py-3">PPID</th><th className="px-4 py-3">Name</th><th className="px-4 py-3">Command line</th><th className="px-4 py-3">Created</th><th className="px-4 py-3">Exited</th><th className="px-4 py-3">Sources</th><th className="px-4 py-3">State</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-line">
+                    {processQuery.data.items.map((item) => (
+                      <tr key={item.document_id || `${item.memory_run_id}-${item.process.pid}`}>
+                        <td className="px-4 py-3 text-ink">{reported(item.process.pid)}</td>
+                        <td className="px-4 py-3 text-muted">{reported(item.process.ppid)}</td>
+                        <td className="px-4 py-3 text-ink">{reported(item.process.name)}</td>
+                        <td className="max-w-xl truncate px-4 py-3 text-muted" title={reported(item.process.command_line)}>{reported(item.process.command_line)}</td>
+                        <td className="px-4 py-3 text-muted">{reported(item.process.create_time)}</td>
+                        <td className="px-4 py-3 text-muted">{reported(item.process.exit_time)}</td>
+                        <td className="px-4 py-3 text-muted">{sourceBadges(item).join(", ") || "Not reported"}</td>
+                        <td className="px-4 py-3 text-muted">{stateLabel(item)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                <div className="flex justify-end gap-2 border-t border-line p-3">
+                  <button disabled={processPage <= 1} onClick={() => setProcessPage((page) => Math.max(1, page - 1))} className="rounded-xl border border-line px-3 py-2 text-xs disabled:opacity-50">Previous</button>
+                  <button disabled={processQuery.data.items.length < processQuery.data.page_size} onClick={() => setProcessPage((page) => page + 1)} className="rounded-xl border border-line px-3 py-2 text-xs disabled:opacity-50">Next</button>
+                </div>
+              </div>
+            ) : (
+              <p className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">No memory process results have been reported.</p>
+            )}
+          </section>
+
+          <section className="rounded-[28px] border border-line bg-panel/60 p-5">
+            <h3 className="text-lg font-semibold">Process tree</h3>
+            {processTreeQuery.data && processTreeQuery.data.total_process_count > 200 ? <p className="mt-3 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 text-sm text-amber-100">This result is too large for full graph rendering; use the process table and filters.</p> : null}
+            {processTreeQuery.data ? (
+              <div className="mt-4 space-y-2 text-sm">
+                <p className="text-muted">Roots: {processTreeQuery.data.root_count} · Orphans: {processTreeQuery.data.orphan_count} · Sources: {processTreeQuery.data.source_plugins.map((plugin) => plugin.replace("windows.", "")).join(", ") || "Not reported"}</p>
+                {processTreeQuery.data.nodes.slice(0, 200).map((item) => (
+                  <div key={item.document_id || `${item.memory_run_id}-${item.process.pid}`} className="rounded-xl border border-line bg-abyss/60 px-3 py-2">
+                    <span className="font-mono text-xs text-muted">PID {reported(item.process.pid)} PPID {reported(item.process.ppid)}</span>
+                    <span className="ml-3 text-ink">{reported(item.process.name)}</span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">No isolated memory process tree is available.</p>
+            )}
           </section>
         </>
       ) : null}
