@@ -40,3 +40,8 @@ class Case(UUIDMixin, TimestampMixin, Base):
     analysis_jobs = relationship("CaseAnalysisJob", back_populates="case", cascade="all, delete-orphan")
     reports = relationship("CaseReport", back_populates="case", cascade="all, delete-orphan")
     host_identities = relationship("CaseHost", back_populates="case", cascade="all, delete-orphan")
+    memory_scan_runs = relationship("MemoryScanRun", back_populates="case", cascade="all, delete-orphan")
+    memory_artifact_summaries = relationship("MemoryArtifactSummary", back_populates="case", cascade="all, delete-orphan")
+
+
+from app.models import memory as _memory_models  # noqa: E402,F401

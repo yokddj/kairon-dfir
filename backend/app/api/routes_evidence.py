@@ -1194,6 +1194,33 @@ def _write_initial_manifest(evidence: Evidence) -> None:
     write_manifest(evidence_manifest_path(evidence.case_id, evidence.id), default_manifest(evidence))
 
 
+def _finalize_memory_evidence_registration(db: Session, evidence: Evidence) -> Evidence:
+    metadata = dict(evidence.metadata_json or {})
+    metadata.update(
+        {
+            "current_phase": "registered_memory_metadata",
+            "progress_pct": 100,
+            "display_status": "completed",
+            "investigation_ready": False,
+            "searchable_documents_count": 0,
+            "events_indexed": 0,
+            "indexed_events": 0,
+            "memory_analysis": {
+                "status": "registered",
+                "profile": "metadata_only",
+                "message": "Authorized memory evidence registered. External memory analysis is disabled by default and is not executed in this build.",
+            },
+            "status_reason": "Memory dump registered metadata-only. It is isolated from disk Search, Timeline, Detections, Findings, Reports, and SIEM.",
+        }
+    )
+    evidence.metadata_json = metadata
+    evidence.ingest_status = IngestStatus.completed
+    evidence.processed_at = datetime.now(UTC).replace(tzinfo=None)
+    db.commit()
+    db.refresh(evidence)
+    return evidence
+
+
 def _raw_collection_initial_metadata(extra: dict | None = None) -> dict:
     return {
         "phases": ["uploaded", "indexing_zip", "discovering_candidates", "waiting_selection", "extracting_selected", "parsing", "indexing_events"],
@@ -1747,6 +1774,18 @@ def upload_evidence(
     db.commit()
     db.refresh(evidence)
     _write_initial_manifest(evidence)
+    if evidence.evidence_type == EvidenceType.memory_dump:
+        evidence = _finalize_memory_evidence_registration(db, evidence)
+        log_activity(
+            db,
+            activity_type="evidence_uploaded",
+            title="Memory evidence registered",
+            message=f"Registered authorized memory evidence {evidence.original_filename}. External memory analysis was not executed.",
+            case_id=case_id,
+            evidence_id=evidence.id,
+            metadata={"evidence_type": evidence.evidence_type.value, "memory_profile": "metadata_only"},
+        )
+        return evidence
     if raw_collection:
         evidence = _finalize_raw_collection_discovery(db, evidence)
         log_activity(
@@ -1942,6 +1981,18 @@ def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Sessi
     db.commit()
     db.refresh(evidence)
     _write_initial_manifest(evidence)
+    if evidence.evidence_type == EvidenceType.memory_dump:
+        evidence = _finalize_memory_evidence_registration(db, evidence)
+        log_activity(
+            db,
+            activity_type="evidence_registered_path",
+            title="Memory evidence registered",
+            message=f"Registered authorized memory evidence from {resolved_path}. External memory analysis was not executed.",
+            case_id=case_id,
+            evidence_id=evidence.id,
+            metadata={"path": str(resolved_path), "storage_mode": evidence.storage_mode.value, "memory_profile": "metadata_only"},
+        )
+        return evidence
     if raw_collection:
         evidence = _finalize_raw_collection_discovery(db, evidence)
     else:

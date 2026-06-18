@@ -44,6 +44,14 @@
   - `suspicious_reasons`
 - **Crear findings**: selecciona eventos del artefacto actual y crea un finding ligado al caso
 
+## Memory Analysis
+
+- **Para qué sirve**: registrar y revisar el estado aislado de evidencia RAM/memoria autorizada.
+- **Estado actual**: experimental, desactivado por defecto y fundacional. No ejecuta Volatility, MemProcFS ni otras herramientas externas.
+- **Qué muestra**: modo del caso (`empty`, `disk_only`, `memory_only`, `hybrid`), evidencias `memory_dump` y runs metadata-only si la feature se habilita.
+- **Qué no hace todavía**: no añade memoria a Search, Timeline, Artifact Explorer, Detections, Findings, Reports, SIEM, Command History, Persistence ni Execution Stories.
+- **Regla legal**: usa solo evidencia RAM propia, autorizada o de laboratorio creada para ese fin. No subas ni commits dumps con datos de terceros sin autorización.
+
 ## Investigation Timeline
 
 - **Para qué sirve**: ordenar cronológicamente lo indexado.
