@@ -893,6 +893,9 @@ export type StorageCapabilities = {
   allow_host_path_import: boolean;
   allowed_roots: string[];
   max_upload_size: number;
+  memory_upload_enabled?: boolean;
+  memory_upload_max_bytes?: number;
+  memory_upload_allowed_extensions?: string[];
   supports_mounted_path: boolean;
   can_edit_deployment_settings?: boolean;
   restart_enabled?: boolean;

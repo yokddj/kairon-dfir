@@ -237,6 +237,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
 
   const capabilities = capabilitiesQuery.data;
   const uploadLimit = capabilities?.max_upload_size ?? 0;
+  const memoryUploadLimit = capabilities?.memory_upload_max_bytes ?? uploadLimit;
   const allowedRoots = capabilities?.allowed_roots ?? [];
   const hostPathImportEnabled = Boolean(capabilities?.allow_host_path_import);
   const hostRequired = !providedHost.trim();
@@ -898,7 +899,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
                   <p className="font-semibold">Memory image</p>
                   <p className="mt-1">Memory images may contain credentials, personal data, encryption material, browser data, and other sensitive information. Upload only evidence that you own or are explicitly authorized to analyze.</p>
                   <p className="mt-1 text-muted">It will be stored as memory_dump evidence, bypass normal disk ingest, and processing occurs later in Memory Analysis.</p>
-                  {uploadLimit > 0 ? <p className="mt-1 text-muted">Configured upload limit: {formatBytes(uploadLimit)}</p> : null}
+                  {memoryUploadLimit > 0 ? <p className="mt-1 text-muted">Configured upload limit: {formatBytes(memoryUploadLimit)}</p> : null}
                 </div>
               ) : null}
             </div>
