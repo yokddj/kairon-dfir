@@ -41,8 +41,17 @@ def resolve_volatility_executable() -> tuple[str, str]:
     return executable, display or Path(executable).name
 
 
+ALLOWED_VOLATILITY_PLUGINS = {"windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"}
+
+
+def build_plugin_argv(executable: str, evidence_path: Path, plugin: str) -> list[str]:
+    if plugin not in ALLOWED_VOLATILITY_PLUGINS:
+        raise VolatilityRunnerError("PLUGIN_NOT_ALLOWED", "Memory plugin is not allowed.")
+    return [executable, "-f", str(evidence_path), "-r", "json", plugin]
+
+
 def build_windows_info_argv(executable: str, evidence_path: Path) -> list[str]:
-    return [executable, "-f", str(evidence_path), "-r", "json", "windows.info"]
+    return build_plugin_argv(executable, evidence_path, "windows.info")
 
 
 def _minimal_environment() -> dict[str, str]:
@@ -55,14 +64,14 @@ def _minimal_environment() -> dict[str, str]:
     return env
 
 
-def run_windows_info(evidence_path: Path, work_dir: Path) -> VolatilityRunResult:
+def run_plugin(plugin: str, evidence_path: Path, work_dir: Path) -> VolatilityRunResult:
     settings = get_settings()
     executable, display = resolve_volatility_executable()
-    argv = build_windows_info_argv(executable, evidence_path)
+    argv = build_plugin_argv(executable, evidence_path, plugin)
     timeout = max(1, int(settings.memory_plugin_timeout_seconds))
     max_bytes = max(1, int(settings.memory_plugin_output_max_bytes))
     work_dir.mkdir(parents=True, exist_ok=True)
-    logger.info("memory volatility plugin started", extra={"plugin": "windows.info", "executable": display})
+    logger.info("memory volatility plugin started", extra={"plugin": plugin, "executable": display})
     started = time.monotonic()
     process: subprocess.Popen[bytes] | None = None
     try:
@@ -86,7 +95,7 @@ def run_windows_info(evidence_path: Path, work_dir: Path) -> VolatilityRunResult
                     os.killpg(process.pid, signal.SIGKILL)
                 except Exception:  # noqa: BLE001
                     process.kill()
-        raise VolatilityRunnerError("PLUGIN_TIMEOUT", "Volatility windows.info timed out.", stdout=exc.output or b"", stderr=exc.stderr or b"") from exc
+        raise VolatilityRunnerError("PLUGIN_TIMEOUT", f"Volatility {plugin} timed out.", stdout=exc.output or b"", stderr=exc.stderr or b"") from exc
     except OSError as exc:
         raise VolatilityRunnerError("BACKEND_START_FAILED", sanitize_backend_error(exc)) from exc
 
@@ -98,7 +107,11 @@ def run_windows_info(evidence_path: Path, work_dir: Path) -> VolatilityRunResult
     if process.returncode != 0:
         message = _classify_failure(stderr or b"")
         raise VolatilityRunnerError(message[0], message[1], stdout=stdout or b"", stderr=stderr or b"")
-    return VolatilityRunResult(argv_display=[display, "-f", "[evidence]", "-r", "json", "windows.info"], stdout=stdout or b"", stderr=stderr or b"", duration_ms=duration_ms)
+    return VolatilityRunResult(argv_display=[display, "-f", "[evidence]", "-r", "json", plugin], stdout=stdout or b"", stderr=stderr or b"", duration_ms=duration_ms)
+
+
+def run_windows_info(evidence_path: Path, work_dir: Path) -> VolatilityRunResult:
+    return run_plugin("windows.info", evidence_path, work_dir)
 
 
 def _classify_failure(stderr: bytes) -> tuple[str, str]:

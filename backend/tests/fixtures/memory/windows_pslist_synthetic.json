@@ -1,0 +1,5 @@
+[
+  {"fixture_notice":"Synthetic non-evidentiary pslist fixture. Not from a real memory dump.","PID":4,"PPID":0,"ImageFileName":"System","Offset(V)":"0x1000"},
+  {"PID":1000,"PPID":4,"ImageFileName":"sample-app.exe","Offset(V)":"0x2000","CreateTime":"2026-06-16T00:00:00Z"},
+  {"PID":1200,"PPID":1000,"ImageFileName":"example-cli.exe","Offset(V)":"0x2400","CreateTime":"2026-06-16T00:01:00Z"}
+]

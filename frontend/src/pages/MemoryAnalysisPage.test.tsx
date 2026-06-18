@@ -7,6 +7,8 @@ import MemoryAnalysisPage from "./MemoryAnalysisPage";
 const getMemoryOverviewMock = vi.fn();
 const getMemoryBackendOverviewMock = vi.fn();
 const getCaseMemorySystemInfoMock = vi.fn();
+const getCaseMemoryProcessesMock = vi.fn();
+const getMemoryProcessTreeMock = vi.fn();
 const startMemoryScanMock = vi.fn();
 
 vi.mock("../api/client", () => ({
@@ -14,6 +16,8 @@ vi.mock("../api/client", () => ({
     getMemoryBackendOverview: (...args: unknown[]) => getMemoryBackendOverviewMock(...args),
     getMemoryOverview: (...args: unknown[]) => getMemoryOverviewMock(...args),
     getCaseMemorySystemInfo: (...args: unknown[]) => getCaseMemorySystemInfoMock(...args),
+    getCaseMemoryProcesses: (...args: unknown[]) => getCaseMemoryProcessesMock(...args),
+    getMemoryProcessTree: (...args: unknown[]) => getMemoryProcessTreeMock(...args),
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
   },
 }));
@@ -92,6 +96,8 @@ describe("MemoryAnalysisPage", () => {
     getMemoryOverviewMock.mockResolvedValue(overview());
     getMemoryBackendOverviewMock.mockResolvedValue(backendOverview());
     getCaseMemorySystemInfoMock.mockResolvedValue([]);
+    getCaseMemoryProcessesMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50 });
+    getMemoryProcessTreeMock.mockResolvedValue({ run_id: "run-1", nodes: [], edges: [], orphan_count: 0, root_count: 0, warnings: [], source_plugins: [], total_process_count: 0 });
     vi.spyOn(window, "confirm").mockReturnValue(true);
     startMemoryScanMock.mockResolvedValue({ accepted: true, evidence_id: "ev-memory", run_id: "run-1", status: "queued", message: "Memory metadata analysis queued for windows.info.", run: null });
   });
@@ -210,7 +216,31 @@ describe("MemoryAnalysisPage", () => {
     expect(await screen.findByText("memory.mem")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Run metadata analysis/i }));
     expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining("windows.info metadata plugin"));
-    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("ev-memory"));
+    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("ev-memory", "metadata_only"));
+  });
+
+  it("offers basic process analysis with exact confirmation copy", async () => {
+    getMemoryOverviewMock.mockResolvedValueOnce(
+      overview({
+        memory_analysis_enabled: true,
+        memory_process_profile_enabled: true,
+        has_memory_evidence: true,
+        evidences: [{ id: "ev-memory", case_id: "case-1", original_filename: "memory.mem", evidence_type: "memory_dump", size_bytes: 2048, ingest_status: "completed", created_at: "2026-06-16T00:00:00Z" }],
+      }),
+    );
+    getMemoryBackendOverviewMock.mockResolvedValueOnce(
+      backendOverview({
+        memory_analysis_enabled: true,
+        external_execution_allowed: true,
+        ready_backend_count: 1,
+        backends: [backendStatus({ executable_found: true, execution_allowed: true, available: true, ready: true, status: "available" })],
+      }),
+    );
+    renderPage();
+    expect(await screen.findByText("memory.mem")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Run basic process analysis/i }));
+    expect(window.confirm).toHaveBeenCalledWith("This will analyze the selected authorized memory image using the externally configured Volatility 3 backend and the windows.info, windows.pslist, windows.pstree, and windows.cmdline plugins.");
+    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("ev-memory", "processes_basic"));
   });
 
   it("shows run list", async () => {

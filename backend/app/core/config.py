@@ -62,7 +62,13 @@ class Settings(BaseSettings):
     memory_plugin_timeout_seconds: int = 600
     memory_plugin_output_max_bytes: int = 10485760
     memory_worker_concurrency: int = 1
-    memory_allowed_plugins: str = "windows.info"
+    memory_allowed_plugins: str = "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline"
+    memory_allowed_profiles: str = "metadata_only,processes_basic,processes_extended"
+    memory_default_profile: str = "metadata_only"
+    memory_process_profile_enabled: bool = False
+    memory_max_process_rows: int = 100000
+    memory_max_command_line_length: int = 16384
+    memory_max_raw_field_length: int = 65536
     memory_raw_output_retention_enabled: bool = True
     memory_symbol_network_access_enabled: bool = False
     backend_multipart_max_files: int = 10000
@@ -177,12 +183,24 @@ class Settings(BaseSettings):
 
     @property
     def allowed_memory_plugins(self) -> list[str]:
+        allowed = {"windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"}
         values = self.memory_allowed_plugins
         if isinstance(values, str):
             plugins = [item.strip() for item in values.split(",") if item.strip()]
         else:
             plugins = [str(item).strip() for item in values if str(item).strip()]
-        return [plugin for plugin in plugins if plugin == "windows.info"] or ["windows.info"]
+        return [plugin for plugin in plugins if plugin in allowed] or ["windows.info"]
+
+    @property
+    def allowed_memory_profiles(self) -> list[str]:
+        allowed = {"metadata_only", "processes_basic", "processes_extended"}
+        profiles = [item.strip() for item in str(self.memory_allowed_profiles or "").split(",") if item.strip()]
+        return [profile for profile in profiles if profile in allowed] or ["metadata_only"]
+
+    @property
+    def default_memory_profile(self) -> str:
+        profile = str(self.memory_default_profile or "metadata_only").strip()
+        return profile if profile in self.allowed_memory_profiles else "metadata_only"
 
     @property
     def allowed_evidence_roots(self) -> list[Path]:

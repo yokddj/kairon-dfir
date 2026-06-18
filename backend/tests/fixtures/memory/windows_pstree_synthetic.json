@@ -1,0 +1,4 @@
+[
+  {"fixture_notice":"Synthetic non-evidentiary pstree fixture. Not from a real memory dump.","PID":1000,"PPID":4,"Name":"sample-app.exe","Offset(V)":"0x2000","CreateTime":"2026-06-16T00:00:00Z"},
+  {"PID":1200,"PPID":1000,"Name":"example-cli.exe","Offset(V)":"0x2400","CreateTime":"2026-06-16T00:01:00Z"}
+]

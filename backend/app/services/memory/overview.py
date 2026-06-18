@@ -95,6 +95,7 @@ def get_case_memory_overview(db: Session, case_id: str) -> dict:
     return {
         "case_id": case_id,
         "memory_analysis_enabled": enabled,
+        "memory_process_profile_enabled": bool(settings.memory_process_profile_enabled),
         "has_memory_evidence": bool(mode_info["has_memory_evidence"]),
         "has_memory_results": has_results,
         "has_disk_events": bool(mode_info["has_disk_events"]),

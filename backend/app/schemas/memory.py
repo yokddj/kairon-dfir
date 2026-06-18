@@ -101,6 +101,7 @@ class MemoryRunDetailRead(MemoryScanRunRead):
 class MemoryOverviewRead(BaseModel):
     case_id: str
     memory_analysis_enabled: bool
+    memory_process_profile_enabled: bool = False
     has_memory_evidence: bool
     has_memory_results: bool
     has_disk_events: bool
@@ -139,3 +140,55 @@ class MemorySystemInfoRead(BaseModel):
     memory: dict
     parsed_at: datetime
     raw: dict = {}
+
+
+class MemoryProcessRead(BaseModel):
+    document_id: str | None = None
+    case_id: str
+    evidence_id: str
+    memory_run_id: str
+    source_layer: str
+    memory_artifact_type: str
+    backend: str
+    plugins: list[str]
+    process: dict
+    memory: dict
+    visibility: dict
+    state: dict
+    parsed_at: datetime
+    raw: dict = {}
+    warnings: list[str] = []
+
+
+class MemoryProcessListRead(BaseModel):
+    items: list[MemoryProcessRead]
+    total: int
+    page: int
+    page_size: int
+
+
+class MemoryProcessEdgeRead(BaseModel):
+    document_id: str | None = None
+    case_id: str
+    evidence_id: str
+    memory_run_id: str
+    source_layer: str
+    memory_artifact_type: str
+    parent_pid: int | None = None
+    child_pid: int | None = None
+    edge_type: str
+    source_plugin: str
+    confidence: str
+    parsed_at: datetime
+    warnings: list[str] = []
+
+
+class MemoryProcessTreeRead(BaseModel):
+    run_id: str
+    nodes: list[MemoryProcessRead]
+    edges: list[MemoryProcessEdgeRead]
+    orphan_count: int
+    root_count: int
+    warnings: list[str]
+    source_plugins: list[str]
+    total_process_count: int

@@ -1,0 +1,4 @@
+[
+  {"fixture_notice":"Synthetic non-evidentiary cmdline fixture. Not from a real memory dump.","PID":1000,"Args":"C:\\Program Files\\Example\\sample-app.exe --profile demo","Offset(V)":"0x2000","CreateTime":"2026-06-16T00:00:00Z"},
+  {"PID":1200,"Args":"C:\\Tools\\example-cli.exe --input synthetic.txt","Offset(V)":"0x2400","CreateTime":"2026-06-16T00:01:00Z"}
+]

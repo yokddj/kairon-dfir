@@ -169,6 +169,32 @@ def test_memory_scan_queues_metadata_only_when_enabled(db_session, monkeypatch: 
     assert plugin_run.plugin == "windows.info"
 
 
+def test_memory_profiles_resolve_server_side(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(memory_execution.backend_readiness, "get_settings", lambda: _backend_settings(memory_process_profile_enabled=True))
+
+    assert memory_execution.resolve_profile_plugins("metadata_only") == ["windows.info"]
+    assert memory_execution.resolve_profile_plugins("processes_basic") == ["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"]
+    assert memory_execution.resolve_profile_plugins("processes_extended") == ["windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"]
+
+
+def test_process_profile_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(memory_execution.backend_readiness, "get_settings", lambda: _backend_settings(memory_process_profile_enabled=False))
+
+    with pytest.raises(memory_validation.MemoryExecutionValidationError) as exc_info:
+        memory_execution.resolve_profile_plugins("processes_basic")
+
+    assert exc_info.value.code == "PROCESS_PROFILE_DISABLED"
+
+
+def test_unknown_memory_profile_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(memory_execution.backend_readiness, "get_settings", lambda: _backend_settings(memory_process_profile_enabled=True))
+
+    with pytest.raises(memory_validation.MemoryExecutionValidationError) as exc_info:
+        memory_execution.resolve_profile_plugins("windows.netscan")
+
+    assert exc_info.value.code == "UNKNOWN_PROFILE"
+
+
 def test_memory_evidence_does_not_create_normalized_events(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     evidence = _evidence(db_session)
@@ -202,6 +228,13 @@ def _backend_settings(**overrides) -> SimpleNamespace:
         "preferred_memory_backend": "volatility3",
         "volatility3_command": "vol",
         "memprocfs_command": "memprocfs",
+        "allowed_memory_profiles": ["metadata_only", "processes_basic", "processes_extended"],
+        "allowed_memory_plugins": ["windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"],
+        "default_memory_profile": "metadata_only",
+        "memory_process_profile_enabled": False,
+        "memory_max_process_rows": 100000,
+        "memory_max_command_line_length": 16384,
+        "memory_max_raw_field_length": 65536,
     }
     values.update(overrides)
     return SimpleNamespace(**values)
@@ -444,6 +477,35 @@ def test_volatility_runner_uses_fixed_argv_and_shell_false(tmp_path: Path, monke
     assert result.argv_display == ["vol", "-f", "[evidence]", "-r", "json", "windows.info"]
 
 
+def test_volatility_runner_uses_fixed_process_plugin_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    evidence_path = tmp_path / "memory.mem"
+    evidence_path.write_bytes(b"synthetic")
+    calls: dict = {}
+
+    class FakeProcess:
+        pid = 12345
+        returncode = 0
+
+        def communicate(self, timeout):
+            return b"[]", b""
+
+    monkeypatch.setattr(volatility_runner, "get_settings", lambda: SimpleNamespace(volatility3_command="vol", memory_plugin_timeout_seconds=5, memory_plugin_output_max_bytes=10_000))
+    monkeypatch.setattr(volatility_runner, "resolve_configured_executable", lambda _command: (True, "/usr/bin/vol", "vol", None))
+    monkeypatch.setattr(volatility_runner.subprocess, "Popen", lambda args, **kwargs: calls.update({"args": args, "kwargs": kwargs}) or FakeProcess())
+
+    volatility_runner.run_plugin("windows.pslist", evidence_path, tmp_path)
+
+    assert calls["args"] == ["/usr/bin/vol", "-f", str(evidence_path), "-r", "json", "windows.pslist"]
+    assert calls["kwargs"]["shell"] is False
+
+
+def test_volatility_runner_rejects_unallowed_plugin(tmp_path: Path) -> None:
+    with pytest.raises(volatility_runner.VolatilityRunnerError) as exc_info:
+        volatility_runner.build_plugin_argv("/usr/bin/vol", tmp_path / "memory.mem", "windows.netscan")
+
+    assert exc_info.value.code == "PLUGIN_NOT_ALLOWED"
+
+
 def test_volatility_runner_timeout_terminates_process_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     evidence_path = tmp_path / "memory.mem"
     evidence_path.write_bytes(b"synthetic")
@@ -512,6 +574,42 @@ def test_windows_info_normalizer_handles_missing_fields() -> None:
     assert document["memory"]["dtb"] is None
 
 
+def test_process_normalizers_merge_pslist_pstree_psscan_cmdline() -> None:
+    pslist = memory_normalizers.normalize_windows_pslist([
+        {"PID": 4, "PPID": 0, "ImageFileName": "System", "Offset(V)": "0x1000"},
+        {"PID": 1000, "PPID": 4, "ImageFileName": "sample-app.exe", "Offset(V)": "0x2000", "CreateTime": "2026-06-16T00:00:00Z"},
+    ])
+    pstree = memory_normalizers.normalize_windows_pstree([
+        {"PID": 1000, "PPID": 4, "Name": "sample-app.exe", "Offset(V)": "0x2000", "CreateTime": "2026-06-16T00:00:00Z"},
+    ])
+    psscan = memory_normalizers.normalize_windows_psscan([
+        {"PID": 2000, "PPID": 1000, "ImageFileName": "finished-task.exe", "Offset(P)": "0x3000", "ExitTime": "2026-06-16T00:05:00Z"},
+    ])
+    cmdline = memory_normalizers.normalize_windows_cmdline([
+        {"PID": 1000, "Args": "C:\\\\Program Files\\\\Example\\\\sample-app.exe --safe-mode", "Offset(V)": "0x2000", "CreateTime": "2026-06-16T00:00:00Z"},
+    ])
+
+    merged = memory_normalizers.merge_memory_process_results([pslist, pstree, psscan, cmdline], case_id=CASE_ID, evidence_id=MEMORY_EVIDENCE_ID, memory_run_id="run-1")
+
+    assert len(merged["processes"]) == 3
+    sample = next(item for item in merged["processes"] if item["process"]["pid"] == 1000)
+    assert sample["process"]["command_line"].endswith("--safe-mode")
+    assert sample["visibility"]["pslist"] is True
+    assert sample["visibility"]["pstree"] is True
+    scanned_only = next(item for item in merged["processes"] if item["process"]["pid"] == 2000)
+    assert scanned_only["visibility"]["psscan"] is True
+    assert scanned_only["state"]["hidden_candidate"] is False
+    assert "not_present_in_pslist_result" in scanned_only["warnings"]
+    assert len(merged["edges"]) == 1
+
+
+def test_process_normalizer_invalid_pid_warns() -> None:
+    normalized = memory_normalizers.normalize_windows_pslist([{"PID": "not-a-pid", "ImageFileName": "example.exe"}])
+
+    assert normalized["processes"] == []
+    assert "missing_or_invalid_pid" in normalized["warnings"]
+
+
 def test_execution_indexing_failure_retains_raw_output(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     evidence_file = tmp_path / "data" / "evidence" / CASE_ID / MEMORY_EVIDENCE_ID / "original" / "memory.mem"
@@ -534,7 +632,7 @@ def test_execution_indexing_failure_retains_raw_output(db_session, tmp_path: Pat
     monkeypatch.setattr(memory_execution, "SessionLocal", lambda: SessionContext())
     monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=evidence, path=evidence_file, size_bytes=evidence_file.stat().st_size))
     monkeypatch.setattr(memory_execution.backend_readiness, "check_volatility3_backend", lambda: {"ready": True, "version": "Volatility 3 Framework 2.8.0"})
-    monkeypatch.setattr(memory_execution, "run_windows_info", lambda _path, _work_dir: SimpleNamespace(argv_display=["vol", "-f", "[evidence]", "-r", "json", "windows.info"], stdout=b'{"Kernel Base":"0xf8000000"}', stderr=b"", duration_ms=7))
+    monkeypatch.setattr(memory_execution, "run_plugin", lambda _plugin, _path, _work_dir: SimpleNamespace(argv_display=["vol", "-f", "[evidence]", "-r", "json", "windows.info"], stdout=b'{"Kernel Base":"0xf8000000"}', stderr=b"", duration_ms=7))
     monkeypatch.setattr(memory_execution, "index_memory_system_info", lambda _case_id, _document: (_ for _ in ()).throw(RuntimeError("/secret/index failed")))
     monkeypatch.setattr(memory_execution, "memory_run_dir", lambda _case_id, _evidence_id, run_id: tmp_path / "data" / "evidence" / CASE_ID / MEMORY_EVIDENCE_ID / "memory" / "runs" / run_id)
     monkeypatch.setattr(memory_execution, "relative_to_data_dir", lambda path: str(path.relative_to(tmp_path / "data")))
