@@ -231,6 +231,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   const [detectionPreview, setDetectionPreview] = useState<DetectionPreview | null>(null);
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [latestEvidenceId, setLatestEvidenceId] = useState("");
+  const [memoryAuthorizationAcknowledged, setMemoryAuthorizationAcknowledged] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
@@ -364,6 +365,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
           ingestMode,
           providedHost: providedHost.trim() || undefined,
           evtxProfile: effectiveEvtxProfile,
+          memoryAuthorizationAcknowledged: isMemoryImageFile(file) && memoryAuthorizationAcknowledged,
         });
         if (isRawDiscoveryEvidence(evidence)) {
           setPhase("selection_pending");
@@ -465,6 +467,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
     setSelectedFormat(inferredIntent === "raw_archive" ? "raw_archive" : inferredIntent === "parsed_archive" ? "parsed_archive" : inferredIntent === "parsed_single_file" ? "parsed_single_file" : "raw_single_file");
     setFileIntent(inferredIntent);
     setPendingFile(file);
+    setMemoryAuthorizationAcknowledged(false);
     setDetectionPreview(buildDetectionPreview(file, inferredIntent));
     setStatus(`Ready to index: ${file.name}`);
     resetPickers();
@@ -488,6 +491,10 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
     }
     if (!pendingFile) {
       setStatus("Add an evidence file before indexing.");
+      return;
+    }
+    if (isMemoryImageFile(pendingFile) && !memoryAuthorizationAcknowledged) {
+      setStatus("Confirm authorization before uploading RAM evidence.");
       return;
     }
     await handleUploadFile(pendingFile, fileIntent ?? (isArchiveFile(pendingFile) ? "raw_archive" : "raw_single_file"));
@@ -900,6 +907,12 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
                   <p className="mt-1">Memory images may contain credentials, personal data, encryption material, browser data, and other sensitive information. Upload only evidence that you own or are explicitly authorized to analyze.</p>
                   <p className="mt-1 text-muted">It will be stored as memory_dump evidence, bypass normal disk ingest, and processing occurs later in Memory Analysis.</p>
                   {memoryUploadLimit > 0 ? <p className="mt-1 text-muted">Configured upload limit: {formatBytes(memoryUploadLimit)}</p> : null}
+                  <p className="mt-2 text-muted">For the best experience, use the dedicated Memory Image upload.</p>
+                  <button type="button" onClick={() => navigate(`/cases/${caseId}/memory/upload`)} className="mt-2 rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Memory Upload</button>
+                  <label className="mt-3 flex gap-2 text-xs">
+                    <input type="checkbox" checked={memoryAuthorizationAcknowledged} onChange={(event) => setMemoryAuthorizationAcknowledged(event.target.checked)} />
+                    <span>I confirm that I own this memory image or am explicitly authorized to upload and analyze it.</span>
+                  </label>
                 </div>
               ) : null}
             </div>
@@ -917,7 +930,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
             <li>EVTX: Full coverage with EvtxECmd if event logs are found</li>
             <li>Rules/reports: on-demand after indexing</li>
           </ul>
-          <button type="button" onClick={() => void startIndexing()} disabled={uploading || !providedHost.trim() || (!pendingFile && selectedKind !== "server_path")} className="mt-4 w-full rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
+          <button type="button" onClick={() => void startIndexing()} disabled={uploading || !providedHost.trim() || (!pendingFile && selectedKind !== "server_path") || (Boolean(pendingFile && isMemoryImageFile(pendingFile)) && !memoryAuthorizationAcknowledged)} className="mt-4 w-full rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
             {uploading ? "Indexing..." : "Index evidence"}
           </button>
         </div>

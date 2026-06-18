@@ -201,7 +201,10 @@ export default function MemoryAnalysisPage() {
             <h2 className="text-3xl font-semibold">Authorized RAM evidence</h2>
             <p className="mt-2 max-w-3xl text-sm text-muted">Isolated analysis for authorized memory evidence. Process results remain only in Memory Analysis and never enter global disk views.</p>
           </div>
-          <Link to={`/cases/${caseId}/evidence`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Evidence &amp; Ingest</Link>
+          <div className="flex flex-wrap gap-2">
+            <Link to={`/cases/${caseId}/memory/upload`} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">Add memory image</Link>
+            <Link to={`/cases/${caseId}/evidence`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Evidence &amp; Ingest</Link>
+          </div>
         </div>
       </section>
 
@@ -303,6 +306,7 @@ export default function MemoryAnalysisPage() {
             <section className="rounded-[28px] border border-line bg-panel/60 p-6">
               <h3 className="text-lg font-semibold">No memory evidence found for this case</h3>
               <p className="mt-2 text-sm text-muted">Kairon can work with disk artifacts only, memory artifacts only, or both.</p>
+              <Link to={`/cases/${caseId}/memory/upload`} className="mt-4 inline-flex rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">Add memory image</Link>
             </section>
           ) : (
             <section className="overflow-hidden rounded-[28px] border border-line bg-panel/60">

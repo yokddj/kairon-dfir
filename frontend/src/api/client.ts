@@ -430,6 +430,24 @@ export type MemoryBackendOverview = {
   message: string;
 };
 
+export type MemoryUploadReadiness = {
+  case_id: string;
+  upload_enabled: boolean;
+  max_upload_bytes: number;
+  max_upload_display: string;
+  allowed_extensions: string[];
+  staging_available_bytes: number;
+  canonical_storage_available_bytes: number;
+  memory_output_available_bytes: number;
+  recommended_max_upload_bytes: number;
+  required_capacity_bytes: number;
+  can_accept_selected_size: boolean;
+  analysis_enabled: boolean;
+  dedicated_worker_online: boolean;
+  backend_ready: boolean;
+  message: string;
+};
+
 export type ProblematicArtifact = {
   artifact_id: string | null;
   name: string;
@@ -3321,6 +3339,10 @@ export const api = {
   listEvidences: (caseId: string) => request<Evidence[]>(`/cases/${caseId}/evidences`),
   getMemoryBackendOverview: () => request<MemoryBackendOverview>("/memory/backends"),
   getMemoryOverview: (caseId: string) => request<MemoryOverview>(`/cases/${caseId}/memory`),
+  getMemoryUploadReadiness: (caseId: string, selectedSizeBytes?: number) => {
+    const query = selectedSizeBytes && selectedSizeBytes > 0 ? `?selected_size_bytes=${encodeURIComponent(String(selectedSizeBytes))}` : "";
+    return request<MemoryUploadReadiness>(`/cases/${caseId}/memory/upload-readiness${query}`);
+  },
   listMemoryEvidences: (caseId: string) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences`),
   listMemoryRuns: (caseId: string) => request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs`),
   startMemoryScan: (evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", authorizationAcknowledged = false) =>
@@ -3461,7 +3483,7 @@ export const api = {
   uploadEvidence: async (
     caseId: string,
     file: File,
-    options?: UploadOptions & { evidenceIntent?: EvidenceIntent; packaging?: EvidencePackaging; folderName?: string; folderUpload?: boolean; ingestMode?: IngestMode; providedHost?: string; evtxProfile?: EvtxProfile },
+    options?: UploadOptions & { evidenceIntent?: EvidenceIntent; packaging?: EvidencePackaging; folderName?: string; folderUpload?: boolean; ingestMode?: IngestMode; providedHost?: string; evtxProfile?: EvtxProfile; memoryAuthorizationAcknowledged?: boolean },
   ) => {
     const formData = new FormData();
     formData.append("file", file);
@@ -3470,6 +3492,7 @@ export const api = {
     if (options?.ingestMode) formData.append("ingest_mode", options.ingestMode);
     if (options?.providedHost) formData.append("provided_host", options.providedHost);
     if (options?.evtxProfile) formData.append("evtx_profile", options.evtxProfile);
+    if (options?.memoryAuthorizationAcknowledged) formData.append("memory_authorization_acknowledged", "true");
     if (options?.folderUpload) formData.append("folder_upload", "true");
     if (options?.folderName) formData.append("folder_name", options.folderName);
     return uploadFormData<Evidence>(`/cases/${caseId}/evidences/upload`, formData, { onProgress: options?.onProgress, transport: "xhr" });

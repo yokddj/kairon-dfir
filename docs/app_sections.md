@@ -48,7 +48,8 @@
 
 - **Para qué sirve**: registrar y revisar el estado aislado de evidencia RAM/memoria autorizada.
 - **Estado actual**: experimental y desactivado por defecto. Puede registrar uploads `memory_dump` autorizados y ejecutar perfiles Volatility 3 aislados cuando un administrador habilita explícitamente upload, ejecución externa y el `memory-worker`; MemProcFS sigue como readiness-only.
-- **Qué muestra**: modo del caso (`empty`, `disk_only`, `memory_only`, `hybrid`), evidencias `memory_dump`, backend readiness, runs metadata/process y resultados aislados.
+- **Flujo recomendado**: `Case -> Memory Analysis -> Add memory image`. El formulario genérico de Evidence Upload sigue funcionando, pero la subida dedicada muestra capacidad, privacidad, autorización y progreso de forma más clara.
+- **Qué muestra**: modo del caso (`empty`, `disk_only`, `memory_only`, `hybrid`), evidencias `memory_dump`, upload readiness, backend readiness, runs metadata/process y resultados aislados.
 - **Qué no hace todavía**: no añade memoria a Search, Timeline, Artifact Explorer, Detections, Findings, Reports, SIEM, Command History, Persistence ni Execution Stories.
 - **Regla legal**: usa solo evidencia RAM propia, autorizada o de laboratorio creada para ese fin. No subas ni commits dumps con datos de terceros sin autorización.
 

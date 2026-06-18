@@ -1708,6 +1708,7 @@ def upload_evidence(
     ingest_mode: str | None = Form(None),
     provided_host: str | None = Form(None),
     evtx_profile: str | None = Form(None),
+    memory_authorization_acknowledged: bool = Form(False),
     db: Session = Depends(get_db),
 ) -> Evidence:
     if hasattr(ingest_mode, "get") and not hasattr(db, "get"):
@@ -1726,6 +1727,8 @@ def upload_evidence(
     if memory_upload:
         if not settings.memory_upload_enabled:
             raise HTTPException(status_code=403, detail="Memory image upload is disabled by server configuration.")
+        if not memory_authorization_acknowledged:
+            raise HTTPException(status_code=400, detail="Authorization acknowledgement is required before uploading RAM evidence.")
         try:
             evidence_id, stored_path, size, uploaded_sha256, safe_memory_display_name = save_memory_upload(case_id, file)
         except MemoryUploadError as exc:
@@ -1786,6 +1789,7 @@ def upload_evidence(
             "evtx_profile": normalized_evtx_profile,
             "upload_state": "uploaded",
             "memory_upload": bool(memory_upload),
+            "memory_authorization_acknowledged": bool(memory_upload and memory_authorization_acknowledged),
             "canonical_relative_path": str(stored_path.relative_to(settings.backend_data_dir)) if memory_upload and stored_path.is_relative_to(settings.backend_data_dir) else None,
         },
         metadata_json=_raw_collection_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "folder_entries": folder_entries, "folder_upload": True, "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "evtx_profile": normalized_evtx_profile})
@@ -1816,7 +1820,7 @@ def upload_evidence(
             message=f"Registered authorized memory evidence {evidence.original_filename}. External memory analysis was not executed.",
             case_id=case_id,
             evidence_id=evidence.id,
-            metadata={"evidence_type": evidence.evidence_type.value, "memory_profile": "metadata_only"},
+            metadata={"evidence_type": evidence.evidence_type.value, "memory_profile": "metadata_only", "authorization_acknowledged": bool(memory_authorization_acknowledged), "size_bytes": evidence.size_bytes},
         )
         return evidence
     if raw_collection:

@@ -7,6 +7,7 @@ from uuid import uuid4
 from fastapi import UploadFile
 
 from app.core.config import get_settings
+from app.services.memory.upload_readiness import assert_memory_upload_capacity
 
 
 settings = get_settings()
@@ -73,6 +74,12 @@ def save_memory_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int
     size = 0
     safe_name = safe_display_filename(upload.filename)
     try:
+        hinted_size = getattr(upload, "size", None)
+        if isinstance(hinted_size, int) and hinted_size > 0:
+            try:
+                assert_memory_upload_capacity(hinted_size)
+            except RuntimeError as exc:
+                raise MemoryUploadError("insufficient_storage", "Server storage capacity is below the recommended threshold for this memory image.") from exc
         with temp_path.open("xb") as buffer:
             while True:
                 chunk = upload.file.read(chunk_size)
@@ -87,6 +94,10 @@ def save_memory_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int
             os.fsync(buffer.fileno())
         if size <= 0:
             raise MemoryUploadError("rejected_empty", "Empty memory image uploads are not accepted.")
+        try:
+            assert_memory_upload_capacity(size)
+        except RuntimeError as exc:
+            raise MemoryUploadError("insufficient_storage", "Server storage capacity is below the recommended threshold for this memory image.") from exc
         os.replace(temp_path, final_path)
         dir_fd = os.open(str(final_path.parent), os.O_DIRECTORY)
         try:
