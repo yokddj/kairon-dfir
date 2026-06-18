@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     opensearch_ssl: bool = False
     opensearch_verify_certs: bool = False
     opensearch_index_prefix: str = "dfir-events"
+    opensearch_memory_index_prefix: str = "dfir-memory"
     opensearch_dashboards_internal_url: str = "http://opensearch-dashboards:5601"
     opensearch_dashboards_public_url: str = "http://localhost:5601"
     opensearch_dashboards_username: str | None = None
@@ -48,6 +49,15 @@ class Settings(BaseSettings):
     backend_cors_origins: str = "*"
     backend_cors_origin_regex: str = r".*"
     backend_max_upload_size: int = Field(default=2147483648)
+    memory_analysis_enabled: bool = False
+    volatility3_command: str = "vol"
+    memprocfs_command: str = "memprocfs"
+    memory_tools_auto_install_enabled: bool = False
+    memory_allow_external_tool_execution: bool = False
+    memory_backend_check_timeout_seconds: int = 10
+    memory_backend_status_cache_seconds: int = 60
+    memory_preferred_backend: str = "volatility3"
+    memory_max_upload_size: int = 2147483648
     backend_multipart_max_files: int = 10000
     backend_multipart_max_fields: int = 20000
     backend_multipart_max_part_size: int = 1048576
@@ -150,6 +160,13 @@ class Settings(BaseSettings):
         if mode in {"investigation", "demo", "training", "validation"}:
             return mode
         return "investigation"
+
+    @property
+    def preferred_memory_backend(self) -> str | None:
+        backend = str(self.memory_preferred_backend or "").strip().lower()
+        if backend in {"volatility3", "memprocfs"}:
+            return backend
+        return "volatility3"
 
     @property
     def allowed_evidence_roots(self) -> list[Path]:

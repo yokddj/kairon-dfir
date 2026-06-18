@@ -75,6 +75,7 @@ describe("workspace navigation", () => {
     expect(screen.getByText(/Case Overview/i)).toBeInTheDocument();
     expect(investigationGroup).toBeInTheDocument();
     expect(evidenceGroup).toBeInTheDocument();
+    expect(screen.getByText(/^Memory$/i)).toBeInTheDocument();
     expect(screen.getByText(/Advanced/i)).toBeInTheDocument();
     expect(screen.getByText(/Help/i)).toBeInTheDocument();
     expect(screen.getByText("Investigation Home")).toBeInTheDocument();
@@ -85,6 +86,7 @@ describe("workspace navigation", () => {
     expect(screen.queryByText(/^Timeline$/)).not.toBeInTheDocument();
     expect(screen.getByText("Execution Stories")).toBeInTheDocument();
     expect(screen.getByText("Evidence & Ingest")).toBeInTheDocument();
+    expect(screen.getByText("Memory Analysis")).toBeInTheDocument();
     expect(screen.getByText("Detections")).toBeInTheDocument();
     expect(screen.getByText("Reports")).toBeInTheDocument();
     expect(screen.getByText("Rules")).toBeInTheDocument();

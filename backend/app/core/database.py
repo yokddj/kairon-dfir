@@ -63,7 +63,7 @@ def get_db() -> Generator:
 
 
 def init_db() -> None:
-    from app.models import activity, app_setting, artifact, case, case_analysis_job, case_host, case_host_alias, case_host_identity_audit, case_report, detection_result, evidence, event_marking, finding, incident_timeline_draft, rule, rule_import_run, rule_run, rule_set, tag, timeline_bookmark  # noqa: F401
+    from app.models import activity, app_setting, artifact, case, case_analysis_job, case_host, case_host_alias, case_host_identity_audit, case_report, detection_result, evidence, event_marking, finding, incident_timeline_draft, memory, rule, rule_import_run, rule_run, rule_set, tag, timeline_bookmark  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
     _ensure_compatible_schema()

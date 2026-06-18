@@ -264,6 +264,80 @@ export type Evidence = {
   processed_at: string | null;
 };
 
+export type MemoryEvidence = {
+  id: string;
+  case_id: string;
+  original_filename: string;
+  evidence_type: string;
+  size_bytes: number;
+  ingest_status: string;
+  created_at: string;
+};
+
+export type MemoryScanRun = {
+  id: string;
+  case_id: string;
+  evidence_id: string;
+  backend: string | null;
+  profile: string;
+  status: string;
+  plugin_count: number;
+  plugins_completed: number;
+  plugins_failed: number;
+  started_at: string | null;
+  completed_at: string | null;
+  output_dir: string | null;
+  metadata_json: Record<string, unknown>;
+  error_log: Record<string, unknown>;
+  created_at: string;
+};
+
+export type MemoryOverview = {
+  case_id: string;
+  memory_analysis_enabled: boolean;
+  has_memory_evidence: boolean;
+  has_memory_results: boolean;
+  has_disk_events: boolean;
+  mode: "empty" | "disk_only" | "memory_only" | "hybrid";
+  evidences: MemoryEvidence[];
+  runs: MemoryScanRun[];
+  message: string;
+};
+
+export type MemoryStartScanResponse = {
+  accepted: boolean;
+  evidence_id: string;
+  run_id: string | null;
+  status: string;
+  message: string;
+  run: MemoryScanRun | null;
+};
+
+export type MemoryBackendStatus = {
+  backend: string;
+  display_name: string;
+  configured: boolean;
+  executable_found: boolean;
+  execution_allowed: boolean;
+  available: boolean;
+  ready: boolean;
+  version: string | null;
+  command_display: string | null;
+  status: "disabled" | "not_configured" | "blocked" | "not_found" | "available" | "check_failed";
+  message: string;
+  checked_at: string;
+  error_code: string | null;
+};
+
+export type MemoryBackendOverview = {
+  memory_analysis_enabled: boolean;
+  external_execution_allowed: boolean;
+  backends: MemoryBackendStatus[];
+  preferred_backend: string | null;
+  ready_backend_count: number;
+  message: string;
+};
+
 export type ProblematicArtifact = {
   artifact_id: string | null;
   name: string;
@@ -3150,6 +3224,11 @@ export const api = {
   listDocs: () => request<DocEntry[]>("/docs"),
   getDoc: (slug: string) => request<DocPage>(`/docs/${slug}`),
   listEvidences: (caseId: string) => request<Evidence[]>(`/cases/${caseId}/evidences`),
+  getMemoryBackendOverview: () => request<MemoryBackendOverview>("/memory/backends"),
+  getMemoryOverview: (caseId: string) => request<MemoryOverview>(`/cases/${caseId}/memory`),
+  listMemoryEvidences: (caseId: string) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences`),
+  listMemoryRuns: (caseId: string) => request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs`),
+  startMemoryScan: (evidenceId: string) => request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan`, { method: "POST", body: JSON.stringify({ profile: "metadata_only" }) }),
   getEvidence: (evidenceId: string) => request<Evidence>(`/evidences/${evidenceId}`),
   getEvidenceManifest: (evidenceId: string) => request<EvidenceManifest>(`/evidences/${evidenceId}/manifest`),
   getEvidenceOnDemandModules: (evidenceId: string) => request<OnDemandModulesResponse>(`/evidences/${evidenceId}/on-demand-modules`),

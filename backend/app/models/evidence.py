@@ -71,6 +71,8 @@ class Evidence(UUIDMixin, Base):
     detections = relationship("DetectionResult", back_populates="evidence")
     activity_events = relationship("AppActivityEvent", back_populates="evidence")
     rule_runs = relationship("RuleRun", back_populates="evidence")
+    memory_scan_runs = relationship("MemoryScanRun", back_populates="evidence", cascade="all, delete-orphan")
+    memory_artifact_summaries = relationship("MemoryArtifactSummary", back_populates="evidence", cascade="all, delete-orphan")
 
 
 def resolve_public_evidence_type(
@@ -97,3 +99,6 @@ def resolve_public_evidence_type(
         except ValueError:
             return EvidenceType.unknown
     return EvidenceType.unknown
+
+
+from app.models import memory as _memory_models  # noqa: E402,F401

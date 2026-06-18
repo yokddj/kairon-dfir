@@ -261,6 +261,10 @@ def get_events_index(case_id: str | None = None) -> str:
     return f"{settings.opensearch_index_prefix}-{suffix}"
 
 
+def get_memory_index(case_id: str) -> str:
+    return f"{settings.opensearch_memory_index_prefix}-{case_id}"
+
+
 def index_exists(client: OpenSearch, index: str) -> bool:
     try:
         return bool(client.indices.exists(index=index))

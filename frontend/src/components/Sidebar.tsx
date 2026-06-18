@@ -7,6 +7,7 @@ import {
   Gauge,
   Home,
   ListChecks,
+  MemoryStick,
   ScanSearch,
   Search,
   ShieldAlert,
@@ -98,6 +99,12 @@ export default function Sidebar() {
       title: "Evidence",
       items: [
         { to: "/cases/:caseId/evidence", label: "Evidence & Ingest", icon: Database, requiresCase: true },
+      ],
+    },
+    {
+      title: "Memory",
+      items: [
+        { to: "/cases/:caseId/memory", label: "Memory Analysis", icon: MemoryStick, requiresCase: true },
       ],
     },
     {
