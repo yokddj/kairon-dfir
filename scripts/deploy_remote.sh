@@ -40,7 +40,11 @@ echo "Branch: $branch"
 echo "Remote: $REMOTE_HOST:$REMOTE_DIR"
 echo "Services: $SERVICES"
 
-rsync_args=(-avzcR --exclude='.git/' --exclude='.env' --exclude='data/' --exclude='node_modules/' --exclude='dist/' --exclude='*.tsbuildinfo')
+file_list="$(mktemp)"
+trap 'rm -f "$file_list"' EXIT
+git ls-files -z > "$file_list"
+
+rsync_args=(-avzcR --from0 --files-from="$file_list" --exclude='.env')
 if [[ "$DRY_RUN" -eq 1 ]]; then
   rsync_args+=(--dry-run)
 fi
