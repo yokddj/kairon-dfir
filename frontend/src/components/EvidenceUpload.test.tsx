@@ -78,6 +78,7 @@ describe("EvidenceUpload", () => {
       allow_host_path_import: true,
       allowed_roots: ["/mnt/evidence", "/data/evidence"],
       max_upload_size: 123,
+      memory_upload_max_bytes: 5368709120,
       supports_mounted_path: true,
       restart_enabled: false,
       can_edit_deployment_settings: false,
@@ -172,6 +173,7 @@ describe("EvidenceUpload", () => {
 
     expect(await screen.findByText(/Detected: Memory image/i)).toBeInTheDocument();
     expect(screen.getByText(/Memory images may contain credentials, personal data, encryption material, browser data, and other sensitive information/i)).toBeInTheDocument();
+    expect(screen.getByText(/Configured upload limit: 5\.0 GB/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Index evidence/i }));
 
     await waitFor(() => expect(uploadEvidenceMock).toHaveBeenCalled());

@@ -69,6 +69,7 @@ def validate_memory_execution_request(db: Session, evidence_id: str) -> Validate
     stat_result = resolved.stat()
     if stat_result.st_size <= 0:
         raise MemoryExecutionValidationError("EMPTY_EVIDENCE_FILE", "Memory evidence file is empty.")
-    if stat_result.st_size > int(settings.memory_max_upload_size):
+    max_size = int(getattr(settings, "memory_upload_max_bytes", None) or settings.memory_max_upload_size)
+    if stat_result.st_size > max_size:
         raise MemoryExecutionValidationError("EVIDENCE_TOO_LARGE", "Memory evidence exceeds the configured memory evidence size limit.")
     return ValidatedMemoryEvidence(evidence=evidence, path=resolved, size_bytes=stat_result.st_size)

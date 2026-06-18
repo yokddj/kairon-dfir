@@ -530,6 +530,28 @@ def test_memory_validation_accepts_regular_uploaded_file(db_session, tmp_path: P
     assert validated.path == evidence_file.resolve()
 
 
+def test_memory_validation_uses_memory_upload_limit_for_uploaded_file(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    evidence_file = tmp_path / "data" / "evidence" / CASE_ID / MEMORY_EVIDENCE_ID / "original" / "memory.mem"
+    evidence_file.parent.mkdir(parents=True)
+    evidence_file.write_bytes(b"synthetic")
+    evidence = _evidence(db_session, stored_path=str(evidence_file))
+    monkeypatch.setattr(
+        memory_validation,
+        "get_settings",
+        lambda: SimpleNamespace(
+            backend_data_dir=tmp_path / "data",
+            allowed_evidence_roots=[],
+            memory_max_upload_size=4,
+            memory_upload_max_bytes=10,
+        ),
+    )
+
+    validated = memory_validation.validate_memory_execution_request(db_session, evidence.id)
+
+    assert validated.size_bytes == len(b"synthetic")
+
+
 def test_memory_scan_prevents_duplicate_active_run(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     evidence = _evidence(db_session)
