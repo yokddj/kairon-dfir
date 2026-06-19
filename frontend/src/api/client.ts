@@ -285,6 +285,11 @@ export type MemoryEvidenceReadiness = {
   can_analyze: boolean;
   error_code: string | null;
   sanitized_message: string;
+  symbols_required: boolean;
+  symbol_identifier_present: boolean;
+  acquisition_available: boolean;
+  acquisition_status: string | null;
+  can_analyze_offline: boolean;
 };
 
 export type MemoryScanRun = {

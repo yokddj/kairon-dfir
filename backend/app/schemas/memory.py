@@ -68,6 +68,42 @@ class MemoryEvidenceReadinessRead(BaseModel):
     can_analyze: bool
     error_code: str | None = None
     sanitized_message: str
+    symbols_required: bool = False
+    symbol_identifier_present: bool = False
+    acquisition_available: bool = False
+    acquisition_status: str | None = None
+    can_analyze_offline: bool = False
+
+
+class MemorySymbolAcquireRequest(BaseModel):
+    authorization_acknowledged: bool = False
+
+    model_config = {"extra": "forbid"}
+
+
+class MemorySymbolAcquireResponse(BaseModel):
+    request_id: str | None = None
+    status: str
+    symbol_mode: str
+    source: str
+    error_code: str | None = None
+    message: str
+
+
+class MemorySymbolCacheStatusRead(BaseModel):
+    mode: str
+    acquisition_enabled: bool
+    network_isolation_ready: bool
+    administrator_authorization_available: bool
+    total_bytes: int
+    configured_max_bytes: int
+    available_bytes: int
+    symbol_count: int
+    active_requests: int
+    failed_requests: int
+    last_success_at: datetime | None = None
+    error_code: str | None = None
+    message: str
 
 
 class MemoryScanRunRead(BaseModel):

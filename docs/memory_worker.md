@@ -38,6 +38,11 @@ MEMORY_REQUIRE_DEDICATED_WORKER=true
 MEMORY_SYMBOL_NETWORK_ACCESS_ENABLED=false
 ```
 
+The worker remains offline during normal analysis. Symbol acquisition must use
+a separately isolated component and cache; it must not add general network
+access or an evidence mount to this worker. See
+[Managed Windows symbols](memory_symbols.md).
+
 To use the dedicated worker, an administrator must intentionally configure:
 
 ```sh

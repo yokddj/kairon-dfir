@@ -139,6 +139,10 @@ Configuration:
 - `MEMORY_RAW_OUTPUT_RETENTION_ENABLED=true`
 - `MEMORY_SYMBOL_NETWORK_ACCESS_ENABLED=false`
 
+Managed symbol acquisition remains a separate, disabled-by-default control
+plane. See [Managed Windows symbols](memory_symbols.md). Normal memory analysis
+continues to run offline even after a reviewed symbol has been cached.
+
 Command settings are administrator-controlled and require trusted server access to change. Shell fragments and embedded arguments are rejected.
 
 ## Sprint boundary

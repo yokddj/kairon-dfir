@@ -88,6 +88,21 @@ class Settings(BaseSettings):
     memory_max_raw_field_length: int = 65536
     memory_raw_output_retention_enabled: bool = True
     memory_symbol_network_access_enabled: bool = False
+    memory_symbol_mode: str = "offline_only"
+    memory_symbol_managed_download_enabled: bool = False
+    memory_symbol_allowed_hosts: str = ""
+    memory_symbol_download_timeout_seconds: int = 120
+    memory_symbol_download_max_bytes: int = 1073741824
+    memory_symbol_cache_max_bytes: int = 5368709120
+    memory_symbol_cache_root: str = ""
+    memory_symbol_download_concurrency: int = 1
+    # This is deliberately separate from feature enablement.  It may only be
+    # true when deployment-level egress enforcement has been independently
+    # verified; application URL checks are not a network sandbox.
+    memory_symbol_network_isolation_ready: bool = False
+    # Kairon does not currently provide authenticated administrator roles.
+    # Keep the mutation unavailable until that control exists.
+    memory_symbol_admin_authorization_enforced: bool = False
     backend_multipart_max_files: int = 10000
     backend_multipart_max_fields: int = 20000
     backend_multipart_max_part_size: int = 1048576
@@ -235,6 +250,27 @@ class Settings(BaseSettings):
     def memory_output_root(self) -> Path | None:
         value = str(self.memory_output_dir or "").strip()
         return Path(value) if value else None
+
+    @property
+    def memory_symbol_cache_path(self) -> Path:
+        value = str(self.memory_symbol_cache_root or "").strip()
+        return Path(value) if value else self.backend_data_dir / "memory-symbol-cache"
+
+    @property
+    def memory_symbol_execution_mode(self) -> str:
+        mode = str(self.memory_symbol_mode or "offline_only").strip().lower()
+        return mode if mode in {"offline_only", "managed_download"} else "offline_only"
+
+    @property
+    def memory_symbol_hosts(self) -> list[str]:
+        hosts: list[str] = []
+        for raw in str(self.memory_symbol_allowed_hosts or "").split(","):
+            host = raw.strip().lower().rstrip(".")
+            if not host or "*" in host or "://" in host or "/" in host:
+                continue
+            if re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", host):
+                hosts.append(host)
+        return sorted(set(hosts))
 
     @property
     def memory_upload_staging_path(self) -> Path:
