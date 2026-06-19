@@ -1723,6 +1723,8 @@ def upload_evidence(
     if hasattr(ingest_mode, "get") and not hasattr(db, "get"):
         db = ingest_mode  # type: ignore[assignment]
         ingest_mode = None
+    if not isinstance(memory_upload_id, str):
+        memory_upload_id = None
     if not db.get(Case, case_id):
         raise HTTPException(status_code=404, detail="Case not found")
     normalized_provided_host = _require_provided_host(provided_host)

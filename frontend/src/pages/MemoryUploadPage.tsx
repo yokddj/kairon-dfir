@@ -97,7 +97,7 @@ export default function MemoryUploadPage() {
     if (!uploadStatus) return;
     setProgress({ loaded: uploadStatus.bytes_received, total: uploadStatus.expected_bytes });
     if (["validating", "uploading", "verifying", "finalizing"].includes(uploadStatus.status)) {
-      setStage(uploadStatus.status === "validating" ? "validating" : uploadStatus.status === "uploading" ? "verifying" : uploadStatus.status);
+      setStage(uploadStatus.status === "validating" ? "validating" : uploadStatus.status === "uploading" ? "verifying" : uploadStatus.status === "inconsistent" ? "failed" : uploadStatus.status);
       setStatus(uploadStatus.message);
       if (!finalizationStartedAt) setFinalizationStartedAt(Date.now());
       return;

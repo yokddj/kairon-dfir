@@ -157,6 +157,12 @@ def _valid_regular_file(path: Path, expected_size: int) -> bool:
         return False
 
 
+def _detached_upload(db: Session, item: MemoryUpload) -> MemoryUpload:
+    db.refresh(item)
+    db.expunge(item)
+    return item
+
+
 def register_memory_evidence(upload_id: str, *, db: Session | None = None) -> Evidence:
     owns_session = db is None
     db = db or SessionLocal()
@@ -281,10 +287,10 @@ def reconcile_memory_upload(case_id: str, upload_id: str, *, force_stale: bool =
                 item.failure_message = "Completed upload state does not match durable evidence storage."
                 item.retryable = False
                 db.commit()
-            db.expunge(item)
-            return item
+            return _detached_upload(db, item)
         stale_before = utc_now_naive() - timedelta(seconds=max(60, int(settings.memory_upload_stale_timeout_seconds)))
         if item.status in ACTIVE_STATUSES and item.progress_at > stale_before and not force_stale:
+            db.expunge(item)
             return item
         if item.status in ACTIVE_STATUSES:
             release_memory_upload_slot_if_owner(item.id)
@@ -299,14 +305,14 @@ def reconcile_memory_upload(case_id: str, upload_id: str, *, force_stale: bool =
             item.failure_message = "Evidence registration exists but canonical storage is missing or invalid."
             item.retryable = False
             db.commit()
-            return item
+            return _detached_upload(db, item)
         if staging_exists and canonical_exists:
             item.status = "inconsistent"
             item.failure_code = "staging_and_canonical_present"
             item.failure_message = "Both staged and canonical memory files exist; automatic overwrite is unsafe."
             item.retryable = False
             db.commit()
-            return item
+            return _detached_upload(db, item)
         if canonical_exists:
             if not _valid_regular_file(canonical, int(item.expected_bytes)):
                 item.status = "inconsistent"
@@ -314,7 +320,7 @@ def reconcile_memory_upload(case_id: str, upload_id: str, *, force_stale: bool =
                 item.failure_message = "Canonical memory file size does not match the accepted upload."
                 item.retryable = False
                 db.commit()
-                return item
+                return _detached_upload(db, item)
             if not item.sha256:
                 item.sha256 = sha256_file(canonical)
             item.status = "finalizing"
@@ -326,7 +332,7 @@ def reconcile_memory_upload(case_id: str, upload_id: str, *, force_stale: bool =
                 item.failure_message = "Staged memory file is incomplete or invalid."
                 item.retryable = False
                 db.commit()
-                return item
+                return _detached_upload(db, item)
             if not item.sha256:
                 item.sha256 = sha256_file(staging)
             assert_memory_upload_capacity(int(item.expected_bytes), phase="finalization", bytes_already_staged=int(item.expected_bytes))
@@ -341,7 +347,7 @@ def reconcile_memory_upload(case_id: str, upload_id: str, *, force_stale: bool =
             item.failure_message = "Neither staged nor canonical upload bytes are available."
             item.retryable = False
             db.commit()
-            return item
+            return _detached_upload(db, item)
         upload_key = item.id
     register_memory_evidence(upload_key)
     with SessionLocal() as db:
