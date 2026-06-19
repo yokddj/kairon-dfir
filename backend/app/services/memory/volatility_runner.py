@@ -56,7 +56,7 @@ def build_windows_info_argv(executable: str, evidence_path: Path) -> list[str]:
 
 def _minimal_environment() -> dict[str, str]:
     env: dict[str, str] = {}
-    for key in ("PATH", "SYSTEMROOT", "WINDIR", "HOME", "TMPDIR", "TEMP", "TMP"):
+    for key in ("PATH", "SYSTEMROOT", "WINDIR", "HOME", "XDG_CACHE_HOME", "TMPDIR", "TEMP", "TMP"):
         value = os.environ.get(key)
         if value:
             env[key] = value

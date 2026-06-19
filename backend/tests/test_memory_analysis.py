@@ -612,6 +612,16 @@ def test_backend_readiness_rejects_suspicious_configured_commands(command: str) 
     assert error == "invalid_command"
 
 
+def test_volatility_minimal_environment_preserves_offline_writable_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", "/volatility-cache")
+
+    environment = volatility_runner._minimal_environment()
+
+    assert environment["XDG_CACHE_HOME"] == "/volatility-cache"
+    assert environment["VOLATILITY_OFFLINE"] == "1"
+    assert "DATABASE_URL" not in environment
+
+
 def test_backend_readiness_cache_prevents_repeated_subprocess_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     backend_readiness.clear_memory_backend_readiness_cache()
     calls = {"count": 0}
