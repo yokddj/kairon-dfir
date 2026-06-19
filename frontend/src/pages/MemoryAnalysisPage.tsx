@@ -135,6 +135,12 @@ export default function MemoryAnalysisPage() {
     refetchOnWindowFocus: false,
   });
 
+  const symbolCacheQuery = useQuery({
+    queryKey: ["memory-symbol-cache"],
+    queryFn: () => api.getMemorySymbolCacheStatus(),
+    refetchOnWindowFocus: false,
+  });
+
   const systemInfoQuery = useQuery({
     queryKey: ["memory-system-info", caseId],
     queryFn: () => api.getCaseMemorySystemInfo(caseId),
@@ -373,7 +379,11 @@ export default function MemoryAnalysisPage() {
                               <p className="mt-1">
                                 {evidenceReadiness.acquisition_available
                                   ? "An administrator may acquire the exact required symbols from approved official infrastructure."
-                                  : "Managed acquisition is unavailable until restricted network egress and administrator authorization are configured."}
+                                  : symbolCacheQuery.data?.error_code === "SYMBOL_ACQUISITION_ADMIN_AUTH_REQUIRED"
+                                    ? "Managed acquisition requires authenticated administrator authorization."
+                                    : symbolCacheQuery.data?.error_code === "SYMBOL_ACQUISITION_NETWORK_ISOLATION_REQUIRED"
+                                      ? "Managed acquisition is unavailable until restricted network egress is enforced."
+                                      : "Managed acquisition is disabled or unavailable in this deployment."}
                               </p>
                             </div>
                           ) : null}

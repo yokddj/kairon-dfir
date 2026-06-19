@@ -107,7 +107,10 @@ def _symbol_settings(tmp_path: Path, **overrides):
         "memory_symbol_managed_download_enabled": False,
         "memory_symbol_network_isolation_ready": False,
         "memory_symbol_admin_authorization_enforced": False,
+        "memory_symbol_admin_authorization_required": True,
         "memory_symbol_allowed_hosts": "",
+        "memory_symbol_initial_host": "msdl.microsoft.com",
+        "memory_symbol_redirect_host_suffixes": [".blob.core.windows.net"],
         "memory_symbol_cache_root": str(tmp_path),
         "memory_symbol_cache_max_bytes": 1024,
     }

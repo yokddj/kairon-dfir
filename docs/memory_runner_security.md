@@ -53,6 +53,8 @@ The managed-symbol API is independently gated by deployment-level network
 isolation and administrator authorization. Hostname checks in application code
 are not treated as sufficient egress isolation. See
 [Managed Windows symbols](memory_symbols.md).
+Normal Volatility execution is hard-coded offline; only the isolated fetcher
+contains an HTTPS acquisition client.
 
 ## Storage policy
 

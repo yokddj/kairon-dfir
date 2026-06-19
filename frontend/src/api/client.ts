@@ -292,6 +292,27 @@ export type MemoryEvidenceReadiness = {
   can_analyze_offline: boolean;
 };
 
+export type MemorySymbolCacheStatus = {
+  mode: "offline_only" | "managed_download";
+  managed_download_enabled: boolean;
+  acquisition_enabled: boolean;
+  network_isolation_ready: boolean;
+  administrator_authorization_available: boolean;
+  fetcher_online: boolean;
+  total_bytes: number;
+  configured_max_bytes: number;
+  max_bytes: number;
+  available_bytes: number;
+  symbol_count: number;
+  pdb_count: number;
+  isf_count: number;
+  active_requests: number;
+  failed_requests: number;
+  last_success_at: string | null;
+  error_code: string | null;
+  message: string;
+};
+
 export type MemoryScanRun = {
   id: string;
   case_id: string;
@@ -3379,6 +3400,7 @@ export const api = {
   reconcileMemoryUpload: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/reconcile`, { method: "POST" }),
   listMemoryEvidences: (caseId: string) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences`),
   getMemoryEvidenceReadiness: (caseId: string, evidenceId: string) => request<MemoryEvidenceReadiness>(`/cases/${caseId}/memory/evidences/${evidenceId}/readiness`),
+  getMemorySymbolCacheStatus: () => request<MemorySymbolCacheStatus>("/memory/symbols/cache"),
   listMemoryRuns: (caseId: string) => request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs`),
   startMemoryScan: (evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", authorizationAcknowledged = false) =>
     request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan`, { method: "POST", body: JSON.stringify({ profile, authorization_acknowledged: authorizationAcknowledged }) }),

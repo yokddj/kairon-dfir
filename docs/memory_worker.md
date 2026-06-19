@@ -42,6 +42,8 @@ The worker remains offline during normal analysis. Symbol acquisition must use
 a separately isolated component and cache; it must not add general network
 access or an evidence mount to this worker. See
 [Managed Windows symbols](memory_symbols.md).
+It mounts the persistent symbol volume but does not consume the
+`memory-symbols` queue and does not perform managed downloads.
 
 To use the dedicated worker, an administrator must intentionally configure:
 

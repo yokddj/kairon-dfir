@@ -7,14 +7,14 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
-from app.models.memory import MemoryScanRun
-from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessListRead, MemoryProcessTreeRead, MemoryRunDetailRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolCacheStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
+from app.models.memory import MemoryScanRun, MemorySymbolAcquisition
+from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessListRead, MemoryProcessTreeRead, MemoryRunDetailRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, mark_run_queued, resolve_profile_plugins
 from app.services.memory.evidence_access import evidence_readiness
 from app.services.memory.indexing import get_memory_document, search_memory_edges, search_memory_processes
 from app.services.memory.overview import get_case_memory_overview, list_memory_evidences
-from app.services.memory.symbol_control import acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure
+from app.services.memory.symbol_control import SymbolControlError, acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure, queue_symbol_acquisition
 from app.services.memory.upload_readiness import MAX_SELECTED_SIZE_BYTES, get_memory_upload_readiness
 from app.services.memory.upload_lifecycle import get_memory_upload, public_memory_upload_status, reconcile_memory_upload
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
@@ -69,8 +69,30 @@ def get_memory_evidence_readiness(case_id: str, evidence_id: str, db: Session = 
 
 
 @router.get("/memory/symbols/cache", response_model=MemorySymbolCacheStatusRead)
-def get_memory_symbol_cache_status() -> dict:
-    return cache_status()
+def get_memory_symbol_cache_status(db: Session = Depends(get_db)) -> dict:
+    return cache_status(db=db)
+
+
+@router.get("/memory/symbols/requests/{request_id}", response_model=MemorySymbolRequestStatusRead)
+def get_memory_symbol_request(request_id: str, db: Session = Depends(get_db)) -> dict:
+    item = db.get(MemorySymbolAcquisition, request_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Symbol acquisition request was not found.")
+    return {
+        "request_id": item.id,
+        "requirement_id": item.requirement_id,
+        "status": item.status,
+        "source_category": item.source_category,
+        "downloaded_bytes": item.downloaded_bytes,
+        "validated": item.validated,
+        "cached": item.cached,
+        "retryable": item.retryable,
+        "error_code": item.error_code,
+        "sanitized_message": item.sanitized_message,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+        "completed_at": item.completed_at,
+    }
 
 
 @router.post(
@@ -95,15 +117,18 @@ def acquire_memory_symbols(
     available, error_code, message = acquisition_gate()
     if not available:
         raise HTTPException(status_code=503, detail={"error_code": error_code, "message": message})
-    # This branch is intentionally unreachable until an authenticated admin
-    # boundary and deployment-enforced egress policy are implemented.
-    raise HTTPException(
-        status_code=503,
-        detail={
-            "error_code": "SYMBOL_ACQUISITION_NOT_IMPLEMENTED",
-            "message": "Managed symbol acquisition is not available in this deployment.",
-        },
-    )
+    try:
+        request = queue_symbol_acquisition(db, case_id, evidence_id)
+    except SymbolControlError as exc:
+        raise HTTPException(status_code=503, detail={"error_code": exc.code, "message": exc.message}) from exc
+    return {
+        "request_id": request.id,
+        "status": request.status,
+        "symbol_mode": "managed_download",
+        "source": "official_microsoft_symbols",
+        "error_code": None,
+        "message": "The required Windows symbols are queued for controlled acquisition." if request.status != "completed" else "The required Windows symbols are already cached.",
+    }
 
 
 @router.get("/cases/{case_id}/memory/upload-readiness", response_model=MemoryUploadReadinessRead)

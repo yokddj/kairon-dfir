@@ -141,6 +141,10 @@ Memory backend readiness checks use only trusted server-side command settings su
 
 Windows symbol resolution is offline-only by default. Managed acquisition remains unavailable until the deployment enforces restricted official-source egress and authenticated administrator authorization. See [Managed Windows symbols](docs/memory_symbols.md).
 
+An optional, non-default `symbol-fetcher` service provides the isolated cache
+and validation architecture. It is not an authorization or network-isolation
+bypass; see [its security model](docs/symbol_fetcher_security.md).
+
 ## Documentation
 
 - [Documentation index](docs/index.md)

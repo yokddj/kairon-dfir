@@ -97,6 +97,17 @@ unless restricted official-source egress and authenticated administrator
 authorization have both been implemented and independently verified. A normal
 Docker bridge is not sufficient. See [Managed Windows symbols](memory_symbols.md).
 
+The isolated fetcher can be built for security validation without enabling a
+download:
+
+```bash
+docker compose --profile memory-symbols build symbol-fetcher
+docker compose --profile memory-symbols up -d symbol-fetcher
+```
+
+It must have no evidence mount and `MEMORY_SYMBOL_NETWORK_ISOLATION_READY` must
+remain false until host firewall or egress-proxy enforcement is proven.
+
 Do not publish the resulting image to a registry in this sprint. Do not install Volatility on the host, backend, or normal worker. Keep `MEMORY_ANALYSIS_ENABLED`, `MEMORY_ALLOW_EXTERNAL_TOOL_EXECUTION`, and `MEMORY_PROCESS_PROFILE_ENABLED` disabled unless an administrator intentionally enables authorized memory analysis.
 
 ## Rollback

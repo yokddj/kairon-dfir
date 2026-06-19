@@ -10,6 +10,7 @@ const getCaseMemorySystemInfoMock = vi.fn();
 const getCaseMemoryProcessesMock = vi.fn();
 const getMemoryProcessTreeMock = vi.fn();
 const getMemoryEvidenceReadinessMock = vi.fn();
+const getMemorySymbolCacheStatusMock = vi.fn();
 const startMemoryScanMock = vi.fn();
 
 vi.mock("../api/client", () => ({
@@ -20,6 +21,7 @@ vi.mock("../api/client", () => ({
     getCaseMemoryProcesses: (...args: unknown[]) => getCaseMemoryProcessesMock(...args),
     getMemoryProcessTree: (...args: unknown[]) => getMemoryProcessTreeMock(...args),
     getMemoryEvidenceReadiness: (...args: unknown[]) => getMemoryEvidenceReadinessMock(...args),
+    getMemorySymbolCacheStatus: (...args: unknown[]) => getMemorySymbolCacheStatusMock(...args),
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
   },
 }));
@@ -101,6 +103,7 @@ describe("MemoryAnalysisPage", () => {
     getCaseMemoryProcessesMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50 });
     getMemoryProcessTreeMock.mockResolvedValue({ run_id: "run-1", nodes: [], edges: [], orphan_count: 0, root_count: 0, warnings: [], source_plugins: [], total_process_count: 0 });
     getMemoryEvidenceReadinessMock.mockResolvedValue({ exists: true, regular_file: true, readable_by_memory_worker: true, size_matches: true, output_writable_by_memory_worker: true, worker_online: true, backend_ready: true, can_analyze: true, error_code: null, sanitized_message: "Memory evidence is available to the dedicated memory worker." });
+    getMemorySymbolCacheStatusMock.mockResolvedValue({ mode: "offline_only", acquisition_enabled: false, network_isolation_ready: false, administrator_authorization_available: false, fetcher_online: false, total_bytes: 0, configured_max_bytes: 1024, available_bytes: 1024, symbol_count: 0, active_requests: 0, failed_requests: 0, last_success_at: null, error_code: "SYMBOL_ACQUISITION_DISABLED", message: "Managed symbol acquisition is disabled." });
     vi.spyOn(window, "confirm").mockReturnValue(true);
     startMemoryScanMock.mockResolvedValue({ accepted: true, evidence_id: "ev-memory", run_id: "run-1", status: "queued", message: "Memory metadata analysis queued for windows.info.", run: null });
   });
@@ -258,12 +261,13 @@ describe("MemoryAnalysisPage", () => {
       symbols_required: true, symbol_identifier_present: false, acquisition_available: false,
       acquisition_status: "symbols_required", can_analyze_offline: false,
     });
+    getMemorySymbolCacheStatusMock.mockResolvedValueOnce({ mode: "managed_download", acquisition_enabled: false, network_isolation_ready: false, administrator_authorization_available: false, fetcher_online: true, total_bytes: 0, configured_max_bytes: 1024, available_bytes: 1024, symbol_count: 0, active_requests: 0, failed_requests: 0, last_success_at: null, error_code: "SYMBOL_ACQUISITION_NETWORK_ISOLATION_REQUIRED", message: "Restricted egress is required." });
 
     renderPage();
 
     expect(await screen.findByText("SYMBOLS_UNAVAILABLE")).toBeInTheDocument();
     expect(screen.getByText(/could not resolve the required Windows symbols under offline-only mode/i)).toBeInTheDocument();
-    expect(screen.getByText(/restricted network egress and administrator authorization/i)).toBeInTheDocument();
+    expect(screen.getByText(/restricted network egress is enforced/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Run basic process analysis/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /Run extended process analysis/i })).toBeDisabled();
     expect(screen.queryByText(/Traceback|\/app\/data/i)).not.toBeInTheDocument();

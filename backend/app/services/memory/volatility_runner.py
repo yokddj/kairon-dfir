@@ -4,6 +4,7 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,47 @@ class VolatilityRunResult:
     stdout: bytes
     stderr: bytes
     duration_ms: int
+
+
+def probe_windows_symbol_identity(evidence_path: Path, work_dir: Path) -> dict[str, object] | None:
+    settings = get_settings()
+    xdg_cache = str(os.environ.get("XDG_CACHE_HOME") or "").strip()
+    if not xdg_cache:
+        return None
+    cache_path = Path(xdg_cache) / "volatility3"
+    symbol_path = cache_path / "symbols"
+    argv = [
+        sys.executable,
+        "-m",
+        "app.services.memory.symbol_probe",
+        "--evidence",
+        str(evidence_path),
+        "--cache",
+        str(cache_path),
+        "--symbols",
+        str(symbol_path),
+    ]
+    try:
+        result = subprocess.run(
+            argv,
+            shell=False,
+            cwd=str(work_dir),
+            env=_minimal_environment(),
+            capture_output=True,
+            timeout=min(max(10, int(settings.memory_plugin_timeout_seconds)), 180),
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    marker = b"KAIRON_SYMBOL_REQUIREMENT="
+    line = next((item for item in result.stdout.splitlines() if item.startswith(marker)), None)
+    if result.returncode != 0 or line is None or len(line) > 1024:
+        return None
+    try:
+        payload = __import__("json").loads(line[len(marker):])
+    except (ValueError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def resolve_volatility_executable() -> tuple[str, str]:
@@ -77,7 +119,9 @@ def _minimal_environment() -> dict[str, str]:
 def run_plugin(plugin: str, evidence_path: Path, work_dir: Path) -> VolatilityRunResult:
     settings = get_settings()
     executable, display = resolve_volatility_executable()
-    offline = not bool(getattr(settings, "memory_symbol_network_access_enabled", False))
+    # Normal memory analysis is always offline. Managed downloads belong only
+    # to the dedicated symbol-fetcher service.
+    offline = True
     xdg_cache = str(os.environ.get("XDG_CACHE_HOME") or "").strip()
     cache_path = Path(xdg_cache) / "volatility3" if xdg_cache else None
     symbol_path = cache_path / "symbols" if cache_path else None

@@ -16,7 +16,8 @@ from app.services.memory.indexing import index_memory_documents, index_memory_sy
 from app.services.memory.normalizers import merge_memory_process_results, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, write_atomic_bytes, write_atomic_json
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
-from app.services.memory.volatility_runner import VolatilityRunnerError, run_plugin
+from app.services.memory.volatility_runner import VolatilityRunnerError, probe_windows_symbol_identity, run_plugin
+from app.services.memory.symbol_control import record_symbol_requirement
 
 
 logger = logging.getLogger(__name__)
@@ -190,6 +191,10 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     run.plugins_failed += 1
                     blocking_error = exc
                     db.commit()
+                    if plugin == "windows.info" and exc.code == "SYMBOLS_UNAVAILABLE":
+                        requirement = probe_windows_symbol_identity(validated.path, output_dir)
+                        if requirement:
+                            record_symbol_requirement(db, run, plugin_run.id, requirement)
                     if plugin == "windows.info":
                         fatal = True
                         break
