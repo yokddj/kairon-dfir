@@ -19,6 +19,11 @@ patterns=(
   '*symbol-cache*.db'
   '*symbols*.cab'
   '*symbols*.tar*'
+  '*.pdb.partial'
+  '*.isf.partial'
+  '*symbol-cache*/downloads/*'
+  '*symbol-cache*/pdb/*'
+  '*symbol-cache*/isf/*'
 )
 
 fail=0

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, JSONVariant, UUIDMixin, utc_now_naive
@@ -122,3 +122,66 @@ class MemoryArtifactSummary(UUIDMixin, Base):
     case = relationship("Case", back_populates="memory_artifact_summaries")
     evidence = relationship("Evidence", back_populates="memory_artifact_summaries")
     memory_run = relationship("MemoryScanRun", back_populates="artifact_summaries")
+
+
+class MemorySymbolRequirement(UUIDMixin, Base):
+    __tablename__ = "memory_symbol_requirements"
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_run_id: Mapped[str] = mapped_column(ForeignKey("memory_scan_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_plugin_run_id: Mapped[str] = mapped_column(ForeignKey("memory_plugin_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    pdb_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    pdb_guid: Mapped[str] = mapped_column(String(32), nullable=False)
+    pdb_age: Mapped[int] = mapped_column(nullable=False)
+    architecture: Mapped[str] = mapped_column(String(32), nullable=False)
+    symbol_key: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="unavailable_offline", index=True)
+    acquisition_request_id: Mapped[str | None] = mapped_column(nullable=True, index=True)
+    cached_symbol_id: Mapped[str | None] = mapped_column(nullable=True, index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sanitized_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (UniqueConstraint("evidence_id", "pdb_name", "pdb_guid", "pdb_age", name="uq_memory_evidence_symbol_identity"),)
+
+
+class MemorySymbolAcquisition(UUIDMixin, Base):
+    __tablename__ = "memory_symbol_acquisitions"
+
+    requirement_id: Mapped[str] = mapped_column(ForeignKey("memory_symbol_requirements.id", ondelete="CASCADE"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    source_category: Mapped[str] = mapped_column(String(64), nullable=False, default="official_microsoft_symbols")
+    downloaded_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    pdb_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    isf_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    validated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cached: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    retryable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sanitized_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
+
+class MemoryCachedSymbol(UUIDMixin, Base):
+    __tablename__ = "memory_cached_symbols"
+
+    symbol_key: Mapped[str] = mapped_column(String(256), nullable=False, unique=True, index=True)
+    pdb_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    pdb_guid: Mapped[str] = mapped_column(String(32), nullable=False)
+    pdb_age: Mapped[int] = mapped_column(nullable=False)
+    architecture: Mapped[str] = mapped_column(String(32), nullable=False)
+    pdb_relative_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    isf_relative_path: Mapped[str] = mapped_column(String(512), nullable=False)
+    pdb_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    isf_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    pdb_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    isf_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    validation_status: Mapped[str] = mapped_column(String(32), nullable=False, default="validated")
+    source_category: Mapped[str] = mapped_column(String(64), nullable=False, default="official_microsoft_symbols")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)

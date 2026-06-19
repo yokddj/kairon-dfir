@@ -92,18 +92,39 @@ class MemorySymbolAcquireResponse(BaseModel):
 
 class MemorySymbolCacheStatusRead(BaseModel):
     mode: str
+    managed_download_enabled: bool
     acquisition_enabled: bool
     network_isolation_ready: bool
     administrator_authorization_available: bool
+    fetcher_online: bool
     total_bytes: int
     configured_max_bytes: int
+    max_bytes: int
     available_bytes: int
     symbol_count: int
+    pdb_count: int
+    isf_count: int
     active_requests: int
     failed_requests: int
     last_success_at: datetime | None = None
     error_code: str | None = None
     message: str
+
+
+class MemorySymbolRequestStatusRead(BaseModel):
+    request_id: str
+    requirement_id: str
+    status: str
+    source_category: str
+    downloaded_bytes: int
+    validated: bool
+    cached: bool
+    retryable: bool
+    error_code: str | None = None
+    sanitized_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
 
 
 class MemoryScanRunRead(BaseModel):

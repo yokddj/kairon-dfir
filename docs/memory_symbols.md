@@ -20,6 +20,12 @@ networking permits general outbound connections, so setting only
 `MEMORY_SYMBOL_MANAGED_DOWNLOAD_ENABLED=true` is insufficient. Kairon reports
 `SYMBOL_ACQUISITION_NETWORK_ISOLATION_REQUIRED` and performs no download.
 
+The optional `symbol-fetcher` service and dedicated `memory-symbols` queue are
+defined under the `memory-symbols` Compose profile. Building it is safe, but
+real acquisition remains blocked until both infrastructure egress enforcement
+and authenticated administrator authorization exist. See
+[Symbol fetcher security](symbol_fetcher_security.md).
+
 Volatility 3 Framework 2.28.0 contains an HTTP default for its Microsoft symbol
 retriever. Kairon must not use that downloader directly for managed mode. A
 future fetch component must enforce HTTPS, certificate validation, exact-host
@@ -46,6 +52,14 @@ MEMORY_SYMBOL_MANAGED_DOWNLOAD_ENABLED=false
 MEMORY_SYMBOL_ALLOWED_HOSTS=
 MEMORY_SYMBOL_NETWORK_ISOLATION_READY=false
 MEMORY_SYMBOL_ADMIN_AUTHORIZATION_ENFORCED=false
+MEMORY_SYMBOL_ADMIN_AUTHORIZATION_REQUIRED=true
+```
+
+Optional build and startup:
+
+```bash
+docker compose --profile memory-symbols build symbol-fetcher
+docker compose --profile memory-symbols up -d symbol-fetcher
 ```
 
 `GET /api/memory/symbols/cache` reports sanitized mode, capacity and gate state.
