@@ -151,6 +151,8 @@ services:
     environment:
       MEMORY_SYMBOL_TASK_QUEUE: ${MEMORY_SYMBOL_TASK_QUEUE:-memory-symbols}
       MEMORY_SYMBOL_CACHE_ROOT: /volatility-cache/volatility3
+      BACKEND_DATA_DIR: /app/data/tmp/runtime
+      BACKEND_TEMP_DIR: /app/data/tmp
       KAIRON_WORKER_ID: symbol-fetcher
     depends_on:
       postgres:
