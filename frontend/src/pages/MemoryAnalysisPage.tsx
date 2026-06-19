@@ -45,6 +45,15 @@ function backendBadge(status: MemoryBackendStatus) {
   }
 }
 
+function memoryRunError(run: MemoryOverview["runs"][number]) {
+  const code = String(run.error_log?.code || "");
+  if (code === "SYMBOLS_UNAVAILABLE") return "windows.info could not resolve the required Windows symbols under offline-only mode.";
+  if (code === "UNSUPPORTED_MEMORY_IMAGE" || code === "INVALID_MEMORY_LAYER") return "Volatility could not construct a supported Windows memory layer for this image.";
+  if (code === "VOLATILITY_OUTPUT_INVALID") return "windows.info executed, but its output could not be parsed.";
+  if (code === "MEMORY_SYMBOL_CACHE_NOT_WRITABLE") return "The controlled Volatility symbol cache is not writable.";
+  return typeof run.error_log?.message === "string" ? run.error_log.message : "None";
+}
+
 const ACTIVE_RUN_STATUSES = new Set(["pending", "queued", "running"]);
 
 function reported(value: unknown) {
@@ -135,6 +144,8 @@ export default function MemoryAnalysisPage() {
   });
 
   const latestProcessRun = overviewQuery.data?.runs.find((run) => run.profile === "processes_extended" || run.profile === "processes_basic");
+  const latestMetadataRun = overviewQuery.data?.runs.find((run) => run.profile === "metadata_only");
+  const metadataPrerequisiteReady = !latestMetadataRun || latestMetadataRun.status === "completed";
 
   const processQuery = useQuery({
     queryKey: ["memory-processes", caseId, latestProcessRun?.id, processPage, processName],
@@ -352,8 +363,8 @@ export default function MemoryAnalysisPage() {
                             Run metadata analysis
                           </button>
                           <div className="mt-2 flex flex-wrap gap-2">
-                            <button type="button" disabled={!canRunProcessProfiles || !evidenceReadiness?.can_analyze || registerMutation.isPending} onClick={() => runAnalysis(evidence.id, "processes_basic")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Run basic process analysis</button>
-                            <button type="button" disabled={!canRunProcessProfiles || !evidenceReadiness?.can_analyze || registerMutation.isPending} onClick={() => runAnalysis(evidence.id, "processes_extended")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Run extended process analysis</button>
+                            <button type="button" disabled={!canRunProcessProfiles || !metadataPrerequisiteReady || !evidenceReadiness?.can_analyze || registerMutation.isPending} onClick={() => runAnalysis(evidence.id, "processes_basic")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Run basic process analysis</button>
+                            <button type="button" disabled={!canRunProcessProfiles || !metadataPrerequisiteReady || !evidenceReadiness?.can_analyze || registerMutation.isPending} onClick={() => runAnalysis(evidence.id, "processes_extended")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Run extended process analysis</button>
                           </div>
                           {!canRunMetadata ? <p className="mt-2 max-w-48 text-xs text-muted">{volatilityBackend?.message || "Volatility 3 is not ready for memory metadata analysis."}</p> : null}
                           {evidenceReadiness && !evidenceReadiness.can_analyze ? <div className="mt-2 max-w-64 rounded-xl border border-rose-400/30 bg-rose-500/10 p-2 text-xs text-rose-100"><p className="font-semibold">Storage permission error</p><p className="mt-1">{evidenceReadiness.sanitized_message}</p></div> : null}
@@ -386,6 +397,8 @@ export default function MemoryAnalysisPage() {
                       <th className="px-4 py-3">Plugins</th>
                       <th className="px-4 py-3">Completed</th>
                       <th className="px-4 py-3">Failed</th>
+                      <th className="px-4 py-3">Skipped</th>
+                      <th className="px-4 py-3">Category</th>
                       <th className="px-4 py-3">Error</th>
                     </tr>
                   </thead>
@@ -401,7 +414,9 @@ export default function MemoryAnalysisPage() {
                         <td className="px-4 py-3 text-muted">{run.plugin_count}</td>
                         <td className="px-4 py-3 text-muted">{run.plugins_completed}</td>
                         <td className="px-4 py-3 text-muted">{run.plugins_failed}</td>
-                        <td className="px-4 py-3 text-muted">{["MEMORY_EVIDENCE_PERMISSION_DENIED", "MEMORY_OUTPUT_PERMISSION_DENIED"].includes(String(run.error_log?.code || "")) ? "Evidence unavailable to memory worker. No plugin was executed." : typeof run.error_log?.message === "string" ? run.error_log.message : "None"}</td>
+                        <td className="px-4 py-3 text-muted">{run.plugins_skipped || 0}</td>
+                        <td className="px-4 py-3 text-muted">{String(run.error_log?.code || "None")}</td>
+                        <td className="px-4 py-3 text-muted">{["MEMORY_EVIDENCE_PERMISSION_DENIED", "MEMORY_OUTPUT_PERMISSION_DENIED"].includes(String(run.error_log?.code || "")) ? "Evidence unavailable to memory worker. No plugin was executed." : memoryRunError(run)}</td>
                       </tr>
                     ))}
                   </tbody>

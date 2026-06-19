@@ -806,6 +806,7 @@ def test_volatility_runner_uses_fixed_argv_and_shell_false(tmp_path: Path, monke
     evidence_path = tmp_path / "memory.mem"
     evidence_path.write_bytes(b"synthetic")
     calls: dict = {}
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
 
     class FakeProcess:
         pid = 12345
@@ -826,15 +827,16 @@ def test_volatility_runner_uses_fixed_argv_and_shell_false(tmp_path: Path, monke
 
     result = volatility_runner.run_windows_info(evidence_path, tmp_path)
 
-    assert calls["args"] == ["/usr/bin/vol", "-f", str(evidence_path), "-r", "json", "windows.info"]
+    assert calls["args"] == ["/usr/bin/vol", "--offline", "-f", str(evidence_path), "-r", "json", "windows.info"]
     assert calls["kwargs"]["shell"] is False
-    assert result.argv_display == ["vol", "-f", "[evidence]", "-r", "json", "windows.info"]
+    assert result.argv_display == ["vol", "--offline", "-f", "[evidence]", "-r", "json", "windows.info"]
 
 
 def test_volatility_runner_uses_fixed_process_plugin_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     evidence_path = tmp_path / "memory.mem"
     evidence_path.write_bytes(b"synthetic")
     calls: dict = {}
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
 
     class FakeProcess:
         pid = 12345
@@ -849,7 +851,7 @@ def test_volatility_runner_uses_fixed_process_plugin_argv(tmp_path: Path, monkey
 
     volatility_runner.run_plugin("windows.pslist", evidence_path, tmp_path)
 
-    assert calls["args"] == ["/usr/bin/vol", "-f", str(evidence_path), "-r", "json", "windows.pslist"]
+    assert calls["args"] == ["/usr/bin/vol", "--offline", "-f", str(evidence_path), "-r", "json", "windows.pslist"]
     assert calls["kwargs"]["shell"] is False
 
 
@@ -858,6 +860,44 @@ def test_volatility_runner_rejects_unallowed_plugin(tmp_path: Path) -> None:
         volatility_runner.build_plugin_argv("/usr/bin/vol", tmp_path / "memory.mem", "windows.netscan")
 
     assert exc_info.value.code == "PLUGIN_NOT_ALLOWED"
+
+
+def test_volatility_runner_uses_server_controlled_offline_symbol_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    evidence_path = tmp_path / "memory.mem"
+    evidence_path.write_bytes(b"synthetic")
+    cache_root = tmp_path / "cache"
+    calls: dict = {}
+
+    class FakeProcess:
+        pid = 12345
+        returncode = 0
+
+        def communicate(self, timeout):
+            return b"{}", b""
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache_root))
+    monkeypatch.setattr(volatility_runner, "get_settings", lambda: SimpleNamespace(volatility3_command="vol", memory_plugin_timeout_seconds=5, memory_plugin_output_max_bytes=10_000, memory_symbol_network_access_enabled=False))
+    monkeypatch.setattr(volatility_runner, "resolve_configured_executable", lambda _command: (True, "/usr/bin/vol", "vol", None))
+    monkeypatch.setattr(volatility_runner.subprocess, "Popen", lambda args, **kwargs: calls.update({"args": args}) or FakeProcess())
+
+    volatility_runner.run_windows_info(evidence_path, tmp_path / "work")
+
+    assert calls["args"][:6] == ["/usr/bin/vol", "--offline", "--cache-path", str(cache_root / "volatility3"), "--symbol-dirs", str(cache_root / "volatility3" / "symbols")]
+    assert (cache_root / "volatility3" / "symbols").is_dir()
+
+
+@pytest.mark.parametrize(
+    ("stderr", "expected"),
+    [
+        (b"Unable to validate the plugin requirements: ['plugins.Info.kernel.symbol_table_name']", "SYMBOLS_UNAVAILABLE"),
+        (b"Unable to validate plugin requirement", "PLUGIN_REQUIREMENTS_UNSATISFIED"),
+        (b"No suitable translation layer was found", "UNSUPPORTED_MEMORY_IMAGE"),
+        (b"Unable to validate layer requirement", "INVALID_MEMORY_LAYER"),
+        (b"OSError: [Errno 30] Read-only file system while preparing symbol PDB", "MEMORY_SYMBOL_CACHE_NOT_WRITABLE"),
+    ],
+)
+def test_volatility_failure_classification(stderr: bytes, expected: str) -> None:
+    assert volatility_runner._classify_failure(stderr)[0] == expected
 
 
 def test_volatility_runner_timeout_terminates_process_group(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1039,6 +1079,74 @@ def test_output_permission_failure_stops_before_plugin_execution(db_session, tmp
     assert run.plugins_completed == 0
     assert run.plugins_failed == 0
     assert plugin_run.status == "pending"
+
+
+def test_windows_info_failure_marks_one_failed_and_later_plugins_skipped(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    evidence_file = tmp_path / "memory.mem"
+    evidence_file.write_bytes(b"synthetic")
+    evidence = _evidence(db_session, stored_path=str(evidence_file))
+    run = MemoryScanRun(case_id=CASE_ID, evidence_id=evidence.id, backend="volatility3", profile="processes_basic", status="queued", requested_plugin_count=4, plugin_count=4, metadata_json={"plugins": ["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"]})
+    db_session.add(run)
+    db_session.commit()
+    for plugin in ["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"]:
+        db_session.add(MemoryPluginRun(memory_scan_run_id=run.id, case_id=CASE_ID, evidence_id=evidence.id, plugin=plugin, status="pending"))
+    db_session.commit()
+
+    class SessionContext:
+        def __enter__(self):
+            return db_session
+
+        def __exit__(self, *_args):
+            return False
+
+    calls: list[str] = []
+    monkeypatch.setattr(memory_execution, "SessionLocal", lambda: SessionContext())
+    monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _id: SimpleNamespace(evidence=evidence, path=evidence_file, size_bytes=evidence_file.stat().st_size))
+    monkeypatch.setattr(memory_execution, "validate_current_process_output_access", lambda: tmp_path)
+    monkeypatch.setattr(memory_execution.backend_readiness, "check_volatility3_backend", lambda: {"ready": True, "version": "Volatility 3 Framework 2.28.0"})
+    monkeypatch.setattr(memory_execution, "memory_run_dir", lambda *_args: tmp_path / "run")
+    monkeypatch.setattr(memory_execution, "relative_to_data_dir", lambda _path: "memory-output/run")
+    monkeypatch.setattr(memory_execution, "write_atomic_json", lambda *_args, **_kwargs: {})
+
+    def fail_info(plugin, *_args):
+        calls.append(plugin)
+        raise volatility_runner.VolatilityRunnerError("SYMBOLS_UNAVAILABLE", "windows.info could not resolve required symbols.", stderr=b"symbol requirement", return_code=1, stdout_length=0, stderr_length=18)
+
+    monkeypatch.setattr(memory_execution, "run_plugin", fail_info)
+
+    memory_execution.run_memory_metadata_scan(run.id)
+    db_session.refresh(run)
+    plugin_runs = {item.plugin: item for item in db_session.query(MemoryPluginRun).filter(MemoryPluginRun.memory_scan_run_id == run.id).all()}
+
+    assert calls == ["windows.info"]
+    assert run.status == "failed"
+    assert run.plugins_completed == 0
+    assert run.plugins_failed == 1
+    assert run.error_log["code"] == "SYMBOLS_UNAVAILABLE"
+    assert plugin_runs["windows.info"].status == "failed"
+    assert plugin_runs["windows.info"].metadata_json["return_code"] == 1
+    assert {plugin_runs[name].status for name in ("windows.pslist", "windows.pstree", "windows.cmdline")} == {"skipped_dependency"}
+    assert run.plugins_skipped == 3
+
+
+def test_invalid_volatility_json_is_classified_before_normalization(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    evidence = _evidence(db_session, stored_path=str(tmp_path / "memory.mem"))
+    run = MemoryScanRun(case_id=CASE_ID, evidence_id=evidence.id, backend="volatility3", profile="metadata_only", status="running")
+    db_session.add(run)
+    db_session.commit()
+    plugin_run = MemoryPluginRun(memory_scan_run_id=run.id, case_id=CASE_ID, evidence_id=evidence.id, plugin="windows.info", status="pending")
+    db_session.add(plugin_run)
+    db_session.commit()
+    monkeypatch.setattr(memory_execution, "run_plugin", lambda *_args: SimpleNamespace(stdout=b"not-json", stderr=b"", duration_ms=4, argv_display=["vol", "windows.info"]))
+    monkeypatch.setattr(memory_execution, "write_atomic_bytes", lambda *_args: {"path": "raw.json", "sha256": "a" * 64, "size": 8})
+
+    with pytest.raises(volatility_runner.VolatilityRunnerError) as exc_info:
+        memory_execution._execute_plugin(db_session, run, plugin_run, "windows.info", tmp_path / "memory.mem", tmp_path)
+
+    assert exc_info.value.code == "VOLATILITY_OUTPUT_INVALID"
+    assert exc_info.value.return_code == 0
 
 
 def test_indexing_uses_memory_index_only(monkeypatch: pytest.MonkeyPatch) -> None:

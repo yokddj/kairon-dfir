@@ -78,6 +78,10 @@ class MemoryScanRun(UUIDMixin, Base):
     artifact_summaries = relationship("MemoryArtifactSummary", back_populates="memory_run", cascade="all, delete-orphan")
     plugin_runs = relationship("MemoryPluginRun", back_populates="memory_scan_run", cascade="all, delete-orphan")
 
+    @property
+    def plugins_skipped(self) -> int:
+        return sum(1 for item in self.plugin_runs if item.status == "skipped_dependency")
+
 
 class MemoryPluginRun(UUIDMixin, Base):
     __tablename__ = "memory_plugin_runs"

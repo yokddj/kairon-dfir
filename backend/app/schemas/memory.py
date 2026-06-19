@@ -81,6 +81,7 @@ class MemoryScanRunRead(BaseModel):
     plugin_count: int = 0
     plugins_completed: int = 0
     plugins_failed: int = 0
+    plugins_skipped: int = 0
     started_at: datetime | None = None
     completed_at: datetime | None = None
     duration_ms: int | None = None

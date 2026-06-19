@@ -241,6 +241,26 @@ describe("MemoryAnalysisPage", () => {
     expect(screen.queryByText(/Errno 13/i)).not.toBeInTheDocument();
   });
 
+  it("shows symbols classification, failed/skipped counts, and blocks process profiles", async () => {
+    getMemoryOverviewMock.mockResolvedValueOnce(overview({
+      memory_analysis_enabled: true,
+      memory_process_profile_enabled: true,
+      has_memory_evidence: true,
+      mode: "memory_only",
+      evidences: [{ id: "ev-memory", case_id: "case-1", original_filename: "memory.dmp", evidence_type: "memory_dump", size_bytes: 1024, ingest_status: "completed", created_at: "2026-06-16T00:00:00Z" }],
+      runs: [{ id: "run-symbols", case_id: "case-1", evidence_id: "ev-memory", backend: "volatility3", profile: "metadata_only", status: "failed", requested_plugin_count: 1, plugin_count: 1, plugins_completed: 0, plugins_failed: 1, plugins_skipped: 0, started_at: null, completed_at: null, duration_ms: 800, output_dir: null, metadata_json: {}, error_log: { code: "SYMBOLS_UNAVAILABLE", message: "sanitized" }, backend_version: "Volatility 3 Framework 2.28.0", worker_task_id: "job-1", cancellation_requested: false, created_at: "2026-06-16T00:00:00Z" }],
+    }));
+    getMemoryBackendOverviewMock.mockResolvedValueOnce(backendOverview({ memory_analysis_enabled: true, external_execution_allowed: true, ready_backend_count: 1, backends: [backendStatus({ ready: true, executable_found: true, execution_allowed: true, available: true, status: "available" })] }));
+
+    renderPage();
+
+    expect(await screen.findByText("SYMBOLS_UNAVAILABLE")).toBeInTheDocument();
+    expect(screen.getByText(/could not resolve the required Windows symbols under offline-only mode/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Run basic process analysis/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Run extended process analysis/i })).toBeDisabled();
+    expect(screen.queryByText(/Traceback|\/app\/data/i)).not.toBeInTheDocument();
+  });
+
   it("offers basic process analysis with exact confirmation copy", async () => {
     getMemoryOverviewMock.mockResolvedValueOnce(
       overview({
