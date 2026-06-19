@@ -29,6 +29,18 @@ function isMemoryImage(file: File | null) {
   return MEMORY_EXTENSIONS.includes(fileExtension(file));
 }
 
+function createUploadId() {
+  if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+  if (typeof globalThis.crypto?.getRandomValues !== "function") {
+    throw new Error("This browser cannot generate a secure upload identifier. Reload in a current browser and try again.");
+  }
+  const bytes = globalThis.crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function readinessLabel(readiness?: MemoryUploadReadiness) {
   if (!readiness) return "Checking";
   if (!readiness.upload_enabled) return "Upload disabled";
@@ -120,20 +132,27 @@ export default function MemoryUploadPage() {
   const extension = fileExtension(file);
   const extensionAllowed = isMemoryImage(file);
   const fileWithinLimit = !file || !readiness || file.size <= readiness.max_upload_bytes;
-  const canUpload = Boolean(
-    file &&
-      extensionAllowed &&
-      fileWithinLimit &&
-      readiness?.upload_enabled &&
-      readiness.can_accept_selected_size &&
-      acknowledged &&
-      providedHost.trim() &&
-      stage === "idle",
-  );
+  const uploadBlockingReason = useMemo(() => {
+    if (activeUploadId) return "A memory upload lifecycle is already active. Check its status before starting another upload.";
+    if (stage !== "idle") return "An upload action is already in progress or requires recovery.";
+    if (!file) return "No file selected.";
+    if (file.size <= 0) return "The selected file is empty or its browser file handle is no longer valid. Select the file again.";
+    if (!extensionAllowed) return "This file extension is not supported for memory image upload.";
+    if (!providedHost.trim()) return "Source host is required.";
+    if (!acknowledged) return "Authorization acknowledgement is required.";
+    if (readinessQuery.isLoading || readinessQuery.isFetching) return "Memory upload readiness is still being checked.";
+    if (readinessQuery.error || !readiness) return "Backend upload readiness is unavailable.";
+    if (!readiness.upload_enabled) return "Memory image upload is disabled by server configuration.";
+    if (!fileWithinLimit) return "The selected file exceeds the configured maximum memory upload size.";
+    if (!readiness.can_accept_selected_size) return readiness.message || "Storage capacity check rejected the selected file.";
+    return null;
+  }, [acknowledged, activeUploadId, extensionAllowed, file, fileWithinLimit, providedHost, readiness, readinessQuery.error, readinessQuery.isFetching, readinessQuery.isLoading, stage]);
+  const canUpload = uploadBlockingReason === null;
   const percent = progress.total > 0 ? Math.min(100, Math.round((progress.loaded / progress.total) * 100)) : 0;
 
   const summary = useMemo(() => {
     if (!file) return "Select an authorized Windows memory image to begin.";
+    if (file.size <= 0) return "The selected file is empty or its browser file handle is no longer valid. Select the file again.";
     if (!extensionAllowed) return "This file extension is not supported for memory image upload.";
     if (!fileWithinLimit) return "This file exceeds the configured maximum memory upload size.";
     if (readiness && !readiness.can_accept_selected_size) return readiness.message;
@@ -141,16 +160,18 @@ export default function MemoryUploadPage() {
   }, [extensionAllowed, file, fileWithinLimit, readiness]);
 
   async function upload() {
-    if (!file || !canUpload) return;
-    let uploadTransferred = false;
-    const uploadId = crypto.randomUUID();
     setStage("validating");
-    setStatus("Validating memory upload readiness");
-    setProgress({ loaded: 0, total: file.size });
+    setStatus("Validating upload…");
     setUploadedEvidence(null);
+    let uploadTransferred = false;
+    let uploadId: string | null = null;
     try {
-      const refreshed = await readinessQuery.refetch();
-      const currentReadiness = refreshed.data;
+      if (uploadBlockingReason || !file) {
+        throw new Error(uploadBlockingReason || "No file selected.");
+      }
+      setProgress({ loaded: 0, total: file.size });
+      uploadId = createUploadId();
+      const currentReadiness = await api.getMemoryUploadReadiness(caseId, file.size);
       if (!currentReadiness?.upload_enabled || !currentReadiness.can_accept_selected_size || file.size > currentReadiness.max_upload_bytes) {
         throw new Error(currentReadiness?.message || "Memory upload readiness could not be confirmed.");
       }
@@ -190,7 +211,8 @@ export default function MemoryUploadPage() {
       const reason = error instanceof Error ? error.message : "Memory image upload failed.";
       if (uploadTransferred) {
         try {
-          const durable = await api.getMemoryUploadStatus(caseId, uploadId);
+          const durable = uploadId ? await api.getMemoryUploadStatus(caseId, uploadId) : null;
+          if (!durable) throw new Error("Durable upload status is not available.");
           if (["validating", "uploading", "verifying", "finalizing"].includes(durable.status)) {
             setStage("verifying");
             setStatus(durable.message);
@@ -205,6 +227,8 @@ export default function MemoryUploadPage() {
           return;
         }
       }
+      setActiveUploadId(null);
+      localStorage.removeItem(`kairon-memory-upload:${caseId}`);
       setStage("failed");
       setStatus(reason);
     }
@@ -291,7 +315,8 @@ export default function MemoryUploadPage() {
       </section>
 
       <section className="rounded-[28px] border border-line bg-panel/60 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-semibold">Upload</h3><p className="mt-1 text-sm text-muted">Stages: validating, uploading, verifying, finalizing, completed, failed.</p></div><button type="button" onClick={() => void upload()} disabled={!canUpload} className="rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-50">Upload memory image</button></div>
+        <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-semibold">Upload</h3><p className="mt-1 text-sm text-muted">Stages: validating, uploading, verifying, finalizing, completed, failed.</p></div><button type="button" onClick={() => void upload()} disabled={!canUpload} className="rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-50">{stage === "validating" ? "Validating upload…" : "Upload memory image"}</button></div>
+        {uploadBlockingReason && stage === "idle" ? <p className="mt-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning" role="status">{uploadBlockingReason}</p> : null}
         {acceptedReadiness ? <p className="mt-3 text-xs text-muted">Accepted capacity check · Finalization: {acceptedReadiness.finalization_strategy === "staged_copy" ? "staged copy" : "atomic move"}</p> : null}
         {stage !== "idle" ? <div className="mt-4"><div className="flex justify-between text-xs text-muted"><span>{stage}</span><span>{formatBytes(progress.loaded)} / {formatBytes(progress.total)} · {percent}% transferred</span></div><div className="mt-2 h-3 overflow-hidden rounded-full bg-abyss"><div className={`h-full transition-all ${stage === "failed" ? "bg-rose-500" : stage === "completed" ? "bg-mint" : "bg-accent"}`} style={{ width: `${percent}%` }} /></div><p className={`mt-3 text-sm ${stage === "failed" ? "text-rose-200" : "text-muted"}`}>{status}</p>{stage === "verifying" || stage === "finalizing" ? <><p className="mt-2 text-xs text-muted" role="status">Server finalization is active · {elapsedSeconds}s elapsed.</p>{elapsedSeconds >= 30 ? <p className="mt-2 text-xs text-warning">The file has been transferred. Kairon is still finalizing the evidence.</p> : null}</> : null}</div> : null}
         {activeUploadId && stage !== "completed" ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => void statusQuery.refetch()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Check status</button>{statusQuery.data?.retryable ? <button type="button" onClick={() => void reconcileUpload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Retry finalization</button> : null}{statusQuery.data?.failure_code === "upload_bytes_lost" ? <button type="button" onClick={() => void prepareReupload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Prepare new upload</button> : null}</div> : null}
