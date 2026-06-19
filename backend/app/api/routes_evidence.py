@@ -44,6 +44,7 @@ from app.models.artifact import Artifact
 from app.models.case import Case
 from app.models.detection_result import DetectionResult
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
+from app.models.memory import MemoryUpload
 from app.models.rule_run import RuleRun, RuleRunStatus
 from app.schemas.evidence import ArtifactRead, EvidenceRead, EvidenceRunQueuedResponse, EvidenceRunRead
 from app.schemas.evidence import EvidenceBenchmarkQueuedResponse, EvidenceBenchmarkRead
@@ -94,6 +95,13 @@ from app.services.problematic_artifacts import (
     run_evtx_health_check,
 )
 from app.services.host_identity import is_invalid_host_value
+from app.services.memory.upload_lifecycle import (
+    create_memory_upload,
+    mark_memory_upload_failed,
+    normalize_upload_id,
+    register_memory_evidence,
+    update_memory_upload,
+)
 from app.services.usable_ingest import FULL_FORENSIC_MODE, USABLE_INGEST_MODE, ingest_mode_metadata, normalize_ingest_mode
 from datetime import UTC, datetime
 from app.services.reconciliation import capture_reprocess_baseline
@@ -1236,99 +1244,6 @@ def _finalize_memory_evidence_registration(db: Session, evidence: Evidence) -> E
     return evidence
 
 
-def _register_uploaded_memory_evidence(
-    db: Session,
-    *,
-    case_id: str,
-    evidence_id: str,
-    stored_path: Path,
-    size: int,
-    sha256: str,
-    display_name: str,
-    provided_host: str,
-    evidence_intent: str,
-    packaging: str,
-    ingest_mode: str,
-    evtx_profile: str | None,
-    authorization_acknowledged: bool,
-) -> Evidence:
-    evidence = Evidence(
-        id=evidence_id,
-        case_id=case_id,
-        original_filename=display_name,
-        stored_path=str(stored_path),
-        original_path=str(stored_path),
-        storage_mode=EvidenceStorageMode.uploaded,
-        is_external=False,
-        copy_to_storage=True,
-        evidence_type=EvidenceType.memory_dump,
-        sha256=sha256,
-        size_bytes=size,
-        ingest_status=IngestStatus.pending,
-        source_tool=None,
-        path_validation={},
-        ingest_source={
-            "mode": EvidenceStorageMode.uploaded.value,
-            "original_path": str(stored_path),
-            "storage_path": str(stored_path),
-            "copied": True,
-            "evidence_intent": evidence_intent,
-            "packaging": packaging,
-            "ingest_mode": ingest_mode,
-            "provided_host": provided_host,
-            "evtx_profile": evtx_profile,
-            "upload_state": "uploaded",
-            "memory_upload": True,
-            "memory_authorization_acknowledged": authorization_acknowledged,
-            "canonical_relative_path": str(stored_path.relative_to(settings.backend_data_dir)),
-        },
-        metadata_json=_initial_metadata(
-            {
-                **ingest_mode_metadata(ingest_mode),
-                "warnings": [],
-                "evidence_intent": evidence_intent,
-                "packaging": packaging,
-                "provided_host": provided_host,
-                "evtx_profile": evtx_profile,
-            }
-        ),
-        error_log={},
-    )
-    try:
-        db.add(evidence)
-        db.commit()
-        db.refresh(evidence)
-        evidence.ingest_source = {
-            **(evidence.ingest_source or {}),
-            "registered_at": evidence.created_at.isoformat() if evidence.created_at else None,
-        }
-        db.commit()
-        evidence = _finalize_memory_evidence_registration(db, evidence)
-        _write_initial_manifest(evidence)
-        log_activity(
-            db,
-            activity_type="evidence_uploaded",
-            title="Memory evidence registered",
-            message=f"Registered authorized memory evidence {evidence.original_filename}. External memory analysis was not executed.",
-            case_id=case_id,
-            evidence_id=evidence.id,
-            metadata={"evidence_type": evidence.evidence_type.value, "memory_profile": "metadata_only", "authorization_acknowledged": authorization_acknowledged, "size_bytes": evidence.size_bytes},
-        )
-        db.refresh(evidence)
-        return evidence
-    except Exception:
-        db.rollback()
-        try:
-            persisted = db.get(Evidence, evidence_id)
-            if persisted is not None:
-                db.delete(persisted)
-                db.commit()
-        except Exception:  # noqa: BLE001
-            db.rollback()
-        safe_remove(build_evidence_root(case_id, evidence_id))
-        raise
-
-
 def _raw_collection_initial_metadata(extra: dict | None = None) -> dict:
     return {
         "phases": ["uploaded", "indexing_zip", "discovering_candidates", "waiting_selection", "extracting_selected", "parsing", "indexing_events"],
@@ -1802,6 +1717,7 @@ def upload_evidence(
     provided_host: str | None = Form(None),
     evtx_profile: str | None = Form(None),
     memory_authorization_acknowledged: bool = Form(False),
+    memory_upload_id: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> Evidence:
     if hasattr(ingest_mode, "get") and not hasattr(db, "get"):
@@ -1826,9 +1742,50 @@ def upload_evidence(
             raise HTTPException(status_code=403, detail="Memory image upload is disabled by server configuration.")
         if not memory_authorization_acknowledged:
             raise HTTPException(status_code=400, detail="Authorization acknowledgement is required before uploading RAM evidence.")
+        expected_size = int(getattr(file, "size", 0) or 0)
+        if expected_size <= 0:
+            raise HTTPException(status_code=400, detail="Memory upload size could not be determined safely.")
         try:
-            evidence_id, stored_path, size, uploaded_sha256, safe_memory_display_name = save_memory_upload(case_id, file)
+            normalized_upload_id = normalize_upload_id(memory_upload_id or str(uuid4()))
+            existing_upload = db.get(MemoryUpload, normalized_upload_id)
+            if existing_upload is not None:
+                if existing_upload.case_id != case_id or int(existing_upload.expected_bytes) != expected_size:
+                    raise ValueError("Upload ID is already associated with a different request.")
+                if existing_upload.status == "completed":
+                    existing_evidence = db.get(Evidence, existing_upload.evidence_id)
+                    if existing_evidence is not None:
+                        return existing_evidence
+                raise ValueError("This memory upload request already exists; use upload status or reconciliation.")
+            upload_state = create_memory_upload(
+                upload_id=normalized_upload_id,
+                case_id=case_id,
+                expected_bytes=expected_size,
+                display_name=uploaded_name,
+                source_host=normalized_provided_host,
+                extension=uploaded_suffix,
+                metadata={
+                    "evidence_intent": normalized_intent,
+                    "packaging": normalized_packaging,
+                    "ingest_mode": normalized_ingest_mode,
+                    "evtx_profile": normalized_evtx_profile,
+                    "authorization_acknowledged": True,
+                },
+                db=db,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        db.rollback()
+        try:
+            evidence_id, stored_path, size, uploaded_sha256, safe_memory_display_name = save_memory_upload(
+                case_id,
+                file,
+                upload_id=upload_state.id,
+                evidence_id=upload_state.evidence_id,
+                state_callback=lambda upload_id, **values: update_memory_upload(upload_id, db=db, **values),
+            )
         except MemoryUploadError as exc:
+            retryable = exc.code in {"verification_timeout", "finalization_timeout", "canonical_validation_failed", "insufficient_storage", "upload_reservation_lost"}
+            mark_memory_upload_failed(upload_state.id, exc.code, exc.message, retryable=retryable, db=db)
             code = (
                 413
                 if exc.code == "rejected_size"
@@ -1838,24 +1795,20 @@ def upload_evidence(
                 if exc.code == "concurrency_guard_unavailable"
                 else 507
                 if exc.code in {"insufficient_storage", "upload_reservation_lost"}
+                else 504
+                if exc.code in {"verification_timeout", "finalization_timeout"}
                 else status.HTTP_400_BAD_REQUEST
             )
             raise HTTPException(status_code=code, detail=exc.message) from exc
-        return _register_uploaded_memory_evidence(
-            db,
-            case_id=case_id,
-            evidence_id=evidence_id,
-            stored_path=stored_path,
-            size=size,
-            sha256=uploaded_sha256,
-            display_name=safe_memory_display_name,
-            provided_host=normalized_provided_host,
-            evidence_intent=normalized_intent,
-            packaging=normalized_packaging,
-            ingest_mode=normalized_ingest_mode,
-            evtx_profile=normalized_evtx_profile,
-            authorization_acknowledged=bool(memory_authorization_acknowledged),
-        )
+        except Exception as exc:
+            mark_memory_upload_failed(upload_state.id, "storage_finalization_failed", "Kairon could not finalize the uploaded memory image.", retryable=True, db=db)
+            raise HTTPException(status_code=500, detail="Kairon could not finalize the uploaded memory image.") from exc
+        update_memory_upload(upload_state.id, db=db, status="finalizing", bytes_received=size, sha256=uploaded_sha256)
+        try:
+            return register_memory_evidence(upload_state.id, db=db)
+        except Exception as exc:
+            mark_memory_upload_failed(upload_state.id, "evidence_registration_failed", "Canonical upload is preserved; evidence registration can be retried.", retryable=True, db=db)
+            raise HTTPException(status_code=500, detail="Canonical upload is preserved; evidence registration can be retried.") from exc
     else:
         evidence_id, stored_path, size = save_upload(case_id, file)
     raw_collection = False

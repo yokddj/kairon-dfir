@@ -3,7 +3,9 @@ import logging
 import os
 import re
 import shutil
+import time
 from pathlib import Path
+from typing import Any, Callable
 from uuid import uuid4
 
 from fastapi import UploadFile
@@ -64,13 +66,20 @@ def is_memory_upload_filename(filename: str | None) -> bool:
     return bool(suffix and suffix in settings.memory_upload_extensions)
 
 
-def save_memory_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int, str, str]:
+def save_memory_upload(
+    case_id: str,
+    upload: UploadFile,
+    *,
+    upload_id: str | None = None,
+    evidence_id: str | None = None,
+    state_callback: Callable[..., Any] | None = None,
+) -> tuple[str, Path, int, str, str]:
     suffix = Path(upload.filename or "").suffix.lower()
     if suffix not in settings.memory_upload_extensions:
         raise MemoryUploadError("rejected_type", "This memory image extension is not enabled for browser upload.")
     chunk_size = max(65536, int(settings.memory_upload_chunk_size_bytes or 4194304))
     max_bytes = max(1, int(settings.memory_upload_max_bytes or settings.memory_max_upload_size or 1))
-    evidence_id = str(uuid4())
+    evidence_id = evidence_id or str(uuid4())
     root = build_evidence_root(case_id, evidence_id)
     original_dir = root / "original"
     staging_root = settings.memory_upload_staging_path
@@ -81,8 +90,17 @@ def save_memory_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int
     digest = hashlib.sha256()
     size = 0
     safe_name = safe_display_filename(upload.filename)
-    request_id = str(uuid4())
+    request_id = upload_id or str(uuid4())
     strategy = "unknown"
+    preserve_for_recovery = False
+    canonical_finalized = False
+    verification_started = 0.0
+    finalization_started = 0.0
+
+    def publish(**values: Any) -> None:
+        if state_callback is not None:
+            state_callback(request_id, **values)
+
     try:
         hinted_size = getattr(upload, "size", None)
         expected_size = int(hinted_size) if isinstance(hinted_size, int) and hinted_size > 0 else max_bytes
@@ -92,6 +110,7 @@ def save_memory_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int
             with MemoryUploadSlot(request_id=request_id) as slot:
                 decision = assert_memory_upload_capacity(expected_size, phase="pre_upload")
                 strategy = decision.finalization_strategy
+                publish(status="uploading", finalization_strategy=strategy, lock_token=request_id)
                 logger.info(
                     "memory upload capacity decision request_id=%s case_id=%s selected_size_bytes=%s phase=pre_upload accepted=true strategy=%s same_filesystem=%s bytes_written=0",
                     request_id,
@@ -112,20 +131,61 @@ def save_memory_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int
                         digest.update(chunk)
                         buffer.write(chunk)
                         size = next_size
+                        if size == expected_size or size % max(chunk_size, 64 * 1024 * 1024) < chunk_size:
+                            publish(status="uploading", bytes_received=size)
                         slot.refresh()
+                    verification_started = time.monotonic()
+                    publish(status="verifying", bytes_received=size)
                     buffer.flush()
                     os.fsync(buffer.fileno())
+                verification_elapsed = time.monotonic() - verification_started
+                logger.info(
+                    "memory upload step request_id=%s case_id=%s phase=verifying operation=flush_fsync duration_seconds=%.3f bytes_written=%s",
+                    request_id,
+                    case_id,
+                    verification_elapsed,
+                    size,
+                )
+                preserve_for_recovery = size == expected_size
+                if verification_elapsed > max(1, int(getattr(settings, "memory_upload_verification_timeout_seconds", 300))):
+                    raise MemoryUploadError("verification_timeout", "Memory upload verification exceeded the configured timeout.")
                 if size <= 0:
                     raise MemoryUploadError("rejected_empty", "Empty memory image uploads are not accepted.")
                 if isinstance(hinted_size, int) and hinted_size > 0 and size != hinted_size:
                     raise MemoryUploadError("size_mismatch", "Transferred memory image size did not match the declared size.")
+                finalized_sha256 = digest.hexdigest()
+                publish(status="finalizing", bytes_received=size, sha256=finalized_sha256)
+                finalization_started = time.monotonic()
                 decision = assert_memory_upload_capacity(size, phase="finalization", bytes_already_staged=size)
                 strategy = decision.finalization_strategy
+                move_started = time.monotonic()
                 if strategy == "atomic_rename":
                     os.replace(temp_path, final_path)
                 else:
-                    _copy_memory_upload_to_final(temp_path, final_path, expected_size=size, expected_sha256=digest.hexdigest(), chunk_size=chunk_size)
+                    _copy_memory_upload_to_final(temp_path, final_path, expected_size=size, expected_sha256=finalized_sha256, chunk_size=chunk_size)
                     _safe_unlink_memory_staging(temp_path, staging_root=staging_root, expected_name=temp_path.name)
+                canonical_finalized = True
+                move_elapsed = time.monotonic() - move_started
+                stat = final_path.lstat()
+                if final_path.is_symlink() or not final_path.is_file() or stat.st_size != size:
+                    raise MemoryUploadError("canonical_validation_failed", "Canonical memory evidence validation failed after finalization.")
+                dir_fd = os.open(str(final_path.parent), os.O_DIRECTORY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+                finalization_elapsed = time.monotonic() - finalization_started
+                logger.info(
+                    "memory upload step request_id=%s case_id=%s phase=finalizing strategy=%s move_seconds=%.3f total_seconds=%.3f bytes_written=%s",
+                    request_id,
+                    case_id,
+                    strategy,
+                    move_elapsed,
+                    finalization_elapsed,
+                    size,
+                )
+                if finalization_elapsed > max(1, int(getattr(settings, "memory_upload_finalization_timeout_seconds", 120))):
+                    raise MemoryUploadError("finalization_timeout", "Memory upload finalization exceeded the configured timeout.")
                 slot.refresh(force=True)
         except MemoryCapacityError as exc:
             public_message = (
@@ -134,17 +194,12 @@ def save_memory_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int
                 else "Server storage capacity is below the safe threshold for this memory image."
             )
             raise MemoryUploadError(exc.category, public_message) from exc
-        dir_fd = os.open(str(final_path.parent), os.O_DIRECTORY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
         return evidence_id, final_path, size, digest.hexdigest(), safe_name
     except Exception as exc:
-        cleaned = _safe_unlink_memory_staging(temp_path, staging_root=staging_root, expected_name=temp_path.name)
-        if final_path.exists() and not final_path.is_symlink():
-            final_path.unlink()
-        safe_remove(root)
+        cleaned = False
+        if not preserve_for_recovery and not canonical_finalized:
+            cleaned = _safe_unlink_memory_staging(temp_path, staging_root=staging_root, expected_name=temp_path.name)
+            safe_remove(root)
         logger.warning(
             "memory upload failed request_id=%s case_id=%s selected_size_bytes=%s phase=upload_or_finalization strategy=%s bytes_written=%s failure_category=%s staging_cleaned=%s",
             request_id,

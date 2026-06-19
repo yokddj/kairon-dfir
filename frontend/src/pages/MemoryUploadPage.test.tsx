@@ -7,6 +7,9 @@ import MemoryUploadPage from "./MemoryUploadPage";
 
 const getMemoryUploadReadinessMock = vi.fn();
 const uploadEvidenceMock = vi.fn();
+const getMemoryUploadStatusMock = vi.fn();
+const reconcileMemoryUploadMock = vi.fn();
+const getEvidenceMock = vi.fn();
 const navigateMock = vi.fn();
 
 vi.mock("react-router-dom", async () => {
@@ -21,6 +24,9 @@ vi.mock("../api/client", () => ({
   api: {
     getMemoryUploadReadiness: (...args: unknown[]) => getMemoryUploadReadinessMock(...args),
     uploadEvidence: (...args: unknown[]) => uploadEvidenceMock(...args),
+    getMemoryUploadStatus: (...args: unknown[]) => getMemoryUploadStatusMock(...args),
+    reconcileMemoryUpload: (...args: unknown[]) => reconcileMemoryUploadMock(...args),
+    getEvidence: (...args: unknown[]) => getEvidenceMock(...args),
   },
 }));
 
@@ -68,8 +74,14 @@ describe("MemoryUploadPage", () => {
     navigateMock.mockReset();
     getMemoryUploadReadinessMock.mockReset();
     uploadEvidenceMock.mockReset();
+    getMemoryUploadStatusMock.mockReset();
+    reconcileMemoryUploadMock.mockReset();
+    getEvidenceMock.mockReset();
+    localStorage.clear();
     getMemoryUploadReadinessMock.mockResolvedValue(readiness());
     uploadEvidenceMock.mockResolvedValue({ id: "ev-memory", evidence_type: "memory_dump", size_bytes: 6, sha256: "0".repeat(64) });
+    getMemoryUploadStatusMock.mockImplementation(() => new Promise(() => undefined));
+    getEvidenceMock.mockResolvedValue({ id: "ev-memory", evidence_type: "memory_dump", size_bytes: 6, sha256: "0".repeat(64) });
   });
 
   it("renders dedicated memory upload readiness and privacy acknowledgement", async () => {
@@ -124,7 +136,9 @@ describe("MemoryUploadPage", () => {
     expect(await screen.findByText(/Upload completed/i)).toBeInTheDocument();
   });
 
-  it("shows a finalization failure after 100% transfer and requires readiness refresh before retry", async () => {
+  it("shows a durable finalization failure after 100% transfer without recommending re-upload", async () => {
+    getMemoryUploadStatusMock.mockResolvedValue({ upload_id: "upload-1", status: "failed", bytes_received: 6, expected_bytes: 6, evidence_id: null, failure_code: "finalization_timeout", message: "Finalization timed out safely.", updated_at: new Date().toISOString(), retryable: true });
+    reconcileMemoryUploadMock.mockResolvedValue({ upload_id: "upload-1", status: "finalizing", bytes_received: 6, expected_bytes: 6, evidence_id: null, failure_code: null, message: "Finalizing.", updated_at: new Date().toISOString(), retryable: false });
     uploadEvidenceMock.mockImplementation((_caseId, file, options) => {
       options.onProgress({ loaded: file.size, total: file.size });
       return Promise.reject(new Error("Capacity changed during finalization."));
@@ -136,12 +150,11 @@ describe("MemoryUploadPage", () => {
     await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
     await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
 
-    expect(await screen.findByText(/transferred, but Kairon could not finalize it as evidence/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Finalization timed out safely/i)).toBeInTheDocument();
     expect(screen.queryByText(/Upload completed/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Open Memory Analysis/i })).not.toBeInTheDocument();
-    const callsBeforeRetry = getMemoryUploadReadinessMock.mock.calls.length;
-    await userEvent.click(screen.getByRole("button", { name: /Retry upload/i }));
-    await waitFor(() => expect(getMemoryUploadReadinessMock.mock.calls.length).toBeGreaterThan(callsBeforeRetry));
+    expect(screen.queryByRole("button", { name: /Retry upload/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Retry finalization/i })).toBeInTheDocument();
   });
 
   it("uses binary GiB units for selected and capacity values", async () => {
@@ -153,5 +166,35 @@ describe("MemoryUploadPage", () => {
 
     expect(await screen.findByText(/Size: 4\.0 GiB/i)).toBeInTheDocument();
     expect(screen.getByText("6.0 GiB")).toBeInTheDocument();
+  });
+
+  it("resumes status polling after refresh and exposes completed evidence", async () => {
+    localStorage.setItem("kairon-memory-upload:case-1", "11111111-1111-4111-8111-111111111111");
+    getMemoryUploadStatusMock.mockResolvedValue({ upload_id: "11111111-1111-4111-8111-111111111111", status: "completed", bytes_received: 6, expected_bytes: 6, evidence_id: "ev-memory", failure_code: null, message: "Memory image uploaded and registered.", updated_at: new Date().toISOString(), retryable: false });
+    renderPage();
+
+    expect(await screen.findByText(/Upload completed/i)).toBeInTheDocument();
+    expect(getMemoryUploadStatusMock).toHaveBeenCalledWith("case-1", "11111111-1111-4111-8111-111111111111");
+    expect(await screen.findByRole("button", { name: /Open Memory Analysis/i })).toBeInTheDocument();
+  });
+
+  it("polls an active upload and disables duplicate submission", async () => {
+    localStorage.setItem("kairon-memory-upload:case-1", "22222222-2222-4222-8222-222222222222");
+    getMemoryUploadStatusMock.mockResolvedValue({ upload_id: "22222222-2222-4222-8222-222222222222", status: "finalizing", bytes_received: 6, expected_bytes: 6, evidence_id: null, failure_code: null, message: "The file has been transferred. Kairon is finalizing the evidence.", updated_at: new Date().toISOString(), retryable: false });
+    renderPage();
+
+    expect(await screen.findByText(/Kairon is finalizing the evidence/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Upload memory image/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /Check status/i })).toBeInTheDocument();
+  });
+
+  it("stops on an inconsistent terminal state without offering unsafe finalization", async () => {
+    localStorage.setItem("kairon-memory-upload:case-1", "33333333-3333-4333-8333-333333333333");
+    getMemoryUploadStatusMock.mockResolvedValue({ upload_id: "33333333-3333-4333-8333-333333333333", status: "inconsistent", bytes_received: 6, expected_bytes: 6, evidence_id: null, failure_code: "staging_and_canonical_present", message: "Both staged and canonical files require review.", updated_at: new Date().toISOString(), retryable: false });
+    renderPage();
+
+    expect(await screen.findByText(/require review/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Retry finalization/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open Memory Analysis/i })).not.toBeInTheDocument();
   });
 });

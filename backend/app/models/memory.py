@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, String
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, JSONVariant, UUIDMixin, utc_now_naive
@@ -20,6 +20,34 @@ MEMORY_SCAN_STATUSES = {
     "cancelled",
 }
 MEMORY_PLUGIN_STATUSES = {"pending", "running", "completed", "failed", "timed_out"}
+
+
+class MemoryUpload(UUIDMixin, Base):
+    __tablename__ = "memory_uploads"
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(nullable=False, unique=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="validating", index=True)
+    bytes_received: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    expected_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    sha256: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    display_name: Mapped[str] = mapped_column(String(512), nullable=False)
+    source_host: Mapped[str] = mapped_column(String(255), nullable=False)
+    extension: Mapped[str] = mapped_column(String(32), nullable=False)
+    staging_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    canonical_relative_path: Mapped[str] = mapped_column(String(2048), nullable=False)
+    finalization_strategy: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    lock_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    failure_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    retryable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    metadata_json: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
+    progress_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
+    __table_args__ = (Index("ix_memory_upload_case_updated", "case_id", "updated_at"),)
 
 
 class MemoryScanRun(UUIDMixin, Base):

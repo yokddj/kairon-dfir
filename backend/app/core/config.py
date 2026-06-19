@@ -64,6 +64,9 @@ class Settings(BaseSettings):
     memory_upload_staging_root: str = ""
     memory_upload_cleanup_age_seconds: int = 86400
     memory_upload_request_timeout_seconds: int = 0
+    memory_upload_verification_timeout_seconds: int = 300
+    memory_upload_finalization_timeout_seconds: int = 120
+    memory_upload_stale_timeout_seconds: int = 900
     memory_upload_allowed_extensions: str = ".raw,.mem,.vmem,.dmp,.lime"
     memory_job_timeout_seconds: int = 900
     memory_plugin_timeout_seconds: int = 600

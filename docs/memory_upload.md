@@ -45,6 +45,14 @@ Memory uploads are classified as `memory_dump`, bypass normal disk ingest, and d
 
 The endpoint is informational. The upload endpoint remains authoritative and uses the same capacity service during pre-upload, streaming, and finalization.
 
+Each accepted upload also has a durable lifecycle ID. After browser transport reaches 100%, the UI polls:
+
+```text
+GET /api/cases/{case_id}/memory/uploads/{upload_id}
+```
+
+The status record contains only sanitized state, byte counts, terminal failure category, and the evidence ID after completion. It allows completion to be recovered after a browser disconnect, backend response loss, or a successful file move followed by a database error. Safe reconciliation is idempotent and never overwrites when both staging and canonical files exist.
+
 The standard remote validation target is `MEMORY_UPLOAD_MAX_BYTES=5368709120`, displayed as `5 GiB`. Capacity is grouped by filesystem device:
 
 - same-filesystem finalization requires one input image, output allowance, and one safety margin before upload
@@ -65,8 +73,11 @@ The backend streams memory uploads to disk in bounded chunks:
 - cross-filesystem files are copied to a controlled destination temporary, size/hash verified, then atomically renamed on the destination filesystem
 - failed or oversized uploads remove only the known temporary partial file
 - one Redis-backed upload slot serializes large memory uploads across backend replicas and expires safely if an uploader disappears
+- verification and finalization have separate configurable warning/hard limits
 
 The database evidence row is created only after storage finalization succeeds. Incomplete uploads are not valid scannable evidence.
+
+`Evidence.size_bytes` is stored as PostgreSQL `BIGINT`; browser memory uploads up to the configured 5 GiB limit must not be written to a 32-bit `INTEGER` column.
 
 ## Storage Layout
 

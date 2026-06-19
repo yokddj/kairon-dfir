@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Enum, ForeignKey, String
+from sqlalchemy import BigInteger, Enum, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, JSONVariant, UUIDMixin, utc_now_naive
@@ -53,7 +53,7 @@ class Evidence(UUIDMixin, Base):
     is_external: Mapped[bool] = mapped_column(default=False, nullable=False)
     copy_to_storage: Mapped[bool] = mapped_column(default=True, nullable=False)
     sha256: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
-    size_bytes: Mapped[int] = mapped_column(nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     file_count: Mapped[int | None] = mapped_column(nullable=True)
     ingest_status: Mapped[IngestStatus] = mapped_column(Enum(IngestStatus), default=IngestStatus.pending, nullable=False)
     detected_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
