@@ -1,3 +1,4 @@
+import os
 import subprocess
 from io import BytesIO
 from pathlib import Path
@@ -17,6 +18,7 @@ from app.models.evidence import Evidence, EvidenceType, IngestStatus
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun, MemoryUpload
 from app.services.memory import backend_readiness
 from app.services.memory import execution as memory_execution
+from app.services.memory.evidence_access import MemoryStorageAccessError
 from app.services.memory import indexing as memory_indexing
 from app.services.memory import normalizers as memory_normalizers
 from app.services.memory import overview as memory_overview
@@ -152,6 +154,7 @@ def test_standard_memory_upload_streams_to_canonical_storage(db_session, tmp_pat
         memory_upload_chunk_size_bytes=1024,
         memory_upload_extensions={".raw", ".mem", ".vmem", ".dmp", ".lime"},
         memory_upload_staging_path=tmp_path / "data" / "tmp" / "memory-uploads",
+        memory_evidence_shared_gid=os.getgid(),
     )
     monkeypatch.setattr(core_storage, "settings", settings)
     monkeypatch.setattr(core_storage, "assert_memory_upload_capacity", _accepted_capacity)
@@ -173,6 +176,9 @@ def test_standard_memory_upload_streams_to_canonical_storage(db_session, tmp_pat
     assert evidence.original_filename == "authorized.raw"
     assert evidence.stored_path.endswith(f"/evidence/{CASE_ID}/{evidence.id}/original/memory-image.raw")
     assert Path(evidence.stored_path).read_bytes() == data
+    assert Path(evidence.stored_path).stat().st_mode & 0o777 == 0o640
+    assert Path(evidence.stored_path).parent.stat().st_mode & 0o7777 == 0o2750
+    assert Path(evidence.stored_path).stat().st_size == len(data)
     assert not list(settings.memory_upload_staging_path.glob("*.part"))
     assert len(replace_calls) == 1
     assert enqueue_calls == []
@@ -688,6 +694,8 @@ def test_memory_validation_accepts_regular_uploaded_file(db_session, tmp_path: P
     evidence_file.parent.mkdir(parents=True)
     evidence_file.write_bytes(b"synthetic")
     evidence = _evidence(db_session, stored_path=str(evidence_file))
+    evidence.size_bytes = len(b"synthetic")
+    db_session.commit()
     monkeypatch.setattr(memory_validation, "get_settings", lambda: SimpleNamespace(backend_data_dir=tmp_path / "data", allowed_evidence_roots=[] , memory_max_upload_size=10_000))
 
     validated = memory_validation.validate_memory_execution_request(db_session, evidence.id)
@@ -701,6 +709,8 @@ def test_memory_validation_uses_memory_upload_limit_for_uploaded_file(db_session
     evidence_file.parent.mkdir(parents=True)
     evidence_file.write_bytes(b"synthetic")
     evidence = _evidence(db_session, stored_path=str(evidence_file))
+    evidence.size_bytes = len(b"synthetic")
+    db_session.commit()
     monkeypatch.setattr(
         memory_validation,
         "get_settings",
@@ -982,6 +992,43 @@ def test_execution_indexing_failure_retains_raw_output(db_session, tmp_path: Pat
     assert plugin_run.status == "completed"
     assert plugin_run.output_sha256
     assert "/secret" not in run.error_log["message"]
+
+
+def test_output_permission_failure_stops_before_plugin_execution(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    evidence_file = tmp_path / "data" / "evidence" / CASE_ID / MEMORY_EVIDENCE_ID / "original" / "memory.mem"
+    evidence_file.parent.mkdir(parents=True)
+    evidence_file.write_bytes(b"synthetic")
+    evidence = _evidence(db_session, stored_path=str(evidence_file))
+    run = MemoryScanRun(case_id=CASE_ID, evidence_id=evidence.id, backend="volatility3", profile="metadata_only", status="queued", requested_plugin_count=1, plugin_count=1)
+    db_session.add(run)
+    db_session.commit()
+    plugin_run = MemoryPluginRun(memory_scan_run_id=run.id, case_id=CASE_ID, evidence_id=evidence.id, plugin="windows.info", status="pending")
+    db_session.add(plugin_run)
+    db_session.commit()
+
+    class SessionContext:
+        def __enter__(self):
+            return db_session
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(memory_execution, "SessionLocal", lambda: SessionContext())
+    monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=evidence, path=evidence_file, size_bytes=evidence_file.stat().st_size))
+    monkeypatch.setattr(memory_execution.backend_readiness, "check_volatility3_backend", lambda: {"ready": True, "version": "Volatility 3 Framework 2.28.0"})
+    monkeypatch.setattr(memory_execution, "validate_current_process_output_access", lambda: (_ for _ in ()).throw(MemoryStorageAccessError("MEMORY_OUTPUT_PERMISSION_DENIED", "The memory worker cannot write isolated analysis output.")))
+    monkeypatch.setattr(memory_execution, "run_plugin", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("plugin must not start")))
+
+    memory_execution.run_memory_metadata_scan(run.id)
+    db_session.refresh(run)
+    db_session.refresh(plugin_run)
+
+    assert run.status == "failed"
+    assert run.error_log["code"] == "MEMORY_OUTPUT_PERMISSION_DENIED"
+    assert run.plugins_completed == 0
+    assert run.plugins_failed == 0
+    assert plugin_run.status == "pending"
 
 
 def test_indexing_uses_memory_index_only(monkeypatch: pytest.MonkeyPatch) -> None:

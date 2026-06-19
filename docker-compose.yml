@@ -65,6 +65,8 @@ services:
       - ./data/local-mounts/data-evidence:/data/evidence:ro
       - ./data/local-mounts/cases:/cases:ro
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "${BACKEND_UVICORN_WORKERS:-1}"]
+    group_add:
+      - "${MEMORY_EVIDENCE_SHARED_GID:-10001}"
 
   worker:
     build:
@@ -132,6 +134,8 @@ services:
     security_opt:
       - no-new-privileges:true
     user: "10001:10001"
+    group_add:
+      - "${MEMORY_EVIDENCE_SHARED_GID:-10001}"
 
   frontend:
     build:

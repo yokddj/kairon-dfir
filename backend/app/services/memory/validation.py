@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType
+from app.services.memory.evidence_access import MemoryStorageAccessError, validate_current_process_evidence_access
 
 
 class MemoryExecutionValidationError(RuntimeError):
@@ -47,25 +48,11 @@ def validate_memory_execution_request(db: Session, evidence_id: str) -> Validate
     if evidence.evidence_type != EvidenceType.memory_dump:
         raise MemoryExecutionValidationError("INVALID_EVIDENCE_TYPE", "Metadata analysis is only supported for memory_dump evidence.")
 
-    raw_path = str(evidence.stored_path or "").strip()
-    if not raw_path:
-        raise MemoryExecutionValidationError("EVIDENCE_PATH_MISSING", "Evidence storage path is missing.")
-    candidate = Path(raw_path)
-    if not candidate.is_absolute():
-        candidate = settings.backend_data_dir / candidate
-
     try:
-        resolved = candidate.resolve(strict=True)
-    except OSError:
-        raise MemoryExecutionValidationError("EVIDENCE_FILE_NOT_FOUND", "Memory evidence file was not found.") from None
-
-    if candidate.is_symlink() or resolved.is_symlink():
-        raise MemoryExecutionValidationError("UNSAFE_EVIDENCE_FILE", "Memory evidence file must not be a symlink.")
-    if not resolved.is_file():
-        raise MemoryExecutionValidationError("UNSAFE_EVIDENCE_FILE", "Memory evidence path must be a regular file.")
-    if not any(_is_within(root, resolved) for root in _approved_roots_for(evidence)):
-        raise MemoryExecutionValidationError("UNSAFE_EVIDENCE_PATH", "Memory evidence path is outside approved evidence storage roots.")
-
+        access = validate_current_process_evidence_access(evidence, settings=settings)
+    except MemoryStorageAccessError as exc:
+        raise MemoryExecutionValidationError(exc.code, exc.message) from None
+    resolved = access.path
     stat_result = resolved.stat()
     if stat_result.st_size <= 0:
         raise MemoryExecutionValidationError("EMPTY_EVIDENCE_FILE", "Memory evidence file is empty.")

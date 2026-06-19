@@ -8,9 +8,10 @@ from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryScanRun
-from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryOverviewRead, MemoryProcessListRead, MemoryProcessTreeRead, MemoryRunDetailRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
-from app.services.memory.backend_readiness import get_memory_backend_overview
+from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessListRead, MemoryProcessTreeRead, MemoryRunDetailRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
+from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, mark_run_queued, resolve_profile_plugins
+from app.services.memory.evidence_access import evidence_readiness
 from app.services.memory.indexing import get_memory_document, search_memory_edges, search_memory_processes
 from app.services.memory.overview import get_case_memory_overview, list_memory_evidences
 from app.services.memory.upload_readiness import MAX_SELECTED_SIZE_BYTES, get_memory_upload_readiness
@@ -43,6 +44,26 @@ def get_memory_overview(case_id: str, db: Session = Depends(get_db)) -> dict:
 def get_memory_evidences(case_id: str, db: Session = Depends(get_db)) -> list[Evidence]:
     _require_case(db, case_id)
     return list_memory_evidences(db, case_id)
+
+
+@router.get("/cases/{case_id}/memory/evidences/{evidence_id}/readiness", response_model=MemoryEvidenceReadinessRead)
+def get_memory_evidence_readiness(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    _require_case(db, case_id)
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
+        raise HTTPException(status_code=404, detail="Memory evidence was not found.")
+    backend = check_volatility3_backend()
+    result = evidence_readiness(evidence)
+    result["worker_online"] = bool(backend.get("dedicated_worker_online"))
+    result["backend_ready"] = bool(backend.get("ready"))
+    result["can_analyze"] = bool(result["can_analyze"] and result["worker_online"] and result["backend_ready"])
+    if not result["worker_online"]:
+        result["error_code"] = "MEMORY_WORKER_OFFLINE"
+        result["sanitized_message"] = "The dedicated memory worker is offline."
+    elif not result["backend_ready"] and result["error_code"] is None:
+        result["error_code"] = "MEMORY_BACKEND_UNAVAILABLE"
+        result["sanitized_message"] = "The memory analysis backend is not ready."
+    return result
 
 
 @router.get("/cases/{case_id}/memory/upload-readiness", response_model=MemoryUploadReadinessRead)

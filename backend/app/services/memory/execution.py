@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.core.database import SessionLocal, utc_now_naive
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
 from app.services.memory import backend_readiness
+from app.services.memory.evidence_access import MemoryStorageAccessError, validate_current_process_output_access
 from app.services.memory.indexing import index_memory_documents, index_memory_system_info
 from app.services.memory.normalizers import merge_memory_process_results, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, write_atomic_bytes, write_atomic_json
@@ -141,6 +142,10 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             readiness = backend_readiness.check_volatility3_backend()
             if not readiness.get("ready"):
                 raise MemoryExecutionValidationError("BACKEND_UNAVAILABLE", "Volatility 3 backend is not ready for execution.")
+            try:
+                validate_current_process_output_access()
+            except MemoryStorageAccessError as exc:
+                raise MemoryExecutionValidationError(exc.code, exc.message) from None
             run.backend_version = readiness.get("version")
             output_dir = memory_run_dir(run.case_id, run.evidence_id, run.id)
             run.output_dir = relative_to_data_dir(output_dir)
@@ -216,7 +221,11 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             db.commit()
             logger.info("memory scan completed", extra={"run_id": run.id, "status": run.status, "duration_ms": run.duration_ms})
         except MemoryExecutionValidationError as exc:
-            _fail_run(db, run, None, "invalid_evidence" if exc.code.startswith(("EVIDENCE", "INVALID", "UNSAFE", "EMPTY")) else "backend_unavailable", exc.code, exc.message)
+            if exc.code in {"MEMORY_EVIDENCE_PERMISSION_DENIED", "MEMORY_OUTPUT_PERMISSION_DENIED"}:
+                status = "failed"
+            else:
+                status = "invalid_evidence" if exc.code.startswith(("EVIDENCE", "INVALID", "UNSAFE", "EMPTY")) else "backend_unavailable"
+            _fail_run(db, run, None, status, exc.code, exc.message)
         except VolatilityRunnerError as exc:
             status = "timed_out" if exc.code == "PLUGIN_TIMEOUT" else "failed"
             _fail_run(db, run, None, status, exc.code, exc.message)
