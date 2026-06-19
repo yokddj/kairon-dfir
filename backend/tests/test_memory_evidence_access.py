@@ -23,8 +23,11 @@ def _settings(tmp_path: Path) -> SimpleNamespace:
 
 
 def _evidence(settings: SimpleNamespace, *, mode: int = 0o640):
+    settings.backend_data_dir.parent.chmod(0o755)
     path = settings.backend_data_dir / "evidence" / "case" / "evidence" / "original" / "memory.dmp"
     path.parent.mkdir(parents=True)
+    for directory in (settings.backend_data_dir, settings.backend_data_dir / "evidence", path.parents[2], path.parents[1], path.parent):
+        directory.chmod(0o750)
     path.write_bytes(b"synthetic")
     path.chmod(mode)
     return SimpleNamespace(
