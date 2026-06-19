@@ -28,9 +28,12 @@ from app.services.memory import upload_capacity
 from app.services.memory import upload_lifecycle
 from app.services.memory import validation as memory_validation
 from app.services.memory import volatility_runner
+from app.services.memory import symbol_control
 from app.services.memory import worker_capability
 from app.core import storage as core_storage
 from app.schemas.memory import MemoryStartScanRequest
+from app.schemas.memory import MemorySymbolAcquireRequest
+from pydantic import ValidationError
 
 
 @pytest.fixture()
@@ -96,6 +99,96 @@ def _evidence(db, case_id: str = CASE_ID, evidence_id: str = MEMORY_EVIDENCE_ID,
 
 def _set_disk_count(monkeypatch: pytest.MonkeyPatch, count: int) -> None:
     monkeypatch.setattr(memory_overview, "count_documents", lambda _index: {"count": count})
+
+
+def _symbol_settings(tmp_path: Path, **overrides):
+    values = {
+        "memory_symbol_mode": "offline_only",
+        "memory_symbol_managed_download_enabled": False,
+        "memory_symbol_network_isolation_ready": False,
+        "memory_symbol_admin_authorization_enforced": False,
+        "memory_symbol_allowed_hosts": "",
+        "memory_symbol_cache_root": str(tmp_path),
+        "memory_symbol_cache_max_bytes": 1024,
+    }
+    values.update(overrides)
+    return SimpleNamespace(
+        **values,
+        memory_symbol_execution_mode=str(values["memory_symbol_mode"]),
+        memory_symbol_hosts=[host for host in str(values["memory_symbol_allowed_hosts"]).split(",") if host],
+        memory_symbol_cache_path=Path(values["memory_symbol_cache_root"]),
+    )
+
+
+def test_managed_symbol_acquisition_is_disabled_by_default(tmp_path: Path) -> None:
+    accepted, code, _ = symbol_control.acquisition_gate(_symbol_settings(tmp_path))
+    assert accepted is False
+    assert code == "SYMBOL_ACQUISITION_DISABLED"
+
+
+def test_managed_symbol_acquisition_requires_deployment_egress_isolation(tmp_path: Path) -> None:
+    settings = _symbol_settings(
+        tmp_path,
+        memory_symbol_mode="managed_download",
+        memory_symbol_managed_download_enabled=True,
+        memory_symbol_allowed_hosts="msdl.microsoft.com",
+    )
+    accepted, code, _ = symbol_control.acquisition_gate(settings)
+    assert accepted is False
+    assert code == symbol_control.NETWORK_ISOLATION_REQUIRED
+
+
+def test_managed_symbol_acquisition_requires_administrator_authorization(tmp_path: Path) -> None:
+    settings = _symbol_settings(
+        tmp_path,
+        memory_symbol_mode="managed_download",
+        memory_symbol_managed_download_enabled=True,
+        memory_symbol_network_isolation_ready=True,
+        memory_symbol_allowed_hosts="msdl.microsoft.com",
+    )
+    accepted, code, _ = symbol_control.acquisition_gate(settings)
+    assert accepted is False
+    assert code == symbol_control.ADMIN_AUTH_REQUIRED
+
+
+def test_symbol_acquisition_schema_rejects_operator_url() -> None:
+    with pytest.raises(ValidationError):
+        MemorySymbolAcquireRequest.model_validate(
+            {"authorization_acknowledged": True, "url": "https://example.invalid/symbol.pdb"}
+        )
+
+
+def test_symbol_cache_status_is_bounded_and_does_not_follow_symlinks(tmp_path: Path) -> None:
+    (tmp_path / "kernel.json").write_bytes(b"{}")
+    outside = tmp_path.parent / "outside-symbol.json"
+    outside.write_bytes(b"private")
+    (tmp_path / "escape.json").symlink_to(outside)
+    result = symbol_control.cache_status(settings=_symbol_settings(tmp_path))
+    assert result["total_bytes"] == 2
+    assert result["symbol_count"] == 1
+    assert "path" not in result
+
+
+def test_symbol_readiness_requires_recorded_symbols_failure(db_session, tmp_path: Path) -> None:
+    _case(db_session)
+    evidence = _evidence(db_session)
+    run = MemoryScanRun(
+        case_id=CASE_ID,
+        evidence_id=evidence.id,
+        profile="metadata_only",
+        status="failed",
+        error_log={"code": "SYMBOLS_UNAVAILABLE", "message": "sanitized"},
+    )
+    db_session.add(run)
+    db_session.commit()
+    result = symbol_control.evidence_symbol_readiness(db_session, CASE_ID, evidence.id, settings=_symbol_settings(tmp_path))
+    assert result == {
+        "symbols_required": True,
+        "symbol_identifier_present": False,
+        "acquisition_available": False,
+        "acquisition_status": "symbols_required",
+        "can_analyze_offline": False,
+    }
 
 
 def test_memory_overview_empty_case(db_session, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -367,7 +367,17 @@ export default function MemoryAnalysisPage() {
                             <button type="button" disabled={!canRunProcessProfiles || !metadataPrerequisiteReady || !evidenceReadiness?.can_analyze || registerMutation.isPending} onClick={() => runAnalysis(evidence.id, "processes_extended")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Run extended process analysis</button>
                           </div>
                           {!canRunMetadata ? <p className="mt-2 max-w-48 text-xs text-muted">{volatilityBackend?.message || "Volatility 3 is not ready for memory metadata analysis."}</p> : null}
-                          {evidenceReadiness && !evidenceReadiness.can_analyze ? <div className="mt-2 max-w-64 rounded-xl border border-rose-400/30 bg-rose-500/10 p-2 text-xs text-rose-100"><p className="font-semibold">Storage permission error</p><p className="mt-1">{evidenceReadiness.sanitized_message}</p></div> : null}
+                          {evidenceReadiness?.symbols_required ? (
+                            <div className="mt-2 max-w-72 rounded-xl border border-amber-400/30 bg-amber-500/10 p-2 text-xs text-amber-100">
+                              <p className="font-semibold">Required Windows symbols are not present in the offline cache.</p>
+                              <p className="mt-1">
+                                {evidenceReadiness.acquisition_available
+                                  ? "An administrator may acquire the exact required symbols from approved official infrastructure."
+                                  : "Managed acquisition is unavailable until restricted network egress and administrator authorization are configured."}
+                              </p>
+                            </div>
+                          ) : null}
+                          {evidenceReadiness && !evidenceReadiness.can_analyze && !evidenceReadiness.symbols_required ? <div className="mt-2 max-w-64 rounded-xl border border-rose-400/30 bg-rose-500/10 p-2 text-xs text-rose-100"><p className="font-semibold">Storage permission error</p><p className="mt-1">{evidenceReadiness.sanitized_message}</p></div> : null}
                         </td>
                       </tr>;
                     })}

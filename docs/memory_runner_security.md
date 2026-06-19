@@ -49,6 +49,11 @@ The default deployment does not include Volatility. Operators may build an optio
 
 Kairon does not initiate automatic symbol downloads. `MEMORY_SYMBOL_NETWORK_ACCESS_ENABLED=false` by default. If symbols are unavailable, the run fails safely with a sanitized requirements error and does not retry indefinitely.
 
+The managed-symbol API is independently gated by deployment-level network
+isolation and administrator authorization. Hostname checks in application code
+are not treated as sufficient egress isolation. See
+[Managed Windows symbols](memory_symbols.md).
+
 ## Storage policy
 
 Raw plugin output is stored under the isolated evidence run directory:

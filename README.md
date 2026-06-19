@@ -139,6 +139,8 @@ Memory dumps can contain credentials, personal data, and third-party private dat
 
 Memory backend readiness checks use only trusted server-side command settings such as `VOLATILITY3_COMMAND` and `MEMPROCFS_COMMAND`. They reject shell fragments and arguments, run harmless help/version checks only, and never receive memory-image paths.
 
+Windows symbol resolution is offline-only by default. Managed acquisition remains unavailable until the deployment enforces restricted official-source egress and authenticated administrator authorization. See [Managed Windows symbols](docs/memory_symbols.md).
+
 ## Documentation
 
 - [Documentation index](docs/index.md)
@@ -148,6 +150,7 @@ Memory backend readiness checks use only trusted server-side command settings su
 - [Memory Analysis](docs/memory_analysis.md)
 - [Memory Upload](docs/memory_upload.md)
 - [Memory Upload UX](docs/memory_upload_ux.md)
+- [Managed Windows symbols](docs/memory_symbols.md)
 - [Private beta deployment](docs/deployment/beta-deployment.md)
 - [Security notes](docs/SECURITY.md)
 - [Known limitations](docs/KNOWN_LIMITATIONS.md)

@@ -8,12 +8,13 @@ from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryScanRun
-from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessListRead, MemoryProcessTreeRead, MemoryRunDetailRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
+from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessListRead, MemoryProcessTreeRead, MemoryRunDetailRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolCacheStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, mark_run_queued, resolve_profile_plugins
 from app.services.memory.evidence_access import evidence_readiness
 from app.services.memory.indexing import get_memory_document, search_memory_edges, search_memory_processes
 from app.services.memory.overview import get_case_memory_overview, list_memory_evidences
+from app.services.memory.symbol_control import acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure
 from app.services.memory.upload_readiness import MAX_SELECTED_SIZE_BYTES, get_memory_upload_readiness
 from app.services.memory.upload_lifecycle import get_memory_upload, public_memory_upload_status, reconcile_memory_upload
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
@@ -63,7 +64,46 @@ def get_memory_evidence_readiness(case_id: str, evidence_id: str, db: Session = 
     elif not result["backend_ready"] and result["error_code"] is None:
         result["error_code"] = "MEMORY_BACKEND_UNAVAILABLE"
         result["sanitized_message"] = "The memory analysis backend is not ready."
+    result.update(evidence_symbol_readiness(db, case_id, evidence_id))
     return result
+
+
+@router.get("/memory/symbols/cache", response_model=MemorySymbolCacheStatusRead)
+def get_memory_symbol_cache_status() -> dict:
+    return cache_status()
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/symbols/acquire",
+    response_model=MemorySymbolAcquireResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def acquire_memory_symbols(
+    case_id: str,
+    evidence_id: str,
+    payload: MemorySymbolAcquireRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    _require_case(db, case_id)
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
+        raise HTTPException(status_code=404, detail="Memory evidence was not found.")
+    if not payload.authorization_acknowledged:
+        raise HTTPException(status_code=400, detail="Evidence authorization acknowledgement is required.")
+    if latest_symbols_failure(db, case_id, evidence_id) is None:
+        raise HTTPException(status_code=409, detail="No unresolved Windows symbol requirement is recorded for this evidence.")
+    available, error_code, message = acquisition_gate()
+    if not available:
+        raise HTTPException(status_code=503, detail={"error_code": error_code, "message": message})
+    # This branch is intentionally unreachable until an authenticated admin
+    # boundary and deployment-enforced egress policy are implemented.
+    raise HTTPException(
+        status_code=503,
+        detail={
+            "error_code": "SYMBOL_ACQUISITION_NOT_IMPLEMENTED",
+            "message": "Managed symbol acquisition is not available in this deployment.",
+        },
+    )
 
 
 @router.get("/cases/{case_id}/memory/upload-readiness", response_model=MemoryUploadReadinessRead)

@@ -12,6 +12,13 @@ patterns=(
   '*.lime'
   '*.aff4'
   '*symbols*.zip'
+  '*.pdb'
+  '*.isf'
+  '*.json.xz'
+  '*symbol-cache*.sqlite*'
+  '*symbol-cache*.db'
+  '*symbols*.cab'
+  '*symbols*.tar*'
 )
 
 fail=0
@@ -21,6 +28,7 @@ for pattern in "${patterns[@]}"; do
     case "$path" in
       ./.git/*|backend/.pytest_cache/*|frontend/node_modules/*) continue ;;
       backend/tests/fixtures/memory/*.json) continue ;;
+      backend/tests/fixtures/memory/*.json.xz) continue ;;
     esac
     [[ "$(basename "$path")" == $pattern ]] || continue
     echo "Forbidden memory/Volatility artifact candidate: $path" >&2

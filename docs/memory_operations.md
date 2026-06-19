@@ -13,6 +13,10 @@ Default deployment remains disk-only. To run real memory analysis, an administra
 - `MEMORY_TASK_QUEUE=memory`
 - `MEMORY_SYMBOL_NETWORK_ACCESS_ENABLED=false`
 
+Do not enable managed symbol acquisition on a normal Docker bridge. The
+deployment must enforce restricted HTTPS egress and authenticated administrator
+authorization first. See [Managed Windows symbols](memory_symbols.md).
+
 Build and start the optional worker only after reviewing the Volatility license notice:
 
 ```bash
