@@ -274,6 +274,19 @@ export type MemoryEvidence = {
   created_at: string;
 };
 
+export type MemoryEvidenceReadiness = {
+  exists: boolean;
+  regular_file: boolean;
+  readable_by_memory_worker: boolean;
+  size_matches: boolean;
+  output_writable_by_memory_worker: boolean;
+  worker_online: boolean;
+  backend_ready: boolean;
+  can_analyze: boolean;
+  error_code: string | null;
+  sanitized_message: string;
+};
+
 export type MemoryScanRun = {
   id: string;
   case_id: string;
@@ -3359,6 +3372,7 @@ export const api = {
   getMemoryUploadStatus: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}`),
   reconcileMemoryUpload: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/reconcile`, { method: "POST" }),
   listMemoryEvidences: (caseId: string) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences`),
+  getMemoryEvidenceReadiness: (caseId: string, evidenceId: string) => request<MemoryEvidenceReadiness>(`/cases/${caseId}/memory/evidences/${evidenceId}/readiness`),
   listMemoryRuns: (caseId: string) => request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs`),
   startMemoryScan: (evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", authorizationAcknowledged = false) =>
     request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan`, { method: "POST", body: JSON.stringify({ profile, authorization_acknowledged: authorizationAcknowledged }) }),

@@ -16,6 +16,7 @@ from app.services.memory.upload_capacity import (
     MemoryUploadSlot,
     assert_memory_upload_capacity,
 )
+from app.services.memory.evidence_access import MemoryStorageAccessError, secure_uploaded_memory_permissions
 
 
 settings = get_settings()
@@ -169,6 +170,10 @@ def save_memory_upload(
                 stat = final_path.lstat()
                 if final_path.is_symlink() or not final_path.is_file() or stat.st_size != size:
                     raise MemoryUploadError("canonical_validation_failed", "Canonical memory evidence validation failed after finalization.")
+                try:
+                    secure_uploaded_memory_permissions(final_path, settings=settings)
+                except (MemoryStorageAccessError, OSError) as exc:
+                    raise MemoryUploadError("canonical_permission_failed", "Memory evidence was preserved, but secure worker-readable permissions could not be applied.") from exc
                 dir_fd = os.open(str(final_path.parent), os.O_DIRECTORY)
                 try:
                     os.fsync(dir_fd)

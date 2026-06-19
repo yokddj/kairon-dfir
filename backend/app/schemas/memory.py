@@ -57,6 +57,19 @@ class MemoryEvidenceRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class MemoryEvidenceReadinessRead(BaseModel):
+    exists: bool
+    regular_file: bool
+    readable_by_memory_worker: bool
+    size_matches: bool
+    output_writable_by_memory_worker: bool
+    worker_online: bool
+    backend_ready: bool
+    can_analyze: bool
+    error_code: str | None = None
+    sanitized_message: str
+
+
 class MemoryScanRunRead(BaseModel):
     id: str
     case_id: str

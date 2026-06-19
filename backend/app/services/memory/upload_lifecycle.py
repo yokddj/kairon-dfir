@@ -17,6 +17,7 @@ from app.core.storage import safe_display_filename, sha256_file
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
 from app.models.memory import MemoryUpload
 from app.services.memory.upload_capacity import assert_memory_upload_capacity, release_memory_upload_slot_if_owner
+from app.services.memory.evidence_access import secure_uploaded_memory_permissions
 
 
 logger = logging.getLogger(__name__)
@@ -188,6 +189,7 @@ def register_memory_evidence(upload_id: str, *, db: Session | None = None) -> Ev
             return existing
         if not item.sha256 or not _valid_regular_file(canonical, int(item.expected_bytes)):
             raise RuntimeError("Canonical memory evidence is not ready for registration.")
+        secure_uploaded_memory_permissions(canonical, settings=get_settings())
         metadata = dict(item.metadata_json or {})
         evidence = Evidence(
             id=item.evidence_id,

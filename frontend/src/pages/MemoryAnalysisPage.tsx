@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { api, type MemoryBackendStatus, type MemoryOverview, type MemoryProcess, type MemorySystemInfo } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
@@ -164,6 +164,14 @@ export default function MemoryAnalysisPage() {
   });
 
   const overview = overviewQuery.data;
+  const evidenceReadinessQueries = useQueries({
+    queries: (overview?.evidences || []).map((evidence) => ({
+      queryKey: ["memory-evidence-readiness", caseId, evidence.id],
+      queryFn: () => api.getMemoryEvidenceReadiness(caseId, evidence.id),
+      refetchOnWindowFocus: false,
+    })),
+  });
+  const readinessByEvidence = new Map((overview?.evidences || []).map((evidence, index) => [evidence.id, evidenceReadinessQueries[index]?.data]));
   const volatilityBackend = backendQuery.data?.backends.find((backend) => backend.backend === "volatility3");
   const canRunMetadata = Boolean(overview?.memory_analysis_enabled && volatilityBackend?.ready);
   const canRunProcessProfiles = Boolean(canRunMetadata && overview?.memory_process_profile_enabled);
@@ -326,8 +334,10 @@ export default function MemoryAnalysisPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-line">
-                    {overview.evidences.map((evidence) => (
-                      <tr key={evidence.id}>
+                    {overview.evidences.map((evidence) => {
+                      const evidenceReadiness = readinessByEvidence.get(evidence.id);
+                      const evidenceCanAnalyze = Boolean(canRunMetadata && evidenceReadiness?.can_analyze);
+                      return <tr key={evidence.id}>
                         <td className="px-4 py-3 font-medium text-ink">{evidence.original_filename}</td>
                         <td className="px-4 py-3 text-muted">{formatBytes(evidence.size_bytes)}</td>
                         <td className="px-4 py-3 text-muted">{evidence.ingest_status}</td>
@@ -335,20 +345,21 @@ export default function MemoryAnalysisPage() {
                         <td className="px-4 py-3">
                           <button
                             type="button"
-                            disabled={!canRunMetadata || registerMutation.isPending}
+                            disabled={!evidenceCanAnalyze || registerMutation.isPending}
                             onClick={() => runMetadataAnalysis(evidence.id)}
                             className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50"
                           >
                             Run metadata analysis
                           </button>
                           <div className="mt-2 flex flex-wrap gap-2">
-                            <button type="button" disabled={!canRunProcessProfiles || registerMutation.isPending} onClick={() => runAnalysis(evidence.id, "processes_basic")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Run basic process analysis</button>
-                            <button type="button" disabled={!canRunProcessProfiles || registerMutation.isPending} onClick={() => runAnalysis(evidence.id, "processes_extended")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Run extended process analysis</button>
+                            <button type="button" disabled={!canRunProcessProfiles || !evidenceReadiness?.can_analyze || registerMutation.isPending} onClick={() => runAnalysis(evidence.id, "processes_basic")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Run basic process analysis</button>
+                            <button type="button" disabled={!canRunProcessProfiles || !evidenceReadiness?.can_analyze || registerMutation.isPending} onClick={() => runAnalysis(evidence.id, "processes_extended")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Run extended process analysis</button>
                           </div>
                           {!canRunMetadata ? <p className="mt-2 max-w-48 text-xs text-muted">{volatilityBackend?.message || "Volatility 3 is not ready for memory metadata analysis."}</p> : null}
+                          {evidenceReadiness && !evidenceReadiness.can_analyze ? <div className="mt-2 max-w-64 rounded-xl border border-rose-400/30 bg-rose-500/10 p-2 text-xs text-rose-100"><p className="font-semibold">Storage permission error</p><p className="mt-1">{evidenceReadiness.sanitized_message}</p></div> : null}
                         </td>
-                      </tr>
-                    ))}
+                      </tr>;
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -381,7 +392,7 @@ export default function MemoryAnalysisPage() {
                   <tbody className="divide-y divide-line">
                     {overview.runs.map((run) => (
                       <tr key={run.id}>
-                        <td className="px-4 py-3 text-ink">{run.status}</td>
+                        <td className="px-4 py-3 text-ink">{["MEMORY_EVIDENCE_PERMISSION_DENIED", "MEMORY_OUTPUT_PERMISSION_DENIED"].includes(String(run.error_log?.code || "")) ? "Storage permission error" : run.status}</td>
                         <td className="px-4 py-3 text-muted">{run.backend || "none"}</td>
                         <td className="px-4 py-3 text-muted">{run.profile}</td>
                         <td className="px-4 py-3 text-muted">{run.created_at}</td>
@@ -390,7 +401,7 @@ export default function MemoryAnalysisPage() {
                         <td className="px-4 py-3 text-muted">{run.plugin_count}</td>
                         <td className="px-4 py-3 text-muted">{run.plugins_completed}</td>
                         <td className="px-4 py-3 text-muted">{run.plugins_failed}</td>
-                        <td className="px-4 py-3 text-muted">{typeof run.error_log?.message === "string" ? run.error_log.message : "None"}</td>
+                        <td className="px-4 py-3 text-muted">{["MEMORY_EVIDENCE_PERMISSION_DENIED", "MEMORY_OUTPUT_PERMISSION_DENIED"].includes(String(run.error_log?.code || "")) ? "Evidence unavailable to memory worker. No plugin was executed." : typeof run.error_log?.message === "string" ? run.error_log.message : "None"}</td>
                       </tr>
                     ))}
                   </tbody>

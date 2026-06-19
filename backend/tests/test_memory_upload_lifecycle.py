@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
@@ -38,6 +39,7 @@ def lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         memory_plugin_output_max_bytes=10 * 1024 * 1024,
         memory_output_root=None,
         redis_url="redis://unused",
+        memory_evidence_shared_gid=os.getgid(),
     )
     settings.memory_upload_staging_path.mkdir(parents=True)
     (settings.backend_data_dir / "evidence").mkdir(parents=True)
