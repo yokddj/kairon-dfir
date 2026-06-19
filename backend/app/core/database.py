@@ -109,6 +109,11 @@ def _ensure_compatible_schema() -> None:
             for column_name, column_type in memory_column_defs.items():
                 if column_name not in memory_columns:
                     connection.execute(text(f"ALTER TABLE memory_scan_runs ADD COLUMN {column_name} {column_type}"))
+        if "evidences" in existing_tables:
+            evidence_columns = {column["name"]: column for column in inspector.get_columns("evidences")}
+            size_type = str(evidence_columns.get("size_bytes", {}).get("type", "")).upper()
+            if "BIGINT" not in size_type:
+                connection.execute(text("ALTER TABLE evidences ALTER COLUMN size_bytes TYPE BIGINT"))
         connection.execute(
             text(
                 """

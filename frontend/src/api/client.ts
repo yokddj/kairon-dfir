@@ -449,6 +449,18 @@ export type MemoryUploadReadiness = {
   message: string;
 };
 
+export type MemoryUploadStatus = {
+  upload_id: string;
+  status: "validating" | "uploading" | "verifying" | "finalizing" | "completed" | "failed" | "inconsistent";
+  bytes_received: number;
+  expected_bytes: number;
+  evidence_id: string | null;
+  failure_code: string | null;
+  message: string;
+  updated_at: string;
+  retryable: boolean;
+};
+
 export type ProblematicArtifact = {
   artifact_id: string | null;
   name: string;
@@ -3344,6 +3356,8 @@ export const api = {
     const query = selectedSizeBytes && selectedSizeBytes > 0 ? `?selected_size_bytes=${encodeURIComponent(String(selectedSizeBytes))}` : "";
     return request<MemoryUploadReadiness>(`/cases/${caseId}/memory/upload-readiness${query}`);
   },
+  getMemoryUploadStatus: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}`),
+  reconcileMemoryUpload: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/reconcile`, { method: "POST" }),
   listMemoryEvidences: (caseId: string) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences`),
   listMemoryRuns: (caseId: string) => request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs`),
   startMemoryScan: (evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", authorizationAcknowledged = false) =>
@@ -3484,7 +3498,7 @@ export const api = {
   uploadEvidence: async (
     caseId: string,
     file: File,
-    options?: UploadOptions & { evidenceIntent?: EvidenceIntent; packaging?: EvidencePackaging; folderName?: string; folderUpload?: boolean; ingestMode?: IngestMode; providedHost?: string; evtxProfile?: EvtxProfile; memoryAuthorizationAcknowledged?: boolean },
+    options?: UploadOptions & { evidenceIntent?: EvidenceIntent; packaging?: EvidencePackaging; folderName?: string; folderUpload?: boolean; ingestMode?: IngestMode; providedHost?: string; evtxProfile?: EvtxProfile; memoryAuthorizationAcknowledged?: boolean; memoryUploadId?: string },
   ) => {
     const formData = new FormData();
     formData.append("file", file);
@@ -3494,6 +3508,7 @@ export const api = {
     if (options?.providedHost) formData.append("provided_host", options.providedHost);
     if (options?.evtxProfile) formData.append("evtx_profile", options.evtxProfile);
     if (options?.memoryAuthorizationAcknowledged) formData.append("memory_authorization_acknowledged", "true");
+    if (options?.memoryUploadId) formData.append("memory_upload_id", options.memoryUploadId);
     if (options?.folderUpload) formData.append("folder_upload", "true");
     if (options?.folderName) formData.append("folder_name", options.folderName);
     return uploadFormData<Evidence>(`/cases/${caseId}/evidences/upload`, formData, { onProgress: options?.onProgress, transport: "xhr" });

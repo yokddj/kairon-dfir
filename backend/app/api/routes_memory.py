@@ -8,12 +8,13 @@ from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryScanRun
-from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryOverviewRead, MemoryProcessListRead, MemoryProcessTreeRead, MemoryRunDetailRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySystemInfoRead, MemoryUploadReadinessRead
+from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryOverviewRead, MemoryProcessListRead, MemoryProcessTreeRead, MemoryRunDetailRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
 from app.services.memory.backend_readiness import get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, mark_run_queued, resolve_profile_plugins
 from app.services.memory.indexing import get_memory_document, search_memory_edges, search_memory_processes
 from app.services.memory.overview import get_case_memory_overview, list_memory_evidences
 from app.services.memory.upload_readiness import MAX_SELECTED_SIZE_BYTES, get_memory_upload_readiness
+from app.services.memory.upload_lifecycle import get_memory_upload, public_memory_upload_status, reconcile_memory_upload
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
 from app.workers.tasks import enqueue_memory_metadata_scan
 
@@ -52,6 +53,35 @@ def get_memory_upload_readiness_endpoint(
 ) -> dict:
     _require_case(db, case_id)
     return get_memory_upload_readiness(case_id, selected_size_bytes=selected_size_bytes)
+
+
+@router.get("/cases/{case_id}/memory/uploads/{upload_id}", response_model=MemoryUploadStatusRead)
+def get_memory_upload_status(case_id: str, upload_id: str, db: Session = Depends(get_db)) -> dict:
+    _require_case(db, case_id)
+    try:
+        item = get_memory_upload(db, case_id, upload_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Memory upload was not found.") from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="Memory upload was not found.")
+    return public_memory_upload_status(item)
+
+
+@router.post("/cases/{case_id}/memory/uploads/{upload_id}/reconcile", response_model=MemoryUploadStatusRead)
+def reconcile_memory_upload_endpoint(case_id: str, upload_id: str, db: Session = Depends(get_db)) -> dict:
+    _require_case(db, case_id)
+    item = get_memory_upload(db, case_id, upload_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Memory upload was not found.")
+    if item.status in {"failed", "inconsistent"} and not item.retryable:
+        return public_memory_upload_status(item)
+    try:
+        reconciled = reconcile_memory_upload(case_id, upload_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Memory upload was not found.") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail="Memory upload could not be reconciled safely.") from exc
+    return public_memory_upload_status(reconciled)
 
 
 @router.get("/cases/{case_id}/memory/runs", response_model=list[MemoryScanRunRead])

@@ -140,6 +140,18 @@ class MemoryUploadReadinessRead(BaseModel):
     message: str
 
 
+class MemoryUploadStatusRead(BaseModel):
+    upload_id: str
+    status: str
+    bytes_received: int
+    expected_bytes: int
+    evidence_id: str | None = None
+    failure_code: str | None = None
+    message: str
+    updated_at: datetime
+    retryable: bool
+
+
 class MemoryStartScanRequest(BaseModel):
     profile: str = "metadata_only"
     authorization_acknowledged: bool = False

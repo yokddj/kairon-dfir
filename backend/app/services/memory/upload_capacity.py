@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import logging
 import shutil
 import time
@@ -181,8 +180,9 @@ class MemoryUploadSlot:
         self.request_id = request_id or str(uuid4())
         self._redis = redis_conn or Redis.from_url(settings.redis_url)
         configured_timeout = int(settings.memory_upload_request_timeout_seconds or 0)
-        self._ttl_seconds = max(300, configured_timeout, int(settings.memory_upload_cleanup_age_seconds or 0))
-        self._token = json.dumps({"request_id": self.request_id, "created_at": int(time.time())}, sort_keys=True)
+        stale_timeout = int(getattr(settings, "memory_upload_stale_timeout_seconds", 900) or 900)
+        self._ttl_seconds = max(300, configured_timeout, stale_timeout)
+        self._token = self.request_id
         self._held = False
         self._last_refresh = 0.0
 
@@ -224,3 +224,14 @@ class MemoryUploadSlot:
 
     def __exit__(self, _exc_type, _exc, _tb) -> None:
         self.release()
+
+
+def release_memory_upload_slot_if_owner(upload_id: str, *, redis_conn: Redis | None = None) -> bool:
+    settings = get_settings()
+    connection = redis_conn or Redis.from_url(settings.redis_url)
+    script = "if redis.call('get',KEYS[1]) == ARGV[1] then return redis.call('del',KEYS[1]) else return 0 end"
+    try:
+        return int(connection.eval(script, 1, UPLOAD_SLOT_KEY, upload_id)) == 1
+    except Exception:  # noqa: BLE001
+        logger.warning("memory upload stale slot release failed request_id=%s", upload_id)
+        return False
