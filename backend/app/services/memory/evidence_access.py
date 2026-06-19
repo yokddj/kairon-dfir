@@ -182,7 +182,7 @@ def secure_uploaded_memory_permissions(path: Path, *, settings=None) -> None:
     resolved = path.resolve(strict=True)
     if not _within(managed_root, resolved) or path.is_symlink() or not resolved.is_file():
         raise MemoryStorageAccessError("UNSAFE_EVIDENCE_FILE", "Canonical memory evidence validation failed.")
-    gid = int(settings.memory_evidence_shared_gid)
+    gid = int(getattr(settings, "memory_evidence_shared_gid", os.getgid()))
     for directory in (managed_root, resolved.parents[2], resolved.parents[1], resolved.parent):
         os.chown(directory, -1, gid)
         os.chmod(directory, 0o2750)
