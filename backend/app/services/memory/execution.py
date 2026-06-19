@@ -156,18 +156,22 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             process_results = []
             manifest_plugins = []
             fatal = False
+            blocking_error: VolatilityRunnerError | None = None
             for plugin in plugins:
                 plugin_run = _plugin_run_for(db, run, plugin)
                 try:
                     payload, raw_info, duration_ms, argv_display = _execute_plugin(db, run, plugin_run, plugin, validated.path, output_dir)
                     raw_outputs[plugin] = raw_info
                     manifest_plugins.append({"plugin": plugin, "argv": argv_display, "raw_output": raw_info, "duration_ms": duration_ms})
-                    if plugin == "windows.info":
-                        system_info = _json_safe(normalize_windows_info(payload, case_id=run.case_id, evidence_id=run.evidence_id, memory_run_id=run.id, memory_plugin_run_id=plugin_run.id, backend_version=run.backend_version))
-                        plugin_run.metadata_json = {"normalized_type": "memory_system_info", "raw_output_retained": True}
-                    elif plugin in PROCESS_PLUGINS:
-                        process_results.append(_normalize_process_payload(plugin, payload))
-                        plugin_run.metadata_json = {"normalized_type": "memory_process", "raw_output_retained": True}
+                    try:
+                        if plugin == "windows.info":
+                            system_info = _json_safe(normalize_windows_info(payload, case_id=run.case_id, evidence_id=run.evidence_id, memory_run_id=run.id, memory_plugin_run_id=plugin_run.id, backend_version=run.backend_version))
+                            plugin_run.metadata_json = {"normalized_type": "memory_system_info", "raw_output_retained": True}
+                        elif plugin in PROCESS_PLUGINS:
+                            process_results.append(_normalize_process_payload(plugin, payload))
+                            plugin_run.metadata_json = {"normalized_type": "memory_process", "raw_output_retained": True}
+                    except Exception as exc:  # noqa: BLE001
+                        raise VolatilityRunnerError("NORMALIZATION_FAILED", f"Volatility {plugin} completed, but Kairon could not normalize its output.", return_code=0) from exc
                     plugin_run.status = "completed"
                     plugin_run.completed_at = utc_now_naive()
                     plugin_run.duration_ms = duration_ms
@@ -184,6 +188,7 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     plugin_run.error_code = exc.code
                     plugin_run.error_message = _sanitize_message(exc.message)
                     run.plugins_failed += 1
+                    blocking_error = exc
                     db.commit()
                     if plugin == "windows.info":
                         fatal = True
@@ -192,7 +197,8 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             write_atomic_json(output_dir / "run_manifest.json", {"run_id": run.id, "evidence_id": run.evidence_id, "backend": "volatility3", "profile": run.profile, "plugins": manifest_plugins, "completed_at": utc_iso()})
             run.metadata_json = {"system_info": system_info, "plugins": plugins, "raw_output": raw_outputs, "profile": run.profile}
             if fatal:
-                raise VolatilityRunnerError("BASELINE_PLUGIN_FAILED", "windows.info failed; remaining memory plugins were not executed.")
+                _mark_dependency_skipped(db, run, blocking_plugin="windows.info")
+                raise blocking_error or VolatilityRunnerError("PLUGIN_FAILED", "windows.info failed; remaining memory plugins were not executed.")
             try:
                 indexing = {}
                 if system_info:
@@ -260,7 +266,7 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
     try:
         payload = json.loads(result.stdout.decode("utf-8"))
     except Exception as exc:  # noqa: BLE001
-        raise VolatilityRunnerError("MALFORMED_OUTPUT", f"Volatility {plugin} returned malformed JSON.", stdout=result.stdout, stderr=result.stderr) from exc
+        raise VolatilityRunnerError("VOLATILITY_OUTPUT_INVALID", f"Volatility {plugin} executed, but its output could not be parsed.", stdout=result.stdout, stderr=result.stderr, return_code=0) from exc
     return payload, raw_info, result.duration_ms, result.argv_display
 
 
@@ -304,6 +310,14 @@ def _row_count(payload: Any) -> int:
 
 
 def _write_plugin_error(run: MemoryScanRun, plugin_run: MemoryPluginRun, exc: VolatilityRunnerError) -> None:
+    plugin_run.metadata_json = {
+        **(plugin_run.metadata_json or {}),
+        "return_code": exc.return_code,
+        "stdout_length": exc.stdout_length,
+        "stderr_length": exc.stderr_length,
+        "stdout_retained_bytes": len(exc.stdout),
+        "stderr_retained_bytes": len(exc.stderr),
+    }
     if not exc.stderr:
         return
     try:
@@ -318,7 +332,8 @@ def _fail_run(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun | Non
     run.status = status
     run.completed_at = completed_at
     run.duration_ms = _duration_ms(run.started_at, completed_at)
-    run.plugins_failed = 1 if plugin_run else 0
+    if plugin_run:
+        run.plugins_failed = 1
     run.error_log = {"code": code, "message": _sanitize_message(message)}
     if plugin_run:
         plugin_run.status = "timed_out" if status == "timed_out" else "failed"
@@ -328,6 +343,18 @@ def _fail_run(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun | Non
         plugin_run.error_message = _sanitize_message(message)
     db.commit()
     logger.warning("memory scan failed", extra={"run_id": run.id, "status": run.status, "error_code": code})
+
+
+def _mark_dependency_skipped(db: Session, run: MemoryScanRun, *, blocking_plugin: str) -> None:
+    now = utc_now_naive()
+    for plugin_run in run.plugin_runs:
+        if plugin_run.plugin == blocking_plugin or plugin_run.status != "pending":
+            continue
+        plugin_run.status = "skipped_dependency"
+        plugin_run.completed_at = now
+        plugin_run.error_code = "SKIPPED_DEPENDENCY"
+        plugin_run.error_message = f"Skipped because {blocking_plugin} did not complete successfully."
+    db.commit()
 
 
 def count_runs(db: Session) -> int:

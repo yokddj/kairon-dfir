@@ -298,6 +298,7 @@ export type MemoryScanRun = {
   plugin_count: number;
   plugins_completed: number;
   plugins_failed: number;
+  plugins_skipped: number;
   started_at: string | null;
   completed_at: string | null;
   duration_ms: number | null;

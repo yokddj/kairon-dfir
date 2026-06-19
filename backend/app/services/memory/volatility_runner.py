@@ -16,12 +16,15 @@ logger = logging.getLogger(__name__)
 
 
 class VolatilityRunnerError(RuntimeError):
-    def __init__(self, code: str, message: str, *, stdout: bytes = b"", stderr: bytes = b""):
+    def __init__(self, code: str, message: str, *, stdout: bytes = b"", stderr: bytes = b"", return_code: int | None = None, stdout_length: int | None = None, stderr_length: int | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
         self.stdout = stdout
         self.stderr = stderr
+        self.return_code = return_code
+        self.stdout_length = len(stdout) if stdout_length is None else stdout_length
+        self.stderr_length = len(stderr) if stderr_length is None else stderr_length
 
 
 @dataclass(frozen=True)
@@ -44,10 +47,17 @@ def resolve_volatility_executable() -> tuple[str, str]:
 ALLOWED_VOLATILITY_PLUGINS = {"windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"}
 
 
-def build_plugin_argv(executable: str, evidence_path: Path, plugin: str) -> list[str]:
+def build_plugin_argv(executable: str, evidence_path: Path, plugin: str, *, offline: bool = True, cache_path: Path | None = None, symbol_path: Path | None = None) -> list[str]:
     if plugin not in ALLOWED_VOLATILITY_PLUGINS:
         raise VolatilityRunnerError("PLUGIN_NOT_ALLOWED", "Memory plugin is not allowed.")
-    return [executable, "-f", str(evidence_path), "-r", "json", plugin]
+    argv = [executable]
+    if offline:
+        argv.append("--offline")
+    if cache_path is not None:
+        argv.extend(["--cache-path", str(cache_path)])
+    if symbol_path is not None:
+        argv.extend(["--symbol-dirs", str(symbol_path)])
+    return [*argv, "-f", str(evidence_path), "-r", "json", plugin]
 
 
 def build_windows_info_argv(executable: str, evidence_path: Path) -> list[str]:
@@ -67,7 +77,14 @@ def _minimal_environment() -> dict[str, str]:
 def run_plugin(plugin: str, evidence_path: Path, work_dir: Path) -> VolatilityRunResult:
     settings = get_settings()
     executable, display = resolve_volatility_executable()
-    argv = build_plugin_argv(executable, evidence_path, plugin)
+    offline = not bool(getattr(settings, "memory_symbol_network_access_enabled", False))
+    xdg_cache = str(os.environ.get("XDG_CACHE_HOME") or "").strip()
+    cache_path = Path(xdg_cache) / "volatility3" if xdg_cache else None
+    symbol_path = cache_path / "symbols" if cache_path else None
+    if cache_path is not None and symbol_path is not None:
+        cache_path.mkdir(parents=True, exist_ok=True, mode=0o750)
+        symbol_path.mkdir(parents=True, exist_ok=True, mode=0o750)
+    argv = build_plugin_argv(executable, evidence_path, plugin, offline=offline, cache_path=cache_path, symbol_path=symbol_path)
     timeout = max(1, int(settings.memory_plugin_timeout_seconds))
     max_bytes = max(1, int(settings.memory_plugin_output_max_bytes))
     work_dir.mkdir(parents=True, exist_ok=True)
@@ -95,19 +112,26 @@ def run_plugin(plugin: str, evidence_path: Path, work_dir: Path) -> VolatilityRu
                     os.killpg(process.pid, signal.SIGKILL)
                 except Exception:  # noqa: BLE001
                     process.kill()
-        raise VolatilityRunnerError("PLUGIN_TIMEOUT", f"Volatility {plugin} timed out.", stdout=exc.output or b"", stderr=exc.stderr or b"") from exc
+        raise VolatilityRunnerError("PLUGIN_TIMEOUT", f"Volatility {plugin} timed out.", stdout=(exc.output or b"")[:max_bytes], stderr=(exc.stderr or b"")[:65536], stdout_length=len(exc.output or b""), stderr_length=len(exc.stderr or b"")) from exc
     except OSError as exc:
         raise VolatilityRunnerError("BACKEND_START_FAILED", sanitize_backend_error(exc)) from exc
 
     duration_ms = int((time.monotonic() - started) * 1000)
+    stdout_length = len(stdout or b"")
+    stderr_length = len(stderr or b"")
     if len(stdout or b"") > max_bytes:
         raise VolatilityRunnerError("OUTPUT_TOO_LARGE", "Volatility output exceeded the configured size limit.", stdout=(stdout or b"")[:max_bytes], stderr=(stderr or b"")[:4096])
     if len(stderr or b"") > 65536:
         stderr = (stderr or b"")[:65536]
     if process.returncode != 0:
         message = _classify_failure(stderr or b"")
-        raise VolatilityRunnerError(message[0], message[1], stdout=stdout or b"", stderr=stderr or b"")
-    return VolatilityRunResult(argv_display=[display, "-f", "[evidence]", "-r", "json", plugin], stdout=stdout or b"", stderr=stderr or b"", duration_ms=duration_ms)
+        raise VolatilityRunnerError(message[0], message[1], stdout=(stdout or b"")[:max_bytes], stderr=stderr or b"", return_code=process.returncode, stdout_length=stdout_length, stderr_length=stderr_length)
+    display_argv = [display]
+    if offline:
+        display_argv.append("--offline")
+    if cache_path is not None:
+        display_argv.extend(["--cache-path", "[cache]", "--symbol-dirs", "[symbols]"])
+    return VolatilityRunResult(argv_display=[*display_argv, "-f", "[evidence]", "-r", "json", plugin], stdout=stdout or b"", stderr=stderr or b"", duration_ms=duration_ms)
 
 
 def run_windows_info(evidence_path: Path, work_dir: Path) -> VolatilityRunResult:
@@ -115,8 +139,17 @@ def run_windows_info(evidence_path: Path, work_dir: Path) -> VolatilityRunResult
 
 
 def _classify_failure(stderr: bytes) -> tuple[str, str]:
-    text = sanitize_backend_error(stderr.decode("utf-8", errors="replace"))
-    lower = text.lower()
-    if "symbol" in lower or "requirement" in lower:
-        return "PLUGIN_REQUIREMENTS_UNSATISFIED", "Volatility could not satisfy plugin requirements, commonly because symbols are unavailable."
+    raw = stderr.decode("utf-8", errors="replace")
+    lower = raw.lower()
+    if "read-only file system" in lower and ("symbol" in lower or "pdb" in lower):
+        return "MEMORY_SYMBOL_CACHE_NOT_WRITABLE", "Volatility could not use its controlled symbol cache under the read-only worker filesystem."
+    if "symbol_table_name" in lower or ("unable to validate" in lower and "symbol" in lower):
+        return "SYMBOLS_UNAVAILABLE", "windows.info could not resolve the required Windows symbols under offline-only mode."
+    if "unable to validate" in lower and "layer" in lower:
+        return "INVALID_MEMORY_LAYER", "Volatility could not construct a valid Windows memory layer for this image."
+    if "no suitable" in lower and "layer" in lower:
+        return "UNSUPPORTED_MEMORY_IMAGE", "Volatility could not construct a supported Windows memory layer for this image."
+    if "unable to validate" in lower or "requirement" in lower:
+        return "PLUGIN_REQUIREMENTS_UNSATISFIED", "Volatility could not satisfy the windows.info plugin requirements."
+    text = sanitize_backend_error(raw)
     return "PLUGIN_FAILED", text or "Volatility windows.info failed."
