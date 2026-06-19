@@ -41,6 +41,7 @@ function readiness(overrides = {}) {
     recommended_max_upload_bytes: 5 * 1024 * 1024 * 1024,
     required_capacity_bytes: 2 * 1024 * 1024 * 1024,
     can_accept_selected_size: true,
+    finalization_strategy: "atomic_move",
     analysis_enabled: true,
     dedicated_worker_online: true,
     backend_ready: true,
@@ -102,5 +103,55 @@ describe("MemoryUploadPage", () => {
 
     expect(await screen.findByText(/below the recommended threshold/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Upload memory image/i })).toBeDisabled();
+  });
+
+  it("shows transferred bytes as verifying before final evidence completion", async () => {
+    let resolveUpload: ((value: unknown) => void) | undefined;
+    uploadEvidenceMock.mockImplementation((_caseId, file, options) => {
+      options.onProgress({ loaded: file.size, total: file.size });
+      return new Promise((resolve) => { resolveUpload = resolve; });
+    });
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+
+    expect(await screen.findByText(/Upload transferred; verifying and finalizing/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Upload completed/i)).not.toBeInTheDocument();
+    resolveUpload?.({ id: "ev-memory", evidence_type: "memory_dump", size_bytes: 6, sha256: "0".repeat(64) });
+    expect(await screen.findByText(/Upload completed/i)).toBeInTheDocument();
+  });
+
+  it("shows a finalization failure after 100% transfer and requires readiness refresh before retry", async () => {
+    uploadEvidenceMock.mockImplementation((_caseId, file, options) => {
+      options.onProgress({ loaded: file.size, total: file.size });
+      return Promise.reject(new Error("Capacity changed during finalization."));
+    });
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+
+    expect(await screen.findByText(/transferred, but Kairon could not finalize it as evidence/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Upload completed/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Open Memory Analysis/i })).not.toBeInTheDocument();
+    const callsBeforeRetry = getMemoryUploadReadinessMock.mock.calls.length;
+    await userEvent.click(screen.getByRole("button", { name: /Retry upload/i }));
+    await waitFor(() => expect(getMemoryUploadReadinessMock.mock.calls.length).toBeGreaterThan(callsBeforeRetry));
+  });
+
+  it("uses binary GiB units for selected and capacity values", async () => {
+    const selected = new File(["x"], "authorized.mem");
+    Object.defineProperty(selected, "size", { value: 4 * 1024 * 1024 * 1024 });
+    getMemoryUploadReadinessMock.mockResolvedValue(readiness({ required_capacity_bytes: 6 * 1024 * 1024 * 1024 }));
+    renderPage();
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), selected);
+
+    expect(await screen.findByText(/Size: 4\.0 GiB/i)).toBeInTheDocument();
+    expect(screen.getByText("6.0 GiB")).toBeInTheDocument();
   });
 });

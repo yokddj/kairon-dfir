@@ -22,6 +22,7 @@ from app.services.memory import normalizers as memory_normalizers
 from app.services.memory import overview as memory_overview
 from app.services.memory import storage as memory_storage
 from app.services.memory import upload_readiness
+from app.services.memory import upload_capacity
 from app.services.memory import validation as memory_validation
 from app.services.memory import volatility_runner
 from app.services.memory import worker_capability
@@ -44,6 +45,24 @@ def db_session():
 CASE_ID = "aaaaaaaa-1111-4111-8111-111111111111"
 MEMORY_EVIDENCE_ID = "bbbbbbbb-2222-4222-8222-222222222222"
 DISK_EVIDENCE_ID = "cccccccc-3333-4333-8333-333333333333"
+
+
+class _UploadSlotStub:
+    def __init__(self, **_kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+    def refresh(self, **_kwargs):
+        return None
+
+
+def _accepted_capacity(size: int, *, phase: str, bytes_already_staged: int = 0):
+    return SimpleNamespace(finalization_strategy="atomic_rename", staging_and_final_same_filesystem=True)
 
 
 def _case(db, case_id: str = CASE_ID) -> Case:
@@ -134,8 +153,12 @@ def test_standard_memory_upload_streams_to_canonical_storage(db_session, tmp_pat
         memory_upload_staging_path=tmp_path / "data" / "tmp" / "memory-uploads",
     )
     monkeypatch.setattr(core_storage, "settings", settings)
-    monkeypatch.setattr(core_storage, "assert_memory_upload_capacity", lambda _size: None)
+    monkeypatch.setattr(core_storage, "assert_memory_upload_capacity", _accepted_capacity)
+    monkeypatch.setattr(core_storage, "MemoryUploadSlot", _UploadSlotStub)
     monkeypatch.setattr(routes_evidence, "settings", settings)
+    replace_calls: list[tuple[Path, Path]] = []
+    real_replace = core_storage.os.replace
+    monkeypatch.setattr(core_storage.os, "replace", lambda source, target: (replace_calls.append((Path(source), Path(target))), real_replace(source, target))[1])
     enqueue_calls: list[str] = []
     monkeypatch.setattr(routes_evidence, "enqueue_ingest", lambda evidence_id: enqueue_calls.append(evidence_id))
 
@@ -149,6 +172,7 @@ def test_standard_memory_upload_streams_to_canonical_storage(db_session, tmp_pat
     assert evidence.stored_path.endswith(f"/evidence/{CASE_ID}/{evidence.id}/original/memory-image.raw")
     assert Path(evidence.stored_path).read_bytes() == data
     assert not list(settings.memory_upload_staging_path.glob("*.part"))
+    assert len(replace_calls) == 1
     assert enqueue_calls == []
 
 
@@ -165,7 +189,8 @@ def test_memory_upload_rejects_oversized_file_without_evidence(db_session, tmp_p
         memory_upload_staging_path=tmp_path / "data" / "tmp" / "memory-uploads",
     )
     monkeypatch.setattr(core_storage, "settings", settings)
-    monkeypatch.setattr(core_storage, "assert_memory_upload_capacity", lambda _size: None)
+    monkeypatch.setattr(core_storage, "assert_memory_upload_capacity", _accepted_capacity)
+    monkeypatch.setattr(core_storage, "MemoryUploadSlot", _UploadSlotStub)
     monkeypatch.setattr(routes_evidence, "settings", settings)
 
     with pytest.raises(Exception) as exc_info:
@@ -174,6 +199,71 @@ def test_memory_upload_rejects_oversized_file_without_evidence(db_session, tmp_p
     assert getattr(exc_info.value, "status_code", None) == 413
     assert db_session.query(Evidence).count() == 0
     assert not list((settings.backend_data_dir / "evidence").rglob("*.mem"))
+
+
+def test_memory_upload_finalization_capacity_failure_cleans_only_controlled_staging(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    data = b"memory-data"
+    upload = UploadFile(filename="authorized.mem", file=BytesIO(data), size=len(data))
+    settings = SimpleNamespace(
+        backend_data_dir=tmp_path / "data",
+        backend_temp_dir=tmp_path / "data" / "tmp",
+        memory_upload_enabled=True,
+        memory_upload_max_bytes=1024,
+        memory_upload_chunk_size_bytes=4,
+        memory_upload_extensions={".raw", ".mem", ".vmem", ".dmp", ".lime"},
+        memory_upload_staging_path=tmp_path / "data" / "tmp" / "memory-uploads",
+    )
+    settings.memory_upload_staging_path.mkdir(parents=True)
+    unrelated = settings.memory_upload_staging_path / "unrelated.part"
+    unrelated.write_bytes(b"keep")
+    monkeypatch.setattr(core_storage, "settings", settings)
+    monkeypatch.setattr(routes_evidence, "settings", settings)
+    monkeypatch.setattr(core_storage, "MemoryUploadSlot", _UploadSlotStub)
+
+    def capacity(size: int, *, phase: str, bytes_already_staged: int = 0):
+        if phase == "finalization":
+            raise upload_capacity.MemoryCapacityError("insufficient_storage", "capacity race")
+        return _accepted_capacity(size, phase=phase, bytes_already_staged=bytes_already_staged)
+
+    monkeypatch.setattr(core_storage, "assert_memory_upload_capacity", capacity)
+
+    with pytest.raises(Exception) as exc_info:
+        routes_evidence.upload_evidence(CASE_ID, upload, folder_upload=False, folder_name=None, evidence_intent=None, packaging=None, ingest_mode=None, provided_host="HOSTA", evtx_profile=None, memory_authorization_acknowledged=True, db=db_session)
+
+    assert getattr(exc_info.value, "status_code", None) == 507
+    assert db_session.query(Evidence).count() == 0
+    assert db_session.query(MemoryScanRun).count() == 0
+    assert not list(settings.memory_upload_staging_path.glob("*.memory-upload.part"))
+    assert unrelated.read_bytes() == b"keep"
+    assert not list((settings.backend_data_dir / "evidence").rglob("memory-image.mem"))
+
+
+def test_memory_upload_registration_failure_removes_canonical_file_and_row(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    data = b"memory-data"
+    upload = UploadFile(filename="authorized.mem", file=BytesIO(data), size=len(data))
+    settings = SimpleNamespace(
+        backend_data_dir=tmp_path / "data",
+        backend_temp_dir=tmp_path / "data" / "tmp",
+        memory_upload_enabled=True,
+        memory_upload_max_bytes=1024,
+        memory_upload_chunk_size_bytes=4,
+        memory_upload_extensions={".raw", ".mem", ".vmem", ".dmp", ".lime"},
+        memory_upload_staging_path=tmp_path / "data" / "tmp" / "memory-uploads",
+    )
+    monkeypatch.setattr(core_storage, "settings", settings)
+    monkeypatch.setattr(routes_evidence, "settings", settings)
+    monkeypatch.setattr(core_storage, "MemoryUploadSlot", _UploadSlotStub)
+    monkeypatch.setattr(core_storage, "assert_memory_upload_capacity", _accepted_capacity)
+    monkeypatch.setattr(routes_evidence, "_write_initial_manifest", lambda _evidence: (_ for _ in ()).throw(RuntimeError("manifest failed")))
+
+    with pytest.raises(RuntimeError, match="manifest failed"):
+        routes_evidence.upload_evidence(CASE_ID, upload, folder_upload=False, folder_name=None, evidence_intent=None, packaging=None, ingest_mode=None, provided_host="HOSTA", evtx_profile=None, memory_authorization_acknowledged=True, db=db_session)
+
+    assert db_session.query(Evidence).count() == 0
+    assert db_session.query(MemoryScanRun).count() == 0
+    assert not list((settings.backend_data_dir / "evidence").rglob("memory-image.mem"))
 
 
 def test_memory_upload_disabled_rejects_memory_extension(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -568,8 +658,9 @@ def test_memory_upload_readiness_reports_five_gib_limit_without_paths(tmp_path: 
         memory_analysis_enabled=True,
     )
     monkeypatch.setattr(upload_readiness, "get_settings", lambda: settings)
+    monkeypatch.setattr(upload_capacity, "get_settings", lambda: settings)
     monkeypatch.setattr(upload_readiness, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True, "dedicated_worker_online": True}]})
-    monkeypatch.setattr(upload_readiness.shutil, "disk_usage", lambda _path: SimpleNamespace(free=13 * 1024 * 1024 * 1024))
+    monkeypatch.setattr(upload_capacity, "_snapshot", lambda _path: upload_capacity.FilesystemSnapshot(device=1, available_bytes=13 * 1024 * 1024 * 1024))
 
     result = upload_readiness.get_memory_upload_readiness(CASE_ID, selected_size_bytes=5 * 1024 * 1024 * 1024)
 
@@ -594,13 +685,14 @@ def test_memory_upload_readiness_blocks_insufficient_storage(tmp_path: Path, mon
         memory_analysis_enabled=True,
     )
     monkeypatch.setattr(upload_readiness, "get_settings", lambda: settings)
+    monkeypatch.setattr(upload_capacity, "get_settings", lambda: settings)
     monkeypatch.setattr(upload_readiness, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True, "dedicated_worker_online": True}]})
-    monkeypatch.setattr(upload_readiness.shutil, "disk_usage", lambda _path: SimpleNamespace(free=10 * 1024 * 1024 * 1024))
+    monkeypatch.setattr(upload_capacity, "_snapshot", lambda _path: upload_capacity.FilesystemSnapshot(device=1, available_bytes=7 * 1024 * 1024 * 1024))
 
     result = upload_readiness.get_memory_upload_readiness(CASE_ID, selected_size_bytes=5 * 1024 * 1024 * 1024)
 
     assert result["can_accept_selected_size"] is False
-    assert result["required_capacity_bytes"] >= 12 * 1024 * 1024 * 1024
+    assert result["required_capacity_bytes"] == (5 * 1024 * 1024 * 1024) + upload_capacity.SAFETY_MARGIN_BYTES + upload_capacity.MIN_OUTPUT_ALLOWANCE_BYTES
 
 
 def test_memory_scan_prevents_duplicate_active_run(db_session, monkeypatch: pytest.MonkeyPatch) -> None:

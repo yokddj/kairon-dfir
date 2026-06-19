@@ -6,12 +6,14 @@ REMOTE_DIR="${REMOTE_DIR:-/root/DFIR_APP}"
 SERVICES="${SERVICES:-backend frontend}"
 DRY_RUN=0
 ALLOW_DIRTY=0
+DEPLOY_FILES=()
 
 usage() {
   cat <<'EOF'
-Usage: scripts/deploy_remote.sh [--host HOST] [--dir REMOTE_DIR] [--services "backend frontend"] [--dry-run] [--allow-dirty]
+Usage: scripts/deploy_remote.sh [--host HOST] [--dir REMOTE_DIR] [--services "backend frontend"] [--file PATH ...] [--dry-run] [--allow-dirty]
 
 Deploys selected committed source files to the remote Kairon host with relative paths preserved.
+When one or more --file options are supplied, only those tracked files are synchronized.
 This helper never uses --delete, never copies secrets, and never touches Docker volumes.
 EOF
 }
@@ -21,6 +23,7 @@ while [[ $# -gt 0 ]]; do
     --host) REMOTE_HOST="$2"; shift 2 ;;
     --dir) REMOTE_DIR="$2"; shift 2 ;;
     --services) SERVICES="$2"; shift 2 ;;
+    --file) DEPLOY_FILES+=("$2"); shift 2 ;;
     --dry-run) DRY_RUN=1; shift ;;
     --allow-dirty) ALLOW_DIRTY=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -42,7 +45,18 @@ echo "Services: $SERVICES"
 
 file_list="$(mktemp)"
 trap 'rm -f "$file_list"' EXIT
-git ls-files -z > "$file_list"
+if [[ "${#DEPLOY_FILES[@]}" -gt 0 ]]; then
+  for path in "${DEPLOY_FILES[@]}"; do
+    if ! git ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then
+      echo "Refusing untracked deployment path: $path" >&2
+      exit 1
+    fi
+    printf '%s\0' "$path" >> "$file_list"
+  done
+  echo "Files: ${DEPLOY_FILES[*]}"
+else
+  git ls-files -z > "$file_list"
+fi
 
 rsync_args=(-avzcR --from0 --files-from="$file_list" --exclude='.env')
 if [[ "$DRY_RUN" -eq 1 ]]; then

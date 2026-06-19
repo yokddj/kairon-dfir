@@ -1236,6 +1236,99 @@ def _finalize_memory_evidence_registration(db: Session, evidence: Evidence) -> E
     return evidence
 
 
+def _register_uploaded_memory_evidence(
+    db: Session,
+    *,
+    case_id: str,
+    evidence_id: str,
+    stored_path: Path,
+    size: int,
+    sha256: str,
+    display_name: str,
+    provided_host: str,
+    evidence_intent: str,
+    packaging: str,
+    ingest_mode: str,
+    evtx_profile: str | None,
+    authorization_acknowledged: bool,
+) -> Evidence:
+    evidence = Evidence(
+        id=evidence_id,
+        case_id=case_id,
+        original_filename=display_name,
+        stored_path=str(stored_path),
+        original_path=str(stored_path),
+        storage_mode=EvidenceStorageMode.uploaded,
+        is_external=False,
+        copy_to_storage=True,
+        evidence_type=EvidenceType.memory_dump,
+        sha256=sha256,
+        size_bytes=size,
+        ingest_status=IngestStatus.pending,
+        source_tool=None,
+        path_validation={},
+        ingest_source={
+            "mode": EvidenceStorageMode.uploaded.value,
+            "original_path": str(stored_path),
+            "storage_path": str(stored_path),
+            "copied": True,
+            "evidence_intent": evidence_intent,
+            "packaging": packaging,
+            "ingest_mode": ingest_mode,
+            "provided_host": provided_host,
+            "evtx_profile": evtx_profile,
+            "upload_state": "uploaded",
+            "memory_upload": True,
+            "memory_authorization_acknowledged": authorization_acknowledged,
+            "canonical_relative_path": str(stored_path.relative_to(settings.backend_data_dir)),
+        },
+        metadata_json=_initial_metadata(
+            {
+                **ingest_mode_metadata(ingest_mode),
+                "warnings": [],
+                "evidence_intent": evidence_intent,
+                "packaging": packaging,
+                "provided_host": provided_host,
+                "evtx_profile": evtx_profile,
+            }
+        ),
+        error_log={},
+    )
+    try:
+        db.add(evidence)
+        db.commit()
+        db.refresh(evidence)
+        evidence.ingest_source = {
+            **(evidence.ingest_source or {}),
+            "registered_at": evidence.created_at.isoformat() if evidence.created_at else None,
+        }
+        db.commit()
+        evidence = _finalize_memory_evidence_registration(db, evidence)
+        _write_initial_manifest(evidence)
+        log_activity(
+            db,
+            activity_type="evidence_uploaded",
+            title="Memory evidence registered",
+            message=f"Registered authorized memory evidence {evidence.original_filename}. External memory analysis was not executed.",
+            case_id=case_id,
+            evidence_id=evidence.id,
+            metadata={"evidence_type": evidence.evidence_type.value, "memory_profile": "metadata_only", "authorization_acknowledged": authorization_acknowledged, "size_bytes": evidence.size_bytes},
+        )
+        db.refresh(evidence)
+        return evidence
+    except Exception:
+        db.rollback()
+        try:
+            persisted = db.get(Evidence, evidence_id)
+            if persisted is not None:
+                db.delete(persisted)
+                db.commit()
+        except Exception:  # noqa: BLE001
+            db.rollback()
+        safe_remove(build_evidence_root(case_id, evidence_id))
+        raise
+
+
 def _raw_collection_initial_metadata(extra: dict | None = None) -> dict:
     return {
         "phases": ["uploaded", "indexing_zip", "discovering_candidates", "waiting_selection", "extracting_selected", "parsing", "indexing_events"],
@@ -1724,6 +1817,10 @@ def upload_evidence(
         raise HTTPException(status_code=400, detail="This memory image extension is not enabled for browser upload.")
     uploaded_sha256: str | None = None
     safe_memory_display_name: str | None = None
+    normalized_intent = _normalize_evidence_intent(evidence_intent)
+    normalized_packaging = _normalize_packaging(packaging, folder_upload=folder_upload)
+    normalized_ingest_mode = normalize_ingest_mode(ingest_mode)
+    normalized_evtx_profile = str(evtx_profile or "").strip() or None
     if memory_upload:
         if not settings.memory_upload_enabled:
             raise HTTPException(status_code=403, detail="Memory image upload is disabled by server configuration.")
@@ -1732,17 +1829,38 @@ def upload_evidence(
         try:
             evidence_id, stored_path, size, uploaded_sha256, safe_memory_display_name = save_memory_upload(case_id, file)
         except MemoryUploadError as exc:
-            code = 413 if exc.code == "rejected_size" else status.HTTP_400_BAD_REQUEST
+            code = (
+                413
+                if exc.code == "rejected_size"
+                else 409
+                if exc.code == "upload_in_progress"
+                else 503
+                if exc.code == "concurrency_guard_unavailable"
+                else 507
+                if exc.code in {"insufficient_storage", "upload_reservation_lost"}
+                else status.HTTP_400_BAD_REQUEST
+            )
             raise HTTPException(status_code=code, detail=exc.message) from exc
+        return _register_uploaded_memory_evidence(
+            db,
+            case_id=case_id,
+            evidence_id=evidence_id,
+            stored_path=stored_path,
+            size=size,
+            sha256=uploaded_sha256,
+            display_name=safe_memory_display_name,
+            provided_host=normalized_provided_host,
+            evidence_intent=normalized_intent,
+            packaging=normalized_packaging,
+            ingest_mode=normalized_ingest_mode,
+            evtx_profile=normalized_evtx_profile,
+            authorization_acknowledged=bool(memory_authorization_acknowledged),
+        )
     else:
         evidence_id, stored_path, size = save_upload(case_id, file)
     raw_collection = False
     folder_entries: list[dict] = []
     file_count: int | None = None
-    normalized_intent = _normalize_evidence_intent(evidence_intent)
-    normalized_packaging = _normalize_packaging(packaging, folder_upload=folder_upload)
-    normalized_ingest_mode = normalize_ingest_mode(ingest_mode)
-    normalized_evtx_profile = str(evtx_profile or "").strip() or None
     detected_type = detect_evidence_type(stored_path)
     if is_supported_archive_container(stored_path):
         try:

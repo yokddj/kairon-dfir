@@ -1,22 +1,15 @@
 from __future__ import annotations
 
-import shutil
-from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
 from app.services.memory.backend_readiness import get_memory_backend_overview
-
-
-GIB = 1024 * 1024 * 1024
-MIN_NEAR_LIMIT_FREE_BYTES = 12 * GIB
-SAFETY_MARGIN_BYTES = 2 * GIB
-MAX_SELECTED_SIZE_BYTES = 64 * GIB
-
-
-def _available_bytes(path: Path) -> int:
-    path.mkdir(parents=True, exist_ok=True)
-    return int(shutil.disk_usage(path).free)
+from app.services.memory.upload_capacity import (
+    GIB,
+    MAX_SELECTED_SIZE_BYTES,
+    evaluate_memory_upload_capacity,
+    recommended_memory_upload_bytes,
+)
 
 
 def _format_gib(value: int) -> str:
@@ -25,42 +18,25 @@ def _format_gib(value: int) -> str:
     return f"{value / GIB:.1f} GiB"
 
 
-def _capacity_requirements(selected_size_bytes: int) -> tuple[int, int]:
-    settings = get_settings()
-    output_allowance = max(int(settings.memory_plugin_output_max_bytes or 0) * 5, 256 * 1024 * 1024)
-    required = (2 * selected_size_bytes) + output_allowance + SAFETY_MARGIN_BYTES
-    if selected_size_bytes >= int(settings.memory_upload_max_bytes or 0) * 0.9:
-        required = max(required, MIN_NEAR_LIMIT_FREE_BYTES)
-    return required, output_allowance
-
-
-def memory_upload_capacity_for_size(selected_size_bytes: int) -> dict[str, int | bool]:
-    settings = get_settings()
-    if selected_size_bytes <= 0:
-        raise ValueError("selected_size_bytes must be greater than zero")
-    if selected_size_bytes > MAX_SELECTED_SIZE_BYTES:
-        raise ValueError("selected_size_bytes is too large")
-    staging_available = _available_bytes(settings.memory_upload_staging_path)
-    canonical_available = _available_bytes(settings.backend_data_dir / "evidence")
-    output_root = settings.memory_output_root or (settings.backend_data_dir / "evidence")
-    output_available = _available_bytes(output_root)
-    available = min(staging_available, canonical_available, output_available)
-    required, output_allowance = _capacity_requirements(selected_size_bytes)
+def memory_upload_capacity_for_size(selected_size_bytes: int) -> dict[str, Any]:
+    decision = evaluate_memory_upload_capacity(selected_size_bytes, phase="pre_upload")
     return {
-        "staging_available_bytes": staging_available,
-        "canonical_storage_available_bytes": canonical_available,
-        "memory_output_available_bytes": output_available,
-        "available_capacity_bytes": available,
-        "required_capacity_bytes": required,
-        "output_allowance_bytes": output_allowance,
-        "can_accept_selected_size": available >= required,
+        "staging_available_bytes": decision.staging_available_bytes,
+        "canonical_storage_available_bytes": decision.final_available_bytes,
+        "memory_output_available_bytes": decision.output_available_bytes,
+        "available_capacity_bytes": min(decision.staging_available_bytes, decision.final_available_bytes, decision.output_available_bytes),
+        "required_capacity_bytes": decision.required_additional_bytes,
+        "output_allowance_bytes": decision.output_allowance_bytes,
+        "can_accept_selected_size": decision.accepted,
+        "staging_and_final_same_filesystem": decision.staging_and_final_same_filesystem,
+        "finalization_strategy": "atomic_move" if decision.finalization_strategy == "atomic_rename" else "staged_copy",
     }
 
 
 def assert_memory_upload_capacity(selected_size_bytes: int) -> None:
-    capacity = memory_upload_capacity_for_size(selected_size_bytes)
-    if not capacity["can_accept_selected_size"]:
-        raise RuntimeError("Insufficient storage capacity for memory image upload.")
+    from app.services.memory.upload_capacity import assert_memory_upload_capacity as assert_capacity
+
+    assert_capacity(selected_size_bytes, phase="pre_upload")
 
 
 def get_memory_upload_readiness(case_id: str, selected_size_bytes: int | None = None) -> dict[str, Any]:
@@ -69,13 +45,11 @@ def get_memory_upload_readiness(case_id: str, selected_size_bytes: int | None = 
     volatility = next((item for item in backend_overview.get("backends", []) if item.get("backend") == "volatility3"), {})
     max_upload = int(settings.memory_upload_max_bytes or settings.memory_max_upload_size)
     try:
-        staging_available = _available_bytes(settings.memory_upload_staging_path)
-        canonical_available = _available_bytes(settings.backend_data_dir / "evidence")
-        output_root = settings.memory_output_root or (settings.backend_data_dir / "evidence")
-        output_available = _available_bytes(output_root)
-        available = min(staging_available, canonical_available, output_available)
-        output_allowance = max(int(settings.memory_plugin_output_max_bytes or 0) * 5, 256 * 1024 * 1024)
-        recommended_max = max(0, (available - output_allowance - SAFETY_MARGIN_BYTES) // 2)
+        probe = evaluate_memory_upload_capacity(1, phase="pre_upload")
+        staging_available = probe.staging_available_bytes
+        canonical_available = probe.final_available_bytes
+        output_available = probe.output_available_bytes
+        recommended_max = recommended_memory_upload_bytes(max_upload)
         selected_capacity = (
             memory_upload_capacity_for_size(selected_size_bytes)
             if selected_size_bytes is not None
@@ -97,6 +71,7 @@ def get_memory_upload_readiness(case_id: str, selected_size_bytes: int | None = 
             "recommended_max_upload_bytes": 0,
             "required_capacity_bytes": 0,
             "can_accept_selected_size": False,
+            "finalization_strategy": None,
             "analysis_enabled": bool(settings.memory_analysis_enabled),
             "dedicated_worker_online": bool(volatility.get("dedicated_worker_online")),
             "backend_ready": bool(volatility.get("ready")),
@@ -129,6 +104,7 @@ def get_memory_upload_readiness(case_id: str, selected_size_bytes: int | None = 
         "recommended_max_upload_bytes": min(max_upload, recommended_max),
         "required_capacity_bytes": int(selected_capacity["required_capacity_bytes"]),
         "can_accept_selected_size": can_accept,
+        "finalization_strategy": selected_capacity.get("finalization_strategy") if selected_size_bytes is not None else ("atomic_move" if probe.staging_and_final_same_filesystem else "staged_copy"),
         "analysis_enabled": bool(settings.memory_analysis_enabled),
         "dedicated_worker_online": bool(volatility.get("dedicated_worker_online")),
         "backend_ready": bool(volatility.get("ready")),
