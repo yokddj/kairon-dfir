@@ -104,9 +104,33 @@ describe("MemoryUploadPage", () => {
     await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
 
     await waitFor(() => expect(uploadEvidenceMock).toHaveBeenCalledWith("case-1", expect.any(File), expect.objectContaining({ memoryAuthorizationAcknowledged: true, providedHost: "HOSTA" })));
+    const uploadedFile = uploadEvidenceMock.mock.calls[0][1] as File;
+    expect(uploadedFile.name).toBe("authorized.mem");
+    expect(uploadedFile.size).toBe(6);
+    expect(getMemoryUploadReadinessMock).toHaveBeenCalledWith("case-1", 6);
     expect(await screen.findByText(/Upload completed/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Open Memory Analysis/i }));
     expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/memory?evidence_id=ev-memory");
+  });
+
+  it("shows validating immediately and rechecks the exact selected size before multipart upload", async () => {
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+    const button = screen.getByRole("button", { name: /Upload memory image/i });
+    await waitFor(() => expect(button).toBeEnabled());
+
+    let acceptReadiness: ((value: ReturnType<typeof readiness>) => void) | undefined;
+    getMemoryUploadReadinessMock.mockImplementationOnce(() => new Promise((resolve) => { acceptReadiness = resolve; }));
+    await userEvent.click(button);
+
+    expect(screen.getByRole("button", { name: /Validating upload/i })).toBeDisabled();
+    expect(uploadEvidenceMock).not.toHaveBeenCalled();
+    acceptReadiness?.(readiness());
+    await waitFor(() => expect(uploadEvidenceMock).toHaveBeenCalledTimes(1));
+    expect(getMemoryUploadReadinessMock).toHaveBeenLastCalledWith("case-1", 6);
   });
 
   it("disables upload when storage is insufficient", async () => {
@@ -115,6 +139,77 @@ describe("MemoryUploadPage", () => {
 
     expect(await screen.findByText(/below the recommended threshold/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Upload memory image/i })).toBeDisabled();
+  });
+
+  it("disables submission with an explicit reason when authorization is missing", async () => {
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+
+    expect(screen.getByRole("button", { name: /Upload memory image/i })).toBeDisabled();
+    expect(screen.getByText(/Authorization acknowledgement is required/i)).toBeInTheDocument();
+  });
+
+  it("rejects a zero-byte or stale browser File handle visibly", async () => {
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File([], "authorized.mem"));
+
+    expect(screen.getByRole("button", { name: /Upload memory image/i })).toBeDisabled();
+    expect(screen.getAllByText(/file handle is no longer valid/i).length).toBeGreaterThan(0);
+    expect(uploadEvidenceMock).not.toHaveBeenCalled();
+  });
+
+  it("starts upload when randomUUID is unavailable in an HTTP browser context", async () => {
+    const originalRandomUUID = globalThis.crypto.randomUUID;
+    Object.defineProperty(globalThis.crypto, "randomUUID", { configurable: true, value: undefined });
+    try {
+      renderPage();
+      await screen.findByText(/Memory image upload is available/i);
+      await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+      await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+      await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+      const button = screen.getByRole("button", { name: /Upload memory image/i });
+      expect(button).toHaveAttribute("type", "button");
+      await userEvent.click(button);
+
+      await waitFor(() => expect(uploadEvidenceMock).toHaveBeenCalledTimes(1));
+      expect(uploadEvidenceMock.mock.calls[0][2].memoryUploadId).toMatch(/^[0-9a-f-]{36}$/);
+    } finally {
+      Object.defineProperty(globalThis.crypto, "randomUUID", { configurable: true, value: originalRandomUUID });
+    }
+  });
+
+  it("surfaces a synchronous API exception and allows a safe try again", async () => {
+    uploadEvidenceMock.mockImplementation(() => { throw new Error("Synchronous upload client failure."); });
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+
+    expect(await screen.findByText(/Synchronous upload client failure/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Retry upload/i })).toBeInTheDocument();
+  });
+
+  it("prevents duplicate clicks while the first request is active", async () => {
+    uploadEvidenceMock.mockImplementation(() => new Promise(() => undefined));
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+    const button = screen.getByRole("button", { name: /Upload memory image/i });
+    await userEvent.click(button);
+
+    await waitFor(() => expect(uploadEvidenceMock).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("button", { name: /Upload memory image/i })).toBeDisabled();
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+    expect(uploadEvidenceMock).toHaveBeenCalledTimes(1);
   });
 
   it("shows transferred bytes as verifying before final evidence completion", async () => {
