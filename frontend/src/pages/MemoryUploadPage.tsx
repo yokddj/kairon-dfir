@@ -6,11 +6,11 @@ import { useActiveCase } from "../context/ActiveCaseContext";
 
 const MEMORY_EXTENSIONS = [".raw", ".mem", ".vmem", ".dmp", ".lime"];
 
-type UploadStage = "idle" | "validating" | "uploading" | "finalizing" | "completed" | "failed";
+type UploadStage = "idle" | "validating" | "uploading" | "verifying" | "finalizing" | "completed" | "failed";
 
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0 B";
-  const units = ["B", "KB", "MB", "GB", "TB"];
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
   let size = value;
   let unitIndex = 0;
   while (size >= 1024 && unitIndex < units.length - 1) {
@@ -49,13 +49,14 @@ export default function MemoryUploadPage() {
   const [status, setStatus] = useState("");
   const [progress, setProgress] = useState({ loaded: 0, total: 0 });
   const [uploadedEvidence, setUploadedEvidence] = useState<Evidence | null>(null);
+  const [acceptedReadiness, setAcceptedReadiness] = useState<MemoryUploadReadiness | null>(null);
 
   useEffect(() => {
     if (caseId) setActiveCaseId(caseId);
   }, [caseId, setActiveCaseId]);
 
   useEffect(() => {
-    if (stage !== "uploading" && stage !== "finalizing") return;
+    if (stage !== "uploading" && stage !== "verifying" && stage !== "finalizing") return;
     const handler = (event: BeforeUnloadEvent) => {
       event.preventDefault();
       event.returnValue = "";
@@ -83,8 +84,7 @@ export default function MemoryUploadPage() {
       readiness.can_accept_selected_size &&
       acknowledged &&
       providedHost.trim() &&
-      stage !== "uploading" &&
-      stage !== "finalizing",
+      stage === "idle",
   );
   const percent = progress.total > 0 ? Math.min(100, Math.round((progress.loaded / progress.total) * 100)) : 0;
 
@@ -98,10 +98,18 @@ export default function MemoryUploadPage() {
 
   async function upload() {
     if (!file || !canUpload) return;
+    let uploadTransferred = false;
     setStage("validating");
     setStatus("Validating memory upload readiness");
     setProgress({ loaded: 0, total: file.size });
+    setUploadedEvidence(null);
     try {
+      const refreshed = await readinessQuery.refetch();
+      const currentReadiness = refreshed.data;
+      if (!currentReadiness?.upload_enabled || !currentReadiness.can_accept_selected_size || file.size > currentReadiness.max_upload_bytes) {
+        throw new Error(currentReadiness?.message || "Memory upload readiness could not be confirmed.");
+      }
+      setAcceptedReadiness(currentReadiness);
       setStage("uploading");
       setStatus("Uploading memory image");
       const evidence = await api.uploadEvidence(caseId, file, {
@@ -111,18 +119,37 @@ export default function MemoryUploadPage() {
         memoryAuthorizationAcknowledged: true,
         onProgress: ({ loaded, total }) => {
           setProgress({ loaded, total: total || file.size });
+          if (loaded >= (total || file.size)) {
+            uploadTransferred = true;
+            setStage("verifying");
+            setStatus("Upload transferred; verifying and finalizing");
+          }
         },
       });
       setStage("finalizing");
       setStatus("Finalizing memory evidence registration");
+      if (!evidence.id || evidence.evidence_type !== "memory_dump" || evidence.size_bytes !== file.size || !/^[0-9a-f]{64}$/i.test(evidence.sha256 || "")) {
+        throw new Error("The server response did not confirm a finalized memory_dump evidence.");
+      }
       setUploadedEvidence(evidence);
       setProgress({ loaded: file.size, total: file.size });
       setStage("completed");
       setStatus("Memory image uploaded and registered.");
     } catch (error) {
       setStage("failed");
-      setStatus(error instanceof Error ? error.message : "Memory image upload failed.");
+      const reason = error instanceof Error ? error.message : "Memory image upload failed.";
+      setStatus(uploadTransferred ? `The file was transferred, but Kairon could not finalize it as evidence. ${reason}` : reason);
     }
+  }
+
+  async function retryUpload() {
+    setStage("validating");
+    setStatus("Refreshing memory upload readiness");
+    setProgress({ loaded: 0, total: file?.size || 0 });
+    setAcceptedReadiness(null);
+    await readinessQuery.refetch();
+    setStage("idle");
+    setStatus("");
   }
 
   if (!caseId) {
@@ -157,7 +184,7 @@ export default function MemoryUploadPage() {
           <div className="mt-4 grid gap-3 md:grid-cols-3 text-sm">
             <div className="rounded-2xl border border-line bg-abyss/60 p-4"><p className="text-xs uppercase tracking-[0.14em] text-muted">Maximum</p><p className="mt-1 text-ink">{readiness.max_upload_display}</p></div>
             <div className="rounded-2xl border border-line bg-abyss/60 p-4"><p className="text-xs uppercase tracking-[0.14em] text-muted">Recommended current maximum</p><p className="mt-1 text-ink">{formatBytes(readiness.recommended_max_upload_bytes)}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/60 p-4"><p className="text-xs uppercase tracking-[0.14em] text-muted">Required for selected file</p><p className="mt-1 text-ink">{formatBytes(readiness.required_capacity_bytes)}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/60 p-4"><p className="text-xs uppercase tracking-[0.14em] text-muted">Required additional capacity</p><p className="mt-1 text-ink">{formatBytes(readiness.required_capacity_bytes)}</p></div>
           </div>
         ) : null}
         {readiness ? <p className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">{readiness.message}</p> : null}
@@ -173,15 +200,17 @@ export default function MemoryUploadPage() {
         <h3 className="text-lg font-semibold">Memory image file</h3>
         <div className="mt-4 grid gap-4 md:grid-cols-[1fr_220px]">
           <label className="block"><span className="text-sm text-muted">Source host</span><input value={providedHost} onChange={(event) => setProvidedHost(event.target.value)} placeholder="HOSTA or hosta.example.local" className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none" /></label>
-          <button type="button" onClick={() => inputRef.current?.click()} disabled={stage === "uploading" || stage === "finalizing"} className="self-end rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted disabled:opacity-60">Select RAM image</button>
+          <button type="button" onClick={() => inputRef.current?.click()} disabled={stage === "uploading" || stage === "verifying" || stage === "finalizing"} className="self-end rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted disabled:opacity-60">Select RAM image</button>
         </div>
-        <input ref={inputRef} aria-label="Memory image file" type="file" accept={MEMORY_EXTENSIONS.join(",")} className="hidden" onChange={(event) => { const next = event.target.files?.[0] || null; setFile(next); setUploadedEvidence(null); setStage("idle"); setStatus(next ? `Selected ${next.name}` : ""); }} />
+        <input ref={inputRef} aria-label="Memory image file" type="file" accept={MEMORY_EXTENSIONS.join(",")} className="hidden" onChange={(event) => { const next = event.target.files?.[0] || null; setFile(next); setUploadedEvidence(null); setAcceptedReadiness(null); setStage("idle"); setStatus(next ? `Selected ${next.name}` : ""); }} />
         {file ? <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm"><p className="truncate font-medium text-ink" title={file.name}>{file.name}</p><p className="mt-1 text-muted">Extension: {extension || "none"} · Size: {formatBytes(file.size)} · Detected type: {extensionAllowed ? "Memory image" : "Unsupported"}</p><p className={`mt-2 ${extensionAllowed && fileWithinLimit && readiness?.can_accept_selected_size ? "text-mint" : "text-warning"}`}>{summary}</p></div> : null}
       </section>
 
       <section className="rounded-[28px] border border-line bg-panel/60 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-semibold">Upload</h3><p className="mt-1 text-sm text-muted">Stages: validating, uploading, finalizing, completed, failed.</p></div><button type="button" onClick={() => void upload()} disabled={!canUpload} className="rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-50">Upload memory image</button></div>
-        {stage !== "idle" ? <div className="mt-4"><div className="flex justify-between text-xs text-muted"><span>{stage}</span><span>{formatBytes(progress.loaded)} / {formatBytes(progress.total)} · {percent}%</span></div><div className="mt-2 h-3 overflow-hidden rounded-full bg-abyss"><div className="h-full bg-accent transition-all" style={{ width: `${percent}%` }} /></div><p className={`mt-3 text-sm ${stage === "failed" ? "text-rose-200" : "text-muted"}`}>{status}</p></div> : null}
+        <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-semibold">Upload</h3><p className="mt-1 text-sm text-muted">Stages: validating, uploading, verifying, finalizing, completed, failed.</p></div><button type="button" onClick={() => void upload()} disabled={!canUpload} className="rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-50">Upload memory image</button></div>
+        {acceptedReadiness ? <p className="mt-3 text-xs text-muted">Accepted capacity check · Finalization: {acceptedReadiness.finalization_strategy === "staged_copy" ? "staged copy" : "atomic move"}</p> : null}
+        {stage !== "idle" ? <div className="mt-4"><div className="flex justify-between text-xs text-muted"><span>{stage}</span><span>{formatBytes(progress.loaded)} / {formatBytes(progress.total)} · {percent}% transferred</span></div><div className="mt-2 h-3 overflow-hidden rounded-full bg-abyss"><div className={`h-full transition-all ${stage === "failed" ? "bg-rose-500" : stage === "completed" ? "bg-mint" : "bg-accent"}`} style={{ width: `${percent}%` }} /></div><p className={`mt-3 text-sm ${stage === "failed" ? "text-rose-200" : "text-muted"}`}>{status}</p>{stage === "verifying" || stage === "finalizing" ? <p className="mt-2 text-xs text-muted" role="status">Server finalization is still active.</p> : null}</div> : null}
+        {stage === "failed" ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => void retryUpload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Retry upload</button><button type="button" onClick={() => inputRef.current?.click()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Select another file</button></div> : null}
         {uploadedEvidence ? <div className="mt-4 rounded-2xl border border-mint/30 bg-mint/10 p-4 text-sm"><p className="font-semibold text-ink">Upload completed</p><p className="mt-1 text-muted">Evidence ID: {uploadedEvidence.id}</p><p className="mt-1 text-muted">Type: Memory image · Size: {formatBytes(uploadedEvidence.size_bytes)}</p><div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => navigate(`/cases/${caseId}/memory?evidence_id=${uploadedEvidence.id}`)} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">Open Memory Analysis</button><button type="button" onClick={() => { setFile(null); setUploadedEvidence(null); setStage("idle"); setStatus(""); setProgress({ loaded: 0, total: 0 }); }} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Upload another memory image</button></div></div> : null}
       </section>
     </div>

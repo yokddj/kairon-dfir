@@ -442,6 +442,7 @@ export type MemoryUploadReadiness = {
   recommended_max_upload_bytes: number;
   required_capacity_bytes: number;
   can_accept_selected_size: boolean;
+  finalization_strategy: "atomic_move" | "staged_copy" | null;
   analysis_enabled: boolean;
   dedicated_worker_online: boolean;
   backend_ready: boolean;

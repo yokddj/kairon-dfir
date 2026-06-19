@@ -133,6 +133,7 @@ class MemoryUploadReadinessRead(BaseModel):
     recommended_max_upload_bytes: int
     required_capacity_bytes: int
     can_accept_selected_size: bool
+    finalization_strategy: str | None = None
     analysis_enabled: bool
     dedicated_worker_online: bool
     backend_ready: bool

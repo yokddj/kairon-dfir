@@ -43,9 +43,15 @@ Memory uploads are classified as `memory_dump`, bypass normal disk ingest, and d
 - selected-size acceptance when `selected_size_bytes` is provided
 - analysis readiness and dedicated worker status
 
-The endpoint is informational. The upload endpoint remains authoritative and rechecks feature flags, extension, maximum size, and capacity during streaming and finalization.
+The endpoint is informational. The upload endpoint remains authoritative and uses the same capacity service during pre-upload, streaming, and finalization.
 
-The standard remote validation target is `MEMORY_UPLOAD_MAX_BYTES=5368709120`, displayed as `5 GiB`. For near-limit uploads, keep at least 12 GiB available to account for staging, final storage, output, and a safety margin.
+The standard remote validation target is `MEMORY_UPLOAD_MAX_BYTES=5368709120`, displayed as `5 GiB`. Capacity is grouped by filesystem device:
+
+- same-filesystem finalization requires one input image, output allowance, and one safety margin before upload
+- after that input is staged, atomic finalization requires only the remaining output allowance and safety margin
+- cross-filesystem finalization checks staging, final-copy, and output requirements independently on their respective filesystems
+
+The previous implementation counted two complete input images against a single free-space value and repeated that pre-upload formula after staging was complete. A valid readiness decision could therefore fail at finalization solely because the controlled staging file had consumed space. The phase-aware model removes that double count.
 
 ## Streaming Behavior
 
@@ -55,8 +61,10 @@ The backend streams memory uploads to disk in bounded chunks:
 - staged under `MEMORY_UPLOAD_STAGING_ROOT` or backend temp storage
 - SHA-256 and byte count are calculated incrementally
 - `MEMORY_UPLOAD_MAX_BYTES` is enforced while receiving data
-- completed files are atomically moved into canonical evidence storage
+- completed files are atomically moved when staging and canonical storage share a filesystem
+- cross-filesystem files are copied to a controlled destination temporary, size/hash verified, then atomically renamed on the destination filesystem
 - failed or oversized uploads remove only the known temporary partial file
+- one Redis-backed upload slot serializes large memory uploads across backend replicas and expires safely if an uploader disappears
 
 The database evidence row is created only after storage finalization succeeds. Incomplete uploads are not valid scannable evidence.
 

@@ -1,5 +1,7 @@
 import hashlib
+import logging
 import os
+import re
 import shutil
 from pathlib import Path
 from uuid import uuid4
@@ -7,10 +9,16 @@ from uuid import uuid4
 from fastapi import UploadFile
 
 from app.core.config import get_settings
-from app.services.memory.upload_readiness import assert_memory_upload_capacity
+from app.services.memory.upload_capacity import (
+    MemoryCapacityError,
+    MemoryUploadSlot,
+    assert_memory_upload_capacity,
+)
 
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
+_MEMORY_TEMP_NAME = re.compile(r"^[0-9a-f-]{36}-[0-9a-f-]{36}\.memory-upload\.part$")
 
 
 class MemoryUploadError(ValueError):
@@ -73,45 +81,124 @@ def save_memory_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int
     digest = hashlib.sha256()
     size = 0
     safe_name = safe_display_filename(upload.filename)
+    request_id = str(uuid4())
+    strategy = "unknown"
     try:
         hinted_size = getattr(upload, "size", None)
-        if isinstance(hinted_size, int) and hinted_size > 0:
-            try:
-                assert_memory_upload_capacity(hinted_size)
-            except RuntimeError as exc:
-                raise MemoryUploadError("insufficient_storage", "Server storage capacity is below the recommended threshold for this memory image.") from exc
-        with temp_path.open("xb") as buffer:
-            while True:
-                chunk = upload.file.read(chunk_size)
-                if not chunk:
-                    break
-                size += len(chunk)
-                if size > max_bytes:
-                    raise MemoryUploadError("rejected_size", f"Memory image exceeds configured upload limit of {max_bytes} bytes.")
-                digest.update(chunk)
-                buffer.write(chunk)
-            buffer.flush()
-            os.fsync(buffer.fileno())
-        if size <= 0:
-            raise MemoryUploadError("rejected_empty", "Empty memory image uploads are not accepted.")
+        expected_size = int(hinted_size) if isinstance(hinted_size, int) and hinted_size > 0 else max_bytes
+        if expected_size > max_bytes:
+            raise MemoryUploadError("rejected_size", f"Memory image exceeds configured upload limit of {max_bytes} bytes.")
         try:
-            assert_memory_upload_capacity(size)
-        except RuntimeError as exc:
-            raise MemoryUploadError("insufficient_storage", "Server storage capacity is below the recommended threshold for this memory image.") from exc
-        os.replace(temp_path, final_path)
+            with MemoryUploadSlot(request_id=request_id) as slot:
+                decision = assert_memory_upload_capacity(expected_size, phase="pre_upload")
+                strategy = decision.finalization_strategy
+                logger.info(
+                    "memory upload capacity decision request_id=%s case_id=%s selected_size_bytes=%s phase=pre_upload accepted=true strategy=%s same_filesystem=%s bytes_written=0",
+                    request_id,
+                    case_id,
+                    expected_size,
+                    strategy,
+                    decision.staging_and_final_same_filesystem,
+                )
+                with temp_path.open("xb") as buffer:
+                    while True:
+                        chunk = upload.file.read(chunk_size)
+                        if not chunk:
+                            break
+                        next_size = size + len(chunk)
+                        if next_size > max_bytes or (isinstance(hinted_size, int) and hinted_size > 0 and next_size > hinted_size):
+                            raise MemoryUploadError("rejected_size", f"Memory image exceeds configured upload limit of {max_bytes} bytes.")
+                        assert_memory_upload_capacity(expected_size, phase="streaming", bytes_already_staged=size)
+                        digest.update(chunk)
+                        buffer.write(chunk)
+                        size = next_size
+                        slot.refresh()
+                    buffer.flush()
+                    os.fsync(buffer.fileno())
+                if size <= 0:
+                    raise MemoryUploadError("rejected_empty", "Empty memory image uploads are not accepted.")
+                if isinstance(hinted_size, int) and hinted_size > 0 and size != hinted_size:
+                    raise MemoryUploadError("size_mismatch", "Transferred memory image size did not match the declared size.")
+                decision = assert_memory_upload_capacity(size, phase="finalization", bytes_already_staged=size)
+                strategy = decision.finalization_strategy
+                if strategy == "atomic_rename":
+                    os.replace(temp_path, final_path)
+                else:
+                    _copy_memory_upload_to_final(temp_path, final_path, expected_size=size, expected_sha256=digest.hexdigest(), chunk_size=chunk_size)
+                    _safe_unlink_memory_staging(temp_path, staging_root=staging_root, expected_name=temp_path.name)
+                slot.refresh(force=True)
+        except MemoryCapacityError as exc:
+            public_message = (
+                "Another memory image upload is currently in progress."
+                if exc.category == "upload_in_progress"
+                else "Server storage capacity is below the safe threshold for this memory image."
+            )
+            raise MemoryUploadError(exc.category, public_message) from exc
         dir_fd = os.open(str(final_path.parent), os.O_DIRECTORY)
         try:
             os.fsync(dir_fd)
         finally:
             os.close(dir_fd)
         return evidence_id, final_path, size, digest.hexdigest(), safe_name
-    except Exception:
-        if temp_path.exists() and not temp_path.is_symlink():
-            temp_path.unlink()
+    except Exception as exc:
+        cleaned = _safe_unlink_memory_staging(temp_path, staging_root=staging_root, expected_name=temp_path.name)
         if final_path.exists() and not final_path.is_symlink():
             final_path.unlink()
         safe_remove(root)
+        logger.warning(
+            "memory upload failed request_id=%s case_id=%s selected_size_bytes=%s phase=upload_or_finalization strategy=%s bytes_written=%s failure_category=%s staging_cleaned=%s",
+            request_id,
+            case_id,
+            getattr(upload, "size", None),
+            strategy,
+            size,
+            getattr(exc, "code", getattr(exc, "category", type(exc).__name__)),
+            cleaned,
+        )
         raise
+
+
+def _safe_unlink_memory_staging(path: Path, *, staging_root: Path, expected_name: str) -> bool:
+    if path.name != expected_name or not _MEMORY_TEMP_NAME.fullmatch(path.name):
+        return False
+    try:
+        root = staging_root.resolve(strict=True)
+        candidate = path.resolve(strict=True)
+        candidate.relative_to(root)
+        stat = path.lstat()
+    except (FileNotFoundError, OSError, ValueError):
+        return False
+    if path.is_symlink() or not path.is_file() or stat.st_nlink < 1:
+        return False
+    path.unlink()
+    return True
+
+
+def _copy_memory_upload_to_final(
+    staging_path: Path,
+    final_path: Path,
+    *,
+    expected_size: int,
+    expected_sha256: str,
+    chunk_size: int,
+) -> None:
+    destination_temp = final_path.with_name(f".{final_path.name}.{uuid4()}.part")
+    copied_size = 0
+    copied_digest = hashlib.sha256()
+    try:
+        with staging_path.open("rb") as source, destination_temp.open("xb") as target:
+            while chunk := source.read(chunk_size):
+                target.write(chunk)
+                copied_digest.update(chunk)
+                copied_size += len(chunk)
+            target.flush()
+            os.fsync(target.fileno())
+        if copied_size != expected_size or copied_digest.hexdigest() != expected_sha256:
+            raise MemoryUploadError("copy_integrity_failed", "Memory image integrity verification failed during finalization.")
+        os.replace(destination_temp, final_path)
+    finally:
+        if destination_temp.exists() and not destination_temp.is_symlink():
+            destination_temp.unlink()
 
 
 def import_existing_path(case_id: str, source_path: Path) -> tuple[str, Path, int]:
