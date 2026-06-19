@@ -38,11 +38,12 @@ def _evidence(settings: SimpleNamespace, *, mode: int = 0o640):
     ), path
 
 
-def test_mode_0600_rejects_different_worker_uid(tmp_path: Path) -> None:
+def test_mode_0600_rejects_different_worker_uid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(tmp_path)
     settings.memory_output_root.mkdir(mode=0o770)
     settings.memory_output_root.chmod(0o770)
     evidence, _path = _evidence(settings, mode=0o600)
+    monkeypatch.setattr(evidence_access, "_worker_can_traverse", lambda *_args: True)
 
     result = evidence_access.evidence_readiness(evidence, settings=settings)
 
@@ -51,11 +52,12 @@ def test_mode_0600_rejects_different_worker_uid(tmp_path: Path) -> None:
     assert "path" not in result["sanitized_message"].lower()
 
 
-def test_mode_0640_with_shared_group_is_readable(tmp_path: Path) -> None:
+def test_mode_0640_with_shared_group_is_readable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(tmp_path)
     settings.memory_output_root.mkdir(mode=0o770)
     settings.memory_output_root.chmod(0o770)
     evidence, _path = _evidence(settings, mode=0o640)
+    monkeypatch.setattr(evidence_access, "_worker_can_traverse", lambda *_args: True)
 
     result = evidence_access.evidence_readiness(evidence, settings=settings)
 
