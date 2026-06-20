@@ -377,13 +377,30 @@ export default function MemoryAnalysisPage() {
                             <div className="mt-2 max-w-72 rounded-xl border border-amber-400/30 bg-amber-500/10 p-2 text-xs text-amber-100">
                               <p className="font-semibold">Required Windows symbols are not present in the offline cache.</p>
                               <p className="mt-1">
-                                {evidenceReadiness.acquisition_available
-                                  ? "An administrator may acquire the exact required symbols from approved official infrastructure."
-                                  : symbolCacheQuery.data?.error_code === "SYMBOL_ACQUISITION_ADMIN_AUTH_REQUIRED"
-                                    ? "Managed acquisition requires authenticated administrator authorization."
-                                    : symbolCacheQuery.data?.error_code === "SYMBOL_ACQUISITION_NETWORK_ISOLATION_REQUIRED"
-                                      ? "Managed acquisition is unavailable until restricted network egress is enforced."
-                                      : "Managed acquisition is disabled or unavailable in this deployment."}
+                                {evidenceReadiness.pending_request_id
+                                  ? (() => {
+                                      const status = String(evidenceReadiness.acquisition_status || "");
+                                      if (status === "awaiting_operator_approval") {
+                                        return "A symbol acquisition request is awaiting server-operator approval.";
+                                      }
+                                      if (status === "approved" || status === "queued" || status === "downloading" || status === "validating_pdb" || status === "generating_isf" || status === "validating_isf" || status === "caching") {
+                                        return "Symbol acquisition was approved and queued.";
+                                      }
+                                      if (status === "completed") {
+                                        return "Required Windows symbols are now cached.";
+                                      }
+                                      if (status === "failed" || status === "timeout" || status === "expired" || status === "revoked") {
+                                        return "The symbol acquisition attempt did not complete. Contact the server operator for details.";
+                                      }
+                                      return "A symbol acquisition request is being processed.";
+                                    })()
+                                  : evidenceReadiness.acquisition_available
+                                    ? "An administrator may acquire the exact required symbols from approved official infrastructure."
+                                    : symbolCacheQuery.data?.error_code === "SYMBOL_ACQUISITION_LOCAL_APPROVAL_DISABLED"
+                                      ? "Managed acquisition is unavailable until server-operator approval is enabled."
+                                      : symbolCacheQuery.data?.error_code === "SYMBOL_ACQUISITION_NETWORK_ISOLATION_REQUIRED"
+                                        ? "Managed acquisition is unavailable until restricted network egress is configured."
+                                        : "Managed acquisition is disabled or unavailable in this deployment."}
                               </p>
                             </div>
                           ) : null}

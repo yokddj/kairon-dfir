@@ -151,7 +151,7 @@ def test_managed_symbol_acquisition_requires_administrator_authorization(tmp_pat
     )
     accepted, code, _ = symbol_control.acquisition_gate(settings)
     assert accepted is False
-    assert code == symbol_control.ADMIN_AUTH_REQUIRED
+    assert code == symbol_control.LOCAL_APPROVAL_DISABLED
 
 
 def test_symbol_acquisition_schema_rejects_operator_url() -> None:
@@ -191,6 +191,7 @@ def test_symbol_readiness_requires_recorded_symbols_failure(db_session, tmp_path
         "acquisition_available": False,
         "acquisition_status": "symbols_required",
         "can_analyze_offline": False,
+        "pending_request_id": None,
     }
 
 

@@ -13,7 +13,9 @@ LABEL org.opencontainers.image.title="Kairon optional Windows symbol fetcher" \
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     KAIRON_COMMIT="${KAIRON_COMMIT}" \
-    KAIRON_WORKER_ID="symbol-fetcher"
+    KAIRON_WORKER_ID="symbol-fetcher" \
+    XDG_CACHE_HOME=/volatility-cache \
+    HOME=/volatility-cache
 
 WORKDIR /app
 

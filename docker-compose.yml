@@ -12,9 +12,20 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # postgres is also reachable from the symbol-internal network so the
+    # symbol-fetcher can record MemorySymbolAcquisition rows without
+    # traversing the default network.
+    networks:
+      - default
+      - symbol-internal
 
   redis:
     image: redis:7-alpine
+    # redis is also reachable from the symbol-internal network so the
+    # symbol-fetcher can pick up tasks from the memory-symbols queue.
+    networks:
+      - default
+      - symbol-internal
 
   opensearch:
     image: opensearchproject/opensearch:2.15.0
@@ -154,6 +165,7 @@ services:
     environment:
       MEMORY_SYMBOL_TASK_QUEUE: ${MEMORY_SYMBOL_TASK_QUEUE:-memory-symbols}
       MEMORY_SYMBOL_CACHE_ROOT: /volatility-cache/volatility3
+      MEMORY_SYMBOL_EGRESS_GATEWAY_URL: ${MEMORY_SYMBOL_EGRESS_GATEWAY_URL:-http://symbol-egress-gateway:8443}
       BACKEND_DATA_DIR: /app/data/tmp/runtime
       BACKEND_TEMP_DIR: /app/data/tmp
       KAIRON_WORKER_ID: symbol-fetcher
@@ -161,6 +173,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_started
+      symbol-egress-gateway:
         condition: service_started
     volumes:
       - memory-symbol-cache:/volatility-cache
@@ -176,9 +190,57 @@ services:
     security_opt:
       - no-new-privileges:true
     user: "10001:10001"
+    # The fetcher is restricted to internal-only networks.  It cannot
+    # reach the Internet directly; the symbol-egress-gateway is the only
+    # outbound path.  Application-level policy remains a defense in depth.
+    # symbol-fetcher-channel is the dedicated link to the gateway.
+    # symbol-internal hosts postgres/redis for DB and queue access.
     networks:
-      - default
-      - symbol-fetch-egress
+      - symbol-internal
+      - symbol-fetcher-channel
+
+  symbol-egress-gateway:
+    profiles:
+      - memory-symbols
+    build:
+      context: .
+      dockerfile: docker/symbol-egress-gateway/Dockerfile
+      args:
+        KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+    env_file:
+      - .env
+    environment:
+      MEMORY_SYMBOL_EGRESS_GATEWAY_SECRET: ${MEMORY_SYMBOL_EGRESS_GATEWAY_SECRET}
+      MEMORY_SYMBOL_EGRESS_GATEWAY_PORT: "8443"
+      MEMORY_SYMBOL_INITIAL_HOST: ${MEMORY_SYMBOL_INITIAL_HOST:-msdl.microsoft.com}
+      MEMORY_SYMBOL_REDIRECT_SUFFIXES: ${MEMORY_SYMBOL_REDIRECT_SUFFIXES:-.blob.core.windows.net}
+      MEMORY_SYMBOL_CONNECT_TIMEOUT_SECONDS: ${MEMORY_SYMBOL_CONNECT_TIMEOUT_SECONDS:-15}
+      MEMORY_SYMBOL_DOWNLOAD_TIMEOUT_SECONDS: ${MEMORY_SYMBOL_DOWNLOAD_TIMEOUT_SECONDS:-180}
+      MEMORY_SYMBOL_MAX_REDIRECTS: ${MEMORY_SYMBOL_MAX_REDIRECTS:-5}
+      MEMORY_SYMBOL_DOWNLOAD_MAX_BYTES: ${MEMORY_SYMBOL_DOWNLOAD_MAX_BYTES:-1073741824}
+      MEMORY_SYMBOL_EGRESS_REPLAY_WINDOW_SECONDS: ${MEMORY_SYMBOL_EGRESS_REPLAY_WINDOW_SECONDS:-60}
+      BACKEND_LOG_LEVEL: ${BACKEND_LOG_LEVEL:-INFO}
+      KAIRON_WORKER_ID: symbol-egress-gateway
+    command: ["python", "-m", "app.services.memory.symbol_egress_gateway"]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    user: "10001:10001"
+    # The gateway is the only component on the symbol-egress network
+    # (which has a default route).  It is also on the dedicated
+    # symbol-fetcher-channel so the fetcher can reach it.  It is NOT
+    # attached to symbol-internal (postgres/redis), so a compromised
+    # gateway cannot pivot to the database.
+    networks:
+      - symbol-fetcher-channel
+      - symbol-egress
 
   frontend:
     build:
@@ -198,5 +260,17 @@ volumes:
   memory-symbol-cache:
 
 networks:
-  symbol-fetch-egress:
+  symbol-internal:
     driver: bridge
+    internal: true
+    labels:
+      kairon.network.purpose: "symbol-fetcher, postgres, redis (no default route)"
+  symbol-fetcher-channel:
+    driver: bridge
+    internal: true
+    labels:
+      kairon.network.purpose: "symbol-fetcher <-> symbol-egress-gateway only (no default route)"
+  symbol-egress:
+    driver: bridge
+    labels:
+      kairon.network.purpose: "symbol-egress-gateway outbound HTTPS only"

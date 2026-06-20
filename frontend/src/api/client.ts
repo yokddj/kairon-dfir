@@ -290,6 +290,7 @@ export type MemoryEvidenceReadiness = {
   acquisition_available: boolean;
   acquisition_status: string | null;
   can_analyze_offline: boolean;
+  pending_request_id: string | null;
 };
 
 export type MemorySymbolCacheStatus = {
@@ -298,6 +299,10 @@ export type MemorySymbolCacheStatus = {
   acquisition_enabled: boolean;
   network_isolation_ready: boolean;
   administrator_authorization_available: boolean;
+  local_approval_enabled: boolean;
+  pending_requests: number;
+  awaiting_operator_approval: number;
+  approved_pending: number;
   fetcher_online: boolean;
   total_bytes: number;
   configured_max_bytes: number;
@@ -311,6 +316,39 @@ export type MemorySymbolCacheStatus = {
   last_success_at: string | null;
   error_code: string | null;
   message: string;
+};
+
+export type MemorySymbolRequestCreateResponse = {
+  request_id: string;
+  status: string;
+  source_category: string;
+  pending_request_id: string;
+  requirement_fingerprint: string;
+  error_code: string | null;
+  message: string;
+};
+
+export type MemorySymbolRequestStatus = {
+  request_id: string;
+  requirement_id: string;
+  case_id: string | null;
+  evidence_id: string | null;
+  status: string;
+  source_category: string;
+  requirement_fingerprint: string;
+  downloaded_bytes: number;
+  redirect_count: number;
+  error_code: string | null;
+  sanitized_message: string | null;
+  created_at: string;
+  updated_at: string;
+  approved_at: string | null;
+  approval_expires_at: string | null;
+  approval_consumed_at: string | null;
+  queued_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  acquisition_id: string | null;
 };
 
 export type MemoryScanRun = {
@@ -3401,6 +3439,12 @@ export const api = {
   listMemoryEvidences: (caseId: string) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences`),
   getMemoryEvidenceReadiness: (caseId: string, evidenceId: string) => request<MemoryEvidenceReadiness>(`/cases/${caseId}/memory/evidences/${evidenceId}/readiness`),
   getMemorySymbolCacheStatus: () => request<MemorySymbolCacheStatus>("/memory/symbols/cache"),
+  requestMemorySymbolAcquisition: (caseId: string, evidenceId: string, authorizationAcknowledged = false) =>
+    request<MemorySymbolRequestCreateResponse>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbols/request`, {
+      method: "POST",
+      body: JSON.stringify({ authorization_acknowledged: authorizationAcknowledged }),
+    }),
+  getMemorySymbolRequest: (requestId: string) => request<MemorySymbolRequestStatus>(`/memory/symbols/requests/${requestId}`),
   listMemoryRuns: (caseId: string) => request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs`),
   startMemoryScan: (evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", authorizationAcknowledged = false) =>
     request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan`, { method: "POST", body: JSON.stringify({ profile, authorization_acknowledged: authorizationAcknowledged }) }),
