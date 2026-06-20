@@ -268,7 +268,7 @@ describe("MemoryAnalysisPage", () => {
 
     expect(await screen.findByText("SYMBOLS_UNAVAILABLE")).toBeInTheDocument();
     expect(screen.getByText(/could not resolve the required Windows symbols under offline-only mode/i)).toBeInTheDocument();
-    expect(screen.getByText(/restricted network egress is enforced/i)).toBeInTheDocument();
+    expect(screen.getByText(/restricted network egress is configured/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Run basic process analysis/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /Run extended process analysis/i })).toBeDisabled();
     expect(screen.queryByText(/Traceback|\/app\/data/i)).not.toBeInTheDocument();

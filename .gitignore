@@ -28,6 +28,12 @@ backend/*.egg-info/
 
 # Frontend artifacts
 node_modules/
+package-lock.json
+tsconfig.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
+frontend/tsconfig.app.tsbuildinfo
+frontend/tsconfig.node.tsbuildinfo
+frontend/package-lock.json
 frontend/node_modules/
 dist/
 frontend/dist/
