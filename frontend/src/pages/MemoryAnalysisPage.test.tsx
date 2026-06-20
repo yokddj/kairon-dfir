@@ -471,13 +471,19 @@ describe("MemoryAnalysisPage workspace", () => {
     expect(screen.getByTestId("analyze-run-button")).toBeInTheDocument();
   });
 
-  // 17. No duplicate actions
-  it("does not duplicate the analyze action across tabs", async () => {
+  // 17. Analyze memory only appears on Overview (no duplicates across tabs)
+  it("renders the Analyze memory action only on the Overview tab", async () => {
     renderPage();
-    await screen.findByTestId("memory-analyze-action");
+    await screen.findByTestId("memory-overview");
+    await waitFor(() => {
+      expect(screen.getByTestId("memory-analyze-action")).toBeInTheDocument();
+    });
     fireEvent.click(screen.getByTestId("memory-tab-runs"));
     await screen.findByTestId("memory-runs-tab");
-    expect(screen.getByTestId("memory-analyze-action")).toBeInTheDocument();
+    expect(screen.queryByTestId("memory-analyze-action")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("memory-tab-processes"));
+    await screen.findByTestId("memory-processes-tab");
+    expect(screen.queryByTestId("memory-analyze-action")).not.toBeInTheDocument();
   });
 
   // 18. No sensitive paths rendered

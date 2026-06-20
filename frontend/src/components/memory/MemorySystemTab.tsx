@@ -22,23 +22,32 @@ function SystemInfoCard({ item, runId, isPrimary }: { item: MemorySystemInfo; ru
   const host = (item.host && (item.host.name as string | undefined)) || "—";
   const os = item.os || {};
   const memory = item.memory || {};
-  const kernelBase = (os.kernel_base as string | undefined) || "—";
+  const raw = (item.raw as Record<string, unknown> | undefined) || {};
+  const backendVersion = (raw.backend_version as string | undefined) || "—";
+
+  const family = (os.family as string | undefined) || "windows";
+  const architecture = (os.machine_type as string | undefined) || "—";
+  const ntMajor = (os.nt_major_version as string | undefined);
+  const ntMinor = (os.nt_minor_version as string | undefined);
+  const windowsBuild = (os.windows_build as string | undefined) || "—";
+  const ntVersion = ntMajor !== undefined && ntMinor !== undefined ? `${ntMajor}.${ntMinor}` : "—";
   const kernelVersion = (os.kernel_version as string | undefined) || "—";
-  const arch = (os.machine_type as string | undefined) || "—";
+  const kernelBase = (os.kernel_base as string | undefined) || "—";
+  const kdVersionBlock = (os.kd_version_block as string | undefined) || "—";
+  const ntSystemRoot = (os.nt_system_root as string | undefined) || "—";
+  const keNumberProcessors = (os.ke_number_processors as string | undefined) || "—";
+
   const layerName = (memory.layer_name as string | undefined) || "—";
   const dtb = (memory.dtb as string | undefined) || "—";
   const symbolTable = (memory.kernel_symbols as string | undefined) || "—";
   const systemTime = (memory.system_time as string | undefined) || "—";
-  const raw = (item.raw as Record<string, unknown> | undefined) || {};
-  const backendVersion = (raw.backend_version as string | undefined) || "—";
-  const ntMajor = (os.nt_major_version as string | undefined) || "—";
-  const ntMinor = (os.nt_minor_version as string | undefined) || "—";
-  const family = (os.family as string | undefined) || "windows";
+  const is64Bit = memory.is_64_bit === true ? "Yes" : memory.is_64_bit === false ? "No" : "—";
 
   const missingFields = [
+    architecture === "—" && "architecture",
+    windowsBuild === "—" && "windows build",
     kernelBase === "—" && "kernel base",
     kernelVersion === "—" && "kernel version",
-    arch === "—" && "architecture",
     layerName === "—" && "memory layer",
     symbolTable === "—" && "symbol table",
     systemTime === "—" && "system time",
@@ -54,28 +63,40 @@ function SystemInfoCard({ item, runId, isPrimary }: { item: MemorySystemInfo; ru
           <p className="font-mono text-xs uppercase tracking-[0.18em] text-muted">
             {isPrimary ? "Latest successful windows.info" : "Historical system result"}
           </p>
-          <h4 className="mt-1 text-base font-semibold">{family} · {arch}</h4>
+          <h4 className="mt-1 text-base font-semibold">{family} · {architecture} · {windowsBuild === "—" ? "build ?" : `build ${windowsBuild}`}</h4>
         </div>
         <span className="rounded-md border border-line bg-abyss/60 px-2 py-0.5 text-[10px] text-muted">
           Run {runId.slice(0, 8)}…
         </span>
       </header>
-        <dl className="mt-3 grid gap-2 text-xs md:grid-cols-2">
+
+      <section className="mt-3 rounded-xl border border-line bg-abyss/40 p-2" data-testid="analysis-engine-section">
+        <p className="text-[10px] uppercase tracking-[0.16em] text-muted">Analysis engine</p>
+        <p className="mt-1 text-ink" data-testid="analysis-engine-version">{backendVersion}</p>
+      </section>
+
+      <section className="mt-3" data-testid="guest-system-section">
+        <p className="text-[10px] uppercase tracking-[0.16em] text-muted">Guest system</p>
+        <dl className="mt-1 grid gap-2 text-xs md:grid-cols-2">
           <Field label="OS family" value={family} />
-          <Field label="Architecture" value={arch} missing={arch === "—"} />
-          <Field label="NT version" value={`${ntMajor}.${ntMinor}`} missing={ntMajor === "—"} />
-          <Field label="Kernel base" value={kernelBase} missing={kernelBase === "—"} />
+          <Field label="Windows build" value={windowsBuild} missing={windowsBuild === "—"} />
+          <Field label="Architecture" value={architecture} missing={architecture === "—"} />
+          <Field label="NT version" value={ntVersion} missing={ntVersion === "—"} />
           <Field label="Kernel version" value={kernelVersion} missing={kernelVersion === "—"} />
-          <Field label="Build" value={backendVersion} missing={backendVersion === "—"} />
+          <Field label="Kernel base" value={kernelBase} missing={kernelBase === "—"} />
+          <Field label="KD version block" value={kdVersionBlock} missing={kdVersionBlock === "—"} />
+          <Field label="NT system root" value={ntSystemRoot} missing={ntSystemRoot === "—"} />
+          <Field label="Processors" value={keNumberProcessors} missing={keNumberProcessors === "—"} />
           <Field label="Memory layer" value={layerName} missing={layerName === "—"} />
+          <Field label="Is 64-bit" value={is64Bit} missing={is64Bit === "—"} />
           <Field label="Symbol table" value={symbolTable} missing={symbolTable === "—"} />
           <Field label="DTB" value={dtb} missing={dtb === "—"} />
           <Field label="System time" value={systemTime} missing={systemTime === "—"} />
           <Field label="Host" value={host} missing={host === "—"} />
-          <Field label="Normalization" value="memory_process_canonical_v1" />
         </dl>
+      </section>
       {missingFields.length > 0 ? (
-        <p className="mt-2 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-100">
+        <p className="mt-2 rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-100" data-testid="system-info-warning">
           Some fields were not normalized from the current Volatility output: {missingFields.join(", ")}.
         </p>
       ) : null}

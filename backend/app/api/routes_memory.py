@@ -1,4 +1,6 @@
 from datetime import UTC, datetime
+import json
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -7,12 +9,14 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
-from app.models.memory import MemoryScanRun, MemorySymbolAcquisition
+from app.models.memory import MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition
 from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, mark_run_queued, resolve_profile_plugins
 from app.services.memory.evidence_access import evidence_readiness
-from app.services.memory.indexing import get_memory_document, search_memory_edges, search_memory_processes
+from app.services.memory.indexing import ensure_memory_index, get_memory_document, get_opensearch_client, search_memory_edges, search_memory_processes
+from app.services.memory.normalizers import normalize_windows_info
+from app.services.memory.storage import memory_run_dir
 from app.services.memory.overview import get_case_memory_overview, list_memory_evidences
 from app.services.memory.symbol_control import SymbolControlError, acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure, queue_symbol_acquisition, request_status_dict, request_symbol_acquisition_awaiting_approval
 from app.models.memory import MemorySymbolAcquisition, MemorySymbolAcquisitionRequest
@@ -339,6 +343,75 @@ def get_case_memory_system_info(case_id: str, db: Session = Depends(get_db)) -> 
         system_info = (run.metadata_json or {}).get("system_info")
         if isinstance(system_info, dict):
             results.append(system_info)
+    return results
+
+
+@router.post("/cases/{case_id}/memory/system-info/reindex", response_model=list[MemorySystemInfoRead])
+def reindex_system_info(case_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    """Re-normalize windows.info results from the existing raw output.
+
+    The previous normalizer only inspected the first row of the
+    windows.info output, which produced documents with every OS /
+    memory field set to ``null``.  This endpoint re-runs the
+    normalizer on the existing raw ``windows.info.json`` files
+    on disk, without re-running Volatility or rewriting other
+    indices, and updates the run's ``system_info`` payload in
+    PostgreSQL plus the OpenSearch document.
+    """
+    _require_case(db, case_id)
+    runs = (
+        db.query(MemoryScanRun)
+        .filter(MemoryScanRun.case_id == case_id, MemoryScanRun.status.in_(["completed", "completed_with_errors"]))
+        .order_by(MemoryScanRun.completed_at.desc().nullslast(), MemoryScanRun.created_at.desc())
+        .all()
+    )
+    settings = get_settings()
+    results: list[dict] = []
+    for run in runs:
+        raw_path = memory_run_dir(run.case_id, run.evidence_id, run.id) / "windows.info.json"
+        if not raw_path.exists():
+            continue
+        try:
+            payload = json.loads(raw_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        plugin_run = (
+            db.query(MemoryPluginRun)
+            .filter(MemoryPluginRun.memory_scan_run_id == run.id, MemoryPluginRun.plugin == "windows.info")
+            .order_by(MemoryPluginRun.created_at.desc())
+            .first()
+        )
+        plugin_run_id = plugin_run.id if plugin_run else ""
+        system_info = normalize_windows_info(
+            payload,
+            case_id=run.case_id,
+            evidence_id=run.evidence_id,
+            memory_run_id=run.id,
+            memory_plugin_run_id=plugin_run_id,
+            backend_version=run.backend_version,
+        )
+        metadata = dict(run.metadata_json or {})
+        metadata["system_info"] = system_info
+        run.metadata_json = metadata
+        db.commit()
+        # Update the OpenSearch document as well.
+        try:
+            index = ensure_memory_index(run.case_id)
+            client = get_opensearch_client()
+            doc_id = f"{run.id}:memory_system_info"
+            client.index(
+                index=index,
+                id=doc_id,
+                body={
+                    **system_info,
+                    "document_type": "memory_system_info",
+                    "document_id": doc_id,
+                },
+                refresh=True,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to update OpenSearch system info doc", extra={"run_id": run.id})
+        results.append(system_info)
     return results
 
 

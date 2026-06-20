@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type MemoryRunSelector, api } from "../../api/client";
 import { MemoryProcessGraph } from "../MemoryProcessGraph";
+import { IndentedTreeView } from "./IndentedTreeView";
 
 type Props = {
   caseId: string;
@@ -13,6 +14,8 @@ type Props = {
   onSelectEntityId: (next: string | null) => void;
   onOpenProcessDetails: (entityId: string) => void;
 };
+
+type SubView = "graph" | "tree";
 
 function Stat({ label, value, testId }: { label: string; value: string | number; testId: string }) {
   return (
@@ -50,6 +53,7 @@ export function MemoryGraphTab({
     scanOnly: 0,
     searchResults: 0,
   });
+  const [subView, setSubView] = useState<SubView>("graph");
 
   return (
     <div className="space-y-4" data-testid="memory-graph-tab">
@@ -59,12 +63,36 @@ export function MemoryGraphTab({
             <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Process graph</h3>
             <p className="mt-1 text-xs text-muted">Run-isolated, filterable, click-to-focus. Detail panel is on the right.</p>
           </div>
-          <RunPicker
-            runId={runId}
-            runOptions={runOptions}
-            selectedRunId={selectedRunId}
-            onSelectRunId={onSelectRunId}
-          />
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex rounded-xl border border-line bg-abyss/70 p-0.5 text-xs" role="tablist" aria-label="Graph sub-view">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={subView === "graph"}
+                onClick={() => setSubView("graph")}
+                data-testid="graph-subview-graph"
+                className={`rounded-lg px-2 py-1 ${subView === "graph" ? "bg-accent text-abyss" : "text-muted"}`}
+              >
+                Visual graph
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={subView === "tree"}
+                onClick={() => setSubView("tree")}
+                data-testid="graph-subview-tree"
+                className={`rounded-lg px-2 py-1 ${subView === "tree" ? "bg-accent text-abyss" : "text-muted"}`}
+              >
+                Indented tree
+              </button>
+            </div>
+            <RunPicker
+              runId={runId}
+              runOptions={runOptions}
+              selectedRunId={selectedRunId}
+              onSelectRunId={onSelectRunId}
+            />
+          </div>
         </header>
 
         <div className="mt-3 grid gap-2 md:grid-cols-7">
@@ -77,35 +105,70 @@ export function MemoryGraphTab({
           <Stat label="Orphans" value={graphMetrics.orphans} testId="orphans" />
         </div>
 
-        <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-          <div className="min-w-0">
-            <MemoryProcessGraph
-              caseId={caseId}
-              runId={runId}
-              onOpenDetail={onOpenProcessDetails}
-              selectedEntityId={selectedEntityId}
-              onSelectEntityId={onSelectEntityId}
-            />
-          </div>
-          <aside
-            className="rounded-2xl border border-line bg-abyss/60 p-4"
-            aria-label="Graph detail"
-            data-testid="graph-side-panel"
-          >
-            <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Selected process</h4>
-            {selectedEntityId ? (
-              <SelectedEntitySummary
+        {subView === "graph" ? (
+          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+            <div className="min-w-0">
+              <MemoryProcessGraph
                 caseId={caseId}
-                entityId={selectedEntityId}
                 runId={runId}
-                onOpenProcessDetails={onOpenProcessDetails}
-                onClose={() => onSelectEntityId(null)}
+                onOpenDetail={onOpenProcessDetails}
+                selectedEntityId={selectedEntityId}
+                onSelectEntityId={onSelectEntityId}
               />
-            ) : (
-              <p className="mt-3 text-xs text-muted">Click a node to inspect it here.</p>
-            )}
-          </aside>
-        </div>
+            </div>
+            <aside
+              className="rounded-2xl border border-line bg-abyss/60 p-4"
+              aria-label="Graph detail"
+              data-testid="graph-side-panel"
+            >
+              <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Selected process</h4>
+              {selectedEntityId ? (
+                <SelectedEntitySummary
+                  caseId={caseId}
+                  entityId={selectedEntityId}
+                  runId={runId}
+                  onOpenProcessDetails={onOpenProcessDetails}
+                  onClose={() => onSelectEntityId(null)}
+                />
+              ) : (
+                <p className="mt-3 text-xs text-muted">Click a node to inspect it here.</p>
+              )}
+            </aside>
+          </div>
+        ) : (
+          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+            <div className="min-w-0">
+              <IndentedTreeView
+                caseId={caseId}
+                runId={runId}
+                runOptions={runOptions}
+                selectedRunId={selectedRunId}
+                onSelectRunId={onSelectRunId}
+                selectedEntityId={selectedEntityId}
+                onSelectEntityId={onSelectEntityId}
+                onOpenProcessDetails={onOpenProcessDetails}
+              />
+            </div>
+            <aside
+              className="rounded-2xl border border-line bg-abyss/60 p-4"
+              aria-label="Tree detail"
+              data-testid="tree-side-panel"
+            >
+              <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Selected process</h4>
+              {selectedEntityId ? (
+                <SelectedEntitySummary
+                  caseId={caseId}
+                  entityId={selectedEntityId}
+                  runId={runId}
+                  onOpenProcessDetails={onOpenProcessDetails}
+                  onClose={() => onSelectEntityId(null)}
+                />
+              ) : (
+                <p className="mt-3 text-xs text-muted">Select a process to inspect it here.</p>
+              )}
+            </aside>
+          </div>
+        )}
       </section>
     </div>
   );
