@@ -8,7 +8,7 @@ from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryScanRun, MemorySymbolAcquisition
-from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessListRead, MemoryProcessTreeRead, MemoryRunDetailRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
+from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, mark_run_queued, resolve_profile_plugins
 from app.services.memory.evidence_access import evidence_readiness
@@ -413,3 +413,285 @@ def get_memory_process_document(document_id: str, case_id: str = Query(...), db:
     if not document or document.get("memory_artifact_type") != "memory_process":
         raise HTTPException(status_code=404, detail="Memory process document not found")
     return document
+
+
+# ---------------------------------------------------------------------------
+# Canonical memory process entity endpoints
+# ---------------------------------------------------------------------------
+
+from app.services.memory import process_entities as canonical_entities  # noqa: E402
+from pydantic import BaseModel as _BaseModel  # noqa: E402
+
+
+class _RenormalizeRequest(_BaseModel):
+    run_id: str
+    dry_run: bool = True
+
+
+def _resolve_run(db: Session, case_id: str, run_id: str | None, profile: str | None) -> MemoryScanRun:
+    query = db.query(MemoryScanRun).filter(MemoryScanRun.case_id == case_id)
+    if run_id:
+        run = query.filter(MemoryScanRun.id == run_id).first()
+        if not run:
+            raise HTTPException(status_code=404, detail="Memory run not found")
+        return run
+    if profile:
+        run = (
+            query.filter(MemoryScanRun.profile == profile, MemoryScanRun.status.in_(["completed", "completed_with_errors"]))
+            .order_by(MemoryScanRun.completed_at.desc().nullslast(), MemoryScanRun.created_at.desc())
+            .first()
+        )
+        if not run:
+            raise HTTPException(status_code=404, detail=f"No completed {profile} run was found for this case.")
+        return run
+    run = (
+        query.filter(MemoryScanRun.status.in_(["completed", "completed_with_errors"]))
+        .order_by(MemoryScanRun.completed_at.desc().nullslast(), MemoryScanRun.created_at.desc())
+        .first()
+    )
+    if not run:
+        raise HTTPException(status_code=404, detail="No completed memory run was found for this case.")
+    return run
+
+
+def _is_process_profile(profile: str | None) -> bool:
+    return bool(profile) and profile in {"processes_basic", "processes_extended"}
+
+
+@router.get("/cases/{case_id}/memory/runs/options", response_model=MemoryRunSelectorRead)
+def get_memory_run_options(case_id: str, db: Session = Depends(get_db)) -> dict:
+    _require_case(db, case_id)
+    runs = (
+        db.query(MemoryScanRun)
+        .filter(MemoryScanRun.case_id == case_id)
+        .order_by(MemoryScanRun.created_at.desc())
+        .all()
+    )
+    completed_process = next(
+        (
+            r
+            for r in runs
+            if _is_process_profile(r.profile) and r.status in ("completed", "completed_with_errors")
+        ),
+        None,
+    )
+    options: list[dict] = []
+    for r in runs:
+        if not _is_process_profile(r.profile) and r.profile != "metadata_only":
+            continue
+        options.append(
+            {
+                "run_id": r.id,
+                "profile": r.profile,
+                "status": r.status,
+                "created_at": r.created_at,
+                "completed_at": r.completed_at,
+                "plugin_count": r.plugin_count,
+                "plugins_completed": r.plugins_completed,
+                "plugins_failed": r.plugins_failed,
+                "selected": bool(completed_process and r.id == completed_process.id),
+            }
+        )
+    default = completed_process.id if completed_process else None
+    return {
+        "runs": options,
+        "default_run_id": default,
+        "combined_historical_available": sum(1 for r in runs if _is_process_profile(r.profile)) > 1,
+    }
+
+
+@router.get("/cases/{case_id}/memory/process-entities", response_model=MemoryProcessEntityListRead)
+def get_canonical_process_entities(
+    case_id: str,
+    run_id: str | None = Query(default=None),
+    profile: str | None = Query(default=None, pattern="^(processes_basic|processes_extended)$"),
+    evidence_id: str | None = Query(default=None),
+    visibility: str | None = Query(default=None, pattern="^(listed|scan_only|terminated|unknown|hidden_candidate)$"),
+    source_plugin: str | None = Query(default=None, pattern="^(windows\\.pslist|windows\\.psscan|windows\\.pstree|windows\\.cmdline)$"),
+    process_name: str | None = Query(default=None),
+    pid: int | None = Query(default=None, ge=0),
+    ppid: int | None = Query(default=None, ge=0),
+    has_command_line: bool | None = Query(default=None),
+    interesting_only: bool | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+) -> dict:
+    _require_case(db, case_id)
+    run = _resolve_run(db, case_id, run_id, profile)
+    result = canonical_entities.fetch_canonical_entities(
+        case_id,
+        run_id=run.id,
+        visibility=visibility,
+        source_plugin=source_plugin,
+        process_name=process_name,
+        pid=pid,
+        ppid=ppid,
+        has_command_line=has_command_line,
+        interesting_only=interesting_only,
+        page=page,
+        page_size=page_size,
+    )
+    items = result["items"]
+    total_observations = sum(item.get("observation_count", 0) for item in items)
+    return {
+        "items": items,
+        "total": result["total"],
+        "page": result["page"],
+        "page_size": result["page_size"],
+        "selected_run": run.id,
+        "normalization_version": canonical_entities.NORMALIZATION_VERSION,
+        "total_observations": total_observations,
+        "facets": {},
+    }
+
+
+@router.get("/cases/{case_id}/memory/process-entities/{entity_id}", response_model=MemoryProcessEntityDetailRead)
+def get_canonical_process_entity_detail(
+    case_id: str,
+    entity_id: str,
+    run_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    _require_case(db, case_id)
+    run = _resolve_run(db, case_id, run_id, profile="processes_extended")
+    entity = canonical_entities.fetch_canonical_entity(case_id, run_id=run.id, entity_id=entity_id)
+    if entity is None:
+        # Try basic profile too
+        run2 = _resolve_run(db, case_id, None, profile="processes_basic")
+        entity = canonical_entities.fetch_canonical_entity(case_id, run_id=run2.id, entity_id=entity_id)
+        if entity is None:
+            raise HTTPException(status_code=404, detail="Memory process entity was not found.")
+        run = run2
+    observations = canonical_entities.fetch_canonical_observations(case_id, run_id=run.id, entity_id=entity_id)
+    alternate_command_lines: list[str] = []
+    for obs in observations:
+        cl = (obs.get("observed") or {}).get("command_line")
+        if cl and cl != entity.get("process", {}).get("command_line") and cl not in alternate_command_lines:
+            alternate_command_lines.append(cl)
+    parent = None
+    children: list[dict] = []
+    parent_id = entity.get("parent_entity_id")
+    if parent_id:
+        parent = canonical_entities.fetch_canonical_entity(case_id, run_id=run.id, entity_id=parent_id)
+    # Fetch children
+    children_page = canonical_entities.fetch_canonical_entities(
+        case_id, run_id=run.id, page=1, page_size=200
+    )
+    for child in children_page["items"]:
+        if child.get("parent_entity_id") == entity_id:
+            children.append(child)
+    tree_path: list[str] = []
+    cursor = parent_id
+    while cursor:
+        tree_path.append(cursor)
+        ancestor = canonical_entities.fetch_canonical_entity(case_id, run_id=run.id, entity_id=cursor)
+        cursor = ancestor.get("parent_entity_id") if ancestor else None
+    source_record_refs = [obs.get("source_record_id", "") for obs in observations if obs.get("source_record_id")]
+    return {
+        "entity": entity,
+        "observations": observations,
+        "parent": parent,
+        "children": children,
+        "tree_path": tree_path,
+        "alternate_command_lines": alternate_command_lines,
+        "findings": entity.get("findings", []),
+        "source_record_refs": source_record_refs,
+    }
+
+
+@router.get("/cases/{case_id}/memory/process-tree-canonical", response_model=MemoryProcessTreeEntityRead)
+def get_canonical_process_tree(
+    case_id: str,
+    run_id: str | None = Query(default=None),
+    profile: str | None = Query(default=None, pattern="^(processes_basic|processes_extended)$"),
+    root_pid: int | None = Query(default=None, ge=0),
+    depth: int = Query(default=3, ge=1, le=10),
+    visibility: str | None = Query(default=None, pattern="^(listed|scan_only|terminated|unknown|hidden_candidate)$"),
+    interesting_only: bool | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    _require_case(db, case_id)
+    run = _resolve_run(db, case_id, run_id, profile)
+    return canonical_entities.fetch_canonical_tree(
+        case_id,
+        run_id=run.id,
+        root_pid=root_pid,
+        depth=depth,
+        visibility=visibility,
+        interesting_only=interesting_only,
+    )
+
+
+@router.post("/cases/{case_id}/memory/process-entities/renormalize", response_model=MemoryRenormalizeSummaryRead)
+def renormalize_canonical_entities(
+    case_id: str,
+    payload: _RenormalizeRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Reconcile legacy per-plugin memory_process documents into canonical entities.
+
+    The legacy documents (one per plugin-row) are preserved; the
+    canonical entities, observations and edges are written alongside
+    them, keyed by the same run id.  ``dry_run=True`` returns the
+    summary without writing to OpenSearch.
+    """
+    _require_case(db, case_id)
+    run = db.get(MemoryScanRun, payload.run_id)
+    if not run or run.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Memory run not found for this case.")
+    if not _is_process_profile(run.profile):
+        raise HTTPException(status_code=400, detail="Renormalization is only supported for processes_basic/processes_extended runs.")
+    evidence = db.get(Evidence, run.evidence_id)
+    if evidence is None:
+        raise HTTPException(status_code=404, detail="Memory evidence not found for this run.")
+    raw_documents = canonical_entities.fetch_legacy_process_documents(case_id, run_id=run.id)
+    result = canonical_entities.renormalize_documents(
+        raw_documents,
+        case_id=case_id,
+        evidence_id=run.evidence_id,
+        run_id=run.id,
+        materialize=not payload.dry_run,
+    )
+    summary = result["summary"]
+    summary["materialization_status"] = "applied" if not payload.dry_run else "dry_run"
+    return summary
+
+
+@router.get("/cases/{case_id}/memory/process-entities/summary", response_model=MemoryRenormalizeSummaryRead)
+def get_canonical_process_summary(
+    case_id: str,
+    run_id: str | None = Query(default=None),
+    profile: str | None = Query(default=None, pattern="^(processes_basic|processes_extended)$"),
+    db: Session = Depends(get_db),
+) -> dict:
+    _require_case(db, case_id)
+    run = _resolve_run(db, case_id, run_id, profile)
+    summary = canonical_entities.fetch_canonical_summary(case_id, run_id=run.id)
+    return {
+        "case_id": case_id,
+        "evidence_id": run.evidence_id,
+        "run_id": run.id,
+        "source_documents": 0,
+        "candidate_entities": summary["total_entities"],
+        "observation_count": 0,
+        "duplicate_groups_collapsed": 0,
+        "invalid_records": 0,
+        "ambiguous_pid_groups": 0,
+        "expected_edges": 0,
+        "tree_metrics": {
+            "total_nodes": summary["total_entities"],
+            "roots": summary["roots"],
+            "orphans": summary["orphans"],
+            "unknown_parent": summary["unknown_parent"],
+            "cycles": summary["cycles"],
+            "self_parent": summary["self_parent"],
+            "hidden_candidates": summary["hidden_candidate"],
+            "scan_only": summary["scan_only"],
+            "terminated": summary["terminated"],
+            "pid_zero_count": summary["pid_zero"],
+            "pid_4_count": summary["pid_4"],
+        },
+        "normalization_version": canonical_entities.NORMALIZATION_VERSION,
+        "materialization_status": "applied",
+    }
