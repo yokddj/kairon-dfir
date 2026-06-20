@@ -109,15 +109,21 @@ function toNodeShape(node: any): NodeShape {
   };
 }
 
+type MemoryProcessGraphProps = {
+  caseId: string;
+  runId: string | null;
+  onOpenDetail: (entityId: string) => void;
+  selectedEntityId?: string | null;
+  onSelectEntityId?: (next: string | null) => void;
+};
+
 export function MemoryProcessGraph({
   caseId,
   runId,
   onOpenDetail,
-}: {
-  caseId: string;
-  runId: string | null;
-  onOpenDetail: (entityId: string) => void;
-}) {
+  selectedEntityId: externalSelectedEntityId,
+  onSelectEntityId: externalOnSelectEntityId,
+}: MemoryProcessGraphProps) {
   const queryClient = useQueryClient();
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [scope, setScope] = useState<Scope>("main");
@@ -125,8 +131,11 @@ export function MemoryProcessGraph({
   const [depth, setDepth] = useState(2);
   const [maxNodes, setMaxNodes] = useState(60);
   const [search, setSearch] = useState("");
-  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [internalSelectedEntityId, setInternalSelectedEntityId] = useState<string | null>(null);
   const [focusedEntityId, setFocusedEntityId] = useState<string | null>(null);
+  const selectedEntityId =
+    externalSelectedEntityId !== undefined ? externalSelectedEntityId : internalSelectedEntityId;
+  const setSelectedEntityId = externalOnSelectEntityId ?? setInternalSelectedEntityId;
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragStart, setDragStart] = useState<{ x: number; y: number; pan: { x: number; y: number } } | null>(null);

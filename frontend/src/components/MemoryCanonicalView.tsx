@@ -36,18 +36,40 @@ const TONE_CLASS: Record<string, string> = {
   neutral: "border-line bg-abyss/70 text-muted",
 };
 
-export function MemoryCanonicalView({ caseId }: { caseId: string }) {
+type MemoryCanonicalViewProps = {
+  caseId: string;
+  runId?: string | null;
+  processName?: string;
+  onProcessName?: (next: string) => void;
+  selectedEntityId?: string | null;
+  onSelectEntityId?: (next: string | null) => void;
+};
+
+export function MemoryCanonicalView({
+  caseId,
+  runId,
+  processName: externalProcessName,
+  onProcessName: externalOnProcessName,
+  selectedEntityId: externalSelectedEntityId,
+  onSelectEntityId: externalOnSelectEntityId,
+}: MemoryCanonicalViewProps) {
   const queryClient = useQueryClient();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [visibility, setVisibility] = useState<VisibilityFilter>("");
   const [sourcePlugin, setSourcePlugin] = useState<SourcePluginFilter>("");
-  const [processName, setProcessName] = useState("");
+  const [internalProcessName, setInternalProcessName] = useState("");
   const [interestingOnly, setInterestingOnly] = useState<InterestingFilter>("");
   const [page, setPage] = useState(1);
   const pageSize = 50;
-  const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [internalSelectedEntityId, setInternalSelectedEntityId] = useState<string | null>(null);
   const [dryRunMessage, setDryRunMessage] = useState<string | null>(null);
   const [applyMessage, setApplyMessage] = useState<string | null>(null);
+
+  const processName = externalProcessName ?? internalProcessName;
+  const setProcessName = externalOnProcessName ?? setInternalProcessName;
+  const selectedEntityId =
+    externalSelectedEntityId !== undefined ? externalSelectedEntityId : internalSelectedEntityId;
+  const setSelectedEntityId = externalOnSelectEntityId ?? setInternalSelectedEntityId;
 
   const runOptionsQuery = useQuery({
     queryKey: ["memory-run-options", caseId],
@@ -57,7 +79,7 @@ export function MemoryCanonicalView({ caseId }: { caseId: string }) {
   });
 
   const runSelector: MemoryRunSelector | undefined = runOptionsQuery.data;
-  const effectiveRunId = selectedRunId || runSelector?.default_run_id || null;
+  const effectiveRunId = runId || selectedRunId || runSelector?.default_run_id || null;
   const runOptionsList = useMemo(() => buildRunOptions(runSelector?.runs, effectiveRunId), [runSelector, effectiveRunId]);
 
   const entitiesQuery = useQuery({
