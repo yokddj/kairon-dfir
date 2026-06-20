@@ -270,7 +270,21 @@ def normalize_windows_info(
     memory_plugin_run_id: str,
     backend_version: str | None = None,
 ) -> dict[str, Any]:
-    row = _first_row(payload)
+    """Normalize a windows.info result.
+
+    Volatility emits windows.info as a list of ``{Variable, Value}`` rows
+    (one per kernel field).  Earlier versions of this normalizer only
+    inspected the first row, which produced documents with every OS /
+    memory field set to ``null``.  This version builds a normalized
+    map keyed by ``Variable`` and extracts the fields the UI expects.
+    """
+    variable_map = _build_windows_info_map(payload)
+    nt_major = _coerce_int(variable_map.get("NtMajorVersion") or variable_map.get("PE MajorOperatingSystemVersion"))
+    nt_minor = _coerce_int(variable_map.get("NtMinorVersion") or variable_map.get("PE MinorOperatingSystemVersion"))
+    major_minor = str(variable_map.get("Major/Minor") or "").strip()
+    windows_build = _extract_windows_build(variable_map, major_minor, nt_major, nt_minor)
+    architecture = _architecture_label(variable_map)
+    kernel_version = _kernel_version_label(variable_map, nt_major, nt_minor, windows_build)
     return {
         "case_id": case_id,
         "evidence_id": evidence_id,
@@ -280,22 +294,157 @@ def normalize_windows_info(
         "memory_artifact_type": "memory_system_info",
         "backend": "volatility3",
         "plugin": "windows.info",
-        "host": {"name": _lookup(row, "host_name", "hostname", "computer_name")},
+        "host": {"name": _host_name(variable_map)},
         "os": {
             "family": "windows",
-            "kernel_base": _lookup(row, "kernel_base", "kernel base"),
-            "kernel_version": _lookup(row, "kernel_version", "nt_build_lab", "major/minor"),
-            "nt_major_version": _lookup(row, "nt_major_version", "nt major version"),
-            "nt_minor_version": _lookup(row, "nt_minor_version", "nt minor version"),
-            "machine_type": _lookup(row, "machine_type", "machine", "architecture"),
+            "kernel_base": variable_map.get("Kernel Base"),
+            "kernel_version": kernel_version,
+            "windows_build": windows_build,
+            "nt_major_version": nt_major,
+            "nt_minor_version": nt_minor,
+            "machine_type": architecture,
+            "kd_version_block": variable_map.get("KdVersionBlock"),
+            "nt_system_root": variable_map.get("NtSystemRoot"),
+            "ke_number_processors": _coerce_int(variable_map.get("KeNumberProcessors")),
         },
         "memory": {
-            "layer_name": _lookup(row, "layer_name", "primary", "layer"),
-            "dtb": _lookup(row, "dtb", "directory_table_base"),
-            "kernel_symbols": _lookup(row, "kernel_symbols", "symbols", "symbol_table"),
-            "is_64_bit": _lookup(row, "is_64_bit", "is_64bit"),
-            "system_time": _lookup(row, "system_time", "system time"),
+            "layer_name": variable_map.get("memory_layer") or variable_map.get("layer_name"),
+            "dtb": variable_map.get("DTB"),
+            "kernel_symbols": _symbol_table_label(variable_map),
+            "is_64_bit": _coerce_bool(variable_map.get("Is64Bit")),
+            "is_pae": _coerce_bool(variable_map.get("IsPAE")),
+            "system_time": variable_map.get("SystemTime"),
         },
         "parsed_at": _utc_now(),
-        "raw": {"backend_version": backend_version, "fields": _raw_subset(row)},
+        "raw": {
+            "backend_version": backend_version,
+            "fields": _raw_subset(variable_map) if isinstance(variable_map, dict) else {},
+        },
     }
+
+
+def _build_windows_info_map(payload: Any) -> dict[str, Any]:
+    """Convert a windows.info list-of-rows payload into a Variable -> Value map."""
+    if isinstance(payload, list):
+        result: dict[str, Any] = {}
+        for row in payload:
+            if not isinstance(row, dict):
+                continue
+            var = row.get("Variable")
+            if not isinstance(var, str):
+                continue
+            value = row.get("Value")
+            # Layer entries come in the form "0 WindowsIntel32e"; keep only
+            # the textual label so the UI can render it cleanly.
+            if isinstance(value, str) and var in {"layer_name", "memory_layer", "base_layer"}:
+                parts = value.split(" ", 1)
+                if len(parts) == 2 and parts[0].isdigit():
+                    value = parts[1]
+            result[var] = value
+        return result
+    if isinstance(payload, dict):
+        return dict(payload)
+    return {}
+
+
+def _coerce_int(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(str(value), 0)
+    except (TypeError, ValueError):
+        return None
+
+
+def _coerce_bool(value: Any) -> bool | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"true", "yes", "1"}:
+        return True
+    if text in {"false", "no", "0"}:
+        return False
+    return None
+
+
+def _extract_windows_build(
+    variable_map: dict[str, Any],
+    major_minor: str,
+    nt_major: int | None,
+    nt_minor: int | None,
+) -> str | None:
+    """Derive a Windows build string from the variables we have.
+
+    Volatility exposes ``Major/Minor`` as ``<nt_major>.<build>``.  The
+    legacy UI confused this with the Volatility backend version, which
+    is the bug this fix addresses.  When the Volatility value is not
+    present, fall back to the conventional ``<nt_major>.<nt_minor>``
+    representation.
+    """
+    if major_minor and "." in major_minor:
+        _, _, maybe_build = major_minor.partition(".")
+        maybe_build = maybe_build.strip()
+        if maybe_build.isdigit():
+            return maybe_build
+    if nt_major is not None and nt_minor is not None:
+        return f"{nt_major}.{nt_minor}"
+    return None
+
+
+def _architecture_label(variable_map: dict[str, Any]) -> str | None:
+    for key in ("MachineType", "PE Machine", "machine_type"):
+        value = variable_map.get(key)
+        if value is None or value == "":
+            continue
+        try:
+            code = int(str(value), 0)
+        except (TypeError, ValueError):
+            return str(value)
+        if code in {34404, 0x8664}:
+            return "x64"
+        if code in {452, 0x1c4}:
+            return "x86"
+        if code in {512, 0x200}:
+            return "IA64"
+        if code in {43620, 0xAA64}:
+            return "ARM64"
+        return str(value)
+    return None
+
+
+def _kernel_version_label(
+    variable_map: dict[str, Any],
+    nt_major: int | None,
+    nt_minor: int | None,
+    windows_build: str | None,
+) -> str | None:
+    if nt_major is not None and nt_minor is not None:
+        if windows_build:
+            return f"{nt_major}.{nt_minor}.{windows_build}"
+        return f"{nt_major}.{nt_minor}"
+    return None
+
+
+def _host_name(variable_map: dict[str, Any]) -> str | None:
+    for key in ("Computer Name", "HostName", "host_name", "hostname", "computer_name", "NtProductType"):
+        value = variable_map.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _symbol_table_label(variable_map: dict[str, Any]) -> str | None:
+    raw = variable_map.get("Symbols")
+    if not isinstance(raw, str):
+        return None
+    if "ntkrnlmp.pdb" not in raw:
+        return None
+    guid = ""
+    if "{" in raw:
+        guid = raw.split("{", 1)[1].split("}", 1)[0]
+    if not guid:
+        # Some volatility outputs include the GUID with a -N suffix.
+        return raw.split("/")[-1] or None
+    return f"ntkrnlmp.pdb / {guid}"

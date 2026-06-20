@@ -127,7 +127,7 @@ export function MemoryOverviewTab({
             <Card label="Hidden candidates" value={summary.tree_metrics.hidden_candidates} tone="warn" />
             <Card label="Terminated" value={summary.tree_metrics.terminated} />
             <Card label="Orphans" value={summary.tree_metrics.orphans} tone="warn" />
-            <Card label="Roots" value={summary.tree_metrics.roots} />
+            <Card label="Case roots" value={summary.tree_metrics.roots} />
           </div>
         ) : (
           <p className="mt-3 text-sm text-muted">No canonical entities for the current run yet.</p>

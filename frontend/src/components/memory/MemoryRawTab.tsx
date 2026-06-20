@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
-import { type MemoryProcess, type MemoryProcessList, type MemoryRunSelector, api } from "../../api/client";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type MemoryProcess, type MemoryRunSelector, api } from "../../api/client";
 
 type Props = {
   caseId: string;
@@ -22,26 +22,30 @@ function sourceBadge(plugin: string): string {
 
 export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId }: Props) {
   const effectiveRunId = selectedRunId || runOptions?.default_run_id || null;
+  const queryClient = useQueryClient();
   const [plugin, setPlugin] = useState<PluginFilter>("all");
   const [pid, setPid] = useState("");
   const [processName, setProcessName] = useState("");
+  const [page, setPage] = useState(1);
   const [showTree, setShowTree] = useState(false);
+  const pageSize = 50;
 
-  const processQuery = useQuery({
-    queryKey: ["raw-processes", caseId, effectiveRunId, plugin, pid, processName],
+  const processQuery = useQuery<{ items: MemoryProcess[]; total: number; page: number; page_size: number }>({
+    queryKey: ["raw-processes", caseId, effectiveRunId, plugin, pid, processName, page],
     queryFn: () => {
       const params: { run_id?: string; pid?: number; process_name?: string; page: number; page_size: number; source_plugin?: string } = {
         run_id: effectiveRunId || undefined,
-        page: 1,
-        page_size: 50,
+        page,
+        page_size: pageSize,
       };
       if (plugin !== "all") params.source_plugin = plugin;
       if (pid) params.pid = Number(pid);
       if (processName) params.process_name = processName;
-      return api.getCaseMemoryProcesses(caseId, params as any) as Promise<MemoryProcessList>;
+      return api.getCaseMemoryProcesses(caseId, params as any) as Promise<{ items: MemoryProcess[]; total: number; page: number; page_size: number }>;
     },
     enabled: Boolean(effectiveRunId),
     refetchOnWindowFocus: false,
+    placeholderData: (previous) => previous,
   });
 
   const treeQuery = useQuery({
@@ -50,6 +54,32 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
     enabled: Boolean(effectiveRunId && showTree),
     refetchOnWindowFocus: false,
   });
+
+  const detailQueries = useQueries({
+    queries: (processQuery.data?.items || []).map((row) => ({
+      queryKey: ["raw-canonical-link", caseId, effectiveRunId, (row.process as any)?.pid],
+      queryFn: () =>
+        api.getCanonicalProcessEntities(caseId, {
+          run_id: effectiveRunId || undefined,
+          pid: (row.process as any)?.pid ?? 0,
+          page: 1,
+          page_size: 1,
+        }),
+      enabled: Boolean(effectiveRunId && (row.process as any)?.pid !== undefined),
+      refetchOnWindowFocus: false,
+      staleTime: 60_000,
+    })),
+  });
+
+  const totalPages = processQuery.data ? Math.max(1, Math.ceil(processQuery.data.total / pageSize)) : 1;
+
+  function reset() {
+    setPlugin("all");
+    setPid("");
+    setProcessName("");
+    setPage(1);
+    queryClient.invalidateQueries({ queryKey: ["raw-processes"] });
+  }
 
   return (
     <div className="space-y-4" data-testid="memory-raw-tab">
@@ -67,7 +97,7 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
             <select
               id="raw-run-picker"
               value={effectiveRunId || ""}
-              onChange={(event) => onSelectRunId(event.target.value || null)}
+              onChange={(event) => { onSelectRunId(event.target.value || null); setPage(1); }}
               className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm"
               data-testid="raw-run-picker"
             >
@@ -82,7 +112,7 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
             <select
               id="raw-plugin"
               value={plugin}
-              onChange={(event) => setPlugin(event.target.value as PluginFilter)}
+              onChange={(event) => { setPlugin(event.target.value as PluginFilter); setPage(1); }}
               className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm"
               data-testid="raw-plugin-filter"
             >
@@ -102,7 +132,7 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
             type="number"
             min={0}
             value={pid}
-            onChange={(event) => setPid(event.target.value)}
+            onChange={(event) => { setPid(event.target.value); setPage(1); }}
             className="w-24 rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm"
             data-testid="raw-pid-input"
           />
@@ -110,10 +140,18 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
           <input
             id="raw-name"
             value={processName}
-            onChange={(event) => setProcessName(event.target.value)}
+            onChange={(event) => { setProcessName(event.target.value); setPage(1); }}
             className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm"
             data-testid="raw-name-input"
           />
+          <button
+            type="button"
+            onClick={reset}
+            className="rounded-xl border border-line bg-abyss/70 px-3 py-1 text-xs"
+            data-testid="raw-reset-filters"
+          >
+            Reset
+          </button>
           <button
             type="button"
             onClick={() => setShowTree((value) => !value)}
@@ -134,11 +172,11 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
         {processQuery.data ? (
           <>
             <p className="mt-3 text-xs text-muted">
-              {processQuery.data.total} raw rows · showing first 50 (legacy per-plugin layout).
+              {processQuery.data.total} raw rows · page {page} of {totalPages} (showing {processQuery.data.items.length} per page).
             </p>
-            <div className="mt-2 overflow-x-auto">
-              <table className="min-w-full divide-y divide-line text-xs" data-testid="raw-table">
-                <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted">
+            <div className="mt-2 max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
+              <table className="min-w-[860px] w-full divide-y divide-line text-xs" data-testid="raw-table">
+                <thead className="sticky top-0 z-10 bg-abyss/90 text-left text-[10px] uppercase tracking-[0.14em] text-muted">
                   <tr>
                     <th className="px-2 py-1">Plugin</th>
                     <th className="px-2 py-1">PID</th>
@@ -147,22 +185,72 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
                     <th className="px-2 py-1">Command line</th>
                     <th className="px-2 py-1">Create</th>
                     <th className="px-2 py-1">Exit</th>
+                    <th className="px-2 py-1">Canonical</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-line">
-                  {processQuery.data.items.map((row: MemoryProcess) => (
-                    <tr key={row.document_id || `${row.memory_run_id}-${row.process?.pid}-${row.plugins?.[0]}`}>
-                      <td className="px-2 py-1 text-ink">{(row.plugins || []).map(sourceBadge).join(", ") || "—"}</td>
-                      <td className="px-2 py-1 text-muted">{reported((row.process as any)?.pid)}</td>
-                      <td className="px-2 py-1 text-muted">{reported((row.process as any)?.ppid)}</td>
-                      <td className="px-2 py-1 text-ink">{reported((row.process as any)?.name)}</td>
-                      <td className="px-2 py-1 text-muted">{reported((row.process as any)?.command_line)}</td>
-                      <td className="px-2 py-1 text-muted">{reported((row.process as any)?.create_time)}</td>
-                      <td className="px-2 py-1 text-muted">{reported((row.process as any)?.exit_time)}</td>
-                    </tr>
-                  ))}
+                  {processQuery.data.items.map((row: MemoryProcess, idx: number) => {
+                    const link = detailQueries[idx]?.data?.items?.[0];
+                    return (
+                      <tr key={row.document_id || `${row.memory_run_id}-${(row.process as any)?.pid}-${(row.plugins || [])[0]}-${idx}`}>
+                        <td className="px-2 py-1 text-ink">{(row.plugins || []).map(sourceBadge).join(", ") || "—"}</td>
+                        <td className="px-2 py-1 text-muted">{reported((row.process as any)?.pid)}</td>
+                        <td className="px-2 py-1 text-muted">{reported((row.process as any)?.ppid)}</td>
+                        <td className="px-2 py-1 text-ink">{reported((row.process as any)?.name)}</td>
+                        <td className="px-2 py-1 text-muted" title={reported((row.process as any)?.command_line)}>
+                          {reported((row.process as any)?.command_line)}
+                        </td>
+                        <td className="px-2 py-1 text-muted">{reported((row.process as any)?.create_time)}</td>
+                        <td className="px-2 py-1 text-muted">{reported((row.process as any)?.exit_time)}</td>
+                        <td className="px-2 py-1">
+                          {link ? (
+                            <a
+                              href={`/cases/${caseId}/memory?tab=processes&run_id=${effectiveRunId}`}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                const url = `/cases/${caseId}/memory?tab=processes&run_id=${effectiveRunId || ""}`;
+                                window.history.pushState({}, "", url);
+                                window.dispatchEvent(new PopStateEvent("popstate"));
+                                window.location.assign(url);
+                              }}
+                              data-testid="raw-link-canonical"
+                              className="rounded-md border border-line bg-abyss/70 px-1.5 py-0.5 text-[10px] text-accent"
+                            >
+                              Open canonical
+                            </a>
+                          ) : (
+                            <span className="text-[10px] text-muted">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
+            </div>
+            <div className="mt-3 flex items-center justify-between text-xs" data-testid="raw-pagination">
+              <span className="text-muted">{processQuery.data.items.length === 0 ? "No rows." : `Showing ${(page - 1) * pageSize + 1}-${(page - 1) * pageSize + processQuery.data.items.length} of ${processQuery.data.total}`}</span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                  disabled={page <= 1}
+                  className="rounded-md border border-line bg-abyss/70 px-2 py-1 text-xs disabled:opacity-50"
+                  data-testid="raw-prev-page"
+                >
+                  Previous
+                </button>
+                <span>Page {page} / {totalPages}</span>
+                <button
+                  type="button"
+                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={page >= totalPages}
+                  className="rounded-md border border-line bg-abyss/70 px-2 py-1 text-xs disabled:opacity-50"
+                  data-testid="raw-next-page"
+                >
+                  Next
+                </button>
+              </div>
             </div>
           </>
         ) : null}
@@ -176,7 +264,7 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
                 {treeQuery.error.message}
               </p>
             ) : treeQuery.data ? (
-              <p className="mt-2 text-xs text-muted">
+              <p className="mt-2 text-xs text-muted" data-testid="raw-tree-summary">
                 Total {treeQuery.data.total_process_count} · Roots {treeQuery.data.root_count} · Orphans {treeQuery.data.orphan_count} · Sources {treeQuery.data.source_plugins.map(sourceBadge).join(", ")}
               </p>
             ) : null}

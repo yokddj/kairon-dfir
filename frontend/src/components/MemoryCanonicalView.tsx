@@ -355,34 +355,36 @@ function ProcessTable({
     );
   }
   return (
-    <div className="overflow-x-auto">
-      <table className="min-w-full divide-y divide-line text-sm" data-testid="canonical-process-table">
-        <thead className="bg-abyss/70 text-left text-xs uppercase tracking-[0.14em] text-muted">
+    <div className="max-w-full overflow-x-auto" data-testid="canonical-process-table-container">
+      <table className="min-w-[1100px] w-full divide-y divide-line text-sm" data-testid="canonical-process-table">
+        <thead className="sticky top-0 z-10 bg-abyss/90 backdrop-blur text-left text-xs uppercase tracking-[0.14em] text-muted">
           <tr>
-            <th className="px-4 py-3">PID</th>
+            <th className="sticky left-0 z-20 bg-abyss/90 px-4 py-3 text-left">PID</th>
             <th className="px-4 py-3">PPID</th>
             <th className="px-4 py-3">Process</th>
             <th className="px-4 py-3">Command line</th>
-            <th className="px-4 py-3">Created</th>
-            <th className="px-4 py-3">Exited</th>
-            <th className="px-4 py-3">Sources</th>
+            <th className="px-4 py-3 hidden md:table-cell">Created</th>
+            <th className="px-4 py-3 hidden md:table-cell">Exited</th>
+            <th className="px-4 py-3 hidden lg:table-cell">Sources</th>
             <th className="px-4 py-3">Visibility</th>
-            <th className="px-4 py-3">Findings</th>
+            <th className="px-4 py-3 hidden lg:table-cell">Findings</th>
             <th className="px-4 py-3">Actions</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-line">
           {list.items.map((entity) => (
             <tr key={entity.process_entity_id} data-testid="canonical-process-row">
-              <td className="px-4 py-3 text-ink">{reported(entity.process.pid)}</td>
+              <td className="sticky left-0 z-10 bg-abyss/95 px-4 py-3 font-mono text-xs text-ink">
+                {reported(entity.process.pid)}
+              </td>
               <td className="px-4 py-3 text-muted">{reported(entity.process.ppid)}</td>
               <td className="px-4 py-3 text-ink">{reported(entity.process.name)}</td>
-              <td className="max-w-xl truncate px-4 py-3 text-muted" title={reported(entity.process.command_line)}>
+              <td className="max-w-[420px] truncate px-4 py-3 text-muted" title={reported(entity.process.command_line)}>
                 {reported(entity.process.command_line)}
               </td>
-              <td className="px-4 py-3 text-muted">{reported(entity.process.create_time)}</td>
-              <td className="px-4 py-3 text-muted">{reported(entity.process.exit_time)}</td>
-              <td className="px-4 py-3">
+              <td className="hidden px-4 py-3 text-muted md:table-cell">{reported(entity.process.create_time)}</td>
+              <td className="hidden px-4 py-3 text-muted md:table-cell">{reported(entity.process.exit_time)}</td>
+              <td className="hidden px-4 py-3 lg:table-cell">
                 <div className="flex flex-wrap gap-1">
                   {(entity.sources || []).map((plugin) => (
                     <span key={plugin} className={`rounded-md border px-1.5 py-0.5 text-[10px] ${TONE_CLASS[plugin === "windows.psscan" ? "warn" : "info"]}`}>
@@ -396,7 +398,7 @@ function ProcessTable({
                   {visibilityLabel(entity)}
                 </span>
               </td>
-              <td className="px-4 py-3">
+              <td className="hidden px-4 py-3 lg:table-cell">
                 <div className="flex flex-wrap gap-1">
                   {(entity.findings || []).map((finding) => (
                     <span key={finding} className="rounded-md border border-line bg-abyss/70 px-1.5 py-0.5 text-[10px] text-muted">

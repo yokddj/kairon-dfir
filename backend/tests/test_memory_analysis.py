@@ -1050,7 +1050,10 @@ def test_volatility_runner_output_size_enforced(tmp_path: Path, monkeypatch: pyt
 
 def test_windows_info_normalizer_handles_missing_fields() -> None:
     document = memory_normalizers.normalize_windows_info(
-        {"Kernel Base": "0xf8000000", "Machine": "x64"},
+        [
+            {"Variable": "Kernel Base", "Value": "0xf8000000", "__children": []},
+            {"Variable": "MachineType", "Value": "34404", "__children": []},
+        ],
         case_id=CASE_ID,
         evidence_id=MEMORY_EVIDENCE_ID,
         memory_run_id="run-1",

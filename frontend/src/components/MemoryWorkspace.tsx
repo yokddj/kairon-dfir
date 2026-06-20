@@ -284,7 +284,7 @@ export function MemoryWorkspace({ caseId }: MemoryWorkspaceProps) {
         ) : null}
       </div>
 
-      {overview && overview.evidences.length > 0 ? (
+      {tab === "overview" && overview && overview.evidences.length > 0 ? (
         <MemoryAnalyzeAction
           caseId={caseId}
           overview={overview}
