@@ -1005,8 +1005,8 @@ def fetch_legacy_process_documents(case_id: str, *, run_id: str) -> list[dict[st
         "query": {
             "bool": {
                 "filter": [
-                    {"term": {"memory_artifact_type": "memory_process"}},
-                    {"term": {"memory_run_id": run_id}},
+                    {"term": {"memory_artifact_type.keyword": "memory_process"}},
+                    {"term": {"memory_run_id.keyword": run_id}},
                 ]
             }
         },
@@ -1041,13 +1041,13 @@ def fetch_canonical_entities(
     page_size = min(max(int(page_size), 1), 200)
     page = max(int(page), 1)
     filters: list[dict[str, Any]] = [
-        {"term": {"document_type": "memory_process_entity"}},
-        {"term": {"scan_run_id": run_id}},
+        {"term": {"document_type.keyword": "memory_process_entity"}},
+        {"term": {"scan_run_id.keyword": run_id}},
     ]
     if visibility:
         filters.append({"term": {f"visibility.{visibility}": True}})
     if source_plugin:
-        filters.append({"term": {"source_plugins": source_plugin}})
+        filters.append({"term": {"source_plugins.keyword": source_plugin}})
     if pid is not None:
         filters.append({"term": {"process.pid": pid}})
     if ppid is not None:
@@ -1067,7 +1067,7 @@ def fetch_canonical_entities(
         "query": {"bool": {"filter": filters, "must": must}},
         "sort": [
             {"process.pid": {"order": "asc", "missing": "_last"}},
-            {"document_id": {"order": "asc"}},
+            {"document_id.keyword": {"order": "asc"}},
         ],
         "from": (page - 1) * page_size,
         "size": page_size,
@@ -1109,14 +1109,14 @@ def fetch_canonical_observations(case_id: str, *, run_id: str, entity_id: str) -
         "query": {
             "bool": {
                 "filter": [
-                    {"term": {"document_type": "memory_process_observation"}},
-                    {"term": {"scan_run_id": run_id}},
-                    {"term": {"process_entity_id": entity_id}},
+                    {"term": {"document_type.keyword": "memory_process_observation"}},
+                    {"term": {"scan_run_id.keyword": run_id}},
+                    {"term": {"process_entity_id.keyword": entity_id}},
                 ]
             }
         },
         "size": 100,
-        "sort": [{"plugin_name": "asc"}],
+        "sort": [{"plugin_name.keyword": "asc"}],
     }
     response = client.search(
         index=get_memory_index(case_id),
@@ -1135,8 +1135,8 @@ def fetch_canonical_edges(case_id: str, *, run_id: str) -> list[dict[str, Any]]:
         "query": {
             "bool": {
                 "filter": [
-                    {"term": {"document_type": "memory_process_edge"}},
-                    {"term": {"scan_run_id": run_id}},
+                    {"term": {"document_type.keyword": "memory_process_edge"}},
+                    {"term": {"scan_run_id.keyword": run_id}},
                 ]
             }
         },
@@ -1248,8 +1248,8 @@ def fetch_canonical_summary(case_id: str, *, run_id: str) -> dict[str, Any]:
         "query": {
             "bool": {
                 "filter": [
-                    {"term": {"document_type": "memory_process_entity"}},
-                    {"term": {"scan_run_id": run_id}},
+                    {"term": {"document_type.keyword": "memory_process_entity"}},
+                    {"term": {"scan_run_id.keyword": run_id}},
                 ]
             }
         },
