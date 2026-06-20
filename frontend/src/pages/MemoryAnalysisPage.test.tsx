@@ -103,7 +103,7 @@ describe("MemoryAnalysisPage", () => {
     getCaseMemoryProcessesMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50 });
     getMemoryProcessTreeMock.mockResolvedValue({ run_id: "run-1", nodes: [], edges: [], orphan_count: 0, root_count: 0, warnings: [], source_plugins: [], total_process_count: 0 });
     getMemoryEvidenceReadinessMock.mockResolvedValue({ exists: true, regular_file: true, readable_by_memory_worker: true, size_matches: true, output_writable_by_memory_worker: true, worker_online: true, backend_ready: true, can_analyze: true, error_code: null, sanitized_message: "Memory evidence is available to the dedicated memory worker." });
-    getMemorySymbolCacheStatusMock.mockResolvedValue({ mode: "offline_only", acquisition_enabled: false, network_isolation_ready: false, administrator_authorization_available: false, fetcher_online: false, total_bytes: 0, configured_max_bytes: 1024, available_bytes: 1024, symbol_count: 0, active_requests: 0, failed_requests: 0, last_success_at: null, error_code: "SYMBOL_ACQUISITION_DISABLED", message: "Managed symbol acquisition is disabled." });
+    getMemorySymbolCacheStatusMock.mockResolvedValue({ mode: "offline_only", acquisition_enabled: false, network_isolation_ready: false, administrator_authorization_available: false, local_approval_enabled: false, pending_requests: 0, awaiting_operator_approval: 0, approved_pending: 0, fetcher_online: false, total_bytes: 0, configured_max_bytes: 1024, available_bytes: 1024, symbol_count: 0, pdb_count: 0, isf_count: 0, active_requests: 0, failed_requests: 0, last_success_at: null, error_code: "SYMBOL_ACQUISITION_DISABLED", message: "Managed symbol acquisition is disabled." });
     vi.spyOn(window, "confirm").mockReturnValue(true);
     startMemoryScanMock.mockResolvedValue({ accepted: true, evidence_id: "ev-memory", run_id: "run-1", status: "queued", message: "Memory metadata analysis queued for windows.info.", run: null });
   });
@@ -260,8 +260,9 @@ describe("MemoryAnalysisPage", () => {
       can_analyze: true, error_code: null, sanitized_message: "Memory evidence is available.",
       symbols_required: true, symbol_identifier_present: false, acquisition_available: false,
       acquisition_status: "symbols_required", can_analyze_offline: false,
+      pending_request_id: null,
     });
-    getMemorySymbolCacheStatusMock.mockResolvedValueOnce({ mode: "managed_download", acquisition_enabled: false, network_isolation_ready: false, administrator_authorization_available: false, fetcher_online: true, total_bytes: 0, configured_max_bytes: 1024, available_bytes: 1024, symbol_count: 0, active_requests: 0, failed_requests: 0, last_success_at: null, error_code: "SYMBOL_ACQUISITION_NETWORK_ISOLATION_REQUIRED", message: "Restricted egress is required." });
+    getMemorySymbolCacheStatusMock.mockResolvedValueOnce({ mode: "managed_download", acquisition_enabled: false, network_isolation_ready: false, administrator_authorization_available: false, local_approval_enabled: false, pending_requests: 0, awaiting_operator_approval: 0, approved_pending: 0, fetcher_online: true, total_bytes: 0, configured_max_bytes: 1024, available_bytes: 1024, symbol_count: 0, pdb_count: 0, isf_count: 0, active_requests: 0, failed_requests: 0, last_success_at: null, error_code: "SYMBOL_ACQUISITION_NETWORK_ISOLATION_REQUIRED", message: "Restricted egress is required." });
 
     renderPage();
 
