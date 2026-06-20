@@ -423,6 +423,7 @@ class MemoryProcessTreeEntityRead(BaseModel):
     total_entities: int
     omitted_count: int = 0
     truncation_reason: str | None = None
+    search_results: list[str] = []
 
 
 class MemoryRenormalizeSummaryRead(BaseModel):
