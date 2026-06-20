@@ -368,8 +368,16 @@ def reindex_system_info(case_id: str, db: Session = Depends(get_db)) -> list[dic
     settings = get_settings()
     results: list[dict] = []
     for run in runs:
-        raw_path = memory_run_dir(run.case_id, run.evidence_id, run.id) / "windows.info.json"
-        if not raw_path.exists():
+        primary_dir = memory_run_dir(run.case_id, run.evidence_id, run.id)
+        # The actual raw output may live under the configured
+        # output root even if the primary resolver returns the
+        # generic evidence directory.  Probe both locations.
+        candidate_paths = [
+            primary_dir / "windows.info.json",
+            settings.backend_data_dir / "memory-output" / "evidence" / run.case_id / run.evidence_id / "memory" / "runs" / run.id / "windows.info.json",
+        ]
+        raw_path = next((path for path in candidate_paths if path.exists()), None)
+        if raw_path is None:
             continue
         try:
             payload = json.loads(raw_path.read_text(encoding="utf-8"))
