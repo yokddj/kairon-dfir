@@ -1192,7 +1192,7 @@ def fetch_canonical_tree(
     * ``search`` — find an entity by exact PID or partial name; when
       set, ``include_ancestors`` is implied.
     """
-    page_size = 500
+    page_size = 200
     page = 1
     all_entities: list[dict[str, Any]] = []
     while True:
