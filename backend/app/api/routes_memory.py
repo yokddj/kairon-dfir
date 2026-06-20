@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 import json
 import logging
+from datetime import datetime, date
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -398,6 +399,8 @@ def reindex_system_info(case_id: str, db: Session = Depends(get_db)) -> list[dic
             memory_plugin_run_id=plugin_run_id,
             backend_version=run.backend_version,
         )
+        # Ensure all datetimes are ISO strings for JSON / OpenSearch.
+        system_info = _jsonify_system_info(system_info)
         metadata = dict(run.metadata_json or {})
         metadata["system_info"] = system_info
         run.metadata_json = metadata
@@ -507,6 +510,17 @@ from pydantic import BaseModel as _BaseModel  # noqa: E402
 class _RenormalizeRequest(_BaseModel):
     run_id: str
     dry_run: bool = True
+
+
+def _jsonify_system_info(value):
+    """Recursively convert datetime/date values to ISO strings."""
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {key: _jsonify_system_info(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_jsonify_system_info(item) for item in value]
+    return value
 
 
 def _resolve_run(db: Session, case_id: str, run_id: str | None, profile: str | None) -> MemoryScanRun:
