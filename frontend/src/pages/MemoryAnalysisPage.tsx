@@ -3,6 +3,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { Link, useParams } from "react-router-dom";
 import { api, type MemoryBackendStatus, type MemoryOverview, type MemoryProcess, type MemorySystemInfo } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
+import { MemoryCanonicalView } from "../components/MemoryCanonicalView";
 
 function modeLabel(mode: MemoryOverview["mode"]) {
   switch (mode) {
@@ -461,6 +462,8 @@ export default function MemoryAnalysisPage() {
               </div>
             </section>
           ) : null}
+
+          <MemoryCanonicalView caseId={caseId} />
 
           <section className="rounded-[28px] border border-line bg-panel/60 p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">

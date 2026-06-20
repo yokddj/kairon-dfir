@@ -451,6 +451,186 @@ export type MemoryProcessTree = {
   total_process_count: number;
 };
 
+export type MemoryProcessEntity = {
+  document_id?: string | null;
+  document_type: "memory_process_entity";
+  case_id: string;
+  evidence_id: string;
+  scan_run_id: string;
+  host_id?: string | null;
+  process_entity_id: string;
+  process: {
+    pid: number;
+    ppid?: number | null;
+    name?: string | null;
+    executable_name?: string | null;
+    command_line?: string | null;
+    create_time?: string | null;
+    exit_time?: string | null;
+    session_id?: number | null;
+    wow64?: boolean | null;
+  };
+  visibility: {
+    listed?: boolean;
+    scan_only?: boolean;
+    terminated?: boolean;
+    unknown?: boolean;
+    hidden_candidate?: boolean;
+  };
+  sources: string[];
+  source_plugins: string[];
+  observation_count: number;
+  observation_summary: {
+    has_pslist?: boolean;
+    has_psscan?: boolean;
+    has_pstree?: boolean;
+    has_cmdline?: boolean;
+  };
+  confidence: "low" | "medium" | "high";
+  first_seen_run_id?: string | null;
+  latest_run_id?: string | null;
+  findings: string[];
+  findings_summary: string[];
+  normalization_version: string;
+  materialized_from_run_id?: string | null;
+  parent_entity_id?: string | null;
+  child_count: number;
+  tree: {
+    is_root?: boolean;
+    is_orphan?: boolean;
+    is_unknown_parent?: boolean;
+    is_cycle?: boolean;
+    is_self_parent?: boolean;
+    is_pid_zero?: boolean;
+  };
+  indexed_at?: string | null;
+};
+
+export type MemoryProcessEntityList = {
+  items: MemoryProcessEntity[];
+  total: number;
+  page: number;
+  page_size: number;
+  selected_run?: string | null;
+  normalization_version: string;
+  total_observations: number;
+  facets: Record<string, unknown>;
+};
+
+export type MemoryProcessObservation = {
+  document_id?: string | null;
+  document_type: "memory_process_observation";
+  case_id: string;
+  evidence_id: string;
+  scan_run_id: string;
+  process_entity_id: string;
+  plugin_run_id?: string | null;
+  plugin_name: string;
+  source_record_id?: string | null;
+  observed: {
+    pid: number;
+    ppid?: number | null;
+    name?: string | null;
+    command_line?: string | null;
+    create_time?: string | null;
+    exit_time?: string | null;
+  };
+  raw_status: string;
+  source_fields: Record<string, unknown>;
+  confidence: "low" | "medium" | "high";
+  indexed_at?: string | null;
+};
+
+export type MemoryProcessEntityDetail = {
+  entity: MemoryProcessEntity;
+  observations: MemoryProcessObservation[];
+  parent: MemoryProcessEntity | null;
+  children: MemoryProcessEntity[];
+  tree_path: string[];
+  alternate_command_lines: string[];
+  findings: string[];
+  source_record_refs: string[];
+};
+
+export type MemoryProcessTreeEntity = {
+  run_id: string;
+  nodes: Array<{
+    process_entity_id: string;
+    pid: number;
+    ppid?: number | null;
+    name?: string | null;
+    command_line?: string | null;
+    sources: string[];
+    visibility: Record<string, boolean>;
+    findings: string[];
+    child_count: number;
+    children: Array<Record<string, unknown>>;
+  }>;
+  edges: Array<Record<string, unknown>>;
+  metrics: {
+    total_nodes: number;
+    roots: number;
+    orphans: number;
+    unknown_parent: number;
+    cycles: number;
+    self_parent: number;
+    hidden_candidates: number;
+    scan_only: number;
+    terminated: number;
+    pid_zero_count: number;
+    pid_4_count: number;
+  };
+  total_entities: number;
+  omitted_count: number;
+  truncation_reason: string | null;
+};
+
+export type MemoryRenormalizeSummary = {
+  case_id: string;
+  evidence_id: string;
+  run_id: string;
+  source_documents: number;
+  candidate_entities: number;
+  observation_count: number;
+  duplicate_groups_collapsed: number;
+  invalid_records: number;
+  ambiguous_pid_groups: number;
+  expected_edges: number;
+  tree_metrics: {
+    total_nodes: number;
+    roots: number;
+    orphans: number;
+    unknown_parent: number;
+    cycles: number;
+    self_parent: number;
+    hidden_candidates: number;
+    scan_only: number;
+    terminated: number;
+    pid_zero_count: number;
+    pid_4_count: number;
+  };
+  normalization_version: string;
+  materialization_status: "pending" | "applied" | "dry_run";
+};
+
+export type MemoryRunOption = {
+  run_id: string;
+  profile: string;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
+  plugin_count: number;
+  plugins_completed: number;
+  plugins_failed: number;
+  selected: boolean;
+};
+
+export type MemoryRunSelector = {
+  runs: MemoryRunOption[];
+  default_run_id: string | null;
+  combined_historical_available: boolean;
+};
+
 export type MemoryOverview = {
   case_id: string;
   memory_analysis_enabled: boolean;
@@ -3462,6 +3642,74 @@ export const api = {
     return request<MemoryProcessList>(`/cases/${caseId}/memory/processes${query.size ? `?${query.toString()}` : ""}`);
   },
   getMemoryProcessTree: (runId: string) => request<MemoryProcessTree>(`/memory/runs/${runId}/process-tree`),
+  getMemoryRunOptions: (caseId: string) => request<MemoryRunSelector>(`/cases/${caseId}/memory/runs/options`),
+  getCanonicalProcessEntities: (
+    caseId: string,
+    params?: {
+      run_id?: string;
+      profile?: "processes_basic" | "processes_extended";
+      visibility?: "listed" | "scan_only" | "terminated" | "unknown" | "hidden_candidate";
+      source_plugin?: "windows.pslist" | "windows.psscan" | "windows.pstree" | "windows.cmdline";
+      process_name?: string;
+      pid?: number;
+      ppid?: number;
+      has_command_line?: boolean;
+      interesting_only?: boolean;
+      page?: number;
+      page_size?: number;
+    },
+  ) => {
+    const query = new URLSearchParams();
+    if (params?.run_id) query.set("run_id", params.run_id);
+    if (params?.profile) query.set("profile", params.profile);
+    if (params?.visibility) query.set("visibility", params.visibility);
+    if (params?.source_plugin) query.set("source_plugin", params.source_plugin);
+    if (params?.process_name) query.set("process_name", params.process_name);
+    if (params?.pid !== undefined) query.set("pid", String(params.pid));
+    if (params?.ppid !== undefined) query.set("ppid", String(params.ppid));
+    if (params?.has_command_line !== undefined) query.set("has_command_line", String(params.has_command_line));
+    if (params?.interesting_only !== undefined) query.set("interesting_only", String(params.interesting_only));
+    if (params?.page) query.set("page", String(params.page));
+    if (params?.page_size) query.set("page_size", String(params.page_size));
+    return request<MemoryProcessEntityList>(`/cases/${caseId}/memory/process-entities${query.size ? `?${query.toString()}` : ""}`);
+  },
+  getCanonicalProcessEntityDetail: (caseId: string, entityId: string, runId?: string) => {
+    const query = new URLSearchParams();
+    if (runId) query.set("run_id", runId);
+    return request<MemoryProcessEntityDetail>(`/cases/${caseId}/memory/process-entities/${entityId}${query.size ? `?${query.toString()}` : ""}`);
+  },
+  getCanonicalProcessSummary: (caseId: string, params?: { run_id?: string; profile?: "processes_basic" | "processes_extended" }) => {
+    const query = new URLSearchParams();
+    if (params?.run_id) query.set("run_id", params.run_id);
+    if (params?.profile) query.set("profile", params.profile);
+    return request<MemoryRenormalizeSummary>(`/cases/${caseId}/memory/process-entities/summary${query.size ? `?${query.toString()}` : ""}`);
+  },
+  getCanonicalProcessTree: (
+    caseId: string,
+    params?: {
+      run_id?: string;
+      profile?: "processes_basic" | "processes_extended";
+      root_pid?: number;
+      depth?: number;
+      visibility?: "listed" | "scan_only" | "terminated" | "unknown" | "hidden_candidate";
+      interesting_only?: boolean;
+    },
+  ) => {
+    const query = new URLSearchParams();
+    if (params?.run_id) query.set("run_id", params.run_id);
+    if (params?.profile) query.set("profile", params.profile);
+    if (params?.root_pid !== undefined) query.set("root_pid", String(params.root_pid));
+    if (params?.depth) query.set("depth", String(params.depth));
+    if (params?.visibility) query.set("visibility", params.visibility);
+    if (params?.interesting_only !== undefined) query.set("interesting_only", String(params.interesting_only));
+    return request<MemoryProcessTreeEntity>(`/cases/${caseId}/memory/process-tree-canonical${query.size ? `?${query.toString()}` : ""}`);
+  },
+  renormalizeProcessEntities: (caseId: string, runId: string, dryRun = true) =>
+    request<MemoryRenormalizeSummary>(`/cases/${caseId}/memory/process-entities/renormalize`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ run_id: runId, dry_run: dryRun }),
+    }),
   getEvidence: (evidenceId: string) => request<Evidence>(`/evidences/${evidenceId}`),
   getEvidenceManifest: (evidenceId: string) => request<EvidenceManifest>(`/evidences/${evidenceId}/manifest`),
   getEvidenceOnDemandModules: (evidenceId: string) => request<OnDemandModulesResponse>(`/evidences/${evidenceId}/on-demand-modules`),

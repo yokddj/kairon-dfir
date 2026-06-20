@@ -11,6 +11,12 @@ const getCaseMemoryProcessesMock = vi.fn();
 const getMemoryProcessTreeMock = vi.fn();
 const getMemoryEvidenceReadinessMock = vi.fn();
 const getMemorySymbolCacheStatusMock = vi.fn();
+const getMemoryRunOptionsMock = vi.fn();
+const getCanonicalProcessEntitiesMock = vi.fn();
+const getCanonicalProcessSummaryMock = vi.fn();
+const getCanonicalProcessTreeMock = vi.fn();
+const getCanonicalProcessEntityDetailMock = vi.fn();
+const renormalizeProcessEntitiesMock = vi.fn();
 const startMemoryScanMock = vi.fn();
 
 vi.mock("../api/client", () => ({
@@ -22,6 +28,12 @@ vi.mock("../api/client", () => ({
     getMemoryProcessTree: (...args: unknown[]) => getMemoryProcessTreeMock(...args),
     getMemoryEvidenceReadiness: (...args: unknown[]) => getMemoryEvidenceReadinessMock(...args),
     getMemorySymbolCacheStatus: (...args: unknown[]) => getMemorySymbolCacheStatusMock(...args),
+    getMemoryRunOptions: (...args: unknown[]) => getMemoryRunOptionsMock(...args),
+    getCanonicalProcessEntities: (...args: unknown[]) => getCanonicalProcessEntitiesMock(...args),
+    getCanonicalProcessSummary: (...args: unknown[]) => getCanonicalProcessSummaryMock(...args),
+    getCanonicalProcessTree: (...args: unknown[]) => getCanonicalProcessTreeMock(...args),
+    getCanonicalProcessEntityDetail: (...args: unknown[]) => getCanonicalProcessEntityDetailMock(...args),
+    renormalizeProcessEntities: (...args: unknown[]) => renormalizeProcessEntitiesMock(...args),
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
   },
 }));
@@ -104,6 +116,12 @@ describe("MemoryAnalysisPage", () => {
     getMemoryProcessTreeMock.mockResolvedValue({ run_id: "run-1", nodes: [], edges: [], orphan_count: 0, root_count: 0, warnings: [], source_plugins: [], total_process_count: 0 });
     getMemoryEvidenceReadinessMock.mockResolvedValue({ exists: true, regular_file: true, readable_by_memory_worker: true, size_matches: true, output_writable_by_memory_worker: true, worker_online: true, backend_ready: true, can_analyze: true, error_code: null, sanitized_message: "Memory evidence is available to the dedicated memory worker." });
     getMemorySymbolCacheStatusMock.mockResolvedValue({ mode: "offline_only", acquisition_enabled: false, network_isolation_ready: false, administrator_authorization_available: false, local_approval_enabled: false, pending_requests: 0, awaiting_operator_approval: 0, approved_pending: 0, fetcher_online: false, total_bytes: 0, configured_max_bytes: 1024, available_bytes: 1024, symbol_count: 0, pdb_count: 0, isf_count: 0, active_requests: 0, failed_requests: 0, last_success_at: null, error_code: "SYMBOL_ACQUISITION_DISABLED", message: "Managed symbol acquisition is disabled." });
+    getMemoryRunOptionsMock.mockResolvedValue({ runs: [], default_run_id: null, combined_historical_available: false });
+    getCanonicalProcessEntitiesMock.mockResolvedValue({ items: [], total: 0, page: 1, page_size: 50, selected_run: null, normalization_version: "memory_process_canonical_v1", total_observations: 0, facets: {} });
+    getCanonicalProcessSummaryMock.mockResolvedValue({ case_id: "case-1", evidence_id: "ev-memory", run_id: "run-1", source_documents: 0, candidate_entities: 0, observation_count: 0, duplicate_groups_collapsed: 0, invalid_records: 0, ambiguous_pid_groups: 0, expected_edges: 0, tree_metrics: { total_nodes: 0, roots: 0, orphans: 0, unknown_parent: 0, cycles: 0, self_parent: 0, hidden_candidates: 0, scan_only: 0, terminated: 0, pid_zero_count: 0, pid_4_count: 0 }, normalization_version: "memory_process_canonical_v1", materialization_status: "applied" });
+    getCanonicalProcessTreeMock.mockResolvedValue({ run_id: "run-1", nodes: [], edges: [], metrics: { total_nodes: 0, roots: 0, orphans: 0, unknown_parent: 0, cycles: 0, self_parent: 0, hidden_candidates: 0, scan_only: 0, terminated: 0, pid_zero_count: 0, pid_4_count: 0 }, total_entities: 0, omitted_count: 0, truncation_reason: null });
+    getCanonicalProcessEntityDetailMock.mockResolvedValue(null);
+    renormalizeProcessEntitiesMock.mockResolvedValue({ case_id: "case-1", evidence_id: "ev-memory", run_id: "run-1", source_documents: 0, candidate_entities: 0, observation_count: 0, duplicate_groups_collapsed: 0, invalid_records: 0, ambiguous_pid_groups: 0, expected_edges: 0, tree_metrics: { total_nodes: 0, roots: 0, orphans: 0, unknown_parent: 0, cycles: 0, self_parent: 0, hidden_candidates: 0, scan_only: 0, terminated: 0, pid_zero_count: 0, pid_4_count: 0 }, normalization_version: "memory_process_canonical_v1", materialization_status: "applied" });
     vi.spyOn(window, "confirm").mockReturnValue(true);
     startMemoryScanMock.mockResolvedValue({ accepted: true, evidence_id: "ev-memory", run_id: "run-1", status: "queued", message: "Memory metadata analysis queued for windows.info.", run: null });
   });
