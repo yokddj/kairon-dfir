@@ -384,7 +384,7 @@ export function IndentedTreeView({
   const effectiveRunId = selectedRunId || runOptions?.default_run_id || null;
   const treeQuery = useQuery({
     queryKey: ["indented-tree", caseId, effectiveRunId],
-    queryFn: () => api.getCanonicalProcessTree(caseId, { run_id: effectiveRunId || undefined, depth: 30, max_nodes: 500 }),
+    queryFn: () => api.getCanonicalProcessTree(caseId, { run_id: effectiveRunId || undefined, depth: 10, max_nodes: 500 }),
     enabled: Boolean(caseId && effectiveRunId),
     refetchOnWindowFocus: false,
   });
