@@ -1,8 +1,7 @@
-import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { type MemoryProcessEntityDetail, type MemoryRunSelector, api } from "../../api/client";
+import { type MemoryRunSelector, api } from "../../api/client";
 import { MemoryCanonicalView } from "../MemoryCanonicalView";
-import { ProcessDetailDrawer } from "./ProcessDetailDrawer";
+import { ProcessDetailModal } from "./ProcessDetailModal";
 
 type Profile = "processes_basic" | "processes_extended" | "metadata_only" | null;
 
@@ -43,10 +42,6 @@ export function MemoryProcessesTab({
     refetchOnWindowFocus: false,
   });
 
-  useEffect(() => {
-    if (!selectedEntityId) return;
-  }, [selectedEntityId]);
-
   return (
     <div className="space-y-4" data-testid="memory-processes-tab">
       <div className="rounded-[28px] border border-line bg-panel/60 p-3 shadow-panel">
@@ -59,12 +54,13 @@ export function MemoryProcessesTab({
           onSelectEntityId={onSelectEntityId}
         />
       </div>
-      <ProcessDetailDrawer
+      <ProcessDetailModal
         open={Boolean(selectedEntityId)}
         detail={detailQuery.data ?? null}
         isLoading={detailQuery.isLoading}
         error={detailQuery.error instanceof Error ? detailQuery.error : null}
         onClose={() => onSelectEntityId(null)}
+        onSelectEntityId={onSelectEntityId}
       />
     </div>
   );

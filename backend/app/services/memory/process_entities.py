@@ -1225,11 +1225,26 @@ def fetch_canonical_tree(
                 elif needle in name or needle in cmdline:
                     matches.append(e)
             if not matches:
+                empty_metrics = dict(metrics)
+                empty_metrics.update(
+                    {
+                        "case_roots": metrics["roots"],
+                        "current_view_roots": 0,
+                        "visible_processes": 0,
+                        "context_ancestors": 0,
+                        "collapsed_branches": 0,
+                        "processes_not_loaded": metrics["total_nodes"],
+                        "search_results": [],
+                    }
+                )
                 return {
                     "run_id": run_id,
+                    "roots": [],
+                    "orphans": [],
+                    "top_level_nodes": [],
                     "nodes": [],
                     "edges": [],
-                    "metrics": metrics,
+                    "metrics": empty_metrics,
                     "total_entities": len(all_entities),
                     "omitted_count": len(all_entities),
                     "truncation_reason": "search_no_match",
@@ -1306,26 +1321,38 @@ def _build_tree_response(
             children_map[parent_id].append(e)
 
     # Determine the visible roots
+    # The tree response separates:
+    #   * roots  — entities flagged as is_root=True (a real root, e.g. System)
+    #   * orphans — entities whose expected parent is missing in the set
+    #   * top_level_nodes — presentational union (roots + orphans) used
+    #     by the frontend "Orphans" block; orphans are *never* added to
+    #     the roots list.
     if root_entity_id and root_entity_id in by_id:
         roots = [by_id[root_entity_id]]
+        orphans: list[dict[str, Any]] = []
     elif root_pid is not None:
         roots = [e for e in all_entities if e["process"]["pid"] == root_pid]
+        orphans = []
     else:
-        roots = [e for e in all_entities if e.get("tree", {}).get("is_root")]
-        # Orphans (no parent in the set) are also valid roots for the
-        # orphan view; they have no parent_entity_id.
-        roots.extend(e for e in all_entities if e not in roots and not e.get("parent_entity_id"))
-        # If a root has a parent in the entity set, it is a child of
-        # that parent; we should not list it as a separate root to
-        # avoid duplication.  This handles the case where, e.g.,
-        # System (PID 4) is flagged as is_root because its parent
-        # PID 0 is the special Idle entity, but Idle is also present
-        # in the set and is the top of the tree.
-        root_ids = {r["process_entity_id"] for r in roots}
+        # Strict: roots are exactly the is_root entities.  PID 0 (Idle)
+        # is a technical entity that never replaces System as the user-
+        # visible root; if it is flagged as is_root (which it should not
+        # be after the canonical normalizer), we still drop it.
+        pid_zero_ids = {e["process_entity_id"] for e in all_entities if e["process"]["pid"] == 0}
         roots = [
-            r
-            for r in roots
-            if not r.get("parent_entity_id") or r["parent_entity_id"] not in root_ids
+            e
+            for e in all_entities
+            if e.get("tree", {}).get("is_root") and e["process_entity_id"] not in pid_zero_ids
+        ]
+        # Orphans are entities with no parent in the set, AND that are
+        # not already counted as a root.
+        root_ids = {r["process_entity_id"] for r in roots}
+        orphans = [
+            e
+            for e in all_entities
+            if e.get("parent_entity_id") is None
+            and e["process_entity_id"] not in root_ids
+            and e["process_entity_id"] not in pid_zero_ids
         ]
 
     # Ancestor expansion
@@ -1388,11 +1415,47 @@ def _build_tree_response(
         truncation_reason = "max_nodes_reached"
     elif omitted_count > 0:
         truncation_reason = "depth_or_root_scope"
+
+    # Top-level nodes are the presentational union of roots and orphans.
+    # Orphans are rendered flat (no children) to keep the
+    # "Parent process is not present in the selected run" panel honest.
+    orphan_nodes: list[dict[str, Any]] = []
+    for orph in sorted(orphans, key=lambda e: e["process"]["pid"]):
+        orphan_nodes.append(
+            {
+                "process_entity_id": orph["process_entity_id"],
+                "pid": orph["process"]["pid"],
+                "ppid": orph["process"].get("ppid"),
+                "name": orph["process"].get("name"),
+                "command_line": orph["process"].get("command_line"),
+                "sources": orph.get("sources", []),
+                "visibility": orph.get("visibility", {}),
+                "findings": orph.get("findings", []),
+                "child_count": orph.get("child_count", 0),
+                "confidence": orph.get("confidence", "low"),
+                "create_time": orph.get("process", {}).get("create_time"),
+                "exit_time": orph.get("process", {}).get("exit_time"),
+                "tree": orph.get("tree", {}),
+                "children": [],
+                "omitted_children": 0,
+            }
+        )
+    top_level_nodes = nodes + orphan_nodes
     return {
         "run_id": run_id,
-        "nodes": nodes,
+        "roots": [_root_summary(r) for r in sorted(roots, key=lambda e: e["process"]["pid"])],
+        "orphans": [_orphan_summary(o) for o in sorted(orphans, key=lambda e: e["process"]["pid"])],
+        "top_level_nodes": top_level_nodes,
+        "nodes": top_level_nodes,
         "edges": [],
-        "metrics": _build_metrics_for_visible(all_entities, nodes, search_results=search_results),
+        "metrics": _build_metrics_for_visible(
+            all_entities,
+            nodes,
+            orphan_nodes=orphan_nodes,
+            roots=roots,
+            orphans=orphans,
+            search_results=search_results,
+        ),
         "total_entities": len(all_entities),
         "omitted_count": omitted_count,
         "truncation_reason": truncation_reason,
@@ -1400,12 +1463,43 @@ def _build_tree_response(
     }
 
 
+def _root_summary(entity: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "process_entity_id": entity["process_entity_id"],
+        "pid": entity["process"]["pid"],
+        "name": entity["process"].get("name"),
+        "command_line": entity["process"].get("command_line"),
+        "sources": entity.get("sources", []),
+        "visibility": entity.get("visibility", {}),
+        "findings": entity.get("findings", []),
+        "confidence": entity.get("confidence", "low"),
+        "create_time": entity.get("process", {}).get("create_time"),
+        "exit_time": entity.get("process", {}).get("exit_time"),
+        "tree": entity.get("tree", {}),
+    }
+
+
+def _orphan_summary(entity: dict[str, Any]) -> dict[str, Any]:
+    return _root_summary(entity)
+
+
 def _build_metrics_for_visible(
     all_entities: list[dict[str, Any]],
     nodes: list[dict[str, Any]],
     *,
+    orphan_nodes: list[dict[str, Any]] | None = None,
+    roots: list[dict[str, Any]] | None = None,
+    orphans: list[dict[str, Any]] | None = None,
     search_results: list[str] | None = None,
 ) -> dict[str, Any]:
+    """Single source of truth for tree metrics.
+
+    ``case_roots`` and ``orphans`` describe the *underlying* canonical
+    set for the run (independent of the visible sub-tree), while
+    ``visible_processes`` / ``current_view_roots`` describe the
+    *current* filter scope.  ``search_results`` carries the matching
+    entity ids so the UI can show "matching" without a second query.
+    """
     base = build_tree_metrics(all_entities)
     visible_ids: set[str] = set()
 
@@ -1416,9 +1510,20 @@ def _build_metrics_for_visible(
 
     for n in nodes:
         _collect(n)
+    for n in orphan_nodes or []:
+        _collect(n)
+
+    collapsed_branches = sum(1 for n in nodes if n.get("truncated"))
+    processes_not_loaded = base["total_nodes"] - len(visible_ids)
     return {
         **base,
-        "visible_nodes": len(visible_ids),
+        # Single source of truth (renamed for clarity in the UI):
+        "case_roots": base["roots"],
+        "current_view_roots": len(roots or []),
+        "visible_processes": len(visible_ids),
+        "context_ancestors": 0,  # populated by the include_ancestors flow at the caller
+        "collapsed_branches": collapsed_branches,
+        "processes_not_loaded": processes_not_loaded,
         "search_results": search_results or [],
     }
 

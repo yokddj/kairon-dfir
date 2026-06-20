@@ -3,6 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { type MemoryRunSelector, api } from "../../api/client";
 import { MemoryProcessGraph } from "../MemoryProcessGraph";
 import { IndentedTreeView } from "./IndentedTreeView";
+import { MetricsStrip } from "./MetricsStrip";
+import { ProcessDetailModal } from "./ProcessDetailModal";
+import { useMemoryTreeMetrics } from "../../lib/useMemoryTreeMetrics";
 
 type Props = {
   caseId: string;
@@ -17,15 +20,6 @@ type Props = {
 
 type SubView = "graph" | "tree";
 
-function Stat({ label, value, testId }: { label: string; value: string | number; testId: string }) {
-  return (
-    <div className="rounded-xl border border-line bg-abyss/60 px-3 py-2" data-testid={`graph-tab-stat-${testId}`}>
-      <p className="text-[10px] uppercase tracking-[0.18em] text-muted">{label}</p>
-      <p className="mt-1 text-base font-semibold text-ink">{value}</p>
-    </div>
-  );
-}
-
 export function MemoryGraphTab({
   caseId,
   runId,
@@ -36,24 +30,22 @@ export function MemoryGraphTab({
   onSelectEntityId,
   onOpenProcessDetails,
 }: Props) {
-  const [graphMetrics, setGraphMetrics] = useState<{
-    visibleNodes: number;
-    truncatedCount: number;
-    caseRoots: number;
-    currentViewRoots: number;
-    orphans: number;
-    scanOnly: number;
-    searchResults: number;
-  }>({
-    visibleNodes: 0,
-    truncatedCount: 0,
-    caseRoots: 0,
-    currentViewRoots: 0,
-    orphans: 0,
-    scanOnly: 0,
-    searchResults: 0,
-  });
   const [subView, setSubView] = useState<SubView>("graph");
+  const [inspectEntityId, setInspectEntityId] = useState<string | null>(null);
+
+  const effectiveRunId = selectedRunId || runId || runOptions?.default_run_id || null;
+  const { metrics, isLoading, isFetching, hasLoaded } = useMemoryTreeMetrics(caseId, {
+    run_id: effectiveRunId,
+    depth: 10,
+    max_nodes: 500,
+  });
+
+  const inspectEntityDetail = useQuery({
+    queryKey: ["memory-process-entity-detail-modal", caseId, inspectEntityId, effectiveRunId],
+    queryFn: () => api.getCanonicalProcessEntityDetail(caseId, inspectEntityId as string, effectiveRunId || undefined),
+    enabled: Boolean(caseId && inspectEntityId),
+    refetchOnWindowFocus: false,
+  });
 
   return (
     <div className="space-y-4" data-testid="memory-graph-tab">
@@ -61,7 +53,7 @@ export function MemoryGraphTab({
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Process graph</h3>
-            <p className="mt-1 text-xs text-muted">Run-isolated, filterable, click-to-focus. Detail panel is on the right.</p>
+            <p className="mt-1 text-xs text-muted">Run-isolated, filterable, click-to-focus. Detail opens as a centered modal.</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="flex rounded-xl border border-line bg-abyss/70 p-0.5 text-xs" role="tablist" aria-label="Graph sub-view">
@@ -95,81 +87,53 @@ export function MemoryGraphTab({
           </div>
         </header>
 
-        <div className="mt-3 grid gap-2 md:grid-cols-7">
-          <Stat label="Visible" value={graphMetrics.visibleNodes} testId="visible" />
-          <Stat label="Matching" value={graphMetrics.searchResults} testId="matching" />
-          <Stat label="Context ancestors" value={0} testId="ancestors" />
-          <Stat label="Collapsed" value={graphMetrics.truncatedCount} testId="collapsed" />
-          <Stat label="Not loaded" value={0} testId="not-loaded" />
-          <Stat label="Case roots" value={graphMetrics.caseRoots} testId="case-roots" />
-          <Stat label="Orphans" value={graphMetrics.orphans} testId="orphans" />
+        <div className="mt-3">
+          <MetricsStrip
+            metrics={metrics}
+            isLoading={isLoading}
+            isFetching={isFetching}
+            hasLoaded={hasLoaded}
+          />
         </div>
 
         {subView === "graph" ? (
-          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-            <div className="min-w-0">
-              <MemoryProcessGraph
-                caseId={caseId}
-                runId={runId}
-                onOpenDetail={onOpenProcessDetails}
-                selectedEntityId={selectedEntityId}
-                onSelectEntityId={onSelectEntityId}
-              />
-            </div>
-            <aside
-              className="rounded-2xl border border-line bg-abyss/60 p-4"
-              aria-label="Graph detail"
-              data-testid="graph-side-panel"
-            >
-              <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Selected process</h4>
-              {selectedEntityId ? (
-                <SelectedEntitySummary
-                  caseId={caseId}
-                  entityId={selectedEntityId}
-                  runId={runId}
-                  onOpenProcessDetails={onOpenProcessDetails}
-                  onClose={() => onSelectEntityId(null)}
-                />
-              ) : (
-                <p className="mt-3 text-xs text-muted">Click a node to inspect it here.</p>
-              )}
-            </aside>
+          <div className="mt-4">
+            <MemoryProcessGraph
+              caseId={caseId}
+              runId={runId}
+              onOpenDetail={(entityId) => setInspectEntityId(entityId)}
+              selectedEntityId={selectedEntityId}
+              onSelectEntityId={onSelectEntityId}
+            />
           </div>
         ) : (
-          <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-            <div className="min-w-0">
-              <IndentedTreeView
-                caseId={caseId}
-                runId={runId}
-                runOptions={runOptions}
-                selectedRunId={selectedRunId}
-                onSelectRunId={onSelectRunId}
-                selectedEntityId={selectedEntityId}
-                onSelectEntityId={onSelectEntityId}
-                onOpenProcessDetails={onOpenProcessDetails}
-              />
-            </div>
-            <aside
-              className="rounded-2xl border border-line bg-abyss/60 p-4"
-              aria-label="Tree detail"
-              data-testid="tree-side-panel"
-            >
-              <h4 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Selected process</h4>
-              {selectedEntityId ? (
-                <SelectedEntitySummary
-                  caseId={caseId}
-                  entityId={selectedEntityId}
-                  runId={runId}
-                  onOpenProcessDetails={onOpenProcessDetails}
-                  onClose={() => onSelectEntityId(null)}
-                />
-              ) : (
-                <p className="mt-3 text-xs text-muted">Select a process to inspect it here.</p>
-              )}
-            </aside>
+          <div className="mt-4">
+            <IndentedTreeView
+              caseId={caseId}
+              runId={runId}
+              runOptions={runOptions}
+              selectedRunId={selectedRunId}
+              onSelectRunId={onSelectRunId}
+              selectedEntityId={selectedEntityId}
+              onSelectEntityId={onSelectEntityId}
+              onOpenProcessDetails={(entityId) => setInspectEntityId(entityId)}
+            />
           </div>
         )}
       </section>
+      <ProcessDetailModal
+        open={Boolean(inspectEntityId)}
+        detail={inspectEntityDetail.data ?? null}
+        isLoading={inspectEntityDetail.isLoading}
+        error={inspectEntityDetail.error instanceof Error ? inspectEntityDetail.error : null}
+        onClose={() => setInspectEntityId(null)}
+        onSelectEntityId={(next) => {
+          setInspectEntityId(next);
+          onSelectEntityId(next);
+        }}
+        onOpenInGraph={() => setSubView("graph")}
+        onShowInTree={() => setSubView("tree")}
+      />
     </div>
   );
 }
@@ -206,65 +170,4 @@ function RunPicker({
       </select>
     </div>
   );
-}
-
-function SelectedEntitySummary({
-  caseId,
-  entityId,
-  runId,
-  onOpenProcessDetails,
-  onClose,
-}: {
-  caseId: string;
-  entityId: string;
-  runId: string | null;
-  onOpenProcessDetails: (entityId: string) => void;
-  onClose: () => void;
-}) {
-  const detailQuery = useSelectedEntityDetail(caseId, entityId, runId);
-  if (detailQuery.isLoading) return <p className="mt-3 text-xs text-muted">Loading…</p>;
-  if (detailQuery.error instanceof Error) return <p className="mt-3 text-xs text-rose-200">{detailQuery.error.message}</p>;
-  if (!detailQuery.data) return <p className="mt-3 text-xs text-muted">No data.</p>;
-  const entity = detailQuery.data.entity;
-  return (
-    <div className="mt-3 space-y-2 text-xs" data-testid="graph-side-detail">
-      <div className="flex items-start justify-between gap-2">
-        <p className="text-sm font-semibold">{(entity.process.name as string | undefined) || "—"} · PID {entity.process.pid}</p>
-        <button type="button" onClick={onClose} className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px]">
-          Clear
-        </button>
-      </div>
-      <p className="text-muted">Entity {entity.process_entity_id} · Confidence {entity.confidence}</p>
-      <p className="break-words text-ink" title={entity.process.command_line as string | undefined}>
-        {entity.process.command_line || "—"}
-      </p>
-      <p className="text-muted">Sources: {(entity.sources || []).map((s) => s.replace("windows.", "")).join(", ") || "—"}</p>
-      <p className="text-muted">Visibility: {describeVisibility(entity)}</p>
-      <button
-        type="button"
-        onClick={() => onOpenProcessDetails(entity.process_entity_id)}
-        className="mt-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-1 text-xs text-accent"
-        data-testid="graph-side-open-detail"
-      >
-        Open process details
-      </button>
-    </div>
-  );
-}
-
-function describeVisibility(entity: any): string {
-  if (entity.visibility?.terminated) return "Terminated";
-  if (entity.visibility?.hidden_candidate) return "Hidden candidate";
-  if (entity.visibility?.scan_only) return "Scan only";
-  if (entity.visibility?.unknown) return "Unknown";
-  return "Listed";
-}
-
-function useSelectedEntityDetail(caseId: string, entityId: string, runId: string | null) {
-  return useQuery({
-    queryKey: ["memory-process-entity-detail", caseId, entityId, runId],
-    queryFn: () => api.getCanonicalProcessEntityDetail(caseId, entityId, runId || undefined),
-    enabled: Boolean(caseId && entityId),
-    refetchOnWindowFocus: false,
-  });
 }

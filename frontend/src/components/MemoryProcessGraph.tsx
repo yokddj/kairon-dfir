@@ -426,13 +426,10 @@ export function MemoryProcessGraph({
         </button>
       </div>
 
-      <div className="grid gap-2 md:grid-cols-6 text-xs">
-        <Stat label="Visible" value={visibleNodeCount} />
-        <Stat label="Truncated" value={truncatedCount} />
-        <Stat label="Omitted" value={tree?.omitted_count ?? 0} />
-        <Stat label="Roots" value={tree?.metrics?.roots ?? 0} />
-        <Stat label="Orphans" value={tree?.metrics?.orphans ?? 0} />
-        <Stat label="Scan only" value={tree?.metrics?.scan_only ?? 0} />
+      <div className="grid gap-2 md:grid-cols-3 text-xs">
+        <Stat label="Visible (canvas)" value={visibleNodeCount} />
+        <Stat label="Truncated branches" value={truncatedCount} />
+        <Stat label="Omitted by tree cap" value={tree?.omitted_count ?? 0} />
       </div>
 
       {treeQuery.isLoading ? (
