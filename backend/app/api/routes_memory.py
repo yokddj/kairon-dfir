@@ -808,3 +808,78 @@ def renormalize_canonical_entities(
     summary = result["summary"]
     summary["materialization_status"] = "applied" if not payload.dry_run else "dry_run"
     return summary
+
+
+@router.post(
+    "/cases/{case_id}/memory/process-entities/recompute-tree",
+    response_model=MemoryRenormalizeSummaryRead,
+)
+def recompute_canonical_tree(
+    case_id: str,
+    payload: _RenormalizeRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Recompute the tree / parent linkage for the canonical entities of a run.
+
+    The legacy normalizer computed the parent chain in a way that
+    lost the canonical ``tree.is_root`` flag on certain entities
+    (notably System when PID 0 is present).  This endpoint pulls
+    the existing canonical entities from OpenSearch, rebuilds the
+    parent map, and re-applies ``build_tree_metrics`` in place.
+    It does not touch the raw plugin records, the evidence, the
+    symbol cache, the workers or the disk index.
+    """
+    _require_case(db, case_id)
+    run = db.get(MemoryScanRun, payload.run_id)
+    if not run or run.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Memory run not found for this case.")
+    if not _is_process_profile(run.profile):
+        raise HTTPException(status_code=400, detail="Recompute-tree is only supported for processes_basic/processes_extended runs.")
+    # Fetch all canonical entities for the run in pages.
+    page = 1
+    page_size = 200
+    all_entities: list[dict[str, Any]] = []
+    while True:
+        result = canonical_entities.fetch_canonical_entities(
+            case_id, run_id=run.id, page=page, page_size=page_size
+        )
+        items = result["items"]
+        all_entities.extend(items)
+        if len(items) < page_size:
+            break
+        page += 1
+    metrics = canonical_entities.build_tree_metrics(all_entities)
+    # Persist updated tree + parent_entity_id back to OpenSearch.
+    index = canonical_entities.ensure_memory_index(case_id)
+    client = canonical_entities.get_opensearch_client()
+    for ent in all_entities:
+        try:
+            client.index(
+                index=index,
+                id=ent["document_id"],
+                body={
+                    **ent,
+                    "document_id": ent["document_id"],
+                    "document_type": "memory_process_entity",
+                },
+                refresh=False,
+            )
+        except Exception:  # noqa: BLE001
+            logger.warning("Failed to update canonical tree doc", extra={"entity_id": ent.get("process_entity_id")})
+    if all_entities:
+        client.indices.refresh(index=index)
+    return {
+        "case_id": case_id,
+        "evidence_id": run.evidence_id,
+        "run_id": run.id,
+        "source_documents": len(all_entities),
+        "candidate_entities": len(all_entities),
+        "observation_count": sum(int(e.get("observation_count") or 0) for e in all_entities),
+        "duplicate_groups_collapsed": 0,
+        "invalid_records": 0,
+        "ambiguous_pid_groups": 0,
+        "expected_edges": sum(1 for e in all_entities if e.get("parent_entity_id")),
+        "tree_metrics": metrics,
+        "normalization_version": canonical_entities.NORMALIZATION_VERSION,
+        "materialization_status": "applied",
+    }
