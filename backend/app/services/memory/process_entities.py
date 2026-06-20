@@ -1243,7 +1243,9 @@ def fetch_canonical_tree(
                 if parent_id and parent_id in by_id:
                     children_map[parent_id].append(e)
             scope_ids: set[str] = set()
+            search_result_ids: list[str] = []
             for match in matches:
+                search_result_ids.append(match["process_entity_id"])
                 # Ancestors
                 cursor = match.get("parent_entity_id")
                 if include_ancestors or True:
@@ -1267,7 +1269,7 @@ def fetch_canonical_tree(
                 run_id=run_id,
                 depth=depth,
                 max_nodes=max_nodes,
-                search_results=[m["process_entity_id"] for m in matches],
+                search_results=search_result_ids,
             )
 
     if orphans_only:
