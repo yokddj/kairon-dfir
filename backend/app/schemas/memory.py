@@ -332,3 +332,128 @@ class MemoryProcessTreeRead(BaseModel):
     warnings: list[str]
     source_plugins: list[str]
     total_process_count: int
+
+
+class MemoryProcessEntityRead(BaseModel):
+    document_id: str | None = None
+    document_type: str = "memory_process_entity"
+    case_id: str
+    evidence_id: str
+    scan_run_id: str
+    host_id: str | None = None
+    process_entity_id: str
+    process: dict
+    visibility: dict
+    sources: list[str] = []
+    source_plugins: list[str] = []
+    observation_count: int = 0
+    observation_summary: dict = {}
+    confidence: str = "low"
+    first_seen_run_id: str | None = None
+    latest_run_id: str | None = None
+    findings: list[str] = []
+    findings_summary: list[str] = []
+    normalization_version: str = "memory_process_canonical_v1"
+    materialized_from_run_id: str | None = None
+    parent_entity_id: str | None = None
+    child_count: int = 0
+    tree: dict = {}
+    indexed_at: datetime | None = None
+
+
+class MemoryProcessObservationRead(BaseModel):
+    document_id: str | None = None
+    document_type: str = "memory_process_observation"
+    case_id: str
+    evidence_id: str
+    scan_run_id: str
+    process_entity_id: str
+    plugin_run_id: str | None = None
+    plugin_name: str
+    source_record_id: str | None = None
+    observed: dict
+    raw_status: str = "ok"
+    source_fields: dict = {}
+    confidence: str = "low"
+    indexed_at: datetime | None = None
+
+
+class MemoryProcessEdgeEntityRead(BaseModel):
+    document_id: str | None = None
+    document_type: str = "memory_process_edge"
+    case_id: str
+    evidence_id: str
+    scan_run_id: str
+    parent_entity_id: str
+    child_entity_id: str
+    edge_type: str = "parent_child"
+    source_plugin: str | None = None
+    confidence: str = "medium"
+    parent_pid: int | None = None
+    child_pid: int | None = None
+
+
+class MemoryProcessEntityListRead(BaseModel):
+    items: list[MemoryProcessEntityRead]
+    total: int
+    page: int
+    page_size: int
+    selected_run: str | None = None
+    normalization_version: str = "memory_process_canonical_v1"
+    total_observations: int = 0
+    facets: dict = {}
+
+
+class MemoryProcessEntityDetailRead(BaseModel):
+    entity: MemoryProcessEntityRead
+    observations: list[MemoryProcessObservationRead] = []
+    parent: MemoryProcessEntityRead | None = None
+    children: list[MemoryProcessEntityRead] = []
+    tree_path: list[str] = []
+    alternate_command_lines: list[str] = []
+    findings: list[str] = []
+    source_record_refs: list[str] = []
+
+
+class MemoryProcessTreeEntityRead(BaseModel):
+    run_id: str
+    nodes: list[dict]
+    edges: list[MemoryProcessEdgeEntityRead] = []
+    metrics: dict
+    total_entities: int
+    omitted_count: int = 0
+    truncation_reason: str | None = None
+
+
+class MemoryRenormalizeSummaryRead(BaseModel):
+    case_id: str
+    evidence_id: str
+    run_id: str
+    source_documents: int
+    candidate_entities: int
+    observation_count: int
+    duplicate_groups_collapsed: int
+    invalid_records: int
+    ambiguous_pid_groups: int
+    expected_edges: int
+    tree_metrics: dict
+    normalization_version: str = "memory_process_canonical_v1"
+    materialization_status: str = "pending"
+
+
+class MemoryRunOptionsRead(BaseModel):
+    run_id: str
+    profile: str
+    status: str
+    created_at: datetime
+    completed_at: datetime | None = None
+    plugin_count: int = 0
+    plugins_completed: int = 0
+    plugins_failed: int = 0
+    selected: bool = False
+
+
+class MemoryRunSelectorRead(BaseModel):
+    runs: list[MemoryRunOptionsRead]
+    default_run_id: str | None = None
+    combined_historical_available: bool = False
