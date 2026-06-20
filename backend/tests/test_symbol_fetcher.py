@@ -41,7 +41,7 @@ def _synthetic_pdb(path: Path, identity: SymbolIdentity) -> None:
 
 def test_official_url_uses_only_validated_identity() -> None:
     url = official_symbol_url(_identity())
-    assert url == "https://msdl.microsoft.com/inventedkrnl.pdb/00112233445566778899AABBCCDDEEFF3/inventedkrnl.pdb"
+    assert url == "https://msdl.microsoft.com/download/symbols/inventedkrnl.pdb/00112233445566778899AABBCCDDEEFF3/inventedkrnl.pdb"
     with pytest.raises(SymbolFetchError):
         official_symbol_url(SymbolIdentity("../kernel.pdb", _identity().guid, 1, "x64"))
 

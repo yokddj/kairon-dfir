@@ -52,6 +52,8 @@ vi.mock("./pages/Rules", () => ({ default: () => <div>Rules Page</div> }));
 vi.mock("./pages/Detections", () => ({ default: () => <div>Detections Page</div> }));
 vi.mock("./pages/SystemPage", () => ({ default: () => <div>System Page</div> }));
 vi.mock("./pages/DocsPage", () => ({ default: () => <div>Docs Page</div> }));
+vi.mock("./pages/MemoryAnalysisPage", () => ({ default: () => <div>Memory Analysis Page</div> }));
+vi.mock("./pages/MemoryUploadPage", () => ({ default: () => <div>Memory Upload Page</div> }));
 
 function renderApp(initialEntry: string) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -111,5 +113,36 @@ describe("legacy navigation redirects", () => {
   it("keeps the legacy /cases/:caseId/artifact-search route working", async () => {
     renderApp("/cases/case-1/artifact-search");
     expect(await screen.findByText("Artifact Views Page")).toBeInTheDocument();
+  });
+});
+
+describe("memory routes are registered", () => {
+  beforeEach(() => {
+    activeCaseState.activeCaseId = "case-1";
+    activeCaseState.activeCase = { id: "case-1", name: "Case Alpha" };
+    listCasesMock.mockResolvedValue([]);
+  });
+
+  it("renders Memory Analysis at /cases/:caseId/memory", async () => {
+    renderApp("/cases/case-1/memory");
+    expect(await screen.findByText("Memory Analysis Page")).toBeInTheDocument();
+  });
+
+  it("renders Memory Upload at /cases/:caseId/memory/upload", async () => {
+    renderApp("/cases/case-1/memory/upload");
+    expect(await screen.findByText("Memory Upload Page")).toBeInTheDocument();
+  });
+
+  it("does not collapse /cases/:caseId/memory onto another route", async () => {
+    renderApp("/cases/case-1/memory");
+    expect(screen.queryByText("Overview Page")).not.toBeInTheDocument();
+    expect(screen.queryByText("Case Detail Page")).not.toBeInTheDocument();
+    expect(screen.queryByText("Detections Page")).not.toBeInTheDocument();
+  });
+
+  it("does not collapse /cases/:caseId/memory/upload onto another route", async () => {
+    renderApp("/cases/case-1/memory/upload");
+    expect(screen.queryByText("Overview Page")).not.toBeInTheDocument();
+    expect(screen.queryByText("Memory Analysis Page")).not.toBeInTheDocument();
   });
 });

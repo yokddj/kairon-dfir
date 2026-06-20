@@ -3,7 +3,7 @@
 ## Threat model
 
 The optional `symbol-fetcher` handles untrusted third-party PDB data and is the
-only Kairon component designed to perform managed symbol downloads. It has no
+only Kairon component that orchestrates managed symbol downloads. It has no
 evidence or memory-output mount, no public port, no Docker socket, no devices
 and no access to normal or memory-analysis queues. It runs as UID/GID
 `10001:10001` with a read-only root filesystem, all capabilities dropped and
@@ -15,45 +15,56 @@ delegate a download implicitly and never sends evidence to the fetcher.
 
 ## Outbound request
 
-The initial destination is exactly `msdl.microsoft.com` over HTTPS port 443.
-The request path contains only the validated PDB filename and GUID-plus-age
-symbol key. Kairon does not send the case ID, evidence ID, filename, dump hash,
-host details, process data or memory pages.
+The fetcher DOES NOT make outbound HTTPS connections directly.  All requests
+go through the `symbol-egress-gateway` over an internal Docker network.  See
+`docs/symbol_egress_gateway.md` for the gateway trust boundary, the signed
+request protocol, and the source/redirect policy.
 
-Redirects are bounded and revalidated at every hop. The reviewed redirect
-category is a non-apex subdomain ending exactly in `.blob.core.windows.net`.
-Lookalike suffixes, HTTP downgrade, user information, non-443 ports, IP
-literals, loopback, private, link-local, multicast and non-global resolved
-addresses are rejected. TLS uses the system trust store with certificate and
-hostname verification. DNS is resolved before connection and the selected
-public address is pinned for the TLS connection, reducing DNS-rebinding risk.
-
-Downloads stream to an exclusive `0640` partial, enforce time and byte limits,
-and calculate SHA-256 incrementally. PDB MSF identity is checked against the
-required GUID/age before promotion. Volatility 3 2.28.0, installed from the
-existing SHA-256-pinned lock, generates a compressed ISF. The ISF is parsed and
-validated before atomic promotion.
+Application-level URL allowlisting (initial host `msdl.microsoft.com`, redirect
+suffix `.blob.core.windows.net`) remains in the fetcher as a defense in
+depth.  Neither the application policy nor the gateway policy alone is
+sufficient to claim network isolation: only the Docker network topology
+(internal network for the fetcher) is the binding control.
 
 ## Infrastructure egress gate
 
 Application validation does not by itself prevent a compromised process from
-opening another socket. `MEMORY_SYMBOL_NETWORK_ISOLATION_READY` must remain
-false until the deployment has an independently enforceable firewall or egress
-proxy policy for the fetcher network. The current Docker bridge is not such a
-control. Building the optional service does not authorize network acquisition.
+opening another socket.  The fetcher is connected only to `symbol-internal`
+(an `internal: true` Docker network with no default route).  The
+`symbol-egress-gateway` is the only component in the symbol subsystem
+connected to a network with a default route (`symbol-egress`).
+
+`MEMORY_SYMBOL_NETWORK_ISOLATION_READY` must remain false until the
+deployment has been independently verified to enforce this topology.  The
+flag is set true only after:
+
+1. `docker compose config` shows the symbol-fetcher is on `symbol-internal` only.
+2. The fetcher has been proven unable to reach the Internet directly.
+3. The gateway has been proven to be the only outbound path.
+4. The gateway's source and redirect policy tests pass.
+5. The runtime security checks pass.
+
+See `docs/memory_operations.md` and `docs/deployment_remote.md` for the
+runtime proof procedure.
 
 ## Administrator gate
 
-Kairon currently has no authenticated administrator role. The acquisition API
-therefore remains server-side blocked with
-`SYMBOL_ACQUISITION_ADMIN_AUTH_REQUIRED`, even if configuration is changed.
-Do not replace this with a hidden frontend control, source-IP trust or a static
-secret header. A future authentication sprint must add an authenticated
-`memory:symbols:acquire` capability and actor audit identity.
+Kairon does not yet provide a mature authenticated administrator role.  The
+interim control is a server-side CLI that records explicit local-operator
+authorization.  See `docs/memory_symbol_operator_approval.md` for the
+lifecycle, the CLI commands, and the approval semantics.
+
+The acquisition API remains blocked with
+`SYMBOL_ACQUISITION_LOCAL_APPROVAL_DISABLED` when
+`MEMORY_SYMBOL_LOCAL_APPROVAL_ENABLED=false`.  Do not replace this with a
+hidden frontend control, source-IP trust, or a static secret header.  A
+future authentication sprint must add an authenticated
+`memory:symbols:acquire` capability and actor audit identity, and replace
+the local-operator CLI.
 
 ## Rollback and retention
 
 Stop the optional profile and restore `MEMORY_SYMBOL_MODE=offline_only` and
-`MEMORY_SYMBOL_MANAGED_DOWNLOAD_ENABLED=false`. Cached third-party artifacts
-must not be committed, embedded in images or redistributed. This sprint does
-not implement broad cache deletion or automatic eviction.
+`MEMORY_SYMBOL_MANAGED_DOWNLOAD_ENABLED=false`.  Cached third-party artifacts
+must not be committed, embedded in images or redistributed.  This sprint
+does not implement broad cache deletion or automatic eviction.

@@ -104,6 +104,19 @@ class Settings(BaseSettings):
     memory_symbol_request_stale_seconds: int = 900
     memory_symbol_initial_host: str = "msdl.microsoft.com"
     memory_symbol_redirect_suffixes: str = ".blob.core.windows.net"
+    # Egress gateway (symbol-fetcher -> symbol-egress-gateway -> Internet).
+    # The fetcher never makes outbound connections except to the gateway.
+    memory_symbol_egress_gateway_url: str = "http://symbol-egress-gateway:8443"
+    memory_symbol_egress_gateway_secret: str = ""
+    memory_symbol_egress_gateway_timeout_seconds: int = 60
+    memory_symbol_egress_replay_window_seconds: int = 60
+    memory_symbol_egress_max_response_bytes: int = 1073741824
+    # Local-operator approval. Disabled by default.  When disabled, the CLI
+    # refuses to approve requests.  This is an interim server-administrator
+    # authorization mechanism, not a replacement for future application RBAC.
+    memory_symbol_local_approval_enabled: bool = False
+    memory_symbol_approval_ttl_seconds: int = 600
+    memory_symbol_approval_single_use: bool = True
     # This is deliberately separate from feature enablement.  It may only be
     # true when deployment-level egress enforcement has been independently
     # verified; application URL checks are not a network sandbox.

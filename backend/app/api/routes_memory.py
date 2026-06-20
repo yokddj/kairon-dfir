@@ -8,13 +8,14 @@ from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryScanRun, MemorySymbolAcquisition
-from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessListRead, MemoryProcessTreeRead, MemoryRunDetailRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
+from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessListRead, MemoryProcessTreeRead, MemoryRunDetailRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, mark_run_queued, resolve_profile_plugins
 from app.services.memory.evidence_access import evidence_readiness
 from app.services.memory.indexing import get_memory_document, search_memory_edges, search_memory_processes
 from app.services.memory.overview import get_case_memory_overview, list_memory_evidences
-from app.services.memory.symbol_control import SymbolControlError, acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure, queue_symbol_acquisition
+from app.services.memory.symbol_control import SymbolControlError, acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure, queue_symbol_acquisition, request_status_dict, request_symbol_acquisition_awaiting_approval
+from app.models.memory import MemorySymbolAcquisition, MemorySymbolAcquisitionRequest
 from app.services.memory.upload_readiness import MAX_SELECTED_SIZE_BYTES, get_memory_upload_readiness
 from app.services.memory.upload_lifecycle import get_memory_upload, public_memory_upload_status, reconcile_memory_upload
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
@@ -75,23 +76,78 @@ def get_memory_symbol_cache_status(db: Session = Depends(get_db)) -> dict:
 
 @router.get("/memory/symbols/requests/{request_id}", response_model=MemorySymbolRequestStatusRead)
 def get_memory_symbol_request(request_id: str, db: Session = Depends(get_db)) -> dict:
-    item = db.get(MemorySymbolAcquisition, request_id)
+    item = db.get(MemorySymbolAcquisitionRequest, request_id)
     if item is None:
-        raise HTTPException(status_code=404, detail="Symbol acquisition request was not found.")
+        # Fall back to legacy MemorySymbolAcquisition id for backward compat.
+        legacy = db.get(MemorySymbolAcquisition, request_id)
+        if legacy is None:
+            raise HTTPException(status_code=404, detail="Symbol acquisition request was not found.")
+        return request_status_dict(
+            MemorySymbolAcquisitionRequest(
+                id=legacy.id,
+                requirement_id=legacy.requirement_id,
+                case_id="",
+                evidence_id="",
+                status=legacy.status,
+                source_category=legacy.source_category,
+                requirement_fingerprint="",
+                downloaded_bytes=legacy.downloaded_bytes,
+            ),
+            approval=legacy,
+        )
+    acquisition = (
+        db.query(MemorySymbolAcquisition)
+        .filter(MemorySymbolAcquisition.requirement_id == item.requirement_id)
+        .order_by(MemorySymbolAcquisition.created_at.desc())
+        .first()
+    )
+    return request_status_dict(item, approval=acquisition)
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/symbols/request",
+    response_model=MemorySymbolRequestCreateResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def create_symbol_acquisition_request(
+    case_id: str,
+    evidence_id: str,
+    payload: MemorySymbolRequestCreateRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Create or return the pending symbol acquisition request.
+
+    The request is created in ``awaiting_network_isolation`` or
+    ``awaiting_operator_approval`` depending on the deployment state.  It
+    is NOT queued for download.  Only the local CLI can approve and queue
+    the request.
+    """
+    _require_case(db, case_id)
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
+        raise HTTPException(status_code=404, detail="Memory evidence was not found.")
+    if not payload.authorization_acknowledged:
+        raise HTTPException(status_code=400, detail="Evidence authorization acknowledgement is required.")
+    if latest_symbols_failure(db, case_id, evidence_id) is None:
+        raise HTTPException(status_code=409, detail="No unresolved Windows symbol requirement is recorded for this evidence.")
+    available, error_code, message = acquisition_gate()
+    if not available and error_code in {"SYMBOL_ACQUISITION_DISABLED"}:
+        raise HTTPException(status_code=409, detail={"error_code": error_code, "message": message})
+    try:
+        request = request_symbol_acquisition_awaiting_approval(db, case_id=case_id, evidence_id=evidence_id)
+    except Exception as exc:  # noqa: BLE001
+        from app.services.memory.symbol_approval import ApprovalError
+        if isinstance(exc, ApprovalError):
+            raise HTTPException(status_code=409, detail={"error_code": exc.code, "message": exc.message}) from exc
+        raise
     return {
-        "request_id": item.id,
-        "requirement_id": item.requirement_id,
-        "status": item.status,
-        "source_category": item.source_category,
-        "downloaded_bytes": item.downloaded_bytes,
-        "validated": item.validated,
-        "cached": item.cached,
-        "retryable": item.retryable,
-        "error_code": item.error_code,
-        "sanitized_message": item.sanitized_message,
-        "created_at": item.created_at,
-        "updated_at": item.updated_at,
-        "completed_at": item.completed_at,
+        "request_id": request.id,
+        "status": request.status,
+        "source_category": request.source_category,
+        "pending_request_id": request.id,
+        "requirement_fingerprint": request.requirement_fingerprint,
+        "error_code": None,
+        "message": request.sanitized_message or "A symbol acquisition request was recorded.",
     }
 
 
@@ -106,6 +162,13 @@ def acquire_memory_symbols(
     payload: MemorySymbolAcquireRequest,
     db: Session = Depends(get_db),
 ) -> dict:
+    """Queue a managed acquisition.
+
+    This endpoint is reserved for the local operator workflow.  It refuses
+    if no active approval exists for the request.  In ordinary UI flows
+    use POST /symbols/request to create the pending request; queueing
+    requires the local CLI.
+    """
     _require_case(db, case_id)
     evidence = db.get(Evidence, evidence_id)
     if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:

@@ -134,6 +134,14 @@ class MemorySymbolRequirement(UUIDMixin, Base):
     pdb_name: Mapped[str] = mapped_column(String(128), nullable=False)
     pdb_guid: Mapped[str] = mapped_column(String(32), nullable=False)
     pdb_age: Mapped[int] = mapped_column(nullable=False)
+    # The age that was originally requested (typically the one Volatility's
+    # windows.info plugin reported).  Preserved for audit even if pdb_age
+    # is corrected to match a re-published PDB on Microsoft's symbol server.
+    requested_pdb_age: Mapped[int | None] = mapped_column(nullable=True)
+    # True when pdb_age was adjusted to match a re-published symbol whose
+    # internal age differs from the requested age.  The cache key uses
+    # the corrected age but the audit metadata keeps the requested one.
+    age_corrected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     architecture: Mapped[str] = mapped_column(String(32), nullable=False)
     symbol_key: Mapped[str] = mapped_column(String(256), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="unavailable_offline", index=True)
@@ -185,3 +193,56 @@ class MemoryCachedSymbol(UUIDMixin, Base):
     source_category: Mapped[str] = mapped_column(String(64), nullable=False, default="official_microsoft_symbols")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
+
+class MemorySymbolAcquisitionRequest(UUIDMixin, Base):
+    __tablename__ = "memory_symbol_acquisition_requests"
+
+    requirement_id: Mapped[str] = mapped_column(ForeignKey("memory_symbol_requirements.id", ondelete="CASCADE"), nullable=False, index=True)
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="awaiting_network_isolation", index=True)
+    source_category: Mapped[str] = mapped_column(String(64), nullable=False, default="official_microsoft_symbols")
+    requirement_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sanitized_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    approval_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    approval_consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    downloaded_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    redirect_count: Mapped[int] = mapped_column(nullable=False, default=0)
+    metadata_json: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
+
+    __table_args__ = (
+        Index("ix_memory_symbol_req_requirement", "requirement_id"),
+        Index("ix_memory_symbol_req_status_updated", "status", "updated_at"),
+    )
+
+
+class MemorySymbolApproval(UUIDMixin, Base):
+    __tablename__ = "memory_symbol_approvals"
+
+    request_id: Mapped[str] = mapped_column(
+        ForeignKey("memory_symbol_acquisition_requests.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    requirement_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active", index=True)
+    actor_category: Mapped[str] = mapped_column(String(64), nullable=False, default="local_operator")
+    actor_label: Mapped[str] = mapped_column(String(128), nullable=False, default="server-operator")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    audit_metadata_json: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
+
+    __table_args__ = (
+        Index("ix_memory_symbol_approval_status_expires", "status", "expires_at"),
+        Index("ix_memory_symbol_approval_request_status", "request_id", "status"),
+    )
