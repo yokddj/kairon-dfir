@@ -564,6 +564,12 @@ export type MemoryProcessTreeEntity = {
     visibility: Record<string, boolean>;
     findings: string[];
     child_count: number;
+    confidence?: string;
+    create_time?: string | null;
+    exit_time?: string | null;
+    tree?: Record<string, boolean>;
+    truncated?: boolean;
+    omitted_children?: number;
     children: Array<Record<string, unknown>>;
   }>;
   edges: Array<Record<string, unknown>>;
@@ -579,10 +585,13 @@ export type MemoryProcessTreeEntity = {
     terminated: number;
     pid_zero_count: number;
     pid_4_count: number;
+    visible_nodes?: number;
+    search_results?: string[];
   };
   total_entities: number;
   omitted_count: number;
   truncation_reason: string | null;
+  search_results?: string[];
 };
 
 export type MemoryRenormalizeSummary = {
@@ -3690,18 +3699,28 @@ export const api = {
       run_id?: string;
       profile?: "processes_basic" | "processes_extended";
       root_pid?: number;
+      root_entity_id?: string;
       depth?: number;
+      max_nodes?: number;
       visibility?: "listed" | "scan_only" | "terminated" | "unknown" | "hidden_candidate";
       interesting_only?: boolean;
+      include_ancestors?: boolean;
+      orphans_only?: boolean;
+      search?: string;
     },
   ) => {
     const query = new URLSearchParams();
     if (params?.run_id) query.set("run_id", params.run_id);
     if (params?.profile) query.set("profile", params.profile);
     if (params?.root_pid !== undefined) query.set("root_pid", String(params.root_pid));
+    if (params?.root_entity_id) query.set("root_entity_id", params.root_entity_id);
     if (params?.depth) query.set("depth", String(params.depth));
+    if (params?.max_nodes) query.set("max_nodes", String(params.max_nodes));
     if (params?.visibility) query.set("visibility", params.visibility);
     if (params?.interesting_only !== undefined) query.set("interesting_only", String(params.interesting_only));
+    if (params?.include_ancestors !== undefined) query.set("include_ancestors", String(params.include_ancestors));
+    if (params?.orphans_only !== undefined) query.set("orphans_only", String(params.orphans_only));
+    if (params?.search) query.set("search", params.search);
     return request<MemoryProcessTreeEntity>(`/cases/${caseId}/memory/process-tree-canonical${query.size ? `?${query.toString()}` : ""}`);
   },
   renormalizeProcessEntities: (caseId: string, runId: string, dryRun = true) =>

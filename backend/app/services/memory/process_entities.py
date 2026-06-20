@@ -1161,14 +1161,36 @@ def fetch_canonical_edges(case_id: str, *, run_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def fetch_canonical_tree(case_id: str, *, run_id: str, root_pid: int | None = None, depth: int = 3, visibility: str | None = None, interesting_only: bool | None = None) -> dict[str, Any]:
+def fetch_canonical_tree(
+    case_id: str,
+    *,
+    run_id: str,
+    root_pid: int | None = None,
+    root_entity_id: str | None = None,
+    depth: int = 3,
+    max_nodes: int | None = None,
+    visibility: str | None = None,
+    interesting_only: bool | None = None,
+    include_ancestors: bool = False,
+    orphans_only: bool = False,
+    search: str | None = None,
+) -> dict[str, Any]:
     """Build a tree-shaped response from canonical entities.
 
-    ``root_pid`` scopes the tree to a particular sub-tree.  ``depth``
-    limits how deep we expand.  ``visibility`` filters the set
-    (e.g. ``"scan_only"`` to show only processes not present in
-    pslist).  ``interesting_only`` keeps only entities with at least
-    one finding.
+    Parameters:
+
+    * ``root_pid`` / ``root_entity_id`` — scope the visible tree to a
+      particular sub-tree.
+    * ``depth`` — limit how deep we expand from each root.
+    * ``max_nodes`` — global cap on returned nodes (truncated flag).
+    * ``visibility`` — filter the set (e.g. ``"scan_only"``).
+    * ``interesting_only`` — keep only entities with at least one
+      finding.
+    * ``include_ancestors`` — for a scoped root, also include the
+      ancestor chain up to System.
+    * ``orphans_only`` — return only orphan entities (separate view).
+    * ``search`` — find an entity by exact PID or partial name; when
+      set, ``include_ancestors`` is implied.
     """
     page_size = 500
     page = 1
@@ -1188,31 +1210,155 @@ def fetch_canonical_tree(case_id: str, *, run_id: str, root_pid: int | None = No
             break
         page += 1
     metrics = build_tree_metrics(all_entities)
-    if root_pid is not None:
-        # Find the root entity and walk down
-        roots = [e for e in all_entities if e["process"]["pid"] == root_pid]
-    else:
-        roots = [e for e in all_entities if e.get("tree", {}).get("is_root")]
+
+    # Search handling
+    if search:
+        needle = str(search).strip().lower()
+        if needle:
+            matches: list[dict[str, Any]] = []
+            for e in all_entities:
+                pid = e.get("process", {}).get("pid")
+                name = (e.get("process", {}).get("name") or "").lower()
+                cmdline = (e.get("process", {}).get("command_line") or "").lower()
+                if needle.isdigit() and pid is not None and str(pid) == needle:
+                    matches.append(e)
+                elif needle in name or needle in cmdline:
+                    matches.append(e)
+            if not matches:
+                return {
+                    "run_id": run_id,
+                    "nodes": [],
+                    "edges": [],
+                    "metrics": metrics,
+                    "total_entities": len(all_entities),
+                    "omitted_count": len(all_entities),
+                    "truncation_reason": "search_no_match",
+                    "search_results": [],
+                }
+            # Build ancestor + descendant sub-trees for each match.
+            by_id = {e["process_entity_id"]: e for e in all_entities}
+            children_map: dict[str, list[dict[str, Any]]] = defaultdict(list)
+            for e in all_entities:
+                parent_id = e.get("parent_entity_id")
+                if parent_id and parent_id in by_id:
+                    children_map[parent_id].append(e)
+            scope_ids: set[str] = set()
+            for match in matches:
+                # Ancestors
+                cursor = match.get("parent_entity_id")
+                if include_ancestors or True:
+                    while cursor and cursor in by_id and cursor not in scope_ids:
+                        scope_ids.add(cursor)
+                        cursor = by_id[cursor].get("parent_entity_id")
+                # Match itself
+                scope_ids.add(match["process_entity_id"])
+            # BFS descendants
+            queue = [m["process_entity_id"] for m in matches]
+            while queue:
+                cur = queue.pop(0)
+                for child in children_map.get(cur, []):
+                    if child["process_entity_id"] not in scope_ids:
+                        scope_ids.add(child["process_entity_id"])
+                        queue.append(child["process_entity_id"])
+            all_entities = [e for e in all_entities if e["process_entity_id"] in scope_ids]
+            metrics = build_tree_metrics(all_entities)
+            return _build_tree_response(
+                all_entities=all_entities,
+                run_id=run_id,
+                depth=depth,
+                max_nodes=max_nodes,
+                search_results=[m["process_entity_id"] for m in matches],
+            )
+
+    if orphans_only:
+        all_entities = [e for e in all_entities if e.get("tree", {}).get("is_orphan")]
+        metrics = build_tree_metrics(all_entities)
+
+    return _build_tree_response(
+        all_entities=all_entities,
+        run_id=run_id,
+        depth=depth,
+        max_nodes=max_nodes,
+        root_pid=root_pid,
+        root_entity_id=root_entity_id,
+        include_ancestors=include_ancestors,
+    )
+
+
+def _build_tree_response(
+    *,
+    all_entities: list[dict[str, Any]],
+    run_id: str,
+    depth: int,
+    max_nodes: int | None,
+    root_pid: int | None = None,
+    root_entity_id: str | None = None,
+    include_ancestors: bool = False,
+    search_results: list[str] | None = None,
+) -> dict[str, Any]:
+    by_id = {e["process_entity_id"]: e for e in all_entities}
     children_map: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for e in all_entities:
         parent_id = e.get("parent_entity_id")
-        if parent_id:
+        if parent_id and parent_id in by_id:
             children_map[parent_id].append(e)
 
-    def _walk(ent: dict[str, Any], level: int, visited: set[str]) -> dict[str, Any]:
+    # Determine the visible roots
+    if root_entity_id and root_entity_id in by_id:
+        roots = [by_id[root_entity_id]]
+    elif root_pid is not None:
+        roots = [e for e in all_entities if e["process"]["pid"] == root_pid]
+    else:
+        roots = [e for e in all_entities if e.get("tree", {}).get("is_root")]
+        # Orphans (no parent in the set) are also valid roots for the
+        # orphan view; they have no parent_entity_id.
+        roots.extend(e for e in all_entities if e not in roots and not e.get("parent_entity_id"))
+        # If a root has a parent in the entity set, it is a child of
+        # that parent; we should not list it as a separate root to
+        # avoid duplication.  This handles the case where, e.g.,
+        # System (PID 4) is flagged as is_root because its parent
+        # PID 0 is the special Idle entity, but Idle is also present
+        # in the set and is the top of the tree.
+        root_ids = {r["process_entity_id"] for r in roots}
+        roots = [
+            r
+            for r in roots
+            if not r.get("parent_entity_id") or r["parent_entity_id"] not in root_ids
+        ]
+
+    # Ancestor expansion
+    if include_ancestors and roots and not root_entity_id and root_pid is None:
+        # Already anchored at roots; no extra work.
+        pass
+
+    def _walk(ent: dict[str, Any], level: int, visited: set[str], remaining: list[int]) -> dict[str, Any]:
         eid = ent["process_entity_id"]
-        if eid in visited or level > depth:
+        if eid in visited or level > depth or remaining[0] <= 0:
             return {
                 "process_entity_id": eid,
                 "pid": ent["process"]["pid"],
                 "name": ent["process"].get("name"),
                 "truncated": True,
                 "children": [],
+                "omitted_children": 0,
             }
         visited = visited | {eid}
+        remaining[0] -= 1
         children = []
         for child in sorted(children_map.get(eid, []), key=lambda c: c["process"]["pid"]):
-            children.append(_walk(child, level + 1, visited))
+            if remaining[0] <= 0:
+                children.append({
+                    "process_entity_id": child["process_entity_id"],
+                    "pid": child["process"]["pid"],
+                    "name": child["process"].get("name"),
+                    "truncated": True,
+                    "children": [],
+                    "omitted_children": 0,
+                })
+                continue
+            children.append(_walk(child, level + 1, visited, remaining))
+        total_child_count = ent.get("child_count", len(children_map.get(eid, [])))
+        omitted = max(0, total_child_count - len(children))
         return {
             "process_entity_id": eid,
             "pid": ent["process"]["pid"],
@@ -1222,23 +1368,56 @@ def fetch_canonical_tree(case_id: str, *, run_id: str, root_pid: int | None = No
             "sources": ent.get("sources", []),
             "visibility": ent.get("visibility", {}),
             "findings": ent.get("findings", []),
-            "child_count": ent.get("child_count", 0),
+            "child_count": total_child_count,
+            "confidence": ent.get("confidence", "low"),
+            "create_time": ent.get("process", {}).get("create_time"),
+            "exit_time": ent.get("process", {}).get("exit_time"),
+            "tree": ent.get("tree", {}),
             "children": children,
+            "omitted_children": omitted,
         }
 
-    nodes = [_walk(r, 0, set()) for r in sorted(roots, key=lambda e: e["process"]["pid"])]
-    omitted_count = max(0, len(all_entities) - sum(1 + _count_subtree(n) for n in nodes))
+    cap = [max_nodes] if max_nodes else [10**9]
+    nodes = [_walk(r, 0, set(), cap) for r in sorted(roots, key=lambda e: e["process"]["pid"])]
+    included_count = sum(1 + _count_subtree(n) for n in nodes)
+    omitted_count = max(0, len(all_entities) - included_count)
     truncation_reason = None
-    if omitted_count > 0:
+    if cap[0] <= 0:
+        truncation_reason = "max_nodes_reached"
+    elif omitted_count > 0:
         truncation_reason = "depth_or_root_scope"
     return {
         "run_id": run_id,
         "nodes": nodes,
         "edges": [],
-        "metrics": metrics,
+        "metrics": _build_metrics_for_visible(all_entities, nodes, search_results=search_results),
         "total_entities": len(all_entities),
         "omitted_count": omitted_count,
         "truncation_reason": truncation_reason,
+        "search_results": search_results or [],
+    }
+
+
+def _build_metrics_for_visible(
+    all_entities: list[dict[str, Any]],
+    nodes: list[dict[str, Any]],
+    *,
+    search_results: list[str] | None = None,
+) -> dict[str, Any]:
+    base = build_tree_metrics(all_entities)
+    visible_ids: set[str] = set()
+
+    def _collect(n: dict[str, Any]) -> None:
+        visible_ids.add(n["process_entity_id"])
+        for c in n.get("children", []) or []:
+            _collect(c)
+
+    for n in nodes:
+        _collect(n)
+    return {
+        **base,
+        "visible_nodes": len(visible_ids),
+        "search_results": search_results or [],
     }
 
 

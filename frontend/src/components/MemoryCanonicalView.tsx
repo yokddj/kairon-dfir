@@ -9,6 +9,7 @@ import {
   type MemoryRunSelector,
   api,
 } from "../api/client";
+import { MemoryProcessGraph } from "./MemoryProcessGraph";
 import {
   buildRunOptions,
   confidenceTone,
@@ -281,6 +282,12 @@ export function MemoryCanonicalView({ caseId }: { caseId: string }) {
       />
 
       {detail ? <ProcessDetailPanel detail={detail} onClose={() => setSelectedEntityId(null)} /> : null}
+
+      <MemoryProcessGraph
+        caseId={caseId}
+        runId={effectiveRunId}
+        onOpenDetail={(entityId) => setSelectedEntityId(entityId)}
+      />
 
       <ProcessTreePanel tree={tree} onSelect={(entityId) => setSelectedEntityId(entityId)} />
     </section>

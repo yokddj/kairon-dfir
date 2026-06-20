@@ -653,9 +653,14 @@ def get_canonical_process_tree(
     run_id: str | None = Query(default=None),
     profile: str | None = Query(default=None, pattern="^(processes_basic|processes_extended)$"),
     root_pid: int | None = Query(default=None, ge=0),
+    root_entity_id: str | None = Query(default=None, max_length=128),
     depth: int = Query(default=3, ge=1, le=10),
+    max_nodes: int | None = Query(default=None, ge=1, le=2000),
     visibility: str | None = Query(default=None, pattern="^(listed|scan_only|terminated|unknown|hidden_candidate)$"),
     interesting_only: bool | None = Query(default=None),
+    include_ancestors: bool = Query(default=False),
+    orphans_only: bool = Query(default=False),
+    search: str | None = Query(default=None, max_length=128),
     db: Session = Depends(get_db),
 ) -> dict:
     _require_case(db, case_id)
@@ -664,9 +669,14 @@ def get_canonical_process_tree(
         case_id,
         run_id=run.id,
         root_pid=root_pid,
+        root_entity_id=root_entity_id,
         depth=depth,
+        max_nodes=max_nodes,
         visibility=visibility,
         interesting_only=interesting_only,
+        include_ancestors=include_ancestors,
+        orphans_only=orphans_only,
+        search=search,
     )
 
 
