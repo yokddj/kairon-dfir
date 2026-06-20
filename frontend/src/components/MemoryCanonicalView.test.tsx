@@ -471,8 +471,31 @@ describe("MemoryCanonicalView", () => {
 
   // 15. Large graph: guided controls shown
   it("shows the large graph guidance when total_entities exceeds 200", async () => {
-    getCanonicalProcessTreeMock.mockResolvedValueOnce(tree({ total_entities: 500, nodes: [] }));
+    getCanonicalProcessTreeMock.mockResolvedValueOnce(
+      tree({
+        total_entities: 500,
+        nodes: [
+          {
+            process_entity_id: "ent-large",
+            pid: 4,
+            ppid: 0,
+            name: "System",
+            command_line: null,
+            sources: ["windows.pslist"],
+            visibility: { listed: true },
+            findings: [],
+            child_count: 250,
+            confidence: "high",
+            truncated: true,
+            omitted_children: 250,
+            children: [],
+          },
+        ],
+      }),
+    );
     renderView();
+    // The MemoryProcessGraph component renders the TruncationMessage
+    // when total_entities > 200.
     expect(await screen.findByText(/The full process graph contains 500 canonical processes/)).toBeInTheDocument();
   });
 
