@@ -500,6 +500,53 @@ def get_memory_run_options(case_id: str, db: Session = Depends(get_db)) -> dict:
     }
 
 
+@router.get("/cases/{case_id}/memory/process-entities/summary", response_model=MemoryRenormalizeSummaryRead)
+def get_canonical_process_summary(
+    case_id: str,
+    run_id: str | None = Query(default=None),
+    profile: str | None = Query(default=None, pattern="^(processes_basic|processes_extended)$"),
+    db: Session = Depends(get_db),
+) -> dict:
+    _require_case(db, case_id)
+    run = _resolve_run(db, case_id, run_id, profile)
+    summary = canonical_entities.fetch_canonical_summary(case_id, run_id=run.id)
+    return {
+        "case_id": case_id,
+        "evidence_id": run.evidence_id,
+        "run_id": run.id,
+        "source_documents": 0,
+        "candidate_entities": summary["total_entities"],
+        "observation_count": 0,
+        "duplicate_groups_collapsed": 0,
+        "invalid_records": 0,
+        "ambiguous_pid_groups": 0,
+        "expected_edges": 0,
+        "tree_metrics": {
+            "total_nodes": summary["total_entities"],
+            "roots": summary["roots"],
+            "orphans": summary["orphans"],
+            "unknown_parent": summary["unknown_parent"],
+            "cycles": summary["cycles"],
+            "self_parent": summary["self_parent"],
+            "hidden_candidates": summary["hidden_candidate"],
+            "scan_only": summary["scan_only"],
+            "terminated": summary["terminated"],
+            "pid_zero_count": summary["pid_zero"],
+            "pid_4_count": summary["pid_4"],
+        },
+        "normalization_version": canonical_entities.NORMALIZATION_VERSION,
+        "materialization_status": "applied",
+    }
+
+
+@router.get("/cases/{case_id}/memory/process-entities/renormalize", response_model=MemoryRenormalizeSummaryRead)
+def renormalize_canonical_entities_get_redirect() -> dict:
+    raise HTTPException(
+        status_code=405,
+        detail="Renormalize is a POST endpoint. Use POST /api/cases/{case_id}/memory/process-entities/renormalize.",
+    )
+
+
 @router.get("/cases/{case_id}/memory/process-entities", response_model=MemoryProcessEntityListRead)
 def get_canonical_process_entities(
     case_id: str,
@@ -656,42 +703,3 @@ def renormalize_canonical_entities(
     summary = result["summary"]
     summary["materialization_status"] = "applied" if not payload.dry_run else "dry_run"
     return summary
-
-
-@router.get("/cases/{case_id}/memory/process-entities/summary", response_model=MemoryRenormalizeSummaryRead)
-def get_canonical_process_summary(
-    case_id: str,
-    run_id: str | None = Query(default=None),
-    profile: str | None = Query(default=None, pattern="^(processes_basic|processes_extended)$"),
-    db: Session = Depends(get_db),
-) -> dict:
-    _require_case(db, case_id)
-    run = _resolve_run(db, case_id, run_id, profile)
-    summary = canonical_entities.fetch_canonical_summary(case_id, run_id=run.id)
-    return {
-        "case_id": case_id,
-        "evidence_id": run.evidence_id,
-        "run_id": run.id,
-        "source_documents": 0,
-        "candidate_entities": summary["total_entities"],
-        "observation_count": 0,
-        "duplicate_groups_collapsed": 0,
-        "invalid_records": 0,
-        "ambiguous_pid_groups": 0,
-        "expected_edges": 0,
-        "tree_metrics": {
-            "total_nodes": summary["total_entities"],
-            "roots": summary["roots"],
-            "orphans": summary["orphans"],
-            "unknown_parent": summary["unknown_parent"],
-            "cycles": summary["cycles"],
-            "self_parent": summary["self_parent"],
-            "hidden_candidates": summary["hidden_candidate"],
-            "scan_only": summary["scan_only"],
-            "terminated": summary["terminated"],
-            "pid_zero_count": summary["pid_zero"],
-            "pid_4_count": summary["pid_4"],
-        },
-        "normalization_version": canonical_entities.NORMALIZATION_VERSION,
-        "materialization_status": "applied",
-    }
