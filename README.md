@@ -139,11 +139,18 @@ Memory dumps can contain credentials, personal data, and third-party private dat
 
 Memory backend readiness checks use only trusted server-side command settings such as `VOLATILITY3_COMMAND` and `MEMPROCFS_COMMAND`. They reject shell fragments and arguments, run harmless help/version checks only, and never receive memory-image paths.
 
-Windows symbol resolution is offline-only by default. Managed acquisition remains unavailable until the deployment enforces restricted official-source egress and authenticated administrator authorization. See [Managed Windows symbols](docs/memory_symbols.md).
+Windows symbol resolution is offline-only by default. Managed acquisition
+remains unavailable until the deployment enforces restricted official-source
+egress and local-operator authorization. See
+[Managed Windows symbols](docs/memory_symbols.md), the
+[Symbol Egress Gateway](docs/symbol_egress_gateway.md) architecture, and the
+[Local Operator Approval](docs/memory_symbol_operator_approval.md) workflow.
 
-An optional, non-default `symbol-fetcher` service provides the isolated cache
-and validation architecture. It is not an authorization or network-isolation
-bypass; see [its security model](docs/symbol_fetcher_security.md).
+An optional, non-default `symbol-fetcher` service provides the isolated
+client. An optional `symbol-egress-gateway` service provides the only
+outbound HTTPS path. The fetcher is attached only to a Docker `internal: true`
+network; the gateway is the only component connected to a network with a
+default route. See [its security model](docs/symbol_fetcher_security.md).
 
 ## Documentation
 
@@ -155,6 +162,8 @@ bypass; see [its security model](docs/symbol_fetcher_security.md).
 - [Memory Upload](docs/memory_upload.md)
 - [Memory Upload UX](docs/memory_upload_ux.md)
 - [Managed Windows symbols](docs/memory_symbols.md)
+- [Symbol Egress Gateway](docs/symbol_egress_gateway.md)
+- [Local Operator Approval](docs/memory_symbol_operator_approval.md)
 - [Private beta deployment](docs/deployment/beta-deployment.md)
 - [Security notes](docs/SECURITY.md)
 - [Known limitations](docs/KNOWN_LIMITATIONS.md)

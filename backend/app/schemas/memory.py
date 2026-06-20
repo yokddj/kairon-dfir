@@ -90,12 +90,32 @@ class MemorySymbolAcquireResponse(BaseModel):
     message: str
 
 
+class MemorySymbolRequestCreateRequest(BaseModel):
+    authorization_acknowledged: bool = False
+
+    model_config = {"extra": "forbid"}
+
+
+class MemorySymbolRequestCreateResponse(BaseModel):
+    request_id: str
+    status: str
+    source_category: str
+    pending_request_id: str | None = None
+    requirement_fingerprint: str
+    error_code: str | None = None
+    message: str
+
+
 class MemorySymbolCacheStatusRead(BaseModel):
     mode: str
     managed_download_enabled: bool
     acquisition_enabled: bool
     network_isolation_ready: bool
     administrator_authorization_available: bool
+    local_approval_enabled: bool
+    pending_requests: int
+    awaiting_operator_approval: int
+    approved_pending: int
     fetcher_online: bool
     total_bytes: int
     configured_max_bytes: int
@@ -114,17 +134,24 @@ class MemorySymbolCacheStatusRead(BaseModel):
 class MemorySymbolRequestStatusRead(BaseModel):
     request_id: str
     requirement_id: str
+    case_id: str | None = None
+    evidence_id: str | None = None
     status: str
     source_category: str
+    requirement_fingerprint: str
     downloaded_bytes: int
-    validated: bool
-    cached: bool
-    retryable: bool
+    redirect_count: int
     error_code: str | None = None
     sanitized_message: str | None = None
     created_at: datetime
     updated_at: datetime
+    approved_at: datetime | None = None
+    approval_expires_at: datetime | None = None
+    approval_consumed_at: datetime | None = None
+    queued_at: datetime | None = None
+    started_at: datetime | None = None
     completed_at: datetime | None = None
+    acquisition_id: str | None = None
 
 
 class MemoryScanRunRead(BaseModel):

@@ -49,12 +49,23 @@ The default deployment does not include Volatility. Operators may build an optio
 
 Kairon does not initiate automatic symbol downloads. `MEMORY_SYMBOL_NETWORK_ACCESS_ENABLED=false` by default. If symbols are unavailable, the run fails safely with a sanitized requirements error and does not retry indefinitely.
 
-The managed-symbol API is independently gated by deployment-level network
-isolation and administrator authorization. Hostname checks in application code
-are not treated as sufficient egress isolation. See
-[Managed Windows symbols](memory_symbols.md).
-Normal Volatility execution is hard-coded offline; only the isolated fetcher
-contains an HTTPS acquisition client.
+The managed-symbol API is independently gated by:
+
+1. **Docker network isolation**: the `symbol-fetcher` is attached only to
+   `symbol-internal` (an `internal: true` network with no default route).
+   The `symbol-egress-gateway` is the only component in the symbol
+   subsystem attached to a network with a default route.
+2. **Gateway policy**: the gateway validates the initial host, the
+   redirect suffix, the resolved IP, and the TLS certificate on every
+   hop.  See [Symbol Egress Gateway](symbol_egress_gateway.md).
+3. **Local-operator approval**: real acquisitions require a
+   server-side CLI approval, single-use, short-lived, and bound to the
+   exact symbol identity.  See [Local Operator Approval](memory_symbol_operator_approval.md).
+
+Hostname checks in application code are not treated as sufficient egress
+isolation. Normal Volatility execution is hard-coded offline; the isolated
+fetcher contains an HTTPS client but it talks only to the egress gateway
+over the internal network.
 
 ## Storage policy
 

@@ -52,11 +52,11 @@ class SymbolIdentity:
             raise SymbolFetchError("SYMBOL_IDENTITY_INVALID", "The recorded symbol architecture is invalid.")
 
 
-def official_symbol_url(identity: SymbolIdentity, initial_host: str = "msdl.microsoft.com") -> str:
+def official_symbol_url(identity: SymbolIdentity, initial_host: str = "msdl.microsoft.com", path_prefix: str = "/download/symbols") -> str:
     identity.validate()
     name = quote(identity.pdb_name, safe="._-")
     key = quote(f"{identity.guid.upper()}{identity.age}", safe="")
-    return f"https://{initial_host}/{name}/{key}/{name}"
+    return f"https://{initial_host}{path_prefix}/{name}/{key}/{name}"
 
 
 def _public_addresses(host: str, port: int = 443) -> list[str]:
@@ -231,10 +231,21 @@ def read_pdb_identity(path: Path) -> tuple[str, int]:
         return guid, age
 
 
-def validate_pdb(path: Path, identity: SymbolIdentity) -> None:
+def validate_pdb(path: Path, identity: SymbolIdentity) -> dict[str, int | str]:
+    """Validate the downloaded PDB identity.
+
+    The GUID is the authoritative identity.  The age in Microsoft's URL
+    can differ from the age embedded in the PDB file (Microsoft may
+    re-publish a PDB at the same URL with a different internal age when
+    the file is updated).  When the GUID matches, the age mismatch is
+    reported as a non-fatal warning via the returned metadata.
+    """
     guid, age = read_pdb_identity(path)
-    if guid != identity.guid.upper() or age != int(identity.age):
+    if guid != identity.guid.upper():
         raise SymbolFetchError("SYMBOL_IDENTITY_MISMATCH", "Downloaded PDB identity does not match the required symbol.")
+    if age != int(identity.age):
+        return {"guid": guid, "expected_age": int(identity.age), "actual_age": int(age), "age_warning": True}
+    return {"guid": guid, "expected_age": int(identity.age), "actual_age": int(age), "age_warning": False}
 
 
 def generate_isf(pdb_path: Path, output_path: Path, identity: SymbolIdentity, *, max_bytes: int) -> dict[str, object]:
