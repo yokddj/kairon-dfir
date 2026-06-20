@@ -1067,7 +1067,7 @@ def fetch_canonical_entities(
         "query": {"bool": {"filter": filters, "must": must}},
         "sort": [
             {"process.pid": {"order": "asc", "missing": "_last"}},
-            {"process_entity_id": {"order": "asc"}},
+            {"document_id": {"order": "asc"}},
         ],
         "from": (page - 1) * page_size,
         "size": page_size,
