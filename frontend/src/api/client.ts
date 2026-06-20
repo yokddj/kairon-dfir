@@ -554,6 +554,33 @@ export type MemoryProcessEntityDetail = {
 
 export type MemoryProcessTreeEntity = {
   run_id: string;
+  roots: Array<{
+    process_entity_id: string;
+    pid: number;
+    name?: string | null;
+    command_line?: string | null;
+    sources: string[];
+    visibility: Record<string, boolean>;
+    findings: string[];
+    confidence?: string;
+    create_time?: string | null;
+    exit_time?: string | null;
+    tree?: Record<string, boolean>;
+  }>;
+  orphans: Array<{
+    process_entity_id: string;
+    pid: number;
+    name?: string | null;
+    command_line?: string | null;
+    sources: string[];
+    visibility: Record<string, boolean>;
+    findings: string[];
+    confidence?: string;
+    create_time?: string | null;
+    exit_time?: string | null;
+    tree?: Record<string, boolean>;
+  }>;
+  top_level_nodes: Array<Record<string, unknown>>;
   nodes: Array<{
     process_entity_id: string;
     pid: number;
@@ -585,6 +612,12 @@ export type MemoryProcessTreeEntity = {
     terminated: number;
     pid_zero_count: number;
     pid_4_count: number;
+    case_roots?: number;
+    current_view_roots?: number;
+    visible_processes?: number;
+    context_ancestors?: number;
+    collapsed_branches?: number;
+    processes_not_loaded?: number;
     visible_nodes?: number;
     search_results?: string[];
   };

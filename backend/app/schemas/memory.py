@@ -417,6 +417,9 @@ class MemoryProcessEntityDetailRead(BaseModel):
 
 class MemoryProcessTreeEntityRead(BaseModel):
     run_id: str
+    roots: list[dict] = []
+    orphans: list[dict] = []
+    top_level_nodes: list[dict] = []
     nodes: list[dict]
     edges: list[MemoryProcessEdgeEntityRead] = []
     metrics: dict

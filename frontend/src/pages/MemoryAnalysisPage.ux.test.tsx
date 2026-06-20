@@ -145,20 +145,28 @@ function systemInfo() {
 }
 
 function treeResponse(overrides = {}) {
+  const svchost = { process_entity_id: "ent-svchost", pid: 1116, ppid: 4, name: "svchost.exe", command_line: "C:\\Windows\\system32\\svchost.exe -k NetworkService -p", sources: ["windows.pslist", "windows.cmdline"], visibility: { listed: true }, findings: [], child_count: 0, confidence: "high", truncated: false, omitted_children: 0, children: [] };
+  const services = { process_entity_id: "ent-services", pid: 808, ppid: 4, name: "services.exe", command_line: "C:\\Windows\\system32\\services.exe", sources: ["windows.pslist"], visibility: { listed: true }, findings: [], child_count: 2, confidence: "high", truncated: false, omitted_children: 0, children: [] };
+  const systemTree = [{
+    process_entity_id: "ent-system", pid: 4, ppid: 0, name: "System",
+    command_line: null, sources: ["windows.pslist"],
+    visibility: { listed: true }, findings: [], child_count: 2,
+    confidence: "high", truncated: false, omitted_children: 0,
+    children: [svchost, services],
+  }];
   return {
     run_id: "run-basic",
-    nodes: [{
-      process_entity_id: "ent-system", pid: 4, ppid: 0, name: "System",
-      command_line: null, sources: ["windows.pslist"],
-      visibility: { listed: true }, findings: [], child_count: 1,
-      confidence: "high", truncated: false, omitted_children: 0,
-      children: [
-        { process_entity_id: "ent-svchost", pid: 1116, ppid: 4, name: "svchost.exe", command_line: "C:\\Windows\\system32\\svchost.exe -k NetworkService -p", sources: ["windows.pslist", "windows.cmdline"], visibility: { listed: true }, findings: [], child_count: 0, confidence: "high", truncated: false, omitted_children: 0, children: [] },
-        { process_entity_id: "ent-services", pid: 808, ppid: 4, name: "services.exe", command_line: "C:\\Windows\\system32\\services.exe", sources: ["windows.pslist"], visibility: { listed: true }, findings: [], child_count: 2, confidence: "high", truncated: false, omitted_children: 0, children: [] },
-      ],
-    }],
+    roots: [{ process_entity_id: "ent-system", pid: 4, name: "System", command_line: null, sources: ["windows.pslist"], visibility: { listed: true }, findings: [], confidence: "high", tree: { is_root: true } }],
+    orphans: [],
+    top_level_nodes: systemTree,
+    nodes: systemTree,
     edges: [],
-    metrics: { total_nodes: 3, roots: 1, orphans: 0, unknown_parent: 0, cycles: 0, self_parent: 0, hidden_candidates: 0, scan_only: 0, terminated: 0, pid_zero_count: 1, pid_4_count: 1, visible_nodes: 3, search_results: [] },
+    metrics: {
+      total_nodes: 3, roots: 1, orphans: 0, unknown_parent: 0, cycles: 0, self_parent: 0,
+      hidden_candidates: 0, scan_only: 0, terminated: 0, pid_zero_count: 1, pid_4_count: 1,
+      case_roots: 1, current_view_roots: 1, visible_processes: 3, context_ancestors: 0,
+      collapsed_branches: 0, processes_not_loaded: 0, visible_nodes: 3, search_results: [],
+    },
     total_entities: 3, omitted_count: 0, truncation_reason: null,
     search_results: [],
     ...overrides,
@@ -439,5 +447,196 @@ describe("Memory analysis UX fixes v1", () => {
     await screen.findByTestId("memory-runs-tab");
     fireEvent.click(screen.getByTestId("memory-tab-processes"));
     await screen.findByTestId("memory-processes-tab");
+  });
+
+  // 21. Modal opens centered and uses role=dialog
+  it("opens the centered process detail modal", async () => {
+    getCanonicalProcessEntityDetailMock.mockResolvedValue({
+      entity: {
+        process_entity_id: "ent-system",
+        process: { pid: 4, ppid: 0, name: "System", command_line: null, create_time: null, exit_time: null },
+        sources: ["windows.pslist"],
+        visibility: { listed: true },
+        observation_count: 1,
+        observation_summary: {},
+        confidence: "high",
+        findings: [],
+        parent_entity_id: null,
+        child_count: 1,
+        tree: { is_root: true },
+        normalization_version: "memory_process_canonical_v1",
+        indexed_at: null,
+      },
+      observations: [],
+      parent: null,
+      children: [],
+      tree_path: ["System (4)"],
+      alternate_command_lines: [],
+      findings: [],
+      source_record_refs: ["obs-1"],
+    });
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-processes"));
+    await screen.findByTestId("memory-processes-tab");
+    // The "Inspect" button is rendered in MemoryCanonicalView's table.
+    const inspectButton = (await screen.findAllByText("Inspect"))[0];
+    fireEvent.click(inspectButton);
+    const modal = await screen.findByTestId("process-detail-modal");
+    expect(modal).toHaveAttribute("role", "dialog");
+    expect(modal).toHaveAttribute("aria-modal", "true");
+  });
+
+  // 22. The old side drawer is no longer rendered
+  it("does not render the legacy side drawer", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-processes"));
+    await screen.findByTestId("memory-processes-tab");
+    expect(screen.queryByTestId("process-detail-drawer")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("process-detail-drawer-panel")).not.toBeInTheDocument();
+  });
+
+  // 23. Modal closes with Escape and restores focus
+  it("closes the modal with Escape and restores focus", async () => {
+    getCanonicalProcessEntityDetailMock.mockResolvedValue({
+      entity: {
+        process_entity_id: "ent-system",
+        process: { pid: 4, ppid: 0, name: "System", command_line: null, create_time: null, exit_time: null },
+        sources: ["windows.pslist"],
+        visibility: { listed: true },
+        observation_count: 1,
+        observation_summary: {},
+        confidence: "high",
+        findings: [],
+        parent_entity_id: null,
+        child_count: 1,
+        tree: { is_root: true },
+        normalization_version: "memory_process_canonical_v1",
+        indexed_at: null,
+      },
+      observations: [],
+      parent: null,
+      children: [],
+      tree_path: ["System (4)"],
+      alternate_command_lines: [],
+      findings: [],
+      source_record_refs: ["obs-1"],
+    });
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-processes"));
+    await screen.findByTestId("memory-processes-tab");
+    const inspectButton = (await screen.findAllByText("Inspect"))[0];
+    fireEvent.click(inspectButton);
+    await screen.findByTestId("process-detail-modal");
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => {
+      expect(screen.queryByTestId("process-detail-modal")).not.toBeInTheDocument();
+    });
+  });
+
+  // 24. Indented tree separates Main tree and Orphans
+  it("splits Main tree and Orphans in the indented tree view", async () => {
+    const orphan = { process_entity_id: "ent-orphan", pid: 9000, ppid: 12345, name: "orphan.exe", command_line: null, sources: ["windows.pslist"], visibility: { listed: true }, findings: [], child_count: 0, confidence: "high", truncated: false, omitted_children: 0, children: [] };
+    getCanonicalProcessTreeMock.mockResolvedValue(treeResponse({
+      orphans: [orphan],
+      top_level_nodes: treeResponse().nodes.concat(orphan),
+      metrics: { ...treeResponse().metrics, orphans: 1 },
+    }));
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-graph"));
+    await screen.findByTestId("memory-graph-tab");
+    fireEvent.click(screen.getByTestId("graph-subview-tree"));
+    await screen.findByTestId("indented-tree");
+    expect(screen.getByTestId("indented-tree-main")).toBeInTheDocument();
+    expect(screen.getByTestId("indented-tree-orphans")).toBeInTheDocument();
+    // The summary must say "Main tree · 1 root" and "Orphans · 1", never
+    // the misleading "12 root(s)" pattern.
+    const summary = screen.getByTestId("indented-tree-summary");
+    expect(summary.textContent).toContain("Main tree · 1 root");
+    expect(summary.textContent).toContain("Orphans · 1");
+    expect(summary.textContent).not.toMatch(/\d+ root\(s\)/);
+  });
+
+  // 25. Raw observations: "Open canonical" opens the modal
+  it("opens the modal from the Raw observations Open canonical link", async () => {
+    getCaseMemoryProcessesMock.mockResolvedValue({
+      items: [
+        {
+          document_id: "raw-1",
+          process: { pid: 1116, ppid: 4, name: "svchost.exe", command_line: "C:\\Windows\\system32\\svchost.exe -k NetworkService -p", create_time: null, exit_time: null },
+          plugins: ["windows.pslist"],
+          memory_run_id: "run-basic",
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 50,
+    });
+    getCanonicalProcessEntitiesMock.mockResolvedValue({
+      items: [
+        {
+          process_entity_id: "ent-svchost-raw",
+          process: { pid: 1116, ppid: 4, name: "svchost.exe", command_line: null, create_time: null, exit_time: null },
+          sources: ["windows.pslist"],
+          visibility: { listed: true },
+          observation_count: 1,
+          observation_summary: {},
+          confidence: "high",
+          findings: [],
+          parent_entity_id: null,
+          child_count: 0,
+          tree: {},
+          normalization_version: "memory_process_canonical_v1",
+          indexed_at: null,
+        },
+      ],
+      total: 1,
+      page: 1,
+      page_size: 1,
+      selected_run: "run-basic",
+      normalization_version: "memory_process_canonical_v1",
+      total_observations: 1,
+      facets: {},
+    });
+    getCanonicalProcessEntityDetailMock.mockResolvedValue({
+      entity: {
+        process_entity_id: "ent-svchost-raw",
+        process: { pid: 1116, ppid: 4, name: "svchost.exe", command_line: null, create_time: null, exit_time: null },
+        sources: ["windows.pslist"],
+        visibility: { listed: true },
+        observation_count: 1,
+        observation_summary: {},
+        confidence: "high",
+        findings: [],
+        parent_entity_id: null,
+        child_count: 0,
+        tree: {},
+        normalization_version: "memory_process_canonical_v1",
+        indexed_at: null,
+      },
+      observations: [],
+      parent: null,
+      children: [],
+      tree_path: ["System (4)"],
+      alternate_command_lines: [],
+      findings: [],
+      source_record_refs: ["obs-1"],
+    });
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-raw"));
+    await screen.findByTestId("memory-raw-tab");
+    const link = await screen.findByTestId("raw-link-canonical");
+    fireEvent.click(link);
+    expect(await screen.findByTestId("process-detail-modal")).toBeInTheDocument();
+  });
+
+  // 26. Metrics strip does not render 0 / 12 simultaneously
+  it("renders a single metrics strip with consistent values", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-graph"));
+    await screen.findByTestId("memory-graph-tab");
+    const strip = await screen.findByTestId("metrics-strip");
+    expect(strip).toBeInTheDocument();
+    // The legacy duplicated row should not be present any more.
+    expect(document.querySelectorAll('[data-testid^="graph-tab-stat-"]').length).toBe(0);
   });
 });

@@ -143,7 +143,10 @@ def test_load_by_root_and_depth() -> None:
 def test_max_nodes_limit() -> None:
     entities, edges = _make_run()
     tree = _tree(entities, edges, depth=10, max_nodes=3)
-    # Count non-truncated nodes in the returned tree
+    # Count non-truncated nodes in the *tree* part (roots).  The orphans
+    # are reported as a separate flat list and are not bounded by
+    # max_nodes, because they are presentational and the user can browse
+    # them through the dedicated Orphans panel.
     count = 0
 
     def _count(n):
@@ -154,7 +157,12 @@ def test_max_nodes_limit() -> None:
             _count(c)
 
     for n in tree["nodes"]:
-        _count(n)
+        # orphans have empty children and pid != System; skip them in the
+        # tree count.
+        if n.get("pid") == 4 or n.get("pid") == 0:
+            _count(n)
+        elif n.get("children"):
+            _count(n)
     assert count <= 3
     assert tree["truncation_reason"] in {"max_nodes_reached", "depth_or_root_scope"}
 
@@ -370,3 +378,132 @@ def test_no_normalized_event_creation() -> None:
     forbidden = ["NormalizedEvent", "create_normalized_event", "disk_event"]
     for token in forbidden:
         assert token not in source, f"forbidden token {token!r} in tree builder"
+
+
+# ---------------------------------------------------------------------------
+# 11. Roots / orphans semantics
+# ---------------------------------------------------------------------------
+
+
+def test_roots_contain_only_system_pid_4() -> None:
+    """The canonical System tree must report a single root (PID 4)."""
+    entities, edges = _make_run()
+    tree = _tree(entities, edges, depth=10)
+    assert "roots" in tree
+    assert len(tree["roots"]) == 1, tree["roots"]
+    assert tree["roots"][0]["pid"] == 4
+    # System must be the *only* user-visible root, never PID 0 (Idle).
+    pids = [r["pid"] for r in tree["roots"]]
+    assert 0 not in pids
+    assert 4 in pids
+
+
+def test_orphans_list_contains_only_entities_without_parent() -> None:
+    """Orphans are entities with no parent in the canonical set."""
+    entities, edges = _make_run()
+    tree = _tree(entities, edges, depth=10)
+    assert "orphans" in tree
+    assert len(tree["orphans"]) == 1
+    assert tree["orphans"][0]["pid"] == 9000
+    # The orphan must NOT be present in the roots list.
+    root_pids = [r["pid"] for r in tree["roots"]]
+    assert 9000 not in root_pids
+    # orphans must not include System or Idle.
+    orphan_pids = [o["pid"] for o in tree["orphans"]]
+    assert 4 not in orphan_pids
+    assert 0 not in orphan_pids
+
+
+def test_top_level_nodes_is_optional_presentation_union() -> None:
+    """top_level_nodes is a convenience field for the UI; it equals roots + orphans."""
+    entities, edges = _make_run()
+    tree = _tree(entities, edges, depth=10)
+    assert "top_level_nodes" in tree
+    pids = [n["pid"] for n in tree["top_level_nodes"]]
+    assert 4 in pids
+    assert 9000 in pids
+    assert 0 not in pids
+
+
+def test_pid_zero_never_replaces_system_as_root() -> None:
+    """Even if PID 0 (Idle) ends up flagged as is_root by accident, the
+    tree response must drop it so System remains the user-visible root.
+    """
+    entities, edges = _make_run()
+    # Force Idle (PID 0) to look like a root in the canonical entities.
+    for e in entities:
+        if e["process"]["pid"] == 0:
+            e["tree"]["is_root"] = True
+    tree = _tree(entities, edges, depth=10)
+    pids = [r["pid"] for r in tree["roots"]]
+    assert 0 not in pids
+    assert 4 in pids
+
+
+def test_orphans_do_not_increment_root_count() -> None:
+    """The tree metrics must distinguish case_roots from orphans.
+
+    Building a larger fixture with multiple orphans confirms that the
+    orphans are tallied separately and never summed into the roots.
+    """
+    extra_orphans = [
+        _legacy_doc(pid=9100 + i, plugin="windows.pslist", ppid=99999, name=f"orphan{i}.exe", create_time="2024-03-22T10:08:00Z")
+        for i in range(10)
+    ]
+    base_docs = [
+        _legacy_doc(pid=0, plugin="windows.pslist", ppid=0, name="Idle", create_time="2024-03-22T09:59:00Z"),
+        _legacy_doc(pid=4, plugin="windows.pslist", ppid=0, name="System", create_time="2024-03-22T10:00:00Z"),
+        _legacy_doc(pid=9000, plugin="windows.pslist", ppid=12345, name="orphan.exe", create_time="2024-03-22T10:07:00Z"),
+    ]
+    entities, _ = _renormalize(base_docs + extra_orphans)["entities"], None
+    tree = _tree(entities, [], depth=10)
+    metrics = tree["metrics"]
+    # The canonical set has exactly one root (System, PID 4).
+    assert metrics["case_roots"] == 1, metrics
+    # All 11 orphans are tallied separately and never merged into roots.
+    assert metrics["orphans"] == 11, metrics
+    assert metrics["case_roots"] != metrics["orphans"]
+    # The list of orphans returned by the response must contain all 11.
+    assert len(tree["orphans"]) == 11
+    # The roots list contains only System.
+    assert len(tree["roots"]) == 1
+    assert tree["roots"][0]["pid"] == 4
+
+
+def test_filtered_view_does_not_alter_case_roots() -> None:
+    """A scoped view (e.g. search match) must keep case_roots anchored
+    to the underlying canonical set, not the visible sub-tree.
+    """
+    entities, edges = _make_run()
+    # Filter to only the orphan subtree; case_roots must still be 1.
+    orphan_only = [e for e in entities if e.get("tree", {}).get("is_orphan")]
+    tree = canonical._build_tree_response(
+        all_entities=orphan_only,
+        run_id=RUN,
+        depth=10,
+        max_nodes=None,
+    )
+    # The orphan-only view has no roots but the metrics still describe
+    # the orphan set (case_roots=0 for an orphan-only filter).
+    assert tree["metrics"]["case_roots"] == 0
+    assert tree["metrics"]["orphans"] == 1
+    # top_level_nodes has only the orphan.
+    pids = [n["pid"] for n in tree["top_level_nodes"]]
+    assert pids == [9000]
+
+
+def test_tree_response_is_idempotent() -> None:
+    """Re-running _build_tree_response with the same input must be a
+    pure function: equal inputs produce equal outputs.
+    """
+    entities, edges = _make_run()
+    first = _tree(entities, edges, depth=10)
+    second = _tree(entities, edges, depth=10)
+    # Compare only the structural part: roots, orphans, top_level_nodes pids.
+    def _pids(tree):
+        return {
+            "roots": [r["pid"] for r in tree["roots"]],
+            "orphans": [o["pid"] for o in tree["orphans"]],
+            "top_level_nodes": [n["pid"] for n in tree["top_level_nodes"]],
+        }
+    assert _pids(first) == _pids(second)

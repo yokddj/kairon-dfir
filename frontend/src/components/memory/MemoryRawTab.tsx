@@ -1,6 +1,7 @@
 import { useState } from "react";
-import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type MemoryProcess, type MemoryRunSelector, api } from "../../api/client";
+import { ProcessDetailModal } from "./ProcessDetailModal";
 
 type Props = {
   caseId: string;
@@ -28,6 +29,7 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
   const [processName, setProcessName] = useState("");
   const [page, setPage] = useState(1);
   const [showTree, setShowTree] = useState(false);
+  const [inspectEntityId, setInspectEntityId] = useState<string | null>(null);
   const pageSize = 50;
 
   const processQuery = useQuery<{ items: MemoryProcess[]; total: number; page: number; page_size: number }>({
@@ -52,6 +54,13 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
     queryKey: ["raw-tree", effectiveRunId],
     queryFn: () => api.getMemoryProcessTree(effectiveRunId as string),
     enabled: Boolean(effectiveRunId && showTree),
+    refetchOnWindowFocus: false,
+  });
+
+  const inspectDetailQuery = useQuery({
+    queryKey: ["memory-process-entity-detail-raw", caseId, inspectEntityId, effectiveRunId],
+    queryFn: () => api.getCanonicalProcessEntityDetail(caseId, inspectEntityId as string, effectiveRunId || undefined),
+    enabled: Boolean(caseId && inspectEntityId),
     refetchOnWindowFocus: false,
   });
 
@@ -204,20 +213,14 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
                         <td className="px-2 py-1 text-muted">{reported((row.process as any)?.exit_time)}</td>
                         <td className="px-2 py-1">
                           {link ? (
-                            <a
-                              href={`/cases/${caseId}/memory?tab=processes&run_id=${effectiveRunId}`}
-                              onClick={(event) => {
-                                event.preventDefault();
-                                const url = `/cases/${caseId}/memory?tab=processes&run_id=${effectiveRunId || ""}`;
-                                window.history.pushState({}, "", url);
-                                window.dispatchEvent(new PopStateEvent("popstate"));
-                                window.location.assign(url);
-                              }}
+                            <button
+                              type="button"
+                              onClick={() => setInspectEntityId(link.process_entity_id)}
                               data-testid="raw-link-canonical"
                               className="rounded-md border border-line bg-abyss/70 px-1.5 py-0.5 text-[10px] text-accent"
                             >
                               Open canonical
-                            </a>
+                            </button>
                           ) : (
                             <span className="text-[10px] text-muted">—</span>
                           )}
@@ -271,6 +274,13 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
           </div>
         ) : null}
       </section>
+      <ProcessDetailModal
+        open={Boolean(inspectEntityId)}
+        detail={inspectDetailQuery.data ?? null}
+        isLoading={inspectDetailQuery.isLoading}
+        error={inspectDetailQuery.error instanceof Error ? inspectDetailQuery.error : null}
+        onClose={() => setInspectEntityId(null)}
+      />
     </div>
   );
 }

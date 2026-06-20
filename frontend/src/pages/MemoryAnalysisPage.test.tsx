@@ -356,7 +356,7 @@ describe("MemoryAnalysisPage workspace", () => {
     await waitFor(() => {
       expect(screen.getByTestId("memory-process-canvas")).toBeInTheDocument();
     }, { timeout: 5000 });
-    expect(screen.getByTestId("graph-side-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("metrics-strip")).toBeInTheDocument();
   });
 
   // 4. System tab shows only latest successful by default
@@ -431,26 +431,27 @@ describe("MemoryAnalysisPage workspace", () => {
   });
 
   // 12. Graph detail panel appears on the right in desktop
-  it("renders a side detail panel in the Graph tab", async () => {
+  it("renders a single shared metrics strip in the Graph tab", async () => {
     renderPage();
     fireEvent.click(screen.getByTestId("memory-tab-graph"));
-    expect(await screen.findByTestId("graph-side-panel")).toBeInTheDocument();
+    expect(await screen.findByTestId("metrics-strip")).toBeInTheDocument();
   });
 
   // 13. Renamed graph metrics
   it("renames graph metrics in the Graph tab header", async () => {
     renderPage();
     fireEvent.click(screen.getByTestId("memory-tab-graph"));
-    expect(await screen.findByTestId("graph-tab-stat-visible")).toBeInTheDocument();
-    expect(screen.getByTestId("graph-tab-stat-orphans")).toBeInTheDocument();
+    expect(await screen.findByTestId("metrics-strip-visible")).toBeInTheDocument();
+    expect(screen.getByTestId("metrics-strip-orphans")).toBeInTheDocument();
   });
 
   // 14. Case roots vs current-view roots differentiated
   it("differentiates case roots and current-view roots in the Graph tab", async () => {
     renderPage();
     fireEvent.click(screen.getByTestId("memory-tab-graph"));
-    await screen.findByTestId("graph-tab-stat-case-roots");
-    expect(screen.getByTestId("graph-tab-stat-case-roots")).toBeInTheDocument();
+    await screen.findByTestId("metrics-strip-case-roots");
+    expect(screen.getByTestId("metrics-strip-case-roots")).toBeInTheDocument();
+    expect(screen.getByTestId("metrics-strip-view-roots")).toBeInTheDocument();
   });
 
   // 15. Backend details collapsed
