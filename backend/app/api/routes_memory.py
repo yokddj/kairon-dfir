@@ -850,8 +850,9 @@ def recompute_canonical_tree(
         page += 1
     metrics = canonical_entities.build_tree_metrics(all_entities)
     # Persist updated tree + parent_entity_id back to OpenSearch.
-    index = canonical_entities.ensure_memory_index(case_id)
-    client = canonical_entities.get_opensearch_client()
+    from app.core.opensearch import get_memory_index, get_opensearch_client
+    index = get_memory_index(case_id)
+    client = get_opensearch_client()
     for ent in all_entities:
         try:
             client.index(
