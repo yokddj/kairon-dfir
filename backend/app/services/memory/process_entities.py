@@ -746,14 +746,22 @@ def build_tree_metrics(entities: list[dict[str, Any]]) -> dict[str, Any]:
             }
 
     # Compute root classification: a node is a "root" of the visible
-    # graph if its parent_entity_id is None AND it is not flagged as
-    # unknown_parent or orphan.  This is the analyst's "top of the
-    # tree" view.
+    # graph if either:
+    #   * it has no parent_entity_id (i.e. PPID not in the set,
+    #     not flagged as orphan, not unknown_parent, not
+    #     self_parent, not the special PID 0), OR
+    #   * its parent is the PID 0 self-referencing entity (System
+    #     is conventionally the top of the analyst's tree).
+    pid_zero_ids = {e["process_entity_id"] for e in entities if e["process"]["pid"] == 0}
     for ent in entities:
         tree = ent["tree"]
-        if not tree["is_self_parent"] and not tree["is_unknown_parent"] and not tree["is_orphan"] and not tree["is_pid_zero"]:
-            if parent_map.get(ent["process_entity_id"]) is None:
-                tree["is_root"] = True
+        if tree["is_self_parent"] or tree["is_unknown_parent"] or tree["is_orphan"] or tree["is_pid_zero"]:
+            continue
+        parent_id = parent_map.get(ent["process_entity_id"])
+        if parent_id is None:
+            tree["is_root"] = True
+        elif parent_id in pid_zero_ids:
+            tree["is_root"] = True
 
     # Cycle detection: if any path from A to its parent eventually
     # returns to A.
