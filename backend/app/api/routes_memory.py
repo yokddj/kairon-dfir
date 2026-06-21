@@ -1131,6 +1131,83 @@ def renormalize_canonical_entities(
 
 
 @router.post(
+    "/cases/{case_id}/memory/runs/{run_id}/rematerialize-canonical",
+    response_model=MemoryRenormalizeSummaryRead,
+)
+def rematerialize_canonical(
+    case_id: str,
+    run_id: str,
+    payload: _RenormalizeRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Repair canonical materialization for an existing process run.
+
+    The run already has raw ``memory_process`` documents in OpenSearch.
+    This endpoint re-runs the canonical pipeline (without re-executing
+    Volatility): it pulls the raw documents, deduplicates them, indexes
+    the canonical entities / observations / edges and updates the run's
+    ``canonical_materialization_status`` to ``completed``.
+
+    The operation is **idempotent**: re-running it over the same raw
+    documents produces the same OpenSearch document IDs (the
+    ``document_id`` is derived from the run id + identity hash) and
+    the same counts.
+    """
+    from app.services.memory.execution import _run_canonical_materialization
+    from app.services.memory.canonical_entities import fetch_legacy_process_documents
+
+    _require_case(db, case_id)
+    run = db.get(MemoryScanRun, run_id)
+    if not run or run.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Memory run not found for this case.")
+    if not _is_process_profile(run.profile):
+        raise HTTPException(
+            status_code=400,
+            detail="Repair is only supported for processes_basic/processes_extended runs.",
+        )
+    payload = payload or _RenormalizeRequest(dry_run=False)  # type: ignore[call-arg]
+    raw_documents = fetch_legacy_process_documents(case_id, run_id=run.id)
+    if not raw_documents:
+        raise HTTPException(
+            status_code=409,
+            detail="No raw memory_process documents found for this run. "
+                   "Re-run the Volatility profile to populate raw observations first.",
+        )
+    if payload.dry_run:
+        result = canonical_entities.renormalize_documents(
+            raw_documents,
+            case_id=case_id,
+            evidence_id=run.evidence_id,
+            run_id=run.id,
+            materialize=False,
+        )
+        summary = result["summary"]
+        summary["materialization_status"] = "dry_run"
+        return summary
+    _run_canonical_materialization(db, run, documents=raw_documents)
+    db.refresh(run)
+    return {
+        "case_id": case_id,
+        "evidence_id": run.evidence_id,
+        "run_id": run.id,
+        "source_documents": len(raw_documents),
+        "candidate_entities": run.canonical_entity_count,
+        "observation_count": run.canonical_observation_count,
+        "duplicate_groups_collapsed": max(0, len(raw_documents) - run.canonical_entity_count),
+        "invalid_records": 0,
+        "ambiguous_pid_groups": 0,
+        "expected_edges": 0,
+        "tree_metrics": {
+            "roots": run.canonical_root_count,
+            "orphans": run.canonical_orphan_count,
+            "scan_only": run.canonical_scan_only_count,
+        },
+        "normalization_version": run.canonical_materialization_version,
+        "materialization_status": "applied",
+    }
+
+
+@router.post(
     "/cases/{case_id}/memory/process-entities/recompute-tree",
     response_model=MemoryRenormalizeSummaryRead,
 )

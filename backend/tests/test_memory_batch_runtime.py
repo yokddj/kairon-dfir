@@ -291,8 +291,8 @@ def test_active_result_resolved_run_id_drives_count(db: Session) -> None:
         db, case_id=case.id, evidence_id=ev.id, profile="processes_basic",
         minutes_ago=10,
     )
-    _make_summary(db, run=extended, count=255, artifact_type="memory_process")
-    _make_summary(db, run=basic, count=253, artifact_type="memory_process")
+    _make_summary(db, run=extended, count=255, artifact_type="memory_process_entity")
+    _make_summary(db, run=basic, count=253, artifact_type="memory_process_entity")
     active_ids = resolve_active_run_ids(db, case_id=case.id, evidence_id=ev.id)
     assert active_ids["processes"] == extended.id
     payload = get_memory_family_count(

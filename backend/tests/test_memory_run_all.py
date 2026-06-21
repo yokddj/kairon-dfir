@@ -231,7 +231,7 @@ def test_overview_per_family_independent_of_global_run(db: Session) -> None:
 def test_overview_real_per_family_counts(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
     processes_run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="processes_extended")
-    _make_summary(db, run=processes_run, artifact_type="memory_process", count=255)
+    _make_summary(db, run=processes_run, artifact_type="memory_process_entity", count=255)
     modules_run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="modules_basic")
     _make_summary(db, run=modules_run, artifact_type="memory_process_module", count=21_339)
     handles_run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="handles_basic")
