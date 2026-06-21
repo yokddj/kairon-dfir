@@ -564,6 +564,28 @@ def _is_process_profile(profile: str | None) -> bool:
     return bool(profile) and profile in {"processes_basic", "processes_extended"}
 
 
+_ARTIFACT_PROFILES_API = {
+    "network_basic",
+    "modules_basic",
+    "handles_basic",
+    "kernel_basic",
+    "suspicious_memory",
+}
+
+
+def _is_visible_profile(profile: str | None) -> bool:
+    """Profile is exposed in the run picker when it is a process
+    profile, metadata_only, or one of the new artifact profiles.
+    """
+    if not profile:
+        return False
+    if _is_process_profile(profile):
+        return True
+    if profile == "metadata_only":
+        return True
+    return profile in _ARTIFACT_PROFILES_API
+
+
 @router.get("/cases/{case_id}/memory/runs/options", response_model=MemoryRunSelectorRead)
 def get_memory_run_options(case_id: str, db: Session = Depends(get_db)) -> dict:
     _require_case(db, case_id)
@@ -583,7 +605,7 @@ def get_memory_run_options(case_id: str, db: Session = Depends(get_db)) -> dict:
     )
     options: list[dict] = []
     for r in runs:
-        if not _is_process_profile(r.profile) and r.profile != "metadata_only":
+        if not _is_visible_profile(r.profile):
             continue
         options.append(
             {
