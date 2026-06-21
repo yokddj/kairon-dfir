@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 FAMILY_TO_DOCUMENT_TYPE: dict[str, str] = {
     "system_info": "memory_system_info",
-    "processes": "memory_process_entity",
+    "processes": "memory_process",
     "modules": "memory_process_module",
     "handles": "memory_handle",
     "kernel_modules": "memory_kernel_module",
