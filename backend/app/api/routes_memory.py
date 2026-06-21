@@ -287,6 +287,34 @@ def get_run_all_preview(
 
 
 @router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/analysis-batches/active",
+    response_model=None,
+)
+def get_active_analysis_batch(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return the in-flight batch (queued or running) for the evidence.
+
+    The frontend polls this endpoint while a batch is running.  The
+    endpoint returns 404 when no active batch exists.
+
+    NOTE: this route must be declared before the
+    ``/{batch_id}`` route so the literal segment ``active`` does
+    not get captured as a batch id.
+    """
+    from app.services.memory.batch import find_active_batch, serialize_batch
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    batch = find_active_batch(db, case_id=case_id, evidence_id=evidence_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="No active batch for this evidence.")
+    return serialize_batch(batch)
+
+
+@router.get(
     "/cases/{case_id}/memory/evidences/{evidence_id}/analysis-batches/{batch_id}",
     response_model=None,
 )
@@ -304,30 +332,6 @@ def get_analysis_batch(
     batch = get_batch(db, batch_id=batch_id)
     if batch is None or batch.case_id != case_id or batch.evidence_id != evidence_id:
         raise HTTPException(status_code=404, detail="Memory analysis batch not found.")
-    return serialize_batch(batch)
-
-
-@router.get(
-    "/cases/{case_id}/memory/evidences/{evidence_id}/analysis-batches/active",
-    response_model=None,
-)
-def get_active_analysis_batch(
-    case_id: str,
-    evidence_id: str,
-    db: Session = Depends(get_db),
-) -> dict:
-    """Return the in-flight batch (queued or running) for the evidence.
-
-    The frontend polls this endpoint while a batch is running.  The
-    endpoint returns 404 when no active batch exists.
-    """
-    from app.services.memory.batch import find_active_batch, serialize_batch
-
-    _require_case(db, case_id)
-    _require_evidence_for_case(db, case_id, evidence_id)
-    batch = find_active_batch(db, case_id=case_id, evidence_id=evidence_id)
-    if batch is None:
-        raise HTTPException(status_code=404, detail="No active batch for this evidence.")
     return serialize_batch(batch)
 
 
