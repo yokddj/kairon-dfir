@@ -105,10 +105,29 @@ def _ensure_compatible_schema() -> None:
                 "backend_version": "VARCHAR(255)",
                 "worker_task_id": "VARCHAR(255)",
                 "cancellation_requested": "BOOLEAN NOT NULL DEFAULT FALSE",
+                "batch_id": "UUID",
+                "batch_position": "INTEGER",
+                "batch_total": "INTEGER",
             }
             for column_name, column_type in memory_column_defs.items():
                 if column_name not in memory_columns:
                     connection.execute(text(f"ALTER TABLE memory_scan_runs ADD COLUMN {column_name} {column_type}"))
+            if "batch_id" in memory_columns or any(c["name"] == "batch_id" for c in inspector.get_columns("memory_scan_runs")):
+                fk_rows = connection.execute(
+                    text(
+                        "SELECT 1 FROM information_schema.table_constraints "
+                        "WHERE constraint_name = 'memory_scan_runs_batch_id_fkey' "
+                        "AND table_name = 'memory_scan_runs'"
+                    )
+                ).fetchone()
+                if not fk_rows and "memory_analysis_batches" in existing_tables:
+                    connection.execute(
+                        text(
+                            "ALTER TABLE memory_scan_runs "
+                            "ADD CONSTRAINT memory_scan_runs_batch_id_fkey "
+                            "FOREIGN KEY (batch_id) REFERENCES memory_analysis_batches(id) ON DELETE SET NULL"
+                        )
+                    )
         if "evidences" in existing_tables:
             evidence_columns = {column["name"]: column for column in inspector.get_columns("evidences")}
             size_type = str(evidence_columns.get("size_bytes", {}).get("type", "")).upper()
