@@ -157,12 +157,25 @@ def plan_run_all(
             continue
         selected.append(profile)
 
+    excluded = [
+        {"profile": p, "reason": r} for p, r in RUN_ALL_EXCLUDED_PROFILES.items()
+    ]
+    # network_basic is never part of run-all; surface it under
+    # ``excluded_profiles`` so the UI can show the operator why it is
+    # absent.
+    network_ok, network_reason = _profile_available("network_basic")
+    if not network_ok:
+        excluded.append(
+            {
+                "profile": "network_basic",
+                "reason": network_reason or NETWORK_UNAVAILABLE_REASON,
+            }
+        )
+
     return {
         "selected_profiles": selected,
         "skipped_profiles": skipped,
-        "excluded_profiles": [
-            {"profile": p, "reason": r} for p, r in RUN_ALL_EXCLUDED_PROFILES.items()
-        ],
+        "excluded_profiles": excluded,
     }
 
 
