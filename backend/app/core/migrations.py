@@ -166,7 +166,7 @@ def _v2_batches_runtime_columns(connection: Connection) -> None:
     existing = {c["name"] for c in inspector.get_columns("memory_analysis_batches")}
     column_defs = {
         "version": "INTEGER NOT NULL DEFAULT 1",
-        "last_advanced_run_id": "UUID",
+        "last_advanced_run_id": "VARCHAR(64)",
         "last_advanced_at": "TIMESTAMP",
         "reconciled_at": "TIMESTAMP",
         "failure_reason": "TEXT",
