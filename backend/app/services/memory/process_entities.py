@@ -1013,13 +1013,13 @@ def fetch_legacy_process_documents(case_id: str, *, run_id: str) -> list[dict[st
         "query": {
             "bool": {
                 "filter": [
-                    {"term": {"memory_artifact_type.keyword": "memory_process"}},
-                    {"term": {"memory_run_id.keyword": run_id}},
+                    {"term": {"memory_artifact_type": "memory_process"}},
+                    {"term": {"memory_run_id": run_id}},
                 ]
             }
         },
         "size": 5000,
-        "sort": [{"process.pid": {"order": "asc", "missing": "_last"}}],
+        "sort": [{"process.pid": {"order": "asc", "missing": "_last", "unmapped_type": "long"}}],
     }
     response = client.search(
         index=get_memory_index(case_id),
