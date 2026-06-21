@@ -146,7 +146,10 @@ def get_memory_family_count(
             "query": {
                 "bool": {
                     "filter": [
-                        {"term": {"document_type": document_type}},
+                        {"bool": {"should": [
+                            {"term": {"document_type": document_type}},
+                            {"term": {"memory_artifact_type": document_type}},
+                        ], "minimum_should_match": 1}},
                         {"bool": {"should": [
                             {"term": {"scan_run_id.keyword": active_run_id}},
                             {"term": {"memory_run_id": active_run_id}},
