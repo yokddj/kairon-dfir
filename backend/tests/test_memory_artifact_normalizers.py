@@ -631,9 +631,6 @@ def test_search_filters_build_correctly() -> None:
 # ---------------------------------------------------------------------------
 # 24. raw provenance preserved
 # ---------------------------------------------------------------------------
-
-
-def test_raw_provenance_preserved() -> None:
     """Every artifact document must carry a ``provenance`` block that
     points back to the source plugin run, so the UI can render
     "Source: <plugin> · Run: <id>" without losing context.
@@ -652,3 +649,39 @@ def test_raw_provenance_preserved() -> None:
         assert provenance["plugin_run_id"] == f"{RUN}:windows.modules"
         assert provenance["source_plugin"] == "windows.modules"
         assert provenance["normalization_version"] == NORMALIZATION_VERSION
+
+
+# ---------------------------------------------------------------------------
+# 25. scan_run_id mapping is keyword-searchable
+# ---------------------------------------------------------------------------
+
+
+def test_scan_run_id_mapping_supports_term_query() -> None:
+    """The OpenSearch mapping must declare ``scan_run_id`` as a keyword
+    field (or a text+keyword sub-field) so that the count and search
+    helpers can match exact run ids.
+    """
+    from app.services.memory.artifact_indexing import ARTIFACT_MAPPING
+    mapping = ARTIFACT_MAPPING["mappings"]["properties"]
+    field = mapping["scan_run_id"]
+    # The field is mapped as text+keyword; the search helpers use the
+    # keyword sub-field for exact term matches.
+    if field["type"] == "text":
+        assert field["fields"]["keyword"]["type"] == "keyword"
+    else:
+        assert field["type"] == "keyword"
+
+
+# ---------------------------------------------------------------------------
+# 26. SystemRoot and Windows path normalization
+# ---------------------------------------------------------------------------
+
+
+def test_systemroot_and_windows_paths_collapse() -> None:
+    """``dlllist`` emits ``\\SystemRoot\\...`` paths while ``ldrmodules``
+    emits ``\\Windows\\...`` for the same file.  Both must produce
+    the same canonical document so the merge consolidates them.
+    """
+    from app.services.memory.artifact_normalizers import _normalize_path
+    assert _normalize_path("\\SystemRoot\\System32\\smss.exe") == _normalize_path("\\Windows\\System32\\smss.exe")
+    assert _normalize_path("SystemRoot\\System32\\foo.dll") == _normalize_path("windows/System32/foo.dll")

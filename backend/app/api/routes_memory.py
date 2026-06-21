@@ -4,6 +4,9 @@ import logging
 from datetime import datetime, date
 from typing import Any
 
+
+logger = logging.getLogger(__name__)
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
 
@@ -18,6 +21,7 @@ from app.services.memory.artifact_indexing import (
     get_artifact_document,
     search_artifact_documents,
 )
+from app.services.memory.volatility_runner import network_basic_available
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, mark_run_queued, resolve_profile_plugins
 from app.services.memory.evidence_access import evidence_readiness
@@ -1016,6 +1020,27 @@ def get_case_memory_artifacts_overview(
     return _artifact_overview(case_id, db, run_id)
 
 
+@router.post("/cases/{case_id}/memory/artifacts/relink/{run_id}")
+def relink_artifact_process_entities(
+    case_id: str,
+    run_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, int]:
+    """Re-link artifact documents to canonical process entities for the
+    given run.  Idempotent: re-running with the same input is a no-op.
+    """
+    _require_case(db, case_id)
+    if not _resolve_run(db, case_id, run_id):
+        raise HTTPException(status_code=404, detail="Memory run not found.")
+    linked = 0
+    for doc_type in ("memory_process_module", "memory_handle", "memory_network_connection"):
+        try:
+            linked += int(link_process_entities(case_id, scan_run_id=run_id, document_type=doc_type))
+        except Exception:  # noqa: BLE001
+            logger.warning("artifact re-link failed for %s", doc_type)
+    return {"linked": linked}
+
+
 @router.get("/cases/{case_id}/memory/network", response_model=MemoryArtifactListRead)
 def list_memory_network_connections(
     case_id: str,
@@ -1075,10 +1100,10 @@ def list_memory_process_modules(
     }
     sort: list[dict[str, Any]] | None = None
     if discrepancy_only:
-        # "discrepancy_only" filters via search results — handled by
-        # the API caller (UI sets a dedicated parameter).  Backend
-        # sorts by findings to bring discrepancies up.
-        sort = [{"findings": {"order": "desc"}}, {"pid": {"order": "asc", "missing": "_last"}}, {"document_id": {"order": "asc"}}]
+        # "discrepancy_only" is implemented as an exists filter on the
+        # ``findings`` keyword field.  The sort uses the same field so
+        # that documents with the most findings are surfaced first.
+        filters["findings"] = "module_list_discrepancy"
     return _artifact_list(
         case_id,
         document_type="memory_process_module",

@@ -32,6 +32,7 @@ from app.services.memory.normalizers import merge_memory_process_results, normal
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, write_atomic_bytes, write_atomic_json
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
 from app.services.memory.volatility_runner import VolatilityRunnerError, probe_windows_symbol_identity, run_plugin
+from app.services.memory import volatility_runner
 from app.services.memory.symbol_control import record_symbol_requirement
 
 
@@ -121,6 +122,14 @@ def resolve_profile_plugins(profile: str) -> list[str]:
         raise MemoryExecutionValidationError("UNKNOWN_PROFILE", "Unknown memory analysis profile.")
     if profile != "metadata_only" and not settings.memory_process_profile_enabled:
         raise MemoryExecutionValidationError("PROCESS_PROFILE_DISABLED", "Memory process profiles are disabled by server configuration.")
+    # Runtime check: the network_basic profile requires a Windows
+    # network plugin that is not present in the installed Volatility
+    # 3.28.0 build.  Reject the start before any MemoryScanRun is
+    # created and before any Redis task is enqueued.
+    if profile == "network_basic":
+        available, explanation = volatility_runner.network_basic_available()
+        if not available:
+            raise MemoryExecutionValidationError("MEMORY_PROFILE_UNAVAILABLE", explanation)
     plugins = PROFILE_PLUGINS[profile]
     allowed_plugins = set(settings.allowed_memory_plugins)
     required = set(plugins)

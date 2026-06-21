@@ -34,7 +34,7 @@ ARTIFACT_MAPPING = {
         "properties": {
             "case_id": {"type": "keyword"},
             "evidence_id": {"type": "keyword"},
-            "scan_run_id": {"type": "keyword"},
+            "scan_run_id": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
             "plugin_run_id": {"type": "keyword"},
             "document_type": {"type": "keyword"},
             "document_id": {"type": "keyword"},
@@ -46,7 +46,7 @@ ARTIFACT_MAPPING = {
                 "properties": {
                     "case_id": {"type": "keyword"},
                     "evidence_id": {"type": "keyword"},
-                    "scan_run_id": {"type": "keyword"},
+                    "scan_run_id": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 256}}},
                     "plugin_run_id": {"type": "keyword"},
                     "source_plugin": {"type": "keyword"},
                     "normalization_version": {"type": "keyword"},
@@ -160,7 +160,9 @@ def search_artifact_documents(
     page = max(int(page), 1)
     query_filters: list[dict[str, Any]] = [{"term": {"document_type": document_type}}]
     if run_id:
-        query_filters.append({"term": {"scan_run_id": run_id}})
+        # scan_run_id is mapped as text with a keyword sub-field; use the
+        # keyword form for an exact match.
+        query_filters.append({"term": {"scan_run_id.keyword": run_id}})
     if filters:
         for key, value in filters.items():
             if value is None:
@@ -207,7 +209,9 @@ def count_artifact_documents(
     client = get_opensearch_client()
     filters: list[dict[str, Any]] = [{"term": {"document_type": document_type}}]
     if run_id:
-        filters.append({"term": {"scan_run_id": run_id}})
+        # scan_run_id is mapped as text with a keyword sub-field; use the
+        # keyword form for an exact match.
+        filters.append({"term": {"scan_run_id.keyword": run_id}})
     if extra_filters:
         filters.extend(extra_filters)
     body = {"query": {"bool": {"filter": filters}}}
@@ -249,7 +253,7 @@ def link_process_entities(
         "size": 10000,
         "query": {"bool": {"filter": [
             {"term": {"document_type": document_type}},
-            {"term": {"scan_run_id": scan_run_id}},
+            {"term": {"scan_run_id.keyword": scan_run_id}},
         ]}},
     }
     response = client.search(index=index, body=body, params={"ignore_unavailable": "true"})
@@ -263,7 +267,7 @@ def link_process_entities(
         "size": 10000,
         "query": {"bool": {"filter": [
             {"term": {"document_type": "memory_process_entity"}},
-            {"term": {"scan_run_id": scan_run_id}},
+            {"term": {"scan_run_id.keyword": scan_run_id}},
             {"terms": {"process.pid": pids}},
         ]}},
         "_source": ["process_entity_id", "process.pid", "process.create_time"],
