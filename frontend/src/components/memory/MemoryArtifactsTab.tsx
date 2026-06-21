@@ -49,6 +49,17 @@ const SUBVIEWS: ReadonlyArray<{ key: SubView; label: string; testId: string; des
   { key: "suspicious", label: "Suspicious regions", testId: "memory-artifacts-subview-suspicious", description: "Indicators (windows.malfind), needs review." },
 ];
 
+function _isArtifactProfile(profile: string | null | undefined): boolean {
+  if (!profile) return false;
+  return [
+    "network_basic",
+    "modules_basic",
+    "handles_basic",
+    "kernel_basic",
+    "suspicious_memory",
+  ].includes(profile);
+}
+
 function reported(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
   return String(value);
@@ -695,7 +706,7 @@ export function MemoryArtifactsTab({
         </p>
 
         <div className="mt-3 grid gap-2 md:grid-cols-3 lg:grid-cols-6" data-testid="memory-artifacts-overview-cards">
-          {overview?.run_status ? (
+          {overview?.run_status && _isArtifactProfile(overview.profile) ? (
             <>
               <CountCard label="Network connections" value={overview.network_connections?.count ?? 0} testId="overview-network" />
               <CountCard label="Process modules" value={overview.process_modules?.count ?? 0} testId="overview-modules" />

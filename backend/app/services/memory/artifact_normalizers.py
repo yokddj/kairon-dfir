@@ -324,11 +324,11 @@ def _normalize_module_payload(
         in_init = _lookup(row, "InInit")
         in_mem = _lookup(row, "InMem")
         # Module identity: collapse same modules from different plugins
-        # (dlllist vs ldrmodules) by ignoring fields that the second
-        # plugin may not report.  We always key on (pid, module, path,
-        # base_address) and append size only when it is present in
-        # both sources.
-        identity = _identity_pid_offset(pid, module_name, path_value or "nopath", base_address or 0)
+        # (dlllist vs ldrmodules).  The path is normalized so
+        # ``\\SystemRoot\\System32\\foo`` and ``\\Windows\\System32\\foo``
+        # produce the same identity.
+        normalized_path = _normalize_path(path_value) or "nopath"
+        identity = _identity_pid_offset(pid, module_name, normalized_path, base_address or 0)
         doc = {
             "document_id": _document_id(prefix="memory_process_module", case_id=case_id, run_id=scan_run_id, identity=identity),
             "document_type": "memory_process_module",
@@ -401,6 +401,24 @@ def _module_name_from_path(path: str) -> str | None:
     return cleaned.rsplit("/", 1)[-1][:MAX_NAME_LENGTH] or None
 
 
+def _normalize_path(path: str | None) -> str | None:
+    """Map equivalent Windows path representations to a canonical form
+    so that ``dlllist`` and ``ldrmodules`` entries for the same module
+    can be merged by identity.  ``\\SystemRoot\\System32\\foo`` and
+    ``\\Windows\\System32\\foo`` refer to the same file.
+    """
+    if not path:
+        return path
+    cleaned = path.strip().replace("\\", "/").rstrip("/").lower()
+    if cleaned.startswith("//?/"):
+        cleaned = cleaned[4:]
+    if cleaned.startswith("/systemroot/"):
+        cleaned = "/windows/" + cleaned[len("/systemroot/"):]
+    if cleaned.startswith("systemroot/"):
+        cleaned = "windows/" + cleaned[len("systemroot/"):]
+    return cleaned
+
+
 def merge_module_documents(*groups: Iterable[dict[str, Any]]) -> dict[str, Any]:
     """Merge dlllist+ldrmodules into consolidated ``memory_process_module`` docs.
 
@@ -448,6 +466,13 @@ def merge_module_documents(*groups: Iterable[dict[str, Any]]) -> dict[str, Any]:
                     conflicts += 1
             if not existing.get("path") and doc.get("path"):
                 existing["path"] = doc.get("path")
+            elif existing.get("path") and doc.get("path") and existing["path"] != doc["path"]:
+                # Prefer the SystemRoot-style path (more canonical),
+                # otherwise keep the first non-null one.
+                if existing["path"].lower().startswith("\\systemroot\\") and not doc["path"].lower().startswith("\\systemroot\\"):
+                    pass  # existing is already preferred
+                elif not existing["path"].lower().startswith("\\systemroot\\") and doc["path"].lower().startswith("\\systemroot\\"):
+                    existing["path"] = doc["path"]
             if not existing.get("module_name") and doc.get("module_name"):
                 existing["module_name"] = doc.get("module_name")
     items = list(by_id.values())

@@ -210,3 +210,60 @@ def _classify_failure(stderr: bytes) -> tuple[str, str]:
         return "PLUGIN_REQUIREMENTS_UNSATISFIED", "Volatility could not satisfy the windows.info plugin requirements."
     text = sanitize_backend_error(raw)
     return "PLUGIN_FAILED", text or "Volatility windows.info failed."
+
+
+# Plugins that are required for the network_basic profile but are
+# missing from the installed Volatility 3.28.0 build (no
+# windows.netscan / windows.netstat).  Kept in one place so the API
+# layer can reject the start before any MemoryScanRun is created.
+NETWORK_BASIC_REQUIRED_PLUGINS = ("windows.netscan", "windows.netstat")
+
+
+def probe_volatility_plugin(plugin: str) -> bool:
+    """Return True when the local Volatility runtime exposes ``plugin``.
+
+    Uses ``vol --help`` to enumerate the registered plugins.  The call
+    is offline and bounded; the output is cached for the lifetime of
+    the process.
+    """
+    import functools
+    cache_attr = "_volatility_plugin_cache"
+    cache: dict[str, bool] | None = getattr(probe_volatility_plugin, cache_attr, None)
+    if cache is None:
+        cache = {}
+        setattr(probe_volatility_plugin, cache_attr, cache)
+    if plugin in cache:
+        return cache[plugin]
+    try:
+        executable, _ = resolve_volatility_executable()
+    except VolatilityRunnerError:
+        cache[plugin] = False
+        return False
+    try:
+        result = subprocess.run(
+            [executable, "--help"],
+            shell=False,
+            capture_output=True,
+            timeout=30,
+        )
+    except Exception:  # noqa: BLE001
+        cache[plugin] = False
+        return False
+    output = (result.stdout or b"") + (result.stderr or b"")
+    available = f" {plugin}," in output.decode("utf-8", errors="replace") or f" {plugin} " in output.decode("utf-8", errors="replace")
+    cache[plugin] = available
+    return available
+
+
+def network_basic_available() -> tuple[bool, str]:
+    """Probe the installed Volatility runtime for the Windows network
+    plugins required by ``network_basic``.
+
+    Returns a tuple ``(available, explanation)``.  When no compatible
+    plugin is present, ``explanation`` is a safe human-readable string
+    the UI/API can surface verbatim.
+    """
+    for plugin in NETWORK_BASIC_REQUIRED_PLUGINS:
+        if probe_volatility_plugin(plugin):
+            return True, f"{plugin} is available."
+    return False, "No compatible Windows network plugin is available in the installed Volatility runtime."
