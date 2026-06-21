@@ -30,6 +30,7 @@ type Props = {
   onJumpToProcesses: (entityId: string) => void;
   onJumpToGraph: (entityId: string) => void;
   onJumpToTree: (entityId: string) => void;
+  evidenceId?: string;
 };
 
 type SubView =
@@ -582,6 +583,7 @@ export function MemoryArtifactsTab({
   selectedRunId,
   onSelectRunId,
   onSelectEntity,
+  evidenceId,
   onJumpToProcesses,
   onJumpToGraph,
   onJumpToTree,
@@ -597,54 +599,59 @@ export function MemoryArtifactsTab({
   const effectiveRunId = selectedRunId || runOptions?.default_run_id || null;
 
   const overviewQuery = useQuery<MemoryArtifactOverview>({
-    queryKey: ["memory-artifact-overview", caseId, effectiveRunId],
+    queryKey: ["memory-artifact-overview", caseId, effectiveRunId, evidenceId],
     queryFn: () => api.getMemoryArtifactOverview(caseId, { run_id: effectiveRunId || undefined }),
     refetchOnWindowFocus: false,
   });
   const overview = overviewQuery.data;
 
   const listParams: Record<string, unknown> = useMemo(() => {
-    const params: Record<string, unknown> = { run_id: effectiveRunId || undefined, page, page_size: 50 };
+    const params: Record<string, unknown> = {
+      run_id: effectiveRunId || undefined,
+      page,
+      page_size: 50,
+    };
+    if (evidenceId) params.evidence_id = evidenceId;
     if (filter) params.process_name = filter;
     if (pidFilter) params.pid = Number(pidFilter);
     if (objectTypeFilter) params.object_type = objectTypeFilter;
     if (reviewFilter) params.review_status = reviewFilter;
     return params;
-  }, [effectiveRunId, page, filter, pidFilter, objectTypeFilter, reviewFilter]);
+  }, [effectiveRunId, evidenceId, page, filter, pidFilter, objectTypeFilter, reviewFilter]);
 
   const networkQuery = useQuery<MemoryArtifactList>({
     queryKey: ["memory-artifact-network", caseId, listParams],
-    queryFn: () => api.getMemoryNetworkConnections(caseId, listParams),
+    queryFn: () => api.getMemoryNetworkConnections(caseId, listParams as never),
     enabled: subView === "network",
     refetchOnWindowFocus: false,
   });
   const modulesQuery = useQuery<MemoryArtifactList>({
     queryKey: ["memory-artifact-modules", caseId, listParams],
-    queryFn: () => api.getMemoryProcessModules(caseId, listParams),
+    queryFn: () => api.getMemoryProcessModules(caseId, listParams as never),
     enabled: subView === "modules",
     refetchOnWindowFocus: false,
   });
   const handlesQuery = useQuery<MemoryArtifactList>({
     queryKey: ["memory-artifact-handles", caseId, listParams],
-    queryFn: () => api.getMemoryHandles(caseId, listParams),
+    queryFn: () => api.getMemoryHandles(caseId, listParams as never),
     enabled: subView === "handles",
     refetchOnWindowFocus: false,
   });
   const driversQuery = useQuery<MemoryArtifactList>({
     queryKey: ["memory-artifact-drivers", caseId, listParams],
-    queryFn: () => api.getMemoryDrivers(caseId, listParams),
+    queryFn: () => api.getMemoryDrivers(caseId, listParams as never),
     enabled: subView === "drivers",
     refetchOnWindowFocus: false,
   });
   const kernelQuery = useQuery<MemoryArtifactList>({
     queryKey: ["memory-artifact-kernel", caseId, listParams],
-    queryFn: () => api.getMemoryKernelModules(caseId, listParams),
+    queryFn: () => api.getMemoryKernelModules(caseId, listParams as never),
     enabled: subView === "kernel",
     refetchOnWindowFocus: false,
   });
   const suspiciousQuery = useQuery<MemoryArtifactList>({
     queryKey: ["memory-artifact-suspicious", caseId, listParams],
-    queryFn: () => api.getMemorySuspiciousRegions(caseId, listParams),
+    queryFn: () => api.getMemorySuspiciousRegions(caseId, listParams as never),
     enabled: subView === "suspicious",
     refetchOnWindowFocus: false,
   });
@@ -677,12 +684,21 @@ export function MemoryArtifactsTab({
               bounded server-side; raw bytes and full paths are never displayed.
             </p>
           </div>
-          <RunPicker
-            runOptions={runOptions}
-            selectedRunId={effectiveRunId}
-            onSelectRunId={(next) => { onSelectRunId(next); setPage(1); }}
-            testId="memory-artifacts-run-picker"
-          />
+          {evidenceId ? (
+            <span
+              className="rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-100"
+              data-testid="memory-artifacts-latest-successful"
+            >
+              Latest successful
+            </span>
+          ) : (
+            <RunPicker
+              runOptions={runOptions}
+              selectedRunId={effectiveRunId}
+              onSelectRunId={(next) => { onSelectRunId(next); setPage(1); }}
+              testId="memory-artifacts-run-picker"
+            />
+          )}
         </header>
         <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="Memory artifact subviews">
           {SUBVIEWS.map((sv) => (

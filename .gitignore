@@ -66,6 +66,7 @@ parser_outputs/
 parsed-output/
 parsed_outputs/
 exports/
+graphify-out/
 *.log
 
 # Forensic evidence and case archives should never be added accidentally.

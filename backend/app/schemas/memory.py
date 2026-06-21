@@ -471,6 +471,7 @@ class MemoryRunSelectorRead(BaseModel):
 class MemoryArtifactListRead(BaseModel):
     document_type: str
     selected_run: str | None = None
+    evidence_id: str | None = None
     total: int
     page: int
     page_size: int
@@ -499,3 +500,51 @@ class MemoryArtifactOverviewRead(BaseModel):
     handles: dict = {}
     suspicious_regions: dict = {}
     normalization_version: str = "memory_artifact_canonical_v1"
+
+
+class MemoryActiveRunRead(BaseModel):
+    id: str
+    profile: str
+    status: str
+    started_at: str | None = None
+    completed_at: str | None = None
+    duration_seconds: float = 0.0
+    plugin_count: int | None = None
+    plugins_completed: int | None = None
+    plugins_failed: int | None = None
+    evidence_id: str
+    case_id: str
+
+
+class MemoryActiveResultRead(BaseModel):
+    case_id: str
+    evidence_id: str
+    artifact_family: str
+    active_run: MemoryActiveRunRead | None = None
+    latest_attempt: MemoryActiveRunRead | None = None
+    selection_reason: str
+    using_fallback: bool = False
+    historical_override: bool = False
+    total: int = 0
+    items: list = []
+    analysis_state: str = "not_analyzed"
+
+
+class MemoryAnalysisCatalogueItemRead(BaseModel):
+    profile: str
+    family: str
+    title: str
+    description: str
+    cost_label: str
+    est_duration_seconds: int
+    available: bool = True
+    availability_reason: str | None = None
+    last_run: MemoryActiveRunRead | None = None
+    last_status: str | None = None
+    last_count: int = 0
+
+
+class MemoryAnalysisCatalogueRead(BaseModel):
+    case_id: str
+    evidence_id: str
+    items: list[MemoryAnalysisCatalogueItemRead]

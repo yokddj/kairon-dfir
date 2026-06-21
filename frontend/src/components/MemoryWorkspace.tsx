@@ -21,6 +21,7 @@ type RunProfile = "processes_basic" | "processes_extended" | "metadata_only";
 
 type MemoryWorkspaceProps = {
   caseId: string;
+  evidenceId?: string;
 };
 
 function backendBadge(status: MemoryBackendStatus): string {
@@ -57,7 +58,7 @@ function modeLabel(mode: MemoryOverview["mode"]): string {
   }
 }
 
-export function MemoryWorkspace({ caseId }: MemoryWorkspaceProps) {
+export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWorkspaceProps) {
   const { setActiveCaseId } = useActiveCase();
   const [tab, setTab] = useMemoryTab();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -109,6 +110,7 @@ export function MemoryWorkspace({ caseId }: MemoryWorkspaceProps) {
   });
 
   const overview = overviewQuery.data;
+  const effectiveEvidenceId = evidenceIdProp || overview?.evidences?.[0]?.id || undefined;
   const evidenceReadinessQueries = useQueries({
     queries: (overview?.evidences || []).map((evidence) => ({
       queryKey: ["memory-evidence-readiness", caseId, evidence.id],
@@ -280,6 +282,7 @@ export function MemoryWorkspace({ caseId }: MemoryWorkspaceProps) {
               setSelectedEntityId(entityId);
               onTabChange("graph");
             }}
+            evidenceId={effectiveEvidenceId}
           />
         ) : null}
 
@@ -309,7 +312,7 @@ export function MemoryWorkspace({ caseId }: MemoryWorkspaceProps) {
         ) : null}
       </div>
 
-      {tab === "overview" && overview && overview.evidences.length > 0 ? (
+      {tab === "overview" && overview && overview.evidences.length > 0 && !evidenceIdProp ? (
         <MemoryAnalyzeAction
           caseId={caseId}
           overview={overview}

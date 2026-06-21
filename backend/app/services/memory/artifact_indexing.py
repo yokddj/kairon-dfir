@@ -165,6 +165,7 @@ def search_artifact_documents(
     *,
     document_type: str,
     run_id: str | None = None,
+    evidence_id: str | None = None,
     page: int = 1,
     page_size: int = 50,
     filters: dict[str, Any] | None = None,
@@ -177,6 +178,8 @@ def search_artifact_documents(
         # scan_run_id is mapped as text with a keyword sub-field; use the
         # keyword form for an exact match.
         query_filters.append({"term": {"scan_run_id.keyword": run_id}})
+    if evidence_id:
+        query_filters.append({"term": {"evidence_id.keyword": evidence_id}})
     if filters:
         for key, value in filters.items():
             if value is None:

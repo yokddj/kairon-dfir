@@ -293,6 +293,97 @@ export type MemoryEvidenceReadiness = {
   pending_request_id: string | null;
 };
 
+export type MemoryActiveRun = {
+  id: string;
+  profile: string;
+  status: string;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_seconds: number;
+  plugin_count: number | null;
+  plugins_completed: number | null;
+  plugins_failed: number | null;
+  evidence_id: string;
+  case_id: string;
+};
+
+export type MemoryFamilyState =
+  | "ready"
+  | "not_analyzed"
+  | "completed"
+  | "running"
+  | "latest_attempt_failed"
+  | "unavailable"
+  | "historical_override"
+  | "unknown_family"
+  | "evidence_scope_required"
+  | "historical_override_invalid";
+
+export type MemoryActiveResult = {
+  case_id: string;
+  evidence_id: string;
+  artifact_family: string;
+  active_run: MemoryActiveRun | null;
+  latest_attempt: MemoryActiveRun | null;
+  selection_reason: string;
+  using_fallback: boolean;
+  historical_override: boolean;
+  total: number;
+  items: unknown[];
+  analysis_state: MemoryFamilyState;
+};
+
+export type MemoryAnalysisCatalogueItem = {
+  profile: string;
+  family: string;
+  title: string;
+  description: string;
+  cost_label: string;
+  est_duration_seconds: number;
+  available: boolean;
+  availability_reason: string | null;
+  last_run: MemoryActiveRun | null;
+  last_status: string | null;
+  last_count: number;
+};
+
+export type MemoryAnalysisCatalogue = {
+  case_id: string;
+  evidence_id: string;
+  items: MemoryAnalysisCatalogueItem[];
+};
+
+export type MemoryEvidenceLandingItem = {
+  evidence_id: string;
+  case_id: string;
+  filename: string;
+  detected_host: string | null;
+  size_bytes: number;
+  created_at: string | null;
+  processed_at: string | null;
+  ingest_status: string | null;
+  metadata: Record<string, unknown>;
+  families: Array<{
+    family: string;
+    title: string;
+    state: MemoryFamilyState;
+    active_run: MemoryActiveRun | null;
+    latest_attempt: MemoryActiveRun | null;
+    selection_reason: string;
+    using_fallback: boolean;
+    historical_override: boolean;
+    availability_reason: string | null;
+  }>;
+  run_count: number;
+  latest_run_id: string | null;
+  latest_run_status: string | null;
+};
+
+export type MemoryEvidenceLanding = {
+  case_id: string;
+  items: MemoryEvidenceLandingItem[];
+};
+
 export type MemorySymbolCacheStatus = {
   mode: "offline_only" | "managed_download";
   managed_download_enabled: boolean;
@@ -3711,7 +3802,19 @@ export const api = {
       body: JSON.stringify({ authorization_acknowledged: authorizationAcknowledged }),
     }),
   getMemorySymbolRequest: (requestId: string) => request<MemorySymbolRequestStatus>(`/memory/symbols/requests/${requestId}`),
-  listMemoryRuns: (caseId: string) => request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs`),
+  listMemoryRuns: (caseId: string, evidenceId?: string) => {
+    const query = evidenceId ? `?evidence_id=${encodeURIComponent(evidenceId)}` : "";
+    return request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs${query}`);
+  },
+  getMemoryEvidenceLanding: (caseId: string) => request<MemoryEvidenceLanding>(`/cases/${caseId}/memory/landing`),
+  getMemoryActiveResult: (caseId: string, evidenceId: string, family: string, runId?: string) => {
+    const query = new URLSearchParams();
+    query.set("family", family);
+    if (runId) query.set("run_id", runId);
+    return request<MemoryActiveResult>(`/cases/${caseId}/memory/evidences/${evidenceId}/active-result?${query.toString()}`);
+  },
+  getMemoryAnalysisCatalogue: (caseId: string, evidenceId: string) =>
+    request<MemoryAnalysisCatalogue>(`/cases/${caseId}/memory/evidences/${evidenceId}/catalogue`),
   startMemoryScan: (evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", authorizationAcknowledged = false) =>
     request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan`, { method: "POST", body: JSON.stringify({ profile, authorization_acknowledged: authorizationAcknowledged }) }),
   getMemoryRun: (runId: string) => request<MemoryRunDetail>(`/memory/runs/${runId}`),
@@ -3733,6 +3836,7 @@ export const api = {
     caseId: string,
     params?: {
       run_id?: string;
+      evidence_id?: string;
       profile?: "processes_basic" | "processes_extended";
       visibility?: "listed" | "scan_only" | "terminated" | "unknown" | "hidden_candidate";
       source_plugin?: "windows.pslist" | "windows.psscan" | "windows.pstree" | "windows.cmdline";
@@ -3747,6 +3851,7 @@ export const api = {
   ) => {
     const query = new URLSearchParams();
     if (params?.run_id) query.set("run_id", params.run_id);
+    if (params?.evidence_id) query.set("evidence_id", params.evidence_id);
     if (params?.profile) query.set("profile", params.profile);
     if (params?.visibility) query.set("visibility", params.visibility);
     if (params?.source_plugin) query.set("source_plugin", params.source_plugin);
@@ -3815,6 +3920,7 @@ export const api = {
   getMemoryNetworkConnections: (
     caseId: string,
     params?: {
+      evidence_id: string;
       run_id?: string;
       protocol?: string;
       local_address?: string;
@@ -3831,6 +3937,7 @@ export const api = {
   getMemoryProcessModules: (
     caseId: string,
     params?: {
+      evidence_id: string;
       run_id?: string;
       pid?: number;
       process_name?: string;
@@ -3845,6 +3952,7 @@ export const api = {
   getMemoryHandles: (
     caseId: string,
     params?: {
+      evidence_id: string;
       run_id?: string;
       pid?: number;
       process_name?: string;
@@ -3856,15 +3964,16 @@ export const api = {
   ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/handles`, params)),
   getMemoryKernelModules: (
     caseId: string,
-    params?: { run_id?: string; page?: number; page_size?: number },
+    params: { evidence_id: string; run_id?: string; page?: number; page_size?: number },
   ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/kernel-modules`, params)),
   getMemoryDrivers: (
     caseId: string,
-    params?: { run_id?: string; page?: number; page_size?: number },
+    params: { evidence_id: string; run_id?: string; page?: number; page_size?: number },
   ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/drivers`, params)),
   getMemorySuspiciousRegions: (
     caseId: string,
     params?: {
+      evidence_id: string;
       run_id?: string;
       pid?: number;
       process_name?: string;
