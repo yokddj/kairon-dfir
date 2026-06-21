@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, JSONVariant, UUIDMixin, utc_now_naive
@@ -304,7 +305,7 @@ class MemoryAnalysisBatch(UUIDMixin, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     # Runtime-safety fields added by the versioned migration v2.
     version: Mapped[int] = mapped_column(default=1, nullable=False)
-    last_advanced_run_id: Mapped[str | None] = mapped_column(nullable=True)
+    last_advanced_run_id: Mapped[str | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
     last_advanced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(nullable=True)
