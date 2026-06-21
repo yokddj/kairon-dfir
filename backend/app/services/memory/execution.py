@@ -456,17 +456,24 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
     # Per-plugin guard-rails (timeout, output size) for the new artifact
     # plugins.  Falls back to the global default for process plugins.
     overrides = ARTIFACT_PLUGIN_LIMITS.get(plugin, {})
-    if overrides.get("timeout_seconds") or overrides.get("max_output_bytes"):
+    max_output_bytes = int(overrides.get("max_output_bytes") or 0) or None
+    timeout_seconds = int(overrides.get("timeout_seconds") or 0) or None
+    if timeout_seconds or max_output_bytes:
         result = run_plugin(
             plugin,
             evidence_path,
             output_dir,
-            timeout_seconds=int(overrides.get("timeout_seconds") or 0) or None,
-            max_output_bytes=int(overrides.get("max_output_bytes") or 0) or None,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
         )
     else:
         result = run_plugin(plugin, evidence_path, output_dir)
-    raw_info = write_atomic_bytes(output_dir / _plugin_filename(plugin), result.stdout)
+    try:
+        raw_info = write_atomic_bytes(output_dir / _plugin_filename(plugin), result.stdout, max_bytes=max_output_bytes)
+    except ValueError as exc:
+        if str(exc) == "output_too_large":
+            raise VolatilityRunnerError("OUTPUT_TOO_LARGE", f"Volatility {plugin} output exceeded the configured size limit.", stdout=result.stdout[:max_output_bytes or 0], stderr=result.stderr[:4096]) from exc
+        raise
     try:
         payload = json.loads(result.stdout.decode("utf-8"))
     except Exception as exc:  # noqa: BLE001

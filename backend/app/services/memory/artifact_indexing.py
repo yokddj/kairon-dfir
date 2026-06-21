@@ -112,33 +112,47 @@ def ensure_memory_index(case_id: str) -> str:
     return index
 
 
-def index_artifact_documents(case_id: str, documents: list[dict[str, Any]]) -> dict[str, Any]:
+def index_artifact_documents(case_id: str, documents: list[dict[str, Any]], *, batch_size: int = 2000) -> dict[str, Any]:
     """Idempotent bulk index.  Re-running with the same ``document_id``
     overwrites the existing document (preserves the latest
     normalization result and prevents duplicates).
+
+    The bulk request is split into chunks of ``batch_size`` documents
+    so that a very large normalization (e.g. ``windows.handles``) does
+    not exceed the OpenSearch HTTP request size limit (HTTP 413).
     """
     if not documents:
         return {"indexed": 0}
     index = ensure_memory_index(case_id)
     client = get_opensearch_client()
-    body: list[dict[str, Any]] = []
-    for doc in documents:
-        doc_id = doc.get("document_id")
-        if not doc_id:
+    total_indexed = 0
+    total_errors = 0
+    for start in range(0, len(documents), batch_size):
+        chunk = documents[start:start + batch_size]
+        body: list[dict[str, Any]] = []
+        for doc in chunk:
+            doc_id = doc.get("document_id")
+            if not doc_id:
+                continue
+            body.append({"index": {"_index": index, "_id": doc_id}})
+            body.append(doc)
+        if not body:
             continue
-        body.append({"index": {"_index": index, "_id": doc_id}})
-        body.append(doc)
-    response = client.bulk(body=body, refresh=False)
-    if response.get("errors"):
-        # Log and count; never raise for partial failures so a single
-        # bad document does not poison the entire run.
-        for item in response.get("items", []):
-            result = item.get("index", {})
-            if result.get("error"):
-                logger.warning("artifact index error: %s", result.get("error"))
+        try:
+            response = client.bulk(body=body, refresh=False)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("artifact bulk index failed at offset %s: %s", start, exc)
+            total_errors += len(chunk)
+            continue
+        if response.get("errors"):
+            for item in response.get("items", []):
+                result = item.get("index", {})
+                if result.get("error"):
+                    logger.warning("artifact index error: %s", result.get("error"))
+        total_indexed += sum(1 for item in response.get("items", []) if not item.get("index", {}).get("error"))
+        total_errors += sum(1 for item in response.get("items", []) if item.get("index", {}).get("error"))
     client.indices.refresh(index=index)
-    indexed = sum(1 for item in response.get("items", []) if not item.get("index", {}).get("error"))
-    return {"indexed": indexed, "errors": len(response.get("items", [])) - indexed}
+    return {"indexed": total_indexed, "errors": total_errors}
 
 
 # ---------------------------------------------------------------------------
@@ -180,6 +194,7 @@ def search_artifact_documents(
         "from": (page - 1) * page_size,
         "size": page_size,
         "timeout": "5s",
+        "track_total_hits": True,
         "sort": sort or [{"pid": {"order": "asc", "missing": "_last"}}, {"document_id": {"order": "asc"}}],
     }
     client = get_opensearch_client()
@@ -238,6 +253,7 @@ def link_process_entities(
     scan_run_id: str,
     document_type: str,
     pid_field: str = "pid",
+    page_size: int = 5000,
 ) -> int:
     """Resolve ``process_entity_id`` for every artifact document of
     ``document_type`` in the given run, using the canonical
@@ -250,15 +266,59 @@ def link_process_entities(
     Process entities are looked up across the most recent canonical
     process run (processes_extended or processes_basic) so the link
     is robust to artifact profiles that run in their own run.
+
+    The function paginates through all artifact documents using
+    ``search_after`` so it scales beyond OpenSearch's 10k default
+    page cap.
     """
     client = get_opensearch_client()
     index = get_memory_index(case_id)
-    body = {
+    all_hits: list[dict[str, Any]] = []
+    search_after: list[Any] | None = None
+    while True:
+        body: dict[str, Any] = {
+            "size": page_size,
+            "query": {"bool": {"filter": [
+                {"term": {"document_type": document_type}},
+                {"term": {"scan_run_id.keyword": scan_run_id}},
+            ]}},
+            "sort": [
+                {"process.pid": {"order": "asc", "missing": "_last"}},
+                {"document_id": {"order": "asc"}},
+            ],
+        }
+        if search_after is not None:
+            body["search_after"] = search_after
+        response = client.search(index=index, body=body, params={"ignore_unavailable": "true"})
+        hits = response.get("hits", {}).get("hits", [])
+        if not hits:
+            break
+        all_hits.extend(hits)
+        if len(hits) < page_size:
+            break
+        search_after = hits[-1].get("sort")
+        if not search_after:
+            break
+    hits = all_hits
+    if not hits:
+        return 0
+    pids = sorted({int(h.get("_source", {}).get(pid_field)) for h in hits if h.get("_source", {}).get(pid_field) is not None})
+    if not pids:
+        return 0
+    # Look up canonical entities across all process runs.  We pick
+    # the most recent run per profile so the canonical link is
+    # stable for the duration of the artifact analysis.
+    ent_body = {
         "size": 10000,
         "query": {"bool": {"filter": [
-            {"term": {"document_type": document_type}},
-            {"term": {"scan_run_id.keyword": scan_run_id}},
+            {"term": {"document_type": "memory_process_entity"}},
+            {"terms": {"process.pid": pids}},
         ]}},
+        "sort": [
+            {"scan_run_id.keyword": {"order": "desc"}},
+            {"process.create_time": {"order": "asc", "missing": "_last"}},
+        ],
+        "_source": ["process_entity_id", "process.pid", "process.create_time", "scan_run_id"],
     }
     response = client.search(index=index, body=body, params={"ignore_unavailable": "true"})
     hits = response.get("hits", {}).get("hits", [])

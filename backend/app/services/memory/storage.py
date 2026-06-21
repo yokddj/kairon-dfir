@@ -36,9 +36,10 @@ def relative_to_data_dir(path: Path) -> str:
     return Path(path.name).name
 
 
-def write_atomic_bytes(path: Path, data: bytes) -> dict[str, Any]:
+def write_atomic_bytes(path: Path, data: bytes, max_bytes: int | None = None) -> dict[str, Any]:
     settings = get_settings()
-    if len(data) > int(settings.memory_plugin_output_max_bytes):
+    cap = int(max_bytes) if max_bytes else int(settings.memory_plugin_output_max_bytes)
+    if len(data) > cap:
         raise ValueError("output_too_large")
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
     with NamedTemporaryFile("wb", delete=False, dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp") as handle:
