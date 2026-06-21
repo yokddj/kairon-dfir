@@ -36,7 +36,9 @@ export default function MemoryEvidencePage() {
   const [catalogueOpen, setCatalogueOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
 
-  setActiveCaseId(caseId);
+  useEffect(() => {
+    setActiveCaseId(caseId);
+  }, [caseId, setActiveCaseId]);
 
   const tab = useMemo<MemoryTab>(() => {
     const raw = searchParams.get("tab");

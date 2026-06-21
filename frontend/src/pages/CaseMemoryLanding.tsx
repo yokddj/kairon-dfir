@@ -62,7 +62,9 @@ export default function CaseMemoryLanding() {
   const navigate = useNavigate();
   const { setActiveCaseId } = useActiveCase();
 
-  setActiveCaseId(caseId);
+  useEffect(() => {
+    setActiveCaseId(caseId);
+  }, [caseId, setActiveCaseId]);
 
   const overviewQuery = useQuery({
     queryKey: ["memory-overview", caseId],
