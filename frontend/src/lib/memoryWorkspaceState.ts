@@ -8,12 +8,20 @@ parent component so all tabs see consistent values.
 
 import { useSearchParams } from "react-router-dom";
 
-export type MemoryTab = "overview" | "processes" | "graph" | "system" | "runs" | "raw";
+export type MemoryTab =
+  | "overview"
+  | "processes"
+  | "graph"
+  | "artifacts"
+  | "system"
+  | "runs"
+  | "raw";
 
 export const MEMORY_TABS: ReadonlyArray<{ key: MemoryTab; label: string; testId: string }> = [
   { key: "overview", label: "Overview", testId: "memory-tab-overview" },
   { key: "processes", label: "Processes", testId: "memory-tab-processes" },
   { key: "graph", label: "Graph", testId: "memory-tab-graph" },
+  { key: "artifacts", label: "Artifacts", testId: "memory-tab-artifacts" },
   { key: "system", label: "System", testId: "memory-tab-system" },
   { key: "runs", label: "Runs", testId: "memory-tab-runs" },
   { key: "raw", label: "Raw observations", testId: "memory-tab-raw" },

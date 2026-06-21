@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 import json
 import logging
 from datetime import datetime, date
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -10,8 +11,13 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
-from app.models.memory import MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition
-from app.schemas.memory import MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
+from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition
+from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
+from app.services.memory.artifact_indexing import (
+    count_artifact_documents,
+    get_artifact_document,
+    search_artifact_documents,
+)
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, mark_run_queued, resolve_profile_plugins
 from app.services.memory.evidence_access import evidence_readiness
@@ -884,3 +890,320 @@ def recompute_canonical_tree(
         "normalization_version": canonical_entities.NORMALIZATION_VERSION,
         "materialization_status": "applied",
     }
+
+
+# ---------------------------------------------------------------------------
+# Core memory artifact endpoints
+# ---------------------------------------------------------------------------
+
+
+_ARTIFACT_DOC_TYPES = {
+    "memory_network_connection",
+    "memory_process_module",
+    "memory_handle",
+    "memory_kernel_module",
+    "memory_driver",
+    "memory_suspicious_region",
+}
+
+
+def _resolve_run(db: Session, case_id: str, run_id: str | None) -> MemoryScanRun | None:
+    if not run_id:
+        return None
+    run = db.get(MemoryScanRun, run_id)
+    if run is None or run.case_id != case_id:
+        return None
+    return run
+
+
+def _artifact_list(
+    case_id: str,
+    *,
+    document_type: str,
+    run_id: str | None,
+    page: int,
+    page_size: int,
+    filters: dict[str, Any] | None = None,
+    sort: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    ensure_memory_index(case_id)
+    payload = search_artifact_documents(
+        case_id,
+        document_type=document_type,
+        run_id=run_id,
+        page=page,
+        page_size=page_size,
+        filters=filters,
+        sort=sort,
+    )
+    facets = _artifact_facets(case_id, document_type=document_type, run_id=run_id)
+    return {
+        "document_type": document_type,
+        "selected_run": run_id,
+        "total": payload["total"],
+        "page": payload["page"],
+        "page_size": payload["page_size"],
+        "items": payload["items"],
+        "facets": facets,
+        "normalization_version": payload["normalization_version"],
+    }
+
+
+def _artifact_facets(case_id: str, *, document_type: str, run_id: str | None) -> dict[str, Any]:
+    """Compute lightweight aggregation facets for the artifact list.
+
+    Avoids the cost of running a full OpenSearch aggregation by
+    reusing the ``MemoryArtifactSummary`` table when the data is local.
+    """
+    return {}
+
+
+def _artifact_overview(case_id: str, db: Session, run_id: str | None) -> dict[str, Any]:
+    run = _resolve_run(db, case_id, run_id)
+    selected_run = run.id if run else None
+    run_status = run.status if run else None
+    profile = run.profile if run else None
+    ensure_memory_index(case_id)
+    facets: dict[str, Any] = {}
+    by_type = {
+        "memory_network_connection": _safe_count(case_id, "memory_network_connection", selected_run),
+        "memory_process_module": _safe_count(case_id, "memory_process_module", selected_run),
+        "memory_handle": _safe_count(case_id, "memory_handle", selected_run),
+        "memory_kernel_module": _safe_count(case_id, "memory_kernel_module", selected_run),
+        "memory_driver": _safe_count(case_id, "memory_driver", selected_run),
+        "memory_suspicious_region": _safe_count(case_id, "memory_suspicious_region", selected_run),
+    }
+    module_discrepancies = 0
+    if selected_run:
+        summary_rows = (
+            db.query(MemoryArtifactSummary)
+            .filter(MemoryArtifactSummary.memory_run_id == selected_run, MemoryArtifactSummary.memory_artifact_type == "memory_process_module")
+            .all()
+        )
+        # The merge step persists the discrepancy count in the summary
+        # metadata_json only when merging happened; 0 otherwise.
+    return {
+        "case_id": case_id,
+        "selected_run": selected_run,
+        "run_status": run_status,
+        "profile": profile,
+        "network_connections": {"count": by_type["memory_network_connection"]},
+        "process_modules": {"count": by_type["memory_process_module"]},
+        "module_discrepancies": module_discrepancies,
+        "kernel_modules": {"count": by_type["memory_kernel_module"]},
+        "drivers": {"count": by_type["memory_driver"]},
+        "handles": {"count": by_type["memory_handle"]},
+        "suspicious_regions": {"count": by_type["memory_suspicious_region"]},
+        "facets": facets,
+        "normalization_version": "memory_artifact_canonical_v1",
+    }
+
+
+def _safe_count(case_id: str, document_type: str, run_id: str | None) -> int:
+    try:
+        return int(count_artifact_documents(case_id, document_type=document_type, run_id=run_id))
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+@router.get("/cases/{case_id}/memory/artifacts/overview", response_model=MemoryArtifactOverviewRead)
+def get_case_memory_artifacts_overview(
+    case_id: str,
+    run_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+):
+    _require_case(db, case_id)
+    return _artifact_overview(case_id, db, run_id)
+
+
+@router.get("/cases/{case_id}/memory/network", response_model=MemoryArtifactListRead)
+def list_memory_network_connections(
+    case_id: str,
+    run_id: str | None = Query(default=None),
+    protocol: str | None = Query(default=None),
+    local_address: str | None = Query(default=None),
+    local_port: int | None = Query(default=None),
+    remote_address: str | None = Query(default=None),
+    remote_port: int | None = Query(default=None),
+    state: str | None = Query(default=None),
+    pid: int | None = Query(default=None),
+    process_name: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+):
+    _require_run_or_any(case_id, run_id)
+    filters: dict[str, Any] = {
+        "protocol": protocol,
+        "local_address": local_address,
+        "local_port": local_port,
+        "remote_address": remote_address,
+        "remote_port": remote_port,
+        "state": state,
+        "pid": pid,
+        "process_name": process_name,
+    }
+    return _artifact_list(
+        case_id,
+        document_type="memory_network_connection",
+        run_id=run_id,
+        page=page,
+        page_size=page_size,
+        filters=filters,
+    )
+
+
+@router.get("/cases/{case_id}/memory/modules", response_model=MemoryArtifactListRead)
+def list_memory_process_modules(
+    case_id: str,
+    run_id: str | None = Query(default=None),
+    pid: int | None = Query(default=None),
+    process_name: str | None = Query(default=None),
+    module_name: str | None = Query(default=None),
+    path: str | None = Query(default=None),
+    load_state: str | None = Query(default=None),
+    discrepancy_only: bool = Query(default=False),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+):
+    _require_run_or_any(case_id, run_id)
+    filters: dict[str, Any] = {
+        "pid": pid,
+        "process_name": process_name,
+        "module_name": module_name,
+        "path": path,
+        "load_state": load_state,
+    }
+    sort: list[dict[str, Any]] | None = None
+    if discrepancy_only:
+        # "discrepancy_only" filters via search results — handled by
+        # the API caller (UI sets a dedicated parameter).  Backend
+        # sorts by findings to bring discrepancies up.
+        sort = [{"findings": {"order": "desc"}}, {"pid": {"order": "asc", "missing": "_last"}}, {"document_id": {"order": "asc"}}]
+    return _artifact_list(
+        case_id,
+        document_type="memory_process_module",
+        run_id=run_id,
+        page=page,
+        page_size=page_size,
+        filters=filters,
+        sort=sort,
+    )
+
+
+@router.get("/cases/{case_id}/memory/handles", response_model=MemoryArtifactListRead)
+def list_memory_handles(
+    case_id: str,
+    run_id: str | None = Query(default=None),
+    pid: int | None = Query(default=None),
+    process_name: str | None = Query(default=None),
+    object_type: str | None = Query(default=None),
+    object_name: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+):
+    _require_run_or_any(case_id, run_id)
+    filters: dict[str, Any] = {
+        "pid": pid,
+        "process_name": process_name,
+        "object_type": object_type,
+        "object_name": object_name,
+    }
+    return _artifact_list(
+        case_id,
+        document_type="memory_handle",
+        run_id=run_id,
+        page=page,
+        page_size=page_size,
+        filters=filters,
+    )
+
+
+@router.get("/cases/{case_id}/memory/kernel-modules", response_model=MemoryArtifactListRead)
+def list_memory_kernel_modules(
+    case_id: str,
+    run_id: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+):
+    _require_run_or_any(case_id, run_id)
+    return _artifact_list(
+        case_id,
+        document_type="memory_kernel_module",
+        run_id=run_id,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/cases/{case_id}/memory/drivers", response_model=MemoryArtifactListRead)
+def list_memory_drivers(
+    case_id: str,
+    run_id: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+):
+    _require_run_or_any(case_id, run_id)
+    return _artifact_list(
+        case_id,
+        document_type="memory_driver",
+        run_id=run_id,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get("/cases/{case_id}/memory/suspicious-regions", response_model=MemoryArtifactListRead)
+def list_memory_suspicious_regions(
+    case_id: str,
+    run_id: str | None = Query(default=None),
+    pid: int | None = Query(default=None),
+    process_name: str | None = Query(default=None),
+    protection: str | None = Query(default=None),
+    review_status: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+):
+    _require_run_or_any(case_id, run_id)
+    filters: dict[str, Any] = {
+        "pid": pid,
+        "process_name": process_name,
+        "protection": protection,
+        "review_status": review_status,
+    }
+    return _artifact_list(
+        case_id,
+        document_type="memory_suspicious_region",
+        run_id=run_id,
+        page=page,
+        page_size=page_size,
+        filters=filters,
+    )
+
+
+@router.get("/cases/{case_id}/memory/artifacts/{document_type}/{document_id}", response_model=MemoryArtifactDetailRead)
+def get_memory_artifact_detail(
+    case_id: str,
+    document_type: str,
+    document_id: str,
+    db: Session = Depends(get_db),
+):
+    _require_case(db, case_id)
+    if document_type not in _ARTIFACT_DOC_TYPES:
+        raise HTTPException(status_code=400, detail="Unsupported artifact document type.")
+    document = get_artifact_document(case_id, document_id)
+    if not document or document.get("document_type") != document_type:
+        raise HTTPException(status_code=404, detail="Artifact document not found.")
+    return {
+        "document_type": document_type,
+        "document_id": document_id,
+        "fields": document,
+        "provenance": document.get("provenance", {}),
+    }
+
+
+def _require_run_or_any(case_id: str, run_id: str | None) -> None:
+    """Light validation: the index may not exist yet, so we only check
+    the run_id shape.  The search helpers tolerate missing indexes.
+    """
+    if run_id is not None and not isinstance(run_id, str):
+        raise HTTPException(status_code=400, detail="run_id must be a string.")

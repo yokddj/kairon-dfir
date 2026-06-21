@@ -79,8 +79,15 @@ class Settings(BaseSettings):
     memory_worker_uid: int = 10001
     memory_worker_gid: int = 10001
     memory_evidence_shared_gid: int = 10001
-    memory_allowed_plugins: str = "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline"
-    memory_allowed_profiles: str = "metadata_only,processes_basic,processes_extended"
+    memory_allowed_plugins: str = (
+        "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,"
+        "windows.netscan,windows.dlllist,windows.ldrmodules,windows.handles,"
+        "windows.modules,windows.driverscan,windows.malfind"
+    )
+    memory_allowed_profiles: str = (
+        "metadata_only,processes_basic,processes_extended,"
+        "network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory"
+    )
     memory_default_profile: str = "metadata_only"
     memory_process_profile_enabled: bool = False
     memory_max_process_rows: int = 100000
@@ -237,7 +244,20 @@ class Settings(BaseSettings):
 
     @property
     def allowed_memory_plugins(self) -> list[str]:
-        allowed = {"windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"}
+        allowed = {
+            "windows.info",
+            "windows.pslist",
+            "windows.pstree",
+            "windows.psscan",
+            "windows.cmdline",
+            "windows.netscan",
+            "windows.dlllist",
+            "windows.ldrmodules",
+            "windows.handles",
+            "windows.modules",
+            "windows.driverscan",
+            "windows.malfind",
+        }
         values = self.memory_allowed_plugins
         if isinstance(values, str):
             plugins = [item.strip() for item in values.split(",") if item.strip()]
@@ -247,7 +267,16 @@ class Settings(BaseSettings):
 
     @property
     def allowed_memory_profiles(self) -> list[str]:
-        allowed = {"metadata_only", "processes_basic", "processes_extended"}
+        allowed = {
+            "metadata_only",
+            "processes_basic",
+            "processes_extended",
+            "network_basic",
+            "modules_basic",
+            "handles_basic",
+            "kernel_basic",
+            "suspicious_memory",
+        }
         profiles = [item.strip() for item in str(self.memory_allowed_profiles or "").split(",") if item.strip()]
         return [profile for profile in profiles if profile in allowed] or ["metadata_only"]
 

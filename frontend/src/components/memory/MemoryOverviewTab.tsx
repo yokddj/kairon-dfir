@@ -1,12 +1,15 @@
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
+  type MemoryArtifactOverview,
   type MemoryBackendStatus,
   type MemoryOverview,
   type MemoryEvidenceReadiness,
   type MemoryRenormalizeSummary,
   type MemoryRunSelector,
   type MemorySymbolCacheStatus,
+  api,
 } from "../../api/client";
 import { backendBadge } from "../MemoryWorkspace";
 import type { MemoryTab } from "../../lib/memoryWorkspaceState";
@@ -92,6 +95,12 @@ export function MemoryOverviewTab({
   const evidenceItems = overview?.evidences ?? [];
   const processProfile = overview?.memory_process_profile_enabled;
 
+  const artifactOverview = useQuery<MemoryArtifactOverview>({
+    queryKey: ["memory-artifact-overview", caseId],
+    queryFn: () => api.getMemoryArtifactOverview(caseId),
+    refetchOnWindowFocus: false,
+  });
+
   return (
     <div className="space-y-6" data-testid="memory-overview">
       <section className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel">
@@ -168,6 +177,35 @@ export function MemoryOverviewTab({
             <DetailRow label="Status message" value={backend.message} />
           </dl>
         ) : null}
+      </section>
+
+      <section className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel">
+        <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Core memory artifacts</h3>
+        <p className="mt-1 text-xs text-muted">
+          Open the Artifacts tab for filters, pagination and bounded previews.
+        </p>
+        <div className="mt-3 grid gap-2 md:grid-cols-3 lg:grid-cols-6" data-testid="memory-overview-artifacts-cards">
+          {artifactOverview.data?.run_status ? (
+            <>
+              <Card label="Network" value={artifactOverview.data.network_connections?.count ?? 0} />
+              <Card label="Modules" value={artifactOverview.data.process_modules?.count ?? 0} />
+              <Card label="Discrepancies" value={artifactOverview.data.module_discrepancies ?? 0} tone="warn" />
+              <Card label="Handles" value={artifactOverview.data.handles?.count ?? 0} />
+              <Card label="Drivers" value={artifactOverview.data.drivers?.count ?? 0} tone="warn" />
+              <Card label="Suspicious" value={artifactOverview.data.suspicious_regions?.count ?? 0} tone="warn" />
+            </>
+          ) : (
+            <Card label="Artifacts" value="Not analyzed" tone="info" />
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => onJumpToTab("artifacts")}
+          className="mt-3 rounded-xl border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs text-accent"
+          data-testid="overview-jump-artifacts"
+        >
+          Open Artifacts tab
+        </button>
       </section>
 
       <section className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel">

@@ -18,6 +18,41 @@ const getCaseMemoryProcessesMock = vi.fn();
 const getMemoryProcessTreeMock = vi.fn();
 const startMemoryScanMock = vi.fn();
 const renormalizeProcessEntitiesMock = vi.fn();
+const getMemoryArtifactOverviewMock = vi.fn();
+const getMemoryNetworkConnectionsMock = vi.fn();
+const getMemoryProcessModulesMock = vi.fn();
+const getMemoryHandlesMock = vi.fn();
+const getMemoryDriversMock = vi.fn();
+const getMemoryKernelModulesMock = vi.fn();
+const getMemorySuspiciousRegionsMock = vi.fn();
+const getMemoryArtifactDetailMock = vi.fn();
+
+const emptyArtifactList = {
+  document_type: "memory_artifact",
+  selected_run: null,
+  total: 0,
+  page: 1,
+  page_size: 50,
+  items: [],
+  facets: {},
+  normalization_version: "memory_artifact_canonical_v1",
+};
+
+const emptyArtifactOverview = {
+  case_id: "case-1",
+  selected_run: null,
+  run_status: null,
+  profile: null,
+  network_connections: { count: 0 },
+  process_modules: { count: 0 },
+  module_discrepancies: 0,
+  kernel_modules: { count: 0 },
+  drivers: { count: 0 },
+  handles: { count: 0 },
+  suspicious_regions: { count: 0 },
+  facets: {},
+  normalization_version: "memory_artifact_canonical_v1",
+};
 
 vi.mock("../api/client", () => ({
   api: {
@@ -35,6 +70,14 @@ vi.mock("../api/client", () => ({
     getMemoryProcessTree: (...args: unknown[]) => getMemoryProcessTreeMock(...args),
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
     renormalizeProcessEntities: (...args: unknown[]) => renormalizeProcessEntitiesMock(...args),
+    getMemoryArtifactOverview: (...args: unknown[]) => getMemoryArtifactOverviewMock(...args),
+    getMemoryNetworkConnections: (...args: unknown[]) => getMemoryNetworkConnectionsMock(...args),
+    getMemoryProcessModules: (...args: unknown[]) => getMemoryProcessModulesMock(...args),
+    getMemoryHandles: (...args: unknown[]) => getMemoryHandlesMock(...args),
+    getMemoryDrivers: (...args: unknown[]) => getMemoryDriversMock(...args),
+    getMemoryKernelModules: (...args: unknown[]) => getMemoryKernelModulesMock(...args),
+    getMemorySuspiciousRegions: (...args: unknown[]) => getMemorySuspiciousRegionsMock(...args),
+    getMemoryArtifactDetail: (...args: unknown[]) => getMemoryArtifactDetailMock(...args),
   },
 }));
 
@@ -193,6 +236,19 @@ describe("Memory analysis UX fixes v1", () => {
     });
     getCanonicalProcessTreeMock.mockResolvedValue(treeResponse());
     getCanonicalProcessEntityDetailMock.mockResolvedValue(null);
+    getMemoryArtifactOverviewMock.mockResolvedValue(emptyArtifactOverview);
+    getMemoryNetworkConnectionsMock.mockResolvedValue(emptyArtifactList);
+    getMemoryProcessModulesMock.mockResolvedValue(emptyArtifactList);
+    getMemoryHandlesMock.mockResolvedValue(emptyArtifactList);
+    getMemoryDriversMock.mockResolvedValue(emptyArtifactList);
+    getMemoryKernelModulesMock.mockResolvedValue(emptyArtifactList);
+    getMemorySuspiciousRegionsMock.mockResolvedValue(emptyArtifactList);
+    getMemoryArtifactDetailMock.mockResolvedValue({
+      document_type: "memory_artifact",
+      document_id: "x",
+      fields: {},
+      provenance: {},
+    });
     getMemoryEvidenceReadinessMock.mockResolvedValue({
       exists: true, regular_file: true, readable_by_memory_worker: true, size_matches: true,
       output_writable_by_memory_worker: true, worker_online: true, backend_ready: true, can_analyze: true,
@@ -638,5 +694,165 @@ describe("Memory analysis UX fixes v1", () => {
     expect(strip).toBeInTheDocument();
     // The legacy duplicated row should not be present any more.
     expect(document.querySelectorAll('[data-testid^="graph-tab-stat-"]').length).toBe(0);
+  });
+
+  // 27. Artifacts tab is present and shows "Not analyzed" when no run
+  it("renders the Artifacts tab with Not analyzed state", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-artifacts"));
+    const tab = await screen.findByTestId("memory-artifacts-tab");
+    expect(tab).toBeInTheDocument();
+    // Without a run, all six overview cards show "Not analyzed".
+    expect(await screen.findByTestId("memory-artifacts-overview-network-value")).toHaveTextContent("Not analyzed");
+  });
+
+  // 28. Artifacts subviews are present
+  it("lists every Artifacts subview", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-artifacts"));
+    await screen.findByTestId("memory-artifacts-tab");
+    for (const sv of ["network", "modules", "handles", "drivers", "kernel", "suspicious"]) {
+      expect(screen.getByTestId(`memory-artifacts-subview-${sv}`)).toBeInTheDocument();
+    }
+  });
+
+  // 29. Network subview renders the empty state when no rows
+  it("renders the Network table empty state when no rows", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-artifacts"));
+    await screen.findByTestId("memory-artifacts-tab");
+    expect(await screen.findByTestId("memory-artifacts-network-empty")).toBeInTheDocument();
+  });
+
+  // 30. Modules subview renders the empty state when no rows
+  it("renders the Modules empty state when no rows", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-artifacts"));
+    await screen.findByTestId("memory-artifacts-tab");
+    fireEvent.click(screen.getByTestId("memory-artifacts-subview-modules"));
+    expect(await screen.findByTestId("memory-artifacts-modules-empty")).toBeInTheDocument();
+  });
+
+  // 31. Handles subview renders the empty state when no rows
+  it("renders the Handles empty state when no rows", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-artifacts"));
+    await screen.findByTestId("memory-artifacts-tab");
+    fireEvent.click(screen.getByTestId("memory-artifacts-subview-handles"));
+    expect(await screen.findByTestId("memory-artifacts-handles-empty")).toBeInTheDocument();
+  });
+
+  // 32. Drivers subview renders the empty state when no rows
+  it("renders the Drivers empty state when no rows", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-artifacts"));
+    await screen.findByTestId("memory-artifacts-tab");
+    fireEvent.click(screen.getByTestId("memory-artifacts-subview-drivers"));
+    expect(await screen.findByTestId("memory-artifacts-drivers-empty")).toBeInTheDocument();
+  });
+
+  // 33. Suspicious regions show needs_review status
+  it("renders the suspicious regions empty state when no rows", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-artifacts"));
+    await screen.findByTestId("memory-artifacts-tab");
+    fireEvent.click(screen.getByTestId("memory-artifacts-subview-suspicious"));
+    expect(await screen.findByTestId("memory-artifacts-suspicious-empty")).toBeInTheDocument();
+  });
+
+  // 34. Run selector present in the Artifacts tab
+  it("shows the run selector in the Artifacts tab", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-artifacts"));
+    await screen.findByTestId("memory-artifacts-tab");
+    expect(screen.getByTestId("memory-artifacts-run-picker")).toBeInTheDocument();
+  });
+
+  // 35. Artifacts filters are present
+  it("shows the Artifacts filters and reset", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-artifacts"));
+    await screen.findByTestId("memory-artifacts-tab");
+    expect(screen.getByTestId("memory-artifacts-filter-name")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-artifacts-filter-pid")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-artifacts-filter-reset")).toBeInTheDocument();
+  });
+
+  // 36. Pagination controls are present
+  it("shows pagination controls in the Artifacts tab", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-artifacts"));
+    await screen.findByTestId("memory-artifacts-tab");
+    expect(screen.getByTestId("memory-artifacts-pagination")).toBeInTheDocument();
+  });
+
+  // 37. Process link buttons exist in Network rows when rows are present
+  it("renders process actions for each network row", async () => {
+    getMemoryNetworkConnectionsMock.mockResolvedValue({
+      document_type: "memory_network_connection",
+      selected_run: "run-basic",
+      total: 1,
+      page: 1,
+      page_size: 50,
+      items: [{
+        document_id: "r:memory_network_connection:abc",
+        protocol: "TCPv4",
+        local_address: "10.0.0.5", local_port: 445,
+        remote_address: "10.0.0.10", remote_port: 49152,
+        state: "ESTABLISHED",
+        pid: 4, process_name: "System", process_entity_id: "ent-system",
+        create_time: "2024-03-22T10:53:00+00:00",
+        source_plugin: "windows.netscan", confidence: "reported_by_plugin",
+      }],
+      facets: {}, normalization_version: "memory_artifact_canonical_v1",
+    });
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-artifacts"));
+    await screen.findByTestId("memory-artifacts-tab");
+    const rows = await screen.findAllByTestId("memory-artifacts-network-row");
+    expect(rows.length).toBe(1);
+    expect(screen.getByTestId("memory-artifacts-network-process")).toBeInTheDocument();
+  });
+
+  // 38. Malfind does not show "malware confirmed"
+  it("does not show a malware-confirmed label in suspicious regions", async () => {
+    getMemorySuspiciousRegionsMock.mockResolvedValue({
+      document_type: "memory_suspicious_region",
+      selected_run: "run-basic",
+      total: 1,
+      page: 1,
+      page_size: 50,
+      items: [{
+        document_id: "r:memory_suspicious_region:x",
+        pid: 1116, process_name: "svchost.exe", process_entity_id: "ent-svchost",
+        start_address: "0x1f0000", end_address: "0x1f1000",
+        protection: "PAGE_EXECUTE_READWRITE", tag: "VadS",
+        commit_charge: 4, private_memory: true,
+        source_plugin: "windows.malfind", confidence: "indicator",
+        review_status: "needs_review",
+        findings: ["needs_review"],
+      }],
+      facets: {}, normalization_version: "memory_artifact_canonical_v1",
+    });
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-artifacts"));
+    await screen.findByTestId("memory-artifacts-tab");
+    fireEvent.click(screen.getByTestId("memory-artifacts-subview-suspicious"));
+    expect(await screen.findByTestId("memory-artifacts-suspicious-review")).toHaveTextContent("needs_review");
+    expect(document.body.textContent || "").not.toContain("malware confirmed");
+  });
+
+  // 39. Overview shows the artifacts jump button
+  it("renders the Open Artifacts tab button on Overview", async () => {
+    renderPage();
+    expect(await screen.findByTestId("memory-overview")).toBeInTheDocument();
+    expect(screen.getByTestId("overview-jump-artifacts")).toBeInTheDocument();
+  });
+
+  // 40. Runs tab shows the new profile names
+  it("renders the Runs tab without errors", async () => {
+    renderPage();
+    fireEvent.click(screen.getByTestId("memory-tab-runs"));
+    expect(await screen.findByTestId("memory-runs-tab")).toBeInTheDocument();
   });
 });

@@ -86,7 +86,20 @@ def resolve_volatility_executable() -> tuple[str, str]:
     return executable, display or Path(executable).name
 
 
-ALLOWED_VOLATILITY_PLUGINS = {"windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"}
+ALLOWED_VOLATILITY_PLUGINS = {
+    "windows.info",
+    "windows.pslist",
+    "windows.pstree",
+    "windows.psscan",
+    "windows.cmdline",
+    "windows.netscan",
+    "windows.dlllist",
+    "windows.ldrmodules",
+    "windows.handles",
+    "windows.modules",
+    "windows.driverscan",
+    "windows.malfind",
+}
 
 
 def build_plugin_argv(executable: str, evidence_path: Path, plugin: str, *, offline: bool = True, cache_path: Path | None = None, symbol_path: Path | None = None) -> list[str]:
@@ -116,7 +129,7 @@ def _minimal_environment() -> dict[str, str]:
     return env
 
 
-def run_plugin(plugin: str, evidence_path: Path, work_dir: Path) -> VolatilityRunResult:
+def run_plugin(plugin: str, evidence_path: Path, work_dir: Path, *, timeout_seconds: int | None = None, max_output_bytes: int | None = None) -> VolatilityRunResult:
     settings = get_settings()
     executable, display = resolve_volatility_executable()
     # Normal memory analysis is always offline. Managed downloads belong only
@@ -129,8 +142,8 @@ def run_plugin(plugin: str, evidence_path: Path, work_dir: Path) -> VolatilityRu
         cache_path.mkdir(parents=True, exist_ok=True, mode=0o750)
         symbol_path.mkdir(parents=True, exist_ok=True, mode=0o750)
     argv = build_plugin_argv(executable, evidence_path, plugin, offline=offline, cache_path=cache_path, symbol_path=symbol_path)
-    timeout = max(1, int(settings.memory_plugin_timeout_seconds))
-    max_bytes = max(1, int(settings.memory_plugin_output_max_bytes))
+    timeout = max(1, int(timeout_seconds or settings.memory_plugin_timeout_seconds))
+    max_bytes = max(1, int(max_output_bytes or settings.memory_plugin_output_max_bytes))
     work_dir.mkdir(parents=True, exist_ok=True)
     logger.info("memory volatility plugin started", extra={"plugin": plugin, "executable": display})
     started = time.monotonic()
