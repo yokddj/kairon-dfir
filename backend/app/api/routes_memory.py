@@ -19,6 +19,7 @@ from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead,
 from app.services.memory.artifact_indexing import (
     count_artifact_documents,
     get_artifact_document,
+    link_process_entities,
     search_artifact_documents,
 )
 from app.services.memory.volatility_runner import network_basic_available
@@ -911,13 +912,32 @@ _ARTIFACT_DOC_TYPES = {
 }
 
 
-def _resolve_run(db: Session, case_id: str, run_id: str | None) -> MemoryScanRun | None:
-    if not run_id:
+def _resolve_run(db: Session, case_id: str, run_id: str | None, profile: str | None = None) -> MemoryScanRun | None:
+    """Resolve a memory run for a case.
+
+    The 4-arg signature (``profile``) is kept as an optional parameter
+    for the canonical process-entity endpoints.  When ``run_id`` is
+    provided, the function returns the matching run for the case (or
+    ``None`` when the run does not exist).  When ``run_id`` is
+    ``None``, the function falls back to a profile-based lookup that
+    returns the latest completed run of the requested profile.
+    """
+    if run_id:
+        run = db.get(MemoryScanRun, run_id)
+        if run is None or run.case_id != case_id:
+            return None
+        return run
+    if not profile:
         return None
-    run = db.get(MemoryScanRun, run_id)
-    if run is None or run.case_id != case_id:
-        return None
-    return run
+    query = db.query(MemoryScanRun).filter(MemoryScanRun.case_id == case_id)
+    return (
+        query.filter(
+            MemoryScanRun.profile == profile,
+            MemoryScanRun.status.in_(["completed", "completed_with_errors"]),
+        )
+        .order_by(MemoryScanRun.completed_at.desc().nullslast(), MemoryScanRun.created_at.desc())
+        .first()
+    )
 
 
 def _artifact_list(
@@ -1036,8 +1056,8 @@ def relink_artifact_process_entities(
     for doc_type in ("memory_process_module", "memory_handle", "memory_network_connection"):
         try:
             linked += int(link_process_entities(case_id, scan_run_id=run_id, document_type=doc_type))
-        except Exception:  # noqa: BLE001
-            logger.warning("artifact re-link failed for %s", doc_type)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("artifact re-link failed for %s: %s", doc_type, exc)
     return {"linked": linked}
 
 

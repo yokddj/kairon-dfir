@@ -246,6 +246,10 @@ def link_process_entities(
     to a single canonical entity.  When PID reuse is ambiguous the
     artifact keeps ``process_entity_id=null`` and the
     ``unresolved_process_reference`` flag stays ``true``.
+
+    Process entities are looked up across the most recent canonical
+    process run (processes_extended or processes_basic) so the link
+    is robust to artifact profiles that run in their own run.
     """
     client = get_opensearch_client()
     index = get_memory_index(case_id)
@@ -263,14 +267,20 @@ def link_process_entities(
     pids = sorted({int(h.get("_source", {}).get(pid_field)) for h in hits if h.get("_source", {}).get(pid_field) is not None})
     if not pids:
         return 0
+    # Look up canonical entities across all process runs.  We pick
+    # the most recent run per profile so the canonical link is
+    # stable for the duration of the artifact analysis.
     ent_body = {
         "size": 10000,
         "query": {"bool": {"filter": [
             {"term": {"document_type": "memory_process_entity"}},
-            {"term": {"scan_run_id.keyword": scan_run_id}},
             {"terms": {"process.pid": pids}},
         ]}},
-        "_source": ["process_entity_id", "process.pid", "process.create_time"],
+        "sort": [
+            {"scan_run_id.keyword": {"order": "desc"}},
+            {"process.create_time": {"order": "asc", "missing": "_last"}},
+        ],
+        "_source": ["process_entity_id", "process.pid", "process.create_time", "scan_run_id"],
     }
     ent_resp = client.search(index=index, body=ent_body, params={"ignore_unavailable": "true"})
     pid_to_entities: dict[int, list[dict[str, Any]]] = {}
@@ -281,10 +291,17 @@ def link_process_entities(
         pid = proc.get("pid")
         if ent_id is None or pid is None:
             continue
-        pid_to_entities.setdefault(int(pid), []).append({
-            "process_entity_id": ent_id,
-            "create_time": proc.get("create_time"),
-        })
+        # The same canonical entity can appear in multiple runs
+        # (e.g. processes_basic and processes_extended both see PID 4);
+        # we dedupe by (process_entity_id, create_time) to avoid
+        # treating those as ambiguity.  PID reuse with different
+        # create_times is still treated as ambiguous.
+        bucket = pid_to_entities.setdefault(int(pid), [])
+        if not any(c["process_entity_id"] == ent_id and c.get("create_time") == proc.get("create_time") for c in bucket):
+            bucket.append({
+                "process_entity_id": ent_id,
+                "create_time": proc.get("create_time"),
+            })
     bulk: list[dict[str, Any]] = []
     linked = 0
     for hit in hits:
@@ -294,6 +311,9 @@ def link_process_entities(
             continue
         pid = src.get(pid_field)
         candidates = pid_to_entities.get(int(pid), []) if pid is not None else []
+        # A single canonical entity for this PID (after dedupe) is
+        # unambiguous.  Multiple distinct entities indicate PID reuse
+        # with different create_times.
         if len(candidates) == 1:
             ent_id = candidates[0]["process_entity_id"]
             new_src = dict(src)
