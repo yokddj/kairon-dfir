@@ -164,7 +164,12 @@ def test_resolve_active_result_prefers_extended_over_basic_for_processes(db: Ses
     case = _make_case(db)
     ev = _make_evidence(db, case.id, "a.dmp")
     r_basic = _make_run(db, case.id, ev.id, "processes_basic", "completed", _utc(2026, 6, 16), _utc(2026, 6, 16, 0, 2))
+    r_basic.canonical_materialization_status = "completed"
+    r_basic.canonical_entity_count = 100
     r_ext = _make_run(db, case.id, ev.id, "processes_extended", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 5))
+    r_ext.canonical_materialization_status = "completed"
+    r_ext.canonical_entity_count = 200
+    db.commit()
     result = resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family="processes")
     assert result["active_run"] is not None
     assert result["active_run"]["id"] == r_ext.id
@@ -174,6 +179,9 @@ def test_resolve_active_result_falls_back_to_processes_basic_when_no_extended(db
     case = _make_case(db)
     ev = _make_evidence(db, case.id, "a.dmp")
     r_basic = _make_run(db, case.id, ev.id, "processes_basic", "completed", _utc(2026, 6, 16), _utc(2026, 6, 16, 0, 2))
+    r_basic.canonical_materialization_status = "completed"
+    r_basic.canonical_entity_count = 100
+    db.commit()
     result = resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family="processes")
     assert result["active_run"] is not None
     assert result["active_run"]["id"] == r_basic.id
@@ -327,6 +335,9 @@ def test_resolve_active_result_zero_processes_extended_in_progress_uses_basic_fa
     ev = _make_evidence(db, case.id, "a.dmp")
     _make_run(db, case.id, ev.id, "processes_extended", "running", _utc(2026, 6, 16), None, plugins_completed=1)
     r_basic = _make_run(db, case.id, ev.id, "processes_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+    r_basic.canonical_materialization_status = "completed"
+    r_basic.canonical_entity_count = 100
+    db.commit()
     result = resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family="processes")
     # The extended run is still running, so the resolver falls back to basic
     assert result["active_run"]["id"] == r_basic.id
