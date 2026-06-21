@@ -803,7 +803,7 @@ from pydantic import BaseModel as _BaseModel  # noqa: E402
 
 
 class _RenormalizeRequest(_BaseModel):
-    run_id: str
+    run_id: str | None = None
     dry_run: bool = True
 
 
