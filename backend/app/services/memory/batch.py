@@ -358,7 +358,9 @@ def advance_batch(
 
     Updates the batch state, advances the pointer and (optionally)
     enqueues the next profile.  The function is idempotent: a second
-    call with the same run has no effect.
+    call with the same run has no effect.  The runtime-safety
+    fields (``version``, ``last_advanced_run_id``) protect against
+    duplicate callbacks from the worker.
     """
     if run.batch_id is None:
         return None
@@ -369,8 +371,17 @@ def advance_batch(
     if batch is None:
         return None
 
-    # Idempotency: only the *first* advance call for a run updates
-    # the batch's "current" state.
+    # Idempotency via ``last_advanced_run_id``: a duplicate callback
+    # for the same run is a no-op.  The active-result resolver
+    # marks the run as terminal exactly once, so the second callback
+    # from a retried worker hits this guard.
+    if batch.last_advanced_run_id == run.id:
+        logger.info(
+            "memory batch advance ignored (duplicate callback): batch=%s run=%s",
+            batch.id, run.id,
+        )
+        return batch
+
     if batch.current_profile and run.profile != batch.current_profile:
         # A late callback for a run that no longer matches the
         # current profile (e.g. after a cancellation re-pointed the
@@ -396,6 +407,12 @@ def advance_batch(
         # Non-terminal (still running or pending): leave the batch alone.
         return batch
 
+    # Record the advance.  ``version`` is an optimistic concurrency
+    # token; we increment it on every state transition.
+    batch.version = (batch.version or 1) + 1
+    batch.last_advanced_run_id = run.id
+    batch.last_advanced_at = utc_now_naive()
+
     # Determine the next profile to enqueue.
     next_profile: str | None = None
     completed = set(batch.completed_profiles or [])
@@ -414,6 +431,7 @@ def advance_batch(
     if run.profile == "metadata_only" and terminal_failure:
         next_profile = None
         batch.status = "failed"
+        batch.failure_reason = "metadata_only fundamental failure"
 
     if next_profile is None:
         batch.current_profile = None
@@ -465,7 +483,14 @@ def serialize_batch(batch: MemoryAnalysisBatch, evidence: dict[str, Any] | None 
         "failed_profiles": list(batch.failed_profiles or []),
         "continue_on_failure": batch.continue_on_failure,
         "cancellation_requested": batch.cancellation_requested,
+        "cancellation_reason": batch.cancellation_reason,
         "authorization_acknowledged": batch.authorization_acknowledged,
+        "version": batch.version,
+        "last_advanced_run_id": batch.last_advanced_run_id,
+        "last_advanced_at": batch.last_advanced_at.isoformat() if batch.last_advanced_at else None,
+        "reconciled_at": batch.reconciled_at.isoformat() if batch.reconciled_at else None,
+        "failure_reason": batch.failure_reason,
+        "requested_by": batch.requested_by,
         "created_at": batch.created_at.isoformat() if batch.created_at else None,
         "started_at": batch.started_at.isoformat() if batch.started_at else None,
         "completed_at": batch.completed_at.isoformat() if batch.completed_at else None,
@@ -473,3 +498,128 @@ def serialize_batch(batch: MemoryAnalysisBatch, evidence: dict[str, Any] | None 
     if evidence is not None:
         payload["evidence"] = evidence
     return payload
+
+
+# ---------------------------------------------------------------------------
+# Reconciliation
+# ---------------------------------------------------------------------------
+
+
+def reconcile_memory_batches(db: Session, *, enqueue_fn=None) -> dict[str, Any]:
+    """Reconcile batches after a backend or worker restart.
+
+    The reconciliation handles four situations:
+
+    1. A batch is ``queued`` but no run was ever enqueued for its
+       first profile.  This happens if the backend crashes between
+       the INSERT and the enqueue.  We enqueue the first profile.
+    2. A batch is ``running`` but the run that was its
+       ``current_profile`` has reached a terminal state that was
+       not yet processed.  We call ``advance_batch`` to bring the
+       batch up to date.  The advance function is idempotent so a
+       re-run is safe.
+    3. A batch is ``running`` with ``cancellation_requested`` but
+       no run is active.  We mark it as cancelled.
+    4. A batch is ``running`` with a run that is still in
+       ``pending`` or ``queued`` status.  We do nothing: the worker
+       will eventually pick it up.
+
+    The function is idempotent and safe to call from the backend
+    startup hook or a periodic cron.  It MUST be reentrant because
+    the backend can be restarted again while reconciliation is
+    running.
+    """
+    if enqueue_fn is None:
+        enqueue_fn = _default_enqueue_fn
+    summary = {
+        "enqueued_first_profile": 0,
+        "advanced": 0,
+        "cancelled_after_cancel_request": 0,
+        "noop": 0,
+        "errors": 0,
+    }
+    active_batches = (
+        db.query(MemoryAnalysisBatch)
+        .filter(MemoryAnalysisBatch.status.in_(("queued", "running")))
+        .all()
+    )
+    for batch in active_batches:
+        try:
+            _reconcile_one_batch(db, batch=batch, enqueue_fn=enqueue_fn, summary=summary)
+        except Exception as exc:  # noqa: BLE001
+            summary["errors"] += 1
+            logger.warning(
+                "memory batch reconciliation error: batch=%s error=%s",
+                batch.id, exc,
+            )
+    db.commit()
+    logger.info("memory batch reconciliation complete: %s", summary)
+    return summary
+
+
+def _reconcile_one_batch(
+    db: Session,
+    *,
+    batch: MemoryAnalysisBatch,
+    enqueue_fn,
+    summary: dict[str, Any],
+) -> None:
+    if batch.status == "queued":
+        # No first run was ever enqueued.
+        if not batch.requested_profiles:
+            batch.status = "completed"
+            batch.completed_at = utc_now_naive()
+            summary["noop"] += 1
+            return
+        first = batch.requested_profiles[0]
+        batch.current_profile = first
+        batch.status = "running"
+        batch.started_at = utc_now_naive()
+        _enqueue_profile(db, batch=batch, profile=first, position=1, enqueue_fn=enqueue_fn)
+        batch.reconciled_at = utc_now_naive()
+        summary["enqueued_first_profile"] += 1
+        return
+    if batch.status == "running":
+        if batch.cancellation_requested and batch.current_profile is None:
+            # The previous run finished and the advance step would
+            # have marked the batch as completed/cancelled.  Do that
+            # now.
+            batch.status = "cancelled"
+            batch.completed_at = utc_now_naive()
+            summary["cancelled_after_cancel_request"] += 1
+            return
+        # Is the current_profile's run terminal and unprocessed?
+        if batch.current_profile is None:
+            summary["noop"] += 1
+            return
+        run = (
+            db.query(MemoryScanRun)
+            .filter(
+                MemoryScanRun.batch_id == batch.id,
+                MemoryScanRun.profile == batch.current_profile,
+            )
+            .order_by(MemoryScanRun.created_at.desc())
+            .first()
+        )
+        if run is None:
+            summary["noop"] += 1
+            return
+        if run.status not in (
+            "completed",
+            "completed_with_errors",
+            "failed",
+            "timed_out",
+            "cancelled",
+            "backend_unavailable",
+            "invalid_evidence",
+        ):
+            summary["noop"] += 1
+            return
+        if batch.last_advanced_run_id == run.id:
+            summary["noop"] += 1
+            return
+        advance_batch(db, run=run, enqueue_fn=enqueue_fn)
+        batch.reconciled_at = utc_now_naive()
+        summary["advanced"] += 1
+        return
+    summary["noop"] += 1

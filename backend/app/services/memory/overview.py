@@ -116,6 +116,8 @@ def get_evidence_landing(db: Session, case_id: str) -> list[dict]:
     (Ready / Not analyzed / Completed / Running / Latest attempt
     failed / Unavailable) and a list of completed runs.
     """
+    from app.services.memory.counts import get_memory_family_count
+
     evidences = list_memory_evidences(db, case_id)
     network_unavailable = not network_basic_available()[0]
     items: list[dict] = []
@@ -135,6 +137,9 @@ def get_evidence_landing(db: Session, case_id: str) -> list[dict]:
                         "using_fallback": False,
                         "historical_override": False,
                         "availability_reason": "No compatible Windows network plugin is available in the installed Volatility runtime.",
+                        "count": 0,
+                        "document_type": "memory_network_connection",
+                        "count_source": "no_active_run",
                     }
                 )
                 continue
@@ -143,6 +148,15 @@ def get_evidence_landing(db: Session, case_id: str) -> list[dict]:
                 case_id=case_id,
                 evidence_id=evidence.id,
                 family=family,
+            )
+            active_run = resolved.get("active_run") or {}
+            active_run_id = active_run.get("id") if isinstance(active_run, dict) else None
+            count_payload = get_memory_family_count(
+                case_id=case_id,
+                evidence_id=evidence.id,
+                family=family,
+                active_run_id=active_run_id,
+                db=db,
             )
             families.append(
                 {
@@ -155,6 +169,9 @@ def get_evidence_landing(db: Session, case_id: str) -> list[dict]:
                     "using_fallback": resolved["using_fallback"],
                     "historical_override": resolved["historical_override"],
                     "availability_reason": None,
+                    "count": int(count_payload["total"]),
+                    "document_type": count_payload["document_type"],
+                    "count_source": count_payload["count_source"],
                 }
             )
         runs = (

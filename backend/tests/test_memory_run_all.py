@@ -177,12 +177,18 @@ def _make_run(
     return run
 
 
-def _make_summary(db: Session, *, run: MemoryScanRun, count: int) -> MemoryArtifactSummary:
+def _make_summary(
+    db: Session,
+    *,
+    run: MemoryScanRun,
+    count: int,
+    artifact_type: str = "memory_process",
+) -> MemoryArtifactSummary:
     s = MemoryArtifactSummary(
         case_id=run.case_id,
         evidence_id=run.evidence_id,
         memory_run_id=run.id,
-        memory_artifact_type="memory_process",
+        memory_artifact_type=artifact_type,
         count=count,
         metadata_json={"accepted_count": count, "profile": run.profile},
     )
@@ -225,11 +231,11 @@ def test_overview_per_family_independent_of_global_run(db: Session) -> None:
 def test_overview_real_per_family_counts(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
     processes_run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="processes_extended")
-    _make_summary(db, run=processes_run, count=255)
+    _make_summary(db, run=processes_run, artifact_type="memory_process", count=255)
     modules_run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="modules_basic")
-    _make_summary(db, run=modules_run, count=21_339)
+    _make_summary(db, run=modules_run, artifact_type="memory_process_module", count=21_339)
     handles_run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="handles_basic")
-    _make_summary(db, run=handles_run, count=97_087)
+    _make_summary(db, run=handles_run, artifact_type="memory_handle", count=97_087)
 
     catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
     by_profile = {item["profile"]: item for item in catalogue}

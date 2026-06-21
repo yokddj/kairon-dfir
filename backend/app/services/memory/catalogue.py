@@ -106,9 +106,13 @@ def build_analysis_catalogue(
     and per-profile count for an evidence.
 
     The function reads ``MemoryScanRun`` for this evidence + profile
-    and joins with the run's ``MemoryArtifactSummary`` to obtain the
-    last artifact count.
+    and delegates the per-family count to the unified
+    :func:`app.services.memory.counts.get_memory_family_count` so
+    that every consumer (catalogue, Overview, landing, run-all plan)
+    sees the same number.
     """
+    from app.services.memory.counts import get_memory_family_count
+
     runs_by_profile: dict[str, MemoryScanRun] = {}
     for profile_def in PROFILE_CATALOGUE:
         run = (
@@ -128,9 +132,20 @@ def build_analysis_catalogue(
     items: list[dict[str, Any]] = []
     for profile_def in PROFILE_CATALOGUE:
         profile = profile_def["profile"]
+        family = profile_def["family"]
         last_run = runs_by_profile.get(profile)
         last_run_dict = _serialize(last_run) if last_run else None
-        last_count = _safe_count(db, last_run) if last_run else 0
+        if last_run is not None:
+            count_payload = get_memory_family_count(
+                case_id=case_id,
+                evidence_id=evidence_id,
+                family=family,
+                active_run_id=last_run.id,
+                db=db,
+            )
+            last_count = int(count_payload["total"])
+        else:
+            last_count = 0
         last_status = last_run.status if last_run else None
 
         is_network = profile == "network_basic"
@@ -143,7 +158,7 @@ def build_analysis_catalogue(
         items.append(
             {
                 "profile": profile,
-                "family": profile_def["family"],
+                "family": family,
                 "title": profile_def["title"],
                 "description": profile_def["description"],
                 "cost_label": profile_def["cost_label"],
@@ -169,27 +184,6 @@ def _serialize(run: MemoryScanRun) -> dict[str, Any]:
         "evidence_id": run.evidence_id,
         "case_id": run.case_id,
     }
-
-
-def _safe_count(db: Session, run: MemoryScanRun) -> int:
-    """Return the last artifact count for the run by querying the
-    ``MemoryArtifactSummary`` table for any summary row matching the
-    run.  Falls back to 0 when the table is empty.
-    """
-    from app.models.memory import MemoryArtifactSummary
-
-    summaries = (
-        db.query(MemoryArtifactSummary)
-        .filter(MemoryArtifactSummary.memory_run_id == run.id)
-        .all()
-    )
-    if not summaries:
-        return 0
-    total = 0
-    for s in summaries:
-        meta = s.metadata_json or {}
-        total += int(meta.get("accepted_count", 0) or 0) or int(getattr(s, "count", 0) or 0)
-    return int(total)
 
 
 class MemoryProfileUnavailableError(Exception):

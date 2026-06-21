@@ -67,6 +67,10 @@ def init_db() -> None:
 
     Base.metadata.create_all(bind=engine)
     _ensure_compatible_schema()
+    # Run versioned migrations after the legacy in-place DDL so a
+    # pre-versioned deployment still gets the new columns.
+    from app.core.migrations import run_migrations
+    run_migrations(engine)
 
 
 def _ensure_compatible_schema() -> None:

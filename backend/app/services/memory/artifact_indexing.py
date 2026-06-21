@@ -198,10 +198,30 @@ def search_artifact_documents(
         "size": page_size,
         "timeout": "5s",
         "track_total_hits": True,
-        "sort": sort or [{"pid": {"order": "asc", "missing": "_last"}}, {"document_id": {"order": "asc"}}],
+        "sort": sort or [
+            {"pid": {"order": "asc", "missing": "_last", "unmapped_type": "long"}},
+            {"document_id": {"order": "asc", "unmapped_type": "keyword"}},
+        ],
     }
     client = get_opensearch_client()
-    response = client.search(index=get_memory_index(case_id), body=body, params={"ignore_unavailable": "true"})
+    try:
+        response = client.search(index=get_memory_index(case_id), body=body, params={"ignore_unavailable": "true"})
+    except Exception as exc:  # noqa: BLE001
+        # Fall back to a sort that does not require field mappings.
+        # This is hit when the index has not been migrated to the
+        # latest mapping (e.g. ``pid`` is unmapped for some document
+        # types).  The spec forbids reindexing, so we degrade
+        # gracefully: results are still scoped to the requested
+        # document_type, evidence_id and run_id; the order is
+        # document-id ascending.
+        logger.warning(
+            "artifact search sort fallback: case=%s document_type=%s: %s",
+            case_id, document_type, exc,
+        )
+        body["sort"] = [
+            {"document_id": {"order": "asc", "unmapped_type": "keyword"}},
+        ]
+        response = client.search(index=get_memory_index(case_id), body=body, params={"ignore_unavailable": "true"})
     hits = response.get("hits", {})
     total = hits.get("total", {})
     total_value = total.get("value", 0) if isinstance(total, dict) else int(total or 0)
