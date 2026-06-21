@@ -353,6 +353,38 @@ export type MemoryAnalysisCatalogue = {
   items: MemoryAnalysisCatalogueItem[];
 };
 
+export type MemoryRunAllMode = "missing_or_failed" | "rerun_all";
+
+export type MemoryRunAllPlan = {
+  case_id: string;
+  evidence_id: string;
+  mode: MemoryRunAllMode;
+  selected_profiles: string[];
+  skipped_profiles: Array<{ profile: string; reason: string }>;
+  excluded_profiles: Array<{ profile: string; reason: string }>;
+};
+
+export type MemoryAnalysisBatch = {
+  id: string;
+  case_id: string;
+  evidence_id: string;
+  mode: MemoryRunAllMode;
+  status: "queued" | "running" | "completed" | "completed_with_errors" | "failed" | "cancelled";
+  requested_profiles: string[];
+  skipped_profiles: Array<{ profile: string; reason: string }>;
+  current_profile: string | null;
+  completed_profiles: string[];
+  failed_profiles: string[];
+  continue_on_failure: boolean;
+  cancellation_requested: boolean;
+  authorization_acknowledged: boolean;
+  created_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  plan?: MemoryRunAllPlan;
+  first_run_id?: string;
+};
+
 export type MemoryEvidenceLandingItem = {
   evidence_id: string;
   case_id: string;
@@ -3815,6 +3847,21 @@ export const api = {
   },
   getMemoryAnalysisCatalogue: (caseId: string, evidenceId: string) =>
     request<MemoryAnalysisCatalogue>(`/cases/${caseId}/memory/evidences/${evidenceId}/catalogue`),
+  previewMemoryRunAll: (caseId: string, evidenceId: string, mode: MemoryRunAllMode) =>
+    request<MemoryRunAllPlan>(`/cases/${caseId}/memory/evidences/${evidenceId}/run-all/preview?mode=${mode}`),
+  startMemoryRunAll: (caseId: string, evidenceId: string, payload: { mode: MemoryRunAllMode; authorization_acknowledged: boolean; continue_on_failure?: boolean }) =>
+    request<MemoryAnalysisBatch>(`/cases/${caseId}/memory/evidences/${evidenceId}/run-all`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  getMemoryAnalysisBatch: (caseId: string, evidenceId: string, batchId: string) =>
+    request<MemoryAnalysisBatch>(`/cases/${caseId}/memory/evidences/${evidenceId}/analysis-batches/${batchId}`),
+  getActiveMemoryAnalysisBatch: (caseId: string, evidenceId: string) =>
+    request<MemoryAnalysisBatch>(`/cases/${caseId}/memory/evidences/${evidenceId}/analysis-batches/active`),
+  cancelMemoryAnalysisBatch: (caseId: string, evidenceId: string, batchId: string) =>
+    request<MemoryAnalysisBatch>(`/cases/${caseId}/memory/evidences/${evidenceId}/analysis-batches/${batchId}/cancel`, {
+      method: "POST",
+    }),
   startMemoryScan: (evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", authorizationAcknowledged = false) =>
     request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan`, { method: "POST", body: JSON.stringify({ profile, authorization_acknowledged: authorizationAcknowledged }) }),
   getMemoryRun: (runId: string) => request<MemoryRunDetail>(`/memory/runs/${runId}`),

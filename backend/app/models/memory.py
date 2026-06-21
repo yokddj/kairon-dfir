@@ -71,6 +71,13 @@ class MemoryScanRun(UUIDMixin, Base):
     backend_version: Mapped[str | None] = mapped_column(String(255), nullable=True)
     worker_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
     cancellation_requested: Mapped[bool] = mapped_column(default=False, nullable=False)
+    batch_id: Mapped[str | None] = mapped_column(
+        ForeignKey("memory_analysis_batches.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    batch_position: Mapped[int | None] = mapped_column(nullable=True)
+    batch_total: Mapped[int | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=utc_now_naive, nullable=False)
 
     case = relationship("Case", back_populates="memory_scan_runs")
@@ -245,4 +252,61 @@ class MemorySymbolApproval(UUIDMixin, Base):
     __table_args__ = (
         Index("ix_memory_symbol_approval_status_expires", "status", "expires_at"),
         Index("ix_memory_symbol_approval_request_status", "request_id", "status"),
+    )
+
+
+MEMORY_BATCH_STATUSES = {
+    "queued",
+    "running",
+    "completed",
+    "completed_with_errors",
+    "failed",
+    "cancelled",
+}
+
+MEMORY_BATCH_MODES = {"missing_or_failed", "rerun_all"}
+
+
+class MemoryAnalysisBatch(UUIDMixin, Base):
+    """A server-side orchestrated batch of memory scan profiles.
+
+    A batch is created via ``POST .../memory/evidences/{evidence_id}/run-all``
+    and executes its profiles sequentially (never in parallel).  The
+    batch is scoped to a single ``evidence_id``: cross-evidence state
+    is not allowed.
+
+    A batch enqueues only the FIRST profile.  When that profile's
+    ``MemoryScanRun`` reaches a terminal state, the worker callback
+    advances the batch by enqueuing the next profile.  A new batch
+    is rejected (HTTP 409) while another batch is still active for
+    the same evidence.
+    """
+
+    __tablename__ = "memory_analysis_batches"
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
+    mode: Mapped[str] = mapped_column(String(32), nullable=False, default="missing_or_failed")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    requested_profiles: Mapped[list] = mapped_column(JSONVariant, nullable=False, default=list)
+    skipped_profiles: Mapped[list] = mapped_column(JSONVariant, nullable=False, default=list)
+    current_profile: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    completed_profiles: Mapped[list] = mapped_column(JSONVariant, nullable=False, default=list)
+    failed_profiles: Mapped[list] = mapped_column(JSONVariant, nullable=False, default=list)
+    continue_on_failure: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    cancellation_requested: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    cancellation_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    authorization_acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    authorization_acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    audit_metadata_json: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), default=utc_now_naive, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+
+    case = relationship("Case")
+    evidence = relationship("Evidence")
+
+    __table_args__ = (
+        Index("ix_memory_batch_evidence_status", "evidence_id", "status"),
+        Index("ix_memory_batch_case_created", "case_id", "created_at"),
     )

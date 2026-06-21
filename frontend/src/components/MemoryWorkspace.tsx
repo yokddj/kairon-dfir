@@ -211,21 +211,12 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
         {tab === "overview" ? (
           <MemoryOverviewTab
             caseId={caseId}
+            evidenceId={effectiveEvidenceId ?? ""}
             overview={overview ?? null}
             backend={volatilityBackend ?? null}
             symbolCache={symbolCacheQuery.data ?? null}
-            runOptions={runOptionsQuery.data ?? null}
-            summary={summaryQuery.data ?? null}
             readinessByEvidence={readinessByEvidence}
             onJumpToTab={onTabChange}
-            onOpenGraph={(entityId) => {
-              setSelectedEntityId(entityId);
-              onTabChange("graph");
-            }}
-            onOpenProcesses={(entityId) => {
-              setSelectedEntityId(entityId);
-              onTabChange("processes");
-            }}
           />
         ) : null}
 

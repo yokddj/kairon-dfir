@@ -357,13 +357,11 @@ describe("Memory analysis UX fixes v1", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
-  // 1. Overview roots: 1
-  it("renders Overview with Case roots = 1", async () => {
+  // 1. Overview shows the per-family analysis table
+  it("renders the per-family analysis status table", async () => {
     renderPage();
     await screen.findByTestId("memory-overview");
-    await waitFor(() => {
-      expect(screen.getByTestId("overview-card-case-roots") || screen.getByText(/Case roots/)).toBeTruthy();
-    });
+    expect(screen.getByTestId("memory-family-table")).toBeInTheDocument();
   });
 
   // 2. System info separates Analysis engine and Guest system
@@ -529,14 +527,11 @@ describe("Memory analysis UX fixes v1", () => {
     expect(screen.queryByTestId("memory-analyze-action")).not.toBeInTheDocument();
   });
 
-  // 15. Metrics: Case roots and Orphans
-  it("renders Case roots and Orphans in the Overview", async () => {
+  // 15. Real per-family counts are visible in the Overview
+  it("renders per-family counts in the Overview", async () => {
     renderPage();
-    await screen.findByTestId("memory-overview");
-    await waitFor(() => {
-      expect(screen.getByTestId("overview-card-case-roots")).toHaveTextContent("1");
-    });
-    expect(screen.getByTestId("overview-card-orphans")).toBeInTheDocument();
+    await screen.findByTestId("memory-family-row-processes");
+    expect(screen.getByTestId("memory-family-count-processes")).toBeInTheDocument();
   });
 
   // 16. No sensitive paths in any tab
@@ -929,11 +924,11 @@ describe("Memory analysis UX fixes v1", () => {
     expect(document.body.textContent || "").not.toContain("malware confirmed");
   });
 
-  // 39. Overview shows the artifacts jump button
-  it("renders the Open Artifacts tab button on Overview", async () => {
+  // 39. Overview shows the Core memory artifacts cards
+  it("renders the Core memory artifacts card grid on Overview", async () => {
     renderPage();
     expect(await screen.findByTestId("memory-overview")).toBeInTheDocument();
-    expect(screen.getByTestId("overview-jump-artifacts")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-overview-artifact-cards")).toBeInTheDocument();
   });
 
   // 40. Runs tab shows the new profile names
