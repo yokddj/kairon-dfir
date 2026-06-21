@@ -148,7 +148,7 @@ def get_memory_family_count(
                     "filter": [
                         {"term": {"document_type": document_type}},
                         {"term": {"scan_run_id.keyword": active_run_id}},
-                        {"term": {"evidence_id.keyword": evidence_id}},
+                        {"term": {"evidence_id": evidence_id}},
                     ]
                 }
             }
