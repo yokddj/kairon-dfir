@@ -264,7 +264,7 @@ MEMORY_BATCH_STATUSES = {
     "cancelled",
 }
 
-MEMORY_BATCH_MODES = {"missing_or_failed", "rerun_all"}
+MEMORY_BATCH_MODES = {"missing_or_failed", "rerun_all", "runtime_validation"}
 
 
 class MemoryAnalysisBatch(UUIDMixin, Base):
