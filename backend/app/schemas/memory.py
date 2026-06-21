@@ -461,3 +461,41 @@ class MemoryRunSelectorRead(BaseModel):
     runs: list[MemoryRunOptionsRead]
     default_run_id: str | None = None
     combined_historical_available: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Core memory artifact schemas
+# ---------------------------------------------------------------------------
+
+
+class MemoryArtifactListRead(BaseModel):
+    document_type: str
+    selected_run: str | None = None
+    total: int
+    page: int
+    page_size: int
+    items: list[dict] = []
+    facets: dict = {}
+    normalization_version: str = "memory_artifact_canonical_v1"
+
+
+class MemoryArtifactDetailRead(BaseModel):
+    document_type: str
+    document_id: str
+    fields: dict = {}
+    provenance: dict = {}
+
+
+class MemoryArtifactOverviewRead(BaseModel):
+    case_id: str
+    selected_run: str | None = None
+    run_status: str | None = None
+    profile: str | None = None
+    network_connections: dict = {}
+    process_modules: dict = {}
+    module_discrepancies: int = 0
+    kernel_modules: dict = {}
+    drivers: dict = {}
+    handles: dict = {}
+    suspicious_regions: dict = {}
+    normalization_version: str = "memory_artifact_canonical_v1"

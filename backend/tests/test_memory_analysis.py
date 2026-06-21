@@ -954,7 +954,7 @@ def test_volatility_runner_uses_fixed_process_plugin_argv(tmp_path: Path, monkey
 
 def test_volatility_runner_rejects_unallowed_plugin(tmp_path: Path) -> None:
     with pytest.raises(volatility_runner.VolatilityRunnerError) as exc_info:
-        volatility_runner.build_plugin_argv("/usr/bin/vol", tmp_path / "memory.mem", "windows.netscan")
+        volatility_runner.build_plugin_argv("/usr/bin/vol", tmp_path / "memory.mem", "windows.cachedump")
 
     assert exc_info.value.code == "PLUGIN_NOT_ALLOWED"
 

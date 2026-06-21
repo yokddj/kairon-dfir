@@ -3526,6 +3526,50 @@ export type DebugExportRequest = {
   search_request?: Record<string, unknown>;
 };
 
+export type MemoryArtifactList = {
+  document_type: string;
+  selected_run: string | null;
+  total: number;
+  page: number;
+  page_size: number;
+  items: Array<Record<string, unknown> & { document_id: string }>;
+  facets: Record<string, unknown>;
+  normalization_version: string;
+};
+
+export type MemoryArtifactOverview = {
+  case_id: string;
+  selected_run: string | null;
+  run_status: string | null;
+  profile: string | null;
+  network_connections: { count: number };
+  process_modules: { count: number };
+  module_discrepancies: number;
+  kernel_modules: { count: number };
+  drivers: { count: number };
+  handles: { count: number };
+  suspicious_regions: { count: number };
+  facets: Record<string, unknown>;
+  normalization_version: string;
+};
+
+export type MemoryArtifactDetail = {
+  document_type: string;
+  document_id: string;
+  fields: Record<string, unknown>;
+  provenance: Record<string, unknown>;
+};
+
+function buildArtifactQuery(path: string, params: Record<string, unknown> | undefined): string {
+  const query = new URLSearchParams();
+  if (!params) return path;
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === "") continue;
+    query.set(key, String(value));
+  }
+  return query.size ? `${path}?${query.toString()}` : path;
+}
+
 export const api = {
   listCases: () => request<DfirCase[]>("/cases"),
   createCase: (payload: Partial<DfirCase>) => request<DfirCase>("/cases", { method: "POST", body: JSON.stringify(payload) }),
@@ -3762,6 +3806,76 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ run_id: runId, dry_run: dryRun }),
     }),
+  // Core memory artifact endpoints
+  getMemoryArtifactOverview: (caseId: string, params?: { run_id?: string | null }) => {
+    const query = new URLSearchParams();
+    if (params?.run_id) query.set("run_id", params.run_id);
+    return request<MemoryArtifactOverview>(`/cases/${caseId}/memory/artifacts/overview${query.size ? `?${query.toString()}` : ""}`);
+  },
+  getMemoryNetworkConnections: (
+    caseId: string,
+    params?: {
+      run_id?: string;
+      protocol?: string;
+      local_address?: string;
+      local_port?: number;
+      remote_address?: string;
+      remote_port?: number;
+      state?: string;
+      pid?: number;
+      process_name?: string;
+      page?: number;
+      page_size?: number;
+    },
+  ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/network`, params)),
+  getMemoryProcessModules: (
+    caseId: string,
+    params?: {
+      run_id?: string;
+      pid?: number;
+      process_name?: string;
+      module_name?: string;
+      path?: string;
+      load_state?: string;
+      discrepancy_only?: boolean;
+      page?: number;
+      page_size?: number;
+    },
+  ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/modules`, params)),
+  getMemoryHandles: (
+    caseId: string,
+    params?: {
+      run_id?: string;
+      pid?: number;
+      process_name?: string;
+      object_type?: string;
+      object_name?: string;
+      page?: number;
+      page_size?: number;
+    },
+  ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/handles`, params)),
+  getMemoryKernelModules: (
+    caseId: string,
+    params?: { run_id?: string; page?: number; page_size?: number },
+  ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/kernel-modules`, params)),
+  getMemoryDrivers: (
+    caseId: string,
+    params?: { run_id?: string; page?: number; page_size?: number },
+  ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/drivers`, params)),
+  getMemorySuspiciousRegions: (
+    caseId: string,
+    params?: {
+      run_id?: string;
+      pid?: number;
+      process_name?: string;
+      protection?: string;
+      review_status?: string;
+      page?: number;
+      page_size?: number;
+    },
+  ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/suspicious-regions`, params)),
+  getMemoryArtifactDetail: (caseId: string, documentType: string, documentId: string) =>
+    request<MemoryArtifactDetail>(`/cases/${caseId}/memory/artifacts/${documentType}/${documentId}`),
   getEvidence: (evidenceId: string) => request<Evidence>(`/evidences/${evidenceId}`),
   getEvidenceManifest: (evidenceId: string) => request<EvidenceManifest>(`/evidences/${evidenceId}/manifest`),
   getEvidenceOnDemandModules: (evidenceId: string) => request<OnDemandModulesResponse>(`/evidences/${evidenceId}/on-demand-modules`),

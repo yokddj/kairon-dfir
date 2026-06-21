@@ -11,6 +11,7 @@ import { MEMORY_TABS, useMemoryTab, type MemoryTab } from "../lib/memoryWorkspac
 import { MemoryOverviewTab } from "./memory/MemoryOverviewTab";
 import { MemoryProcessesTab } from "./memory/MemoryProcessesTab";
 import { MemoryGraphTab } from "./memory/MemoryGraphTab";
+import { MemoryArtifactsTab } from "./memory/MemoryArtifactsTab";
 import { MemorySystemTab } from "./memory/MemorySystemTab";
 import { MemoryRunsTab } from "./memory/MemoryRunsTab";
 import { MemoryRawTab } from "./memory/MemoryRawTab";
@@ -254,6 +255,30 @@ export function MemoryWorkspace({ caseId }: MemoryWorkspaceProps) {
             onOpenProcessDetails={(entityId) => {
               setSelectedEntityId(entityId);
               onTabChange("processes");
+            }}
+          />
+        ) : null}
+
+        {tab === "artifacts" ? (
+          <MemoryArtifactsTab
+            caseId={caseId}
+            runOptions={runOptionsQuery.data ?? null}
+            selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
+            onSelectEntity={(entityId) => {
+              setSelectedEntityId(entityId);
+            }}
+            onJumpToProcesses={(entityId) => {
+              setSelectedEntityId(entityId);
+              onTabChange("processes");
+            }}
+            onJumpToGraph={(entityId) => {
+              setSelectedEntityId(entityId);
+              onTabChange("graph");
+            }}
+            onJumpToTree={(entityId) => {
+              setSelectedEntityId(entityId);
+              onTabChange("graph");
             }}
           />
         ) : null}

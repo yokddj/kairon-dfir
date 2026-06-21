@@ -12,6 +12,21 @@ from app.core.database import SessionLocal, utc_now_naive
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
 from app.services.memory import backend_readiness
 from app.services.memory.evidence_access import MemoryStorageAccessError, validate_current_process_output_access
+from app.services.memory.artifact_indexing import (
+    index_artifact_documents,
+    link_process_entities,
+)
+from app.services.memory.artifact_normalizers import (
+    NORMALIZATION_VERSION,
+    merge_module_documents,
+    normalize_windows_dlllist,
+    normalize_windows_driverscan,
+    normalize_windows_handles,
+    normalize_windows_ldrmodules,
+    normalize_windows_malfind,
+    normalize_windows_modules,
+    normalize_windows_netscan,
+)
 from app.services.memory.indexing import index_memory_documents, index_memory_system_info
 from app.services.memory.normalizers import merge_memory_process_results, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, write_atomic_bytes, write_atomic_json
@@ -28,8 +43,39 @@ PROFILE_PLUGINS = {
     "metadata_only": ["windows.info"],
     "processes_basic": ["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"],
     "processes_extended": ["windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"],
+    "network_basic": ["windows.netscan", "windows.info"],
+    "modules_basic": ["windows.dlllist", "windows.ldrmodules", "windows.info"],
+    "handles_basic": ["windows.handles", "windows.info"],
+    "kernel_basic": ["windows.modules", "windows.driverscan", "windows.info"],
+    "suspicious_memory": ["windows.malfind", "windows.info"],
 }
 PROCESS_PLUGINS = {"windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"}
+ARTIFACT_PROFILES = {
+    "network_basic",
+    "modules_basic",
+    "handles_basic",
+    "kernel_basic",
+    "suspicious_memory",
+}
+ARTIFACT_PLUGIN_NORMALIZER = {
+    "windows.netscan": "memory_network_connection",
+    "windows.dlllist": "memory_process_module",
+    "windows.ldrmodules": "memory_process_module",
+    "windows.handles": "memory_handle",
+    "windows.modules": "memory_kernel_module",
+    "windows.driverscan": "memory_driver",
+    "windows.malfind": "memory_suspicious_region",
+}
+ARTIFACT_PLUGIN_LIMITS = {
+    # Per-plugin guard-rails to keep offline execution bounded.
+    "windows.netscan": {"timeout_seconds": 300, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "windows.dlllist": {"timeout_seconds": 300, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "windows.ldrmodules": {"timeout_seconds": 300, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "windows.handles": {"timeout_seconds": 600, "max_output_bytes": 64 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "windows.modules": {"timeout_seconds": 300, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "windows.driverscan": {"timeout_seconds": 300, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "windows.malfind": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 50000, "max_preview_bytes": 256},
+}
 
 
 def utc_iso(value: datetime | None = None) -> str:
@@ -155,6 +201,7 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             system_info = None
             raw_outputs = {}
             process_results = []
+            artifact_results: dict[str, dict[str, Any]] = {}
             manifest_plugins = []
             fatal = False
             blocking_error: VolatilityRunnerError | None = None
@@ -171,8 +218,26 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                         elif plugin in PROCESS_PLUGINS:
                             process_results.append(_normalize_process_payload(plugin, payload))
                             plugin_run.metadata_json = {"normalized_type": "memory_process", "raw_output_retained": True}
+                        elif plugin in ARTIFACT_PLUGIN_NORMALIZER:
+                            artifact_results[plugin] = _normalize_artifact_payload(
+                                plugin,
+                                payload,
+                                case_id=run.case_id,
+                                evidence_id=run.evidence_id,
+                                scan_run_id=run.id,
+                                plugin_run_id=plugin_run.id,
+                            )
+                            plugin_run.metadata_json = {
+                                "normalized_type": ARTIFACT_PLUGIN_NORMALIZER[plugin],
+                                "raw_output_retained": True,
+                                "raw_count": artifact_results[plugin].get("raw_count", 0),
+                                "accepted_count": artifact_results[plugin].get("accepted_count", 0),
+                                "dropped_count": artifact_results[plugin].get("dropped_count", 0),
+                                "warnings": artifact_results[plugin].get("warnings", [])[:20],
+                                "normalization_version": artifact_results[plugin].get("normalization_version", NORMALIZATION_VERSION),
+                            }
                     except Exception as exc:  # noqa: BLE001
-                        raise VolatilityRunnerError("NORMALIZATION_FAILED", f"Volatility {plugin} completed, but Kairon could not normalize its output.", return_code=0) from exc
+                        raise VolatilityRunnerError("MEMORY_ARTIFACT_NORMALIZATION_FAILED", f"Volatility {plugin} completed, but Kairon could not normalize its output.", return_code=0) from exc
                     plugin_run.status = "completed"
                     plugin_run.completed_at = utc_now_naive()
                     plugin_run.duration_ms = duration_ms
@@ -219,6 +284,9 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     _upsert_summary(db, run, "memory_process_edge", len(merged["edges"]), {"profile": run.profile})
                     command_count = len([item for item in merged["processes"] if item.get("process", {}).get("command_line")])
                     _upsert_summary(db, run, "memory_command_line_count", command_count, {"profile": run.profile})
+                if artifact_results:
+                    artifact_indexing = _index_artifact_results(run.case_id, artifact_results, db, run)
+                    indexing["artifacts"] = artifact_indexing
                 run.status = "completed" if run.plugins_failed == 0 else "completed_with_errors"
                 run.metadata_json = {**(run.metadata_json or {}), "indexing": indexing}
             except Exception as exc:  # noqa: BLE001
@@ -262,11 +330,133 @@ def _plugin_filename(plugin: str) -> str:
     return f"{plugin}.json"
 
 
+def _normalize_artifact_payload(
+    plugin: str,
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+) -> dict[str, Any]:
+    """Dispatch a single plugin payload to its canonical normalizer.
+
+    Returns the canonical normalizer result; the caller is responsible
+    for indexing and linking process entities.
+    """
+    common = {
+        "case_id": case_id,
+        "evidence_id": evidence_id,
+        "scan_run_id": scan_run_id,
+        "plugin_run_id": plugin_run_id,
+    }
+    if plugin == "windows.netscan":
+        return normalize_windows_netscan(payload, source_plugin=plugin, **common)
+    if plugin == "windows.dlllist":
+        return normalize_windows_dlllist(payload, source_plugin=plugin, **common)
+    if plugin == "windows.ldrmodules":
+        return normalize_windows_ldrmodules(payload, source_plugin=plugin, **common)
+    if plugin == "windows.handles":
+        return normalize_windows_handles(payload, source_plugin=plugin, **common)
+    if plugin == "windows.modules":
+        return normalize_windows_modules(payload, source_plugin=plugin, **common)
+    if plugin == "windows.driverscan":
+        return normalize_windows_driverscan(payload, source_plugin=plugin, **common)
+    if plugin == "windows.malfind":
+        return normalize_windows_malfind(payload, source_plugin=plugin, **common)
+    return {
+        "items": [],
+        "warnings": [f"unsupported_artifact_plugin:{plugin}"],
+        "raw_count": 0,
+        "accepted_count": 0,
+        "dropped_count": 0,
+        "conflicts": 0,
+        "normalization_version": NORMALIZATION_VERSION,
+    }
+
+
+def _index_artifact_results(
+    case_id: str,
+    artifact_results: dict[str, dict[str, Any]],
+    db: Session,
+    run: MemoryScanRun,
+) -> dict[str, Any]:
+    """Index the artifact documents produced by ``artifact_results``.
+
+    For profiles that need cross-plugin consolidation (modules_basic),
+    the per-plugin outputs are merged before indexing.  For all other
+    profiles the canonical items are indexed directly.  Process-entity
+    linking happens after indexing to keep the contract simple.
+    """
+    result: dict[str, Any] = {}
+    profile = run.profile
+    if profile == "modules_basic":
+        dlllist = artifact_results.get("windows.dlllist")
+        ldrmodules = artifact_results.get("windows.ldrmodules")
+        groups = []
+        if dlllist:
+            groups.append(dlllist)
+        if ldrmodules:
+            groups.append(ldrmodules)
+        merged = merge_module_documents(*groups)
+        if merged["items"]:
+            result["memory_process_module"] = index_artifact_documents(case_id, merged["items"])
+        result["module_discrepancies"] = merged["conflicts"]
+        result["normalization_version"] = merged["normalization_version"]
+    else:
+        for plugin, payload in artifact_results.items():
+            items = payload.get("items", [])
+            if not items:
+                continue
+            doc_type = ARTIFACT_PLUGIN_NORMALIZER.get(plugin, "memory_artifact")
+            result[doc_type] = index_artifact_documents(case_id, items)
+            result["normalization_version"] = payload.get("normalization_version", NORMALIZATION_VERSION)
+    # Best-effort process entity linking.
+    if result:
+        try:
+            link_process_entities(case_id, scan_run_id=run.id, document_type="memory_process_module")
+            link_process_entities(case_id, scan_run_id=run.id, document_type="memory_handle")
+            link_process_entities(case_id, scan_run_id=run.id, document_type="memory_network_connection")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("artifact process linking failed: %s", _sanitize_message(exc))
+    # Persist a summary row per artifact type so the Runs view can show
+    # the counts without re-querying OpenSearch.
+    for plugin, payload in artifact_results.items():
+        doc_type = ARTIFACT_PLUGIN_NORMALIZER.get(plugin)
+        if not doc_type:
+            continue
+        _upsert_summary(
+            db,
+            run,
+            doc_type,
+            int(payload.get("accepted_count", 0)),
+            {
+                "profile": profile,
+                "plugin": plugin,
+                "warnings": payload.get("warnings", [])[:20],
+                "normalization_version": payload.get("normalization_version", NORMALIZATION_VERSION),
+            },
+        )
+    return result
+
+
 def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun, plugin: str, evidence_path, output_dir) -> tuple[Any, dict, int, list[str]]:
     plugin_run.status = "running"
     plugin_run.started_at = utc_now_naive()
     db.commit()
-    result = run_plugin(plugin, evidence_path, output_dir)
+    # Per-plugin guard-rails (timeout, output size) for the new artifact
+    # plugins.  Falls back to the global default for process plugins.
+    overrides = ARTIFACT_PLUGIN_LIMITS.get(plugin, {})
+    if overrides.get("timeout_seconds") or overrides.get("max_output_bytes"):
+        result = run_plugin(
+            plugin,
+            evidence_path,
+            output_dir,
+            timeout_seconds=int(overrides.get("timeout_seconds") or 0) or None,
+            max_output_bytes=int(overrides.get("max_output_bytes") or 0) or None,
+        )
+    else:
+        result = run_plugin(plugin, evidence_path, output_dir)
     raw_info = write_atomic_bytes(output_dir / _plugin_filename(plugin), result.stdout)
     try:
         payload = json.loads(result.stdout.decode("utf-8"))
