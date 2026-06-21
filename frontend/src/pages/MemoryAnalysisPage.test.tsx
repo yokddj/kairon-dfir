@@ -415,15 +415,14 @@ describe("MemoryAnalysisPage workspace", () => {
     vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
-  // 1. Overview renders summary
+  // 1. Overview renders summary (new evidence-scoped overview).
   it("renders the overview summary by default", async () => {
     renderPage();
     expect(await screen.findByTestId("memory-overview")).toBeInTheDocument();
-    await waitFor(() => {
-      expect(screen.getByTestId("overview-card-evidence")).toHaveTextContent("1 memory image");
-    });
-    expect(screen.getByTestId("overview-card-worker")).toHaveTextContent("Ready");
-    expect(screen.getByTestId("overview-card-symbols")).toHaveTextContent(/Cached/);
+    // The new overview shows the per-family status table, not the
+    // legacy "Latest run" card.
+    expect(screen.getByTestId("memory-family-table")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-overview-status")).toBeInTheDocument();
   });
 
   // 2. Processes tab shows the canonical table
@@ -476,10 +475,11 @@ describe("MemoryAnalysisPage workspace", () => {
   });
 
   // 7. Legacy table is not in Overview
-  it("does not show the legacy processes table in Overview", async () => {
+  it("does not show the legacy 'Analyze memory' instruction footer in Overview", async () => {
     renderPage();
     await screen.findByTestId("memory-overview");
-    expect(screen.queryByRole("heading", { name: /Processes$/ })).not.toBeInTheDocument();
+    const text = document.body.textContent ?? "";
+    expect(text).not.toMatch(/Analyze memory section at the bottom/i);
   });
 
   // 8. Legacy tree is not in Overview
@@ -507,14 +507,11 @@ describe("MemoryAnalysisPage workspace", () => {
     expect(await screen.findByTestId("memory-raw-tab")).toBeInTheDocument();
   });
 
-  // 11. Interesting card opens Processes filtered
-  it("opens the Processes tab when clicking the scan-only finding card", async () => {
+  // 11. Processes tab navigation works in evidence-scoped view
+  it("navigates to the Processes tab via the family link", async () => {
     renderPage();
-    await screen.findByTestId("memory-overview");
-    await waitFor(() => {
-      expect(screen.getByTestId("finding-card-scan-only")).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByTestId("finding-card-scan-only"));
+    await screen.findByTestId("memory-family-link-processes");
+    fireEvent.click(screen.getByTestId("memory-family-link-processes"));
     expect(await screen.findByTestId("memory-processes-tab")).toBeInTheDocument();
   });
 
@@ -542,13 +539,13 @@ describe("MemoryAnalysisPage workspace", () => {
     expect(screen.getByTestId("metrics-strip-view-roots")).toBeInTheDocument();
   });
 
-  // 15. Backend details collapsed
-  it("collapses backend details behind a toggle in the Overview", async () => {
+  // 15. Backend status row is rendered (no collapsed detail row any more)
+  it("renders the memory engine status row in the Overview", async () => {
     renderPage();
-    await screen.findByTestId("memory-overview");
-    expect(screen.queryByText("Execution mode")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("overview-toggle-backend-details"));
-    expect(await screen.findByText("Execution mode")).toBeInTheDocument();
+    await screen.findByTestId("memory-overview-status");
+    expect(screen.getByTestId("overview-backend-volatility")).toBeInTheDocument();
+    expect(screen.getByTestId("overview-backend-worker")).toBeInTheDocument();
+    expect(screen.getByTestId("overview-backend-symbols")).toBeInTheDocument();
   });
 
   // 16. Legacy Analyze memory selector is NOT rendered in evidence-scoped view

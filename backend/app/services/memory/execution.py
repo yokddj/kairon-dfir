@@ -187,6 +187,7 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
         run = db.get(MemoryScanRun, memory_scan_run_id)
         if run is None or run.status in TERMINAL_STATUSES:
             return
+        _advance_owning_batch = None
         started_at = utc_now_naive()
         run.status = "running"
         run.started_at = started_at
@@ -308,17 +309,24 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             run.duration_ms = _duration_ms(run.started_at, completed_at)
             db.commit()
             logger.info("memory scan completed", extra={"run_id": run.id, "status": run.status, "duration_ms": run.duration_ms})
+            _advance_owning_batch = run
         except MemoryExecutionValidationError as exc:
             if exc.code in {"MEMORY_EVIDENCE_PERMISSION_DENIED", "MEMORY_OUTPUT_PERMISSION_DENIED"}:
                 status = "failed"
             else:
                 status = "invalid_evidence" if exc.code.startswith(("EVIDENCE", "INVALID", "UNSAFE", "EMPTY")) else "backend_unavailable"
             _fail_run(db, run, None, status, exc.code, exc.message)
+            _advance_owning_batch = run
         except VolatilityRunnerError as exc:
             status = "timed_out" if exc.code == "PLUGIN_TIMEOUT" else "failed"
             _fail_run(db, run, None, status, exc.code, exc.message)
+            _advance_owning_batch = run
         except Exception as exc:  # noqa: BLE001
             _fail_run(db, run, None, "failed", "MEMORY_SCAN_FAILED", _sanitize_message(exc))
+            _advance_owning_batch = run
+
+    if _advance_owning_batch is not None:
+        _advance_batch_after_run(_advance_owning_batch)
 
 
 def _plugin_run_for(db: Session, run: MemoryScanRun, plugin: str) -> MemoryPluginRun:
@@ -536,6 +544,28 @@ def _write_plugin_error(run: MemoryScanRun, plugin_run: MemoryPluginRun, exc: Vo
         write_atomic_json(output_dir / "plugin_error.json", {"code": exc.code, "message": _sanitize_message(exc.message), "stderr": _sanitize_message(exc.stderr.decode("utf-8", errors="replace"))})
     except Exception:  # noqa: BLE001
         logger.warning("memory plugin error file could not be written", extra={"run_id": run.id, "plugin_run_id": plugin_run.id})
+
+
+def _advance_batch_after_run(run: MemoryScanRun) -> None:
+    """Advance the owning batch (if any) after a run has reached a
+    terminal state.  Opens a fresh DB session and delegates to the
+    batch service.
+    """
+    if run.batch_id is None:
+        return
+    try:
+        from app.services.memory.batch import advance_batch
+
+        with SessionLocal() as db:
+            fresh = db.get(MemoryScanRun, run.id)
+            if fresh is None:
+                return
+            advance_batch(db, run=fresh)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "memory batch advancement failed",
+            extra={"run_id": run.id, "batch_id": run.batch_id, "error": _sanitize_message(exc)},
+        )
 
 
 def _fail_run(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun | None, status: str, code: str, message: str) -> None:

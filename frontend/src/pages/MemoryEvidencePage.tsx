@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useParams, useSearchParams } from "react-router-dom";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { MemoryWorkspace } from "../components/MemoryWorkspace";
@@ -89,6 +89,33 @@ export default function MemoryEvidencePage() {
   const volatilityBackend = backendQuery.data?.backends.find((b) => b.backend === "volatility3") || null;
   const canRun = Boolean(overview?.memory_analysis_enabled && volatilityBackend?.ready);
 
+  const activeBatchQuery = useQuery({
+    queryKey: ["memory-active-batch", caseId, evidenceId],
+    enabled: Boolean(caseId && evidenceId),
+    refetchOnWindowFocus: false,
+    refetchInterval: 5_000,
+    retry: false,
+    queryFn: async () => {
+      try {
+        return await api.getActiveMemoryAnalysisBatch(caseId, evidenceId);
+      } catch (err) {
+        // 404 means "no active batch" - this is the normal end state.
+        return null;
+      }
+    },
+  });
+  const activeBatch = activeBatchQuery.data ?? null;
+
+  const cancelBatchMutation = useMutation({
+    mutationFn: async () => {
+      if (!activeBatch) return null;
+      return api.cancelMemoryAnalysisBatch(caseId, evidenceId, activeBatch.id);
+    },
+    onSuccess: () => {
+      activeBatchQuery.refetch();
+    },
+  });
+
   useEffect(() => {
     if (!overview) return;
     if (overview.evidences.length === 0) {
@@ -162,12 +189,50 @@ export default function MemoryEvidencePage() {
         </div>
       ) : null}
 
+      {activeBatch ? (
+        <section
+          className="rounded-[28px] border border-line bg-panel/60 p-4 shadow-panel"
+          data-testid="memory-batch-progress"
+        >
+          <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-accent">
+            Running all supported profiles
+          </p>
+          <p className="mt-1 text-sm" data-testid="memory-batch-progress-summary">
+            {activeBatch.completed_profiles.length} of {activeBatch.requested_profiles.length} completed
+            {activeBatch.current_profile ? <> · Current: <span className="font-mono">{activeBatch.current_profile}</span></> : null}
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <Link
+              to={`/cases/${caseId}/memory/${evidenceId}?tab=runs`}
+              className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted"
+              data-testid="memory-batch-progress-view"
+            >
+              View progress
+            </Link>
+            {activeBatch.cancellation_requested === false && (activeBatch.status === "queued" || activeBatch.status === "running") ? (
+              <button
+                type="button"
+                onClick={() => cancelBatchMutation.mutate()}
+                disabled={cancelBatchMutation.isPending}
+                className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted disabled:opacity-50"
+                data-testid="memory-batch-cancel"
+              >
+                {cancelBatchMutation.isPending ? "Cancelling…" : "Cancel remaining profiles"}
+              </button>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
+
       <MemoryWorkspace caseId={caseId} evidenceId={evidenceId} />
 
-      {catalogueOpen && catalogueQuery.data ? (
+      {catalogueOpen && catalogueQuery.data && evidence ? (
         <MemoryAnalysisCatalogueModal
           caseId={caseId}
           evidenceId={evidenceId}
+          evidenceFilename={evidence.filename}
+          evidenceHost={evidence.detected_host}
+          evidenceSizeBytes={evidence.size_bytes}
           catalogue={catalogueQuery.data}
           volatilityBackend={volatilityBackend}
           canRun={canRun}

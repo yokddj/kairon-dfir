@@ -195,6 +195,167 @@ def get_memory_evidence_catalogue(
     }
 
 
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/run-all",
+    response_model=None,
+    status_code=status.HTTP_201_CREATED,
+)
+def post_run_all_batch(
+    case_id: str,
+    evidence_id: str,
+    payload: dict | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Create a ``MemoryAnalysisBatch`` that orchestrates the
+    ``missing_or_failed`` (default) or ``rerun_all`` profiles for an
+    evidence.  The batch enqueues only the first profile; the
+    remaining profiles are advanced by the worker when each run
+    finishes.
+    """
+    from app.services.memory.batch import (
+        MemoryBatchError,
+        create_run_all_batch,
+        plan_run_all,
+        serialize_batch,
+    )
+    from app.workers.tasks import enqueue_memory_metadata_scan
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    payload = payload or {}
+    if not bool(payload.get("authorization_acknowledged", False)):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "MEMORY_BATCH_AUTHORIZATION_REQUIRED",
+                "message": "authorization_acknowledged must be true to start a run-all batch.",
+            },
+        )
+    mode = (payload.get("mode") or "missing_or_failed").strip()
+    continue_on_failure = bool(payload.get("continue_on_failure", True))
+    try:
+        result = create_run_all_batch(
+            db,
+            case_id=case_id,
+            evidence_id=evidence_id,
+            mode=mode,
+            authorization_acknowledged=True,
+            continue_on_failure=continue_on_failure,
+            enqueue_fn=enqueue_memory_metadata_scan,
+        )
+    except MemoryBatchError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"error_code": exc.code, "message": exc.message}) from exc
+
+    batch = result["batch"]
+    first_run = result["first_run"]
+    plan = result["plan"]
+    payload_out = serialize_batch(batch)
+    payload_out["plan"] = plan
+    if first_run is not None:
+        payload_out["first_run_id"] = first_run.id
+    return payload_out
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/run-all/preview",
+    response_model=None,
+)
+def get_run_all_preview(
+    case_id: str,
+    evidence_id: str,
+    mode: str = Query(default="missing_or_failed"),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return the plan for a run-all batch without creating it.
+
+    The UI calls this endpoint to populate the confirmation modal
+    with the ordered list of profiles, the skipped profiles and the
+    excluded profiles.
+    """
+    from app.services.memory.batch import (
+        MemoryBatchError,
+        plan_run_all,
+    )
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    try:
+        plan = plan_run_all(db, case_id=case_id, evidence_id=evidence_id, mode=mode)
+    except MemoryBatchError as exc:
+        raise HTTPException(status_code=exc.status_code, detail={"error_code": exc.code, "message": exc.message}) from exc
+    return {"case_id": case_id, "evidence_id": evidence_id, "mode": mode, **plan}
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/analysis-batches/{batch_id}",
+    response_model=None,
+)
+def get_analysis_batch(
+    case_id: str,
+    evidence_id: str,
+    batch_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return the state of a single batch."""
+    from app.services.memory.batch import get_batch, serialize_batch
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    batch = get_batch(db, batch_id=batch_id)
+    if batch is None or batch.case_id != case_id or batch.evidence_id != evidence_id:
+        raise HTTPException(status_code=404, detail="Memory analysis batch not found.")
+    return serialize_batch(batch)
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/analysis-batches/active",
+    response_model=None,
+)
+def get_active_analysis_batch(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return the in-flight batch (queued or running) for the evidence.
+
+    The frontend polls this endpoint while a batch is running.  The
+    endpoint returns 404 when no active batch exists.
+    """
+    from app.services.memory.batch import find_active_batch, serialize_batch
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    batch = find_active_batch(db, case_id=case_id, evidence_id=evidence_id)
+    if batch is None:
+        raise HTTPException(status_code=404, detail="No active batch for this evidence.")
+    return serialize_batch(batch)
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/analysis-batches/{batch_id}/cancel",
+    response_model=None,
+)
+def cancel_analysis_batch(
+    case_id: str,
+    evidence_id: str,
+    batch_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Request cancellation of a batch.  The currently running scan
+    is left to finish (we never kill an in-flight plugin) but no
+    new profile is enqueued.
+    """
+    from app.services.memory.batch import cancel_batch, get_batch, serialize_batch
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    batch = get_batch(db, batch_id=batch_id)
+    if batch is None or batch.case_id != case_id or batch.evidence_id != evidence_id:
+        raise HTTPException(status_code=404, detail="Memory analysis batch not found.")
+    updated = cancel_batch(db, batch_id=batch_id) or batch
+    return serialize_batch(updated)
+
+
 @router.get("/memory/symbols/cache", response_model=MemorySymbolCacheStatusRead)
 def get_memory_symbol_cache_status(db: Session = Depends(get_db)) -> dict:
     return cache_status(db=db)
