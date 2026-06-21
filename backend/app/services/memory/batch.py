@@ -145,7 +145,15 @@ def plan_run_all(
 
     selected: list[str] = []
     skipped: list[dict[str, str]] = []
-    for profile in RUN_ALL_PROFILES:
+    # In runtime_validation mode, only the first two profiles are allowed:
+    # metadata_only (fast) and processes_extended (medium).  This is the
+    # batch used by the runtime validation harness to exercise the batch
+    # orchestration without triggering heavy profiles.
+    if mode == "runtime_validation":
+        allowed_profiles = ("metadata_only", "processes_extended")
+    else:
+        allowed_profiles = RUN_ALL_PROFILES
+    for profile in allowed_profiles:
         ok, reason = _profile_available(profile)
         if not ok:
             skipped.append({"profile": profile, "reason": reason or "unavailable"})
