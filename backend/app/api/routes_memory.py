@@ -1154,7 +1154,7 @@ def rematerialize_canonical(
     the same counts.
     """
     from app.services.memory.execution import _run_canonical_materialization
-    from app.services.memory.canonical_entities import fetch_legacy_process_documents
+    from app.services.memory.process_entities import fetch_legacy_process_documents
 
     _require_case(db, case_id)
     run = db.get(MemoryScanRun, run_id)
