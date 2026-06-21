@@ -17,7 +17,6 @@ from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition
 from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
 from app.services.memory.artifact_indexing import (
-    count_artifact_documents,
     get_artifact_document,
     link_process_entities,
     search_artifact_documents,
@@ -1295,21 +1294,57 @@ def _artifact_facets(case_id: str, *, document_type: str, run_id: str | None, ev
     return {}
 
 
-def _artifact_overview(case_id: str, db: Session, run_id: str | None) -> dict[str, Any]:
+def _artifact_overview(
+    case_id: str,
+    db: Session,
+    run_id: str | None,
+    evidence_id: str | None = None,
+) -> dict[str, Any]:
+    """Return the per-family artifact overview.
+
+    The function uses the unified
+    :func:`app.services.memory.counts.get_memory_family_count` so
+    the numbers are consistent with the catalogue and the Overview.
+    """
+    from app.services.memory.counts import (
+        FAMILY_TO_DOCUMENT_TYPE,
+        get_memory_family_count,
+    )
+
     run = _resolve_run(db, case_id, run_id)
     selected_run = run.id if run else None
     run_status = run.status if run else None
     profile = run.profile if run else None
+    evidence_id_value = evidence_id or (run.evidence_id if run else None)
+    if not evidence_id_value:
+        return {
+            "case_id": case_id,
+            "selected_run": selected_run,
+            "run_status": run_status,
+            "profile": profile,
+            "evidence_id": None,
+            "network_connections": {"count": 0},
+            "process_modules": {"count": 0},
+            "module_discrepancies": 0,
+            "kernel_modules": {"count": 0},
+            "drivers": {"count": 0},
+            "handles": {"count": 0},
+            "suspicious_regions": {"count": 0},
+            "facets": {},
+            "normalization_version": "memory_artifact_canonical_v1",
+        }
     ensure_memory_index(case_id)
+    counts: dict[str, int] = {}
+    for family, doc_type in FAMILY_TO_DOCUMENT_TYPE.items():
+        payload = get_memory_family_count(
+            case_id=case_id,
+            evidence_id=evidence_id_value,
+            family=family,
+            active_run_id=selected_run,
+            db=db,
+        )
+        counts[family] = int(payload["total"])
     facets: dict[str, Any] = {}
-    by_type = {
-        "memory_network_connection": _safe_count(case_id, "memory_network_connection", selected_run),
-        "memory_process_module": _safe_count(case_id, "memory_process_module", selected_run),
-        "memory_handle": _safe_count(case_id, "memory_handle", selected_run),
-        "memory_kernel_module": _safe_count(case_id, "memory_kernel_module", selected_run),
-        "memory_driver": _safe_count(case_id, "memory_driver", selected_run),
-        "memory_suspicious_region": _safe_count(case_id, "memory_suspicious_region", selected_run),
-    }
     module_discrepancies = 0
     if selected_run:
         summary_rows = (
@@ -1321,36 +1356,33 @@ def _artifact_overview(case_id: str, db: Session, run_id: str | None) -> dict[st
         # metadata_json only when merging happened; 0 otherwise.
     return {
         "case_id": case_id,
+        "evidence_id": evidence_id_value,
         "selected_run": selected_run,
         "run_status": run_status,
         "profile": profile,
-        "network_connections": {"count": by_type["memory_network_connection"]},
-        "process_modules": {"count": by_type["memory_process_module"]},
+        "network_connections": {"count": counts["network"]},
+        "process_modules": {"count": counts["modules"]},
         "module_discrepancies": module_discrepancies,
-        "kernel_modules": {"count": by_type["memory_kernel_module"]},
-        "drivers": {"count": by_type["memory_driver"]},
-        "handles": {"count": by_type["memory_handle"]},
-        "suspicious_regions": {"count": by_type["memory_suspicious_region"]},
+        "kernel_modules": {"count": counts["kernel_modules"]},
+        "drivers": {"count": counts["drivers"]},
+        "handles": {"count": counts["handles"]},
+        "suspicious_regions": {"count": counts["suspicious_regions"]},
         "facets": facets,
         "normalization_version": "memory_artifact_canonical_v1",
     }
-
-
-def _safe_count(case_id: str, document_type: str, run_id: str | None) -> int:
-    try:
-        return int(count_artifact_documents(case_id, document_type=document_type, run_id=run_id))
-    except Exception:  # noqa: BLE001
-        return 0
 
 
 @router.get("/cases/{case_id}/memory/artifacts/overview", response_model=MemoryArtifactOverviewRead)
 def get_case_memory_artifacts_overview(
     case_id: str,
     run_id: str | None = Query(default=None),
+    evidence_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ):
     _require_case(db, case_id)
-    return _artifact_overview(case_id, db, run_id)
+    if evidence_id is not None:
+        _require_evidence_for_case(db, case_id, evidence_id)
+    return _artifact_overview(case_id, db, run_id, evidence_id=evidence_id)
 
 
 @router.post("/cases/{case_id}/memory/artifacts/relink/{run_id}")

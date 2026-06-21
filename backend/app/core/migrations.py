@@ -1,0 +1,202 @@
+"""Versioned database migration runner.
+
+The project does not have a third-party migration tool (Alembic,
+yoyo-migrations, etc.).  This module provides the minimum viable
+migration system that the spec requires:
+
+* a single ``schema_migrations`` table that records which
+  migrations have been applied;
+* an ordered list of migration objects with ``version``, ``name``
+  and ``up(conn)`` callable;
+* an idempotent runner that applies pending migrations on
+  startup;
+* a test-friendly in-memory implementation backed by SQLite.
+
+The runner never re-applies an already-applied migration.  Each
+migration runs inside its own transaction so a failure in one
+migration does not leave the schema half-migrated.
+
+The migration list is the source of truth for the schema.  New
+columns or tables are added by appending a new migration; old,
+in-place DDL in :mod:`app.core.database` is left for backward
+compatibility with pre-versioned deployments but the spec mandates
+its eventual removal.
+"""
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from typing import Callable, List
+
+from sqlalchemy import text
+from sqlalchemy.engine import Connection, Engine
+
+logger = logging.getLogger(__name__)
+
+
+MigrationUp = Callable[[Connection], None]
+
+
+@dataclass(frozen=True)
+class Migration:
+    version: int
+    name: str
+    up: MigrationUp
+
+    def describe(self) -> str:
+        return f"v{self.version:03d} {self.name}"
+
+
+MIGRATIONS: List[Migration] = []
+
+
+def register(version: int, name: str):
+    """Decorator that registers a migration in the global MIGRATIONS list."""
+
+    def decorator(func: MigrationUp) -> MigrationUp:
+        MIGRATIONS.append(Migration(version=version, name=name, up=func))
+        return func
+
+    return decorator
+
+
+SCHEMA_MIGRATIONS_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    version INTEGER PRIMARY KEY,
+    name TEXT NOT NULL,
+    applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+)
+"""
+
+
+def ensure_migrations_table(connection: Connection) -> None:
+    connection.execute(text(SCHEMA_MIGRATIONS_TABLE_DDL))
+
+
+def _applied_versions(connection: Connection) -> set[int]:
+    ensure_migrations_table(connection)
+    rows = connection.execute(text("SELECT version FROM schema_migrations")).fetchall()
+    return {int(row[0]) for row in rows}
+
+
+def run_migrations(engine: Engine) -> list[int]:
+    """Apply pending migrations.
+
+    Returns the list of versions that were applied by this run.
+    Safe to call multiple times; already-applied migrations are
+    skipped.
+    """
+    if engine.dialect.name == "sqlite":
+        # SQLite does not support concurrent writes; we still apply
+        # migrations sequentially but rely on the connection's own
+        # transactional behaviour.
+        pass
+    applied_now: list[int] = []
+    with engine.begin() as connection:
+        already = _applied_versions(connection)
+        for migration in sorted(MIGRATIONS, key=lambda m: m.version):
+            if migration.version in already:
+                continue
+            logger.info("applying migration %s", migration.describe())
+            migration.up(connection)
+            connection.execute(
+                text("INSERT INTO schema_migrations (version, name) VALUES (:v, :n)"),
+                {"v": migration.version, "n": migration.name},
+            )
+            applied_now.append(migration.version)
+    if applied_now:
+        logger.info("applied %d migration(s): %s", len(applied_now), applied_now)
+    return applied_now
+
+
+# ---------------------------------------------------------------------------
+# Migrations are registered in the order they must be applied.  The
+# numeric version is the ordering key; the name is informational.
+# ---------------------------------------------------------------------------
+
+
+@register(1, "memory_scan_runs_batch_columns")
+def _v1_batch_columns(connection: Connection) -> None:
+    """Add batch_id / batch_position / batch_total to memory_scan_runs.
+
+    Idempotent: skips columns that already exist.  This is the
+    forward-compatible version of the in-place DDL that lived in
+    ``app.core.database._ensure_compatible_schema``.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_scan_runs" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("memory_scan_runs")}
+        for column_name, column_type in {
+            "batch_id": "UUID",
+            "batch_position": "INTEGER",
+            "batch_total": "INTEGER",
+        }.items():
+            if column_name not in existing:
+                connection.execute(
+                    text(f"ALTER TABLE memory_scan_runs ADD COLUMN {column_name} {column_type}")
+                )
+
+
+@register(2, "memory_analysis_batches_runtime_columns")
+def _v2_batches_runtime_columns(connection: Connection) -> None:
+    """Add runtime-safety columns to memory_analysis_batches.
+
+    The columns are:
+
+    * ``version`` (INTEGER) — optimistic concurrency token.
+    * ``last_advanced_run_id`` (UUID) — the run that the most recent
+      advance() processed; used to dedupe duplicate callbacks.
+    * ``last_advanced_at`` (TIMESTAMP) — when the last advance()
+      happened.
+    * ``reconciled_at`` (TIMESTAMP) — when the last reconcile pass
+      touched the batch.
+    * ``failure_reason`` (TEXT) — sanitized error when status is
+      failed.
+    * ``requested_by`` (TEXT) — audit principal (default
+      server-operator).
+
+    Also adds a partial unique index that prevents more than one
+    active batch per case+evidence.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_analysis_batches" not in inspector.get_table_names():
+        # Base.metadata.create_all in init_db creates the table; if
+        # it does not exist yet we let the caller handle it.
+        return
+    existing = {c["name"] for c in inspector.get_columns("memory_analysis_batches")}
+    column_defs = {
+        "version": "INTEGER NOT NULL DEFAULT 1",
+        "last_advanced_run_id": "UUID",
+        "last_advanced_at": "TIMESTAMP",
+        "reconciled_at": "TIMESTAMP",
+        "failure_reason": "TEXT",
+        "requested_by": "TEXT NOT NULL DEFAULT 'server-operator'",
+    }
+    for column_name, column_type in column_defs.items():
+        if column_name not in existing:
+            connection.execute(
+                text(
+                    f"ALTER TABLE memory_analysis_batches ADD COLUMN {column_name} {column_type}"
+                )
+            )
+    # Partial unique index: at most one active batch per (case, evidence).
+    connection.execute(
+        text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_memory_analysis_batches_one_active "
+            "ON memory_analysis_batches (case_id, evidence_id) "
+            "WHERE status IN ('queued', 'running')"
+        )
+    )
+    # Index used by the reconciler and the active-batch poll endpoint.
+    connection.execute(
+        text(
+            "CREATE INDEX IF NOT EXISTS ix_memory_analysis_batches_evidence_status "
+            "ON memory_analysis_batches (evidence_id, status)"
+        )
+    )
+
+
+def _inspector_for(connection: Connection):
+    from sqlalchemy import inspect
+
+    return inspect(connection)

@@ -100,6 +100,14 @@ function buildFamilies(
   return FAMILIES.map(({ family, title }) => {
     const landingEntry = landingByFamily.get(family);
     const catalogueEntry = catalogueByFamily.get(family);
+    // The landing carries the per-family count; the catalogue is
+    // keyed by profile so it cannot distinguish ``kernel_modules``
+    // from ``drivers`` (both come from ``kernel_basic``).  When the
+    // landing is missing, fall back to the catalogue for the small
+    // number of families that map to a single profile (e.g. handles).
+    const landingCount = (landingEntry as { count?: number } | undefined)?.count;
+    const lastCount =
+      typeof landingCount === "number" ? landingCount : (catalogueEntry?.lastCount ?? 0);
     return {
       family,
       title,
@@ -108,7 +116,7 @@ function buildFamilies(
       latestAttempt: landingEntry?.latest_attempt ?? null,
       selectionReason: landingEntry?.selection_reason ?? "not_analyzed",
       usingFallback: Boolean(landingEntry?.using_fallback),
-      lastCount: catalogueEntry?.lastCount ?? 0,
+      lastCount,
     } satisfies OverviewFamily;
   });
 }
@@ -144,6 +152,11 @@ export function MemoryOverviewTab({
     [landingQuery.data, evidenceId],
   );
 
+  // Counts come from the landing endpoint which carries the per-family
+  // ``count`` field.  The catalogue is keyed by profile (not family)
+  // so the landing is the only source that distinguishes, e.g.,
+  // ``kernel_modules`` from ``drivers`` even when both come from the
+  // same ``kernel_basic`` run.
   const families = useMemo(
     () => buildFamilies(landing, catalogueQuery.data),
     [landing, catalogueQuery.data],

@@ -87,6 +87,16 @@ def on_startup() -> None:
     init_db()
     ensure_events_indices_safe_settings()
     auto_bootstrap_dashboards()
+    # Reconcile in-flight memory analysis batches so a restart
+    # does not leave a batch with no next profile enqueued.
+    from app.core.database import SessionLocal
+    from app.services.memory.batch import reconcile_memory_batches
+
+    db = SessionLocal()
+    try:
+        reconcile_memory_batches(db)
+    finally:
+        db.close()
 
 
 @app.get("/health")

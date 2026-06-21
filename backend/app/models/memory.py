@@ -302,6 +302,13 @@ class MemoryAnalysisBatch(UUIDMixin, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), default=utc_now_naive, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    # Runtime-safety fields added by the versioned migration v2.
+    version: Mapped[int] = mapped_column(default=1, nullable=False)
+    last_advanced_run_id: Mapped[str | None] = mapped_column(nullable=True)
+    last_advanced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(nullable=True)
+    requested_by: Mapped[str] = mapped_column(String(128), default="server-operator", nullable=False)
 
     case = relationship("Case")
     evidence = relationship("Evidence")
