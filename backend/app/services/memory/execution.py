@@ -29,6 +29,7 @@ from app.services.memory.artifact_normalizers import (
 )
 from app.services.memory.indexing import index_memory_documents, index_memory_system_info
 from app.services.memory.normalizers import merge_memory_process_results, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
+from app.services.memory.process_entities import renormalize_documents
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, write_atomic_bytes, write_atomic_json
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
 from app.services.memory.volatility_runner import VolatilityRunnerError, probe_windows_symbol_identity, run_plugin
@@ -294,6 +295,16 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     _upsert_summary(db, run, "memory_process_edge", len(merged["edges"]), {"profile": run.profile})
                     command_count = len([item for item in merged["processes"] if item.get("process", {}).get("command_line")])
                     _upsert_summary(db, run, "memory_command_line_count", command_count, {"profile": run.profile})
+                    # Canonical materialization: convert raw memory_process
+                    # documents into canonical entities, observations, edges
+                    # and roots.  This runs automatically after the raw
+                    # documents are indexed; failure is recorded on the run
+                    # but does NOT block the run from reaching a terminal
+                    # state.  A run with a failed materialization is NOT
+                    # eligible as the active processes result.
+                    _run_canonical_materialization(
+                        db, run, documents=merged["processes"],
+                    )
                 if artifact_results:
                     artifact_indexing = _index_artifact_results(run.case_id, artifact_results, db, run)
                     indexing["artifacts"] = artifact_indexing
@@ -568,6 +579,84 @@ def _advance_batch_after_run(run: MemoryScanRun) -> None:
             extra={"run_id": run.id, "batch_id": run.batch_id, "error_type": type(exc).__name__},
         )
         logger.exception("memory batch advancement traceback")
+
+
+def _run_canonical_materialization(
+    db: Session,
+    run: MemoryScanRun,
+    *,
+    documents: list[dict[str, Any]],
+) -> None:
+    """Materialize canonical process entities from raw observations.
+
+    This is the canonical pipeline:
+
+        raw observations persisted
+        → canonical materialization started
+        → canonical entities / observations / edges persisted
+        → roots / orphans / scan-only counted
+        → run eligible as active result
+
+    The helper is idempotent: re-running it over the same raw
+    documents produces the same OpenSearch document IDs and the same
+    counts.  Failures are recorded on the run (``canonical_materialization_status='failed'``)
+    but do NOT prevent the run from reaching a terminal state.  The
+    active-result resolver excludes runs whose materialization did not
+    complete.
+    """
+    if not documents:
+        run.canonical_materialization_status = "not_required"
+        run.canonical_entity_count = 0
+        run.canonical_observation_count = 0
+        run.canonical_root_count = 0
+        run.canonical_orphan_count = 0
+        run.canonical_scan_only_count = 0
+        run.canonical_materialized_at = utc_now_naive()
+        db.commit()
+        return
+    run.canonical_materialization_status = "running"
+    db.commit()
+    try:
+        result = renormalize_documents(
+            documents,
+            case_id=run.case_id,
+            evidence_id=run.evidence_id,
+            run_id=run.id,
+            materialize=True,
+        )
+        summary = result.get("summary", {})
+        tree_metrics = summary.get("tree_metrics", {}) or {}
+        run.canonical_materialization_status = "completed"
+        run.canonical_entity_count = int(summary.get("candidate_entities", 0))
+        run.canonical_observation_count = int(summary.get("observation_count", len(documents)))
+        run.canonical_root_count = int(tree_metrics.get("roots", 0))
+        run.canonical_orphan_count = int(tree_metrics.get("orphans", 0))
+        run.canonical_scan_only_count = int(tree_metrics.get("scan_only", 0))
+        run.canonical_materialization_version = summary.get("normalization_version")
+        run.canonical_materialization_error = None
+        run.canonical_materialized_at = utc_now_naive()
+        db.commit()
+        logger.info(
+            "memory canonical materialization completed",
+            extra={
+                "run_id": run.id,
+                "entity_count": run.canonical_entity_count,
+                "root_count": run.canonical_root_count,
+                "orphan_count": run.canonical_orphan_count,
+                "scan_only_count": run.canonical_scan_only_count,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        run.canonical_materialization_status = "failed"
+        run.canonical_materialization_error = _sanitize_message(exc)[:512]
+        run.canonical_materialized_at = utc_now_naive()
+        db.commit()
+        logger.warning(
+            "memory canonical materialization failed: %s",
+            _sanitize_message(exc),
+            extra={"run_id": run.id, "error_type": type(exc).__name__},
+        )
+        logger.exception("memory canonical materialization traceback")
 
 
 def _fail_run(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun | None, status: str, code: str, message: str) -> None:

@@ -196,6 +196,46 @@ def _v2_batches_runtime_columns(connection: Connection) -> None:
     )
 
 
+@register(3, "memory_scan_runs_canonical_materialization")
+def _v3_canonical_materialization_columns(connection: Connection) -> None:
+    """Add canonical materialization lifecycle columns to memory_scan_runs.
+
+    Lifecycle values:
+
+    * ``not_required``  - profile does not produce raw observations
+                          (e.g. metadata_only, handles_basic, modules_basic).
+    * ``pending``       - profile produces raw observations but
+                          materialization has not started yet.
+    * ``running``       - materialization is in progress.
+    * ``completed``     - canonical entities, observations, edges and
+                          roots/orphans/scan-only counts are persisted.
+    * ``failed``        - materialization raised; the run is still
+                          terminal but is NOT eligible as active result.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_scan_runs" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("memory_scan_runs")}
+    column_defs = {
+        "canonical_materialization_status": "VARCHAR(32) NOT NULL DEFAULT 'not_required'",
+        "canonical_entity_count": "INTEGER NOT NULL DEFAULT 0",
+        "canonical_observation_count": "INTEGER NOT NULL DEFAULT 0",
+        "canonical_root_count": "INTEGER NOT NULL DEFAULT 0",
+        "canonical_orphan_count": "INTEGER NOT NULL DEFAULT 0",
+        "canonical_scan_only_count": "INTEGER NOT NULL DEFAULT 0",
+        "canonical_materialization_error": "VARCHAR(512)",
+        "canonical_materialization_version": "VARCHAR(32)",
+        "canonical_materialized_at": "TIMESTAMP",
+    }
+    for column_name, column_type in column_defs.items():
+        if column_name not in existing:
+            connection.execute(
+                text(
+                    f"ALTER TABLE memory_scan_runs ADD COLUMN {column_name} {column_type}"
+                )
+            )
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 

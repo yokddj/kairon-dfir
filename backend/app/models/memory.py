@@ -1,7 +1,6 @@
 from datetime import datetime
 
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, JSONVariant, UUIDMixin, utc_now_naive
@@ -79,6 +78,24 @@ class MemoryScanRun(UUIDMixin, Base):
     )
     batch_position: Mapped[int | None] = mapped_column(nullable=True)
     batch_total: Mapped[int | None] = mapped_column(nullable=True)
+    # Canonical materialization lifecycle.  A run that has raw observations
+    # but no canonical materialization is NOT eligible as the active
+    # result for the processes family.
+    canonical_materialization_status: Mapped[str] = mapped_column(
+        String(32), default="not_required", nullable=False
+    )
+    canonical_entity_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    canonical_observation_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    canonical_root_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    canonical_orphan_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    canonical_scan_only_count: Mapped[int] = mapped_column(default=0, nullable=False)
+    canonical_materialization_error: Mapped[str | None] = mapped_column(
+        String(512), nullable=True
+    )
+    canonical_materialization_version: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
+    canonical_materialized_at: Mapped[datetime | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(default=utc_now_naive, nullable=False)
 
     case = relationship("Case", back_populates="memory_scan_runs")
@@ -305,7 +322,7 @@ class MemoryAnalysisBatch(UUIDMixin, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     # Runtime-safety fields added by the versioned migration v2.
     version: Mapped[int] = mapped_column(default=1, nullable=False)
-    last_advanced_run_id: Mapped[str | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    last_advanced_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_advanced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     failure_reason: Mapped[str | None] = mapped_column(nullable=True)

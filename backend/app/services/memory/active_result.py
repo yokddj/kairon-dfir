@@ -106,6 +106,23 @@ FAMILY_RESOLUTION = {
 TERMINAL_SUCCESS_STATUSES = {"completed", "completed_with_errors"}
 
 
+def _is_canonical_usable(run: MemoryScanRun) -> bool:
+    """Return True when ``run`` has a completed canonical materialization
+    with at least one entity.
+
+    Runs whose materialization status is ``not_required`` (profiles that
+    do not produce raw observations) are considered usable for
+    completeness.  Runs whose materialization ``pending``, ``running``
+    or ``failed`` are NEVER usable.
+    """
+    status = (getattr(run, "canonical_materialization_status", None) or "not_required")
+    if status == "not_required":
+        return True
+    if status != "completed":
+        return False
+    return int(getattr(run, "canonical_entity_count", 0) or 0) > 0
+
+
 def list_families() -> list[str]:
     return list(FAMILY_RESOLUTION.keys())
 
@@ -214,6 +231,12 @@ def resolve_active_memory_result(
     # the "processes_extended > processes_basic" rule is enforced:
     # we never return a basic run when an extended run is available,
     # even if the basic run was started more recently.
+    #
+    # The processes family additionally requires the run to have a
+    # completed canonical materialization with at least one entity.
+    # A run that has raw observations but no canonical entities is
+    # NEVER promoted to active; the previous usable run is preserved.
+    requires_canonical = family in {"processes"}
     active_run = None
     for preferred_profile in rules["preferred_profiles"]:
         candidate = (
@@ -227,9 +250,12 @@ def resolve_active_memory_result(
             )
             .first()
         )
-        if candidate is not None:
-            active_run = candidate
-            break
+        if candidate is None:
+            continue
+        if requires_canonical and not _is_canonical_usable(candidate):
+            continue
+        active_run = candidate
+        break
 
     using_fallback = False
     selection_reason = "latest_successful"
@@ -265,6 +291,12 @@ def resolve_active_memory_result(
         if latest_attempt.status not in TERMINAL_SUCCESS_STATUSES:
             using_fallback = True
             selection_reason = "latest_attempt_failed_kept_last_success"
+        elif requires_canonical and not _is_canonical_usable(latest_attempt):
+            # Latest attempt reached a terminal status but its
+            # canonical materialization did NOT complete.  The active
+            # run is the previous usable canonical result.
+            using_fallback = True
+            selection_reason = "latest_attempt_materialization_failed_kept_last_usable_canonical"
 
     return _build_response(
         case_id=case_id,
@@ -327,4 +359,19 @@ def _serialize_run(run: MemoryScanRun) -> dict[str, Any]:
         "plugins_failed": run.plugins_failed,
         "evidence_id": run.evidence_id,
         "case_id": run.case_id,
+        "canonical_materialization_status": getattr(
+            run, "canonical_materialization_status", "not_required"
+        ),
+        "canonical_entity_count": int(
+            getattr(run, "canonical_entity_count", 0) or 0
+        ),
+        "canonical_root_count": int(
+            getattr(run, "canonical_root_count", 0) or 0
+        ),
+        "canonical_orphan_count": int(
+            getattr(run, "canonical_orphan_count", 0) or 0
+        ),
+        "canonical_scan_only_count": int(
+            getattr(run, "canonical_scan_only_count", 0) or 0
+        ),
     }

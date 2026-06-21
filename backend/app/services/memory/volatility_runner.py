@@ -216,15 +216,32 @@ def _classify_failure(stderr: bytes) -> tuple[str, str]:
 # missing from the installed Volatility 3.28.0 build (no
 # windows.netscan / windows.netstat).  Kept in one place so the API
 # layer can reject the start before any MemoryScanRun is created.
-NETWORK_BASIC_REQUIRED_PLUGINS = ("windows.netscan", "windows.netstat")
+NETWORK_BASIC_REQUIRED_PLUGINS = (
+    "windows.netscan",
+    "windows.netstat",
+)
+
+
+NETWORK_PLUGIN_CLASSES = {
+    "windows.netscan": ("volatility3.plugins.windows.netscan", "NetScan"),
+    "windows.netstat": ("volatility3.plugins.windows.netstat", "NetStat"),
+}
 
 
 def probe_volatility_plugin(plugin: str) -> bool:
     """Return True when the local Volatility runtime exposes ``plugin``.
 
-    Uses ``vol --help`` to enumerate the registered plugins.  The call
-    is offline and bounded; the output is cached for the lifetime of
-    the process.
+    Discovery is done in two layers:
+
+    1. Structured import: we try to ``import`` the module that hosts the
+       plugin and verify the expected class is present.  This is the
+       authoritative answer: a plugin whose module fails to import is
+       NOT usable, even if ``vol --help`` lists it by name.
+    2. ``vol --help`` enumeration: used as a secondary signal for
+       plugins that are dynamically registered through Volatility's
+       plugin system and not visible as a class attribute.
+
+    The result is cached for the lifetime of the process.
     """
     import functools
     cache_attr = "_volatility_plugin_cache"
@@ -234,10 +251,29 @@ def probe_volatility_plugin(plugin: str) -> bool:
         setattr(probe_volatility_plugin, cache_attr, cache)
     if plugin in cache:
         return cache[plugin]
+    available = _probe_plugin_importable(plugin) or _probe_plugin_listed(plugin)
+    cache[plugin] = available
+    return available
+
+
+def _probe_plugin_importable(plugin: str) -> bool:
+    """Try to import the module that hosts the plugin class."""
+    target = NETWORK_PLUGIN_CLASSES.get(plugin)
+    if target is None:
+        return False
+    module_name, class_name = target
+    try:
+        module = __import__(module_name, fromlist=[class_name])
+    except Exception:  # noqa: BLE001
+        return False
+    return hasattr(module, class_name)
+
+
+def _probe_plugin_listed(plugin: str) -> bool:
+    """Fallback: look for ``plugin`` in the ``vol --help`` output."""
     try:
         executable, _ = resolve_volatility_executable()
     except VolatilityRunnerError:
-        cache[plugin] = False
         return False
     try:
         result = subprocess.run(
@@ -247,23 +283,47 @@ def probe_volatility_plugin(plugin: str) -> bool:
             timeout=30,
         )
     except Exception:  # noqa: BLE001
-        cache[plugin] = False
         return False
     output = (result.stdout or b"") + (result.stderr or b"")
-    available = f" {plugin}," in output.decode("utf-8", errors="replace") or f" {plugin} " in output.decode("utf-8", errors="replace")
-    cache[plugin] = available
-    return available
+    decoded = output.decode("utf-8", errors="replace")
+    needle = plugin.replace("windows.", "")
+    return f" {needle} " in decoded or f" {needle}," in decoded
 
 
 def network_basic_available() -> tuple[bool, str]:
     """Probe the installed Volatility runtime for the Windows network
     plugins required by ``network_basic``.
 
-    Returns a tuple ``(available, explanation)``.  When no compatible
-    plugin is present, ``explanation`` is a safe human-readable string
-    the UI/API can surface verbatim.
+    Returns a tuple ``(available, explanation)``.  ``available`` is
+    True only when at least one plugin is importable.  When no
+    compatible plugin is present, ``explanation`` is a safe
+    human-readable string the UI/API can surface verbatim.
+
+    Diagnostic states (one per required plugin):
+
+    * ``importable``       - module imports and exposes the class
+    * ``import_error``     - module file exists but import raises
+    * ``absent_in_runtime``- module not present in the runtime
     """
+    diagnostics: list[str] = []
     for plugin in NETWORK_BASIC_REQUIRED_PLUGINS:
-        if probe_volatility_plugin(plugin):
-            return True, f"{plugin} is available."
-    return False, "No compatible Windows network plugin is available in the installed Volatility runtime."
+        if _probe_plugin_importable(plugin):
+            diagnostics.append(f"{plugin}: importable")
+        else:
+            target = NETWORK_PLUGIN_CLASSES.get(plugin)
+            if target is None:
+                diagnostics.append(f"{plugin}: absent_in_runtime")
+                continue
+            module_name, _ = target
+            try:
+                __import__(module_name, fromlist=["*"])
+            except ModuleNotFoundError as exc:
+                diagnostics.append(f"{plugin}: absent_in_runtime (missing dependency: {exc.name})")
+            except Exception as exc:  # noqa: BLE001
+                diagnostics.append(f"{plugin}: import_error ({type(exc).__name__}: {exc})")
+            else:
+                diagnostics.append(f"{plugin}: import_error (class not exposed)")
+    importable = any("importable" in d for d in diagnostics)
+    if importable:
+        return True, "; ".join(diagnostics)
+    return False, "No compatible Windows network plugin is available in the installed Volatility runtime. " + " | ".join(diagnostics)
