@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
@@ -67,7 +67,9 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
   const [processName, setProcessName] = useState("");
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
 
-  setActiveCaseId(caseId);
+  useEffect(() => {
+    setActiveCaseId(caseId);
+  }, [caseId, setActiveCaseId]);
 
   const overviewQuery = useQuery({
     queryKey: ["memory-overview", caseId],
