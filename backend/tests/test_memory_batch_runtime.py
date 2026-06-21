@@ -287,10 +287,15 @@ def test_active_result_resolved_run_id_drives_count(db: Session) -> None:
         db, case_id=case.id, evidence_id=ev.id, profile="processes_extended",
         minutes_ago=30,
     )
+    extended.canonical_materialization_status = "completed"
+    extended.canonical_entity_count = 255
     basic = _make_run(
         db, case_id=case.id, evidence_id=ev.id, profile="processes_basic",
         minutes_ago=10,
     )
+    basic.canonical_materialization_status = "completed"
+    basic.canonical_entity_count = 253
+    db.commit()
     _make_summary(db, run=extended, count=255, artifact_type="memory_process_entity")
     _make_summary(db, run=basic, count=253, artifact_type="memory_process_entity")
     active_ids = resolve_active_run_ids(db, case_id=case.id, evidence_id=ev.id)
@@ -651,6 +656,9 @@ def test_active_result_does_not_change_while_running(db: Session) -> None:
         db, case_id=case.id, evidence_id=ev.id, profile="processes_extended",
         minutes_ago=60, document_type="memory_process",
     )
+    completed.canonical_materialization_status = "completed"
+    completed.canonical_entity_count = 255
+    db.commit()
     _make_summary(db, run=completed, count=255, artifact_type="memory_process")
     # The new run for the batch is queued but not finished.
     new_run = _make_run(
@@ -672,6 +680,9 @@ def test_active_result_changes_only_after_successful_completion(db: Session) -> 
         db, case_id=case.id, evidence_id=ev.id, profile="processes_extended",
         minutes_ago=10, document_type="memory_process",
     )
+    success.canonical_materialization_status = "completed"
+    success.canonical_entity_count = 300
+    db.commit()
     _make_summary(db, run=success, count=300, artifact_type="memory_process")
     # A failed earlier run should NOT be promoted.
     failed = _make_run(

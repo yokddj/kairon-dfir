@@ -106,16 +106,33 @@ FAMILY_RESOLUTION = {
 TERMINAL_SUCCESS_STATUSES = {"completed", "completed_with_errors"}
 
 
+# Profiles that REQUIRE canonical materialization to be considered
+# usable as the active processes result.  These profiles produce raw
+# observations that must be deduplicated into canonical entities.
+_CANONICAL_REQUIRED_PROFILES = frozenset({"processes_extended", "processes_basic"})
+
+
 def _is_canonical_usable(run: MemoryScanRun) -> bool:
     """Return True when ``run`` has a completed canonical materialization
     with at least one entity.
 
-    Runs whose materialization status is ``not_required`` (profiles that
-    do not produce raw observations) are considered usable for
-    completeness.  Runs whose materialization ``pending``, ``running``
-    or ``failed`` are NEVER usable.
+    For profiles that produce raw observations (``processes_extended``,
+    ``processes_basic``), the run is usable only when its materialization
+    status is ``completed`` AND its canonical entity count is > 0.
+    A run that has raw observations but no canonical entities (status
+    ``not_required``, ``pending``, ``running`` or ``failed``) is NEVER
+    eligible as the active result.
+
+    For other profiles (metadata_only, handles_basic, modules_basic,
+    kernel_basic, suspicious_memory, network_basic) the materialization
+    status is ``not_required`` and the run is usable when the run itself
+    reached a terminal successful state.
     """
     status = (getattr(run, "canonical_materialization_status", None) or "not_required")
+    if run.profile in _CANONICAL_REQUIRED_PROFILES:
+        if status != "completed":
+            return False
+        return int(getattr(run, "canonical_entity_count", 0) or 0) > 0
     if status == "not_required":
         return True
     if status != "completed":
@@ -227,8 +244,8 @@ def resolve_active_memory_result(
 
     # Active run: latest successful run for this family.  We iterate
     # the preferred profiles in order and pick the latest successful
-    # run for the FIRST profile that has one.  This guarantees that
-    # the "processes_extended > processes_basic" rule is enforced:
+    # USABLE run for the FIRST profile that has one.  This guarantees
+    # that the "processes_extended > processes_basic" rule is enforced:
     # we never return a basic run when an extended run is available,
     # even if the basic run was started more recently.
     #
@@ -236,10 +253,12 @@ def resolve_active_memory_result(
     # completed canonical materialization with at least one entity.
     # A run that has raw observations but no canonical entities is
     # NEVER promoted to active; the previous usable run is preserved.
+    # We therefore iterate ALL runs for the profile (newest first) and
+    # pick the first one that is canonically usable.
     requires_canonical = family in {"processes"}
     active_run = None
     for preferred_profile in rules["preferred_profiles"]:
-        candidate = (
+        candidates = (
             base_query.filter(
                 MemoryScanRun.profile == preferred_profile,
                 MemoryScanRun.status.in_(list(TERMINAL_SUCCESS_STATUSES)),
@@ -248,14 +267,17 @@ def resolve_active_memory_result(
                 desc(func.coalesce(MemoryScanRun.completed_at, MemoryScanRun.created_at)),
                 desc(MemoryScanRun.created_at),
             )
-            .first()
+            .all()
         )
-        if candidate is None:
+        if not candidates:
             continue
-        if requires_canonical and not _is_canonical_usable(candidate):
-            continue
-        active_run = candidate
-        break
+        for candidate in candidates:
+            if requires_canonical and not _is_canonical_usable(candidate):
+                continue
+            active_run = candidate
+            break
+        if active_run is not None:
+            break
 
     using_fallback = False
     selection_reason = "latest_successful"
