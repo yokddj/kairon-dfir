@@ -614,6 +614,8 @@ def _build_canonical_entity(
         "findings_summary": findings,
         "normalization_version": NORMALIZATION_VERSION,
         "materialized_from_run_id": run_id,
+        "memory_run_id": run_id,
+        "memory_artifact_type": "memory_process_entity",
         "indexed_at": _utc_now(),
         "document_type": "memory_process_entity",
         "document_id": _entity_document_id(entity["process_entity_id"], run_id),
