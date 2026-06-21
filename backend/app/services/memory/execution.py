@@ -563,9 +563,11 @@ def _advance_batch_after_run(run: MemoryScanRun) -> None:
             advance_batch(db, run=fresh)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            "memory batch advancement failed",
-            extra={"run_id": run.id, "batch_id": run.batch_id, "error": _sanitize_message(exc)},
+            "memory batch advancement failed: %s",
+            _sanitize_message(exc),
+            extra={"run_id": run.id, "batch_id": run.batch_id, "error_type": type(exc).__name__},
         )
+        logger.exception("memory batch advancement traceback")
 
 
 def _fail_run(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun | None, status: str, code: str, message: str) -> None:
