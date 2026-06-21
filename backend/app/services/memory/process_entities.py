@@ -1036,6 +1036,7 @@ def fetch_canonical_entities(
     case_id: str,
     *,
     run_id: str,
+    evidence_id: str | None = None,
     visibility: str | None = None,
     source_plugin: str | None = None,
     process_name: str | None = None,
@@ -1052,6 +1053,8 @@ def fetch_canonical_entities(
         {"term": {"document_type.keyword": "memory_process_entity"}},
         {"term": {"scan_run_id.keyword": run_id}},
     ]
+    if evidence_id:
+        filters.append({"term": {"evidence_id.keyword": evidence_id}})
     if visibility:
         filters.append({"term": {f"visibility.{visibility}": True}})
     if source_plugin:

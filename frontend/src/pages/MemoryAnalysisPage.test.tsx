@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import MemoryAnalysisPage from "./MemoryAnalysisPage";
+import MemoryEvidencePage from "./MemoryEvidencePage";
 
 const getMemoryOverviewMock = vi.fn();
 const getMemoryBackendOverviewMock = vi.fn();
@@ -18,6 +19,9 @@ const getCaseMemoryProcessesMock = vi.fn();
 const getMemoryProcessTreeMock = vi.fn();
 const startMemoryScanMock = vi.fn();
 const renormalizeProcessEntitiesMock = vi.fn();
+const getMemoryEvidenceLandingMock = vi.fn();
+const getMemoryActiveResultMock = vi.fn();
+const getMemoryAnalysisCatalogueMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -35,6 +39,9 @@ vi.mock("../api/client", () => ({
     getMemoryProcessTree: (...args: unknown[]) => getMemoryProcessTreeMock(...args),
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
     renormalizeProcessEntities: (...args: unknown[]) => renormalizeProcessEntitiesMock(...args),
+    getMemoryEvidenceLanding: (...args: unknown[]) => getMemoryEvidenceLandingMock(...args),
+    getMemoryActiveResult: (...args: unknown[]) => getMemoryActiveResultMock(...args),
+    getMemoryAnalysisCatalogue: (...args: unknown[]) => getMemoryAnalysisCatalogueMock(...args),
   },
 }));
 
@@ -44,13 +51,14 @@ vi.mock("../context/ActiveCaseContext", () => ({
   }),
 }));
 
-function renderPage(initialPath = "/cases/case-1/memory") {
+function renderPage(initialPath = "/cases/case-1/memory/ev-memory") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <QueryClientProvider client={queryClient}>
         <Routes>
           <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
+          <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
         </Routes>
       </QueryClientProvider>
     </MemoryRouter>,
@@ -324,6 +332,86 @@ describe("MemoryAnalysisPage workspace", () => {
     getMemoryProcessTreeMock.mockResolvedValue({ run_id: "run-basic", nodes: [], edges: [], orphan_count: 0, root_count: 0, warnings: [], source_plugins: [], total_process_count: 0 });
     startMemoryScanMock.mockResolvedValue({ accepted: true, evidence_id: "ev-memory", run_id: "run-basic", status: "queued", message: "queued", run: null });
     renormalizeProcessEntitiesMock.mockResolvedValue({ ...summary(), materialization_status: "applied" });
+    getMemoryEvidenceLandingMock.mockResolvedValue({
+      case_id: "case-1",
+      items: [
+        {
+          evidence_id: "ev-memory",
+          case_id: "case-1",
+          filename: "memory.mem",
+          detected_host: "WS01",
+          size_bytes: 2048,
+          created_at: "2026-06-16T00:00:00Z",
+          processed_at: "2026-06-16T00:01:00Z",
+          ingest_status: "completed",
+          metadata: {},
+          families: [
+            { family: "system_info", title: "System metadata", state: "completed", active_run: { id: "run-basic" }, latest_attempt: { id: "run-basic" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
+            { family: "processes", title: "Processes", state: "completed", active_run: { id: "run-basic" }, latest_attempt: { id: "run-basic" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
+            { family: "network", title: "Network connections", state: "unavailable", active_run: null, latest_attempt: null, selection_reason: "runtime_plugin_missing", using_fallback: false, historical_override: false, availability_reason: "No compatible Windows network plugin is available." },
+            { family: "modules", title: "Process modules", state: "completed", active_run: { id: "run-basic" }, latest_attempt: { id: "run-basic" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
+            { family: "handles", title: "Process handles", state: "completed", active_run: { id: "run-basic" }, latest_attempt: { id: "run-basic" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
+            { family: "kernel_modules", title: "Kernel modules", state: "completed", active_run: { id: "run-basic" }, latest_attempt: { id: "run-basic" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
+            { family: "drivers", title: "Drivers", state: "completed", active_run: { id: "run-basic" }, latest_attempt: { id: "run-basic" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
+            { family: "suspicious_regions", title: "Suspicious memory regions", state: "completed", active_run: { id: "run-basic" }, latest_attempt: { id: "run-basic" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
+          ],
+          run_count: 1,
+          latest_run_id: "run-basic",
+          latest_run_status: "completed",
+        },
+      ],
+    });
+    getMemoryActiveResultMock.mockResolvedValue({
+      case_id: "case-1",
+      evidence_id: "ev-memory",
+      artifact_family: "processes",
+      active_run: {
+        id: "run-basic",
+        profile: "processes_basic",
+        status: "completed",
+        started_at: "2026-06-16T00:00:00Z",
+        completed_at: "2026-06-16T00:01:00Z",
+        duration_seconds: 60,
+        plugin_count: 4,
+        plugins_completed: 4,
+        plugins_failed: 0,
+        evidence_id: "ev-memory",
+        case_id: "case-1",
+      },
+      latest_attempt: {
+        id: "run-basic",
+        profile: "processes_basic",
+        status: "completed",
+        started_at: "2026-06-16T00:00:00Z",
+        completed_at: "2026-06-16T00:01:00Z",
+        duration_seconds: 60,
+        plugin_count: 4,
+        plugins_completed: 4,
+        plugins_failed: 0,
+        evidence_id: "ev-memory",
+        case_id: "case-1",
+      },
+      selection_reason: "latest_successful",
+      using_fallback: false,
+      historical_override: false,
+      total: 0,
+      items: [],
+      analysis_state: "completed",
+    });
+    getMemoryAnalysisCatalogueMock.mockResolvedValue({
+      case_id: "case-1",
+      evidence_id: "ev-memory",
+      items: [
+        { profile: "metadata_only", family: "system_info", title: "System metadata", description: "", cost_label: "Fast", est_duration_seconds: 20, available: true, availability_reason: null, last_run: { id: "run-basic" }, last_status: "completed", last_count: 1 },
+        { profile: "processes_basic", family: "processes", title: "Standard process analysis", description: "", cost_label: "Medium", est_duration_seconds: 90, available: true, availability_reason: null, last_run: { id: "run-basic" }, last_status: "completed", last_count: 50 },
+        { profile: "processes_extended", family: "processes", title: "Extended process analysis", description: "", cost_label: "Medium", est_duration_seconds: 240, available: true, availability_reason: null, last_run: { id: "run-basic" }, last_status: "completed", last_count: 50 },
+        { profile: "network_basic", family: "network", title: "Network connections", description: "", cost_label: "Medium", est_duration_seconds: 90, available: false, availability_reason: "No compatible Windows network plugin is available.", last_run: null, last_status: null, last_count: 0 },
+        { profile: "modules_basic", family: "modules", title: "Process modules (DLLs)", description: "", cost_label: "Medium", est_duration_seconds: 120, available: true, availability_reason: null, last_run: { id: "run-basic" }, last_status: "completed", last_count: 21339 },
+        { profile: "handles_basic", family: "handles", title: "Process handles", description: "", cost_label: "High volume", est_duration_seconds: 1800, available: true, availability_reason: null, last_run: { id: "run-basic" }, last_status: "completed", last_count: 97087 },
+        { profile: "kernel_basic", family: "kernel_modules", title: "Kernel modules & drivers", description: "", cost_label: "Medium", est_duration_seconds: 180, available: true, availability_reason: null, last_run: { id: "run-basic" }, last_status: "completed", last_count: 169 },
+        { profile: "suspicious_memory", family: "suspicious_regions", title: "Suspicious memory regions", description: "", cost_label: "Slow", est_duration_seconds: 1800, available: true, availability_reason: null, last_run: { id: "run-basic" }, last_status: "completed", last_count: 19 },
+      ],
+    });
     vi.spyOn(window, "confirm").mockReturnValue(true);
   });
 
@@ -341,7 +429,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 2. Processes tab shows the canonical table
   it("renders the Processes tab with the canonical table", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("memory-tab-processes"));
+    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
     expect(await screen.findByTestId("memory-processes-tab")).toBeInTheDocument();
     await waitFor(() => {
       expect(getCanonicalProcessEntitiesMock).toHaveBeenCalled();
@@ -351,7 +439,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 3. Graph tab shows graph
   it("renders the Graph tab with the interactive graph", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("memory-tab-graph"));
+    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
     expect(await screen.findByTestId("memory-graph-tab")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByTestId("memory-process-canvas")).toBeInTheDocument();
@@ -362,7 +450,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 4. System tab shows only latest successful by default
   it("renders the System tab with the latest successful windows.info", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("memory-tab-system"));
+    fireEvent.click(await screen.findByTestId("memory-tab-system"));
     expect(await screen.findByTestId("memory-system-tab")).toBeInTheDocument();
     const primary = await screen.findByTestId("system-info-card-primary");
     expect(primary).toHaveTextContent("WS01");
@@ -371,7 +459,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 5. Runs tab contains history
   it("renders the Runs tab with the full history", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("memory-tab-runs"));
+    fireEvent.click(await screen.findByTestId("memory-tab-runs"));
     expect(await screen.findByTestId("memory-runs-tab")).toBeInTheDocument();
     await waitFor(() => {
       expect(screen.getByTestId("runs-table")).toBeInTheDocument();
@@ -382,7 +470,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 6. Raw tab contains legacy views
   it("renders the Raw tab with legacy plugin observations", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("memory-tab-raw"));
+    fireEvent.click(await screen.findByTestId("memory-tab-raw"));
     expect(await screen.findByTestId("memory-raw-tab")).toBeInTheDocument();
     expect(screen.getByTestId("raw-plugin-filter")).toBeInTheDocument();
   });
@@ -404,7 +492,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 9. Tab navigation preserves run
   it("preserves the run selection when switching tabs", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("memory-tab-runs"));
+    fireEvent.click(await screen.findByTestId("memory-tab-runs"));
     expect(await screen.findByTestId("memory-runs-tab")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("memory-tab-processes"));
     expect(await screen.findByTestId("memory-processes-tab")).toBeInTheDocument();
@@ -413,7 +501,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 10. Tab navigation preserves filters (processName stays in URL or shared state)
   it("preserves shared state across tabs", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("memory-tab-processes"));
+    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
     expect(await screen.findByTestId("memory-processes-tab")).toBeInTheDocument();
     fireEvent.click(screen.getByTestId("memory-tab-raw"));
     expect(await screen.findByTestId("memory-raw-tab")).toBeInTheDocument();
@@ -433,14 +521,14 @@ describe("MemoryAnalysisPage workspace", () => {
   // 12. Graph detail panel appears on the right in desktop
   it("renders a single shared metrics strip in the Graph tab", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("memory-tab-graph"));
+    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
     expect(await screen.findByTestId("metrics-strip")).toBeInTheDocument();
   });
 
   // 13. Renamed graph metrics
   it("renames graph metrics in the Graph tab header", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("memory-tab-graph"));
+    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
     expect(await screen.findByTestId("metrics-strip-visible")).toBeInTheDocument();
     expect(screen.getByTestId("metrics-strip-orphans")).toBeInTheDocument();
   });
@@ -448,7 +536,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 14. Case roots vs current-view roots differentiated
   it("differentiates case roots and current-view roots in the Graph tab", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("memory-tab-graph"));
+    fireEvent.click(await screen.findByTestId("memory-tab-graph"));
     await screen.findByTestId("metrics-strip-case-roots");
     expect(screen.getByTestId("metrics-strip-case-roots")).toBeInTheDocument();
     expect(screen.getByTestId("metrics-strip-view-roots")).toBeInTheDocument();
@@ -463,28 +551,21 @@ describe("MemoryAnalysisPage workspace", () => {
     expect(await screen.findByText("Execution mode")).toBeInTheDocument();
   });
 
-  // 16. Analyze memory selector
-  it("renders the Analyze memory selector with profile options", async () => {
+  // 16. Legacy Analyze memory selector is NOT rendered in evidence-scoped view
+  it("does not render the legacy Analyze memory selector in the evidence-scoped workspace", async () => {
     renderPage();
-    expect(await screen.findByTestId("memory-analyze-action")).toBeInTheDocument();
-    const select = screen.getByTestId("analyze-profile-select") as HTMLSelectElement;
-    expect(select.value).toBe("processes_basic");
-    expect(screen.getByTestId("analyze-run-button")).toBeInTheDocument();
+    await screen.findByTestId("memory-evidence-header");
+    expect(screen.queryByTestId("memory-analyze-action")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("analyze-profile-select")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("analyze-run-button")).not.toBeInTheDocument();
   });
 
-  // 17. Analyze memory only appears on Overview (no duplicates across tabs)
-  it("renders the Analyze memory action only on the Overview tab", async () => {
+  // 17. Run analysis is exposed via the catalogue modal in the evidence header
+  it("exposes Run analysis via the catalogue button in the evidence header", async () => {
     renderPage();
-    await screen.findByTestId("memory-overview");
-    await waitFor(() => {
-      expect(screen.getByTestId("memory-analyze-action")).toBeInTheDocument();
-    });
-    fireEvent.click(screen.getByTestId("memory-tab-runs"));
-    await screen.findByTestId("memory-runs-tab");
-    expect(screen.queryByTestId("memory-analyze-action")).not.toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("memory-tab-processes"));
-    await screen.findByTestId("memory-processes-tab");
-    expect(screen.queryByTestId("memory-analyze-action")).not.toBeInTheDocument();
+    const catalogueButton = await screen.findByTestId("memory-open-catalogue");
+    expect(catalogueButton).toBeInTheDocument();
+    expect(catalogueButton).toHaveTextContent("Run analysis");
   });
 
   // 18. No sensitive paths rendered
@@ -498,7 +579,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 19. Keyboard tab navigation
   it("marks tab buttons with role=tab and aria-selected", async () => {
     renderPage();
-    const overview = screen.getByTestId("memory-tab-overview");
+    const overview = await screen.findByTestId("memory-tab-overview");
     expect(overview.getAttribute("role")).toBe("tab");
     expect(overview.getAttribute("aria-selected")).toBe("true");
     const processes = screen.getByTestId("memory-tab-processes");
@@ -508,7 +589,7 @@ describe("MemoryAnalysisPage workspace", () => {
   // 20. Existing MemoryCanonicalView behavior preserved
   it("keeps the canonical MemoryCanonicalView mounted inside the Processes tab", async () => {
     renderPage();
-    fireEvent.click(screen.getByTestId("memory-tab-processes"));
+    fireEvent.click(await screen.findByTestId("memory-tab-processes"));
     await waitFor(() => {
       expect(getCanonicalProcessEntitiesMock).toHaveBeenCalled();
     });

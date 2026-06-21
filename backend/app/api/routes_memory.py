@@ -29,7 +29,9 @@ from app.services.memory.evidence_access import evidence_readiness
 from app.services.memory.indexing import ensure_memory_index, get_memory_document, get_opensearch_client, search_memory_edges, search_memory_processes
 from app.services.memory.normalizers import normalize_windows_info
 from app.services.memory.storage import memory_run_dir
-from app.services.memory.overview import get_case_memory_overview, list_memory_evidences
+from app.services.memory.overview import get_case_memory_overview, get_evidence_landing, list_memory_evidences
+from app.services.memory.active_result import resolve_active_memory_result, list_families as _list_artifact_families
+from app.services.memory.catalogue import build_analysis_catalogue, MemoryProfileUnavailableError
 from app.services.memory.symbol_control import SymbolControlError, acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure, queue_symbol_acquisition, request_status_dict, request_symbol_acquisition_awaiting_approval
 from app.models.memory import MemorySymbolAcquisition, MemorySymbolAcquisitionRequest
 from app.services.memory.upload_readiness import MAX_SELECTED_SIZE_BYTES, get_memory_upload_readiness
@@ -47,6 +49,26 @@ def _require_case(db: Session, case_id: str) -> None:
         raise HTTPException(status_code=404, detail="Case not found")
 
 
+def _require_evidence_for_case(db: Session, case_id: str, evidence_id: str) -> Evidence:
+    """Validate that the given evidence_id belongs to the case and is a
+    memory dump.  Returns the Evidence row.  Raises 400 when the
+    evidence_id is missing (evidence-scope required) and 404 when the
+    evidence does not exist or does not belong to the case.
+    """
+    if not evidence_id or not isinstance(evidence_id, str):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "MEMORY_EVIDENCE_SCOPE_REQUIRED",
+                "message": "evidence_id is required for this memory read endpoint.",
+            },
+        )
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
+        raise HTTPException(status_code=404, detail="Memory evidence was not found for this case.")
+    return evidence
+
+
 @router.get("/memory/backends", response_model=MemoryBackendOverviewRead)
 def get_memory_backends() -> dict:
     return get_memory_backend_overview()
@@ -62,6 +84,24 @@ def get_memory_overview(case_id: str, db: Session = Depends(get_db)) -> dict:
 def get_memory_evidences(case_id: str, db: Session = Depends(get_db)) -> list[Evidence]:
     _require_case(db, case_id)
     return list_memory_evidences(db, case_id)
+
+
+@router.get(
+    "/cases/{case_id}/memory/landing",
+    response_model=None,
+)
+def get_memory_evidence_landing(case_id: str, db: Session = Depends(get_db)) -> dict:
+    """Per-evidence landing for the memory case page.  Each entry
+    includes the evidence metadata and a per-family status snapshot
+    (Ready / Not analyzed / Completed / Running / Latest attempt
+    failed / Unavailable).
+    """
+    _require_case(db, case_id)
+    items = get_evidence_landing(db, case_id)
+    return {
+        "case_id": case_id,
+        "items": items,
+    }
 
 
 @router.get("/cases/{case_id}/memory/evidences/{evidence_id}/readiness", response_model=MemoryEvidenceReadinessRead)
@@ -83,6 +123,76 @@ def get_memory_evidence_readiness(case_id: str, evidence_id: str, db: Session = 
         result["sanitized_message"] = "The memory analysis backend is not ready."
     result.update(evidence_symbol_readiness(db, case_id, evidence_id))
     return result
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/active-result",
+    response_model=None,
+)
+def get_memory_active_result(
+    case_id: str,
+    evidence_id: str,
+    family: str = Query(...),
+    run_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return the active scan run for a single artifact family of an
+    evidence.  ``family`` must be one of the supported artifact
+    families (system_info, processes, network, modules, handles,
+    kernel_modules, drivers, suspicious_regions, raw_observations).
+
+    When ``run_id`` is provided the function validates that the run
+    belongs to this evidence + case and returns it as a historical
+    override.  When ``run_id`` is not provided the function returns
+    the latest successful run for the family plus a snapshot of the
+    latest attempt (which may have failed).
+    """
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    if family not in _list_artifact_families():
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "MEMORY_FAMILY_UNKNOWN",
+                "message": f"Unknown artifact family '{family}'.",
+            },
+        )
+    return resolve_active_memory_result(
+        db,
+        case_id=case_id,
+        evidence_id=evidence_id,
+        family=family,
+        preferred_run_id=run_id,
+    )
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/catalogue",
+    response_model=None,
+)
+def get_memory_evidence_catalogue(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Return the 8-profile analysis catalogue for an evidence.
+
+    The catalogue is the single source of truth for the "Run
+    analysis" modal in the UI.  The network profile is always
+    rendered as Unavailable in the current Volatility runtime.
+    """
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    items = build_analysis_catalogue(
+        db,
+        case_id=case_id,
+        evidence_id=evidence_id,
+    )
+    return {
+        "case_id": case_id,
+        "evidence_id": evidence_id,
+        "items": items,
+    }
 
 
 @router.get("/memory/symbols/cache", response_model=MemorySymbolCacheStatusRead)
@@ -250,14 +360,17 @@ def reconcile_memory_upload_endpoint(case_id: str, upload_id: str, db: Session =
 
 
 @router.get("/cases/{case_id}/memory/runs", response_model=list[MemoryScanRunRead])
-def get_memory_runs(case_id: str, db: Session = Depends(get_db)) -> list[MemoryScanRun]:
+def get_memory_runs(
+    case_id: str,
+    evidence_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> list[MemoryScanRun]:
     _require_case(db, case_id)
-    return (
-        db.query(MemoryScanRun)
-        .filter(MemoryScanRun.case_id == case_id)
-        .order_by(MemoryScanRun.created_at.desc())
-        .all()
-    )
+    query = db.query(MemoryScanRun).filter(MemoryScanRun.case_id == case_id)
+    if evidence_id:
+        _require_evidence_for_case(db, case_id, evidence_id)
+        query = query.filter(MemoryScanRun.evidence_id == evidence_id)
+    return query.order_by(MemoryScanRun.created_at.desc()).all()
 
 
 @router.post("/evidences/{evidence_id}/memory/scan", response_model=MemoryStartScanResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -294,6 +407,13 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
         validate_memory_execution_request(db, evidence.id)
     except MemoryExecutionValidationError as exc:
         raise HTTPException(status_code=400, detail=exc.message) from exc
+    if profile == "network_basic":
+        available, reason = network_basic_available()
+        if not available:
+            raise HTTPException(
+                status_code=400,
+                detail={"error_code": "MEMORY_PROFILE_UNAVAILABLE", "message": reason},
+            )
     existing = active_run_for_evidence(db, evidence.id, profile)
     if existing:
         raise HTTPException(status_code=409, detail=f"An active metadata analysis run already exists for this memory evidence: {existing.id}")
@@ -693,10 +813,13 @@ def get_canonical_process_entities(
     db: Session = Depends(get_db),
 ) -> dict:
     _require_case(db, case_id)
+    if evidence_id:
+        _require_evidence_for_case(db, case_id, evidence_id)
     run = _resolve_run(db, case_id, run_id, profile)
     result = canonical_entities.fetch_canonical_entities(
         case_id,
         run_id=run.id,
+        evidence_id=evidence_id,
         visibility=visibility,
         source_plugin=source_plugin,
         process_name=process_name,
@@ -967,6 +1090,7 @@ def _artifact_list(
     *,
     document_type: str,
     run_id: str | None,
+    evidence_id: str | None = None,
     page: int,
     page_size: int,
     filters: dict[str, Any] | None = None,
@@ -977,15 +1101,17 @@ def _artifact_list(
         case_id,
         document_type=document_type,
         run_id=run_id,
+        evidence_id=evidence_id,
         page=page,
         page_size=page_size,
         filters=filters,
         sort=sort,
     )
-    facets = _artifact_facets(case_id, document_type=document_type, run_id=run_id)
+    facets = _artifact_facets(case_id, document_type=document_type, run_id=run_id, evidence_id=evidence_id)
     return {
         "document_type": document_type,
         "selected_run": run_id,
+        "evidence_id": evidence_id,
         "total": payload["total"],
         "page": payload["page"],
         "page_size": payload["page_size"],
@@ -995,7 +1121,7 @@ def _artifact_list(
     }
 
 
-def _artifact_facets(case_id: str, *, document_type: str, run_id: str | None) -> dict[str, Any]:
+def _artifact_facets(case_id: str, *, document_type: str, run_id: str | None, evidence_id: str | None = None) -> dict[str, Any]:
     """Compute lightweight aggregation facets for the artifact list.
 
     Avoids the cost of running a full OpenSearch aggregation by
@@ -1086,6 +1212,7 @@ def relink_artifact_process_entities(
 @router.get("/cases/{case_id}/memory/network", response_model=MemoryArtifactListRead)
 def list_memory_network_connections(
     case_id: str,
+    evidence_id: str = Query(...),
     run_id: str | None = Query(default=None),
     protocol: str | None = Query(default=None),
     local_address: str | None = Query(default=None),
@@ -1097,7 +1224,9 @@ def list_memory_network_connections(
     process_name: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
 ):
+    _require_evidence_for_case(db, case_id, evidence_id)
     _require_run_or_any(case_id, run_id)
     filters: dict[str, Any] = {
         "protocol": protocol,
@@ -1113,6 +1242,7 @@ def list_memory_network_connections(
         case_id,
         document_type="memory_network_connection",
         run_id=run_id,
+        evidence_id=evidence_id,
         page=page,
         page_size=page_size,
         filters=filters,
@@ -1122,6 +1252,7 @@ def list_memory_network_connections(
 @router.get("/cases/{case_id}/memory/modules", response_model=MemoryArtifactListRead)
 def list_memory_process_modules(
     case_id: str,
+    evidence_id: str = Query(...),
     run_id: str | None = Query(default=None),
     pid: int | None = Query(default=None),
     process_name: str | None = Query(default=None),
@@ -1131,7 +1262,9 @@ def list_memory_process_modules(
     discrepancy_only: bool = Query(default=False),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
 ):
+    _require_evidence_for_case(db, case_id, evidence_id)
     _require_run_or_any(case_id, run_id)
     filters: dict[str, Any] = {
         "pid": pid,
@@ -1150,6 +1283,7 @@ def list_memory_process_modules(
         case_id,
         document_type="memory_process_module",
         run_id=run_id,
+        evidence_id=evidence_id,
         page=page,
         page_size=page_size,
         filters=filters,
@@ -1160,6 +1294,7 @@ def list_memory_process_modules(
 @router.get("/cases/{case_id}/memory/handles", response_model=MemoryArtifactListRead)
 def list_memory_handles(
     case_id: str,
+    evidence_id: str = Query(...),
     run_id: str | None = Query(default=None),
     pid: int | None = Query(default=None),
     process_name: str | None = Query(default=None),
@@ -1167,7 +1302,9 @@ def list_memory_handles(
     object_name: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
 ):
+    _require_evidence_for_case(db, case_id, evidence_id)
     _require_run_or_any(case_id, run_id)
     filters: dict[str, Any] = {
         "pid": pid,
@@ -1179,6 +1316,7 @@ def list_memory_handles(
         case_id,
         document_type="memory_handle",
         run_id=run_id,
+        evidence_id=evidence_id,
         page=page,
         page_size=page_size,
         filters=filters,
@@ -1188,15 +1326,19 @@ def list_memory_handles(
 @router.get("/cases/{case_id}/memory/kernel-modules", response_model=MemoryArtifactListRead)
 def list_memory_kernel_modules(
     case_id: str,
+    evidence_id: str = Query(...),
     run_id: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
 ):
+    _require_evidence_for_case(db, case_id, evidence_id)
     _require_run_or_any(case_id, run_id)
     return _artifact_list(
         case_id,
         document_type="memory_kernel_module",
         run_id=run_id,
+        evidence_id=evidence_id,
         page=page,
         page_size=page_size,
     )
@@ -1205,15 +1347,19 @@ def list_memory_kernel_modules(
 @router.get("/cases/{case_id}/memory/drivers", response_model=MemoryArtifactListRead)
 def list_memory_drivers(
     case_id: str,
+    evidence_id: str = Query(...),
     run_id: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
 ):
+    _require_evidence_for_case(db, case_id, evidence_id)
     _require_run_or_any(case_id, run_id)
     return _artifact_list(
         case_id,
         document_type="memory_driver",
         run_id=run_id,
+        evidence_id=evidence_id,
         page=page,
         page_size=page_size,
     )
@@ -1222,6 +1368,7 @@ def list_memory_drivers(
 @router.get("/cases/{case_id}/memory/suspicious-regions", response_model=MemoryArtifactListRead)
 def list_memory_suspicious_regions(
     case_id: str,
+    evidence_id: str = Query(...),
     run_id: str | None = Query(default=None),
     pid: int | None = Query(default=None),
     process_name: str | None = Query(default=None),
@@ -1229,7 +1376,9 @@ def list_memory_suspicious_regions(
     review_status: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
 ):
+    _require_evidence_for_case(db, case_id, evidence_id)
     _require_run_or_any(case_id, run_id)
     filters: dict[str, Any] = {
         "pid": pid,
@@ -1241,6 +1390,7 @@ def list_memory_suspicious_regions(
         case_id,
         document_type="memory_suspicious_region",
         run_id=run_id,
+        evidence_id=evidence_id,
         page=page,
         page_size=page_size,
         filters=filters,

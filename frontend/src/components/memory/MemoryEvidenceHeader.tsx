@@ -1,0 +1,183 @@
+import { useState } from "react";
+import { Link } from "react-router-dom";
+import { type MemoryActiveResult, type MemoryEvidenceLandingItem } from "../../api/client";
+
+type Props = {
+  caseId: string;
+  evidence: MemoryEvidenceLandingItem;
+  activeResult: MemoryActiveResult | null;
+  family: string;
+  historicalRunId: string | null;
+  onViewHistory: () => void;
+  onReturnToLatest: () => void;
+  onOpenCatalogue: () => void;
+};
+
+function shortId(id: string): string {
+  if (!id) return "";
+  return id.length > 12 ? id.slice(0, 12) : id;
+}
+
+function sizeLabel(bytes: number): string {
+  if (!bytes) return "0 B";
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(2)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} KiB`;
+  return `${bytes} B`;
+}
+
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return iso.slice(0, 19).replace("T", " ");
+}
+
+export function MemoryEvidenceHeader({
+  caseId,
+  evidence,
+  activeResult,
+  family,
+  historicalRunId,
+  onViewHistory,
+  onReturnToLatest,
+  onOpenCatalogue,
+}: Props) {
+  const [copied, setCopied] = useState(false);
+
+  function copyId() {
+    if (typeof navigator === "undefined" || !navigator.clipboard) return;
+    void navigator.clipboard.writeText(evidence.evidence_id).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
+  const activeRun = activeResult?.active_run ?? null;
+  const latestAttempt = activeResult?.latest_attempt ?? null;
+  const usingFallback = activeResult?.using_fallback === true;
+  const isHistorical = historicalRunId !== null;
+
+  return (
+    <section
+      className="rounded-[28px] border border-line bg-panel/70 p-5 shadow-panel"
+      data-testid="memory-evidence-header"
+      data-evidence-id={evidence.evidence_id}
+    >
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <Link
+              to={`/cases/${caseId}/memory`}
+              className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted"
+              data-testid="memory-evidence-back"
+            >
+              ← All evidence
+            </Link>
+            <span className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted">
+              {evidence.ingest_status || "ingest_unknown"}
+            </span>
+            <span className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted">
+              {evidence.run_count} {evidence.run_count === 1 ? "run" : "runs"}
+            </span>
+          </div>
+          <h2 className="mt-2 text-2xl font-semibold text-ink" data-testid="memory-evidence-filename">{evidence.filename}</h2>
+          <div className="mt-2 grid gap-1 text-[11px] text-muted sm:grid-cols-2">
+            <div>
+              <span className="uppercase tracking-wider">Host:</span>{" "}
+              <span className="text-ink" data-testid="memory-evidence-host">{evidence.detected_host || "Unknown"}</span>
+            </div>
+            <div>
+              <span className="uppercase tracking-wider">Size:</span>{" "}
+              <span className="text-ink" data-testid="memory-evidence-size">{sizeLabel(evidence.size_bytes)}</span>
+            </div>
+            <div>
+              <span className="uppercase tracking-wider">Created:</span>{" "}
+              <span className="font-mono text-ink">{formatDate(evidence.created_at)}</span>
+            </div>
+            <div>
+              <span className="uppercase tracking-wider">Processed:</span>{" "}
+              <span className="font-mono text-ink">{formatDate(evidence.processed_at)}</span>
+            </div>
+            <div className="sm:col-span-2">
+              <span className="uppercase tracking-wider">Evidence ID:</span>{" "}
+              <button
+                type="button"
+                onClick={copyId}
+                className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 font-mono text-[10px] text-ink"
+                data-testid="memory-evidence-id"
+                title="Copy evidence ID"
+              >
+                {copied ? "Copied" : shortId(evidence.evidence_id)}…
+              </button>
+            </div>
+          </div>
+        </div>
+        <div className="flex flex-col items-end gap-2">
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onOpenCatalogue}
+              className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss"
+              data-testid="memory-open-catalogue"
+            >
+              Run analysis
+            </button>
+            <button
+              type="button"
+              onClick={onViewHistory}
+              className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted"
+              data-testid="memory-view-history"
+            >
+              View analysis history
+            </button>
+            <Link
+              to={`/cases/${caseId}/memory/upload`}
+              className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted"
+            >
+              Add memory image
+            </Link>
+          </div>
+        </div>
+      </div>
+
+      {isHistorical ? (
+        <div
+          className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100"
+          data-testid="memory-historical-banner"
+        >
+          <span>
+            Historical result — viewing run <span className="font-mono">{shortId(historicalRunId || "")}…</span> for {family}.
+          </span>
+          <button
+            type="button"
+            onClick={onReturnToLatest}
+            className="rounded-md border border-amber-300/40 bg-amber-500/10 px-2 py-0.5 text-[10px]"
+            data-testid="memory-historical-return"
+          >
+            Return to Latest successful
+          </button>
+        </div>
+      ) : null}
+
+      {!isHistorical && usingFallback && latestAttempt && latestAttempt.id !== activeRun?.id ? (
+        <div
+          className="mt-3 rounded-xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs text-rose-100"
+          data-testid="memory-latest-failed-banner"
+        >
+          Latest analysis attempt failed. Showing the last successful result from {formatDate(activeRun?.completed_at)}.
+        </div>
+      ) : null}
+
+      {activeRun ? (
+        <div className="mt-3 flex flex-wrap items-center gap-2 text-[10px] text-muted" data-testid="memory-active-result-label">
+          <span className="rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-emerald-100" data-testid="memory-active-result-badge">
+            Latest successful
+          </span>
+          <span className="font-mono text-ink">{shortId(activeRun.id)}…</span>
+          <span>· {activeRun.profile}</span>
+          <span>· {formatDate(activeRun.completed_at || activeRun.started_at)}</span>
+          {activeRun.duration_seconds ? <span>· {activeRun.duration_seconds.toFixed(1)}s</span> : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
