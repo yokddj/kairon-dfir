@@ -134,7 +134,10 @@ function isArchiveFile(file: File) {
 }
 
 function isMemoryImageFile(file: File) {
-  return /\.(raw|mem|vmem|dmp|lime|aff4)$/i.test(file.name);
+  // .raw, .mem, .dmp, .dump, .bin, .img, .vmem, .lime, .aff4
+  // The backend probe makes the final memory vs disk decision based
+  // on content; this is only the candidate extension check.
+  return /\.(raw|mem|dmp|dump|bin|img|vmem|lime|aff4)$/i.test(file.name);
 }
 
 function isParsedStructuredFile(file: File) {
@@ -293,7 +296,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   function openPrimaryFilePicker() {
     if (uploading) return;
     setFileIntent(null);
-    setFileAccept(".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz,.evtx,.raw,.mem,.vmem,.dmp,.lime,.aff4,.pf,.lnk,.reg,.dat,.db,.sqlite,.csv,.json,.jsonl,.log,.txt,.eml,.mbox,.pst,.ost,.xml");
+    setFileAccept(".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz,.evtx,.raw,.mem,.dmp,.dump,.bin,.img,.vmem,.lime,.aff4,.pf,.lnk,.reg,.dat,.db,.sqlite,.csv,.json,.jsonl,.log,.txt,.eml,.mbox,.pst,.ost,.xml");
     fileInputRef.current?.click();
   }
 
