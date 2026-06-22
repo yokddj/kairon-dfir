@@ -189,6 +189,7 @@ def _has_valid_mbr(header: bytes) -> bool:
     entries = header[446:510]
     if len(entries) < 64:
         return False
+    valid_count = 0
     for i in range(4):
         entry = entries[i * 16:(i + 1) * 16]
         if len(entry) < 16:
@@ -205,7 +206,8 @@ def _has_valid_mbr(header: bytes) -> bool:
             return False
         if start_lba > 0xFFFFFFFF:
             return False
-    return True
+        valid_count += 1
+    return valid_count > 0
 
 
 def _has_valid_gpt(header: bytes) -> bool:
