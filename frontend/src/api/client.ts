@@ -307,6 +307,32 @@ export type MemoryActiveRun = {
   case_id: string;
 };
 
+export type MemoryImageProbeResult = {
+  evidence_id: string;
+  case_id: string;
+  requested_type: string;
+  detected_type: string;
+  detected_format: string;
+  status: string;
+  confidence: string;
+  reason: string;
+  requires_confirmation: boolean;
+  can_analyze: boolean;
+  probe_version: string;
+  file_size: number;
+  extension: string;
+  operator_override: boolean;
+};
+
+export type MemoryImageConfirmResult = {
+  evidence_id: string;
+  case_id: string;
+  status: string;
+  operator_override: boolean;
+  operator_override_reason: string | null;
+  can_analyze: boolean;
+};
+
 export type MemoryFamilyState =
   | "ready"
   | "not_analyzed"
@@ -3879,6 +3905,16 @@ export const api = {
   },
   getMemoryProcessTree: (runId: string) => request<MemoryProcessTree>(`/memory/runs/${runId}/process-tree`),
   getMemoryRunOptions: (caseId: string) => request<MemoryRunSelector>(`/cases/${caseId}/memory/runs/options`),
+  probeMemoryImage: (caseId: string, evidenceId: string) =>
+    request<MemoryImageProbeResult>(
+      `/cases/${caseId}/evidences/probe-memory-image?evidence_id=${encodeURIComponent(evidenceId)}`,
+      { method: "POST" },
+    ),
+  confirmMemoryType: (caseId: string, evidenceId: string, reason: string) =>
+    request<MemoryImageConfirmResult>(
+      `/cases/${caseId}/evidences/${encodeURIComponent(evidenceId)}/confirm-memory-type`,
+      { method: "POST", body: JSON.stringify({ reason }) },
+    ),
   getCanonicalProcessEntities: (
     caseId: string,
     params?: {
