@@ -231,7 +231,9 @@ def _can_analyze(evidence) -> bool:
         "ambiguous_raw_confirmed", "probable_disk_confirmed_as_memory",
     }:
         return True
-    if status and status not in {"not_required", "ambiguous_raw_confirmed"}:
+    if status and status not in {
+        "not_required", "ambiguous_raw_confirmed", "confirmed_memory", "probable_memory",
+    }:
         # Any other non-empty status that is not explicitly usable blocks.
         return False
     return True
