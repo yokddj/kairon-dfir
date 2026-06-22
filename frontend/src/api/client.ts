@@ -1,8 +1,23 @@
 import { strToU8, zipSync, type Zippable } from "fflate";
 
+// The frontend now uses a relative API base so the browser sees a
+// same-origin request through the Vite dev server proxy.  The
+// absolute fallback (window.location.hostname:8000) is retained
+// for environments where the proxy is not in front of the API
+// (e.g. some production deployments with a reverse proxy) — the
+// browser will hit a CORS preflight in that case, which is the
+// correct behaviour.
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
-const fallbackApiBase = `${window.location.protocol}//${window.location.hostname}:8000/api`;
-const preferredApiBases = [configuredApiBase, fallbackApiBase];
+const fallbackApiBase = "/api";
+const absoluteApiBase =
+  typeof window !== "undefined"
+    ? `${window.location.protocol}//${window.location.hostname}:8000/api`
+    : null;
+const preferredApiBases = [
+  configuredApiBase,
+  fallbackApiBase,
+  absoluteApiBase,
+];
 const API_BASE_URLS = Array.from(
   new Set(
     preferredApiBases
@@ -25,13 +40,38 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
       failureDetails.push(`${baseUrl}${path} => ${error instanceof Error && error.message ? error.message : String(error)}`);
     }
   }
-  const detail =
+  // Build a typed network error so the UI can render a friendly
+  // "Kairon could not connect to the API" message instead of a
+  // raw "Load failed" from the browser.
+  const message =
     failureDetails.length
-      ? ` Details: ${failureDetails.join(" | ")}`
+      ? failureDetails.join(" | ")
       : lastError instanceof Error && lastError.message
-        ? ` ${lastError.message}`
-      : "";
-  throw new Error(`The backend could not be reached. Tried: ${attemptedUrls.join(" | ")}.${detail}`);
+        ? lastError.message
+        : "Network error";
+  const error = new Error(`Kairon could not connect to the API. (${message})`);
+  (error as Error & { kind?: string; isNetworkError?: boolean }).kind = "network";
+  (error as Error & { kind?: string; isNetworkError?: boolean }).isNetworkError = true;
+  throw error;
+}
+
+/**
+ * Typed error for HTTP responses with a structured body.  The
+ * backend returns ``{ detail: { error_code, message } }`` for
+ * known error codes.  This wrapper exposes the error_code so the
+ * UI can render a friendly message instead of the raw URL.
+ */
+export class ApiError extends Error {
+  status: number;
+  errorCode: string | null;
+  detail: unknown;
+  constructor(status: number, errorCode: string | null, message: string, detail: unknown) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.errorCode = errorCode;
+    this.detail = detail;
+  }
 }
 
 type UploadProgress = {
@@ -182,19 +222,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!response.ok) {
     const body = await response.text();
-    let detail: string | undefined;
+    let detail: unknown = undefined;
+    let errorCode: string | null = null;
+    let humanMessage: string | null = null;
     try {
-      const parsed = JSON.parse(body) as { detail?: string | Record<string, unknown> };
-      detail =
-        typeof parsed.detail === "string"
-          ? parsed.detail
-          : parsed.detail
-            ? JSON.stringify(parsed.detail)
-            : undefined;
+      const parsed = JSON.parse(body) as {
+        detail?: string | { error_code?: string; message?: string };
+      };
+      if (typeof parsed.detail === "string") {
+        detail = parsed.detail;
+        humanMessage = parsed.detail;
+      } else if (parsed.detail && typeof parsed.detail === "object") {
+        detail = parsed.detail;
+        errorCode = parsed.detail.error_code ?? null;
+        humanMessage = parsed.detail.message ?? null;
+      }
     } catch {
-      detail = undefined;
+      detail = body || undefined;
     }
-    throw new Error(detail || body || `HTTP ${response.status}`);
+    if (response.status >= 500) {
+      throw new ApiError(
+        response.status, errorCode,
+        "The analysis request failed on the server. Check the server logs and try again.",
+        detail,
+      );
+    }
+    throw new ApiError(
+      response.status,
+      errorCode,
+      humanMessage || body || `HTTP ${response.status}`,
+      detail,
+    );
   }
   if (response.status === 204) return undefined as T;
   const contentType = response.headers.get("content-type") ?? "";
@@ -435,6 +493,16 @@ export type MemoryEvidenceLandingItem = {
   run_count: number;
   latest_run_id: string | null;
   latest_run_status: string | null;
+  detection_status?: string | null;
+  detected_format?: string | null;
+  detection_confidence?: string | null;
+  detection_reason?: string | null;
+  operator_override?: boolean;
+  operator_override_reason?: string | null;
+  operator_override_at?: string | null;
+  probe_version?: string | null;
+  probed_at?: string | null;
+  can_analyze?: boolean;
 };
 
 export type MemoryEvidenceLanding = {
@@ -3930,7 +3998,7 @@ export const api = {
   confirmMemoryType: (caseId: string, evidenceId: string, reason: string) =>
     request<MemoryImageConfirmResult>(
       `/cases/${caseId}/evidences/${encodeURIComponent(evidenceId)}/confirm-memory-type`,
-      { method: "POST", body: JSON.stringify({ reason }) },
+      { method: "POST", body: JSON.stringify({ reason, authorization_acknowledged: true }) },
     ),
   getCanonicalProcessEntities: (
     caseId: string,

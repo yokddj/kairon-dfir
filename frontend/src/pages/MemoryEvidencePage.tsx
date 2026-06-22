@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { MemoryWorkspace } from "../components/MemoryWorkspace";
 import { MemoryEvidenceHeader } from "../components/memory/MemoryEvidenceHeader";
 import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysisCatalogueModal";
 import { MemoryHistoryPanel } from "../components/memory/MemoryHistoryPanel";
+import { MemoryTypeConfirmationModal } from "../components/memory/MemoryTypeConfirmationModal";
 import { MEMORY_TABS, isMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 
 const ARTIFACT_FAMILY_FROM_TAB: Record<string, string> = {
@@ -35,6 +36,10 @@ export default function MemoryEvidencePage() {
   const { setActiveCaseId } = useActiveCase();
   const [catalogueOpen, setCatalogueOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [confirmationOpen, setConfirmationOpen] = useState(false);
+  const [confirmationError, setConfirmationError] = useState<string | null>(null);
+  const [confirmationToast, setConfirmationToast] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   useEffect(() => {
     setActiveCaseId(caseId);
@@ -116,6 +121,24 @@ export default function MemoryEvidencePage() {
     },
   });
 
+  const confirmMemoryTypeMutation = useMutation({
+    mutationFn: async (reason: string) =>
+      api.confirmMemoryType(caseId, evidenceId, reason),
+    onSuccess: () => {
+      setConfirmationOpen(false);
+      setConfirmationError(null);
+      setConfirmationToast("Memory evidence type confirmed. Analysis is now available.");
+      // Invalidate every query that depends on the evidence status.
+      void queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
+      void queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId] });
+      void queryClient.invalidateQueries({ queryKey: ["memory-readiness", caseId] });
+      window.setTimeout(() => setConfirmationToast(null), 5000);
+    },
+    onError: (error: Error & { errorCode?: string }) => {
+      setConfirmationError(error.message || "Confirmation failed. Please try again.");
+    },
+  });
+
   useEffect(() => {
     if (!overview) return;
     if (overview.evidences.length === 0) {
@@ -180,8 +203,24 @@ export default function MemoryEvidencePage() {
         historicalRunId={historicalRunId}
         onViewHistory={() => setHistoryOpen(true)}
         onReturnToLatest={handleReturnToLatest}
-        onOpenCatalogue={() => setCatalogueOpen(true)}
+        onOpenCatalogue={() => {
+          if (evidence.can_analyze === false) {
+            setConfirmationOpen(true);
+            return;
+          }
+          setCatalogueOpen(true);
+        }}
       />
+
+      {confirmationToast ? (
+        <div
+          className="rounded-xl border border-mint/30 bg-mint/10 p-3 text-xs text-ink"
+          data-testid="memory-confirmation-toast"
+          role="status"
+        >
+          {confirmationToast}
+        </div>
+      ) : null}
 
       {tab === "overview" && readinessByEvidence.get(evidenceId)?.sanitized_message ? (
         <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs text-rose-100">
@@ -258,6 +297,28 @@ export default function MemoryEvidencePage() {
           selectedRunId={historicalRunId}
         />
       ) : null}
+
+      <MemoryTypeConfirmationModal
+        open={confirmationOpen && Boolean(evidence)}
+        filename={evidence?.filename || ""}
+        evidenceId={evidence?.evidence_id || ""}
+        sizeBytes={evidence?.size_bytes || 0}
+        host={evidence?.detected_host}
+        detectionStatus={evidence?.detection_status || ""}
+        detectionReason={evidence?.detection_reason}
+        detectedFormat={evidence?.detected_format}
+        detectionConfidence={evidence?.detection_confidence}
+        busy={confirmMemoryTypeMutation.isPending}
+        errorMessage={confirmationError}
+        onCancel={() => {
+          setConfirmationOpen(false);
+          setConfirmationError(null);
+        }}
+        onConfirm={async (reason) => {
+          setConfirmationError(null);
+          await confirmMemoryTypeMutation.mutateAsync(reason);
+        }}
+      />
     </div>
   );
 }

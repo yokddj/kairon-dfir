@@ -195,9 +195,41 @@ def get_evidence_landing(db: Session, case_id: str) -> list[dict]:
                 "run_count": len(runs),
                 "latest_run_id": runs[0].id if runs else None,
                 "latest_run_status": runs[0].status if runs else None,
+                # Memory image detection fields.
+                "detection_status": evidence.detection_status,
+                "detected_format": evidence.detected_format,
+                "detection_confidence": evidence.detection_confidence,
+                "detection_reason": evidence.detection_reason,
+                "operator_override": evidence.operator_override,
+                "operator_override_reason": evidence.operator_override_reason,
+                "operator_override_at": evidence.operator_override_at.isoformat() if evidence.operator_override_at else None,
+                "probe_version": evidence.probe_version,
+                "probed_at": evidence.probed_at.isoformat() if evidence.probed_at else None,
+                "can_analyze": _can_analyze(evidence),
             }
         )
     return items
+
+
+def _can_analyze(evidence) -> bool:
+    """Return True when the evidence is eligible for analysis.
+
+    Blocks on:
+    * probable_disk probe verdict
+    * ambiguous_raw probe verdict without operator override
+    * unsupported / invalid / probe_failed verdicts
+    """
+    status = (evidence.detection_status or "").strip()
+    if status == "probable_disk":
+        return False
+    if status == "ambiguous_raw" and not bool(evidence.operator_override):
+        return False
+    if status in {"unsupported", "invalid", "probe_failed"}:
+        return False
+    if status and status not in {"not_required", "ambiguous_raw_confirmed"}:
+        # Any other non-empty status that is not explicitly usable blocks.
+        return False
+    return True
 
 
 def _family_title(family: str) -> str:

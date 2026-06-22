@@ -248,7 +248,7 @@ def test_operator_override_audited(db: Session) -> None:
     db.commit()
     result = confirm_memory_type(
         case_id=case.id, evidence_id=evidence.id,
-        payload={"reason": "Confirmed as memory by operator."}, db=db,
+        payload={"reason": "Confirmed as memory by operator.", "authorization_acknowledged": True}, db=db,
     )
     db.refresh(evidence)
     assert evidence.operator_override is True

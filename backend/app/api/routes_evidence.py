@@ -1784,6 +1784,7 @@ def confirm_memory_type(
     payload: dict | None = None,
     db: Session = Depends(get_db),
 ) -> dict:
+    from app.core.database import utc_now_naive
     """Operator override for an ambiguous_raw verdict.
 
     The endpoint is only meaningful when the evidence's current
@@ -1792,28 +1793,62 @@ def confirm_memory_type(
     ``operator_override`` and ``operator_override_reason`` fields.
     """
     if not db.get(Case, case_id):
-        raise HTTPException(status_code=404, detail="Case not found.")
+        raise HTTPException(status_code=404, detail={
+            "error_code": "EVIDENCE_NOT_FOUND",
+            "message": "Case not found.",
+        })
     evidence = db.get(Evidence, evidence_id)
     if evidence is None or evidence.case_id != case_id:
-        raise HTTPException(status_code=404, detail="Evidence not found for this case.")
+        raise HTTPException(status_code=404, detail={
+            "error_code": "EVIDENCE_NOT_FOUND",
+            "message": "Evidence not found for this case.",
+        })
+    if evidence.detection_status == "ambiguous_raw_confirmed" and evidence.operator_override:
+        # Idempotent: re-confirming an already-confirmed evidence is a no-op.
+        return {
+            "evidence_id": evidence.id,
+            "case_id": evidence.case_id,
+            "status": evidence.detection_status,
+            "operator_override": evidence.operator_override,
+            "operator_override_reason": evidence.operator_override_reason,
+            "can_analyze": True,
+        }
     if evidence.detection_status != "ambiguous_raw":
         raise HTTPException(
             status_code=409,
-            detail=(
-                "Confirmation is only valid when detection_status is "
-                "'ambiguous_raw'; this evidence is "
-                f"'{evidence.detection_status}'."
-            ),
+            detail={
+                "error_code": "MEMORY_TYPE_CONFIRMATION_NOT_ALLOWED",
+                "message": (
+                    "Confirmation is only valid when the evidence has an "
+                    "ambiguous_raw verdict. This evidence is "
+                    f"'{evidence.detection_status or 'unprobed'}'."
+                ),
+            },
         )
     payload = payload or {}
     reason = (payload.get("reason") or "").strip()
     if not reason:
         raise HTTPException(
             status_code=400,
-            detail="A non-empty reason is required for the operator override.",
+            detail={
+                "error_code": "MEMORY_TYPE_CONFIRMATION_REASON_REQUIRED",
+                "message": "A non-empty reason is required for the confirmation.",
+            },
+        )
+    if not bool(payload.get("authorization_acknowledged", False)):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "MEMORY_TYPE_CONFIRMATION_AUTHORIZATION_REQUIRED",
+                "message": (
+                    "Authorization acknowledgement is required to confirm "
+                    "the evidence type."
+                ),
+            },
         )
     evidence.operator_override = True
     evidence.operator_override_reason = reason[:512]
+    evidence.operator_override_at = utc_now_naive()
     evidence.detection_status = "ambiguous_raw_confirmed"
     db.commit()
     db.refresh(evidence)

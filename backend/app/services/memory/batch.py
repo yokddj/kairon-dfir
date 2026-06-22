@@ -269,6 +269,20 @@ def create_run_all_batch(
             "Run-all batches are only supported for memory_dump evidence.",
             status_code=400,
         )
+    if evidence.detection_status == "probable_disk":
+        raise MemoryBatchError(
+            "MEMORY_TYPE_PROBABLE_DISK",
+            "This evidence was classified as a probable disk image. "
+            "Import it as disk evidence or confirm it as memory before analyzing.",
+            status_code=409,
+        )
+    if evidence.detection_status == "ambiguous_raw" and not evidence.operator_override:
+        raise MemoryBatchError(
+            "MEMORY_TYPE_CONFIRMATION_REQUIRED",
+            "This evidence has an ambiguous_raw probe verdict. "
+            "Confirm the evidence type before running the batch.",
+            status_code=409,
+        )
     try:
         validate_current_process_evidence_access(evidence, settings=get_settings())
     except MemoryStorageAccessError as exc:

@@ -2,6 +2,37 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { type MemoryActiveResult, type MemoryEvidenceLandingItem } from "../../api/client";
 
+type DetectionDisplay = {
+  label: string;
+  tone: "neutral" | "good" | "warn" | "bad";
+};
+
+function detectionDisplay(
+  status: string | null | undefined,
+  format: string | null | undefined,
+  confidence: string | null | undefined,
+  operatorOverride: boolean | undefined,
+): DetectionDisplay | null {
+  const s = (status || "").toLowerCase();
+  if (!s) return null;
+  if (s === "ambiguous_raw_confirmed" || operatorOverride) {
+    return { label: "Confirmed memory evidence", tone: "good" };
+  }
+  if (s === "ambiguous_raw") {
+    return { label: "Confirmation required", tone: "warn" };
+  }
+  if (s === "probable_memory" || s === "confirmed_memory") {
+    return { label: `${format || "Memory image"} (${confidence || "confirmed"})`, tone: "good" };
+  }
+  if (s === "probable_disk") {
+    return { label: "Probable disk image", tone: "bad" };
+  }
+  if (s === "unsupported" || s === "invalid" || s === "probe_failed") {
+    return { label: `Cannot analyze (${s})`, tone: "bad" };
+  }
+  return { label: s, tone: "neutral" };
+}
+
 type Props = {
   caseId: string;
   evidence: MemoryEvidenceLandingItem;
@@ -55,6 +86,13 @@ export function MemoryEvidenceHeader({
   const latestAttempt = activeResult?.latest_attempt ?? null;
   const usingFallback = activeResult?.using_fallback === true;
   const isHistorical = historicalRunId !== null;
+  const detection = detectionDisplay(
+    evidence.detection_status,
+    evidence.detected_format,
+    evidence.detection_confidence,
+    evidence.operator_override,
+  );
+  const canAnalyze = evidence.can_analyze !== false;
 
   return (
     <section
@@ -78,6 +116,23 @@ export function MemoryEvidenceHeader({
             <span className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted">
               {evidence.run_count} {evidence.run_count === 1 ? "run" : "runs"}
             </span>
+            {detection ? (
+              <span
+                className={
+                  "rounded-md border px-2 py-0.5 text-[10px] " +
+                  (detection.tone === "good"
+                    ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-100"
+                    : detection.tone === "warn"
+                      ? "border-amber-400/30 bg-amber-500/10 text-amber-100"
+                      : detection.tone === "bad"
+                        ? "border-rose-400/30 bg-rose-500/10 text-rose-100"
+                        : "border-line bg-abyss/70 text-muted")
+                }
+                data-testid="memory-detection-badge"
+              >
+                {detection.label}
+              </span>
+            ) : null}
           </div>
           <h2 className="mt-2 text-2xl font-semibold text-ink" data-testid="memory-evidence-filename">{evidence.filename}</h2>
           <div className="mt-2 grid gap-1 text-[11px] text-muted sm:grid-cols-2">
@@ -116,7 +171,9 @@ export function MemoryEvidenceHeader({
             <button
               type="button"
               onClick={onOpenCatalogue}
-              className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss"
+              disabled={!canAnalyze}
+              title={canAnalyze ? "Run analysis" : "Confirm the evidence type before starting analysis."}
+              className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-60"
               data-testid="memory-open-catalogue"
             >
               Run analysis
@@ -164,6 +221,41 @@ export function MemoryEvidenceHeader({
           data-testid="memory-latest-failed-banner"
         >
           Latest analysis attempt failed. Showing the last successful result from {formatDate(activeRun?.completed_at)}.
+        </div>
+      ) : null}
+
+      {detection?.tone === "warn" ? (
+        <div
+          className="mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100"
+          data-testid="memory-type-confirmation-required"
+        >
+          <p className="font-semibold text-ink">Memory type confirmation required</p>
+          <p className="mt-1 text-amber-100/80">
+            The file was accepted as a RAW candidate, but Kairon could not confirm that it is a memory image.
+          </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onOpenCatalogue}
+              data-testid="memory-header-confirm-button"
+              className="rounded-md border border-amber-300/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold text-ink"
+            >
+              Confirm as memory evidence
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {detection?.tone === "bad" ? (
+        <div
+          className="mt-3 rounded-xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs text-rose-100"
+          data-testid="memory-type-probable-disk"
+        >
+          <p className="font-semibold text-ink">Probable disk image</p>
+          <p className="mt-1 text-rose-100/80">
+            This evidence was classified as a probable disk image by the content probe. Import it as disk evidence
+            or confirm it as memory before analyzing.
+          </p>
         </div>
       ) : null}
 
