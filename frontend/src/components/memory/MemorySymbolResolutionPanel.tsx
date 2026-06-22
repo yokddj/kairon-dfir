@@ -207,6 +207,16 @@ export function MemorySymbolResolutionPanel({
         </dl>
       ) : null}
 
+      {readiness.source ? (
+        <p
+          className="mt-2 text-[10px] uppercase tracking-wider text-muted"
+          data-testid="memory-symbol-source"
+        >
+          Source: {readiness.source.replace(/_/g, " ")}
+          {readiness.confidence ? ` · confidence: ${readiness.confidence}` : ""}
+        </p>
+      ) : null}
+
       {cache ? (
         <div
           className="mt-3 rounded-xl border border-line bg-abyss/40 p-3 text-xs"

@@ -417,6 +417,13 @@ export type MemoryActiveResult = {
   analysis_state: MemoryFamilyState;
 };
 
+export type MemoryCatalogueGateType =
+  | "available"
+  | "blocked_symbol_probe_required"
+  | "blocked_symbols_missing"
+  | "blocked_acquisition_pending"
+  | "unavailable";
+
 export type MemoryAnalysisCatalogueItem = {
   profile: string;
   family: string;
@@ -425,10 +432,14 @@ export type MemoryAnalysisCatalogueItem = {
   cost_label: string;
   est_duration_seconds: number;
   available: boolean;
+  gate_type: MemoryCatalogueGateType;
   availability_reason: string | null;
   last_run: MemoryActiveRun | null;
   last_status: string | null;
   last_count: number;
+  requires_windows_symbols?: boolean;
+  can_run_without_symbols?: boolean;
+  supported_os_families?: string[];
 };
 
 export type MemoryAnalysisCatalogue = {
@@ -613,6 +624,9 @@ export type MemorySymbolReadiness = {
   sanitized_message: string | null;
   acquisition_supported: boolean;
   pending_request_id: string | null;
+  source: string | null;
+  confidence: string | null;
+  reconstructed_at: string | null;
 };
 
 export type MemorySymbolProbeResult = {

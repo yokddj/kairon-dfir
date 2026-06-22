@@ -174,6 +174,15 @@ class MemorySymbolRequirement(UUIDMixin, Base):
     cached_symbol_id: Mapped[str | None] = mapped_column(nullable=True, index=True)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sanitized_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Legacy symbol-readiness recovery: which source produced this row.
+    # One of: "probe", "historical_run", "historical_plugin_run",
+    # "historical_system_info", "historical_process_metadata",
+    # "cache_match", or None for legacy rows.
+    source: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    reconstructed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    backfill_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 

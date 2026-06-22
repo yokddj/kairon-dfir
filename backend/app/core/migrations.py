@@ -310,6 +310,43 @@ def _v6_evidence_detection_status_widen(connection: Connection) -> None:
             return
 
 
+@register(7, "memory_symbol_requirement_backfill_metadata")
+def _v7_memory_symbol_requirement_backfill_metadata(connection: Connection) -> None:
+    """Add backfill metadata columns to ``memory_symbol_requirements``.
+
+    The legacy symbol-readiness recovery sprint needs to record
+    how each requirement row was reconstructed (probe / historical
+    run / cache match) so the UI can distinguish "manually probed"
+    from "backfilled from history".
+
+    New columns:
+
+    * ``source``              - "probe" | "historical_run" | "cache_match" | ...
+    * ``reconstructed_at``    - timestamp set when the row was reconstructed
+    * ``backfill_version``    - free-form version label (e.g. "v1")
+    * ``confidence``          - "high" | "medium" | "low"
+    * ``metadata_json``       - JSONB for additional source-specific metadata
+    """
+    inspector = _inspector_for(connection)
+    if "memory_symbol_requirements" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("memory_symbol_requirements")}
+    additions = [
+        ("source", "VARCHAR(32)"),
+        ("reconstructed_at", "TIMESTAMP"),
+        ("backfill_version", "VARCHAR(16)"),
+        ("confidence", "VARCHAR(16)"),
+        ("metadata_json", "JSONB"),
+    ]
+    for column_name, column_type in additions:
+        if column_name not in existing:
+            connection.execute(
+                text(
+                    f"ALTER TABLE memory_symbol_requirements ADD COLUMN {column_name} {column_type}"
+                )
+            )
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 

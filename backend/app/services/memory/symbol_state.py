@@ -175,6 +175,9 @@ class SymbolReadiness:
     sanitized_message: str | None = None
     acquisition_supported: bool = False
     pending_request_id: str | None = None
+    source: str | None = None
+    confidence: str | None = None
+    reconstructed_at: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -191,6 +194,9 @@ class SymbolReadiness:
             "sanitized_message": self.sanitized_message,
             "acquisition_supported": self.acquisition_supported,
             "pending_request_id": self.pending_request_id,
+            "source": self.source,
+            "confidence": self.confidence,
+            "reconstructed_at": self.reconstructed_at,
         }
 
 
@@ -270,13 +276,62 @@ def evidence_symbol_state(
     """Build the canonical symbol-readiness object for an evidence.
 
     The state machine reads from ``MemorySymbolRequirement`` (the
-    recorded per-evidence requirement) and ``MemoryCachedSymbol`` (the
-    cache).  The acquisition gate is passed in by the caller so this
-    function does not import the symbol-fetcher service (which would
-    pull in Redis / RQ in unit tests).
+    recorded per-evidence requirement, optionally reconstructed
+    from history) and ``MemoryCachedSymbol`` (the cache).  The
+    acquisition gate is passed in by the caller so this function
+    does not import the symbol-fetcher service (which would pull
+    in Redis / RQ in unit tests).
+
+    The function never executes Volatility and never downloads
+    symbols; when no persisted requirement is found and no
+    historical data can reconstruct one, the state is
+    ``unknown`` and the UI shows "Probe symbol requirements".
     """
+    from app.services.memory.symbol_resolver import (
+        ReconstructedRequirement,
+        cache_match_status as resolver_cache_status,
+        reconstruct_requirement,
+        symbol_identifier,
+        normalize_age,
+        normalize_architecture,
+        normalize_guid,
+        normalize_pdb_name,
+        SOURCE_HISTORICAL_PLUGIN,
+        SOURCE_HISTORICAL_PROCESS,
+        SOURCE_HISTORICAL_RUN,
+        SOURCE_HISTORICAL_SYSTEM_INFO,
+        SOURCE_PROBE,
+    )
+
     requirement_row = latest_requirement(db, case_id=case_id, evidence_id=evidence_id)
-    requirement = _serialize_requirement(requirement_row)
+    requirement: SymbolRequirement | None = _serialize_requirement(requirement_row)
+    source: str | None = None
+    confidence: str | None = None
+    reconstructed_at: str | None = None
+    if requirement is not None:
+        # Prefer the persisted source field; fall back to "probe"
+        # for legacy rows that pre-date the field.
+        source = getattr(requirement_row, "source", None) or SOURCE_PROBE
+        confidence = getattr(requirement_row, "confidence", None) or "high"
+        if getattr(requirement_row, "reconstructed_at", None) is not None:
+            reconstructed_at = requirement_row.reconstructed_at.isoformat()
+    if requirement is None:
+        # Try to reconstruct from history.  This is a read-only
+        # operation: no Volatility, no downloads, no DB writes.
+        reconstructed = reconstruct_requirement(
+            db, case_id=case_id, evidence_id=evidence_id
+        )
+        if reconstructed is not None and reconstructed.is_valid():
+            requirement = SymbolRequirement(
+                pdb_name=reconstructed.pdb_name,
+                pdb_guid=reconstructed.pdb_guid,
+                pdb_age=int(reconstructed.pdb_age),
+                architecture=reconstructed.architecture,
+            )
+            source = reconstructed.source
+            confidence = reconstructed.confidence
+            from app.core.database import utc_now_naive
+            reconstructed_at = utc_now_naive().isoformat()
     cache: CacheMatch | None = None
     if requirement is not None and requirement.is_valid():
         cache = _exact_cache_match(db, requirement)
@@ -327,10 +382,45 @@ def evidence_symbol_state(
         sanitized_message=sanitized_message,
         acquisition_supported=acquisition_supported,
         pending_request_id=None,
+        source=source,
+        confidence=confidence,
+        reconstructed_at=reconstructed_at,
     )
 
 
 # Re-exports for convenience.
+# Gate types for the catalogue and UI.  A profile is one of:
+# * "available"                - plugin and symbols are both OK
+# * "blocked_symbol_probe_required" - plugin OK, requirement unknown
+# * "blocked_symbols_missing"  - requirement known, exact cache miss
+# * "blocked_acquisition_pending" - acquisition in progress
+# * "unavailable"              - plugin absent, OS/arch unsupported,
+#                                 import error, runtime incompatible
+GATE_TYPE_AVAILABLE = "available"
+GATE_TYPE_BLOCKED_SYMBOL_PROBE = "blocked_symbol_probe_required"
+GATE_TYPE_BLOCKED_SYMBOLS_MISSING = "blocked_symbols_missing"
+GATE_TYPE_BLOCKED_ACQUISITION_PENDING = "blocked_acquisition_pending"
+GATE_TYPE_UNAVAILABLE = "unavailable"
+
+
+def gate_type_from_state(state: str) -> str:
+    """Map a ``SymbolReadiness.state`` to a catalogue ``gate_type``."""
+    if state == STATE_CACHED or state == STATE_ACQUIRED:
+        return GATE_TYPE_AVAILABLE
+    if state == STATE_PROBING:
+        return GATE_TYPE_BLOCKED_SYMBOL_PROBE
+    if state == STATE_ACQUIRING:
+        return GATE_TYPE_BLOCKED_ACQUISITION_PENDING
+    if state == STATE_ACQUISITION_PENDING or state == STATE_ACQUISITION_REQUIRED:
+        return GATE_TYPE_BLOCKED_ACQUISITION_PENDING
+    if state == STATE_MISSING:
+        return GATE_TYPE_BLOCKED_SYMBOLS_MISSING
+    if state == STATE_UNKNOWN:
+        return GATE_TYPE_BLOCKED_SYMBOL_PROBE
+    # failed, incompatible, unsupported
+    return GATE_TYPE_UNAVAILABLE
+
+
 __all__ = [
     "ALL_STATES",
     "CacheMatch",
@@ -341,6 +431,11 @@ __all__ = [
     "EC_SYMBOL_ACQUISITION_PENDING",
     "EC_SYMBOL_CACHE_MISMATCH",
     "EC_SYMBOL_REQUIREMENT_UNKNOWN",
+    "GATE_TYPE_AVAILABLE",
+    "GATE_TYPE_BLOCKED_ACQUISITION_PENDING",
+    "GATE_TYPE_BLOCKED_SYMBOLS_MISSING",
+    "GATE_TYPE_BLOCKED_SYMBOL_PROBE",
+    "GATE_TYPE_UNAVAILABLE",
     "STATE_ACQUIRED",
     "STATE_ACQUIRING",
     "STATE_ACQUISITION_PENDING",
@@ -355,5 +450,6 @@ __all__ = [
     "SymbolReadiness",
     "SymbolRequirement",
     "evidence_symbol_state",
+    "gate_type_from_state",
     "latest_requirement",
 ]

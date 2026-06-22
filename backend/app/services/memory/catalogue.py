@@ -214,6 +214,12 @@ def build_analysis_catalogue(
     from app.services.memory.symbol_state import (
         STATE_CACHED,
         evidence_symbol_state,
+        gate_type_from_state,
+        GATE_TYPE_AVAILABLE,
+        GATE_TYPE_BLOCKED_SYMBOL_PROBE,
+        GATE_TYPE_BLOCKED_SYMBOLS_MISSING,
+        GATE_TYPE_BLOCKED_ACQUISITION_PENDING,
+        GATE_TYPE_UNAVAILABLE,
     )
 
     symbol_state_obj = evidence_symbol_state(
@@ -246,9 +252,18 @@ def build_analysis_catalogue(
         last_status = last_run.status if last_run else None
 
         is_network = profile == "network_basic"
+        # The gate_type is the single source of truth for the UI:
+        # "available" | "blocked_*" | "unavailable".  It is computed
+        # only after every per-profile branch has been considered.
+        gate_type = GATE_TYPE_AVAILABLE
         available = True
         availability_reason: str | None = None
+        # Network gate: a profile that requires a missing network
+        # plugin is truly unavailable; this wins over the symbol gate
+        # because the symbol gate would otherwise be misleading
+        # (the symbol work is moot without the plugin).
         if is_network and network_state == "unavailable":
+            gate_type = GATE_TYPE_UNAVAILABLE
             available = False
             availability_reason = NETWORK_UNAVAILABLE_REASON
         elif is_network and network_available:
@@ -256,25 +271,34 @@ def build_analysis_catalogue(
             # backend process itself does not probe the plugin; the
             # frontend should display "Available · Not analyzed"
             # until the first analysis actually runs.
+            gate_type = GATE_TYPE_AVAILABLE
             available = True
             availability_reason = "Available · Requirements not yet validated"
         # Symbol gating.  Profiles that require Windows symbols are
-        # blocked when the exact required symbol is missing for this
-        # evidence.  The reason must distinguish plugin availability
-        # from evidence compatibility from symbol readiness.
-        if profile_def.get("requires_windows_symbols") and not symbols_ok:
+        # blocked (NOT marked unavailable) when the exact required
+        # symbol is missing for this evidence.  ``Unavailable`` is
+        # reserved for plugin absence, runtime issues and OS/arch
+        # mismatches.  When the profile is already marked
+        # ``unavailable`` by the network branch above, we keep that
+        # verdict; the symbol check is a no-op.
+        if profile_def.get("requires_windows_symbols") and not symbols_ok and gate_type != GATE_TYPE_UNAVAILABLE:
             available = False
-            symbol_status_label = symbol_status.replace("_", " ")
+            symbol_gate = gate_type_from_state(symbol_status)
+            if symbol_gate in {GATE_TYPE_BLOCKED_SYMBOLS_MISSING, GATE_TYPE_BLOCKED_SYMBOL_PROBE, GATE_TYPE_BLOCKED_ACQUISITION_PENDING}:
+                gate_type = symbol_gate
+            else:
+                # failed, incompatible, unsupported, etc.
+                gate_type = GATE_TYPE_UNAVAILABLE
             if symbol_state_obj.requirement is None:
                 availability_reason = (
                     "Windows symbol requirement for this evidence has not "
-                    "been recorded. Probe the symbol requirements before "
-                    "running this profile."
+                    "been identified yet. Probe the symbol requirements "
+                    "before running this profile."
                 )
             else:
                 availability_reason = (
                     f"Symbols for this evidence are not cached "
-                    f"(state: {symbol_status_label}). "
+                    f"(state: {symbol_status.replace('_', ' ')}). "
                     f"{symbol_blocker or ''}"
                 ).strip()
         items.append(
@@ -286,6 +310,7 @@ def build_analysis_catalogue(
                 "cost_label": profile_def["cost_label"],
                 "est_duration_seconds": profile_def["est_duration_seconds"],
                 "available": available,
+                "gate_type": gate_type,
                 "availability_reason": availability_reason,
                 "last_run": last_run_dict,
                 "last_status": last_status,
