@@ -34,6 +34,9 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "description": "Capture the windows.info block (OS family, kernel base, architecture) without running plugin logic.",
         "cost_label": "Fast",
         "est_duration_seconds": 20,
+        "requires_windows_symbols": True,
+        "can_run_without_symbols": False,
+        "supported_os_families": ["windows"],
     },
     {
         "profile": "processes_basic",
@@ -42,6 +45,9 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "description": "Active processes, parent-child relationships and command lines.",
         "cost_label": "Medium",
         "est_duration_seconds": 90,
+        "requires_windows_symbols": True,
+        "can_run_without_symbols": False,
+        "supported_os_families": ["windows"],
     },
     {
         "profile": "processes_extended",
@@ -50,6 +56,9 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "description": "Adds memory scanning for terminated or unlinked processes. Builds on the standard analysis.",
         "cost_label": "Medium",
         "est_duration_seconds": 240,
+        "requires_windows_symbols": True,
+        "can_run_without_symbols": False,
+        "supported_os_families": ["windows"],
     },
     {
         "profile": "network_basic",
@@ -58,6 +67,9 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "description": "Active and recent TCP/UDP endpoints.",
         "cost_label": "Medium",
         "est_duration_seconds": 90,
+        "requires_windows_symbols": True,
+        "can_run_without_symbols": False,
+        "supported_os_families": ["windows"],
     },
     {
         "profile": "modules_basic",
@@ -66,6 +78,9 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "description": "Loaded modules per process plus ldrmodule list comparison.",
         "cost_label": "Medium",
         "est_duration_seconds": 120,
+        "requires_windows_symbols": True,
+        "can_run_without_symbols": False,
+        "supported_os_families": ["windows"],
     },
     {
         "profile": "handles_basic",
@@ -74,6 +89,9 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "description": "Open handles per process (files, registry keys, mutants, sections).",
         "cost_label": "High volume",
         "est_duration_seconds": 1800,
+        "requires_windows_symbols": True,
+        "can_run_without_symbols": False,
+        "supported_os_families": ["windows"],
     },
     {
         "profile": "kernel_basic",
@@ -82,6 +100,9 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "description": "Kernel modules and loaded drivers.",
         "cost_label": "Medium",
         "est_duration_seconds": 180,
+        "requires_windows_symbols": True,
+        "can_run_without_symbols": False,
+        "supported_os_families": ["windows"],
     },
     {
         "profile": "suspicious_memory",
@@ -90,6 +111,9 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "description": "RX/RWX memory regions with no mapped file (windows.malfind).",
         "cost_label": "Slow",
         "est_duration_seconds": 1800,
+        "requires_windows_symbols": True,
+        "can_run_without_symbols": False,
+        "supported_os_families": ["windows"],
     },
 ]
 
@@ -181,6 +205,27 @@ def build_analysis_catalogue(
     network_available, network_explanation = _probe_network_via_worker()
     network_state = "available" if network_available else "unavailable"
 
+    # Per-evidence symbol readiness.  Profiles that require
+    # Windows symbols must be blocked when the exact required
+    # symbol is not cached for THIS evidence.  The metadata_only
+    # profile is also blocked; the previous sprint allowed a single
+    # attempt to probe the requirement, but the analyst is much
+    # better served by an explicit "Probe symbols" step in the UI.
+    from app.services.memory.symbol_state import (
+        STATE_CACHED,
+        evidence_symbol_state,
+    )
+
+    symbol_state_obj = evidence_symbol_state(
+        db,
+        case_id=case_id,
+        evidence_id=evidence_id,
+        acquisition_gate_available=False,
+    )
+    symbol_status = symbol_state_obj.state
+    symbol_blocker = symbol_state_obj.blocker
+    symbols_ok = symbol_status == STATE_CACHED
+
     items: list[dict[str, Any]] = []
     for profile_def in PROFILE_CATALOGUE:
         profile = profile_def["profile"]
@@ -213,7 +258,25 @@ def build_analysis_catalogue(
             # until the first analysis actually runs.
             available = True
             availability_reason = "Available · Requirements not yet validated"
-
+        # Symbol gating.  Profiles that require Windows symbols are
+        # blocked when the exact required symbol is missing for this
+        # evidence.  The reason must distinguish plugin availability
+        # from evidence compatibility from symbol readiness.
+        if profile_def.get("requires_windows_symbols") and not symbols_ok:
+            available = False
+            symbol_status_label = symbol_status.replace("_", " ")
+            if symbol_state_obj.requirement is None:
+                availability_reason = (
+                    "Windows symbol requirement for this evidence has not "
+                    "been recorded. Probe the symbol requirements before "
+                    "running this profile."
+                )
+            else:
+                availability_reason = (
+                    f"Symbols for this evidence are not cached "
+                    f"(state: {symbol_status_label}). "
+                    f"{symbol_blocker or ''}"
+                ).strip()
         items.append(
             {
                 "profile": profile,
@@ -227,6 +290,9 @@ def build_analysis_catalogue(
                 "last_run": last_run_dict,
                 "last_status": last_status,
                 "last_count": last_count,
+                "requires_windows_symbols": bool(profile_def.get("requires_windows_symbols", False)),
+                "can_run_without_symbols": bool(profile_def.get("can_run_without_symbols", False)),
+                "supported_os_families": list(profile_def.get("supported_os_families", [])),
             }
         )
     return items

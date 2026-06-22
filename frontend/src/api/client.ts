@@ -568,6 +568,75 @@ export type MemorySymbolRequestStatus = {
   acquisition_id: string | null;
 };
 
+export type MemorySymbolRequirement = {
+  pdb_name: string;
+  pdb_guid: string;
+  pdb_age: number;
+  architecture: string;
+};
+
+export type MemorySymbolCacheMatch = {
+  cache_status: "hit" | "miss";
+  exact_match: boolean;
+  required_identifier: string | null;
+  cached_identifiers: string[];
+  matched: {
+    pdb_name: string;
+    pdb_guid: string;
+    pdb_age: number;
+    architecture: string;
+  } | null;
+};
+
+export type MemorySymbolReadiness = {
+  evidence_id: string;
+  state:
+    | "unknown"
+    | "probing"
+    | "cached"
+    | "missing"
+    | "acquisition_required"
+    | "acquisition_pending"
+    | "acquiring"
+    | "acquired"
+    | "incompatible"
+    | "unsupported"
+    | "failed";
+  requirement: MemorySymbolRequirement | null;
+  cache: MemorySymbolCacheMatch | null;
+  last_probe: string | null;
+  last_acquisition: string | null;
+  can_analyze_metadata: boolean;
+  can_run_all: boolean;
+  blocker: string | null;
+  error_code: string | null;
+  sanitized_message: string | null;
+  acquisition_supported: boolean;
+  pending_request_id: string | null;
+};
+
+export type MemorySymbolProbeResult = {
+  evidence_id: string;
+  status: string;
+  requirement: MemorySymbolRequirement | null;
+  probable_os: string | null;
+  layer: string | null;
+  confidence: string;
+  failure_reason: string | null;
+  error_code: string | null;
+  sanitized_message: string | null;
+  duration_ms: number;
+};
+
+export type MemorySymbolAcquireResponse = {
+  request_id: string | null;
+  status: string;
+  symbol_mode: string;
+  source: string;
+  error_code: string | null;
+  message: string;
+};
+
 export type MemoryScanRun = {
   id: string;
   case_id: string;
@@ -3945,6 +4014,17 @@ export const api = {
       body: JSON.stringify({ authorization_acknowledged: authorizationAcknowledged }),
     }),
   getMemorySymbolRequest: (requestId: string) => request<MemorySymbolRequestStatus>(`/memory/symbols/requests/${requestId}`),
+  getMemorySymbolReadiness: (caseId: string, evidenceId: string) =>
+    request<MemorySymbolReadiness>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbol-readiness`),
+  probeMemorySymbolRequirement: (caseId: string, evidenceId: string) =>
+    request<MemorySymbolProbeResult>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbol-probe`, {
+      method: "POST",
+    }),
+  acquireMemorySymbols: (caseId: string, evidenceId: string) =>
+    request<MemorySymbolAcquireResponse>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbols/acquire`, {
+      method: "POST",
+      body: JSON.stringify({ authorization_acknowledged: true }),
+    }),
   listMemoryRuns: (caseId: string, evidenceId?: string) => {
     const query = evidenceId ? `?evidence_id=${encodeURIComponent(evidenceId)}` : "";
     return request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs${query}`);

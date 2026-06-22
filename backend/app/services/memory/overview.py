@@ -205,19 +205,41 @@ def get_evidence_landing(db: Session, case_id: str) -> list[dict]:
                 "operator_override_at": evidence.operator_override_at.isoformat() if evidence.operator_override_at else None,
                 "probe_version": evidence.probe_version,
                 "probed_at": evidence.probed_at.isoformat() if evidence.probed_at else None,
-                "can_analyze": _can_analyze(evidence),
+                "can_analyze": _can_analyze(evidence, db),
             }
         )
-    return items
+    # Augment each item with the per-evidence symbol readiness so the
+    # landing page can render the structured symbol badge without a
+    # second round-trip to /symbol-readiness.
+    from app.services.memory.symbol_state import evidence_symbol_state
+
+    enriched: list[dict] = []
+    for item in items:
+        state = evidence_symbol_state(
+            db,
+            case_id=item["case_id"],
+            evidence_id=item["evidence_id"],
+            acquisition_gate_available=False,
+        )
+        item["symbol_status"] = state.state
+        item["symbol_requirement"] = state.requirement.to_dict() if state.requirement else None
+        item["symbol_blocker"] = state.blocker
+        item["can_analyze_metadata"] = state.can_analyze_metadata
+        item["can_run_all"] = state.can_run_all
+        item["symbol_error_code"] = state.error_code
+        enriched.append(item)
+    return enriched
 
 
-def _can_analyze(evidence) -> bool:
+def _can_analyze(evidence, db: Session | None = None) -> bool:
     """Return True when the evidence is eligible for analysis.
 
     Blocks on:
     * probable_disk probe verdict
     * ambiguous_raw probe verdict without operator override
     * unsupported / invalid / probe_failed verdicts
+    * Windows symbol not cached (per-evidence) when the evidence
+      is a memory dump
     """
     status = (evidence.detection_status or "").strip()
     if status == "probable_disk":
@@ -236,6 +258,30 @@ def _can_analyze(evidence) -> bool:
     }:
         # Any other non-empty status that is not explicitly usable blocks.
         return False
+    # Per-evidence Windows symbol readiness.  When the evidence is
+    # a memory dump and the exact required symbol is not cached,
+    # block analysis so the UI shows a structured blocker rather
+    # than a generic "server error" from a run that immediately
+    # failed.
+    if evidence.evidence_type and evidence.evidence_type.value == "memory_dump" and db is not None:
+        from app.models.memory import (
+            MemoryCachedSymbol,
+            MemorySymbolRequirement,
+        )
+        requirement = (
+            db.query(MemorySymbolRequirement)
+            .filter(MemorySymbolRequirement.evidence_id == evidence.id)
+            .order_by(MemorySymbolRequirement.created_at.desc())
+            .first()
+        )
+        if requirement is not None and requirement.symbol_key:
+            cached = (
+                db.query(MemoryCachedSymbol)
+                .filter(MemoryCachedSymbol.symbol_key == requirement.symbol_key)
+                .first()
+            )
+            if cached is None:
+                return False
     return True
 
 

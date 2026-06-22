@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { type MemoryActiveResult, type MemoryEvidenceLandingItem } from "../../api/client";
+import { type MemoryActiveResult, type MemoryEvidenceLandingItem, type MemorySymbolReadiness } from "../../api/client";
 
 type DetectionDisplay = {
   label: string;
@@ -42,6 +42,7 @@ type Props = {
   onViewHistory: () => void;
   onReturnToLatest: () => void;
   onOpenCatalogue: () => void;
+  symbolReadiness?: MemorySymbolReadiness | null;
 };
 
 function shortId(id: string): string {
@@ -71,6 +72,7 @@ export function MemoryEvidenceHeader({
   onViewHistory,
   onReturnToLatest,
   onOpenCatalogue,
+  symbolReadiness,
 }: Props) {
   const [copied, setCopied] = useState(false);
 
@@ -93,6 +95,26 @@ export function MemoryEvidenceHeader({
     evidence.operator_override,
   );
   const canAnalyze = evidence.can_analyze !== false;
+  // Symbol gating: when the per-evidence symbol readiness is in a
+  // state that blocks metadata analysis, the Run analysis button
+  // must be disabled with a clear, evidence-specific reason.  The
+  // symbol resolution panel below offers the resolution path.
+  const symbolState = symbolReadiness?.state ?? "unknown";
+  const symbolBlocksAnalysis =
+    symbolState === "missing" ||
+    symbolState === "acquisition_required" ||
+    symbolState === "acquiring" ||
+    symbolState === "acquisition_pending" ||
+    symbolState === "failed" ||
+    symbolState === "incompatible" ||
+    symbolState === "unsupported";
+  const runDisabled = !canAnalyze || symbolBlocksAnalysis;
+  const runTitle = !canAnalyze
+    ? "Confirm the evidence type before starting analysis."
+    : symbolBlocksAnalysis
+      ? symbolReadiness?.sanitized_message ||
+        "Resolve the Windows symbol requirement before running analysis."
+      : "Run analysis";
 
   return (
     <section
@@ -171,8 +193,8 @@ export function MemoryEvidenceHeader({
             <button
               type="button"
               onClick={onOpenCatalogue}
-              disabled={!canAnalyze}
-              title={canAnalyze ? "Run analysis" : "Confirm the evidence type before starting analysis."}
+              disabled={runDisabled}
+              title={runTitle}
               className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-60"
               data-testid="memory-open-catalogue"
             >
@@ -243,6 +265,28 @@ export function MemoryEvidenceHeader({
               Confirm as memory evidence
             </button>
           </div>
+        </div>
+      ) : null}
+
+      {symbolBlocksAnalysis ? (
+        <div
+          className="mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100"
+          data-testid="memory-symbol-blocker-banner"
+          data-state={symbolState}
+        >
+          <p className="font-semibold text-ink">Analysis readiness</p>
+          <p className="mt-1" data-testid="memory-symbol-blocker-message">
+            {symbolReadiness?.sanitized_message ||
+              "Windows symbol requirement for this evidence is not satisfied."}
+          </p>
+          {symbolReadiness?.error_code ? (
+            <p
+              className="mt-1 font-mono text-[10px] uppercase tracking-wider"
+              data-testid="memory-symbol-blocker-code"
+            >
+              {symbolReadiness.error_code}
+            </p>
+          ) : null}
         </div>
       ) : null}
 

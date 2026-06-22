@@ -8,6 +8,7 @@ import { MemoryEvidenceHeader } from "../components/memory/MemoryEvidenceHeader"
 import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysisCatalogueModal";
 import { MemoryHistoryPanel } from "../components/memory/MemoryHistoryPanel";
 import { MemoryTypeConfirmationModal } from "../components/memory/MemoryTypeConfirmationModal";
+import { MemorySymbolResolutionPanel } from "../components/memory/MemorySymbolResolutionPanel";
 import { MEMORY_TABS, isMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 
 const ARTIFACT_FAMILY_FROM_TAB: Record<string, string> = {
@@ -173,6 +174,16 @@ export default function MemoryEvidencePage() {
     (overview?.evidences || []).map((evidence, index) => [evidence.id, evidenceReadinessQueries[index]?.data]),
   );
 
+  // Per-evidence symbol readiness: drives the symbol resolution
+  // panel and gates the Run analysis / Run all buttons.
+  const symbolReadinessQuery = useQuery({
+    queryKey: ["memory-symbol-readiness", caseId, evidenceId],
+    queryFn: () => api.getMemorySymbolReadiness(caseId, evidenceId),
+    enabled: Boolean(caseId && evidenceId),
+    refetchOnWindowFocus: false,
+  });
+  const symbolReadiness = symbolReadinessQuery.data ?? null;
+
   const handleReturnToLatest = useCallback(() => {
     setSearchParams((current) => {
       const params = new URLSearchParams(current);
@@ -210,6 +221,7 @@ export default function MemoryEvidencePage() {
           }
           setCatalogueOpen(true);
         }}
+        symbolReadiness={symbolReadiness}
       />
 
       {confirmationToast ? (
@@ -226,6 +238,14 @@ export default function MemoryEvidencePage() {
         <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs text-rose-100">
           {readinessByEvidence.get(evidenceId)?.sanitized_message}
         </div>
+      ) : null}
+
+      {evidence && symbolReadiness ? (
+        <MemorySymbolResolutionPanel
+          caseId={caseId}
+          evidenceId={evidenceId}
+          readiness={symbolReadiness}
+        />
       ) : null}
 
       {activeBatch ? (

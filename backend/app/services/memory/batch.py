@@ -77,11 +77,12 @@ RUN_ALL_EXCLUDED_PROFILES: dict[str, str] = {
 class MemoryBatchError(RuntimeError):
     """Raised for any business-rule violation in batch operations."""
 
-    def __init__(self, code: str, message: str, status_code: int = 400):
+    def __init__(self, code: str, message: str, status_code: int = 400, *, extra: dict[str, object] | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
         self.status_code = status_code
+        self.extra: dict[str, object] = dict(extra) if extra else {}
 
 
 def _family_for_profile(profile: str) -> str | None:
@@ -282,6 +283,56 @@ def create_run_all_batch(
             "This evidence has an ambiguous_raw probe verdict. "
             "Confirm the evidence type before running the batch.",
             status_code=409,
+        )
+    # Per-evidence Windows symbol preflight.  The batch MUST NOT be
+    # created if the exact required symbol is not cached **and** a
+    # requirement has already been recorded for this evidence.  When
+    # no requirement has been recorded yet the metadata_only
+    # profile IS the probe that records the requirement; we allow
+    # the batch to proceed so the analyst can run metadata_only
+    # once.  After that run finishes, the requirement is recorded
+    # and the next batch attempt is blocked with
+    # MEMORY_SYMBOLS_REQUIRED until symbols are acquired.
+    from app.services.memory.symbol_state import (
+        EC_SYMBOLS_REQUIRED,
+        STATE_CACHED,
+        evidence_symbol_state,
+    )
+
+    symbol_state = evidence_symbol_state(
+        db,
+        case_id=case_id,
+        evidence_id=evidence_id,
+        acquisition_gate_available=False,
+    )
+    if symbol_state.state == STATE_CACHED:
+        # Exact match: the batch may proceed.
+        pass
+    elif symbol_state.requirement is None:
+        # No requirement has been recorded yet.  Allow the batch;
+        # metadata_only will probe the requirement and either succeed
+        # (cache hit) or fail (record the requirement and surface
+        # MEMORY_SYMBOLS_REQUIRED on the next attempt).
+        pass
+    else:
+        # The exact symbol is not cached.  We do NOT create a batch
+        # and we do NOT create a MemoryScanRun.  The structured
+        # response (with ``symbol_status``, ``can_acquire``) tells
+        # the UI exactly which path to follow.
+        from app.services.memory.symbol_control import acquisition_gate as _acq_gate
+        available, gate_code, _ = _acq_gate()
+        raise MemoryBatchError(
+            EC_SYMBOLS_REQUIRED,
+            symbol_state.blocker
+            or "Windows symbols required for this evidence are not cached.",
+            status_code=409,
+            extra={
+                "evidence_id": evidence_id,
+                "symbol_status": symbol_state.state,
+                "can_acquire": bool(available and symbol_state.acquisition_supported),
+                "required_identifier": symbol_state.requirement.identifier if symbol_state.requirement else None,
+                "blocker": symbol_state.blocker,
+            },
         )
     try:
         validate_current_process_evidence_access(evidence, settings=get_settings())
