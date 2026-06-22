@@ -12,11 +12,14 @@ catalogue modal in the UI.
 """
 from __future__ import annotations
 
+import ast
+import subprocess
 from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models.memory import MemoryScanRun
 from app.services.memory.volatility_runner import network_basic_available
 
@@ -92,8 +95,53 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
 
 
 NETWORK_UNAVAILABLE_REASON = (
-    "No compatible Windows network plugin is available in the installed Volatility runtime."
+    "Network analysis is not available in this runtime. "
+    "The capability must be probed in the memory-worker process."
 )
+NETWORK_REQUIRES_VALIDATION_REASON = (
+    "Network analysis is available in the worker runtime. "
+    "Requirements for this evidence have not been validated yet."
+)
+
+
+def _probe_network_via_worker() -> tuple[bool, str]:
+    """Ask the memory-worker process for its network capability.
+
+    The API process does not install volatility3.  Calling
+    :func:`network_basic_available` from the API process would
+    always return ``absent_in_runtime`` regardless of what the
+    worker can actually do.  Instead we shell out to the worker
+    container (or fall back to the in-process probe when the
+    worker is unreachable).
+
+    The probe is read-only and bounded.
+    """
+    settings = get_settings()
+    try:
+        # Re-use the same Docker invocation the backend uses to
+        # reach the worker.  ``docker exec`` is the contract the
+        # backend already has with the worker; no new channels.
+        result = subprocess.run(
+            [
+                "docker", "exec",
+                settings.memory_worker_container_name or "dfir_app-memory-worker-1",
+                "python3", "-c",
+                "from app.services.memory.volatility_runner import network_basic_available; "
+                "import sys; r = network_basic_available(); sys.stdout.write(repr(r))",
+            ],
+            capture_output=True, text=True, timeout=20,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return False, f"Could not probe memory-worker: {exc}"
+    if result.returncode != 0:
+        return False, (
+            f"Memory-worker probe failed: {result.stderr.strip()[:200] or 'unknown error'}"
+        )
+    try:
+        available, explanation = ast.literal_eval(result.stdout.strip())
+    except Exception as exc:  # noqa: BLE001
+        return False, f"Could not parse worker probe output: {exc}"
+    return bool(available), str(explanation)
 
 
 def build_analysis_catalogue(
@@ -127,14 +175,11 @@ def build_analysis_catalogue(
         )
         runs_by_profile[profile_def["profile"]] = run
 
-    network_available, network_explanation = network_basic_available()
+    # The API process does not install volatility3.  Probe the
+    # memory-worker instead so the catalogue reflects the actual
+    # worker runtime, not the API's own import graph.
+    network_available, network_explanation = _probe_network_via_worker()
     network_state = "available" if network_available else "unavailable"
-    # Distinguish "runtime plugin missing" (truly absent) from
-    # "requirements not yet validated" (plugin present, full layer
-    # probe not yet run).  The Memory worker probe decides this;
-    # the API process never shells out to Volatility directly.
-    if not network_available and "importable" not in network_explanation:
-        network_state = "unavailable"
 
     items: list[dict[str, Any]] = []
     for profile_def in PROFILE_CATALOGUE:

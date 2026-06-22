@@ -107,17 +107,12 @@ _MBR_SIGNATURE = b"\x55\xaa"
 _GPT_SIGNATURE = b"EFI PART"
 
 
-# NTFS detection.
-_NTFS_MARKERS: list[bytes] = [
-    b"NTFS    ",
-    b"\x02\x00\x00\x00\x00\x00\x00\x00",  # boot sector jump
-    b"MSDOS",
-    b"EXFAT",
-    b"FAT32",
-    b"FAT16",
-    b"FAT12",
-    b"FAT",
-]
+# NTFS detection.  The legacy matchers (strings like "NTFS" or
+# "MSDOS" found anywhere in the first 1 KiB) produced false
+# positives on arbitrary memory dumps.  The structural validators
+# in :func:`_has_valid_ntfs_boot_sector` are the only NTFS path
+# now; the markers are kept for documentation only.
+_NTFS_MARKERS: list[bytes] = []
 
 
 # ext2/3/4 superblock magic.
@@ -156,17 +151,157 @@ class ProbeResult:
 
 
 def _is_disk_image(header: bytes) -> bool:
-    """Return True when the header shows a clear disk signature."""
-    if len(header) >= 512 and header[510:512] == _MBR_SIGNATURE:
+    """Return True when the header shows a CLEAR disk signature.
+
+    A single weak match is NOT enough to classify the image as
+    ``probable_disk``: short byte sequences (e.g. MBR's 2-byte
+    signature at offset 510) appear in arbitrary data.  This routine
+    demands coherent structural evidence before returning True.
+    """
+    if _has_valid_mbr(header):
         return True
-    if _GPT_SIGNATURE in header[:1024]:
+    if _has_valid_gpt(header):
         return True
-    if any(marker in header[:1024] for marker in _NTFS_MARKERS):
+    if _has_valid_ntfs_boot_sector(header):
         return True
-    if (len(header) >= _EXT_MAGIC_OFFSET + 2
-            and header[_EXT_MAGIC_OFFSET:_EXT_MAGIC_OFFSET + 2] == _EXT_MAGIC):
+    if _has_valid_fat_boot_sector(header):
+        return True
+    if _has_valid_ext_superblock(header):
         return True
     return False
+
+
+def _has_valid_mbr(header: bytes) -> bool:
+    """Return True when the header contains a structurally valid MBR.
+
+    A valid MBR has:
+
+    * 0x55 0xAA signature at offset 510.
+    * Four 16-byte partition entries starting at offset 446.
+    * At least one entry with a non-zero boot indicator (0x80) and
+      a plausible partition type, or an entry with a non-zero type
+      and a start LBA < total sectors.
+
+    Two-byte matches alone are not sufficient.
+    """
+    if len(header) < 512 or header[510:512] != _MBR_SIGNATURE:
+        return False
+    entries = header[446:510]
+    if len(entries) < 64:
+        return False
+    for i in range(4):
+        entry = entries[i * 16:(i + 1) * 16]
+        if len(entry) < 16:
+            continue
+        boot_indicator = entry[0]
+        ptype = entry[4]
+        start_lba = int.from_bytes(entry[8:12], "little", signed=False)
+        size_lba = int.from_bytes(entry[12:16], "little", signed=False)
+        if ptype == 0:
+            continue
+        if boot_indicator not in (0, 0x80):
+            return False
+        if size_lba == 0:
+            return False
+        if start_lba > 0xFFFFFFFF:
+            return False
+    return True
+
+
+def _has_valid_gpt(header: bytes) -> bool:
+    """Return True when the header contains a structurally valid GPT."""
+    if len(header) < 1024:
+        return False
+    signature_pos = header.find(_GPT_SIGNATURE)
+    if signature_pos < 0 or signature_pos > 512:
+        return False
+    rev = int.from_bytes(header[signature_pos + 8:signature_pos + 12], "little")
+    if rev < 0x00010000 or rev > 0x00FFFFFF:
+        return False
+    header_size = int.from_bytes(header[signature_pos + 12:signature_pos + 16], "little")
+    if header_size not in (92, 216):
+        return False
+    my_lba = int.from_bytes(header[signature_pos + 24:signature_pos + 32], "little")
+    backup_lba = int.from_bytes(header[signature_pos + 32:signature_pos + 40], "little")
+    if my_lba == 0 or backup_lba == 0 or my_lba == backup_lba:
+        return False
+    entry_size = int.from_bytes(header[signature_pos + 84:signature_pos + 88], "little")
+    entry_count = int.from_bytes(header[signature_pos + 80:signature_pos + 84], "little")
+    if entry_size not in (128, 256):
+        return False
+    if entry_count < 1 or entry_count > 256:
+        return False
+    return True
+
+
+def _has_valid_ntfs_boot_sector(header: bytes) -> bool:
+    """Return True when offset 0 contains a structurally valid NTFS VBR.
+
+    A valid NTFS boot sector has:
+
+    * Jump instruction 0xEB 0x52 0x90 or 0xEB 0x53 0x90 at offset 0.
+    * OEM ID "NTFS    " at offset 3.
+    * bytes_per_sector of 512, 1024, 2048 or 4096.
+    * sectors_per_cluster a power of two.
+    * total_sectors > 0 and consistent with a plausible file size.
+    * ``"NTFS"`` signature at offset 0x28 (NTFS-specific marker).
+    """
+    if len(header) < 512:
+        return False
+    if header[0] != 0xEB or header[2] != 0x90:
+        return False
+    if header[3:11] != b"NTFS    ":
+        return False
+    bytes_per_sector = int.from_bytes(header[11:13], "little")
+    if bytes_per_sector not in (512, 1024, 2048, 4096):
+        return False
+    spc = header[13]
+    if spc == 0 or (spc & (spc - 1)) != 0:
+        return False
+    total_sectors = int.from_bytes(header[40:48], "little")
+    if total_sectors == 0:
+        return False
+    if header[3:7] != b"NTFS" and header[0x28:0x2C] != b"NTFS":
+        return False
+    return True
+
+
+def _has_valid_fat_boot_sector(header: bytes) -> bool:
+    """Return True when offset 0 contains a structurally valid FAT VBR."""
+    if len(header) < 512:
+        return False
+    if header[0] not in (0xEB, 0xE9):
+        return False
+    oem = header[3:11]
+    if not (3 <= len(oem) <= 8):
+        return False
+    bytes_per_sector = int.from_bytes(header[11:13], "little")
+    if bytes_per_sector not in (512, 1024, 2048, 4096):
+        return False
+    spc = header[13]
+    if spc == 0 or (spc & (spc - 1)) != 0:
+        return False
+    total_sectors = int.from_bytes(header[19:21], "little")
+    if total_sectors == 0:
+        return False
+    return True
+
+
+def _has_valid_ext_superblock(header: bytes) -> bool:
+    """Return True when offset 1024+56 contains the ext superblock magic
+    and plausible structural fields."""
+    if len(header) < _EXT_MAGIC_OFFSET + 256:
+        return False
+    if header[_EXT_MAGIC_OFFSET:_EXT_MAGIC_OFFSET + 2] != _EXT_MAGIC:
+        return False
+    s_inodes = int.from_bytes(header[_EXT_MAGIC_OFFSET + 4:_EXT_MAGIC_OFFSET + 8], "little")
+    s_blocks = int.from_bytes(header[_EXT_MAGIC_OFFSET + 24:_EXT_MAGIC_OFFSET + 28], "little")
+    if s_inodes == 0 or s_blocks == 0:
+        return False
+    s_log_block_size = int.from_bytes(header[_EXT_MAGIC_OFFSET + 24:_EXT_MAGIC_OFFSET + 28], "little")
+    if s_log_block_size > 16:
+        return False
+    return True
 
 
 def _is_compressed_or_archive(header: bytes) -> bool:

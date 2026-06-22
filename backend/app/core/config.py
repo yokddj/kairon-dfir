@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     memory_worker_concurrency: int = 1
     memory_worker_uid: int = 10001
     memory_worker_gid: int = 10001
+    memory_worker_container_name: str = "dfir_app-memory-worker-1"
     memory_evidence_shared_gid: int = 10001
     memory_allowed_plugins: str = (
         "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,"
