@@ -268,6 +268,25 @@ def _v4_evidence_memory_detection(connection: Connection) -> None:
             )
 
 
+@register(5, "evidences_operator_override_at")
+def _v5_evidence_operator_override_at(connection: Connection) -> None:
+    """Add the ``operator_override_at`` column to the ``evidences``
+    table.
+
+    Migration v4 was deployed before this column existed; this
+    migration is idempotent and adds the column on databases that
+    were upgraded to v4 before this field was introduced.
+    """
+    inspector = _inspector_for(connection)
+    if "evidences" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("evidences")}
+    if "operator_override_at" not in existing:
+        connection.execute(
+            text("ALTER TABLE evidences ADD COLUMN operator_override_at TIMESTAMP")
+        )
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 
