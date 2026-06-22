@@ -239,6 +239,31 @@ def register_memory_evidence(upload_id: str, *, db: Session | None = None) -> Ev
             processed_at=utc_now_naive(),
         )
         db.add(evidence)
+        # Run the read-only content probe to classify the uploaded
+        # memory image.  The probe never blocks the upload; its verdict
+        # is stored on the evidence row and surfaced through the UI.
+        try:
+            from app.services.memory.probe import probe_memory_image as _probe
+            from app.core.database import utc_now_naive as _now
+            probe_result = _probe(Path(canonical))
+            evidence.detected_format = probe_result.detected_format
+            evidence.detection_status = probe_result.status
+            evidence.detection_confidence = probe_result.confidence
+            evidence.detection_reason = probe_result.reason
+            evidence.probe_version = "memory_probe_v1"
+            evidence.probed_at = _now()
+            if probe_result.status == "probable_disk":
+                # Down-classify: still registered as memory_dump for
+                # compatibility, but the operator must confirm.
+                evidence.detection_reason = (
+                    probe_result.reason
+                    + " Operator can confirm as disk or override as memory."
+                )
+        except Exception as probe_exc:  # noqa: BLE001
+            logger.warning(
+                "memory image probe failed during registration: %s",
+                probe_exc,
+            )
         item.status = "completed"
         item.failure_code = None
         item.failure_message = None

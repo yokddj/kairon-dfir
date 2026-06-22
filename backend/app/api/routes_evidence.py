@@ -4,7 +4,7 @@ import re
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from redis import Redis
@@ -123,7 +123,7 @@ RAW_COLLECTION_ENTRY_PATTERNS = (
     r"windows/system32/config/(system|software|sam|security)$",
     r"users/[^/]+/(ntuser\.dat|appdata/local/microsoft/windows/usrclass\.dat)$",
 )
-MEMORY_UPLOAD_CANDIDATE_EXTENSIONS = {".raw", ".mem", ".vmem", ".dmp", ".lime", ".aff4"}
+MEMORY_UPLOAD_CANDIDATE_EXTENSIONS = {".raw", ".mem", ".dmp", ".dump", ".bin", ".img", ".vmem", ".lime", ".aff4"}
 
 
 def _load_evidence_manifest(item: Evidence) -> dict:
@@ -1702,6 +1702,128 @@ def _capture_reingest_baseline(item: Evidence, existing_metadata: dict, previous
         "detected_host": item.detected_host,
         "by_parser": dict(sorted(by_parser.items())),
         "by_artifact_type": dict(sorted(by_artifact_type.items())),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Memory image probe (content-based detection)
+# ---------------------------------------------------------------------------
+
+PROBE_VERSION = "memory_probe_v1"
+
+
+@router.post(
+    "/api/cases/{case_id}/evidences/probe-memory-image",
+    response_model=None,
+)
+def probe_memory_image(
+    case_id: str,
+    evidence_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Run the read-only content probe on an existing memory-image
+    evidence and persist the verdict on the row.
+
+    The probe is idempotent: re-running it overwrites the previous
+    verdict with the new one.  The file is not re-read in full; only
+    the first 1 MiB and last 64 KiB are sampled.
+    """
+    from app.services.memory.probe import probe_memory_image as _probe
+    from app.core.database import utc_now_naive
+
+    if not db.get(Case, case_id):
+        raise HTTPException(status_code=404, detail="Case not found.")
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Evidence not found for this case.")
+    if not evidence.stored_path:
+        raise HTTPException(status_code=400, detail="Evidence has no stored path; nothing to probe.")
+
+    abs_path = Path(evidence.stored_path)
+    if not abs_path.is_absolute():
+        # Resolve relative to the data dir.
+        from app.core.storage import data_dir
+        abs_path = data_dir() / abs_path
+    if not abs_path.exists():
+        raise HTTPException(status_code=400, detail="Stored file is missing on disk.")
+
+    result = _probe(abs_path)
+    evidence.detected_format = result.detected_format
+    evidence.detection_status = result.status
+    evidence.detection_confidence = result.confidence
+    evidence.detection_reason = result.reason
+    evidence.probe_version = PROBE_VERSION
+    evidence.probed_at = utc_now_naive()
+    db.commit()
+    db.refresh(evidence)
+    return {
+        "evidence_id": evidence.id,
+        "case_id": evidence.case_id,
+        "requested_type": "memory",
+        "detected_type": result.detected_evidence_type,
+        "detected_format": result.detected_format,
+        "status": result.status,
+        "confidence": result.confidence,
+        "reason": result.reason,
+        "requires_confirmation": result.requires_confirmation,
+        "can_analyze": result.can_analyze,
+        "probe_version": PROBE_VERSION,
+        "file_size": result.file_size,
+        "extension": result.extension,
+        "operator_override": evidence.operator_override,
+    }
+
+
+@router.post(
+    "/api/cases/{case_id}/evidences/{evidence_id}/confirm-memory-type",
+    response_model=None,
+)
+def confirm_memory_type(
+    case_id: str,
+    evidence_id: str,
+    payload: dict | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Operator override for an ambiguous_raw verdict.
+
+    The endpoint is only meaningful when the evidence's current
+    ``detection_status`` is ``ambiguous_raw`` and the probe is at
+    a recent enough version.  The override is audited via
+    ``operator_override`` and ``operator_override_reason`` fields.
+    """
+    if not db.get(Case, case_id):
+        raise HTTPException(status_code=404, detail="Case not found.")
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Evidence not found for this case.")
+    if evidence.detection_status != "ambiguous_raw":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Confirmation is only valid when detection_status is "
+                "'ambiguous_raw'; this evidence is "
+                f"'{evidence.detection_status}'."
+            ),
+        )
+    payload = payload or {}
+    reason = (payload.get("reason") or "").strip()
+    if not reason:
+        raise HTTPException(
+            status_code=400,
+            detail="A non-empty reason is required for the operator override.",
+        )
+    evidence.operator_override = True
+    evidence.operator_override_reason = reason[:512]
+    evidence.detection_status = "ambiguous_raw_confirmed"
+    db.commit()
+    db.refresh(evidence)
+    return {
+        "evidence_id": evidence.id,
+        "case_id": evidence.case_id,
+        "status": evidence.detection_status,
+        "operator_override": evidence.operator_override,
+        "operator_override_reason": evidence.operator_override_reason,
+        "can_analyze": True,
     }
 
 

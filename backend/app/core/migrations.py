@@ -236,6 +236,37 @@ def _v3_canonical_materialization_columns(connection: Connection) -> None:
             )
 
 
+@register(4, "evidences_memory_detection")
+def _v4_evidence_memory_detection(connection: Connection) -> None:
+    """Add memory image detection fields to the ``evidences`` table.
+
+    These fields are populated by the read-only content probe that
+    runs on memory-image uploads.  Existing evidence rows are NOT
+    reclassified automatically: nullable defaults are used everywhere.
+    """
+    inspector = _inspector_for(connection)
+    if "evidences" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("evidences")}
+    column_defs = {
+        "detected_format": "VARCHAR(64)",
+        "detection_status": "VARCHAR(32)",
+        "detection_confidence": "VARCHAR(16)",
+        "detection_reason": "VARCHAR(512)",
+        "probe_version": "VARCHAR(32)",
+        "operator_override": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "operator_override_reason": "VARCHAR(512)",
+        "probed_at": "TIMESTAMP",
+    }
+    for column_name, column_type in column_defs.items():
+        if column_name not in existing:
+            connection.execute(
+                text(
+                    f"ALTER TABLE evidences ADD COLUMN {column_name} {column_type}"
+                )
+            )
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 
