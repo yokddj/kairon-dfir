@@ -57,7 +57,7 @@ class Evidence(UUIDMixin, Base):
     # image probe; nullable for evidence that is not a memory
     # candidate.
     detected_format: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    detection_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    detection_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
     detection_confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
     detection_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
     probe_version: Mapped[str | None] = mapped_column(String(32), nullable=True)

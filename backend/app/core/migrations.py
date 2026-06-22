@@ -287,6 +287,29 @@ def _v5_evidence_operator_override_at(connection: Connection) -> None:
         )
 
 
+@register(6, "evidences_detection_status_widen")
+def _v6_evidence_detection_status_widen(connection: Connection) -> None:
+    """Widen ``evidences.detection_status`` to VARCHAR(64).
+
+    The probe false-positives sprint introduced
+    ``probable_disk_confirmed_as_memory`` (34 chars), which overflows
+    the original VARCHAR(32) limit.  This migration is idempotent:
+    it only alters the column when it is still narrower than
+    VARCHAR(64).
+    """
+    inspector = _inspector_for(connection)
+    if "evidences" not in inspector.get_table_names():
+        return
+    for col in inspector.get_columns("evidences"):
+        if col["name"] == "detection_status":
+            current = str(col["type"]).upper()
+            if "VARCHAR(32)" in current or "VARCHAR(16)" in current:
+                connection.execute(
+                    text("ALTER TABLE evidences ALTER COLUMN detection_status TYPE VARCHAR(64)")
+                )
+            return
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 
