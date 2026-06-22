@@ -226,6 +226,11 @@ def _can_analyze(evidence) -> bool:
         return False
     if status in {"unsupported", "invalid", "probe_failed"}:
         return False
+    # Operator-overridden statuses are always analysable.
+    if bool(evidence.operator_override) and status in {
+        "ambiguous_raw_confirmed", "probable_disk_confirmed_as_memory",
+    }:
+        return True
     if status and status not in {"not_required", "ambiguous_raw_confirmed"}:
         # Any other non-empty status that is not explicitly usable blocks.
         return False

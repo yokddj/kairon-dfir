@@ -138,10 +138,18 @@ def test_octet_stream_mime_does_not_block_ingest(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_probable_disk_detected_from_mbr_signature(tmp_path: Path) -> None:
-    """A .img file with an MBR signature is classified as probable_disk."""
-    content = b"\x00" * 510 + b"\x55\xaa" + b"\x00" * (2 * 1024 * 1024)
-    path = _make_fixture_file(tmp_path, content, ".img")
+def test_probable_disk_detected_from_valid_mbr_signature(tmp_path: Path) -> None:
+    """A .img file with a structurally valid MBR is classified as probable_disk."""
+    # A real MBR has a valid partition entry.  Just the 2-byte
+    # signature alone is not enough after the probe hardening.
+    content = bytearray(1024 * 1024)
+    content[510:512] = b"\x55\xaa"
+    # Partition entry 0: bootable NTFS, start LBA 2048, size 204800.
+    content[446 + 0] = 0x80
+    content[446 + 4] = 0x07
+    content[446 + 8:446 + 12] = (2048).to_bytes(4, "little")
+    content[446 + 12:446 + 16] = (204800).to_bytes(4, "little")
+    path = _make_fixture_file(tmp_path, bytes(content), ".img")
     result = probe_memory_image(path)
     assert result.status == STATUS_PROBABLE_DISK
     assert result.detected_evidence_type == "disk"
