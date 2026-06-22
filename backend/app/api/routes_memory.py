@@ -555,7 +555,6 @@ def cancel_memory_upload_endpoint(
     * Only the staged (incomplete) file is deleted.
     """
     from app.services.memory.upload_lifecycle import cancel_memory_upload
-    from app.core.auth import get_current_optional_user
     _require_case(db, case_id)
     item = get_memory_upload(db, case_id, upload_id)
     if item is None:
