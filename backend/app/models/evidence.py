@@ -63,6 +63,7 @@ class Evidence(UUIDMixin, Base):
     probe_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
     operator_override: Mapped[bool] = mapped_column(default=False, nullable=False)
     operator_override_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    operator_override_at: Mapped[datetime | None] = mapped_column(nullable=True)
     probed_at: Mapped[datetime | None] = mapped_column(nullable=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     file_count: Mapped[int | None] = mapped_column(nullable=True)

@@ -256,6 +256,7 @@ def _v4_evidence_memory_detection(connection: Connection) -> None:
         "probe_version": "VARCHAR(32)",
         "operator_override": "BOOLEAN NOT NULL DEFAULT FALSE",
         "operator_override_reason": "VARCHAR(512)",
+        "operator_override_at": "TIMESTAMP",
         "probed_at": "TIMESTAMP",
     }
     for column_name, column_type in column_defs.items():

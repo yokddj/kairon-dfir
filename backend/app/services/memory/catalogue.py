@@ -127,7 +127,14 @@ def build_analysis_catalogue(
         )
         runs_by_profile[profile_def["profile"]] = run
 
-    network_unavailable = not network_basic_available()[0]
+    network_available, network_explanation = network_basic_available()
+    network_state = "available" if network_available else "unavailable"
+    # Distinguish "runtime plugin missing" (truly absent) from
+    # "requirements not yet validated" (plugin present, full layer
+    # probe not yet run).  The Memory worker probe decides this;
+    # the API process never shells out to Volatility directly.
+    if not network_available and "importable" not in network_explanation:
+        network_state = "unavailable"
 
     items: list[dict[str, Any]] = []
     for profile_def in PROFILE_CATALOGUE:
@@ -151,9 +158,16 @@ def build_analysis_catalogue(
         is_network = profile == "network_basic"
         available = True
         availability_reason: str | None = None
-        if is_network and network_unavailable:
+        if is_network and network_state == "unavailable":
             available = False
             availability_reason = NETWORK_UNAVAILABLE_REASON
+        elif is_network and network_available:
+            # Plugin is importable in the memory-worker runtime.  The
+            # backend process itself does not probe the plugin; the
+            # frontend should display "Available · Not analyzed"
+            # until the first analysis actually runs.
+            available = True
+            availability_reason = "Available · Requirements not yet validated"
 
         items.append(
             {
