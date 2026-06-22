@@ -52,17 +52,35 @@ function familyHref(caseId: string, evidenceId: string, item: MemoryAnalysisCata
 function StatusBadge({
   status,
   available,
+  gateType,
 }: {
   status: string | null;
   available: boolean;
+  gateType?: "available" | "blocked_symbol_probe_required" | "blocked_symbols_missing" | "blocked_acquisition_pending" | "unavailable";
 }) {
-  if (!available) {
+  if (!available || gateType === "unavailable") {
     return (
       <span
         className="rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-0.5 text-[10px] text-rose-100"
         data-testid="catalogue-unavailable"
       >
         Unavailable
+      </span>
+    );
+  }
+  if (gateType && gateType.startsWith("blocked")) {
+    const label = gateType === "blocked_symbol_probe_required"
+      ? "Blocked — Probe required"
+      : gateType === "blocked_symbols_missing"
+        ? "Blocked — Symbols missing"
+        : "Blocked — Acquisition pending";
+    return (
+      <span
+        className="rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-100"
+        data-testid="catalogue-blocked"
+        data-gate-type={gateType}
+      >
+        {label}
       </span>
     );
   }
@@ -154,7 +172,7 @@ function CatalogueCard({
               <span className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted">
                 {item.profile}
               </span>
-              <StatusBadge status={item.last_status} available={item.available} />
+              <StatusBadge status={item.last_status} available={item.available} gateType={item.gate_type} />
             </div>
             <p className="mt-1 text-xs text-muted">{item.description}</p>
             <p className="mt-2 text-[11px] text-rose-100" data-testid="catalogue-unavailable-reason">
@@ -199,7 +217,7 @@ function CatalogueCard({
               {item.profile}
             </span>
             <CostLabel label={item.cost_label} />
-            <StatusBadge status={item.last_status} available={item.available} />
+            <StatusBadge status={item.last_status} available={item.available} gateType={item.gate_type} />
           </div>
           <p className="mt-1 text-xs text-muted">{item.description}</p>
           <p className="mt-1 text-[10px] text-muted" data-testid={`catalogue-est-duration-${item.profile}`}>

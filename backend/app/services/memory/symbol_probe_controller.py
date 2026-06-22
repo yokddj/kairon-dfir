@@ -333,6 +333,9 @@ def _persist_requirement(db, evidence: Evidence, requirement: SymbolRequirement)
         architecture=identity.architecture,
         symbol_key=symbol_key,
         status="unavailable_offline",
+        source="probe",
+        confidence="high",
+        metadata_json={},
         sanitized_message="Required Windows symbols are not present in the offline cache.",
     )
     db.add(requirement_row)

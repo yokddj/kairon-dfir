@@ -93,12 +93,15 @@ def record_symbol_requirement(db: Session, run: MemoryScanRun, plugin_run_id: st
         source_plugin_run_id=plugin_run_id,
         pdb_name=identity.pdb_name,
         pdb_guid=identity.guid,
-        pdb_age=identity.age,
-        requested_pdb_age=identity.age,
+        pdb_age=int(identity.age),
+        requested_pdb_age=int(identity.age),
         age_corrected=False,
         architecture=identity.architecture,
         symbol_key=identity.key,
         status="unavailable_offline",
+        source="probe",
+        confidence="high",
+        metadata_json={},
         sanitized_message="Required Windows symbols are not present in the offline cache.",
     )
     db.add(requirement)

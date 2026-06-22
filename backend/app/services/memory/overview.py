@@ -227,6 +227,9 @@ def get_evidence_landing(db: Session, case_id: str) -> list[dict]:
         item["can_analyze_metadata"] = state.can_analyze_metadata
         item["can_run_all"] = state.can_run_all
         item["symbol_error_code"] = state.error_code
+        item["symbol_source"] = state.source
+        item["symbol_confidence"] = state.confidence
+        item["symbol_reconstructed_at"] = state.reconstructed_at
         enriched.append(item)
     return enriched
 

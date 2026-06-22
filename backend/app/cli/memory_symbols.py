@@ -165,6 +165,31 @@ def cmd_status(args: argparse.Namespace) -> int:
     return cmd_show(args)
 
 
+def cmd_backfill(args: argparse.Namespace) -> int:
+    """Reconstruct missing symbol requirements from history.
+
+    The function is read-only with respect to Volatility: it only
+    walks the database, the OpenSearch index for ``memory_system_info``
+    documents, and the existing ``MemoryCachedSymbol`` rows.  It
+    persists a new ``MemorySymbolRequirement`` row for each
+    evidence where the requirement can be reconstructed and no row
+    already exists.  When the exact identifier is in the cache, the
+    row is recorded as ``status=cached``; otherwise as
+    ``status=unavailable_offline`` so the UI can offer the
+    acquisition flow.
+    """
+    from app.services.memory.symbol_backfill import backfill_memory_symbol_readiness
+
+    with SessionLocal() as db:
+        stats = backfill_memory_symbol_readiness(
+            db,
+            case_id=args.case_id,
+            evidence_id=args.evidence_id,
+        )
+    _print_json(stats.to_dict())
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m app.cli.memory_symbols",
@@ -197,6 +222,17 @@ def build_parser() -> argparse.ArgumentParser:
     p_status = sub.add_parser("status", help="Alias for show.")
     p_status.add_argument("--request-id", required=True)
     p_status.set_defaults(func=cmd_status)
+
+    p_backfill = sub.add_parser(
+        "backfill",
+        help=(
+            "Reconstruct missing MemorySymbolRequirement rows from history. "
+            "Idempotent. Never executes Volatility, never downloads symbols."
+        ),
+    )
+    p_backfill.add_argument("--case-id", default=None, help="Limit to a single case.")
+    p_backfill.add_argument("--evidence-id", default=None, help="Limit to a single evidence.")
+    p_backfill.set_defaults(func=cmd_backfill)
 
     return parser
 

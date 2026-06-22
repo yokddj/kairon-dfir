@@ -97,6 +97,26 @@ def on_startup() -> None:
         reconcile_memory_batches(db)
     finally:
         db.close()
+    # Recover per-evidence symbol readiness for legacy evidences.
+    # The backfill is idempotent: it never overwrites an existing
+    # valid requirement, never executes Volatility and never
+    # downloads symbols.  A failure here MUST NOT prevent the API
+    # from starting; we log and continue.
+    import logging
+    logger = logging.getLogger(__name__)
+    from app.services.memory.symbol_backfill import backfill_memory_symbol_readiness
+    db = SessionLocal()
+    try:
+        stats = backfill_memory_symbol_readiness(db)
+        if stats.reconstructed > 0:
+            logger.info(
+                "memory symbol readiness backfill reconstructed %d evidence(s)",
+                stats.reconstructed,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory symbol readiness backfill skipped: %s", exc)
+    finally:
+        db.close()
 
 
 @app.get("/health")
