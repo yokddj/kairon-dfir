@@ -15,17 +15,17 @@ function detectionDisplay(
 ): DetectionDisplay | null {
   const s = (status || "").toLowerCase();
   if (!s) return null;
-  if (s === "ambiguous_raw_confirmed" || operatorOverride) {
+  if (s === "ambiguous_raw_confirmed" || s === "probable_disk_confirmed_as_memory" || operatorOverride) {
     return { label: "Confirmed memory evidence", tone: "good" };
   }
   if (s === "ambiguous_raw") {
     return { label: "Confirmation required", tone: "warn" };
   }
-  if (s === "probable_memory" || s === "confirmed_memory") {
-    return { label: `${format || "Memory image"} (${confidence || "confirmed"})`, tone: "good" };
-  }
   if (s === "probable_disk") {
     return { label: "Probable disk image", tone: "bad" };
+  }
+  if (s === "probable_memory" || s === "confirmed_memory") {
+    return { label: `${format || "Memory image"} (${confidence || "confirmed"})`, tone: "good" };
   }
   if (s === "unsupported" || s === "invalid" || s === "probe_failed") {
     return { label: `Cannot analyze (${s})`, tone: "bad" };
@@ -256,6 +256,16 @@ export function MemoryEvidenceHeader({
             This evidence was classified as a probable disk image by the content probe. Import it as disk evidence
             or confirm it as memory before analyzing.
           </p>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={onOpenCatalogue}
+              data-testid="memory-probable-disk-confirm-button"
+              className="rounded-md border border-rose-300/40 bg-rose-500/20 px-2 py-0.5 text-[10px] font-semibold text-ink"
+            >
+              Confirm as memory evidence
+            </button>
+          </div>
         </div>
       ) : null}
 

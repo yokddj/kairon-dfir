@@ -195,9 +195,66 @@ def run_windows_info(evidence_path: Path, work_dir: Path) -> VolatilityRunResult
     return run_plugin("windows.info", evidence_path, work_dir)
 
 
+# Volatility 3 sends progress messages (e.g. ``Scanning FileLayer
+# using PageMapScanner...``) to stderr.  We must NOT treat them as
+# errors.  The real error is at the end of the stderr stream, after
+# a Python traceback.
+_PROGRESS_LINE_PREFIXES = (
+    "scanning ",
+    "constructing ",
+    "building ",
+    "loading ",
+    "opening ",
+    "reading ",
+    "using ",
+    "trying ",
+    "attempting ",
+    "validating ",
+    "verifying ",
+    "initialising ",
+    "progress:",
+    "info:",
+    "debug:",
+    "warning:",
+    "warn:",
+    "[",
+    "volatility",
+)
+
+
+def _strip_progress_lines(stderr_text: str) -> str:
+    """Filter Volatility progress noise out of a stderr string.
+
+    Only lines that look like an actual error (Python tracebacks,
+    ``Error:`` lines, exit messages) are returned.
+    """
+    keep: list[str] = []
+    for line in stderr_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Always keep Python traceback lines.
+        if stripped.startswith(("Traceback ", "  File ", "    ")):
+            keep.append(line)
+            continue
+        lower = stripped.lower()
+        # Keep error/exception lines.
+        if any(token in lower for token in ("error", "exception", "fatal", "failed", "traceback")):
+            keep.append(line)
+            continue
+        # Discard progress noise.
+        if any(lower.startswith(prefix) for prefix in _PROGRESS_LINE_PREFIXES):
+            continue
+        # Keep anything else (e.g. symbol table dumps, requirement
+        # errors, the final ``Volatility 3 Framework`` summary).
+        keep.append(line)
+    return "\n".join(keep)
+
+
 def _classify_failure(stderr: bytes) -> tuple[str, str]:
     raw = stderr.decode("utf-8", errors="replace")
-    lower = raw.lower()
+    cleaned = _strip_progress_lines(raw)
+    lower = cleaned.lower()
     if "read-only file system" in lower and ("symbol" in lower or "pdb" in lower):
         return "MEMORY_SYMBOL_CACHE_NOT_WRITABLE", "Volatility could not use its controlled symbol cache under the read-only worker filesystem."
     if "symbol_table_name" in lower or ("unable to validate" in lower and "symbol" in lower):
@@ -208,7 +265,14 @@ def _classify_failure(stderr: bytes) -> tuple[str, str]:
         return "UNSUPPORTED_MEMORY_IMAGE", "Volatility could not construct a supported Windows memory layer for this image."
     if "unable to validate" in lower or "requirement" in lower:
         return "PLUGIN_REQUIREMENTS_UNSATISFIED", "Volatility could not satisfy the windows.info plugin requirements."
-    text = sanitize_backend_error(raw)
+    # If everything was progress noise, return a structured error
+    # so the UI does not display raw progress text as an error.
+    if not cleaned.strip():
+        return "MEMORY_PLUGIN_EXECUTION_FAILED", (
+            "Volatility did not return a parseable error. The image may be truncated, encrypted, "
+            "or unsupported by the installed runtime."
+        )
+    text = sanitize_backend_error(cleaned)
     return "PLUGIN_FAILED", text or "Volatility windows.info failed."
 
 
@@ -304,7 +368,29 @@ def network_basic_available() -> tuple[bool, str]:
     * ``importable``       - module imports and exposes the class
     * ``import_error``     - module file exists but import raises
     * ``absent_in_runtime``- module not present in the runtime
+    * ``process_no_volatility`` - volatility3 is not installed in the
+      current Python interpreter (e.g. the API process).  The
+      capability must be probed in the memory-worker.
     """
+    # Detect whether volatility3 is available in this process.  The
+    # API process does not install it; only the dedicated memory
+    # worker does.  Reporting "missing dependency: volatility3"
+    # here is misleading.
+    try:
+        import volatility3  # noqa: F401
+        volatility3_installed = True
+        volatility3_path = getattr(volatility3, "__file__", None) or "unknown"
+        volatility3_version = _safe_volatility_version()
+    except Exception:  # noqa: BLE001
+        volatility3_installed = False
+        volatility3_path = None
+        volatility3_version = None
+    if not volatility3_installed:
+        return False, (
+            "Volatility 3 is not installed in the API process. "
+            "Network capability must be probed in the dedicated memory-worker "
+            "runtime; check /api/memory/backends for the worker status."
+        )
     diagnostics: list[str] = []
     for plugin in NETWORK_BASIC_REQUIRED_PLUGINS:
         if _probe_plugin_importable(plugin):
@@ -318,12 +404,31 @@ def network_basic_available() -> tuple[bool, str]:
             try:
                 __import__(module_name, fromlist=["*"])
             except ModuleNotFoundError as exc:
-                diagnostics.append(f"{plugin}: absent_in_runtime (missing dependency: {exc.name})")
+                # Distinguish "this specific submodule is missing"
+                # from "volatility3 itself is missing" (the latter is
+                # already reported above).
+                if exc.name and exc.name.startswith("volatility3"):
+                    diagnostics.append(
+                        f"{plugin}: importable in this process, but the "
+                        "import path is being executed in a context that "
+                        "cannot find volatility3 (worker probe is authoritative)."
+                    )
+                else:
+                    diagnostics.append(
+                        f"{plugin}: importable in this process, but {exc.name} "
+                        f"is not installed in the worker image."
+                    )
             except Exception as exc:  # noqa: BLE001
                 diagnostics.append(f"{plugin}: import_error ({type(exc).__name__}: {exc})")
             else:
                 diagnostics.append(f"{plugin}: import_error (class not exposed)")
     importable = any("importable" in d for d in diagnostics)
-    if importable:
-        return True, "; ".join(diagnostics)
-    return False, "No compatible Windows network plugin is available in the installed Volatility runtime. " + " | ".join(diagnostics)
+    return importable, "; ".join(diagnostics) if diagnostics else "No network plugins to probe."
+
+
+def _safe_volatility_version() -> str | None:
+    try:
+        from importlib.metadata import version
+        return version("volatility3")
+    except Exception:  # noqa: BLE001
+        return None

@@ -460,6 +460,15 @@ def test_network_discovery_recognizes_full_class_name(monkeypatch: pytest.Monkey
         lambda plugin: plugin == "windows.netscan",
     )
     monkeypatch.setattr(volatility_runner, "_probe_plugin_listed", lambda plugin: False)
+    # The new network_basic_available checks if volatility3 is installed
+    # in the current process; we mock that check to pass.
+    import builtins
+    real_import = builtins.__import__
+    def fake_import(name, *args, **kwargs):
+        if name == "volatility3":
+            return SimpleNamespace(__file__="/fake/volatility3/__init__.py")
+        return real_import(name, *args, **kwargs)
+    monkeypatch.setattr(builtins, "__import__", fake_import)
     available, _ = network_basic_available()
     assert available is True
 

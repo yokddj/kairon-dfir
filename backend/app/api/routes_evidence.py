@@ -1774,6 +1774,22 @@ def probe_memory_image(
     }
 
 
+def _get_original_detection_status(evidence: Evidence) -> str | None:
+    """Recover the original detection status from the override reason.
+
+    The reason may be prefixed with ``[original=probable_disk]`` so
+    we can show both the original verdict and the effective status.
+    """
+    reason = evidence.operator_override_reason or ""
+    if not reason:
+        return None
+    import re
+    match = re.match(r"\[original=([a-z_]+)\]\s*(.*)$", reason)
+    if match:
+        return match.group(1)
+    return evidence.detection_status
+
+
 @router.post(
     "/api/cases/{case_id}/evidences/{evidence_id}/confirm-memory-type",
     response_model=None,
@@ -1803,24 +1819,28 @@ def confirm_memory_type(
             "error_code": "EVIDENCE_NOT_FOUND",
             "message": "Evidence not found for this case.",
         })
-    if evidence.detection_status == "ambiguous_raw_confirmed" and evidence.operator_override:
-        # Idempotent: re-confirming an already-confirmed evidence is a no-op.
+    # Idempotent: re-confirming an already-confirmed evidence is a no-op.
+    if evidence.operator_override and evidence.detection_status in (
+        "ambiguous_raw_confirmed", "probable_disk_confirmed_as_memory",
+    ):
         return {
             "evidence_id": evidence.id,
             "case_id": evidence.case_id,
             "status": evidence.detection_status,
+            "original_detection_status": _get_original_detection_status(evidence),
             "operator_override": evidence.operator_override,
             "operator_override_reason": evidence.operator_override_reason,
             "can_analyze": True,
         }
-    if evidence.detection_status != "ambiguous_raw":
+    allowed_statuses = ("ambiguous_raw", "probable_disk")
+    if evidence.detection_status not in allowed_statuses:
         raise HTTPException(
             status_code=409,
             detail={
                 "error_code": "MEMORY_TYPE_CONFIRMATION_NOT_ALLOWED",
                 "message": (
                     "Confirmation is only valid when the evidence has an "
-                    "ambiguous_raw verdict. This evidence is "
+                    "ambiguous_raw or probable_disk verdict. This evidence is "
                     f"'{evidence.detection_status or 'unprobed'}'."
                 ),
             },
@@ -1849,7 +1869,12 @@ def confirm_memory_type(
     evidence.operator_override = True
     evidence.operator_override_reason = reason[:512]
     evidence.operator_override_at = utc_now_naive()
-    evidence.detection_status = "ambiguous_raw_confirmed"
+    if evidence.detection_status == "ambiguous_raw":
+        evidence.detection_status = "ambiguous_raw_confirmed"
+    elif evidence.detection_status == "probable_disk":
+        # The original verdict is preserved in operator_override_reason
+        # prefix; the new status is what the UI / resolver sees.
+        evidence.detection_status = "probable_disk_confirmed_as_memory"
     db.commit()
     db.refresh(evidence)
     return {
