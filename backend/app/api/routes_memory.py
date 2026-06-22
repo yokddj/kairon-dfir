@@ -494,18 +494,6 @@ def get_memory_upload_readiness_endpoint(
     return get_memory_upload_readiness(case_id, selected_size_bytes=selected_size_bytes)
 
 
-@router.get("/cases/{case_id}/memory/uploads/{upload_id}", response_model=MemoryUploadStatusRead)
-def get_memory_upload_status(case_id: str, upload_id: str, db: Session = Depends(get_db)) -> dict:
-    _require_case(db, case_id)
-    try:
-        item = get_memory_upload(db, case_id, upload_id)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Memory upload was not found.") from exc
-    if item is None:
-        raise HTTPException(status_code=404, detail="Memory upload was not found.")
-    return public_memory_upload_status(item)
-
-
 @router.get("/cases/{case_id}/memory/uploads/active", response_model=MemoryUploadStatusRead | None)
 def get_active_memory_upload_endpoint(case_id: str, db: Session = Depends(get_db)) -> dict | None:
     """Return the most recent non-terminal memory upload for a case.
@@ -520,6 +508,18 @@ def get_active_memory_upload_endpoint(case_id: str, db: Session = Depends(get_db
     item = find_active_memory_upload(db, case_id)
     if item is None:
         return None
+    return public_memory_upload_status(item)
+
+
+@router.get("/cases/{case_id}/memory/uploads/{upload_id}", response_model=MemoryUploadStatusRead)
+def get_memory_upload_status(case_id: str, upload_id: str, db: Session = Depends(get_db)) -> dict:
+    _require_case(db, case_id)
+    try:
+        item = get_memory_upload(db, case_id, upload_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Memory upload was not found.") from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="Memory upload was not found.")
     return public_memory_upload_status(item)
 
 
