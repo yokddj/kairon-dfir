@@ -241,8 +241,9 @@ export default function MemoryEvidencePage() {
           setCatalogueOpen(true);
         }}
         symbolReadiness={symbolReadiness}
+        symbolPreparation={symbolPreparation}
       />
-
+ 
       {confirmationToast ? (
         <div
           className="rounded-xl border border-mint/30 bg-mint/10 p-3 text-xs text-ink"
