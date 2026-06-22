@@ -32,6 +32,20 @@ from app.services.memory.overview import get_case_memory_overview, get_evidence_
 from app.services.memory.active_result import resolve_active_memory_result, list_families as _list_artifact_families
 from app.services.memory.catalogue import build_analysis_catalogue, MemoryProfileUnavailableError
 from app.services.memory.symbol_control import SymbolControlError, acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure, queue_symbol_acquisition, request_status_dict, request_symbol_acquisition_awaiting_approval
+from app.services.memory.symbol_probe_controller import probe_evidence_symbol_requirement
+from app.services.memory.symbol_state import (
+    EC_SYMBOLS_REQUIRED,
+    STATE_ACQUIRING,
+    STATE_ACQUISITION_PENDING,
+    STATE_ACQUISITION_REQUIRED,
+    STATE_CACHED,
+    STATE_INCOMPATIBLE,
+    STATE_MISSING,
+    STATE_PROBING,
+    STATE_UNKNOWN,
+    STATE_UNSUPPORTED,
+    evidence_symbol_state,
+)
 from app.models.memory import MemorySymbolAcquisition, MemorySymbolAcquisitionRequest
 from app.services.memory.upload_readiness import MAX_SELECTED_SIZE_BYTES, get_memory_upload_readiness
 from app.services.memory.upload_lifecycle import get_memory_upload, public_memory_upload_status, reconcile_memory_upload
@@ -243,7 +257,10 @@ def post_run_all_batch(
             enqueue_fn=enqueue_memory_metadata_scan,
         )
     except MemoryBatchError as exc:
-        raise HTTPException(status_code=exc.status_code, detail={"error_code": exc.code, "message": exc.message}) from exc
+        _detail: dict[str, object] = {"error_code": exc.code, "message": exc.message}
+        if exc.extra:
+            _detail.update(exc.extra)
+        raise HTTPException(status_code=exc.status_code, detail=_detail) from exc
 
     batch = result["batch"]
     first_run = result["first_run"]
@@ -484,6 +501,97 @@ def acquire_memory_symbols(
     }
 
 
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/symbol-readiness",
+    response_model=None,
+)
+def get_memory_symbol_readiness(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Per-evidence Windows symbol readiness.
+
+    Returns the canonical per-evidence state object used by the UI
+    to display "Symbols for this evidence" and to gate "Run
+    analysis" / "Run all".  The response is always 200; the
+    ``blocker`` and ``state`` fields describe whether analysis can
+    proceed.
+    """
+    _require_case(db, case_id)
+    evidence = _require_evidence_for_case(db, case_id, evidence_id)
+    available, error_code, _ = acquisition_gate()
+    pending = (
+        db.query(MemorySymbolAcquisitionRequest)
+        .filter(
+            MemorySymbolAcquisitionRequest.case_id == case_id,
+            MemorySymbolAcquisitionRequest.evidence_id == evidence_id,
+            MemorySymbolAcquisitionRequest.status.in_([
+                "awaiting_network_isolation",
+                "awaiting_operator_approval",
+                "approved",
+                "queued",
+                "resolving",
+                "downloading",
+                "validating_pdb",
+                "generating_isf",
+                "validating_isf",
+                "caching",
+            ]),
+        )
+        .order_by(MemorySymbolAcquisitionRequest.created_at.desc())
+        .first()
+    )
+    state = evidence_symbol_state(
+        db,
+        case_id=case_id,
+        evidence_id=evidence_id,
+        acquisition_gate_available=bool(available),
+        pending_request_status=pending.status if pending else None,
+    )
+    return {
+        "case_id": case_id,
+        "evidence_id": evidence_id,
+        "filename": evidence.original_filename,
+        **state.to_dict(),
+        "pending_request_status": pending.status if pending else None,
+        "acquisition_gate": {
+            "available": bool(available),
+            "error_code": error_code,
+        },
+    }
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/symbol-probe",
+    response_model=None,
+)
+def post_memory_symbol_probe(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Probe the per-evidence Windows symbol requirement.
+
+    This endpoint runs the lightweight ``windows.info``-based probe
+    on the evidence and records the requirement on a
+    ``MemorySymbolRequirement`` row.  It NEVER fabricates a
+    requirement: if Volatility cannot identify the kernel / PDB,
+    the response has ``status="unknown"`` and
+    ``requirement=null``.
+
+    The probe does NOT create a MemoryScanRun.
+    """
+    _require_case(db, case_id)
+    evidence = _require_evidence_for_case(db, case_id, evidence_id)
+    result = probe_evidence_symbol_requirement(db, evidence=evidence)
+    return {
+        "case_id": case_id,
+        "evidence_id": evidence_id,
+        **result.to_dict(),
+    }
+
+
 @router.get("/cases/{case_id}/memory/upload-readiness", response_model=MemoryUploadReadinessRead)
 def get_memory_upload_readiness_endpoint(
     case_id: str,
@@ -643,6 +751,40 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
                 ),
             },
         )
+    # Per-evidence Windows symbol preflight (single profile).  We
+    # refuse to enqueue a metadata_only run when the exact required
+    # symbol is not cached.  This is the path that previously
+    # produced the "server error" because it created a MemoryScanRun
+    # that immediately failed with SYMBOLS_UNAVAILABLE; we now block
+    # it before any run is created.
+    if profile == "metadata_only":
+        symbol_state_obj = evidence_symbol_state(
+            db,
+            case_id=evidence.case_id,
+            evidence_id=evidence.id,
+            acquisition_gate_available=False,
+        )
+        if symbol_state_obj.state == STATE_CACHED:
+            pass
+        elif symbol_state_obj.requirement is None:
+            # Allow the user to press "Run analysis" once; the
+            # resulting run will probe the requirement itself.
+            pass
+        else:
+            available, gate_code, _ = acquisition_gate()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error_code": EC_SYMBOLS_REQUIRED,
+                    "message": symbol_state_obj.blocker
+                    or "Windows symbols required for this evidence are not cached.",
+                    "evidence_id": evidence.id,
+                    "symbol_status": symbol_state_obj.state,
+                    "can_acquire": bool(available and symbol_state_obj.acquisition_supported),
+                    "required_identifier": symbol_state_obj.requirement.identifier if symbol_state_obj.requirement else None,
+                    "blocker": symbol_state_obj.blocker,
+                },
+            )
     backend_overview = get_memory_backend_overview()
     volatility_status = next((item for item in backend_overview.get("backends", []) if item.get("backend") == "volatility3"), None)
     if not volatility_status or not volatility_status.get("ready"):

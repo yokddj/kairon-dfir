@@ -86,8 +86,21 @@ export function MemoryRunAllModal({
       queryClient.invalidateQueries({ queryKey: ["memory-runs", caseId, evidenceId] });
       onCompleted();
     },
-    onError: (err: Error) => {
-      setError(err.message);
+    onError: (err: Error & { errorCode?: string; detail?: unknown }) => {
+      // Surface the structured blocker when the backend refused
+      // because the exact Windows symbol is not cached.  The detail
+      // payload includes the symbol_status, required_identifier
+      // and a "can_acquire" flag.
+      const code = (err as Error & { errorCode?: string }).errorCode;
+      if (code === "MEMORY_SYMBOLS_REQUIRED") {
+        const detail = (err as Error & { detail?: Record<string, unknown> }).detail || {};
+        setError(
+          (detail["message"] as string | undefined) ||
+            "Windows symbols required for this evidence are not cached.",
+        );
+      } else {
+        setError(err.message);
+      }
     },
   });
 
