@@ -32,6 +32,24 @@ from app.services.memory.overview import get_case_memory_overview, get_evidence_
 from app.services.memory.active_result import resolve_active_memory_result, list_families as _list_artifact_families
 from app.services.memory.catalogue import build_analysis_catalogue, MemoryProfileUnavailableError
 from app.services.memory.symbol_control import SymbolControlError, acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure, queue_symbol_acquisition, request_status_dict, request_symbol_acquisition_awaiting_approval
+from app.services.memory.symbol_preparation import (
+    MemoryReadiness,
+    compute_memory_readiness,
+    reconcile_memory_symbol_readiness,
+    schedule_preparation,
+    requeue_preparation,
+    register_evidence_content_identity,
+    record_pending_analysis,
+    cancel_pending,
+    consume_pending_for_evidence,
+    mark_pending_materialized,
+    find_requirement_by_content_identity,
+    link_evidence_to_requirement,
+    mark_preparation,
+    PREP_QUEUED,
+    PREP_READY,
+    PREP_PROBING,
+)
 from app.services.memory.symbol_probe_controller import probe_evidence_symbol_requirement
 from app.services.memory.symbol_state import (
     EC_SYMBOLS_REQUIRED,
@@ -510,13 +528,17 @@ def get_memory_symbol_readiness(
     evidence_id: str,
     db: Session = Depends(get_db),
 ) -> dict:
-    """Per-evidence Windows symbol readiness.
+    """Per-evidence Windows symbol readiness (legacy view).
 
     Returns the canonical per-evidence state object used by the UI
     to display "Symbols for this evidence" and to gate "Run
     analysis" / "Run all".  The response is always 200; the
     ``blocker`` and ``state`` fields describe whether analysis can
     proceed.
+
+    The endpoint is kept for backwards compatibility with the
+    previous sprint.  The new automatic preparation pipeline is
+    exposed at ``/symbol-preparation``.
     """
     _require_case(db, case_id)
     evidence = _require_evidence_for_case(db, case_id, evidence_id)
@@ -542,6 +564,15 @@ def get_memory_symbol_readiness(
         .order_by(MemorySymbolAcquisitionRequest.created_at.desc())
         .first()
     )
+    # Prefer the new preparation pipeline when it has produced a
+    # more recent state.
+    from app.models.memory import MemorySymbolPreparation
+    preparation = (
+        db.query(MemorySymbolPreparation)
+        .filter(MemorySymbolPreparation.evidence_id == evidence_id)
+        .order_by(MemorySymbolPreparation.created_at.desc())
+        .first()
+    )
     state = evidence_symbol_state(
         db,
         case_id=case_id,
@@ -559,6 +590,8 @@ def get_memory_symbol_readiness(
             "available": bool(available),
             "error_code": error_code,
         },
+        "preparation_state": preparation.state if preparation else None,
+        "preparation_url": f"/api/cases/{case_id}/memory/evidences/{evidence_id}/symbol-preparation",
     }
 
 
@@ -590,6 +623,169 @@ def post_memory_symbol_probe(
         "evidence_id": evidence_id,
         **result.to_dict(),
     }
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/symbol-preparation",
+    response_model=None,
+)
+def get_memory_symbol_preparation(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Per-evidence automatic Windows symbol preparation.
+
+    Returns the canonical preparation state machine:
+
+    * ``ui_state``            - one of "ready" | "preparing" | "blocked" | "failed"
+    * ``preparation_state``   - the underlying pipeline state
+    * ``requirement``         - identified PDB / GUID / age / architecture (read-only)
+    * ``cache_status``        - "hit" | "miss" | "negative" | "unknown"
+    * ``progress_label``      - "Identifying Windows kernel symbols" etc.
+    * ``progress_percent``    - 0..100 progress for the UI
+    * ``pending_intent_kind`` - "single_profile" | "run_all" | None
+    * ``content_reused_by_hash`` - True if the readiness was reused from
+      the same SHA-256 of a previous evidence (re-upload / new case)
+
+    The response is always 200; the analyst uses ``ui_state`` and
+    ``can_analyze_metadata`` to drive the UI.
+    """
+    _require_case(db, case_id)
+    evidence = _require_evidence_for_case(db, case_id, evidence_id)
+    # Reuse the existing content identity if needed.
+    register_evidence_content_identity(db, evidence=evidence)
+    readiness = compute_memory_readiness(db, evidence=evidence)
+    db.commit()
+    return {
+        "case_id": case_id,
+        "evidence_id": evidence_id,
+        "filename": evidence.original_filename,
+        **readiness.to_dict(),
+    }
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/symbol-preparation/retry",
+    response_model=None,
+)
+def post_memory_symbol_preparation_retry(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Re-queue the automatic preparation pipeline for the evidence.
+
+    Idempotent.  No payload.  Returns the refreshed readiness.
+    """
+    _require_case(db, case_id)
+    evidence = _require_evidence_for_case(db, case_id, evidence_id)
+    requeue_preparation(db, evidence=evidence, state=PREP_QUEUED, reason="manual_retry")
+    db.commit()
+    readiness = compute_memory_readiness(db, evidence=evidence)
+    return {
+        "case_id": case_id,
+        "evidence_id": evidence_id,
+        "requeued": True,
+        **readiness.to_dict(),
+    }
+
+
+@router.post(
+    "/cases/{case_id}/memory/symbol-reconcile",
+    response_model=None,
+)
+def post_memory_symbol_reconcile(
+    db: Session = Depends(get_db),
+) -> dict:
+    """Global reconciliation pass for all memory evidences.
+
+    The pass is idempotent: terminal states (ready, unsupported,
+    cancelled) are not re-queued.  It also detects same-SHA reuses
+    and short-circuits the probe / acquisition pipeline when the
+    cache is already populated.
+    """
+    stats = reconcile_memory_symbol_readiness(db)
+    return {"stats": stats}
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/run-when-ready",
+    response_model=None,
+)
+def post_memory_run_when_ready(
+    case_id: str,
+    evidence_id: str,
+    payload: dict | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Record an operator intent to run analysis once the symbol
+    preparation pipeline reaches ``ready``.
+
+    The endpoint never creates a ``MemoryScanRun`` or a
+    ``MemoryAnalysisBatch``.  It only records the intent.  When
+    the preparation reaches ready, the worker materialises the
+    intent into a real run / batch.
+    """
+    _require_case(db, case_id)
+    evidence = _require_evidence_for_case(db, case_id, evidence_id)
+    payload = payload or {}
+    kind = str(payload.get("kind") or "single_profile")
+    profile = payload.get("profile")
+    mode = str(payload.get("mode") or "missing_or_failed")
+    requested_profiles = list(payload.get("requested_profiles") or [])
+    if kind == "single_profile" and not profile:
+        profile = "metadata_only"
+    if kind == "run_all":
+        profile = None
+        if not requested_profiles:
+            requested_profiles = [
+                "metadata_only",
+                "processes_basic",
+                "network_basic",
+                "modules_basic",
+                "handles_basic",
+                "kernel_basic",
+                "suspicious_memory",
+            ]
+    pending = record_pending_analysis(
+        db,
+        case_id=case_id,
+        evidence_id=evidence_id,
+        kind=kind,
+        profile=profile,
+        mode=mode,
+        requested_profiles=requested_profiles,
+    )
+    db.commit()
+    return {
+        "case_id": case_id,
+        "evidence_id": evidence_id,
+        "pending_id": pending.id,
+        "kind": kind,
+        "profile": profile,
+        "mode": mode,
+        "requested_profiles": requested_profiles,
+        "status": pending.status,
+    }
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/run-when-ready/cancel",
+    response_model=None,
+)
+def post_memory_run_when_ready_cancel(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    pending_items = consume_pending_for_evidence(db, evidence_id=evidence_id)
+    for pending in pending_items:
+        cancel_pending(db, pending, reason="cancelled_by_user")
+    db.commit()
+    return {"cancelled": len(pending_items)}
 
 
 @router.get("/cases/{case_id}/memory/upload-readiness", response_model=MemoryUploadReadinessRead)

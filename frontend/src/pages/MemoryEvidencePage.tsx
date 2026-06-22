@@ -9,6 +9,7 @@ import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysi
 import { MemoryHistoryPanel } from "../components/memory/MemoryHistoryPanel";
 import { MemoryTypeConfirmationModal } from "../components/memory/MemoryTypeConfirmationModal";
 import { MemorySymbolResolutionPanel } from "../components/memory/MemorySymbolResolutionPanel";
+import { MemoryPreparationCard } from "../components/memory/MemoryPreparationCard";
 import { MEMORY_TABS, isMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 
 const ARTIFACT_FAMILY_FROM_TAB: Record<string, string> = {
@@ -184,6 +185,24 @@ export default function MemoryEvidencePage() {
   });
   const symbolReadiness = symbolReadinessQuery.data ?? null;
 
+  // Automatic preparation pipeline.  This is the new state machine
+  // the analyst sees in the "Memory preparation" card.  Polled
+  // aggressively while preparation is in progress.
+  const symbolPreparationQuery = useQuery({
+    queryKey: ["memory-symbol-preparation", caseId, evidenceId],
+    queryFn: () => api.getMemorySymbolPreparation(caseId, evidenceId),
+    enabled: Boolean(caseId && evidenceId),
+    refetchOnWindowFocus: false,
+    refetchInterval: (query) => {
+      const data = query.state.data as { ui_state?: string } | undefined;
+      if (data?.ui_state && data.ui_state !== "ready" && data.ui_state !== "failed" && data.ui_state !== "blocked") {
+        return 2_000;
+      }
+      return false;
+    },
+  });
+  const symbolPreparation = symbolPreparationQuery.data ?? null;
+
   const handleReturnToLatest = useCallback(() => {
     setSearchParams((current) => {
       const params = new URLSearchParams(current);
@@ -245,6 +264,14 @@ export default function MemoryEvidencePage() {
           caseId={caseId}
           evidenceId={evidenceId}
           readiness={symbolReadiness}
+        />
+      ) : null}
+
+      {evidence && symbolPreparation ? (
+        <MemoryPreparationCard
+          caseId={caseId}
+          evidenceId={evidenceId}
+          preparation={symbolPreparation}
         />
       ) : null}
 

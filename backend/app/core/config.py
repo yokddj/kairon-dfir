@@ -133,6 +133,25 @@ class Settings(BaseSettings):
     # Keep the mutation unavailable until that control exists.
     memory_symbol_admin_authorization_enforced: bool = False
     memory_symbol_admin_authorization_required: bool = True
+    # Automatic Windows symbol resolution: auto-probe on upload and
+    # auto-acquire (managed, server-side) when the cache misses.
+    # Both default to true so the analyst never has to push Probe
+    # manually.  The download still flows through the symbol-fetcher
+    # and symbol-egress-gateway; memory-worker stays offline.
+    memory_auto_symbol_probe: bool = True
+    memory_auto_symbol_acquire: bool = True
+    # Cap on concurrent managed acquisitions (per backend process).
+    memory_symbol_max_concurrent_acquisitions: int = 1
+    # How many times a single preparation can fail before it goes
+    # into the "unsupported" terminal state.  The negative cache
+    # also has a TTL below.
+    memory_symbol_acquisition_retry_limit: int = 2
+    # Negative cache TTL for symbols that the configured source
+    # does not provide.  During this window the system will not
+    # retry the acquisition.
+    memory_symbol_negative_cache_ttl_seconds: int = 86400
+    # How often the global reconciliation pass may run (seconds).
+    memory_symbol_reconcile_interval_seconds: int = 300
     backend_multipart_max_files: int = 10000
     backend_multipart_max_fields: int = 20000
     backend_multipart_max_part_size: int = 1048576

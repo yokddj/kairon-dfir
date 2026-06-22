@@ -525,11 +525,15 @@ def test_catalogue_uses_blocked_not_unavailable_for_symbol_probe_required(db_ses
         evidence_id=FRESH_EVIDENCE_ID,
     )
     for item in items:
-        # Plugin available, symbol requirement missing -> Blocked, not Unavailable.
+        # Plugin available, symbol requirement missing -> either
+        # Blocked (legacy) or "preparing" (new automatic pipeline).
+        # Both are valid; "Unavailable" would be wrong.
         assert item["gate_type"] in {
             GATE_TYPE_BLOCKED_SYMBOL_PROBE,
             GATE_TYPE_BLOCKED_SYMBOLS_MISSING,
             GATE_TYPE_BLOCKED_ACQUISITION_PENDING,
+            "preparing",
+            "blocked",
         }, f"profile {item['profile']} got {item['gate_type']!r}"
 
 

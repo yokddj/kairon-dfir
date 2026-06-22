@@ -105,6 +105,7 @@ def on_startup() -> None:
     import logging
     logger = logging.getLogger(__name__)
     from app.services.memory.symbol_backfill import backfill_memory_symbol_readiness
+    from app.services.memory.symbol_preparation import reconcile_memory_symbol_readiness
     db = SessionLocal()
     try:
         stats = backfill_memory_symbol_readiness(db)
@@ -115,6 +116,21 @@ def on_startup() -> None:
             )
     except Exception as exc:  # noqa: BLE001
         logger.warning("memory symbol readiness backfill skipped: %s", exc)
+    finally:
+        db.close()
+    # New automatic pipeline: reconcile the preparation state for
+    # every memory evidence.  This reuses cached requirements by
+    # content identity and queues the probe for the rest.
+    db = SessionLocal()
+    try:
+        prep_stats = reconcile_memory_symbol_readiness(db)
+        if prep_stats.get("queued", 0) > 0 or prep_stats.get("skipped_ready", 0) > 0:
+            logger.info(
+                "memory symbol preparation reconcile: %s",
+                prep_stats,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory symbol preparation reconcile skipped: %s", exc)
     finally:
         db.close()
 

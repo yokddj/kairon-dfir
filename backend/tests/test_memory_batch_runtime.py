@@ -87,6 +87,23 @@ def db(tmp_path, monkeypatch) -> Session:
     session.close()
 
 
+def _make_preparation_ready(db: Session, evidence: Evidence) -> None:
+    """Mark the new automatic preparation pipeline as ready for the
+    evidence.  Required by tests that call create_run_all_batch after
+    the introduction of the MEMORY_SYMBOL_PREPARATION_IN_PROGRESS
+    preflight.
+    """
+    from app.models.memory import MemorySymbolPreparation
+    prep = MemorySymbolPreparation(
+        case_id=evidence.case_id,
+        evidence_id=evidence.id,
+        state="ready",
+        state_reason="test_setup",
+    )
+    db.add(prep)
+    db.commit()
+
+
 def _make_case_and_evidence(db: Session) -> tuple[Case, Evidence]:
     case = Case(
         id=str(uuid4()),
@@ -181,6 +198,7 @@ def _make_summary(
 
 def test_count_modules_filters_to_memory_process_module(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="modules_basic")
     _make_summary(db, run=run, count=21_339, artifact_type="memory_process_module")
     payload = get_memory_family_count(
@@ -197,6 +215,7 @@ def test_count_modules_filters_to_memory_process_module(db: Session) -> None:
 
 def test_count_kernel_modules_separate_from_drivers(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="kernel_basic")
     _make_summary(db, run=run, count=169, artifact_type="memory_kernel_module")
     _make_summary(db, run=run, count=135, artifact_type="memory_driver")
@@ -223,6 +242,7 @@ def test_count_kernel_modules_separate_from_drivers(db: Session) -> None:
 
 def test_count_drivers_filters_to_memory_driver(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="kernel_basic")
     _make_summary(db, run=run, count=135, artifact_type="memory_driver")
     payload = get_memory_family_count(
@@ -270,6 +290,7 @@ def test_counts_are_scoped_by_evidence_id(db: Session) -> None:
 
 def test_count_with_no_active_run_returns_zero(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="modules_basic")
     _make_summary(db, run=run, count=21_339, artifact_type="memory_process_module")
     payload = get_memory_family_count(
@@ -281,6 +302,7 @@ def test_count_with_no_active_run_returns_zero(db: Session) -> None:
 
 def test_active_result_resolved_run_id_drives_count(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     # Two runs: extended (older) and basic (newer).  The active
     # resolver picks the extended run for the "processes" family.
     extended = _make_run(
@@ -319,6 +341,7 @@ def test_active_result_resolved_run_id_drives_count(db: Session) -> None:
 
 def test_landing_catalogue_overview_share_count_source(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="modules_basic")
     _make_summary(db, run=run, count=21_339, artifact_type="memory_process_module")
     catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
@@ -333,6 +356,7 @@ def test_landing_catalogue_overview_share_count_source(db: Session) -> None:
 
 def test_list_family_counts_returns_all_families(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="metadata_only")
     payload = list_family_counts(
         case_id=case.id, evidence_id=ev.id, active_run_ids={"system_info": run.id},
@@ -348,6 +372,7 @@ def test_list_family_counts_returns_all_families(db: Session) -> None:
 
 def test_duplicate_callback_does_not_create_second_run(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -374,6 +399,7 @@ def test_duplicate_callback_does_not_create_second_run(db: Session) -> None:
 
 def test_two_concurrent_advances_create_a_single_next_run(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -405,6 +431,7 @@ def test_two_concurrent_advances_create_a_single_next_run(db: Session) -> None:
 
 def test_last_advanced_run_id_is_idempotent(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -432,12 +459,24 @@ def test_last_advanced_run_id_is_idempotent(db: Session) -> None:
 
 def test_only_one_active_batch_per_evidence(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
         enqueued.append(run_id)
         return f"rq-{run_id}"
 
+    # Mark the preparation as ready so the new automatic pipeline
+    # does not block the batch with MEMORY_SYMBOL_PREPARATION_IN_PROGRESS.
+    from app.models.memory import MemorySymbolPreparation
+    prep = MemorySymbolPreparation(
+        case_id=case.id,
+        evidence_id=ev.id,
+        state="ready",
+        state_reason="test_setup",
+    )
+    db.add(prep)
+    db.commit()
     create_run_all_batch(
         db, case_id=case.id, evidence_id=ev.id, mode="rerun_all",
         authorization_acknowledged=True, continue_on_failure=True,
@@ -454,6 +493,7 @@ def test_only_one_active_batch_per_evidence(db: Session) -> None:
 
 def test_only_one_active_run_per_batch(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -493,6 +533,7 @@ def test_only_one_active_run_per_batch(db: Session) -> None:
 
 def test_finalised_batch_cannot_be_reopened(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -538,6 +579,7 @@ def test_finalised_batch_cannot_be_reopened(db: Session) -> None:
 
 def test_cancel_prevents_next_profile(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -564,6 +606,7 @@ def test_cancel_prevents_next_profile(db: Session) -> None:
 
 def test_reconcile_advances_a_pending_terminal_run(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -593,6 +636,7 @@ def test_reconcile_advances_a_pending_terminal_run(db: Session) -> None:
 
 def test_reconcile_does_not_duplicate_active_run(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -615,6 +659,7 @@ def test_reconcile_does_not_duplicate_active_run(db: Session) -> None:
 
 def test_reconcile_re_enqueues_first_profile_when_batch_was_queued(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -652,6 +697,7 @@ def test_reconcile_re_enqueues_first_profile_when_batch_was_queued(db: Session) 
 
 def test_active_result_does_not_change_while_running(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     completed = _make_run(
         db, case_id=case.id, evidence_id=ev.id, profile="processes_extended",
         minutes_ago=60, document_type="memory_process",
@@ -676,6 +722,7 @@ def test_active_result_does_not_change_while_running(db: Session) -> None:
 
 def test_active_result_changes_only_after_successful_completion(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     success = _make_run(
         db, case_id=case.id, evidence_id=ev.id, profile="processes_extended",
         minutes_ago=10, document_type="memory_process",
@@ -719,6 +766,7 @@ def test_runtime_validation_allowlist_is_fixed() -> None:
 
 def test_arbitrary_profiles_rejected_by_create_run_all_batch(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     with pytest.raises(MemoryBatchError):
         from app.services.memory.batch import _reject_incompatible_profiles
         _reject_incompatible_profiles(["memory_handle_dump"])
@@ -785,6 +833,7 @@ def test_network_read_returns_documented_unavailable_state(db: Session) -> None:
     """The Network endpoint must not 500; it must report Unavailable."""
     from app.services.memory.counts import get_memory_family_count
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     payload = get_memory_family_count(
         case_id=case.id, evidence_id=ev.id, family="network", active_run_id=None, db=db,
     )
@@ -800,6 +849,7 @@ def test_modules_endpoint_tolerates_unmapped_pid(db: Session) -> None:
     count even when OpenSearch is unreachable."""
     from app.services.memory.counts import get_memory_family_count
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="modules_basic")
     _make_summary(db, run=run, count=21_339, artifact_type="memory_process_module")
     payload = get_memory_family_count(
@@ -815,6 +865,7 @@ def test_modules_endpoint_tolerates_unmapped_pid(db: Session) -> None:
 
 def test_plan_run_all_does_not_write_disk_index(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     before = db.query(MemoryScanRun).count()
     plan_run_all(db, case_id=case.id, evidence_id=ev.id, mode="rerun_all")
     after = db.query(MemoryScanRun).count()
@@ -823,6 +874,7 @@ def test_plan_run_all_does_not_write_disk_index(db: Session) -> None:
 
 def test_plan_run_all_does_not_create_normalized_event(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     before = db.query(MemoryScanRun).count()
     plan_run_all(db, case_id=case.id, evidence_id=ev.id, mode="rerun_all")
     after = db.query(MemoryScanRun).count()
@@ -831,6 +883,7 @@ def test_plan_run_all_does_not_create_normalized_event(db: Session) -> None:
 
 def test_create_batch_does_not_extract_files(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:

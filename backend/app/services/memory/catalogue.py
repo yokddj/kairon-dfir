@@ -221,6 +221,14 @@ def build_analysis_catalogue(
         GATE_TYPE_BLOCKED_ACQUISITION_PENDING,
         GATE_TYPE_UNAVAILABLE,
     )
+    from app.services.memory.symbol_preparation import (
+        compute_memory_readiness,
+        UI_STATE_READY,
+        UI_STATE_PREPARING,
+        UI_STATE_BLOCKED,
+        UI_STATE_FAILED,
+    )
+    from app.models.evidence import Evidence as _Evidence
 
     symbol_state_obj = evidence_symbol_state(
         db,
@@ -228,6 +236,21 @@ def build_analysis_catalogue(
         evidence_id=evidence_id,
         acquisition_gate_available=False,
     )
+    # Prefer the new automatic preparation pipeline when it has
+    # recorded a more recent state.
+    try:
+        evidence_row = db.get(_Evidence, evidence_id)
+    except Exception:
+        evidence_row = None
+    prep = (
+        compute_memory_readiness(db, evidence=evidence_row)
+        if evidence_row is not None
+        else None
+    )
+    prep_ui_state = prep.ui_state if prep is not None else UI_STATE_PREPARING
+    prep_progress_label = prep.progress_label if prep is not None else "Preparing"
+    prep_progress_percent = prep.progress_percent if prep is not None else 0
+    prep_preparation_state = prep.preparation_state if prep is not None else "unknown"
     symbol_status = symbol_state_obj.state
     symbol_blocker = symbol_state_obj.blocker
     symbols_ok = symbol_status == STATE_CACHED
@@ -281,26 +304,49 @@ def build_analysis_catalogue(
         # mismatches.  When the profile is already marked
         # ``unavailable`` by the network branch above, we keep that
         # verdict; the symbol check is a no-op.
-        if profile_def.get("requires_windows_symbols") and not symbols_ok and gate_type != GATE_TYPE_UNAVAILABLE:
-            available = False
-            symbol_gate = gate_type_from_state(symbol_status)
-            if symbol_gate in {GATE_TYPE_BLOCKED_SYMBOLS_MISSING, GATE_TYPE_BLOCKED_SYMBOL_PROBE, GATE_TYPE_BLOCKED_ACQUISITION_PENDING}:
-                gate_type = symbol_gate
-            else:
-                # failed, incompatible, unsupported, etc.
-                gate_type = GATE_TYPE_UNAVAILABLE
-            if symbol_state_obj.requirement is None:
-                availability_reason = (
-                    "Windows symbol requirement for this evidence has not "
-                    "been identified yet. Probe the symbol requirements "
-                    "before running this profile."
-                )
-            else:
-                availability_reason = (
-                    f"Symbols for this evidence are not cached "
-                    f"(state: {symbol_status.replace('_', ' ')}). "
-                    f"{symbol_blocker or ''}"
-                ).strip()
+        if profile_def.get("requires_windows_symbols") and gate_type != GATE_TYPE_UNAVAILABLE:
+            if prep is not None and prep_preparation_state != "unknown":
+                if prep_ui_state == UI_STATE_READY:
+                    gate_type = GATE_TYPE_AVAILABLE
+                    available = True
+                    availability_reason = None
+                elif prep_ui_state == UI_STATE_PREPARING:
+                    gate_type = "preparing"
+                    available = False
+                    availability_reason = (
+                        f"{prep_progress_label} for this evidence "
+                        f"({prep_progress_percent}%)."
+                    )
+                elif prep_ui_state in {UI_STATE_BLOCKED, UI_STATE_FAILED}:
+                    gate_type = "blocked"
+                    available = False
+                    availability_reason = (
+                        prep.sanitized_message
+                        or "Windows symbols are not available for this evidence."
+                    )
+                else:
+                    gate_type = GATE_TYPE_BLOCKED_SYMBOL_PROBE
+                    available = False
+            elif not symbols_ok:
+                available = False
+                symbol_gate = gate_type_from_state(symbol_status)
+                if symbol_gate in {GATE_TYPE_BLOCKED_SYMBOLS_MISSING, GATE_TYPE_BLOCKED_SYMBOL_PROBE, GATE_TYPE_BLOCKED_ACQUISITION_PENDING}:
+                    gate_type = symbol_gate
+                else:
+                    # failed, incompatible, unsupported, etc.
+                    gate_type = GATE_TYPE_UNAVAILABLE
+                if symbol_state_obj.requirement is None:
+                    availability_reason = (
+                        "Windows symbol requirement for this evidence has not "
+                        "been identified yet. Probe the symbol requirements "
+                        "before running this profile."
+                    )
+                else:
+                    availability_reason = (
+                        f"Symbols for this evidence are not cached "
+                        f"(state: {symbol_status.replace('_', ' ')}). "
+                        f"{symbol_blocker or ''}"
+                    ).strip()
         items.append(
             {
                 "profile": profile,

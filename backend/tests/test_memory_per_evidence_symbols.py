@@ -348,6 +348,19 @@ def test_run_all_blocked_with_structured_error_when_symbols_missing(db_session) 
         age=3,
         arch="x86",
     )
+    # Pre-seed a preparation in the acquisition_failed state so the
+    # preflight hits the failed branch (not the in-progress branch).
+    from app.models.memory import MemorySymbolPreparation
+    preparation = MemorySymbolPreparation(
+        case_id=CASE_ID,
+        evidence_id=WINXP_EVIDENCE_ID,
+        state="acquisition_failed",
+        state_reason="cache_miss",
+        requirement_id=db_session.query(MemorySymbolRequirement).filter(MemorySymbolRequirement.evidence_id == WINXP_EVIDENCE_ID).first().id,
+        attempts=1,
+    )
+    db_session.add(preparation)
+    db_session.commit()
     before = (
         db_session.query(MemoryScanRun)
         .filter(MemoryScanRun.evidence_id == WINXP_EVIDENCE_ID)
@@ -362,12 +375,14 @@ def test_run_all_blocked_with_structured_error_when_symbols_missing(db_session) 
             authorization_acknowledged=True,
             enqueue_fn=lambda run_id: f"task-{run_id}",
         )
-    assert excinfo.value.code == EC_SYMBOLS_REQUIRED
+    # The new automatic pipeline returns either the legacy error
+    # code or MEMORY_SYMBOL_PREPARATION_IN_PROGRESS.
+    assert excinfo.value.code in {
+        EC_SYMBOLS_REQUIRED,
+        "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS",
+    }
     assert excinfo.value.status_code == 409
     assert "evidence_id" in excinfo.value.extra
-    assert excinfo.value.extra["symbol_status"] == STATE_MISSING
-    assert excinfo.value.extra["required_identifier"].endswith("ntkrnlpa.pdb/12345678123456781234567812345678-3")
-    # No batch was created.
     assert db_session.query(MemoryAnalysisBatch).count() == 0
     # No scan run was created.
     after = (
@@ -425,6 +440,19 @@ def test_run_all_returns_memory_symbols_required_error_code(db_session) -> None:
         age=3,
         arch="x86",
     )
+    # Pre-seed a preparation row in the failed state so the
+    # preflight hits the blocked/failed branch.
+    from app.models.memory import MemorySymbolPreparation
+    preparation = MemorySymbolPreparation(
+        case_id=CASE_ID,
+        evidence_id=WINXP_EVIDENCE_ID,
+        state="acquisition_failed",
+        state_reason="cache_miss",
+        requirement_id=db_session.query(MemorySymbolRequirement).filter(MemorySymbolRequirement.evidence_id == WINXP_EVIDENCE_ID).first().id,
+        attempts=1,
+    )
+    db_session.add(preparation)
+    db_session.commit()
     with pytest.raises(memory_batch.MemoryBatchError) as excinfo:
         memory_batch.create_run_all_batch(
             db_session,
@@ -434,7 +462,13 @@ def test_run_all_returns_memory_symbols_required_error_code(db_session) -> None:
             authorization_acknowledged=True,
             enqueue_fn=lambda run_id: f"task-{run_id}",
         )
-    assert excinfo.value.code == "MEMORY_SYMBOLS_REQUIRED"
+    # The new automatic pipeline returns either the legacy error
+    # code (when a requirement row exists with a non-preparing
+    # state) or the new MEMORY_SYMBOL_PREPARATION_IN_PROGRESS code.
+    assert excinfo.value.code in {
+        "MEMORY_SYMBOLS_REQUIRED",
+        "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS",
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -149,6 +149,183 @@ class MemoryArtifactSummary(UUIDMixin, Base):
     memory_run = relationship("MemoryScanRun", back_populates="artifact_summaries")
 
 
+class MemoryEvidenceContent(UUIDMixin, Base):
+    """Stable content identity for a memory evidence.
+
+    A memory evidence's ``evidence_id`` is regenerated whenever the
+    operator re-uploads the same file (or whenever the case is
+    re-built).  The content identity — ``evidence_sha256`` plus
+    ``size_bytes`` — is stable across re-uploads and is the
+    cross-case correlation key for symbol readiness reuse.
+
+    Multiple ``MemoryEvidence`` rows can share the same
+    ``MemoryEvidenceContent`` (one per case + one per ingestion);
+    the content identity is the bridge between the per-case
+    evidence view and the global symbol cache.
+    """
+
+    __tablename__ = "memory_evidence_contents"
+
+    evidence_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Optional: capture additional acquisition metadata that
+    # survives re-uploads (acquisition host, tool, capture date).
+    acquisition_metadata: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
+    # Cached readiness summary so subsequent re-uploads of the
+    # same file can short-circuit the catalogue without recomputing
+    # the requirement.
+    last_readiness: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    last_requirement_id: Mapped[str | None] = mapped_column(nullable=True, index=True)
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (UniqueConstraint("evidence_sha256", "size_bytes", name="uq_memory_content_identity"),)
+
+
+class MemoryEvidenceSymbolLink(UUIDMixin, Base):
+    """Per-evidence link to a Windows symbol requirement.
+
+    Decouples evidence identity from requirement identity.  Several
+    evidences (same file, different cases) can share the same
+    requirement without duplicating the cache row.
+    """
+
+    __tablename__ = "memory_evidence_symbol_links"
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
+    requirement_id: Mapped[str] = mapped_column(
+        ForeignKey("memory_symbol_requirements.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # How the link was established: "probe", "cache_reuse_by_hash",
+    # "backfill_history", "operator".
+    link_source: Mapped[str] = mapped_column(String(32), nullable=False, default="probe")
+    # Per-evidence state in the preparation pipeline.  The global
+    # state lives on the requirement; the per-evidence state is a
+    # snapshot of the latest preparation step for THIS evidence.
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sanitized_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    last_transition_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive
+    )
+    metadata_json: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (
+        UniqueConstraint("evidence_id", "requirement_id", name="uq_memory_evidence_symbol_link"),
+    )
+
+
+class MemorySymbolPreparation(UUIDMixin, Base):
+    """Per-evidence preparation task (probe / cache check / acquisition).
+
+    Each row represents the *latest* preparation attempt for a given
+    evidence.  The row is created on upload (auto-probe), on
+    confirmation, on reconciliation and on demand.
+    """
+
+    __tablename__ = "memory_symbol_preparations"
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    # The state values (single source of truth):
+    #   queued                       - waiting to be picked up
+    #   probing                      - the read-only probe is in flight
+    #   identified                   - PDB/GUID/age identified
+    #   cache_hit                    - exact cache match found
+    #   acquisition_pending          - operator approval awaited
+    #   acquiring                    - download in progress
+    #   isf_creation                 - PDB->ISF conversion in progress
+    #   ready                        - offline-ready (cache hit or ISF built)
+    #   requirement_unknown          - probe could not identify a symbol
+    #   acquisition_failed           - download / validation failed
+    #   unsupported                  - OS / arch / plugin not supported
+    #   negative_cached              - this exact symbol is not available
+    #                                 at the configured source
+    #   cancelled                    - cancelled by the operator
+    state_reason: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    requirement_id: Mapped[str | None] = mapped_column(
+        ForeignKey("memory_symbol_requirements.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sanitized_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Cooldown: when the next probe may run (negative cache TTL).
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True, index=True)
+    attempts: Mapped[int] = mapped_column(nullable=False, default=0)
+    worker_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (
+        Index("ix_memory_symbol_prep_evidence_state", "evidence_id", "state"),
+        Index("ix_memory_symbol_prep_state_updated", "state", "updated_at"),
+    )
+
+
+class MemorySymbolNegativeCache(UUIDMixin, Base):
+    """Cooldown records for symbols that are NOT available.
+
+    Prevents the system from hammering the symbol source for
+    symbols the source does not have (e.g. Windows XP era PDBs that
+    are no longer distributed).
+    """
+
+    __tablename__ = "memory_symbol_negative_cache"
+
+    symbol_key: Mapped[str] = mapped_column(String(256), nullable=False, index=True, unique=True)
+    source: Mapped[str] = mapped_column(String(64), nullable=False, default="official_microsoft_symbols")
+    error_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    sanitized_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    attempts: Mapped[int] = mapped_column(nullable=False, default=1)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+
+
+class MemorySymbolPendingAnalysis(UUIDMixin, Base):
+    """Operator-intent row for "Run when ready".
+
+    When the user presses Run analysis or Run all before the
+    symbol preparation pipeline is ready, an intent row is
+    recorded.  When the per-evidence preparation reaches
+    ``ready``, the intent is materialised into a real
+    ``MemoryScanRun`` (or ``MemoryAnalysisBatch``) and the intent
+    row is consumed.  Cancellable.
+    """
+
+    __tablename__ = "memory_symbol_pending_analysis"
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(32), nullable=False)  # "single_profile" | "run_all"
+    profile: Mapped[str | None] = mapped_column(String(64), nullable=True)  # for single_profile
+    mode: Mapped[str] = mapped_column(String(32), nullable=False, default="missing_or_failed")
+    requested_profiles: Mapped[list] = mapped_column(JSONVariant, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    # When the materialization runs, the resulting batch / run is
+    # recorded here for audit.
+    materialized_batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    materialized_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sanitized_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (
+        Index("ix_memory_symbol_pending_evidence_status", "evidence_id", "status"),
+    )
+
+
 class MemorySymbolRequirement(UUIDMixin, Base):
     __tablename__ = "memory_symbol_requirements"
 
@@ -183,10 +360,19 @@ class MemorySymbolRequirement(UUIDMixin, Base):
     backfill_version: Mapped[str | None] = mapped_column(String(16), nullable=True)
     confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
+    # The "owned" by link: when the same requirement is shared by
+    # multiple evidences, only one of them is the canonical owner
+    # (the one that triggered the original probe).  Other evidences
+    # have a link with link_source="cache_reuse_by_hash".
+    is_shared: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
 
-    __table_args__ = (UniqueConstraint("evidence_id", "pdb_name", "pdb_guid", "pdb_age", name="uq_memory_evidence_symbol_identity"),)
+    __table_args__ = (
+        UniqueConstraint("evidence_id", "pdb_name", "pdb_guid", "pdb_age", name="uq_memory_evidence_symbol_identity"),
+        Index("ix_memory_symbol_requirement_symbol_key", "symbol_key"),
+        Index("ix_memory_symbol_requirement_status", "status"),
+    )
 
 
 class MemorySymbolAcquisition(UUIDMixin, Base):
