@@ -366,6 +366,58 @@ def register_memory_evidence(upload_id: str, *, db: Session | None = None) -> Ev
                 "memory image probe failed during registration: %s",
                 probe_exc,
             )
+        # Register the content identity and schedule the automatic
+        # Windows symbol preparation pipeline.  This is the
+        # default behaviour; the operator never has to push "Probe
+        # symbol requirements" manually in the normal flow.
+        try:
+            from app.core.config import get_settings
+            from app.services.memory.symbol_preparation import (
+                register_evidence_content_identity,
+                find_requirement_by_content_identity,
+                link_evidence_to_requirement,
+                schedule_preparation,
+                PREP_QUEUED,
+                PREP_READY,
+                PREP_IDENTIFIED,
+            )
+            settings = get_settings()
+            if bool(getattr(settings, "memory_auto_symbol_probe", True)):
+                content = register_evidence_content_identity(db, evidence=evidence)
+                reused = find_requirement_by_content_identity(db, evidence=evidence)
+                if reused is not None:
+                    link_evidence_to_requirement(
+                        db,
+                        evidence=evidence,
+                        requirement=reused,
+                        link_source="cache_reuse_by_hash",
+                        state=PREP_READY,
+                    )
+                    content.last_requirement_id = reused.id
+                    content.last_readiness = PREP_READY
+                    content.last_checked_at = _now()
+                    # Mark the requirement as shared so other
+                    # evidences can detect the canonical owner.
+                    reused.is_shared = True
+                    mark_preparation(
+                        db,
+                        evidence=evidence,
+                        state=PREP_READY,
+                        reason="cache_reuse_by_hash",
+                        requirement_id=reused.id,
+                    )
+                else:
+                    schedule_preparation(
+                        db,
+                        evidence=evidence,
+                        state=PREP_QUEUED,
+                        reason="auto_probe_on_upload",
+                    )
+        except Exception as prep_exc:  # noqa: BLE001
+            logger.warning(
+                "memory symbol preparation scheduling failed: %s",
+                prep_exc,
+            )
         item.status = "completed"
         item.failure_code = None
         item.failure_message = None

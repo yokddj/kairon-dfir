@@ -298,6 +298,12 @@ def create_run_all_batch(
         STATE_CACHED,
         evidence_symbol_state,
     )
+    from app.services.memory.symbol_preparation import (
+        compute_memory_readiness,
+        record_pending_analysis,
+        UI_STATE_READY,
+        UI_STATE_PREPARING,
+    )
 
     symbol_state = evidence_symbol_state(
         db,
@@ -305,8 +311,70 @@ def create_run_all_batch(
         evidence_id=evidence_id,
         acquisition_gate_available=False,
     )
-    if symbol_state.state == STATE_CACHED:
-        # Exact match: the batch may proceed.
+    # Prefer the new automatic preparation pipeline: when the
+    # preparation has reached ``ready`` the batch may proceed.  When
+    # the preparation is still pending we record an intent row
+    # and return 202 so the UI shows a "Preparing" state and starts
+    # the batch when ready.
+    prep = compute_memory_readiness(db, evidence=evidence)
+    if prep.ui_state == UI_STATE_READY:
+        pass
+    elif prep.ui_state == UI_STATE_PREPARING:
+        if symbol_state.state == STATE_CACHED:
+            pass
+        else:
+            requested_profiles: list[str] = []
+            try:
+                plan = _plan_for_mode(
+                    db,
+                    case_id=case_id,
+                    evidence_id=evidence_id,
+                    mode=mode,
+                )
+                requested_profiles = list(plan.get("selected_profiles", []))
+            except Exception:  # noqa: BLE001
+                requested_profiles = list(RUN_ALL_PROFILES)
+            record_pending_analysis(
+                db,
+                case_id=case_id,
+                evidence_id=evidence_id,
+                kind="run_all",
+                mode=mode,
+                requested_profiles=requested_profiles,
+            )
+            db.commit()
+            raise MemoryBatchError(
+                "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS",
+                (
+                    "Windows symbols are being prepared for this evidence. "
+                    "The batch will start automatically once preparation is ready."
+                ),
+                status_code=409,
+                extra={
+                    "evidence_id": evidence_id,
+                    "preparation_state": prep.preparation_state,
+                    "progress_label": prep.progress_label,
+                    "progress_percent": prep.progress_percent,
+                    "auto_start": True,
+                },
+            )
+    elif prep.ui_state in {"blocked", "failed"}:
+        # True blocker; cannot proceed.
+        from app.services.memory.symbol_control import acquisition_gate as _acq_gate
+        available, gate_code, _ = _acq_gate()
+        raise MemoryBatchError(
+            EC_SYMBOLS_REQUIRED,
+            prep.sanitized_message or "Windows symbols are not available for this evidence.",
+            status_code=409,
+            extra={
+                "evidence_id": evidence_id,
+                "preparation_state": prep.preparation_state,
+                "blocker": prep.sanitized_message,
+                "can_acquire": bool(available and prep.ui_state != "failed"),
+                "auto_retry": True,
+            },
+        )
+    elif symbol_state.state == STATE_CACHED:
         pass
     elif symbol_state.requirement is None:
         # No requirement has been recorded yet.  Allow the batch;

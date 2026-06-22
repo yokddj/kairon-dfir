@@ -629,6 +629,62 @@ export type MemorySymbolReadiness = {
   reconstructed_at: string | null;
 };
 
+export type MemorySymbolPreparationState =
+  | "queued"
+  | "probing"
+  | "identified"
+  | "cache_hit"
+  | "acquisition_pending"
+  | "acquiring"
+  | "isf_creation"
+  | "ready"
+  | "requirement_unknown"
+  | "acquisition_failed"
+  | "unsupported"
+  | "negative_cached"
+  | "cancelled";
+
+export type MemorySymbolPreparationUIState = "ready" | "preparing" | "blocked" | "failed";
+
+export type MemorySymbolPreparation = {
+  case_id: string;
+  evidence_id: string;
+  filename: string;
+  ui_state: MemorySymbolPreparationUIState;
+  preparation_state: MemorySymbolPreparationState;
+  requirement: MemorySymbolRequirement | null;
+  cache_status: "hit" | "miss" | "negative" | "unknown";
+  exact_match: boolean;
+  pending_request_id: string | null;
+  blocker: string | null;
+  sanitized_message: string | null;
+  can_analyze_metadata: boolean;
+  can_run_all: boolean;
+  progress_label: string;
+  progress_percent: number;
+  pending_intent_kind: "single_profile" | "run_all" | null;
+  link_source: string | null;
+  content_reused_by_hash: boolean;
+};
+
+export type MemoryRunWhenReadyRequest = {
+  kind: "single_profile" | "run_all";
+  profile?: string;
+  mode?: string;
+  requested_profiles?: string[];
+};
+
+export type MemoryRunWhenReadyResponse = {
+  case_id: string;
+  evidence_id: string;
+  pending_id: string;
+  kind: string;
+  profile: string | null;
+  mode: string;
+  requested_profiles: string[];
+  status: string;
+};
+
 export type MemorySymbolProbeResult = {
   evidence_id: string;
   status: string;
@@ -4030,6 +4086,26 @@ export const api = {
   getMemorySymbolRequest: (requestId: string) => request<MemorySymbolRequestStatus>(`/memory/symbols/requests/${requestId}`),
   getMemorySymbolReadiness: (caseId: string, evidenceId: string) =>
     request<MemorySymbolReadiness>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbol-readiness`),
+  getMemorySymbolPreparation: (caseId: string, evidenceId: string) =>
+    request<MemorySymbolPreparation>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbol-preparation`),
+  retryMemorySymbolPreparation: (caseId: string, evidenceId: string) =>
+    request<MemorySymbolPreparation>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/symbol-preparation/retry`,
+      { method: "POST" },
+    ),
+  reconcileMemorySymbols: (caseId: string) =>
+    request<{ stats: Record<string, number> }>(`/cases/${caseId}/memory/symbol-reconcile`, {
+      method: "POST",
+    }),
+  runMemoryAnalysisWhenReady: (caseId: string, evidenceId: string, payload: MemoryRunWhenReadyRequest) =>
+    request<MemoryRunWhenReadyResponse>(`/cases/${caseId}/memory/evidences/${evidenceId}/run-when-ready`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+  cancelMemoryRunWhenReady: (caseId: string, evidenceId: string) =>
+    request<{ cancelled: number }>(`/cases/${caseId}/memory/evidences/${evidenceId}/run-when-ready/cancel`, {
+      method: "POST",
+    }),
   probeMemorySymbolRequirement: (caseId: string, evidenceId: string) =>
     request<MemorySymbolProbeResult>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbol-probe`, {
       method: "POST",

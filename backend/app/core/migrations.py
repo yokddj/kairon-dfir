@@ -347,6 +347,189 @@ def _v7_memory_symbol_requirement_backfill_metadata(connection: Connection) -> N
             )
 
 
+@register(8, "memory_evidence_content_identity")
+def _v8_memory_evidence_content_identity(connection: Connection) -> None:
+    """Add content-identity tables for symbol readiness reuse.
+
+    New tables:
+
+    * ``memory_evidence_contents``  - one row per (sha256, size) tuple
+    * ``memory_evidence_symbol_links`` - per-evidence link to a requirement
+    * ``memory_symbol_preparations``  - per-evidence preparation state
+    * ``memory_symbol_negative_cache`` - cooldown for unavailable symbols
+    * ``memory_symbol_pending_analysis`` - operator-intent rows for "Run
+      when ready"
+
+    This is the data model behind the automatic symbol resolution
+    flow.  Idempotent: re-running it on a database that already
+    has the tables is a no-op.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_evidence_contents" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                """
+                CREATE TABLE memory_evidence_contents (
+                    id UUID PRIMARY KEY,
+                    evidence_sha256 VARCHAR(64) NOT NULL,
+                    size_bytes BIGINT NOT NULL,
+                    acquisition_metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    last_readiness VARCHAR(32),
+                    last_requirement_id UUID,
+                    last_checked_at TIMESTAMP,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_memory_content_identity ON memory_evidence_contents (evidence_sha256, size_bytes)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_evidence_contents_sha256 ON memory_evidence_contents (evidence_sha256)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_evidence_contents_last_requirement ON memory_evidence_contents (last_requirement_id)"
+            )
+        )
+    if "memory_evidence_symbol_links" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                """
+                CREATE TABLE memory_evidence_symbol_links (
+                    id UUID PRIMARY KEY,
+                    case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+                    evidence_id UUID NOT NULL REFERENCES evidences(id) ON DELETE CASCADE,
+                    requirement_id UUID NOT NULL REFERENCES memory_symbol_requirements(id) ON DELETE CASCADE,
+                    link_source VARCHAR(32) NOT NULL DEFAULT 'probe',
+                    state VARCHAR(32) NOT NULL DEFAULT 'pending',
+                    error_code VARCHAR(64),
+                    sanitized_message VARCHAR(512),
+                    last_transition_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_memory_evidence_symbol_link ON memory_evidence_symbol_links (evidence_id, requirement_id)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_evidence_symbol_links_requirement ON memory_evidence_symbol_links (requirement_id)"
+            )
+        )
+    if "memory_symbol_preparations" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                """
+                CREATE TABLE memory_symbol_preparations (
+                    id UUID PRIMARY KEY,
+                    case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+                    evidence_id UUID NOT NULL REFERENCES evidences(id) ON DELETE CASCADE,
+                    state VARCHAR(32) NOT NULL DEFAULT 'queued',
+                    state_reason VARCHAR(64),
+                    requirement_id UUID REFERENCES memory_symbol_requirements(id) ON DELETE SET NULL,
+                    error_code VARCHAR(64),
+                    sanitized_message VARCHAR(512),
+                    next_attempt_at TIMESTAMP,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    worker_task_id VARCHAR(128),
+                    metadata_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    started_at TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_symbol_prep_evidence_state ON memory_symbol_preparations (evidence_id, state)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_symbol_prep_state_updated ON memory_symbol_preparations (state, updated_at)"
+            )
+        )
+    if "memory_symbol_negative_cache" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                """
+                CREATE TABLE memory_symbol_negative_cache (
+                    id UUID PRIMARY KEY,
+                    symbol_key VARCHAR(256) NOT NULL,
+                    source VARCHAR(64) NOT NULL DEFAULT 'official_microsoft_symbols',
+                    error_code VARCHAR(64) NOT NULL,
+                    sanitized_message VARCHAR(512),
+                    attempts INTEGER NOT NULL DEFAULT 1,
+                    expires_at TIMESTAMP NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_memory_symbol_negative_cache_key ON memory_symbol_negative_cache (symbol_key)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_symbol_negative_cache_expires ON memory_symbol_negative_cache (expires_at)"
+            )
+        )
+    if "memory_symbol_pending_analysis" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                """
+                CREATE TABLE memory_symbol_pending_analysis (
+                    id UUID PRIMARY KEY,
+                    case_id UUID NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+                    evidence_id UUID NOT NULL REFERENCES evidences(id) ON DELETE CASCADE,
+                    kind VARCHAR(32) NOT NULL,
+                    profile VARCHAR(64),
+                    mode VARCHAR(32) NOT NULL DEFAULT 'missing_or_failed',
+                    requested_profiles JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    status VARCHAR(32) NOT NULL DEFAULT 'pending',
+                    materialized_batch_id VARCHAR(64),
+                    materialized_run_id VARCHAR(64),
+                    error_code VARCHAR(64),
+                    sanitized_message VARCHAR(512),
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_symbol_pending_evidence_status ON memory_symbol_pending_analysis (evidence_id, status)"
+            )
+        )
+    # Add is_shared column to memory_symbol_requirements.
+    if "memory_symbol_requirements" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("memory_symbol_requirements")}
+        if "is_shared" not in existing:
+            connection.execute(
+                text(
+                    "ALTER TABLE memory_symbol_requirements ADD COLUMN is_shared BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            )
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 
