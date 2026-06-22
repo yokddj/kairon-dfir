@@ -900,13 +900,23 @@ export type MemoryUploadReadiness = {
 
 export type MemoryUploadStatus = {
   upload_id: string;
-  status: "validating" | "uploading" | "verifying" | "finalizing" | "completed" | "failed" | "inconsistent";
+  case_id?: string;
+  evidence_id: string | null;
+  status: "validating" | "uploading" | "verifying" | "finalizing" | "completed" | "failed" | "cancelled" | "stale" | "inconsistent";
   bytes_received: number;
   expected_bytes: number;
-  evidence_id: string | null;
+  filename?: string;
+  extension?: string;
+  created_at?: string;
+  updated_at: string;
+  last_heartbeat?: string;
+  stale_after_seconds?: number;
+  stale?: boolean;
+  resumable?: boolean;
+  cancellable?: boolean;
+  is_active?: boolean;
   failure_code: string | null;
   message: string;
-  updated_at: string;
   retryable: boolean;
 };
 
@@ -3851,6 +3861,13 @@ export const api = {
   },
   getMemoryUploadStatus: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}`),
   reconcileMemoryUpload: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/reconcile`, { method: "POST" }),
+  cancelMemoryUpload: (caseId: string, uploadId: string, reason: string) =>
+    request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    }),
+  getActiveMemoryUpload: (caseId: string) =>
+    request<MemoryUploadStatus | null>(`/cases/${caseId}/memory/uploads/active`),
   listMemoryEvidences: (caseId: string) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences`),
   getMemoryEvidenceReadiness: (caseId: string, evidenceId: string) => request<MemoryEvidenceReadiness>(`/cases/${caseId}/memory/evidences/${evidenceId}/readiness`),
   getMemorySymbolCacheStatus: () => request<MemorySymbolCacheStatus>("/memory/symbols/cache"),

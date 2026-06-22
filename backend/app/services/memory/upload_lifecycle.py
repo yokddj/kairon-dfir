@@ -111,6 +111,25 @@ def get_memory_upload(db: Session, case_id: str, upload_id: str) -> MemoryUpload
     return db.query(MemoryUpload).filter(MemoryUpload.id == normalize_upload_id(upload_id), MemoryUpload.case_id == case_id).one_or_none()
 
 
+def find_active_memory_upload(db: Session, case_id: str) -> MemoryUpload | None:
+    """Return the most recent non-terminal memory upload for a case.
+
+    Used by the API to surface the active upload panel and by the
+    new-upload check to refuse overlapping uploads within the same
+    case.  Returns ``None`` when there is no active upload.
+    """
+    from app.models.memory import MemoryUpload as _MU
+    return (
+        db.query(_MU)
+        .filter(
+            _MU.case_id == case_id,
+            _MU.status.in_(("validating", "uploading", "verifying", "finalizing", "stale")),
+        )
+        .order_by(_MU.updated_at.desc())
+        .first()
+    )
+
+
 def public_memory_upload_status(item: MemoryUpload) -> dict[str, Any]:
     messages = {
         "validating": "Validating memory upload.",
@@ -119,19 +138,102 @@ def public_memory_upload_status(item: MemoryUpload) -> dict[str, Any]:
         "finalizing": "The file has been transferred. Kairon is finalizing the evidence.",
         "completed": "Memory image uploaded and registered.",
         "failed": item.failure_message or "Memory upload failed.",
+        "cancelled": "Memory upload was cancelled by the operator.",
+        "stale": item.failure_message or "Memory upload is stale; reconcile or cancel to continue.",
         "inconsistent": item.failure_message or "Memory upload storage is inconsistent and requires review.",
     }
+    settings = get_settings()
+    stale_after = max(60, int(settings.memory_upload_stale_timeout_seconds))
+    is_active = item.status in ACTIVE_STATUSES
+    last_heartbeat = item.progress_at
+    now = utc_now_naive()
+    stale = bool(is_active and last_heartbeat and (now - last_heartbeat).total_seconds() > stale_after)
+    resumable = bool(
+        item.retryable
+        and item.status not in {"completed", "inconsistent"}
+        and (item.status != "failed" or bool(item.retryable))
+    )
+    cancellable = item.status in {"validating", "uploading", "verifying", "finalizing", "stale"}
     return {
         "upload_id": item.id,
+        "case_id": item.case_id,
+        "evidence_id": item.evidence_id if item.status == "completed" else None,
         "status": item.status,
         "bytes_received": int(item.bytes_received or 0),
         "expected_bytes": int(item.expected_bytes or 0),
-        "evidence_id": item.evidence_id if item.status == "completed" else None,
+        "filename": item.display_name,
+        "extension": item.extension,
+        "created_at": item.created_at,
+        "updated_at": item.updated_at,
+        "last_heartbeat": last_heartbeat,
+        "stale_after_seconds": stale_after,
+        "stale": stale,
+        "resumable": resumable,
+        "cancellable": cancellable,
+        "is_active": is_active,
         "failure_code": item.failure_code,
         "message": messages.get(item.status, "Memory upload state is unavailable."),
-        "updated_at": item.updated_at,
         "retryable": bool(item.retryable),
     }
+
+
+def cancel_memory_upload(
+    case_id: str,
+    upload_id: str,
+    *,
+    operator: str | None = None,
+    reason: str | None = None,
+    db: Session | None = None,
+) -> MemoryUpload:
+    """Cancel a non-terminal memory upload safely.
+
+    * Idempotent: cancelling an already-cancelled upload is a no-op.
+    * Does NOT touch the canonical evidence file when the upload is
+      already completed (the caller's responsibility is to check
+      ``status != \"completed\"`` before calling).
+    * Only deletes the staged (incomplete) file when it exists and
+      is not the canonical evidence.
+    * Audits the operator, reason and timestamp in
+      ``failure_message`` for the audit trail.
+    """
+    owns_session = db is None
+    db = db or SessionLocal()
+    try:
+        item = get_memory_upload(db, case_id, upload_id)
+        if item is None:
+            raise LookupError("Memory upload was not found.")
+        if item.status == "completed":
+            # Refuse to touch completed evidence.
+            return _detached_upload(db, item)
+        if item.status in {"cancelled", "failed", "inconsistent"}:
+            return _detached_upload(db, item)
+        # Non-terminal: cancel and release the lock.
+        audit_parts = []
+        if operator:
+            audit_parts.append(f"operator={operator}")
+        if reason:
+            audit_parts.append(f"reason={reason[:200]}")
+        audit_parts.append(f"cancelled_at={utc_now_naive().isoformat()}")
+        item.status = "cancelled"
+        item.failure_code = "operator_cancelled"
+        item.failure_message = " | ".join(audit_parts)
+        item.retryable = False
+        # Release the upload slot if owned.
+        release_memory_upload_slot_if_owner(item.id)
+        # Delete only the staged (incomplete) file when safe.
+        staging = _staging_path(item)
+        canonical = _canonical_path(item)
+        try:
+            if staging.exists() and not canonical.exists():
+                staging.unlink()
+        except OSError:
+            pass
+        db.commit()
+        db.refresh(item)
+        return _detached_upload(db, item)
+    finally:
+        if owns_session:
+            db.close()
 
 
 def _canonical_path(item: MemoryUpload) -> Path:
@@ -300,82 +402,88 @@ def mark_memory_upload_failed(upload_id: str, code: str, message: str, *, retrya
     return update_memory_upload(upload_id, db=db, status="failed", failure_code=code, failure_message=message[:512], retryable=retryable)
 
 
-def reconcile_memory_upload(case_id: str, upload_id: str, *, force_stale: bool = False) -> MemoryUpload:
+def reconcile_memory_upload(case_id: str, upload_id: str, *, force_stale: bool = False, db: Session | None = None) -> MemoryUpload:
     settings = get_settings()
-    with SessionLocal() as db:
-        item = get_memory_upload(db, case_id, upload_id)
-        if item is None:
-            raise LookupError("Memory upload state was not found.")
-        if item.status == "completed":
-            evidence = db.get(Evidence, item.evidence_id)
-            if evidence is None or not _valid_regular_file(_canonical_path(item), int(item.expected_bytes)):
-                item.status = "inconsistent"
-                item.failure_code = "completed_state_invalid"
-                item.failure_message = "Completed upload state does not match durable evidence storage."
-                item.retryable = False
-                db.commit()
-            return _detached_upload(db, item)
-        stale_before = utc_now_naive() - timedelta(seconds=max(60, int(settings.memory_upload_stale_timeout_seconds)))
-        if item.status in ACTIVE_STATUSES and item.progress_at > stale_before and not force_stale:
-            db.expunge(item)
-            return item
-        if item.status in ACTIVE_STATUSES:
-            release_memory_upload_slot_if_owner(item.id)
-        staging = _staging_path(item)
-        canonical = _canonical_path(item)
-        staging_exists = staging.exists()
-        canonical_exists = canonical.exists()
+    owns_session = db is None
+    if owns_session:
+        with SessionLocal() as _db:
+            return reconcile_memory_upload(
+                case_id, upload_id, force_stale=force_stale, db=_db,
+            )
+    item = get_memory_upload(db, case_id, upload_id)
+    if item is None:
+        raise LookupError("Memory upload state was not found.")
+    if item.status == "completed":
         evidence = db.get(Evidence, item.evidence_id)
-        if evidence is not None and not _valid_regular_file(canonical, int(item.expected_bytes)):
+        if evidence is None or not _valid_regular_file(_canonical_path(item), int(item.expected_bytes)):
             item.status = "inconsistent"
-            item.failure_code = "evidence_file_missing"
-            item.failure_message = "Evidence registration exists but canonical storage is missing or invalid."
+            item.failure_code = "completed_state_invalid"
+            item.failure_message = "Completed upload state does not match durable evidence storage."
+            item.retryable = False
+            db.commit()
+        return _detached_upload(db, item)
+    stale_before = utc_now_naive() - timedelta(seconds=max(60, int(settings.memory_upload_stale_timeout_seconds)))
+    if item.status in ACTIVE_STATUSES and item.progress_at > stale_before and not force_stale:
+        db.expunge(item)
+        return item
+    if item.status in ACTIVE_STATUSES:
+        release_memory_upload_slot_if_owner(item.id)
+    staging = _staging_path(item)
+    canonical = _canonical_path(item)
+    staging_exists = staging.exists()
+    canonical_exists = canonical.exists()
+    evidence = db.get(Evidence, item.evidence_id)
+    if evidence is not None and not _valid_regular_file(canonical, int(item.expected_bytes)):
+        item.status = "inconsistent"
+        item.failure_code = "evidence_file_missing"
+        item.failure_message = "Evidence registration exists but canonical storage is missing or invalid."
+        item.retryable = False
+        db.commit()
+        return _detached_upload(db, item)
+    if staging_exists and canonical_exists:
+        item.status = "inconsistent"
+        item.failure_code = "staging_and_canonical_present"
+        item.failure_message = "Both staged and canonical memory files exist; automatic overwrite is unsafe."
+        item.retryable = False
+        db.commit()
+        return _detached_upload(db, item)
+    if canonical_exists:
+        if not _valid_regular_file(canonical, int(item.expected_bytes)):
+            item.status = "inconsistent"
+            item.failure_code = "canonical_size_mismatch"
+            item.failure_message = "Canonical memory file size does not match the accepted upload."
             item.retryable = False
             db.commit()
             return _detached_upload(db, item)
-        if staging_exists and canonical_exists:
-            item.status = "inconsistent"
-            item.failure_code = "staging_and_canonical_present"
-            item.failure_message = "Both staged and canonical memory files exist; automatic overwrite is unsafe."
-            item.retryable = False
-            db.commit()
-            return _detached_upload(db, item)
-        if canonical_exists:
-            if not _valid_regular_file(canonical, int(item.expected_bytes)):
-                item.status = "inconsistent"
-                item.failure_code = "canonical_size_mismatch"
-                item.failure_message = "Canonical memory file size does not match the accepted upload."
-                item.retryable = False
-                db.commit()
-                return _detached_upload(db, item)
-            if not item.sha256:
-                item.sha256 = sha256_file(canonical)
-            item.status = "finalizing"
-            db.commit()
-        elif staging_exists:
-            if not _valid_regular_file(staging, int(item.expected_bytes)):
-                item.status = "failed"
-                item.failure_code = "staging_size_mismatch"
-                item.failure_message = "Staged memory file is incomplete or invalid."
-                item.retryable = False
-                db.commit()
-                return _detached_upload(db, item)
-            if not item.sha256:
-                item.sha256 = sha256_file(staging)
-            assert_memory_upload_capacity(int(item.expected_bytes), phase="finalization", bytes_already_staged=int(item.expected_bytes))
-            canonical.parent.mkdir(parents=True, exist_ok=True)
-            os.replace(staging, canonical)
-            item.status = "finalizing"
-            item.bytes_received = item.expected_bytes
-            db.commit()
-        else:
+        if not item.sha256:
+            item.sha256 = sha256_file(canonical)
+        item.status = "finalizing"
+        db.commit()
+    elif staging_exists:
+        if not _valid_regular_file(staging, int(item.expected_bytes)):
             item.status = "failed"
-            item.failure_code = "upload_bytes_lost"
-            item.failure_message = "Neither staged nor canonical upload bytes are available."
+            item.failure_code = "staging_size_mismatch"
+            item.failure_message = "Staged memory file is incomplete or invalid."
             item.retryable = False
             db.commit()
             return _detached_upload(db, item)
-        upload_key = item.id
+        if not item.sha256:
+            item.sha256 = sha256_file(staging)
+        assert_memory_upload_capacity(int(item.expected_bytes), phase="finalization", bytes_already_staged=int(item.expected_bytes))
+        canonical.parent.mkdir(parents=True, exist_ok=True)
+        os.replace(staging, canonical)
+        item.status = "finalizing"
+        item.bytes_received = item.expected_bytes
+        db.commit()
+    else:
+        item.status = "failed"
+        item.failure_code = "upload_bytes_lost"
+        item.failure_message = "Neither staged nor canonical upload bytes are available."
+        item.retryable = False
+        db.commit()
+        return _detached_upload(db, item)
+    upload_key = item.id
     register_memory_evidence(upload_key)
-    with SessionLocal() as db:
+    if owns_session:
         return db.get(MemoryUpload, upload_key)
+    return item
