@@ -4,7 +4,12 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type Evidence, type MemoryUploadReadiness, type MemoryUploadStatus } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
-const MEMORY_EXTENSIONS = [".raw", ".mem", ".vmem", ".dmp", ".lime"];
+// Mirror of the backend's memory_upload_allowed_extensions.  The
+// backend makes the final memory vs disk decision via the content
+// probe; this is only the candidate-extension allowlist used by the
+// file picker.  When the backend's allowlist is available via
+// readiness.allowed_extensions, that list takes precedence.
+const MEMORY_EXTENSIONS = [".raw", ".mem", ".dmp", ".dump", ".bin", ".img", ".vmem", ".lime", ".aff4"];
 
 type UploadStage = "idle" | "validating" | "uploading" | "verifying" | "finalizing" | "completed" | "failed";
 
@@ -87,6 +92,18 @@ export default function MemoryUploadPage() {
     refetchOnWindowFocus: false,
   });
 
+  // The authoritative "is there an active upload for this case?"
+  // comes from the backend.  When the localStorage upload ID is stale
+  // (e.g. the upload was completed or cancelled on the server), the
+  // backend returns 404 and we clear the local entry.
+  const activeUploadQuery = useQuery({
+    queryKey: ["memory-active-upload", caseId],
+    queryFn: () => api.getActiveMemoryUpload(caseId),
+    enabled: Boolean(caseId),
+    refetchInterval: 5000,
+    retry: false,
+  });
+
   const statusQuery = useQuery({
     queryKey: ["memory-upload-status", caseId, activeUploadId],
     queryFn: () => api.getMemoryUploadStatus(caseId, activeUploadId || ""),
@@ -95,8 +112,17 @@ export default function MemoryUploadPage() {
       const current = query.state.data as MemoryUploadStatus | undefined;
       return current && ["completed", "failed", "inconsistent"].includes(current.status) ? false : 2000;
     },
-    retry: 2,
+    retry: false,
   });
+
+  // When the status query fails (404), the localStorage upload ID is
+  // stale.  Clear it so the user is not stuck on a phantom lock.
+  useEffect(() => {
+    if (statusQuery.error && activeUploadId) {
+      localStorage.removeItem(`kairon-memory-upload:${caseId}`);
+      setActiveUploadId(null);
+    }
+  }, [statusQuery.error, activeUploadId, caseId]);
 
   useEffect(() => {
     if (!finalizationStartedAt || !["uploading", "verifying", "finalizing"].includes(stage)) return;
@@ -264,6 +290,8 @@ export default function MemoryUploadPage() {
     return <div className="rounded-[28px] border border-line bg-panel/70 p-8 text-sm text-muted shadow-panel">Select a case first.</div>;
   }
 
+  const serverActive = activeUploadQuery.data;
+
   return (
     <div className="space-y-6">
       <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
@@ -276,6 +304,81 @@ export default function MemoryUploadPage() {
           <Link to={`/cases/${caseId}/memory`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Back to Memory Analysis</Link>
         </div>
       </section>
+
+      {serverActive && serverActive.is_active ? (
+        <section
+          data-testid="memory-active-upload-panel"
+          className="rounded-[28px] border border-warning/30 bg-warning/10 p-5 text-sm"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold text-ink">
+                {serverActive.stale ? "Interrupted memory upload" : "Active memory upload"}
+              </h3>
+              <p className="mt-1 text-sm text-muted">
+                File: <span className="font-mono">{serverActive.filename || serverActive.upload_id}</span>
+              </p>
+              <p className="mt-1 text-sm text-muted">State: <span className="font-mono">{serverActive.status}</span></p>
+              <p className="mt-1 text-sm text-muted">
+                Progress: {formatBytes(serverActive.bytes_received)} / {formatBytes(serverActive.expected_bytes)}
+                {serverActive.expected_bytes > 0 ? ` (${Math.round((serverActive.bytes_received / serverActive.expected_bytes) * 100)}%)` : ""}
+              </p>
+              <p className="mt-1 text-sm text-muted">
+                Last activity: {serverActive.last_heartbeat ? new Date(serverActive.last_heartbeat).toLocaleString() : "unknown"}
+                {serverActive.stale ? " (stale)" : ""}
+              </p>
+              {serverActive.stale ? (
+                <p className="mt-1 text-sm text-warning">No activity for a long time. The upload can be resumed or discarded.</p>
+              ) : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                data-testid="memory-active-check-status"
+                onClick={() => { void activeUploadQuery.refetch(); void statusQuery.refetch(); }}
+                className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted"
+              >
+                Check status
+              </button>
+              {serverActive.cancellable ? (
+                <button
+                  type="button"
+                  data-testid="memory-active-cancel"
+                  onClick={() => {
+                    const reason = window.prompt(
+                      "Cancel and discard incomplete upload?\n\n" +
+                      `File: ${serverActive.filename}\n` +
+                      `Bytes uploaded: ${formatBytes(serverActive.bytes_received)}\n` +
+                      `Last activity: ${serverActive.last_heartbeat || "unknown"}\n\n` +
+                      "Completed evidence is NOT affected.",
+                      "Operator requested cancel",
+                    );
+                    if (!reason) return;
+                    api.cancelMemoryUpload(caseId, serverActive.upload_id, reason)
+                      .then(() => {
+                        localStorage.removeItem(`kairon-memory-upload:${caseId}`);
+                        setActiveUploadId(null);
+                        void activeUploadQuery.refetch();
+                      })
+                      .catch((err) => setStatus(err instanceof Error ? err.message : "Cancel failed"));
+                  }}
+                  className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100"
+                >
+                  Cancel and discard
+                </button>
+              ) : null}
+              {serverActive.evidence_id ? (
+                <Link
+                  to={`/cases/${caseId}/memory?evidence_id=${serverActive.evidence_id}`}
+                  className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss"
+                >
+                  Open evidence
+                </Link>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="grid gap-3 md:grid-cols-4">
         <div className="rounded-2xl border border-line bg-panel/60 p-4"><p className="text-xs uppercase tracking-[0.16em] text-muted">Upload</p><p className="mt-1 text-lg font-semibold">{readiness?.upload_enabled ? "Enabled" : "Disabled"}</p></div>
@@ -310,7 +413,7 @@ export default function MemoryUploadPage() {
           <label className="block"><span className="text-sm text-muted">Source host</span><input value={providedHost} onChange={(event) => setProvidedHost(event.target.value)} placeholder="HOSTA or hosta.example.local" className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none" /></label>
           <button type="button" onClick={() => inputRef.current?.click()} disabled={stage === "uploading" || stage === "verifying" || stage === "finalizing"} className="self-end rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted disabled:opacity-60">Select RAM image</button>
         </div>
-        <input ref={inputRef} aria-label="Memory image file" type="file" accept={MEMORY_EXTENSIONS.join(",")} className="hidden" onChange={(event) => { const next = event.target.files?.[0] || null; setFile(next); setUploadedEvidence(null); setAcceptedReadiness(null); setStage("idle"); setStatus(next ? `Selected ${next.name}` : ""); }} />
+        <input ref={inputRef} data-testid="memory-image-file-input" aria-label="Memory image file" type="file" accept={MEMORY_EXTENSIONS.join(",") + ",application/octet-stream"} className="hidden" onChange={(event) => { const next = event.target.files?.[0] || null; setFile(next); setUploadedEvidence(null); setAcceptedReadiness(null); setStage("idle"); setStatus(next ? `Selected ${next.name}` : ""); }} />
         {file ? <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm"><p className="truncate font-medium text-ink" title={file.name}>{file.name}</p><p className="mt-1 text-muted">Extension: {extension || "none"} · Size: {formatBytes(file.size)} · Detected type: {extensionAllowed ? "Memory image" : "Unsupported"}</p><p className={`mt-2 ${extensionAllowed && fileWithinLimit && readiness?.can_accept_selected_size ? "text-mint" : "text-warning"}`}>{summary}</p></div> : null}
       </section>
 

@@ -506,6 +506,23 @@ def get_memory_upload_status(case_id: str, upload_id: str, db: Session = Depends
     return public_memory_upload_status(item)
 
 
+@router.get("/cases/{case_id}/memory/uploads/active", response_model=MemoryUploadStatusRead | None)
+def get_active_memory_upload_endpoint(case_id: str, db: Session = Depends(get_db)) -> dict | None:
+    """Return the most recent non-terminal memory upload for a case.
+
+    Returns 200 with ``null`` when there is no active upload.  This
+    is the source of truth used by the upload page to decide
+    whether to show the "active upload" panel or to allow a new
+    upload to start.
+    """
+    from app.services.memory.upload_lifecycle import find_active_memory_upload
+    _require_case(db, case_id)
+    item = find_active_memory_upload(db, case_id)
+    if item is None:
+        return None
+    return public_memory_upload_status(item)
+
+
 @router.post("/cases/{case_id}/memory/uploads/{upload_id}/reconcile", response_model=MemoryUploadStatusRead)
 def reconcile_memory_upload_endpoint(case_id: str, upload_id: str, db: Session = Depends(get_db)) -> dict:
     _require_case(db, case_id)
@@ -521,6 +538,43 @@ def reconcile_memory_upload_endpoint(case_id: str, upload_id: str, db: Session =
     except Exception as exc:
         raise HTTPException(status_code=409, detail="Memory upload could not be reconciled safely.") from exc
     return public_memory_upload_status(reconciled)
+
+
+@router.post("/cases/{case_id}/memory/uploads/{upload_id}/cancel", response_model=MemoryUploadStatusRead)
+def cancel_memory_upload_endpoint(
+    case_id: str,
+    upload_id: str,
+    payload: dict | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Cancel a non-terminal memory upload safely.
+
+    * Idempotent: cancelling an already-cancelled upload is a no-op.
+    * Does NOT touch completed evidence: the endpoint refuses to
+      delete a canonical evidence file even if requested.
+    * Only the staged (incomplete) file is deleted.
+    """
+    from app.services.memory.upload_lifecycle import cancel_memory_upload
+    from app.core.auth import get_current_optional_user
+    _require_case(db, case_id)
+    item = get_memory_upload(db, case_id, upload_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Memory upload was not found.")
+    if item.status == "completed":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot cancel a completed memory upload; the evidence is already durable.",
+        )
+    payload = payload or {}
+    operator = payload.get("operator") or "server-operator"
+    reason = (payload.get("reason") or "").strip() or "operator requested cancel"
+    try:
+        cancelled = cancel_memory_upload(
+            case_id, upload_id, operator=operator, reason=reason, db=db,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Memory upload was not found.") from exc
+    return public_memory_upload_status(cancelled)
 
 
 @router.get("/cases/{case_id}/memory/runs", response_model=list[MemoryScanRunRead])
