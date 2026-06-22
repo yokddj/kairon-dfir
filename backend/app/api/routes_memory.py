@@ -563,6 +563,27 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
             status_code=400,
             detail="Authorization acknowledgement is required before analyzing RAM evidence.",
         )
+    # Block analysis when the evidence probe verdict is "probable_disk"
+    # or the file is "ambiguous_raw" without operator override.  The
+    # operator must explicitly confirm the file is memory via
+    # /api/cases/{case_id}/evidences/{evidence_id}/confirm-memory-type.
+    if evidence.detection_status == "probable_disk":
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This evidence was classified as a probable disk image "
+                "by the content probe. Import it as disk evidence or "
+                "explicitly confirm it as memory before analyzing."
+            ),
+        )
+    if evidence.detection_status == "ambiguous_raw" and not evidence.operator_override:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This evidence has an ambiguous_raw probe verdict. "
+                "Confirm the type via /confirm-memory-type before analyzing."
+            ),
+        )
     backend_overview = get_memory_backend_overview()
     volatility_status = next((item for item in backend_overview.get("backends", []) if item.get("backend") == "volatility3"), None)
     if not volatility_status or not volatility_status.get("ready"):

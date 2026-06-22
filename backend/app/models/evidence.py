@@ -53,6 +53,17 @@ class Evidence(UUIDMixin, Base):
     is_external: Mapped[bool] = mapped_column(default=False, nullable=False)
     copy_to_storage: Mapped[bool] = mapped_column(default=True, nullable=False)
     sha256: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    # Memory image detection fields.  Populated by the memory
+    # image probe; nullable for evidence that is not a memory
+    # candidate.
+    detected_format: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    detection_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    detection_confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    detection_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    probe_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    operator_override: Mapped[bool] = mapped_column(default=False, nullable=False)
+    operator_override_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    probed_at: Mapped[datetime | None] = mapped_column(nullable=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     file_count: Mapped[int | None] = mapped_column(nullable=True)
     ingest_status: Mapped[IngestStatus] = mapped_column(Enum(IngestStatus), default=IngestStatus.pending, nullable=False)
