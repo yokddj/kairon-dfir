@@ -2,6 +2,7 @@ from datetime import datetime
 
 import sqlalchemy as sa
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, JSONVariant, UUIDMixin, utc_now_naive
@@ -545,10 +546,19 @@ class MemoryAnalysisBatch(UUIDMixin, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     # Runtime-safety fields added by the versioned migration v2.
     version: Mapped[int] = mapped_column(default=1, nullable=False)
-    last_advanced_run_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # ``last_advanced_run_id`` references ``memory_scan_runs.id``,
+    # which is a native UUID in PostgreSQL and a string in Python.
+    # We declare it explicitly as ``PgUUID(as_uuid=True)`` so the
+    # SQLAlchemy type matches the database column.  ``as_uuid=True``
+    # would convert to ``uuid.UUID`` in Python, but ``UUIDMixin``
+    # uses ``as_uuid=False`` (Python str) everywhere, so we mirror
+    # that to keep the comparison ``batch.last_advanced_run_id ==
+    # run.id`` working without manual casts.  Migration v11 aligns
+    # the column type on PostgreSQL.
+    last_advanced_run_id: Mapped[str | None] = mapped_column(PgUUID(as_uuid=False), nullable=True)
     last_advanced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
-    failure_reason: Mapped[str | None] = mapped_column(nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
     requested_by: Mapped[str] = mapped_column(String(128), default="server-operator", nullable=False)
 
     case = relationship("Case")
