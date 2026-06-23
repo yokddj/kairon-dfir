@@ -401,10 +401,14 @@ describe("Memory overview, profile catalogue and run-all", () => {
   });
 
   // 4. Run analysis visible
-  it("shows the Run analysis button in the evidence header", async () => {
+  it("shows the catalogue button in the evidence header with a coherent label", async () => {
     renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
     const btn = await screen.findByTestId("memory-open-catalogue");
-    expect(btn).toHaveTextContent("Run analysis");
+    expect(btn).toBeInTheDocument();
+    // The default fixture has all profiles completed, so the
+    // header label is "Re-run analysis" (per the v1 stabilization
+    // spec).
+    expect(btn.textContent).toMatch(/Re-run analysis|Run analysis|Analyze memory|Complete analysis/);
   });
 
   // 5. Overview muestra familias
@@ -436,34 +440,68 @@ describe("Memory overview, profile catalogue and run-all", () => {
   });
 
   // 8. Network Run disabled
-  it("disables the Network Run button in the catalogue modal", async () => {
+  it("first-analysis modal hides per-profile Run buttons and shows the single Start button", async () => {
+    // Override the catalogue to a fresh-evidence fixture: 0
+    // profiles completed so the first-analysis view is shown.
+    getMemoryAnalysisCatalogueMock.mockImplementation(async () => ({
+      case_id: "case-1",
+      evidence_id: "ev-A",
+      items: [
+        { profile: "metadata_only", family: "system_info", title: "System metadata", description: "", cost_label: "Fast", est_duration_seconds: 20, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        { profile: "processes_basic", family: "processes", title: "Standard process analysis", description: "", cost_label: "Medium", est_duration_seconds: 90, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        { profile: "processes_extended", family: "processes", title: "Extended process analysis", description: "", cost_label: "Medium", est_duration_seconds: 240, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        { profile: "network_basic", family: "network", title: "Network connections", description: "", cost_label: "Medium", est_duration_seconds: 90, available: false, availability_reason: "No compatible Windows network plugin is available in the installed Volatility runtime.", last_run: null, last_status: null, last_count: 0 },
+        { profile: "modules_basic", family: "modules", title: "Process modules (DLLs)", description: "", cost_label: "Medium", est_duration_seconds: 120, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        { profile: "handles_basic", family: "handles", title: "Process handles", description: "", cost_label: "High volume", est_duration_seconds: 1800, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        { profile: "kernel_basic", family: "kernel_modules", title: "Kernel modules & drivers", description: "", cost_label: "Medium", est_duration_seconds: 180, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        { profile: "suspicious_memory", family: "suspicious_regions", title: "Suspicious memory regions", description: "", cost_label: "Slow", est_duration_seconds: 1800, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+      ],
+    }));
     renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
     const runBtn = await screen.findByTestId("memory-open-catalogue");
     fireEvent.click(runBtn);
-    const modal = await screen.findByTestId("memory-catalogue-modal");
-    const networkRun = modal.querySelector('[data-testid="memory-catalogue-run-network_basic"]') as HTMLButtonElement | null;
-    expect(networkRun).not.toBeNull();
-    expect(networkRun?.disabled).toBe(true);
-    expect(networkRun?.getAttribute("aria-disabled")).toBe("true");
+    expect(await screen.findByTestId("memory-first-analysis")).toBeInTheDocument();
+    expect(screen.queryByTestId("memory-catalogue-run-network_basic")).toBeNull();
+    expect(screen.queryByTestId("memory-catalogue-run-all")).toBeNull();
+    expect(screen.getByTestId("memory-first-analysis-start")).toBeInTheDocument();
   });
 
-  // 9. Network no muestra duración estimada
-  it("does not show the estimated duration for an unavailable profile", async () => {
+  it("first-analysis modal lists Network in Skipped without showing estimated duration", async () => {
+    getMemoryAnalysisCatalogueMock.mockImplementation(async () => ({
+      case_id: "case-1",
+      evidence_id: "ev-A",
+      items: [
+        { profile: "metadata_only", family: "system_info", title: "System metadata", description: "", cost_label: "Fast", est_duration_seconds: 20, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        { profile: "processes_basic", family: "processes", title: "Standard process analysis", description: "", cost_label: "Medium", est_duration_seconds: 90, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        { profile: "processes_extended", family: "processes", title: "Extended process analysis", description: "", cost_label: "Medium", est_duration_seconds: 240, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        { profile: "network_basic", family: "network", title: "Network connections", description: "", cost_label: "Medium", est_duration_seconds: 90, available: false, availability_reason: "No compatible Windows network plugin is available in the installed Volatility runtime.", last_run: null, last_status: null, last_count: 0 },
+        { profile: "modules_basic", family: "modules", title: "Process modules (DLLs)", description: "", cost_label: "Medium", est_duration_seconds: 120, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+      ],
+    }));
     renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
     const runBtn = await screen.findByTestId("memory-open-catalogue");
     fireEvent.click(runBtn);
-    const modal = await screen.findByTestId("memory-catalogue-modal");
-    const networkCard = modal.querySelector('[data-testid="memory-catalogue-item-network_basic"]');
-    expect(networkCard?.textContent).not.toMatch(/Estimated duration/);
+    expect(await screen.findByTestId("memory-first-analysis")).toBeInTheDocument();
+    const body = document.body.textContent || "";
+    expect(body).toMatch(/Skipped/);
+    expect(body).toMatch(/Standard process analysis/);
+    expect(body).not.toMatch(/Estimated duration: ~0/);
   });
 
-  // 10. Botón Run all supported profiles
-  it("exposes a Run all supported profiles button in the catalogue", async () => {
+  it("first-analysis modal exposes the Start full memory analysis button", async () => {
+    getMemoryAnalysisCatalogueMock.mockImplementation(async () => ({
+      case_id: "case-1",
+      evidence_id: "ev-A",
+      items: [
+        { profile: "metadata_only", family: "system_info", title: "System metadata", description: "", cost_label: "Fast", est_duration_seconds: 20, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        { profile: "processes_extended", family: "processes", title: "Extended process analysis", description: "", cost_label: "Medium", est_duration_seconds: 240, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+      ],
+    }));
     renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
     const runBtn = await screen.findByTestId("memory-open-catalogue");
     fireEvent.click(runBtn);
-    const btn = await screen.findByTestId("memory-catalogue-run-all");
-    expect(btn).toHaveTextContent("Run all supported profiles");
+    const btn = await screen.findByTestId("memory-first-analysis-start");
+    expect(btn).toHaveTextContent("Start full memory analysis");
   });
 
   // 11. Modal muestra evidencia

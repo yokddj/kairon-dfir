@@ -1,6 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { type MemoryActiveResult, type MemoryEvidenceLandingItem, type MemorySymbolReadiness } from "../../api/client";
+import { type MemoryActiveResult, type MemoryAnalysisCatalogue, type MemoryEvidenceLandingItem, type MemorySymbolReadiness } from "../../api/client";
 
 type DetectionDisplay = {
   label: string;
@@ -44,6 +44,7 @@ type Props = {
   onOpenCatalogue: () => void;
   symbolReadiness?: MemorySymbolReadiness | null;
   symbolPreparation?: { ui_state?: string; sanitized_message?: string } | null;
+  catalogue?: MemoryAnalysisCatalogue | null;
 };
 
 function shortId(id: string): string {
@@ -75,8 +76,25 @@ export function MemoryEvidenceHeader({
   onOpenCatalogue,
   symbolReadiness,
   symbolPreparation,
+  catalogue,
 }: Props) {
   const [copied, setCopied] = useState(false);
+
+  // Determine the header action label based on the catalogue
+  // state.  The button is always "Analyze memory" / "Complete
+  // analysis" / "Re-run analysis" depending on how many
+  // supported profiles are already completed.
+  const headerLabel = useMemo(() => {
+    if (!catalogue) return "Run analysis";
+    const supported = catalogue.items.filter((it) => it.available);
+    if (supported.length === 0) return "Run analysis";
+    const completed = supported.filter(
+      (it) => it.last_status === "completed" || it.last_status === "completed_with_errors",
+    );
+    if (completed.length === 0) return "Analyze memory";
+    if (completed.length >= supported.length) return "Re-run analysis";
+    return "Complete analysis";
+  }, [catalogue]);
 
   function copyId() {
     if (typeof navigator === "undefined" || !navigator.clipboard) return;
@@ -208,7 +226,7 @@ export function MemoryEvidenceHeader({
               className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-60"
               data-testid="memory-open-catalogue"
             >
-              Run analysis
+              {headerLabel}
             </button>
             <button
               type="button"

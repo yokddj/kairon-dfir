@@ -41,6 +41,8 @@ type MemoryCanonicalViewProps = {
   runId?: string | null;
   processName?: string;
   onProcessName?: (next: string) => void;
+  pidFilter?: string;
+  onPidFilter?: (next: string) => void;
   selectedEntityId?: string | null;
   onSelectEntityId?: (next: string | null) => void;
 };
@@ -50,6 +52,8 @@ export function MemoryCanonicalView({
   runId,
   processName: externalProcessName,
   onProcessName: externalOnProcessName,
+  pidFilter: externalPidFilter,
+  onPidFilter: externalOnPidFilter,
   selectedEntityId: externalSelectedEntityId,
   onSelectEntityId: externalOnSelectEntityId,
 }: MemoryCanonicalViewProps) {
@@ -58,6 +62,7 @@ export function MemoryCanonicalView({
   const [visibility, setVisibility] = useState<VisibilityFilter>("");
   const [sourcePlugin, setSourcePlugin] = useState<SourcePluginFilter>("");
   const [internalProcessName, setInternalProcessName] = useState("");
+  const [internalPidFilter, setInternalPidFilter] = useState("");
   const [interestingOnly, setInterestingOnly] = useState<InterestingFilter>("");
   const [page, setPage] = useState(1);
   const pageSize = 50;
@@ -67,6 +72,8 @@ export function MemoryCanonicalView({
 
   const processName = externalProcessName ?? internalProcessName;
   const setProcessName = externalOnProcessName ?? setInternalProcessName;
+  const pidFilter = externalPidFilter ?? internalPidFilter;
+  const setPidFilter = externalOnPidFilter ?? setInternalPidFilter;
   const selectedEntityId =
     externalSelectedEntityId !== undefined ? externalSelectedEntityId : internalSelectedEntityId;
   const setSelectedEntityId = externalOnSelectEntityId ?? setInternalSelectedEntityId;
@@ -83,12 +90,16 @@ export function MemoryCanonicalView({
   const runOptionsList = useMemo(() => buildRunOptions(runSelector?.runs, effectiveRunId), [runSelector, effectiveRunId]);
 
   const entitiesQuery = useQuery({
-    queryKey: ["canonical-entities", caseId, effectiveRunId, visibility, sourcePlugin, processName, interestingOnly, page],
+    queryKey: ["canonical-entities", caseId, effectiveRunId, visibility, sourcePlugin, processName, pidFilter, interestingOnly, page],
     queryFn: () =>
       api.getCanonicalProcessEntities(caseId, {
         run_id: effectiveRunId || undefined,
         visibility: (visibility || undefined) as any,
         source_plugin: (sourcePlugin || undefined) as any,
+        // Prefer the exact PID filter when set; the API uses an
+        // exact match so typing 11184 selects the unique entity
+        // and never falls back to a name substring search.
+        pid: pidFilter ? Number(pidFilter) : undefined,
         process_name: processName || undefined,
         interesting_only: interestingOnly ? true : undefined,
         page,
@@ -267,13 +278,36 @@ export function MemoryCanonicalView({
 
       <div className="flex flex-wrap gap-2">
         <input
+          value={pidFilter}
+          onChange={(event) => {
+            const v = event.target.value.trim();
+            // Accept only digits; the API requires an exact PID.
+            if (v && !/^\d+$/.test(v)) return;
+            setPidFilter(v);
+            setPage(1);
+            // Selecting a PID also selects the exact entity once the
+            // table reloads, so Processes and Graph stay in sync.
+            if (v) {
+              setProcessName("");
+            }
+          }}
+          placeholder="Search by exact PID (e.g. 11184)"
+          inputMode="numeric"
+          data-testid="memory-canonical-pid-filter"
+          aria-label="Search by exact PID"
+          className="w-64 rounded-xl border border-line bg-abyss/70 px-3 py-2 text-sm outline-none"
+        />
+        <input
           value={processName}
           onChange={(event) => {
             setProcessName(event.target.value);
             setPage(1);
+            if (event.target.value) {
+              setPidFilter("");
+            }
           }}
           placeholder="Filter by process name"
-          className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-sm outline-none"
+          className="w-64 rounded-xl border border-line bg-abyss/70 px-3 py-2 text-sm outline-none"
         />
       </div>
 

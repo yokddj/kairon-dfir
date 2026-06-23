@@ -202,6 +202,14 @@ export default function MemoryEvidencePage() {
     },
   });
   const symbolPreparation = symbolPreparationQuery.data ?? null;
+  // The catalogue modal needs to know whether preparation is
+  // "ready" (effective_state=ready) so it can show or hide the
+  // Run-all button.  When the symbol preparation query is still
+  // loading we treat readiness as unknown (null) and the modal
+  // falls back to a conservative state.
+  const readinessReady: boolean | null = symbolPreparation
+    ? (symbolPreparation.effective_state || symbolPreparation.ui_state) === "ready"
+    : null;
 
   const handleReturnToLatest = useCallback(() => {
     setSearchParams((current) => {
@@ -233,6 +241,7 @@ export default function MemoryEvidencePage() {
         historicalRunId={historicalRunId}
         onViewHistory={() => setHistoryOpen(true)}
         onReturnToLatest={handleReturnToLatest}
+        catalogue={catalogueQuery.data ?? null}
         onOpenCatalogue={() => {
           if (evidence.can_analyze === false) {
             setConfirmationOpen(true);
@@ -323,6 +332,7 @@ export default function MemoryEvidencePage() {
           catalogue={catalogueQuery.data}
           volatilityBackend={volatilityBackend}
           canRun={canRun}
+          readinessReady={readinessReady}
           onClose={() => setCatalogueOpen(false)}
         />
       ) : null}

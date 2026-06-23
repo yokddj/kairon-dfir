@@ -249,16 +249,29 @@ def test_run_all_allowed_after_confirm(db: Session) -> None:
     assert "selected_profiles" in plan
 
 
-def test_run_all_still_requires_its_own_authorization(db: Session) -> None:
+def test_run_all_still_requires_its_own_authorization(db: Session, monkeypatch) -> None:
     """Run-all requires authorization_acknowledged even after type confirmation."""
     from app.api.routes_evidence import confirm_memory_type
     from app.api.routes_memory import post_run_all_batch
+    from app.services.memory import symbol_preparation as sp
     from fastapi import HTTPException
     case = _make_case(db)
     ev = _make_evidence(db, case.id, detection_status="ambiguous_raw")
     confirm_memory_type(
         case_id=case.id, evidence_id=ev.id,
         payload={"reason": "x", "authorization_acknowledged": True}, db=db,
+    )
+    # Stub the preparation state to be "ready" so the
+    # MEMORY_PREPARATION_NOT_READY gate does not short-circuit
+    # the authorization check.
+    monkeypatch.setattr(
+        sp,
+        "resolve_effective_memory_preparation_state",
+        lambda db, *, case_id, evidence_id: {
+            "effective_state": "ready",
+            "preparation_id": "prep-1",
+            "source_of_truth": "stub",
+        },
     )
     with pytest.raises(HTTPException) as exc:
         post_run_all_batch(

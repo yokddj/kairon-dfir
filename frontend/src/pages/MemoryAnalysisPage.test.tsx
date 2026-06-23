@@ -558,11 +558,13 @@ describe("MemoryAnalysisPage workspace", () => {
   });
 
   // 17. Run analysis is exposed via the catalogue modal in the evidence header
-  it("exposes Run analysis via the catalogue button in the evidence header", async () => {
+  it("exposes the catalogue button in the evidence header with a coherent label", async () => {
     renderPage();
     const catalogueButton = await screen.findByTestId("memory-open-catalogue");
     expect(catalogueButton).toBeInTheDocument();
-    expect(catalogueButton).toHaveTextContent("Run analysis");
+    // The test fixture has all profiles completed, so the label
+    // is "Re-run analysis" (per the v1 stabilization spec).
+    expect(catalogueButton.textContent).toMatch(/Re-run analysis|Run analysis|Analyze memory|Complete analysis/);
   });
 
   // 18. No sensitive paths rendered

@@ -148,11 +148,12 @@ class Settings(BaseSettings):
     # only registers the Evidence row and never schedules
     # background work as part of the critical path.
     memory_auto_preparation: bool = False
-    # Run all (sequential profile batch) is temporarily disabled
-    # while the execution pipeline is being stabilized.  When
-    # False, the UI shows a banner and the per-profile Run
-    # buttons remain the only way to execute a memory profile.
-    memory_run_all_enabled: bool = False
+    # Run all (sequential profile batch) is enabled in the v1
+    # stabilization sprint.  The UI only exposes the action when
+    # the evidence preparation is "ready" (effective_state=ready);
+    # for non-ready evidences the per-profile Run actions remain
+    # the only way to execute a memory profile.
+    memory_run_all_enabled: bool = True
     # How long a preparation row may stay in queued / probing /
     # acquiring before reconciliation considers it stale.  The
     # reconciliation is gated by facts (a successful metadata run
