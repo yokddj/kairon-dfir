@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import {
+  type MemoryAnalysisBatch,
   type MemoryAnalysisCatalogue,
   type MemoryAnalysisCatalogueItem,
   type MemoryBackendStatus,
@@ -20,6 +21,7 @@ type Props = {
   catalogue: MemoryAnalysisCatalogue;
   volatilityBackend: MemoryBackendStatus | null;
   canRun: boolean;
+  readinessReady: boolean | null;
   onClose: () => void;
 };
 
@@ -254,6 +256,338 @@ function CatalogueCard({
   );
 }
 
+type AnalysisStage = "first" | "partial" | "completed" | "ready" | "default";
+
+function detectAnalysisStage(catalogue: MemoryAnalysisCatalogue): AnalysisStage {
+  const supported = catalogue.items.filter((it) => it.available);
+  if (supported.length === 0) return "default";
+  const completed = supported.filter((it) => it.last_status === "completed" || it.last_status === "completed_with_errors");
+  if (completed.length === 0) return "first";
+  if (completed.length === supported.length) return "completed";
+  return "partial";
+}
+
+function FirstAnalysisView({
+  caseId,
+  evidenceId,
+  catalogue,
+  evidenceFilename,
+  onClose,
+  onStart,
+  isStarting,
+  error,
+  canRun,
+  readinessReady,
+}: {
+  caseId: string;
+  evidenceId: string;
+  catalogue: MemoryAnalysisCatalogue;
+  evidenceFilename: string;
+  onClose: () => void;
+  onStart: () => void;
+  isStarting: boolean;
+  error: string | null;
+  canRun: boolean;
+  readinessReady: boolean;
+}) {
+  const supported = catalogue.items.filter((it) => it.available);
+  const included = supported.filter((it) => it.profile !== "processes_basic" && it.profile !== "network_basic");
+  const skipped = supported.filter((it) => it.profile === "processes_basic" || it.profile === "network_basic");
+  const disabled = !canRun || !readinessReady || isStarting;
+  return (
+    <div className="space-y-3" data-testid="memory-first-analysis">
+      <p className="text-sm text-muted">
+        This will run the supported memory analysis profiles sequentially.
+      </p>
+      <div className="rounded-2xl border border-line bg-abyss/40 p-3 text-xs">
+        <p className="font-mono uppercase tracking-[0.16em] text-mint">Included</p>
+        <ul className="mt-1 list-disc pl-5 text-ink">
+          {included.map((it) => (
+            <li key={it.profile}>{it.title}</li>
+          ))}
+        </ul>
+      </div>
+      {skipped.length > 0 ? (
+        <div className="rounded-2xl border border-line bg-abyss/40 p-3 text-xs">
+          <p className="font-mono uppercase tracking-[0.16em] text-muted">Skipped</p>
+          <ul className="mt-1 list-disc pl-5 text-muted">
+            {skipped.map((it) => (
+              <li key={it.profile}>{it.title} — {it.profile === "processes_basic" ? "covered by Extended process analysis" : "unavailable or not supported for this evidence"}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      <label className="mt-2 flex items-start gap-2 text-xs text-muted">
+        <input
+          type="checkbox"
+          data-testid="memory-first-analysis-confirm"
+          defaultChecked={false}
+          className="mt-0.5 h-3.5 w-3.5"
+        />
+        <span>I confirm that I am authorized to analyze this memory evidence.</span>
+      </label>
+      {error ? <p className="text-xs text-rose-200" data-testid="memory-first-analysis-error">{error}</p> : null}
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted"
+          data-testid="memory-first-analysis-close"
+        >
+          Close
+        </button>
+        <button
+          type="button"
+          onClick={onStart}
+          disabled={disabled}
+          data-testid="memory-first-analysis-start"
+          className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
+        >
+          {isStarting ? "Starting…" : "Start full memory analysis"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function PartialAnalysisView({
+  caseId,
+  evidenceId,
+  supported,
+  completed,
+  partialAvailable,
+  feedback,
+  error,
+  canRun,
+  readinessReady,
+  isStarting,
+  onClose,
+  onStartMissing,
+  onShowAdvanced,
+  showAdvanced,
+  itemsBySection,
+  startMutation,
+  onRunItem,
+}: {
+  caseId: string;
+  evidenceId: string;
+  catalogue?: MemoryAnalysisCatalogue;
+  supported: MemoryAnalysisCatalogueItem[];
+  completed: MemoryAnalysisCatalogueItem[];
+  partialAvailable: MemoryAnalysisCatalogueItem[];
+  feedback: string | null;
+  error: string | null;
+  canRun: boolean;
+  readinessReady: boolean;
+  isStarting: boolean;
+  onClose: () => void;
+  onStartMissing: () => void;
+  onShowAdvanced: () => void;
+  showAdvanced: boolean;
+  itemsBySection: { section: Section; items: MemoryAnalysisCatalogueItem[] }[];
+  startMutation: { isPending: boolean };
+  onRunItem: (item: MemoryAnalysisCatalogueItem) => void;
+}) {
+  const disabled = !canRun || !readinessReady || isStarting;
+  return (
+    <div className="space-y-3" data-testid="memory-partial-analysis">
+      <p className="text-sm text-muted">
+        Runs only analyses that have not completed successfully.
+      </p>
+      <div className="grid gap-2 md:grid-cols-3 text-xs">
+        <Stat label="Completed" value={completed.length} />
+        <Stat label="Pending" value={partialAvailable.length} />
+        <Stat label="Total supported" value={supported.length} />
+      </div>
+      {feedback ? <p className="text-xs text-emerald-200" data-testid="memory-partial-feedback">{feedback}</p> : null}
+      {error ? <p className="text-xs text-rose-200" data-testid="memory-partial-error">{error}</p> : null}
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted"
+          data-testid="memory-partial-close"
+        >
+          Close
+        </button>
+        <button
+          type="button"
+          onClick={onShowAdvanced}
+          className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted"
+          data-testid="memory-partial-advanced"
+        >
+          {showAdvanced ? "Hide advanced" : "Show advanced"}
+        </button>
+        <button
+          type="button"
+          onClick={onStartMissing}
+          disabled={disabled}
+          data-testid="memory-partial-start"
+          className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
+        >
+          {isStarting ? "Starting…" : "Run missing or failed profiles"}
+        </button>
+      </div>
+      {showAdvanced ? (
+        <div className="mt-2 border-t border-line pt-3" data-testid="memory-partial-catalogue">
+          <CatalogueListing
+            caseId={caseId}
+            evidenceId={evidenceId}
+            itemsBySection={itemsBySection}
+            canRun={canRun}
+            isStarting={startMutation.isPending}
+            onRunItem={onRunItem}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function CompletedAnalysisView({
+  caseId,
+  evidenceId,
+  supported,
+  completed,
+  feedback,
+  error,
+  canRun,
+  readinessReady,
+  isStarting,
+  onClose,
+  onRerun,
+  showAdvanced,
+  onShowAdvanced,
+  itemsBySection,
+  startMutation,
+  onRunItem,
+}: {
+  caseId: string;
+  evidenceId: string;
+  catalogue?: MemoryAnalysisCatalogue;
+  supported: MemoryAnalysisCatalogueItem[];
+  completed: MemoryAnalysisCatalogueItem[];
+  feedback: string | null;
+  error: string | null;
+  canRun: boolean;
+  readinessReady: boolean;
+  isStarting: boolean;
+  onClose: () => void;
+  onRerun: () => void;
+  showAdvanced: boolean;
+  onShowAdvanced: () => void;
+  itemsBySection: { section: Section; items: MemoryAnalysisCatalogueItem[] }[];
+  startMutation: { isPending: boolean };
+  onRunItem: (item: MemoryAnalysisCatalogueItem) => void;
+}) {
+  return (
+    <div className="space-y-3" data-testid="memory-completed-analysis">
+      <p className="text-sm text-muted">
+        All supported profiles for this evidence have completed.
+      </p>
+      <div className="grid gap-2 md:grid-cols-3 text-xs">
+        <Stat label="Completed" value={completed.length} />
+        <Stat label="Total supported" value={supported.length} />
+      </div>
+      {feedback ? <p className="text-xs text-emerald-200" data-testid="memory-completed-feedback">{feedback}</p> : null}
+      {error ? <p className="text-xs text-rose-200" data-testid="memory-completed-error">{error}</p> : null}
+      <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted"
+          data-testid="memory-completed-close"
+        >
+          Close
+        </button>
+        <button
+          type="button"
+          onClick={onShowAdvanced}
+          className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted"
+          data-testid="memory-completed-advanced"
+        >
+          {showAdvanced ? "Hide advanced" : "Show advanced"}
+        </button>
+        <button
+          type="button"
+          onClick={onRerun}
+          disabled={!canRun || !readinessReady || isStarting}
+          data-testid="memory-completed-rerun"
+          className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
+        >
+          {isStarting ? "Starting…" : "Re-run analysis"}
+        </button>
+      </div>
+      {showAdvanced ? (
+        <div className="mt-2 border-t border-line pt-3" data-testid="memory-completed-catalogue">
+          <CatalogueListing
+            caseId={caseId}
+            evidenceId={evidenceId}
+            itemsBySection={itemsBySection}
+            canRun={canRun}
+            isStarting={startMutation.isPending}
+            onRunItem={onRunItem}
+          />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Stat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-xl border border-line bg-abyss/60 px-3 py-2">
+      <p className="text-[10px] uppercase tracking-[0.18em] text-muted">{label}</p>
+      <p className="mt-1 text-base font-semibold text-ink" data-testid={`memory-stat-${label.toLowerCase().replace(/\s+/g, "-")}`}>{value}</p>
+    </div>
+  );
+}
+
+function CatalogueListing({
+  caseId,
+  evidenceId,
+  itemsBySection,
+  canRun,
+  isStarting,
+  onRunItem,
+}: {
+  caseId: string;
+  evidenceId: string;
+  itemsBySection: { section: Section; items: MemoryAnalysisCatalogueItem[] }[];
+  canRun: boolean;
+  isStarting: boolean;
+  onRunItem: (item: MemoryAnalysisCatalogueItem) => void;
+}) {
+  return (
+    <div className="mt-4 space-y-5" data-testid="memory-catalogue-list">
+      {itemsBySection.map(({ section, items }) => (
+        <div key={section} data-testid={`memory-catalogue-section-${section}`}>
+          <h3 className="text-[10px] uppercase tracking-[0.18em] text-muted">
+            {SECTION_LABELS[section]}
+          </h3>
+          <div className="mt-2 space-y-2">
+            {items.length === 0 ? (
+              <p className="text-[10px] text-muted">No profiles in this section.</p>
+            ) : (
+              items.map((item) => (
+                <CatalogueCard
+                  key={item.profile}
+                  caseId={caseId}
+                  evidenceId={evidenceId}
+                  item={item}
+                  canRun={canRun}
+                  isStarting={isStarting}
+                  onRun={onRunItem}
+                />
+              ))
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function MemoryAnalysisCatalogueModal({
   caseId,
   evidenceId,
@@ -264,16 +598,38 @@ export function MemoryAnalysisCatalogueModal({
   volatilityBackend,
   canRun,
   onClose,
+  readinessReady,
 }: Props) {
   const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [runAllOpen, setRunAllOpen] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const startMutation = useMutation<MemoryStartScanResponse, Error, { profile: string }>({
     mutationFn: (vars) => api.startMemoryScan(evidenceId, vars.profile as never, true),
     onSuccess: (result) => {
       setFeedback(result.message);
+      setError(null);
+      queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId, evidenceId] });
+      queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
+      queryClient.invalidateQueries({ queryKey: ["memory-landing", caseId] });
+      queryClient.invalidateQueries({ queryKey: ["memory-runs", caseId, evidenceId] });
+    },
+    onError: (err: Error) => {
+      setError(err.message);
+      setFeedback(null);
+    },
+  });
+
+  const startAllMissing = useMutation<MemoryAnalysisBatch, Error, void>({
+    mutationFn: () => api.startMemoryRunAll(caseId, evidenceId, {
+      mode: "missing_or_failed",
+      authorization_acknowledged: true,
+      continue_on_failure: true,
+    }),
+    onSuccess: () => {
+      setFeedback("Run-all batch started.");
       setError(null);
       queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId, evidenceId] });
       queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
@@ -303,6 +659,15 @@ export function MemoryAnalysisCatalogueModal({
     items: catalogue.items.filter((it) => PROFILE_SECTION[it.profile] === s),
   }));
 
+  const stage = detectAnalysisStage(catalogue);
+  const supported = catalogue.items.filter((it) => it.available);
+  const completed = supported.filter(
+    (it) => it.last_status === "completed" || it.last_status === "completed_with_errors",
+  );
+  const partialAvailable = supported.filter(
+    (it) => it.last_status !== "completed" && it.last_status !== "completed_with_errors",
+  );
+
   return (
     <div
       className="fixed inset-0 z-30 flex items-center justify-center bg-abyss/70 p-4"
@@ -314,14 +679,26 @@ export function MemoryAnalysisCatalogueModal({
       <div className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-[28px] border border-line bg-panel p-6 shadow-panel">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Run analysis</p>
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">
+              {stage === "first" ? "Analyze memory" : stage === "partial" ? "Complete analysis" : "Memory analysis"}
+            </p>
             <h2 id="memory-catalogue-title" className="mt-1 text-2xl font-semibold">
-              Available analysis profiles
+              {stage === "first"
+                ? "Analyze memory"
+                : stage === "partial"
+                  ? "Complete memory analysis"
+                  : "Memory analysis catalogue"}
             </h2>
             <p className="mt-1 max-w-2xl text-xs text-muted">
               {evidenceFilename}
               {evidenceHost ? <> · Host {evidenceHost}</> : null}
             </p>
+            {stage !== "first" ? (
+              <p className="mt-1 text-[10px] text-muted" data-testid="memory-catalogue-progress">
+                {completed.length} of {supported.length} supported profiles completed
+                {partialAvailable.length > 0 ? ` · ${partialAvailable.length} remaining` : ""}
+              </p>
+            ) : null}
           </div>
           <button
             type="button"
@@ -339,86 +716,84 @@ export function MemoryAnalysisCatalogueModal({
           </p>
         ) : null}
 
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-2">
-          <p className="text-[10px] text-muted">
-            Each profile runs against the selected authorized memory image using the externally configured Volatility 3 backend.
-          </p>
-          <button
-            type="button"
-            onClick={() => setRunAllOpen(true)}
-            data-testid="memory-catalogue-run-all"
-            className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-50"
-            disabled={!canRun || startMutation.isPending}
-          >
-            Run all supported profiles
-          </button>
-        </div>
-
-        <div className="mt-4 space-y-5" data-testid="memory-catalogue-list">
-          {itemsBySection.map(({ section, items }) => (
-            <div key={section} data-testid={`memory-catalogue-section-${section}`}>
-              <h3 className="text-[10px] uppercase tracking-[0.18em] text-muted">
-                {SECTION_LABELS[section]}
-              </h3>
-              <div className="mt-2 space-y-2">
-                {items.length === 0 ? (
-                  <p className="text-[10px] text-muted">No profiles in this section.</p>
-                ) : (
-                  items.map((item) => (
-                    <CatalogueCard
-                      key={item.profile}
-                      caseId={caseId}
-                      evidenceId={evidenceId}
-                      item={item}
-                      canRun={canRun}
-                      isStarting={startMutation.isPending}
-                      onRun={handleRun}
-                    />
-                  ))
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        {feedback ? (
-          <p className="mt-3 text-xs text-emerald-200" data-testid="memory-catalogue-feedback">
-            {feedback}
-          </p>
+        {stage === "first" ? (
+          <FirstAnalysisView
+            caseId={caseId}
+            evidenceId={evidenceId}
+            catalogue={catalogue}
+            evidenceFilename={evidenceFilename}
+            onClose={onClose}
+            onStart={() => startAllMissing.mutate()}
+            isStarting={startAllMissing.isPending}
+            error={error}
+            canRun={canRun}
+            readinessReady={readinessReady ?? true}
+          />
+        ) : stage === "partial" ? (
+          <PartialAnalysisView
+            caseId={caseId}
+            evidenceId={evidenceId}
+            catalogue={catalogue}
+            supported={supported}
+            completed={completed}
+            partialAvailable={partialAvailable}
+            feedback={feedback}
+            error={error}
+            canRun={canRun}
+            readinessReady={readinessReady ?? true}
+            isStarting={startAllMissing.isPending}
+            onClose={onClose}
+            onStartMissing={() => startAllMissing.mutate()}
+            onShowAdvanced={() => setShowAdvanced(true)}
+            showAdvanced={showAdvanced}
+            itemsBySection={itemsBySection}
+            startMutation={startMutation}
+            onRunItem={handleRun}
+          />
+        ) : stage === "completed" ? (
+          <CompletedAnalysisView
+            caseId={caseId}
+            evidenceId={evidenceId}
+            catalogue={catalogue}
+            supported={supported}
+            completed={completed}
+            feedback={feedback}
+            error={error}
+            canRun={canRun}
+            readinessReady={readinessReady ?? true}
+            isStarting={startAllMissing.isPending}
+            onClose={onClose}
+            onRerun={() => setRunAllOpen(true)}
+            showAdvanced={showAdvanced}
+            onShowAdvanced={() => setShowAdvanced(true)}
+            itemsBySection={itemsBySection}
+            startMutation={startMutation}
+            onRunItem={handleRun}
+          />
         ) : null}
-        {error ? (
-          <p className="mt-3 text-xs text-rose-200" data-testid="memory-catalogue-error">
-            {error}
-          </p>
-        ) : null}
-        {!canRun ? (
-          <p className="mt-3 text-xs text-rose-200" data-testid="memory-catalogue-blocked-reason">
-            {volatilityBackend?.message || "Volatility 3 is not ready for memory analysis."}
-          </p>
+
+        {runAllOpen ? (
+          <MemoryRunAllModal
+            caseId={caseId}
+            evidenceId={evidenceId}
+            evidenceFilename={evidenceFilename}
+            evidenceHost={evidenceHost}
+            evidenceSizeBytes={evidenceSizeBytes}
+            catalogue={catalogue}
+            volatilityBackend={volatilityBackend}
+            canRun={canRun}
+            onClose={() => setRunAllOpen(false)}
+            onCompleted={() => {
+              setRunAllOpen(false);
+              setFeedback("Run-all batch started.");
+              queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId, evidenceId] });
+              queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
+              queryClient.invalidateQueries({ queryKey: ["memory-landing", caseId] });
+              queryClient.invalidateQueries({ queryKey: ["memory-runs", caseId, evidenceId] });
+            }}
+          />
         ) : null}
       </div>
-
-      {runAllOpen ? (
-        <MemoryRunAllModal
-          caseId={caseId}
-          evidenceId={evidenceId}
-          evidenceFilename={evidenceFilename}
-          evidenceHost={evidenceHost}
-          evidenceSizeBytes={evidenceSizeBytes}
-          catalogue={catalogue}
-          volatilityBackend={volatilityBackend}
-          canRun={canRun}
-          onClose={() => setRunAllOpen(false)}
-          onCompleted={() => {
-            setRunAllOpen(false);
-            setFeedback("Run-all batch started.");
-            queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId, evidenceId] });
-            queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
-            queryClient.invalidateQueries({ queryKey: ["memory-landing", caseId] });
-            queryClient.invalidateQueries({ queryKey: ["memory-runs", caseId, evidenceId] });
-          }}
-        />
-      ) : null}
     </div>
   );
 }

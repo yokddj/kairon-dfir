@@ -197,6 +197,28 @@ export function MemoryProcessGraph({
     return buildProcessGraphLayout(flat as any, []);
   }, [shape]);
 
+  // The matched entity ids from the most recent search.  The
+  // backend returns them via the ``search_results`` field on the
+  // tree response; the frontend uses them to drive the focus,
+  // visual distinction, and counts.
+  const searchResultIds: string[] = useMemo(
+    () => (Array.isArray((tree as any)?.search_results) ? (tree as any).search_results as string[] : []),
+    [tree],
+  );
+  const searchResultSet = useMemo(() => new Set(searchResultIds), [searchResultIds]);
+  const focusedSearchId = searchResultIds[0] ?? null;
+
+  // When the user types a search and the API returns a match,
+  // auto-focus on the first matched entity so the canvas pans to
+  // it.  Do not override a node the user has explicitly clicked.
+  useEffect(() => {
+    if (!focusedSearchId) return;
+    if (focusedEntityId) return;
+    if (selectedEntityId) return;
+    setFocusedEntityId(focusedSearchId);
+    setSelectedEntityId(focusedSearchId);
+  }, [focusedSearchId, focusedEntityId, selectedEntityId]);
+
   // Re-center on focused entity
   useEffect(() => {
     if (!focusedEntityId) return;
@@ -432,6 +454,22 @@ export function MemoryProcessGraph({
         <Stat label="Omitted by tree cap" value={tree?.omitted_count ?? 0} />
       </div>
 
+      {focusedSearchId && searchResultIds.length > 0 ? (
+        <SearchSummary
+          exactMatch={searchResultIds.length}
+          contextCount={visibleNodeCount - searchResultIds.length}
+          childCount={(() => {
+            let child = 0;
+            for (const id of searchResultIds) {
+              const node = lookupNode(shape, id);
+              if (node) child += node.child_count;
+            }
+            return child;
+          })()}
+          searchTerm={search}
+        />
+      ) : null}
+
       {treeQuery.isLoading ? (
         <p className="text-sm text-muted" role="status">Loading memory process graph…</p>
       ) : treeQuery.error instanceof Error ? (
@@ -498,6 +536,20 @@ export function MemoryProcessGraph({
               const tone = visibilityTone(node);
               const isSelected = selectedEntityId === node.process_entity_id;
               const isFocused = focusedEntityId === node.process_entity_id;
+              const isTarget = searchResultSet.has(node.process_entity_id);
+              const isContext = focusedSearchId !== null && !isTarget;
+              // The target is the entity the analyst is searching
+              // for.  It uses an accent border and a "Search match"
+              // badge.  Context ancestors are dimmed.
+              const cardClass = isSelected
+                ? "border-accent/70 bg-accent/15 ring-1 ring-accent/40"
+                : isTarget
+                  ? "border-mint/70 bg-mint/10 ring-1 ring-mint/40"
+                  : isFocused
+                    ? "border-sky-400/60 bg-sky-500/10"
+                    : isContext
+                      ? "border-line bg-abyss/40 opacity-80"
+                      : `border-line ${TONE[tone]}`;
               return (
                 <button
                   key={`node-${node.process_entity_id}`}
@@ -507,16 +559,34 @@ export function MemoryProcessGraph({
                     setFocusedEntityId(node.process_entity_id);
                   }}
                   onDoubleClick={() => onOpenDetail(node.process_entity_id)}
-                  className={`absolute rounded-2xl border p-2 text-left transition shadow-panel ${isSelected ? "border-accent/70 bg-accent/15" : isFocused ? "border-sky-400/60 bg-sky-500/10" : `border-line ${TONE[tone]}`}`}
+                  className={`absolute rounded-2xl border p-2 text-left transition shadow-panel ${cardClass}`}
                   style={{ left: layoutNode.x, top: layoutNode.y, width: layoutNode.width, height: layoutNode.height }}
                   data-testid="memory-graph-node"
-                  aria-label={`PID ${node.pid} ${node.name || ""}`}
+                  data-target={isTarget ? "true" : undefined}
+                  data-context={isContext ? "true" : undefined}
+                  aria-label={`PID ${node.pid} ${node.name || ""}${isTarget ? " (search match)" : ""}`}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5">
                         <NodeIcon node={node} />
                         <span className="block truncate text-sm font-semibold">{nodeLabel(node)}</span>
+                        {isTarget ? (
+                          <span
+                            className="rounded-md border border-mint/40 bg-mint/20 px-1.5 py-0.5 text-[10px] font-semibold text-mint"
+                            data-testid="memory-graph-search-match-badge"
+                          >
+                            Search match
+                          </span>
+                        ) : null}
+                        {isContext ? (
+                          <span
+                            className="rounded-md border border-line bg-abyss/70 px-1.5 py-0.5 text-[10px] text-muted"
+                            data-testid="memory-graph-context-badge"
+                          >
+                            Context
+                          </span>
+                        ) : null}
                       </div>
                       <p className="mt-1 truncate text-[11px] text-muted" title={node.command_line || ""}>
                         {node.command_line || "—"}
@@ -609,6 +679,36 @@ function Stat({ label, value }: { label: string; value: number }) {
   );
 }
 
+function SearchSummary({
+  exactMatch,
+  contextCount,
+  childCount,
+  searchTerm,
+}: {
+  exactMatch: number;
+  contextCount: number;
+  childCount: number;
+  searchTerm: string;
+}) {
+  return (
+    <div
+      className="rounded-xl border border-mint/30 bg-mint/5 p-3 text-xs"
+      data-testid="memory-graph-search-summary"
+      role="status"
+      aria-live="polite"
+    >
+      <p className="font-mono">
+        <span className="text-mint">{exactMatch} exact match{exactMatch === 1 ? "" : "es"}</span>
+        {contextCount > 0 ? <> · {contextCount} context ancestor{contextCount === 1 ? "" : "s"}</> : null}
+        {childCount > 0 ? <> · {childCount} children</> : null}
+      </p>
+      <p className="mt-1 text-[10px] text-muted">
+        Search: <span className="font-mono">{searchTerm}</span>
+      </p>
+    </div>
+  );
+}
+
 function EmptyState({ scope }: { scope: Scope }) {
   return (
     <div className="rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 text-sm text-amber-100" role="status">
@@ -644,6 +744,8 @@ function TruncationMessage({ tree }: { tree: TreeResponse | undefined }) {
 function Legend() {
   return (
     <div className="flex flex-wrap items-center gap-2 text-[10px] text-muted" aria-label="Graph legend">
+      <span className="rounded-md border border-mint/40 bg-mint/20 px-2 py-0.5 text-mint">Search match</span>
+      <span className="rounded-md border border-line bg-abyss/70 px-2 py-0.5">Context</span>
       <span className="rounded-md border border-sky-400/30 bg-sky-500/10 px-2 py-0.5 text-sky-100">Listed</span>
       <span className="rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-0.5 text-rose-100">Scan only</span>
       <span className="rounded-md border border-rose-400/30 bg-rose-500/10 px-2 py-0.5 text-rose-100">Hidden candidate</span>

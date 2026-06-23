@@ -306,15 +306,35 @@ def post_run_all_batch(
 
     _require_case(db, case_id)
     _require_evidence_for_case(db, case_id, evidence_id)
-    # v1 stabilization: Run all is disabled while the execution
-    # pipeline is being verified.  Individual per-profile Run
-    # actions remain available.
+    # v1 stabilization: Run all is enabled but is gated by the
+    # evidence preparation state.  Only "ready" evidences (i.e.
+    # the symbol preparation pipeline is complete) can start a
+    # batch.  For non-ready evidences the per-profile Run actions
+    # remain the only way to execute a memory profile.
     if not bool(getattr(get_settings(), "memory_run_all_enabled", False)):
         raise HTTPException(
             status_code=409,
             detail={
                 "error_code": "MEMORY_RUN_ALL_DISABLED",
                 "message": "Run all is temporarily unavailable while the memory execution pipeline is being stabilized.",
+            },
+        )
+    # The flag is on; gate the action on the per-evidence
+    # preparation state.  Only "ready" evidences can run a batch.
+    from app.services.memory.symbol_preparation import (
+        resolve_effective_memory_preparation_state,
+    )
+    preparation = resolve_effective_memory_preparation_state(
+        db, case_id=case_id, evidence_id=evidence_id,
+    )
+    if preparation.get("effective_state") != "ready":
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "MEMORY_PREPARATION_NOT_READY",
+                "message": "Run all requires the evidence to be ready. Complete the symbol preparation first.",
+                "effective_state": preparation.get("effective_state"),
+                "preparation_id": preparation.get("preparation_id"),
             },
         )
     payload = payload or {}

@@ -65,6 +65,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
   const [profile, setProfile] = useState<RunProfile | null>(null);
   const [search, setSearch] = useState("");
   const [processName, setProcessName] = useState("");
+  const [pidFilter, setPidFilter] = useState("");
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -233,6 +234,8 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
             onSearch={setSearch}
             processName={processName}
             onProcessName={setProcessName}
+            pidFilter={pidFilter}
+            onPidFilter={setPidFilter}
             selectedEntityId={selectedEntityId}
             onSelectEntityId={setSelectedEntityId}
           />

@@ -317,22 +317,24 @@ export function MemoryRunAllModal({
           >
             Cancel
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              setError(null);
-              startMutation.mutate();
-            }}
-            disabled={actionDisabled}
-            data-testid="memory-run-all-confirm"
-            className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-50"
-          >
-            {startMutation.isPending
-              ? "Starting…"
-              : started
-                ? "Started"
-                : "Run all supported profiles"}
-          </button>
+          {canRun ? (
+            <button
+              type="button"
+              onClick={() => {
+                setError(null);
+                startMutation.mutate();
+              }}
+              disabled={actionDisabled}
+              data-testid="memory-run-all-confirm"
+              className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-50"
+            >
+              {startMutation.isPending
+                ? "Starting…"
+                : started
+                  ? "Started"
+                  : "Run all supported profiles"}
+            </button>
+          ) : null}
         </div>
       </div>
     </div>

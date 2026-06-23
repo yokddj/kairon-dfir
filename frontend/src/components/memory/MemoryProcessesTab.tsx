@@ -17,6 +17,8 @@ type Props = {
   onSearch: (next: string) => void;
   processName: string;
   onProcessName: (next: string) => void;
+  pidFilter: string;
+  onPidFilter: (next: string) => void;
   selectedEntityId: string | null;
   onSelectEntityId: (next: string | null) => void;
 };
@@ -27,9 +29,13 @@ export function MemoryProcessesTab({
   runOptions,
   selectedRunId,
   onSelectRunId,
+  profile: _profile,
+  onSelectProfile: _onSelectProfile,
   search: _onSearch,
   processName,
   onProcessName,
+  pidFilter,
+  onPidFilter,
   selectedEntityId,
   onSelectEntityId,
 }: Props) {
@@ -50,6 +56,8 @@ export function MemoryProcessesTab({
           runId={effectiveRunId}
           processName={processName}
           onProcessName={onProcessName}
+          pidFilter={pidFilter}
+          onPidFilter={onPidFilter}
           selectedEntityId={selectedEntityId}
           onSelectEntityId={onSelectEntityId}
         />
