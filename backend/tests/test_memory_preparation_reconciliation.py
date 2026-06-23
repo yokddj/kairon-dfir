@@ -445,30 +445,55 @@ def test_duplicate_preparations_deactivated(
     _make_metadata_run(db, case_id=case.id, evidence_id=evidence.id)
     # The partial unique index ``uq_memory_symbol_prep_active_evidence``
     # guarantees at most one active preparation per evidence.  We
-    # verify the constraint is in place by inspecting the schema.
-    from sqlalchemy import inspect
-    inspector = inspect(db.bind)
-    indexes = inspector.get_indexes("memory_symbol_preparations")
-    unique_names = {i["name"] for i in indexes if i.get("unique")}
-    assert "uq_memory_symbol_prep_active_evidence" in unique_names
-    # Only one ACTIVE row is allowed at a time.  Historical rows
-    # (active=False) are kept for audit.
-    active = _make_queued_prep(
+    # verify the constraint is in place by attempting to insert a
+    # second active row for the same evidence and expecting an
+    # integrity error.
+    from sqlalchemy.exc import IntegrityError
+    _make_queued_prep(
         db, case_id=case.id, evidence_id=evidence.id, active=True,
     )
-    historical = _make_queued_prep(
-        db, case_id=case.id, evidence_id=evidence.id, active=False,
+    with pytest.raises(IntegrityError):
+        duplicate = MemorySymbolPreparation(
+            case_id=case.id,
+            evidence_id=evidence.id,
+            state=PREP_QUEUED,
+            attempts=0,
+            progress_percent=5,
+            active=True,
+            metadata_json={},
+        )
+        db.add(duplicate)
+        db.commit()
+    db.rollback()
+    # Historical (active=False) rows are allowed alongside an
+    # active row; the audit trail is preserved.
+    historical = MemorySymbolPreparation(
+        case_id=case.id,
+        evidence_id=evidence.id,
+        state=PREP_QUEUED,
+        attempts=0,
+        progress_percent=5,
+        active=False,
+        metadata_json={},
     )
-    assert active.active is True
-    assert historical.active is False
-    # Both rows are visible to a query that does not filter by
-    # active; the audit trail is preserved.
+    db.add(historical)
+    db.commit()
     all_rows = (
         db.query(MemorySymbolPreparation)
         .filter(MemorySymbolPreparation.evidence_id == evidence.id)
         .all()
     )
     assert len(all_rows) == 2
+    # Only one is active.
+    active_rows = (
+        db.query(MemorySymbolPreparation)
+        .filter(
+            MemorySymbolPreparation.evidence_id == evidence.id,
+            MemorySymbolPreparation.active == True,  # noqa: E712
+        )
+        .all()
+    )
+    assert len(active_rows) == 1
     # The reconciliation pass is a no-op when there is only one
     # active row and the state is correct.
     stats = reconcile_memory_preparation_states(db, max_evidences=10)
