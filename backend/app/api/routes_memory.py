@@ -9,7 +9,47 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.exc import DataError, IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
+
+
+# Schema version that the live PostgreSQL database is expected
+# to be at after the "Memory Batch UUID Schema Alignment & Live
+# Run-All Closure v1" sprint.  The structured error handler
+# references this so operators know which migration to apply.
+EXPECTED_BATCH_SCHEMA_MIGRATION_VERSION = 11
+
+
+def _structured_db_error(
+    exc: Exception,
+    *,
+    case_id: str,
+    evidence_id: str,
+    mode: str,
+) -> HTTPException:
+    """Convert a SQLAlchemy DB error to a structured HTTPException.
+
+    The most common source of these errors is a database schema
+    mismatch between the SQLAlchemy model and the live PostgreSQL
+    schema (e.g. a missing migration).  We surface a structured
+    error so the operator can act, and we log the SQLAlchemy
+    exception for diagnostics.  We never expose the raw SQL or
+    the psycopg message to the user.
+    """
+    logger.exception(
+        "memory run-all batch DB error: case=%s evidence=%s mode=%s",
+        case_id, evidence_id, mode,
+    )
+    detail = {
+        "error_code": "MEMORY_BATCH_DB_SCHEMA_ERROR",
+        "message": (
+            "Run-all batch could not be created because the "
+            "database schema is out of date. Apply the latest "
+            "versioned migrations and retry."
+        ),
+        "expected_migration_version": EXPECTED_BATCH_SCHEMA_MIGRATION_VERSION,
+    }
+    return HTTPException(status_code=500, detail=detail)
 
 from app.core.config import get_settings
 from app.core.database import get_db
@@ -363,6 +403,18 @@ def post_run_all_batch(
         if exc.extra:
             _detail.update(exc.extra)
         raise HTTPException(status_code=exc.status_code, detail=_detail) from exc
+    except (DataError, IntegrityError, ProgrammingError) as exc:
+        # The most common source of these errors is a database schema
+        # mismatch between the model and the live database (e.g. a
+        # missing migration).  Surface a structured error so the
+        # operator can act, and log the SQLAlchemy exception for
+        # diagnostics.  Never expose the raw SQL to the user.
+        raise _structured_db_error(
+            exc,
+            case_id=case_id,
+            evidence_id=evidence_id,
+            mode=mode,
+        ) from exc
 
     batch = result["batch"]
     first_run = result["first_run"]

@@ -643,6 +643,202 @@ def _v10_memory_symbol_preparation_reconciliation(connection: Connection) -> Non
     )
 
 
+@register(11, "memory_analysis_batches_last_advanced_run_id_uuid")
+def _v11_batches_last_advanced_run_id_uuid(connection: Connection) -> None:
+    """Align ``memory_analysis_batches.last_advanced_run_id`` to native UUID.
+
+    Sprint: Memory Batch UUID Schema Alignment & Live Run-All Closure v1.
+
+    The original migration v2 declared this column as VARCHAR(64),
+    but a later patch changed the SQLAlchemy model to a
+    ``String(64)`` while the live PostgreSQL column had already
+    been created as ``uuid`` by the v2 of an earlier deployment.
+    The mismatch caused every ``INSERT`` into
+    ``memory_analysis_batches`` to fail with::
+
+        column "last_advanced_run_id" is of type uuid but
+        expression is of type character varying
+
+    The migration v11 is idempotent:
+
+    * Inspects the actual column type in the live database.
+    * If the column is already ``uuid`` (or a UUID-compatible
+      type on SQLite) the migration is a no-op.
+    * If the column is ``character varying`` (PostgreSQL) the
+      migration casts the existing data to ``uuid`` using
+      ``USING NULLIF(col, '')::uuid`` so that empty strings are
+      normalised to NULL before the cast.  Any non-UUID value is
+      logged and converted to NULL with a warning, never silently
+      dropped.
+    * If the column is missing entirely (e.g. legacy deployment
+      pre-v2) the migration adds it as a native UUID.
+
+    The migration also reconciles ``memory_scan_runs.batch_id`` and
+    the secondary FK columns in case a deployment ended up with
+    a VARCHAR(64) variant.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_analysis_batches" not in inspector.get_table_names():
+        return
+
+    def _column_type(table: str, column: str) -> str | None:
+        cols = {c["name"]: c for c in inspector.get_columns(table)}
+        col = cols.get(column)
+        if col is None:
+            return None
+        return str(col.get("type"))
+
+    def _column_nullable(table: str, column: str) -> bool:
+        cols = {c["name"]: c for c in inspector.get_columns(table)}
+        col = cols.get(column)
+        if col is None:
+            return True
+        return bool(col.get("nullable", True))
+
+    dialect = connection.dialect.name
+    is_postgres = dialect == "postgresql"
+
+    # 1) memory_analysis_batches.last_advanced_run_id
+    existing_type = _column_type("memory_analysis_batches", "last_advanced_run_id")
+    if existing_type is None:
+        # Column missing (legacy pre-v2).  Add it as native UUID.
+        if is_postgres:
+            connection.execute(
+                text("ALTER TABLE memory_analysis_batches "
+                     "ADD COLUMN last_advanced_run_id UUID")
+            )
+        else:
+            # SQLite: TEXT is the closest portable type.  The
+            # application treats the value as a UUID string.
+            connection.execute(
+                text("ALTER TABLE memory_analysis_batches "
+                     "ADD COLUMN last_advanced_run_id VARCHAR(64)")
+            )
+    elif is_postgres and (
+        existing_type.lower() in ("character varying", "varchar")
+        or existing_type.lower().startswith("varchar(")
+        or existing_type.lower().startswith("character varying(")
+    ):
+        # Detect non-UUID values before casting.
+        rows = connection.execute(
+            text(
+                "SELECT last_advanced_run_id FROM memory_analysis_batches "
+                "WHERE last_advanced_run_id IS NOT NULL "
+                "AND last_advanced_run_id <> '' "
+                "AND last_advanced_run_id::text !~* "
+                "'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+            )
+        ).fetchall()
+        invalid = [str(r[0]) for r in rows]
+        for bad in invalid:
+            logger.warning(
+                "migration v11: invalid UUID in "
+                "memory_analysis_batches.last_advanced_run_id -> NULL: %r",
+                bad,
+            )
+        # NULLIF + ::uuid cast.  Empty strings become NULL; invalid
+        # UUID strings have already been replaced with NULL via the
+        # UPDATE below so the cast itself only sees valid values.
+        if invalid:
+            connection.execute(
+                text(
+                    "UPDATE memory_analysis_batches "
+                    "SET last_advanced_run_id = NULL "
+                    "WHERE last_advanced_run_id IS NOT NULL "
+                    "AND last_advanced_run_id::text !~* "
+                    "'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+                )
+            )
+        # Empty strings -> NULL before the cast to avoid PG error.
+        connection.execute(
+            text(
+                "UPDATE memory_analysis_batches "
+                "SET last_advanced_run_id = NULL "
+                "WHERE last_advanced_run_id = ''"
+            )
+        )
+        connection.execute(
+            text(
+                "ALTER TABLE memory_analysis_batches "
+                "ALTER COLUMN last_advanced_run_id TYPE UUID "
+                "USING NULLIF(last_advanced_run_id, '')::uuid"
+            )
+        )
+    # On SQLite we keep the existing TEXT representation; the
+    # application-level Python type already handles strings.
+
+    # 2) memory_scan_runs.batch_id (defensive: any deployment
+    # that started with the legacy in-place DDL may have it as
+    # TEXT).  On PostgreSQL, align to native UUID.
+    if "memory_scan_runs" in inspector.get_table_names():
+        btype = _column_type("memory_scan_runs", "batch_id")
+        if btype is not None and is_postgres and (
+            btype.lower() in ("character varying", "varchar", "text")
+            or btype.lower().startswith("varchar(")
+            or btype.lower().startswith("character varying(")
+        ):
+            # Drop and re-add the FK if needed so the type can change.
+            connection.execute(
+                text(
+                    "ALTER TABLE memory_scan_runs "
+                    "DROP CONSTRAINT IF EXISTS memory_scan_runs_batch_id_fkey"
+                )
+            )
+            rows = connection.execute(
+                text(
+                    "SELECT batch_id FROM memory_scan_runs "
+                    "WHERE batch_id IS NOT NULL AND batch_id <> '' "
+                    "AND batch_id::text !~* "
+                    "'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+                )
+            ).fetchall()
+            for r in rows:
+                logger.warning(
+                    "migration v11: invalid UUID in "
+                    "memory_scan_runs.batch_id -> NULL: %r", r[0],
+                )
+            if rows:
+                connection.execute(
+                    text(
+                        "UPDATE memory_scan_runs SET batch_id = NULL "
+                        "WHERE batch_id IS NOT NULL AND batch_id::text !~* "
+                        "'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'"
+                    )
+                )
+            connection.execute(
+                text(
+                    "UPDATE memory_scan_runs SET batch_id = NULL "
+                    "WHERE batch_id = ''"
+                )
+            )
+            connection.execute(
+                text(
+                    "ALTER TABLE memory_scan_runs "
+                    "ALTER COLUMN batch_id TYPE UUID "
+                    "USING NULLIF(batch_id, '')::uuid"
+                )
+            )
+            # Re-add the FK.
+            connection.execute(
+                text(
+                    "ALTER TABLE memory_scan_runs "
+                    "ADD CONSTRAINT memory_scan_runs_batch_id_fkey "
+                    "FOREIGN KEY (batch_id) REFERENCES memory_analysis_batches(id) "
+                    "ON DELETE SET NULL"
+                )
+            )
+    # ``last_advanced_run_id`` MUST remain nullable: a brand new
+    # batch is created with no run yet advanced.
+    nullable = _column_nullable("memory_analysis_batches", "last_advanced_run_id")
+    if is_postgres and not nullable:
+        connection.execute(
+            text(
+                "ALTER TABLE memory_analysis_batches "
+                "ALTER COLUMN last_advanced_run_id DROP NOT NULL"
+            )
+        )
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 
