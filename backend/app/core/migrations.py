@@ -602,55 +602,45 @@ def _v10_memory_symbol_preparation_reconciliation(connection: Connection) -> Non
     on PostgreSQL.  On SQLite the WHERE clause is ignored but the
     index still exists.
     """
-    existing = _column_set(connection, "memory_symbol_preparations")
-    if "last_heartbeat_at" not in existing:
-        connection.execute(
-            text(
-                "ALTER TABLE memory_symbol_preparations ADD COLUMN last_heartbeat_at TIMESTAMP"
-            )
-        )
-    if "current_step" not in existing:
-        connection.execute(
-            text(
-                "ALTER TABLE memory_symbol_preparations ADD COLUMN current_step VARCHAR(64)"
-            )
-        )
-    if "progress_percent" not in existing:
-        connection.execute(
-            text(
-                "ALTER TABLE memory_symbol_preparations ADD COLUMN progress_percent INTEGER NOT NULL DEFAULT 0"
-            )
-        )
-    if "source_of_truth" not in existing:
-        connection.execute(
-            text(
-                "ALTER TABLE memory_symbol_preparations ADD COLUMN source_of_truth VARCHAR(64)"
-            )
-        )
-    if "reconciled_at" not in existing:
-        connection.execute(
-            text(
-                "ALTER TABLE memory_symbol_preparations ADD COLUMN reconciled_at TIMESTAMP"
-            )
-        )
-    if "active" not in existing:
-        connection.execute(
-            text(
-                "ALTER TABLE memory_symbol_preparations ADD COLUMN active BOOLEAN NOT NULL DEFAULT TRUE"
-            )
-        )
-        connection.execute(
-            text(
-                "CREATE INDEX ix_memory_symbol_preparations_active ON memory_symbol_preparations (active)"
-            )
-        )
-        # Partial unique index: one active preparation per evidence.
-        connection.execute(
-            text(
-                "CREATE UNIQUE INDEX uq_memory_symbol_prep_active_evidence "
-                "ON memory_symbol_preparations (evidence_id) WHERE active = TRUE"
-            )
-        )
+    # Use ADD COLUMN IF NOT EXISTS so the migration is idempotent
+    # on PostgreSQL (>= 9.6).  SQLite does not support IF NOT
+    # EXISTS on ADD COLUMN, so we wrap each statement in a try /
+    # except to swallow the "duplicate column" error.
+    def _safe_add(column_sql: str) -> None:
+        try:
+            connection.execute(text(column_sql))
+        except Exception as exc:  # noqa: BLE001
+            # SQLite raises "duplicate column" the second time.
+            if "duplicate column" not in str(exc).lower() and "already exists" not in str(exc).lower():
+                raise
+    _safe_add(
+        "ALTER TABLE memory_symbol_preparations ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMP"
+    )
+    _safe_add(
+        "ALTER TABLE memory_symbol_preparations ADD COLUMN IF NOT EXISTS current_step VARCHAR(64)"
+    )
+    _safe_add(
+        "ALTER TABLE memory_symbol_preparations ADD COLUMN IF NOT EXISTS progress_percent INTEGER NOT NULL DEFAULT 0"
+    )
+    _safe_add(
+        "ALTER TABLE memory_symbol_preparations ADD COLUMN IF NOT EXISTS source_of_truth VARCHAR(64)"
+    )
+    _safe_add(
+        "ALTER TABLE memory_symbol_preparations ADD COLUMN IF NOT EXISTS reconciled_at TIMESTAMP"
+    )
+    _safe_add(
+        "ALTER TABLE memory_symbol_preparations ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE"
+    )
+    _safe_add(
+        "CREATE INDEX IF NOT EXISTS ix_memory_symbol_preparations_active ON memory_symbol_preparations (active)"
+    )
+    # Partial unique index: one active preparation per evidence.
+    # The IF NOT EXISTS clause is supported by PostgreSQL 9.5+
+    # and silently ignored by SQLite when the index already exists.
+    _safe_add(
+        "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_symbol_prep_active_evidence "
+        "ON memory_symbol_preparations (evidence_id) WHERE active = TRUE"
+    )
 
 
 def _inspector_for(connection: Connection):
