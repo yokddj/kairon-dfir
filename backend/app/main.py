@@ -133,6 +133,24 @@ def on_startup() -> None:
         logger.warning("memory symbol preparation reconcile skipped: %s", exc)
     finally:
         db.close()
+    # Memory upload registration lifecycle: scan for uploads whose
+    # canonical blob is preserved but whose Evidence row is missing
+    # and re-queue them for the new /retry-registration endpoint.
+    from app.services.memory.upload_lifecycle import (
+        reconcile_memory_upload_lifecycles,
+    )
+    db = SessionLocal()
+    try:
+        lifecycle_stats = reconcile_memory_upload_lifecycles(db)
+        if lifecycle_stats.get("requeued", 0) > 0:
+            logger.info(
+                "memory upload registration lifecycle reconcile: %s",
+                lifecycle_stats,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory upload registration lifecycle reconcile skipped: %s", exc)
+    finally:
+        db.close()
 
 
 @app.get("/health")

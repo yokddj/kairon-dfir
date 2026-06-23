@@ -530,6 +530,55 @@ def _v8_memory_evidence_content_identity(connection: Connection) -> None:
             )
 
 
+@register(9, "memory_upload_registration_lifecycle")
+def _v9_memory_upload_registration_lifecycle(connection: Connection) -> None:
+    """Expand ``memory_uploads`` for the registration recovery flow.
+
+    Adds columns required to decouple evidence registration from
+    post-registration automation (memory probe, symbol preparation,
+    OpenSearch initialization):
+
+    * ``stage``              - registration stage ("registration_pending",
+                               "registered", "failed_registration", ...)
+    * ``registration_state`` - structured registration state
+    * ``registration_attempts`` - retry counter
+    * ``last_registration_error_code`` - structured error code
+    * ``last_registration_error_class`` - exception class name
+    * ``canonical_preserved`` - True when the canonical blob is durable
+
+    The new columns default to NULL / False / 0 so legacy rows are
+    unaffected.  The migration is idempotent: re-running it on a
+    database that already has the columns is a no-op.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_uploads" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("memory_uploads")}
+    additions = [
+        ("stage", "VARCHAR(32)"),
+        ("registration_state", "VARCHAR(32)"),
+        ("registration_attempts", "INTEGER NOT NULL DEFAULT 0"),
+        ("last_registration_error_code", "VARCHAR(64)"),
+        ("last_registration_error_class", "VARCHAR(128)"),
+        ("canonical_preserved", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ]
+    for column_name, column_type in additions:
+        if column_name not in existing:
+            connection.execute(
+                text(
+                    f"ALTER TABLE memory_uploads ADD COLUMN {column_name} {column_type}"
+                )
+            )
+    if "ix_memory_uploads_registration_state" not in {
+        ix["name"] for ix in inspector.get_indexes("memory_uploads")
+    }:
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_uploads_registration_state ON memory_uploads (registration_state)"
+            )
+        )
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 
