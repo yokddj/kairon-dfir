@@ -160,6 +160,12 @@ export function MemoryRunAllModal({
                 ? "Run missing or failed profiles only"
                 : "Re-run all supported profiles"}
             </h2>
+            <p
+              className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
+              data-testid="memory-run-all-disabled-banner"
+            >
+              Run all is temporarily unavailable while the memory execution pipeline is being stabilized.
+            </p>
           </div>
           <button
             type="button"

@@ -711,7 +711,9 @@ def test_old_windows_evidence_with_no_cache_can_be_unsupported(db_session) -> No
 # ---------------------------------------------------------------------------
 
 
-def test_reconcile_is_idempotent(db_session) -> None:
+def test_reconcile_is_idempotent(db_session, monkeypatch) -> None:
+    from app.core.config import get_settings
+    monkeypatch.setattr(get_settings(), "memory_auto_symbol_probe", True)
     _case(db_session)
     _evidence(db_session, EVIDENCE_A, sha256="f" * 64)
     _cached_symbol(

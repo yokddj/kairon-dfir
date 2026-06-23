@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 import json
 import logging
 from datetime import datetime, date
+from pathlib import Path
 from typing import Any
 
 
@@ -66,7 +67,7 @@ from app.services.memory.symbol_state import (
 )
 from app.models.memory import MemorySymbolAcquisition, MemorySymbolAcquisitionRequest
 from app.services.memory.upload_readiness import MAX_SELECTED_SIZE_BYTES, get_memory_upload_readiness
-from app.services.memory.upload_lifecycle import get_memory_upload, public_memory_upload_status, reconcile_memory_upload
+from app.services.memory.upload_lifecycle import get_memory_upload, public_memory_upload_status, reconcile_memory_upload, retry_preserved_memory_upload_registration
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
 from app.workers.tasks import enqueue_memory_metadata_scan
 
@@ -132,6 +133,56 @@ def get_memory_evidence_landing(case_id: str, db: Session = Depends(get_db)) -> 
     return {
         "case_id": case_id,
         "items": items,
+    }
+
+
+@router.get("/cases/{case_id}/memory/evidences/{evidence_id}/diagnostics", response_model=None)
+def get_memory_evidence_diagnostics(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Operator-friendly diagnostics for a memory evidence.
+
+    The response is sanitized: no filesystem paths, no internal
+    URLs, no stack traces.  Only the booleans and counters the
+    operator needs to know whether the evidence is durable and
+    whether the worker is ready.
+    """
+    _require_case(db, case_id)
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
+        raise HTTPException(status_code=404, detail="Memory evidence was not found.")
+    backend = check_volatility3_backend()
+    canonical_path = Path(evidence.stored_path) if evidence.stored_path else None
+    file_present = canonical_path is not None and canonical_path.exists() and canonical_path.is_file()
+    file_size = canonical_path.stat().st_size if file_present else 0
+    size_match = file_present and file_size == int(evidence.size_bytes or 0)
+    # We do not re-hash the file in this endpoint (the evidence row
+    # already records the SHA-256 captured at upload time).  The
+    # operator can request a re-hash via the repair command.
+    worker_ready = bool(backend.get("ready"))
+    worker_online = bool(backend.get("dedicated_worker_online"))
+    return {
+        "case_id": case_id,
+        "evidence_id": evidence_id,
+        "file_present": file_present,
+        "file_size": file_size,
+        "expected_size": int(evidence.size_bytes or 0),
+        "size_match": size_match,
+        "hash_recorded": bool(evidence.sha256),
+        "evidence_registered": True,
+        "worker_ready": worker_ready,
+        "worker_online": worker_online,
+        "volatility_executable": bool(backend.get("volatility_path")),
+        "volatility_version": backend.get("volatility_version"),
+        "cache_readable": bool(backend.get("cache_readable", True)),
+        "last_run_status": evidence.ingest_status.value if evidence.ingest_status else None,
+        "last_error_stage": (evidence.error_log or {}).get("last_error_stage"),
+        "auto_preparation": bool(getattr(get_settings(), "memory_auto_preparation", False)),
+        "auto_symbol_probe": bool(getattr(get_settings(), "memory_auto_symbol_probe", False)),
+        "auto_symbol_acquire": bool(getattr(get_settings(), "memory_auto_symbol_acquire", False)),
+        "run_all_enabled": bool(getattr(get_settings(), "memory_run_all_enabled", False)),
     }
 
 
@@ -253,6 +304,17 @@ def post_run_all_batch(
 
     _require_case(db, case_id)
     _require_evidence_for_case(db, case_id, evidence_id)
+    # v1 stabilization: Run all is disabled while the execution
+    # pipeline is being verified.  Individual per-profile Run
+    # actions remain available.
+    if not bool(getattr(get_settings(), "memory_run_all_enabled", False)):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "MEMORY_RUN_ALL_DISABLED",
+                "message": "Run all is temporarily unavailable while the memory execution pipeline is being stabilized.",
+            },
+        )
     payload = payload or {}
     if not bool(payload.get("authorization_acknowledged", False)):
         raise HTTPException(
@@ -880,7 +942,102 @@ def cancel_memory_upload_endpoint(
     return public_memory_upload_status(cancelled)
 
 
-@router.get("/cases/{case_id}/memory/runs", response_model=list[MemoryScanRunRead])
+@router.post(
+    "/cases/{case_id}/memory/uploads/{upload_id}/retry-registration",
+    response_model=MemoryUploadStatusRead,
+)
+def retry_memory_upload_registration_endpoint(
+    case_id: str,
+    upload_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Re-attempt evidence registration for a preserved memory upload.
+
+    The canonical blob is already on disk; this endpoint only
+    records the Evidence row and runs the post-registration
+    automation.  The route refuses to retry uploads whose canonical
+    file is missing, inconsistent, or whose status is already
+    completed.
+    """
+    _require_case(db, case_id)
+    item = get_memory_upload(db, case_id, upload_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="Memory upload was not found.")
+    if item.status == "completed":
+        raise HTTPException(
+            status_code=409,
+            detail="Cannot retry a completed memory upload; the evidence is already registered.",
+        )
+    if not bool(getattr(item, "canonical_preserved", True)):
+        raise HTTPException(
+            status_code=409,
+            detail="Canonical upload is not preserved; the file must be re-uploaded.",
+        )
+    try:
+        status_payload = retry_preserved_memory_upload_registration(upload_id, db=db)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail="Memory upload was not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # pragma: no cover - defensive
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "MEMORY_EVIDENCE_REGISTRATION_RETRY_FAILED",
+                "message": "Evidence registration retry could not complete.",
+                "exception_class": exc.__class__.__name__,
+            },
+        ) from exc
+    return status_payload
+
+
+@router.post("/cases/{case_id}/memory/uploads/reconcile", response_model=None)
+def reconcile_case_memory_uploads_endpoint(
+    case_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Re-queue every memory upload in a case whose canonical blob
+    is preserved but whose Evidence row is missing.
+
+    The endpoint is idempotent and read-mostly: it only flips
+    ``registration_state`` to ``requeued`` and bumps
+    ``registration_attempts``; the actual Evidence INSERT happens
+    via the per-upload retry endpoint.
+    """
+    from app.services.memory.upload_lifecycle import reconcile_memory_upload_lifecycles
+    _require_case(db, case_id)
+    stats = reconcile_memory_upload_lifecycles(db, case_id=case_id)
+    return {"case_id": case_id, **stats}
+
+
+@router.post("/cases/{case_id}/memory/uploads/repair", response_model=None)
+def repair_preserved_memory_uploads_endpoint(
+    case_id: str,
+    payload: dict | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Admin command: repair preserved-but-orphaned uploads.
+
+    Dry-run by default: the response describes each upload in
+    the case (canonical file present, size valid, hash valid,
+    evidence row exists, repairable) without mutating the
+    database.  Pass ``{"apply": true, "dry_run": false}`` to
+    actually re-register the Evidence rows.
+    """
+    from app.services.memory.upload_lifecycle import repair_preserved_memory_uploads
+    _require_case(db, case_id)
+    payload = payload or {}
+    dry_run = bool(payload.get("dry_run", True))
+    if "apply" in payload and not dry_run:
+        dry_run = not bool(payload.get("apply", False))
+    report = repair_preserved_memory_uploads(case_id, dry_run=dry_run, db=db)
+    return {
+        "case_id": case_id,
+        "dry_run": dry_run,
+        "scanned": len(report),
+        "repairable": sum(1 for r in report if r["repairable"]),
+        "items": report,
+    }
 def get_memory_runs(
     case_id: str,
     evidence_id: str | None = Query(default=None),

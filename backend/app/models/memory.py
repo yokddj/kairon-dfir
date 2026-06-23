@@ -41,6 +41,13 @@ class MemoryUpload(UUIDMixin, Base):
     failure_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     failure_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
     retryable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Registration recovery lifecycle (migration v9).
+    stage: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    registration_state: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    registration_attempts: Mapped[int] = mapped_column(default=0, nullable=False)
+    last_registration_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_registration_error_class: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    canonical_preserved: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     metadata_json: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
     progress_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)

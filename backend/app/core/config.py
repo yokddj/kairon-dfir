@@ -135,11 +135,24 @@ class Settings(BaseSettings):
     memory_symbol_admin_authorization_required: bool = True
     # Automatic Windows symbol resolution: auto-probe on upload and
     # auto-acquire (managed, server-side) when the cache misses.
-    # Both default to true so the analyst never has to push Probe
-    # manually.  The download still flows through the symbol-fetcher
-    # and symbol-egress-gateway; memory-worker stays offline.
-    memory_auto_symbol_probe: bool = True
-    memory_auto_symbol_acquire: bool = True
+    # Both default to FALSE in the v1 stabilization sprint so the
+    # minimal critical path is preserved.  When the operator
+    # enables MEMORY_AUTO_PREPARATION the symbol probe and
+    # acquisition are turned back on.
+    memory_auto_symbol_probe: bool = False
+    memory_auto_symbol_acquire: bool = False
+    # Master switch for the entire post-registration automation
+    # pipeline (probe, content identity, symbol preparation
+    # enqueue, OpenSearch initialization, active-result
+    # materialization).  When False, the memory upload lifecycle
+    # only registers the Evidence row and never schedules
+    # background work as part of the critical path.
+    memory_auto_preparation: bool = False
+    # Run all (sequential profile batch) is temporarily disabled
+    # while the execution pipeline is being stabilized.  When
+    # False, the UI shows a banner and the per-profile Run
+    # buttons remain the only way to execute a memory profile.
+    memory_run_all_enabled: bool = False
     # Cap on concurrent managed acquisitions (per backend process).
     memory_symbol_max_concurrent_acquisitions: int = 1
     # How many times a single preparation can fail before it goes

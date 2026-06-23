@@ -1,8 +1,11 @@
 import json
+import logging
 from pathlib import Path
 import re
 from typing import Any
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import JSONResponse
@@ -96,6 +99,7 @@ from app.services.problematic_artifacts import (
 )
 from app.services.host_identity import is_invalid_host_value
 from app.services.memory.upload_lifecycle import (
+    MemoryUploadRegistrationError,
     create_memory_upload,
     mark_memory_upload_failed,
     normalize_upload_id,
@@ -1990,9 +1994,52 @@ def upload_evidence(
         update_memory_upload(upload_state.id, db=db, status="finalizing", bytes_received=size, sha256=uploaded_sha256)
         try:
             return register_memory_evidence(upload_state.id, db=db)
+        except MemoryUploadRegistrationError as exc:
+            # Structured registration error: log the FULL exception
+            # (no swallowing) and surface the structured code to the
+            # analyst.  The canonical blob is preserved.
+            logger.exception(
+                "memory evidence registration failed upload_id=%s evidence_id=%s code=%s class=%s",
+                upload_state.id, exc.evidence_id, exc.code, exc.exception_class,
+            )
+            mark_memory_upload_failed(
+                upload_state.id,
+                exc.code or "evidence_registration_failed",
+                "Evidence registration failed; the canonical upload is preserved and the operator can retry without resending bytes.",
+                retryable=True,
+                db=db,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error_code": exc.code or "evidence_registration_failed",
+                    "exception_class": exc.exception_class,
+                    "message": "Evidence registration failed; the canonical upload is preserved.",
+                    "canonical_preserved": exc.canonical_preserved,
+                },
+            ) from exc
         except Exception as exc:
-            mark_memory_upload_failed(upload_state.id, "evidence_registration_failed", "Canonical upload is preserved; evidence registration can be retried.", retryable=True, db=db)
-            raise HTTPException(status_code=500, detail="Canonical upload is preserved; evidence registration can be retried.") from exc
+            # Generic registration failure: log the FULL exception
+            # so the operator can find the first real cause.
+            logger.exception(
+                "memory evidence registration failed upload_id=%s class=%s",
+                upload_state.id, type(exc).__name__,
+            )
+            mark_memory_upload_failed(
+                upload_state.id,
+                "evidence_registration_failed",
+                "Evidence registration failed; the canonical upload is preserved and the operator can retry without resending bytes.",
+                retryable=True,
+                db=db,
+            )
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "error_code": "evidence_registration_failed",
+                    "exception_class": type(exc).__name__,
+                    "message": "Evidence registration failed; the canonical upload is preserved.",
+                },
+            ) from exc
     else:
         evidence_id, stored_path, size = save_upload(case_id, file)
     raw_collection = False

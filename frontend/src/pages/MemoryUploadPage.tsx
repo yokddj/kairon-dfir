@@ -277,6 +277,35 @@ export default function MemoryUploadPage() {
     await statusQuery.refetch();
   }
 
+  async function retryRegistration() {
+    if (!activeUploadId) return;
+    setStatus("Retrying evidence registration...");
+    try {
+      const result = await api.retryMemoryUploadRegistration(caseId, activeUploadId);
+      setStatus(result.message);
+      if (result.status === "completed" && result.evidence_id) {
+        localStorage.removeItem(`kairon-memory-upload:${caseId}`);
+        setActiveUploadId(null);
+        navigate(`/cases/${caseId}/memory?evidence_id=${result.evidence_id}`);
+        return;
+      }
+      await statusQuery.refetch();
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Evidence registration retry failed");
+    }
+  }
+
+  const retryRegistrationInFlight = useRef(false);
+  async function retryRegistrationDebounced() {
+    if (retryRegistrationInFlight.current) return;
+    retryRegistrationInFlight.current = true;
+    try {
+      await retryRegistration();
+    } finally {
+      retryRegistrationInFlight.current = false;
+    }
+  }
+
   async function prepareReupload() {
     localStorage.removeItem(`kairon-memory-upload:${caseId}`);
     setActiveUploadId(null);
@@ -319,6 +348,22 @@ export default function MemoryUploadPage() {
                 File: <span className="font-mono">{serverActive.filename || serverActive.upload_id}</span>
               </p>
               <p className="mt-1 text-sm text-muted">State: <span className="font-mono">{serverActive.status}</span></p>
+              {serverActive.stage ? <p className="mt-1 text-sm text-muted">Registration stage: <span data-testid="memory-upload-registration-stage" className="font-mono">{serverActive.stage}</span></p> : null}
+              {serverActive.canonical_preserved ? <p className="mt-1 text-sm text-mint" data-testid="memory-upload-canonical-preserved">Canonical file is preserved on the server.</p> : null}
+              {serverActive.failure_code === "evidence_registration_failed" && serverActive.canonical_preserved ? (
+                <div className="mt-3 rounded-2xl border border-warning/30 bg-warning/10 p-3 text-sm text-warning">
+                  <p>The memory image reached Kairon and is preserved on the server, but evidence registration did not complete. No bytes need to be re-uploaded.</p>
+                  <p className="mt-1 text-xs" data-testid="memory-upload-technical-details">Technical details: code={serverActive.last_registration_error_code || "evidence_registration_failed"}, class={serverActive.last_registration_error_class || "RuntimeError"}</p>
+                  <button
+                    type="button"
+                    data-testid="memory-upload-retry-registration"
+                    onClick={() => void retryRegistrationDebounced()}
+                    className="mt-3 rounded-xl border border-mint/30 bg-mint/10 px-3 py-2 text-xs font-semibold text-mint"
+                  >
+                    Retry evidence registration
+                  </button>
+                </div>
+              ) : null}
               <p className="mt-1 text-sm text-muted">
                 Progress: {formatBytes(serverActive.bytes_received)} / {formatBytes(serverActive.expected_bytes)}
                 {serverActive.expected_bytes > 0 ? ` (${Math.round((serverActive.bytes_received / serverActive.expected_bytes) * 100)}%)` : ""}

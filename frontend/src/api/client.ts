@@ -1110,6 +1110,10 @@ export type MemoryUploadStatus = {
   case_id?: string;
   evidence_id: string | null;
   status: "validating" | "uploading" | "verifying" | "finalizing" | "completed" | "failed" | "cancelled" | "stale" | "inconsistent";
+  stage?: string | null;
+  registration_state?: string | null;
+  registration_attempts?: number;
+  canonical_preserved?: boolean;
   bytes_received: number;
   expected_bytes: number;
   filename?: string;
@@ -1123,6 +1127,9 @@ export type MemoryUploadStatus = {
   cancellable?: boolean;
   is_active?: boolean;
   failure_code: string | null;
+  failure_message?: string | null;
+  last_registration_error_code?: string | null;
+  last_registration_error_class?: string | null;
   message: string;
   retryable: boolean;
 };
@@ -4068,6 +4075,13 @@ export const api = {
   },
   getMemoryUploadStatus: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}`),
   reconcileMemoryUpload: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/reconcile`, { method: "POST" }),
+  retryMemoryUploadRegistration: (caseId: string, uploadId: string) =>
+    request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/retry-registration`, { method: "POST" }),
+  reconcileCaseMemoryUploads: (caseId: string) =>
+    request<{ case_id: string; scanned: number; requeued: number; skipped_terminal: number; skipped_inconsistent: number }>(
+      `/cases/${caseId}/memory/uploads/reconcile`,
+      { method: "POST" },
+    ),
   cancelMemoryUpload: (caseId: string, uploadId: string, reason: string) =>
     request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/cancel`, {
       method: "POST",
@@ -4077,6 +4091,33 @@ export const api = {
     request<MemoryUploadStatus | null>(`/cases/${caseId}/memory/uploads/active`),
   listMemoryEvidences: (caseId: string) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences`),
   getMemoryEvidenceReadiness: (caseId: string, evidenceId: string) => request<MemoryEvidenceReadiness>(`/cases/${caseId}/memory/evidences/${evidenceId}/readiness`),
+  getMemoryEvidenceDiagnostics: (caseId: string, evidenceId: string) =>
+    request<{
+      case_id: string;
+      evidence_id: string;
+      file_present: boolean;
+      file_size: number;
+      expected_size: number;
+      size_match: boolean;
+      hash_recorded: boolean;
+      evidence_registered: boolean;
+      worker_ready: boolean;
+      worker_online: boolean;
+      volatility_executable: boolean;
+      volatility_version: string | null;
+      cache_readable: boolean;
+      last_run_status: string | null;
+      last_error_stage: string | null;
+      auto_preparation: boolean;
+      auto_symbol_probe: boolean;
+      auto_symbol_acquire: boolean;
+      run_all_enabled: boolean;
+    }>(`/cases/${caseId}/memory/evidences/${evidenceId}/diagnostics`),
+  repairPreservedMemoryUploads: (caseId: string, dryRun: boolean) =>
+    request<Array<Record<string, unknown>>>(`/cases/${caseId}/memory/uploads/repair`, {
+      method: "POST",
+      body: JSON.stringify({ dry_run: dryRun }),
+    }),
   getMemorySymbolCacheStatus: () => request<MemorySymbolCacheStatus>("/memory/symbols/cache"),
   requestMemorySymbolAcquisition: (caseId: string, evidenceId: string, authorizationAcknowledged = false) =>
     request<MemorySymbolRequestCreateResponse>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbols/request`, {
