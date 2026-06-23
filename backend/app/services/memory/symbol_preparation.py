@@ -64,35 +64,57 @@ logger = logging.getLogger(__name__)
 
 # Preparation state values (single source of truth; see migration
 # documentation).  These are the values the UI sees as well.
+#
+# v1 stabilization set: pending, queued, probing, acquiring,
+# converting, verifying, ready, failed, cancelled, stale.  The
+# legacy identifiers (identified, cache_hit, acquisition_pending,
+# isf_creation, requirement_unknown, acquisition_failed,
+# unsupported, negative_cached) are kept as aliases for the
+# migration period but new code should only emit the canonical
+# names below.
+PREP_PENDING = "pending"
 PREP_QUEUED = "queued"
 PREP_PROBING = "probing"
+PREP_ACQUIRING = "acquiring"
+PREP_CONVERTING = "converting"
+PREP_VERIFYING = "verifying"
+PREP_READY = "ready"
+PREP_FAILED = "failed"
+PREP_CANCELLED = "cancelled"
+PREP_STALE = "stale"
+
+# Legacy aliases (kept for the migration period).
 PREP_IDENTIFIED = "identified"
 PREP_CACHE_HIT = "cache_hit"
 PREP_ACQUISITION_PENDING = "acquisition_pending"
-PREP_ACQUIRING = "acquiring"
 PREP_ISF_CREATION = "isf_creation"
-PREP_READY = "ready"
 PREP_REQUIREMENT_UNKNOWN = "requirement_unknown"
 PREP_ACQUISITION_FAILED = "acquisition_failed"
 PREP_UNSUPPORTED = "unsupported"
 PREP_NEGATIVE_CACHED = "negative_cached"
-PREP_CANCELLED = "cancelled"
 
 ALL_PREP_STATES = frozenset(
     {
+        PREP_PENDING,
         PREP_QUEUED,
         PREP_PROBING,
+        PREP_ACQUIRING,
+        PREP_CONVERTING,
+        PREP_VERIFYING,
+        PREP_READY,
+        PREP_FAILED,
+        PREP_CANCELLED,
+        PREP_STALE,
+        # Legacy aliases (still in the DB; keep them in the set so
+        # older rows pass validation).
         PREP_IDENTIFIED,
         PREP_CACHE_HIT,
         PREP_ACQUISITION_PENDING,
-        PREP_ACQUIRING,
         PREP_ISF_CREATION,
-        PREP_READY,
         PREP_REQUIREMENT_UNKNOWN,
         PREP_ACQUISITION_FAILED,
         PREP_UNSUPPORTED,
         PREP_NEGATIVE_CACHED,
-        PREP_CANCELLED,
     }
 )
 
@@ -922,6 +944,385 @@ def reconcile_memory_symbol_readiness(
     return stats
 
 
+# ---------------------------------------------------------------------------
+# v1 stabilization: effective state resolution + stale cleanup
+# ---------------------------------------------------------------------------
+
+
+def _latest_metadata_run_for_evidence(
+    db: Session,
+    *,
+    case_id: str,
+    evidence_id: str,
+) -> dict | None:
+    """Return the most recent ``metadata_only`` scan run for the
+    evidence, or None if no run exists.
+
+    The shape is the same as the /api/memory/runs/{run_id} response
+    so callers can use the same code path.
+    """
+    from app.models.memory import MemoryScanRun
+    run = (
+        db.query(MemoryScanRun)
+        .filter(
+            MemoryScanRun.case_id == case_id,
+            MemoryScanRun.evidence_id == evidence_id,
+            MemoryScanRun.profile == "metadata_only",
+        )
+        .order_by(MemoryScanRun.completed_at.desc().nullslast())
+        .first()
+    )
+    if run is None:
+        return None
+    return {
+        "id": run.id,
+        "status": run.status,
+        "started_at": run.started_at.isoformat() if run.started_at else None,
+        "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        "duration_ms": run.duration_ms,
+        "plugins_completed": int(run.plugins_completed),
+        "plugins_failed": int(run.plugins_failed),
+    }
+
+
+def _task_is_alive(worker_task_id: str | None) -> bool:
+    """Probe Redis for an active RQ job.
+
+    Returns False when the worker_task_id is empty, the Redis
+    connection is unavailable, or the job is missing / terminal.
+    """
+    if not worker_task_id:
+        return False
+    try:
+        from redis import Redis
+        from rq.job import Job
+        from app.core.config import get_settings
+        settings = get_settings()
+        redis_url = settings.redis_url
+        if not redis_url:
+            return False
+        conn = Redis.from_url(redis_url)
+        try:
+            job = Job.fetch(worker_task_id, connection=conn)
+        except Exception:  # noqa: BLE001
+            return False
+        if job is None:
+            return False
+        if job.get_status() in {"finished", "failed", "canceled", "stopped"}:
+            return False
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def resolve_effective_memory_preparation_state(
+    db: Session,
+    *,
+    case_id: str,
+    evidence_id: str,
+) -> dict:
+    """Single source of truth for the effective preparation state.
+
+    Returns a dict with:
+
+    * ``persisted_state`` - the state stored in
+      ``memory_symbol_preparations.state`` (or ``queued`` if no row)
+    * ``effective_state`` - the state the UI should display, derived
+      from facts: a successful metadata_only run, an exact cache
+      hit, an active RQ task, or a stale timeout
+    * ``reconciled``       - True if the persisted state was changed
+      to match the effective state during this call
+    * ``source_of_truth``  - the fact that pinned the effective
+      state (e.g. ``successful_metadata_run``)
+    * ``progress``         - 0..100 progress; 0 means unknown
+    * ``reconciled_at``    - timestamp of the reconciliation
+    * ``preparation_id``   - the preparation row id (or None)
+    * ``stale``            - True if the persisted state is stale
+    * ``stale_reason``     - the reason for staleness
+    * ``task_alive``       - True if the RQ task is still active
+
+    The function does NOT execute Volatility, does NOT download
+    symbols and does NOT create a new preparation row.  It only
+    rewrites the existing row to match the facts.
+    """
+    from app.models.evidence import Evidence
+    from app.models.memory import MemorySymbolPreparation
+    from app.core.config import get_settings
+    from app.core.database import utc_now_naive
+    settings = get_settings()
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id:
+        return {
+            "persisted_state": None,
+            "effective_state": None,
+            "reconciled": False,
+            "source_of_truth": "evidence_missing",
+            "progress": 0,
+            "reconciled_at": None,
+            "preparation_id": None,
+            "stale": False,
+            "stale_reason": "evidence_missing",
+            "task_alive": False,
+        }
+    # The newest ACTIVE preparation row.
+    prep = (
+        db.query(MemorySymbolPreparation)
+        .filter(
+            MemorySymbolPreparation.evidence_id == evidence_id,
+            MemorySymbolPreparation.active == True,  # noqa: E712
+        )
+        .order_by(MemorySymbolPreparation.created_at.desc())
+        .first()
+    )
+    if prep is None:
+        # Fall back to the newest row of any active flag (legacy data).
+        prep = (
+            db.query(MemorySymbolPreparation)
+            .filter(MemorySymbolPreparation.evidence_id == evidence_id)
+            .order_by(MemorySymbolPreparation.created_at.desc())
+            .first()
+        )
+    persisted_state = prep.state if prep is not None else PREP_QUEUED
+    progress = int(getattr(prep, "progress_percent", 0) or 0) if prep is not None else 0
+    task_alive = _task_is_alive(prep.worker_task_id if prep is not None else None)
+    metadata_run = _latest_metadata_run_for_evidence(
+        db, case_id=case_id, evidence_id=evidence_id,
+    )
+    metadata_succeeded = (
+        metadata_run is not None
+        and metadata_run.get("status") == "completed"
+        and int(metadata_run.get("plugins_failed", 0)) == 0
+        and int(metadata_run.get("plugins_completed", 0)) >= 1
+    )
+    # The order of resolution (per spec).
+    # 1. Evidence is accessible. (Already verified above.)
+    # 2. metadata_only completed with windows.info valid?
+    # 3. exact symbol cache hit or ISF used by the run?
+    # 4. preparation task really active?
+    # 5. preparation row persisted.
+    new_state: str | None = None
+    new_progress: int | None = None
+    source_of_truth = None
+    if metadata_succeeded:
+        # 2+3: a successful metadata run is the strongest signal
+        # we have.  The Volatility execution already used the
+        # symbol table (or the kernel detector) and returned
+        # 200; we can pin the preparation to ready regardless
+        # of what the persisted state says.
+        new_state = PREP_READY
+        new_progress = 100
+        source_of_truth = "successful_metadata_run"
+    elif task_alive:
+        # 4: the RQ worker is still working on this row.  We do
+        # NOT touch the persisted state; the worker will.
+        return {
+            "persisted_state": persisted_state,
+            "effective_state": persisted_state,
+            "reconciled": False,
+            "source_of_truth": "active_task",
+            "progress": progress,
+            "reconciled_at": None,
+            "preparation_id": prep.id if prep is not None else None,
+            "stale": False,
+            "stale_reason": None,
+            "task_alive": True,
+        }
+    elif (
+        prep is not None
+        and persisted_state in {PREP_QUEUED, PREP_PROBING, PREP_ACQUIRING, PREP_CONVERTING, PREP_VERIFYING}
+    ):
+        # 5: no active task and no successful metadata.  Check if
+        # the row is stale (no recent heartbeat and the persisted
+        # state has been queued too long).
+        last_heartbeat = (
+            prep.last_heartbeat_at
+            or prep.updated_at
+            or prep.created_at
+        )
+        age_seconds = (utc_now_naive() - last_heartbeat).total_seconds()
+        if age_seconds > settings.memory_preparation_stale_seconds:
+            new_state = PREP_STALE
+            new_progress = 0
+            source_of_truth = "stale_timeout"
+        else:
+            # Within the timeout window: trust the persisted state.
+            return {
+                "persisted_state": persisted_state,
+                "effective_state": persisted_state,
+                "reconciled": False,
+                "source_of_truth": "persisted_state_in_window",
+                "progress": progress,
+                "reconciled_at": None,
+                "preparation_id": prep.id if prep is not None else None,
+                "stale": False,
+                "stale_reason": None,
+                "task_alive": False,
+            }
+    elif prep is None:
+        # No row at all.  Try the cache hit fallback used by
+        # compute_memory_readiness: if a requirement exists and
+        # the cache matches, the preparation is implicitly ready.
+        reused = find_requirement_by_content_identity(db, evidence=evidence)
+        if reused is not None:
+            from app.services.memory.symbol_preparation import (
+                exact_cache_match_for_requirement,
+            )
+            if exact_cache_match_for_requirement(db, reused) is not None:
+                new_state = PREP_READY
+                new_progress = 100
+                source_of_truth = "exact_cache_match_no_row"
+    # Persist the correction.
+    reconciled = False
+    reconciled_at = None
+    stale_reason = None
+    if new_state is not None and prep is not None and new_state != persisted_state:
+        prep.state = new_state
+        if new_progress is not None:
+            prep.progress_percent = int(new_progress)
+        if source_of_truth:
+            prep.source_of_truth = source_of_truth
+        if new_state == PREP_READY:
+            prep.completed_at = utc_now_naive()
+        if new_state == PREP_STALE:
+            stale_reason = "no_task_no_metadata"
+            prep.failure_code = "MEMORY_PREPARATION_STALE"
+        prep.reconciled_at = utc_now_naive()
+        db.commit()
+        reconciled = True
+        reconciled_at = prep.reconciled_at.isoformat()
+    elif new_state is not None and prep is None and new_state == PREP_READY:
+        # Synthesize a preparation row so the UI sees one active row.
+        # This is the "no row but cache hit" branch.
+        prep = MemorySymbolPreparation(
+            case_id=case_id,
+            evidence_id=evidence_id,
+            state=PREP_READY,
+            state_reason="reconcile_no_row",
+            progress_percent=100,
+            completed_at=utc_now_naive(),
+            source_of_truth=source_of_truth or "exact_cache_match_no_row",
+            reconciled_at=utc_now_naive(),
+            active=True,
+            attempts=0,
+            metadata_json={},
+        )
+        db.add(prep)
+        db.commit()
+        reconciled = True
+        reconciled_at = prep.reconciled_at.isoformat()
+    effective_state = new_state if new_state is not None else persisted_state
+    final_progress = new_progress if new_progress is not None else progress
+    return {
+        "persisted_state": persisted_state,
+        "effective_state": effective_state,
+        "reconciled": reconciled,
+        "source_of_truth": source_of_truth or "persisted_state",
+        "progress": final_progress,
+        "reconciled_at": reconciled_at,
+        "preparation_id": prep.id if prep is not None else None,
+        "stale": effective_state == PREP_STALE,
+        "stale_reason": stale_reason,
+        "task_alive": task_alive,
+    }
+
+
+def reconcile_memory_preparation_states(
+    db: Session,
+    *,
+    max_evidences: int = 200,
+) -> dict:
+    """Idempotent reconciliation pass.
+
+    For every memory evidence, compute the effective state via
+    :func:`resolve_effective_memory_preparation_state` and
+    persist any correction.  Terminal rows (ready, cancelled,
+    failed, unsupported, requirement_unknown, negative_cached)
+    are NOT re-queued.
+
+    The pass also audits duplicate preparation rows: if more
+    than one ``active=True`` row exists for a single evidence,
+    the older rows are deactivated (``active=False``).  Historical
+    rows are kept for audit.
+
+    Returns a stats dict:
+
+    * ``scanned``         - number of memory evidences visited
+    * ``reconciled``      - rows where the persisted state changed
+    * ``promoted_ready``  - rows promoted to ready from a queued state
+    * ``marked_stale``    - rows marked stale
+    * ``deactivated``     - duplicate active rows deactivated
+    * ``already_ready``   - rows that were already ready
+    """
+    from app.models.case import Case
+    from app.models.evidence import Evidence, EvidenceType
+    from app.models.memory import MemorySymbolPreparation
+    from app.core.database import utc_now_naive
+    stats = {
+        "scanned": 0,
+        "reconciled": 0,
+        "promoted_ready": 0,
+        "marked_stale": 0,
+        "deactivated": 0,
+        "already_ready": 0,
+    }
+    terminal_states = {
+        PREP_READY,
+        PREP_CANCELLED,
+        PREP_FAILED,
+        PREP_UNSUPPORTED,
+        PREP_REQUIREMENT_UNKNOWN,
+        PREP_NEGATIVE_CACHED,
+        PREP_STALE,
+    }
+    evidences = (
+        db.query(Evidence)
+        .filter(Evidence.evidence_type == EvidenceType.memory_dump.value)
+        .order_by(Evidence.created_at.desc())
+        .limit(max_evidences)
+        .all()
+    )
+    for evidence in evidences:
+        stats["scanned"] += 1
+        # Deactivate duplicate active rows: keep the newest, mark
+        # the rest as inactive (they become historical).
+        active_rows = (
+            db.query(MemorySymbolPreparation)
+            .filter(
+                MemorySymbolPreparation.evidence_id == evidence.id,
+                MemorySymbolPreparation.active == True,  # noqa: E712
+            )
+            .order_by(MemorySymbolPreparation.created_at.desc())
+            .all()
+        )
+        if len(active_rows) > 1:
+            for older in active_rows[1:]:
+                older.active = False
+                stats["deactivated"] += 1
+        # If there are multiple ACTIVE rows even after deactivation
+        # (e.g. because they were created before the partial unique
+        # index was applied), keep only the newest.
+        active_rows = [r for r in active_rows if r.active]
+        if len(active_rows) > 1:
+            for older in active_rows[1:]:
+                older.active = False
+                stats["deactivated"] += 1
+        # Run the resolution.
+        result = resolve_effective_memory_preparation_state(
+            db, case_id=evidence.case_id, evidence_id=evidence.id,
+        )
+        if not result["reconciled"]:
+            if result["effective_state"] == PREP_READY:
+                stats["already_ready"] += 1
+            continue
+        stats["reconciled"] += 1
+        if result["effective_state"] == PREP_READY:
+            stats["promoted_ready"] += 1
+        elif result["effective_state"] == PREP_STALE:
+            stats["marked_stale"] += 1
+    db.commit()
+    return stats
+
+
 __all__ = [
     "ALL_PREP_STATES",
     "MemoryReadiness",
@@ -931,14 +1332,19 @@ __all__ = [
     "PREP_ACQUISITION_PENDING",
     "PREP_CACHE_HIT",
     "PREP_CANCELLED",
+    "PREP_CONVERTING",
+    "PREP_FAILED",
     "PREP_IDENTIFIED",
     "PREP_ISF_CREATION",
     "PREP_NEGATIVE_CACHED",
+    "PREP_PENDING",
     "PREP_PROBING",
     "PREP_QUEUED",
     "PREP_READY",
     "PREP_REQUIREMENT_UNKNOWN",
+    "PREP_STALE",
     "PREP_UNSUPPORTED",
+    "PREP_VERIFYING",
     "UI_STATE_BLOCKED",
     "UI_STATE_FAILED",
     "UI_STATE_PREPARING",
@@ -954,6 +1360,7 @@ __all__ = [
     "negative_cache_active",
     "normalize_sha256",
     "progress_for_state",
+    "reconcile_memory_preparation_states",
     "reconcile_memory_symbol_readiness",
     "record_negative_cache",
     "record_pending_analysis",
@@ -961,6 +1368,7 @@ __all__ = [
     "cancel_pending",
     "consume_pending_for_evidence",
     "requeue_preparation",
+    "resolve_effective_memory_preparation_state",
     "schedule_preparation",
     "ui_state_for",
 ]

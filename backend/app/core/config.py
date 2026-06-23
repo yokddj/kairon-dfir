@@ -153,6 +153,12 @@ class Settings(BaseSettings):
     # False, the UI shows a banner and the per-profile Run
     # buttons remain the only way to execute a memory profile.
     memory_run_all_enabled: bool = False
+    # How long a preparation row may stay in queued / probing /
+    # acquiring before reconciliation considers it stale.  The
+    # reconciliation is gated by facts (a successful metadata run
+    # always wins) but this threshold is the last-resort safety
+    # net for queues that never produced a heartbeat.
+    memory_preparation_stale_seconds: int = 600
     # Cap on concurrent managed acquisitions (per backend process).
     memory_symbol_max_concurrent_acquisitions: int = 1
     # How many times a single preparation can fail before it goes

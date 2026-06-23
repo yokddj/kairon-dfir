@@ -1,5 +1,6 @@
 from datetime import datetime
 
+import sqlalchemy as sa
 from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -273,10 +274,30 @@ class MemorySymbolPreparation(UUIDMixin, Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+    # Reconciliation fields (v1 stabilization).
+    last_heartbeat_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    current_step: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    progress_percent: Mapped[int] = mapped_column(nullable=False, default=0)
+    source_of_truth: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    reconciled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    # Active flag: only one preparation row per evidence can be
+    # ``active=True`` at a time.  Historical rows stay in the table
+    # for audit and may have ``active=False``.
+    active: Mapped[bool] = mapped_column(nullable=False, default=True, index=True)
 
     __table_args__ = (
         Index("ix_memory_symbol_prep_evidence_state", "evidence_id", "state"),
         Index("ix_memory_symbol_prep_state_updated", "state", "updated_at"),
+        # Partial index (PostgreSQL) ensures the active-row lookup
+        # is fast; SQLite ignores the WHERE clause but the index is
+        # still valid.
+        Index(
+            "uq_memory_symbol_prep_active_evidence",
+            "evidence_id",
+            unique=True,
+            postgresql_where=sa.text("active = true"),
+            sqlite_where=sa.text("active = 1"),
+        ),
     )
 
 

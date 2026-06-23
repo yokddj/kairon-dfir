@@ -13,27 +13,48 @@ function toneForUIState(uiState: string): Tone {
 }
 
 function cardCopy(prep: MemorySymbolPreparation) {
-  if (prep.ui_state === "ready") {
+  // Use the effective state (post-reconciliation) to drive the
+  // copy.  A persisted "queued" with an effective "ready" is
+  // shown as ready, never as "Queued 5%".
+  const state = prep.effective_state || prep.ui_state;
+  if (state === "ready" || prep.ui_state === "ready") {
     return {
       title: "Memory analysis ready",
-      subtitle: "Windows symbols cached for this evidence.",
+      subtitle: "Windows symbols and system metadata are available.",
       tone: "good" as const,
     };
   }
-  if (prep.ui_state === "preparing") {
+  if (state === "stale" || prep.stale) {
     return {
-      title: "Preparing memory analysis",
-      subtitle: prep.progress_label || "Preparing Windows symbols for this evidence.",
-      tone: "warn" as const,
+      title: "Memory preparation was interrupted.",
+      subtitle:
+        prep.sanitized_message ||
+        "The previous preparation did not finish. You can retry the preparation.",
+      tone: "bad" as const,
     };
   }
-  if (prep.ui_state === "failed") {
+  if (state === "failed" || prep.ui_state === "failed") {
     return {
       title: "Memory preparation failed",
       subtitle:
         prep.sanitized_message ||
         "Kairon could not obtain the required Windows symbols.",
       tone: "bad" as const,
+    };
+  }
+  if (state === "cancelled") {
+    return {
+      title: "Memory preparation cancelled",
+      subtitle: prep.sanitized_message || "The preparation was cancelled.",
+      tone: "neutral" as const,
+    };
+  }
+  // "preparing" or any queued/probing/acquiring/verifying state.
+  if (prep.ui_state === "preparing" || prep.task_alive) {
+    return {
+      title: "Preparing memory analysis",
+      subtitle: prep.progress_label || "Preparing Windows symbols for this evidence.",
+      tone: "warn" as const,
     };
   }
   return {
@@ -96,7 +117,7 @@ export function MemoryPreparationCard({
               : "border-line")
       }
       data-testid="memory-preparation-card"
-      data-ui-state={preparation.ui_state}
+      data-ui-state={preparation.effective_state || preparation.ui_state}
     >
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div>
@@ -125,7 +146,7 @@ export function MemoryPreparationCard({
               className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted disabled:opacity-50"
               data-testid="memory-preparation-retry-button"
             >
-              {retryMutation.isPending ? "Retrying…" : "Retry"}
+              {retryMutation.isPending ? "Retrying…" : "Retry preparation"}
             </button>
           ) : null}
           <button
@@ -134,12 +155,22 @@ export function MemoryPreparationCard({
             className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted"
             data-testid="memory-preparation-toggle-details"
           >
-            {showDetails ? "Hide details" : "View technical details"}
+            {showDetails ? "Hide details" : "View details"}
           </button>
         </div>
       </div>
 
-      {preparation.ui_state === "preparing" ? (
+      {/*
+        Show the progress bar ONLY when:
+        * ui_state is "preparing" AND
+        * the effective state is NOT ready (i.e. the row has not
+          been reconciled) AND
+        * the task is alive (otherwise the percentage is a stale
+          fake value that the analyst should not see).
+      */}
+      {preparation.ui_state === "preparing" &&
+      preparation.effective_state !== "ready" &&
+      preparation.task_alive ? (
         <div className="mt-3" data-testid="memory-preparation-progress">
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-abyss/60">
             <div

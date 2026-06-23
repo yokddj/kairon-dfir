@@ -630,19 +630,26 @@ export type MemorySymbolReadiness = {
 };
 
 export type MemorySymbolPreparationState =
+  | "pending"
   | "queued"
   | "probing"
+  | "acquiring"
+  | "converting"
+  | "verifying"
+  | "ready"
+  | "failed"
+  | "cancelled"
+  | "stale"
+  // Legacy aliases kept for backwards compatibility with rows
+  // written before the v1 reconciliation sprint.
   | "identified"
   | "cache_hit"
   | "acquisition_pending"
-  | "acquiring"
   | "isf_creation"
-  | "ready"
   | "requirement_unknown"
   | "acquisition_failed"
   | "unsupported"
-  | "negative_cached"
-  | "cancelled";
+  | "negative_cached";
 
 export type MemorySymbolPreparationUIState = "ready" | "preparing" | "blocked" | "failed";
 
@@ -652,6 +659,18 @@ export type MemorySymbolPreparation = {
   filename: string;
   ui_state: MemorySymbolPreparationUIState;
   preparation_state: MemorySymbolPreparationState;
+  // v1 reconciliation: persisted_state is what is stored on disk;
+  // effective_state is what the analyst should see (derived from
+  // facts like a successful metadata_only run).
+  persisted_state: MemorySymbolPreparationState | null;
+  effective_state: MemorySymbolPreparationState | null;
+  reconciled: boolean;
+  source_of_truth: string | null;
+  reconciled_at: string | null;
+  preparation_id: string | null;
+  stale: boolean;
+  stale_reason: string | null;
+  task_alive: boolean;
   requirement: MemorySymbolRequirement | null;
   cache_status: "hit" | "miss" | "negative" | "unknown";
   exact_match: boolean;

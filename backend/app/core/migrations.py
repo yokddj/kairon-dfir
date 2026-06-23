@@ -579,6 +579,80 @@ def _v9_memory_upload_registration_lifecycle(connection: Connection) -> None:
         )
 
 
+@register(10, "memory_symbol_preparation_reconciliation")
+def _v10_memory_symbol_preparation_reconciliation(connection: Connection) -> None:
+    """Expand ``memory_symbol_preparations`` for the v1 reconciliation
+    sprint.
+
+    Adds columns used by the stale-queue cleanup and the effective
+    state resolution:
+
+    * ``last_heartbeat_at`` - the worker last touched this row
+    * ``current_step``     - human-readable step label
+    * ``progress_percent`` - 0..100, with a 0 meaning unknown
+    * ``source_of_truth``  - the fact that pinned the current state
+                             (e.g. ``successful_metadata_run``)
+    * ``reconciled_at``    - when the reconciliation last touched the
+                             row
+    * ``active``           - boolean; only one row per evidence can
+                             be active at a time
+
+    The partial unique index on ``evidence_id WHERE active = true``
+    enforces the "one active preparation per evidence" guarantee
+    on PostgreSQL.  On SQLite the WHERE clause is ignored but the
+    index still exists.
+    """
+    existing = _column_set(connection, "memory_symbol_preparations")
+    if "last_heartbeat_at" not in existing:
+        connection.execute(
+            text(
+                "ALTER TABLE memory_symbol_preparations ADD COLUMN last_heartbeat_at TIMESTAMP"
+            )
+        )
+    if "current_step" not in existing:
+        connection.execute(
+            text(
+                "ALTER TABLE memory_symbol_preparations ADD COLUMN current_step VARCHAR(64)"
+            )
+        )
+    if "progress_percent" not in existing:
+        connection.execute(
+            text(
+                "ALTER TABLE memory_symbol_preparations ADD COLUMN progress_percent INTEGER NOT NULL DEFAULT 0"
+            )
+        )
+    if "source_of_truth" not in existing:
+        connection.execute(
+            text(
+                "ALTER TABLE memory_symbol_preparations ADD COLUMN source_of_truth VARCHAR(64)"
+            )
+        )
+    if "reconciled_at" not in existing:
+        connection.execute(
+            text(
+                "ALTER TABLE memory_symbol_preparations ADD COLUMN reconciled_at TIMESTAMP"
+            )
+        )
+    if "active" not in existing:
+        connection.execute(
+            text(
+                "ALTER TABLE memory_symbol_preparations ADD COLUMN active BOOLEAN NOT NULL DEFAULT TRUE"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_symbol_preparations_active ON memory_symbol_preparations (active)"
+            )
+        )
+        # Partial unique index: one active preparation per evidence.
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_memory_symbol_prep_active_evidence "
+                "ON memory_symbol_preparations (evidence_id) WHERE active = TRUE"
+            )
+        )
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 
