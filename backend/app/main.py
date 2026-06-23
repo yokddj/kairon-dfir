@@ -151,6 +151,29 @@ def on_startup() -> None:
         logger.warning("memory upload registration lifecycle reconcile skipped: %s", exc)
     finally:
         db.close()
+    # Memory preparation state reconciliation: promote queued
+    # preparations to ready when a successful metadata run exists,
+    # mark rows stale when no task is alive and no metadata
+    # succeeded, and deactivate duplicate active rows.  Bounded
+    # by max_evidences so the startup pass stays predictable.
+    from app.services.memory.symbol_preparation import (
+        reconcile_memory_preparation_states,
+    )
+    db = SessionLocal()
+    try:
+        prep_reconcile = reconcile_memory_preparation_states(db, max_evidences=200)
+        if (
+            prep_reconcile.get("reconciled", 0) > 0
+            or prep_reconcile.get("deactivated", 0) > 0
+        ):
+            logger.info(
+                "memory preparation state reconciliation: %s",
+                prep_reconcile,
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory preparation state reconciliation skipped: %s", exc)
+    finally:
+        db.close()
 
 
 @app.get("/health")

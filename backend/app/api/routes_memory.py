@@ -37,6 +37,8 @@ from app.services.memory.symbol_preparation import (
     MemoryReadiness,
     compute_memory_readiness,
     reconcile_memory_symbol_readiness,
+    reconcile_memory_preparation_states,
+    resolve_effective_memory_preparation_state,
     schedule_preparation,
     requeue_preparation,
     register_evidence_content_identity,
@@ -717,13 +719,58 @@ def get_memory_symbol_preparation(
     evidence = _require_evidence_for_case(db, case_id, evidence_id)
     # Reuse the existing content identity if needed.
     register_evidence_content_identity(db, evidence=evidence)
+    # Effective state resolution: a successful metadata run always
+    # wins.  The function may rewrite the persisted state of the
+    # preparation row to match the facts; the result is returned
+    # alongside the legacy ``ui_state`` / ``preparation_state``
+    # fields so the UI can drive both views.
+    effective = resolve_effective_memory_preparation_state(
+        db, case_id=case_id, evidence_id=evidence_id,
+    )
     readiness = compute_memory_readiness(db, evidence=evidence)
     db.commit()
+    payload = readiness.to_dict()
+    # If the effective state is ready and the persisted state is
+    # not, override the UI-facing fields so the analyst sees
+    # "Memory analysis ready" without a "Queued 5%" bar.
+    if effective["effective_state"] == "ready" and effective["persisted_state"] != "ready":
+        payload["ui_state"] = "ready"
+        payload["preparation_state"] = "ready"
+        payload["can_analyze_metadata"] = True
+        payload["can_run_all"] = True
+        payload["blocker"] = None
+        payload["sanitized_message"] = (
+            "The exact required Windows symbols are present in the cache."
+        )
+        payload["progress_label"] = "Ready"
+        payload["progress_percent"] = 100
+    elif effective["effective_state"] == "stale":
+        payload["ui_state"] = "blocked"
+        payload["preparation_state"] = "stale"
+        payload["can_analyze_metadata"] = False
+        payload["can_run_all"] = False
+        payload["blocker"] = "Memory preparation was interrupted."
+        payload["sanitized_message"] = (
+            "Memory preparation was interrupted. You can retry the preparation."
+        )
+        payload["progress_label"] = "Stale"
+        payload["progress_percent"] = 0
+    payload.update({
+        "persisted_state": effective["persisted_state"],
+        "effective_state": effective["effective_state"],
+        "reconciled": effective["reconciled"],
+        "source_of_truth": effective["source_of_truth"],
+        "reconciled_at": effective["reconciled_at"],
+        "preparation_id": effective["preparation_id"],
+        "stale": effective["stale"],
+        "stale_reason": effective["stale_reason"],
+        "task_alive": effective["task_alive"],
+    })
     return {
         "case_id": case_id,
         "evidence_id": evidence_id,
         "filename": evidence.original_filename,
-        **readiness.to_dict(),
+        **payload,
     }
 
 
@@ -1038,6 +1085,39 @@ def repair_preserved_memory_uploads_endpoint(
         "repairable": sum(1 for r in report if r["repairable"]),
         "items": report,
     }
+
+
+@router.post("/cases/{case_id}/memory/preparations/reconcile", response_model=None)
+def reconcile_case_memory_preparations_endpoint(
+    case_id: str,
+    payload: dict | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Reconcile preparation state for every memory evidence in a case.
+
+    Idempotent: re-runs are safe and produce the same stats when no
+    facts have changed.  Does NOT execute Volatility, does NOT
+    download symbols and does NOT create new preparation rows.
+    """
+    _require_case(db, case_id)
+    payload = payload or {}
+    max_evidences = int(payload.get("max_evidences", 200))
+    stats = reconcile_memory_preparation_states(db, max_evidences=max_evidences)
+    return {"case_id": case_id, **stats}
+
+
+@router.post("/memory/preparations/reconcile", response_model=None)
+def reconcile_all_memory_preparations_endpoint(
+    payload: dict | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Reconcile preparation state for every memory evidence in
+    the database.  Idempotent.
+    """
+    payload = payload or {}
+    max_evidences = int(payload.get("max_evidences", 200))
+    stats = reconcile_memory_preparation_states(db, max_evidences=max_evidences)
+    return stats
 def get_memory_runs(
     case_id: str,
     evidence_id: str | None = Query(default=None),
