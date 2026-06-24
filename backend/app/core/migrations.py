@@ -897,6 +897,49 @@ def _v13_requirements_nullable_source_fks(connection: Connection) -> None:
             )
 
 
+@register(14, "memory_symbol_acquisitions_observed_identity")
+def _v14_acquisitions_observed_identity(connection: Connection) -> None:
+    """Add observed-identity columns to ``memory_symbol_acquisitions``.
+
+    The managed exact Windows symbol acquisition flow must record
+    the GUID, age and architecture the Microsoft symbol server
+    actually returned, so the operator can see whether the
+    download disagrees with the requirement without inspecting
+    the symbol-fetcher logs.  All three columns are nullable so
+    legacy rows that never reached ``validating_pdb`` are
+    preserved untouched.
+
+    * ``observed_pdb_guid``  - 32 hex chars (uppercase) from the
+                                downloaded PDB info stream.
+    * ``observed_pdb_age``   - integer from the downloaded PDB info
+                                stream.
+    * ``observed_architecture`` - "x64" / "x86" / "arm64".
+
+    The migration is idempotent: it only adds columns that are
+    missing.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_symbol_acquisitions" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("memory_symbol_acquisitions")}
+    additions = [
+        ("observed_pdb_guid", "VARCHAR(32)"),
+        ("observed_pdb_age", "INTEGER"),
+        ("observed_architecture", "VARCHAR(32)"),
+    ]
+    for column_name, column_type in additions:
+        if column_name not in existing:
+            connection.execute(
+                text(
+                    f"ALTER TABLE memory_symbol_acquisitions "
+                    f"ADD COLUMN {column_name} {column_type}"
+                )
+            )
+            logger.info(
+                "v14: added memory_symbol_acquisitions.%s", column_name
+            )
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 

@@ -423,6 +423,14 @@ class MemorySymbolAcquisition(UUIDMixin, Base):
     retryable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     sanitized_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Observed identity from the downloaded file, populated when the
+    # acquisition reaches validating_pdb.  Stays NULL if the download
+    # failed before the identity could be read.  Used for diagnostic
+    # surfaces so the operator can see exactly which GUID/age the
+    # Microsoft symbol server actually returned vs. the requirement.
+    observed_pdb_guid: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    observed_pdb_age: Mapped[int | None] = mapped_column(nullable=True)
+    observed_architecture: Mapped[str | None] = mapped_column(String(32), nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)

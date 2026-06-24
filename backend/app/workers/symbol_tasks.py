@@ -128,39 +128,29 @@ def acquire_windows_symbol(acquisition_id: str, request_id: str) -> None:
             }
             db.commit()
             validation = validate_pdb(partial, identity)
-            if validation.get("age_warning"):
-                # Microsoft's URL uses the publication age, but the file's
-                # internal metadata may show a different (typically higher)
-                # age.  When the GUID matches exactly, treat this as a
-                # recoverable warning.
-                #
-                # We preserve the originally requested age in the
-                # requirement's audit fields and use the validated age
-                # only for the cache key.  This way a future windows.info
-                # scan can be re-correlated with the URL age that was
-                # initially requested, while subsequent acquisitions use
-                # the corrected file age.
-                original_requested_age = int(identity.age)
-                corrected_age = int(validation["actual_age"])
-                requirement.requested_pdb_age = requirement.requested_pdb_age or original_requested_age
-                requirement.pdb_age = corrected_age
-                requirement.age_corrected = True
-                requirement.symbol_key = f"{identity.pdb_name.lower()}/{identity.guid.upper()}-{corrected_age}"
-                request.requirement_fingerprint = (
-                    f"{identity.pdb_name.lower()}|{identity.guid.upper()}|{corrected_age}|{identity.architecture.lower()}"
-                )
-                request.sanitized_message = (
-                    f"PDB GUID matched.  Microsoft URL age ({original_requested_age}) differed from validated file age "
-                    f"({corrected_age}); requirement updated to the validated file age.  "
-                    f"Originally requested age preserved as audit metadata."
-                )
-                identity = SymbolIdentity(
-                    identity.pdb_name,
-                    identity.guid,
-                    corrected_age,
-                    identity.architecture,
-                )
-                db.commit()
+            # The identity has been confirmed by the PDB parser; record
+            # the observed identity in the acquisition row for audit and
+            # proceed.  ``validate_pdb`` raises SYMBOL_PDB_IDENTITY_MISMATCH
+            # on any GUID or age discrepancy; the requirement is never
+            # silently rewritten.
+            acquisition.observed_pdb_guid = str(validation["guid"])
+            acquisition.observed_pdb_age = int(validation["age"])
+            acquisition.observed_architecture = str(validation["architecture"])
+            acquisition.metadata_json = {
+                **(acquisition.metadata_json or {}),
+                "identity_expected": {
+                    "pdb_name": identity.pdb_name,
+                    "pdb_guid": identity.guid.upper(),
+                    "pdb_age": int(identity.age),
+                    "architecture": identity.architecture,
+                },
+                "identity_observed": {
+                    "pdb_guid": str(validation["guid"]),
+                    "pdb_age": int(validation["age"]),
+                    "architecture": str(validation["architecture"]),
+                },
+            }
+            db.commit()
             pdb_final.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
             if pdb_final.exists():
                 partial.unlink(missing_ok=True)
@@ -200,6 +190,36 @@ def acquire_windows_symbol(acquisition_id: str, request_id: str) -> None:
             acquisition.sanitized_message = exc.message
             acquisition.retryable = exc.retryable
             acquisition.completed_at = utc_now_naive()
+            # On PDB identity mismatch, the downloaded file passed the
+            # byte-level parser but reported a different GUID or age
+            # than the requirement.  Surface the observed values in
+            # the acquisition row so the operator can see exactly
+            # what the symbol server returned.  A mismatch is a
+            # deterministic failure: the same URL will always return
+            # the same file, so ``retryable`` stays False.
+            if exc.code == "SYMBOL_PDB_IDENTITY_MISMATCH" and partial.exists():
+                try:
+                    from app.services.memory.symbol_fetcher import read_pdb_identity
+                    observed_guid, observed_age = read_pdb_identity(partial)
+                    acquisition.observed_pdb_guid = str(observed_guid)
+                    acquisition.observed_pdb_age = int(observed_age)
+                except Exception:
+                    pass
+            acquisition.metadata_json = {
+                **(acquisition.metadata_json or {}),
+                "identity_expected": {
+                    "pdb_name": identity.pdb_name,
+                    "pdb_guid": identity.guid.upper(),
+                    "pdb_age": int(identity.age),
+                    "architecture": identity.architecture,
+                },
+            }
+            if acquisition.observed_pdb_guid is not None:
+                acquisition.metadata_json["identity_observed"] = {
+                    "pdb_guid": str(acquisition.observed_pdb_guid),
+                    "pdb_age": int(acquisition.observed_pdb_age) if acquisition.observed_pdb_age is not None else None,
+                    "architecture": acquisition.observed_architecture,
+                }
             request.status = acquisition.status
             request.error_code = acquisition.error_code
             request.sanitized_message = acquisition.sanitized_message
