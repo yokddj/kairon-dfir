@@ -56,7 +56,7 @@ from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition
-from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
+from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolBlockedAcquireRequest, MemorySymbolBlockedAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
 from app.services.memory.artifact_indexing import (
     get_artifact_document,
     link_process_entities,
@@ -73,6 +73,11 @@ from app.services.memory.overview import get_case_memory_overview, get_evidence_
 from app.services.memory.active_result import resolve_active_memory_result, list_families as _list_artifact_families
 from app.services.memory.catalogue import build_analysis_catalogue, MemoryProfileUnavailableError
 from app.services.memory.symbol_control import SymbolControlError, acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure, queue_symbol_acquisition, request_status_dict, request_symbol_acquisition_awaiting_approval
+from app.services.memory.symbol_blocked_acquisition import (
+    BlockedAcquisitionError,
+    queue_blocked_symbols_acquisition,
+    summarize_active_acquisition,
+)
 from app.services.memory.symbol_preparation import (
     MemoryReadiness,
     compute_memory_readiness,
@@ -775,6 +780,74 @@ def acquire_memory_symbols(
         "error_code": None,
         "message": "The required Windows symbols are queued for controlled acquisition." if request.status != "completed" else "The required Windows symbols are already cached.",
     }
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/symbols/acquire-managed",
+    response_model=MemorySymbolBlockedAcquireResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def acquire_blocked_memory_symbols(
+    case_id: str,
+    evidence_id: str,
+    payload: MemorySymbolBlockedAcquireRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Operator-facing endpoint to acquire the exact Windows symbols for a blocked evidence.
+
+    The endpoint is wired into the bounded-discovery
+    ``blocked_symbols`` state.  Identity is derived **only** from
+    the persisted ``MemorySymbolRequirement`` produced by the
+    probe; the client cannot supply a URL, PDB name, GUID, age,
+    architecture, or filesystem destination.
+
+    The HTTP request never blocks on a download: the acquisition
+    is enqueued on the isolated ``memory-symbols`` queue and the
+    function returns once the row is persisted.
+    """
+    _require_case(db, case_id)
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
+        raise HTTPException(status_code=404, detail="Memory evidence was not found.")
+    if not payload.authorization_acknowledged:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "MEMORY_SYMBOL_AUTHORIZATION_REQUIRED",
+                "message": "Explicit authorization acknowledgement is required.",
+            },
+        )
+    try:
+        result = queue_blocked_symbols_acquisition(db, case_id, evidence_id)
+    except BlockedAcquisitionError as exc:
+        raise HTTPException(
+            status_code=exc.http_status,
+            detail={"error_code": exc.code, "message": exc.message, "retryable": exc.retryable},
+        ) from exc
+    return result
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/symbols/acquisition",
+    response_model=MemorySymbolBlockedAcquireResponse,
+)
+def get_blocked_memory_symbol_acquisition(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Read-only summary of the current exact symbol acquisition for an evidence."""
+    _require_case(db, case_id)
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
+        raise HTTPException(status_code=404, detail="Memory evidence was not found.")
+    summary = summarize_active_acquisition(db, case_id, evidence_id)
+    if summary is None:
+        raise HTTPException(
+            status_code=404,
+            detail={"error_code": "SYMBOL_REQUIREMENT_MISSING", "message": "No exact symbol requirement is recorded for this evidence."},
+        )
+    return summary
 
 
 @router.get(

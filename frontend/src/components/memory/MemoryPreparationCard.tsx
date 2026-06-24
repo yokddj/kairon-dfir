@@ -71,6 +71,15 @@ function cardCopy(prep: MemorySymbolPreparation) {
       tone: "bad" as const,
     };
   }
+  if (state === "blocked_symbols") {
+    return {
+      title: "Exact Windows symbols required",
+      subtitle:
+        prep.sanitized_message ||
+        "The exact kernel symbol required for this evidence is not in the offline cache.",
+      tone: "bad" as const,
+    };
+  }
   if (state === "blocked") {
     return {
       title: "Preparation blocked",
@@ -129,6 +138,14 @@ export function MemoryPreparationCard({
     },
   });
 
+  const acquireMutation = useMutation({
+    mutationFn: () => api.acquireExactMemorySymbols(caseId, evidenceId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["memory-symbol-preparation", caseId, evidenceId] });
+      void queryClient.invalidateQueries({ queryKey: ["memory-landing", caseId] });
+    },
+  });
+
   const cancelIntentMutation = useMutation({
     mutationFn: () => api.cancelMemoryRunWhenReady(caseId, evidenceId),
     onSuccess: () => {
@@ -141,6 +158,17 @@ export function MemoryPreparationCard({
   }
   const copy = cardCopy(preparation);
   const tone = copy.tone;
+  const state = preparation.effective_state || preparation.ui_state;
+  const isBlockedSymbols = state === "blocked_symbols";
+  const isAcquiring =
+    acquireMutation.isPending ||
+    acquireMutation.data?.task_alive ||
+    (preparation.ui_state === "preparing" &&
+      Boolean(preparation.task_alive) &&
+      state !== "ready");
+  const acquireError =
+    acquireMutation.error?.message ??
+    (acquireMutation.data?.state === "failed" ? acquireMutation.data.message : null);
 
   return (
     <section
@@ -176,6 +204,21 @@ export function MemoryPreparationCard({
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {isBlockedSymbols ? (
+            <button
+              type="button"
+              onClick={() => acquireMutation.mutate()}
+              disabled={acquireMutation.isPending || isAcquiring}
+              className="rounded-xl border border-accent/40 bg-accent/20 px-3 py-1.5 text-xs text-accent disabled:opacity-50"
+              data-testid="memory-preparation-acquire-button"
+            >
+              {acquireMutation.isPending
+                ? "Acquiring…"
+                : isAcquiring
+                  ? "Acquiring symbols…"
+                  : "Acquire exact symbols"}
+            </button>
+          ) : null}
           {preparation.ui_state !== "ready" ? (
             <button
               type="button"
@@ -197,6 +240,33 @@ export function MemoryPreparationCard({
           </button>
         </div>
       </div>
+
+      {isBlockedSymbols && preparation.requirement ? (
+        <div
+          className="mt-3 rounded-xl border border-line bg-abyss/40 p-2 text-[11px] text-muted"
+          data-testid="memory-preparation-requirement"
+        >
+          <p className="font-mono">
+            Required symbol: {preparation.requirement.pdb_name}
+            <span className="ml-2">GUID: {preparation.requirement.pdb_guid}</span>
+            <span className="ml-2">Age: {preparation.requirement.pdb_age}</span>
+            <span className="ml-2">Arch: {preparation.requirement.architecture}</span>
+          </p>
+          {preparation.cache_status === "miss" ? (
+            <p className="mt-1 font-mono" data-testid="memory-preparation-cache-miss">
+              Cache miss.
+            </p>
+          ) : null}
+          {acquireError ? (
+            <p
+              className="mt-1 font-mono text-rose-300"
+              data-testid="memory-preparation-acquire-error"
+            >
+              {acquireError}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
 
       {/*
         Show the progress bar ONLY when:
