@@ -39,6 +39,7 @@ from __future__ import annotations
 import enum
 import logging
 import re
+import struct
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Protocol, runtime_checkable
@@ -168,9 +169,21 @@ class MemoryPlatformAdapter(Protocol):
 # ---------------------------------------------------------------------------
 
 
-# Volatility layer magic numbers.  These are read directly from
-# the candidate file's first 4 KiB; nothing else is opened.
+# Volatility layer magic numbers and format signatures.  These are
+# read directly from the candidate file's first 4 KiB; nothing else
+# is opened.
 _WINDOWS_KDBG_MAGIC = b"KDBG"
+_WINDOWS_CRASHDUMP_SIGNATURES: list[bytes] = [
+    b"PAGE",
+    b"DU64",
+    b"MPHD",
+    b"MAVS",
+]
+_HIBERNATION_SIGNATURES: list[bytes] = [
+    b"HIBR",
+    b"PAGEPG",
+]
+_LIME_MAGIC_BYTES = struct.pack("<I", 0x4C694D45)  # "LiME" little-endian
 _LINUX_BANNER_PREFIX = b"Linux version "
 _MACOS_KERNEL_PREFIX = b"Mach-O"
 _RAW_MAGIC = b"\\x00\\x00\\x00\\x00"  # placeholder for "not recognised"
@@ -189,30 +202,226 @@ def _read_head(path: Path, *, limit: int = 4096) -> bytes:
 def _classify_from_head(head: bytes) -> tuple[PlatformFamily, Architecture, ProbeConfidence, str]:
     """Map raw bytes to a platform family.
 
-    The classifier is intentionally conservative: it never
-    claims a high confidence unless the magic is unambiguous.
+    The classifier recognises Windows crash dump signatures,
+    Windows hibernation, KDBG kernel markers, LiME, ELF core,
+    Linux banners and Mach-O macOS images.
     """
     if not head:
         return PlatformFamily.UNKNOWN, Architecture.UNKNOWN, ProbeConfidence.LOW, "empty_file"
-    # Windows kernel: KDBG signature appears in the kernel
-    # memory image regardless of compression.  This is the
-    # most reliable marker in a Windows memory dump.
-    if _WINDOWS_KDBG_MAGIC in head:
-        # Heuristic: KDBG markers in the first 4 KiB is a
-        # strong signal but we still report MEDIUM confidence
-        # unless the dump also exposes the Windows NT
-        # signature.
-        return PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.MEDIUM, "kdbg_signature"
-    if head.startswith(_LINUX_BANNER_PREFIX):
-        # Linux banners typically start with the version string.
-        return PlatformFamily.LINUX, Architecture.X64, ProbeConfidence.MEDIUM, "linux_banner"
-    if head.startswith(_MACOS_KERNEL_PREFIX):
-        return PlatformFamily.MACOS, Architecture.X64, ProbeConfidence.MEDIUM, "macho_header"
-    # ELF magic for the kernel image (rare, but seen when the
-    # acquisition is a live kernel).
+    # Windows crash dump signatures (PAGE, DU64, MPHD, MAVS).
+    # These are the canonical 4-byte identifiers at offset 0.
+    for sig in _WINDOWS_CRASHDUMP_SIGNATURES:
+        if head[:4] == sig:
+            arch = Architecture.X64 if sig in (b"DU64",) else Architecture.UNKNOWN
+            return PlatformFamily.WINDOWS, arch, ProbeConfidence.HIGH, f"crashdump_{sig.decode()}"
+    # Windows hibernation file.
+    for sig in _HIBERNATION_SIGNATURES:
+        if head[:4] == sig:
+            return PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.MEDIUM, "hibernation_signature"
+    # LiME Linux memory format.
+    if len(head) >= 4 and head[:4] == _LIME_MAGIC_BYTES:
+        return PlatformFamily.LINUX, Architecture.X64, ProbeConfidence.HIGH, "lime_signature"
+    # ELF core dump.
     if head[:4] == b"\x7fELF":
         return PlatformFamily.LINUX, Architecture.X64, ProbeConfidence.LOW, "elf_header"
+    # Windows kernel: KDBG signature appears in the kernel
+    # memory image regardless of compression.  This is a
+    # strong marker in a Windows memory dump.
+    if _WINDOWS_KDBG_MAGIC in head:
+        return PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.MEDIUM, "kdbg_signature"
+    # Linux banners typically start with the version string.
+    if head.startswith(_LINUX_BANNER_PREFIX):
+        return PlatformFamily.LINUX, Architecture.X64, ProbeConfidence.MEDIUM, "linux_banner"
+    # Mach-O header for macOS kernel images.
+    if head.startswith(_MACOS_KERNEL_PREFIX):
+        return PlatformFamily.MACOS, Architecture.X64, ProbeConfidence.MEDIUM, "macho_header"
     return PlatformFamily.UNKNOWN, Architecture.UNKNOWN, ProbeConfidence.LOW, "no_magic_match"
+
+
+# ---------------------------------------------------------------------------
+# Historical SHA-based classification
+# ---------------------------------------------------------------------------
+
+
+def _historical_platform_by_sha(sha256: str) -> tuple[PlatformFamily, Architecture, ProbeConfidence, str] | None:
+    """Check whether the same SHA has a prior successful Windows metadata run.
+
+    Returns ``(WINDOWS, X64, HIGH, "historical_sha")`` when the
+    content digest matches a prior completed ``windows.info`` run.
+    This prevents re-probing evidence that was already classified.
+    """
+    from app.core.database import SessionLocal
+    from app.models.evidence import Evidence
+    from app.models.memory import MemoryScanRun
+
+    db = SessionLocal()
+    try:
+        prior = (
+            db.query(Evidence)
+            .filter(
+                Evidence.sha256 == sha256,
+                Evidence.evidence_type == "memory_dump",
+            )
+            .order_by(Evidence.created_at.desc())
+            .first()
+        )
+        if prior is None:
+            return None
+        if prior.id is None:
+            return None
+        metadata_run = (
+            db.query(MemoryScanRun)
+            .filter(
+                MemoryScanRun.evidence_id == prior.id,
+                MemoryScanRun.profile.in_(["windows.info", "metadata_only"]),
+                MemoryScanRun.status.in_(["completed", "completed_with_errors"]),
+                MemoryScanRun.plugins_completed >= 1,
+            )
+            .order_by(MemoryScanRun.created_at.desc())
+            .first()
+        )
+        if metadata_run is not None:
+            return (PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.HIGH, "historical_sha")
+        return None
+    finally:
+        db.close()
+
+
+def _bounded_volatility_fallback(canonical_path: Path) -> MemoryProbeResult | None:
+    """Run a bounded Volatility probe when static detection is inconclusive.
+
+    The probe runs ``windows.info`` with a short timeout, no network,
+    no symbol download, and no MemoryScanRun creation.  It returns a
+    **WINDOWS** result if Volatility successfully constructs a Windows
+    layer (regardless of symbol cache state), **LINUX** if a Linux
+    banner is found, or **None** when the result is inconclusive or
+    Volatility is unavailable.
+
+    This fallback is only effective in the memory-worker process where
+    Volatility 3 is installed.
+    """
+    try:
+        import volatility3  # noqa: F401 – guard against missing dependency
+    except ImportError:
+        return None
+
+    import subprocess
+    import tempfile
+
+    from app.core.config import get_settings
+    from app.services.memory.volatility_runner import (
+        VolatilityRunnerError,
+        resolve_volatility_executable,
+        run_plugin,
+    )
+
+    try:
+        executable, _ = resolve_volatility_executable()
+    except (VolatilityRunnerError, Exception):  # noqa: BLE001
+        return None
+
+    tmpdir = tempfile.mkdtemp(suffix="_vol_probe")
+    try:
+        work_dir = Path(tmpdir)
+        work_dir.mkdir(parents=True, exist_ok=True)
+
+        # Attempt Windows probe first.
+        win_result = _run_volatility_plugin_bounded(
+            "windows.info", executable, canonical_path, work_dir
+        )
+        if win_result is not None:
+            return win_result
+
+        # Fall back to Linux banner probe.
+        linux_result = _run_volatility_plugin_bounded(
+            "linux.banners", executable, canonical_path, work_dir
+        )
+        if linux_result is not None:
+            return linux_result
+
+        return None
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _run_volatility_plugin_bounded(
+    plugin: str,
+    executable: str,
+    evidence_path: Path,
+    work_dir: Path,
+) -> MemoryProbeResult | None:
+    """Run a single Volatility plugin and return a platform verdict.
+
+    Returns ``None`` when the plugin fails or produces no usable
+    classification.
+    """
+    import subprocess
+
+    settings = get_settings()
+    timeout = min(30, int(getattr(settings, "memory_plugin_timeout_seconds", 120)))
+
+    env = dict(_minimal_volatility_env())
+    argv = [
+        executable,
+        "--offline",
+        "-f",
+        str(evidence_path),
+        "-r",
+        "json",
+        plugin,
+    ]
+
+    try:
+        result = subprocess.run(
+            argv,
+            capture_output=True,
+            timeout=timeout,
+            shell=False,
+            env=env,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+    stdout = (result.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (result.stderr or b"").decode("utf-8", errors="replace").lower()
+    combined_lower = (stdout + "\n" + stderr).lower()
+
+    if "windows" in combined_lower and ("layer" in combined_lower or "ntoskrnl" in combined_lower or "windows" in stdout):
+        return MemoryProbeResult(
+            platform=PlatformFamily.WINDOWS,
+            format=f"volatility_{plugin}",
+            architecture=Architecture.X64,
+            confidence=ProbeConfidence.MEDIUM,
+            reason=f"volatility_{plugin}_windows",
+        )
+
+    if "linux_banner" in combined_lower or ("linux" in combined_lower and "banner" in combined_lower):
+        return MemoryProbeResult(
+            platform=PlatformFamily.LINUX,
+            format=f"volatility_{plugin}",
+            architecture=Architecture.X64,
+            confidence=ProbeConfidence.MEDIUM,
+            reason=f"volatility_{plugin}_linux",
+        )
+
+    # ``no suitable layer`` or ``unsupported image`` → inconclusive.
+    return None
+
+
+def _minimal_volatility_env() -> dict[str, str]:
+    """Build a minimal environment for the Volatility subprocess.
+
+    Copies PATH and XDG_CACHE_HOME from the current process so the
+    worker's symbol cache and offline mode work correctly.
+    """
+    env: dict[str, str] = {}
+    for key in ("PATH", "HOME", "XDG_CACHE_HOME", "TMPDIR", "TEMP", "TMP"):
+        value = __import__("os").environ.get(key)
+        if value:
+            env[key] = value
+    env["VOLATILITY_OFFLINE"] = "1"
+    return env
 
 
 # ---------------------------------------------------------------------------
@@ -225,23 +434,79 @@ def probe_memory_platform(
     canonical_path: Path,
     detected_format: str | None = None,
     filename: str | None = None,
+    use_volatility_fallback: bool = False,
+    evidence: Any | None = None,
 ) -> MemoryProbeResult:
     """Run the bounded platform probe and return the result.
 
-    The probe is read-only and bounded to the first 4 KiB of
-    the image.  The result is the canonical input to a
-    :class:`MemoryPlatformAdapter`.
+    Detection stages (short-circuits on first match):
+
+    1. **Magic bytes** — reads the first 4 KiB and checks for
+       Windows crash dump, hibernation, LiME, ELF, KDBG, Linux
+       banner, and Mach‑O signatures.
+
+    2. **detected_format** — when the upload probe already
+       classified the file, reuse its verdict as a strong signal.
+       Known format strings: ``windows_crash_dump``,
+       ``hibernation``, ``lime``, ``elf_core``, ``vmware_vmem``.
+
+    3. **Historical SHA** — if the same content digest has a
+       prior successful preparation or metadata run, reuse its
+       platform classification.
+
+    4. **Volatility fallback** (worker only) — when
+       ``use_volatility_fallback=True`` and Volatility 3 is
+       importable, run a bounded ``windows.info`` / ``linux.banners``
+       probe to identify the OS family.  No MemoryScanRun is
+       created; no symbols are downloaded; no network access.
+
+    The probe is always read-only and bounded.
     """
     head = _read_head(canonical_path)
     family, arch, confidence, reason = _classify_from_head(head)
     fmt = (detected_format or "").strip() or "unknown"
-    # Filename hint as a tie breaker.
+
+    # Stage 2: detected_format (upload probe result).
+    if family == PlatformFamily.UNKNOWN and detected_format:
+        fmt_lower = detected_format.lower().strip()
+        if fmt_lower in ("windows_crash_dump",):
+            family, arch, confidence = PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.HIGH
+            reason = f"detected_format:{fmt_lower}"
+        elif fmt_lower in ("hibernation",):
+            family, arch, confidence = PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.MEDIUM
+            reason = f"detected_format:{fmt_lower}"
+        elif fmt_lower in ("lime",):
+            family, arch, confidence = PlatformFamily.LINUX, Architecture.X64, ProbeConfidence.HIGH
+            reason = f"detected_format:{fmt_lower}"
+        elif fmt_lower in ("elf_core",):
+            family, arch, confidence = PlatformFamily.LINUX, Architecture.UNKNOWN, ProbeConfidence.MEDIUM
+            reason = f"detected_format:{fmt_lower}"
+        elif fmt_lower in ("vmware_vmem",):
+            family, arch, confidence = PlatformFamily.WINDOWS, Architecture.UNKNOWN, ProbeConfidence.MEDIUM
+            reason = f"detected_format:{fmt_lower}"
+
+    # Stage 3: Historical SHA match (prior successful preparation).
+    if family == PlatformFamily.UNKNOWN and evidence is not None:
+        from app.models.evidence import Evidence as _Evidence
+        if isinstance(evidence, _Evidence):
+            sha = getattr(evidence, "sha256", None)
+            if sha:
+                hist = _historical_platform_by_sha(sha)
+                if hist is not None:
+                    family, arch, confidence, reason = hist
+
+    # Stage 4: Volatility bounded fallback (worker process only).
+    if family == PlatformFamily.UNKNOWN and use_volatility_fallback:
+        vol_result = _bounded_volatility_fallback(canonical_path)
+        if vol_result is not None:
+            return vol_result
+
+    # Filename hint as a tie breaker (never changes UNKNOWN).
     if family == PlatformFamily.UNKNOWN and filename:
         lowered = filename.lower()
         if re.search(r"\.(dmp|mem|raw|img|lime)$", lowered):
-            # Generic memory extension; keep the unknown family
-            # unless the file content already pinned it.
             pass
+
     return MemoryProbeResult(
         platform=family,
         format=fmt,
@@ -544,9 +809,10 @@ class MacOSMemoryAdapter:
 class UnsupportedMemoryAdapter:
     """Adapter for images that cannot be classified.
 
-    The probe either returned UNKNOWN or a format that the
-    catalogue does not yet support.  The adapter closes the
-    preparation as UNSUPPORTED so the row never stays queued.
+    The probe returned UNKNOWN — the OS family could not be
+    determined.  The adapter closes the preparation as
+    ``platform_not_identified`` so the UI can distinguish
+    "unsupported OS" from "could not determine OS".
     """
 
     platform = PlatformFamily.UNSUPPORTED
