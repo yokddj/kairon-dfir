@@ -228,6 +228,127 @@ def get_memory_evidence_diagnostics(
     }
 
 
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/preparation/diagnostics",
+    response_model=None,
+)
+def get_memory_preparation_diagnostics(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Sprint 6: preparation diagnostics for the analyst console.
+
+    Surfaces the queue the API enqueued to, the queue the row
+    records, the worker task id, the heartbeat, the source of
+    truth and a structured error code.  No Redis URLs, no
+    private paths.
+    """
+    _require_case(db, case_id)
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
+        raise HTTPException(status_code=404, detail="Memory evidence was not found.")
+    from app.services.memory.preparation_runtime import (
+        preparation_diagnostics,
+    )
+    return preparation_diagnostics(db, evidence_id)
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/preparation/retry",
+    response_model=None,
+)
+def retry_memory_preparation(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Sprint 6: idempotent retry of a failed / stale preparation.
+
+    The endpoint never creates a second active preparation row
+    for the same evidence.  It always reuses the existing row
+    or fails with the structured ``MEMORY_PREPARATION_ALREADY_ACTIVE``
+    error.
+    """
+    _require_case(db, case_id)
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
+        raise HTTPException(status_code=404, detail="Memory evidence was not found.")
+    from app.services.memory.preparation_runtime import (
+        dispatch_memory_preparation,
+    )
+    result = dispatch_memory_preparation(db, evidence=evidence, force=True)
+    if result.get("state") == "dispatch_failed":
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": "MEMORY_PREPARATION_DISPATCH_FAILED",
+                "message": "Preparation could not be enqueued. The Redis broker is unreachable or rejected the job.",
+                "retryable": True,
+            },
+        )
+    return result
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/direct-probe",
+    response_model=None,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def direct_metadata_probe(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Sprint 6: minimal reliable fallback for the analyst.
+
+    Runs a single ``metadata_only`` scan that executes the
+    matching platform information plugin (``windows.info``,
+    ``linux.banners``, ``mac.banners``) with raw output
+    preservation.  It does NOT depend on the preparation
+    pipeline, does NOT open OpenSearch indices and does NOT
+    enqueue symbol acquisition.
+    """
+    _require_case(db, case_id)
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
+        raise HTTPException(status_code=404, detail="Memory evidence was not found.")
+    if not settings.memory_analysis_enabled:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": "MEMORY_ANALYSIS_DISABLED",
+                "message": "Memory analysis is disabled by server configuration.",
+            },
+        )
+    # The direct probe is the only path that bypasses the
+    # preparation gate.  It must still acknowledge the
+    # external-tool authorization.
+    if not settings.memory_allow_external_tool_execution:
+        raise HTTPException(
+            status_code=403,
+            detail="External memory-tool execution is disabled by server configuration.",
+        )
+    from app.workers.tasks import enqueue_memory_metadata_scan
+    from app.services.memory.execution import (
+        create_memory_metadata_run,
+        mark_run_queued,
+    )
+    run = create_memory_metadata_run(db, evidence_id, "metadata_only")
+    db.flush()
+    job_id = enqueue_memory_metadata_scan(run.id)
+    run = mark_run_queued(db, run.id, job_id) or run
+    db.commit()
+    return {
+        "accepted": True,
+        "evidence_id": evidence_id,
+        "scan_run_id": run.id,
+        "profile": "metadata_only",
+        "status": "queued",
+        "task_id": job_id,
+    }
+
+
 @router.get("/cases/{case_id}/memory/evidences/{evidence_id}/readiness", response_model=MemoryEvidenceReadinessRead)
 def get_memory_evidence_readiness(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> dict:
     _require_case(db, case_id)
