@@ -200,3 +200,51 @@ def test_fetcher_channel_does_not_expose_database() -> None:
             break
     assert "postgres" not in channel_section
     assert "redis" not in channel_section
+
+
+def test_memory_worker_has_no_external_egress() -> None:
+    """memory-worker must NOT be on any of the symbol-* networks.
+    It is on the default bridge only; its only symbol-related work is
+    running Volatility in --offline mode.
+    """
+    if not COMPOSE_PATH.exists():
+        import pytest
+        pytest.skip("Compose source is not copied into the backend test image; runtime inspection covers this assertion.")
+    compose = COMPOSE_PATH.read_text()
+    service = _service_block(compose, "memory-worker")
+    if "networks:" in service:
+        nets = _networks_for_service(service)
+        for forbidden in ("symbol-internal", "symbol-fetcher-channel", "symbol-egress"):
+            assert forbidden not in nets, f"memory-worker must not be on {forbidden}; got {nets}"
+    # memory-worker must not reference the egress gateway URL either.
+    assert "MEMORY_SYMBOL_EGRESS_GATEWAY_URL" not in service
+    assert "symbol-egress-gateway" not in service
+
+
+def test_backend_does_not_download_symbols() -> None:
+    """The backend service is NOT a symbol-fetcher.  It must not reference
+    the egress gateway URL or any symbol-egress service.  Only the
+    symbol-fetcher service talks to the gateway.
+    """
+    if not COMPOSE_PATH.exists():
+        import pytest
+        pytest.skip("Compose source is not copied into the backend test image; runtime inspection covers this assertion.")
+    compose = COMPOSE_PATH.read_text()
+    service = _service_block(compose, "backend")
+    assert "MEMORY_SYMBOL_EGRESS_GATEWAY_URL" not in service
+    assert "symbol-egress-gateway" not in service
+
+
+def test_only_symbol_fetcher_uses_egress_gateway() -> None:
+    """The only service that may reference the egress gateway is
+    symbol-fetcher.  No other tier may reach it.
+    """
+    if not COMPOSE_PATH.exists():
+        import pytest
+        pytest.skip("Compose source is not copied into the backend test image; runtime inspection covers this assertion.")
+    compose = COMPOSE_PATH.read_text()
+    services = ("backend", "frontend", "memory-worker", "worker", "opensearch", "opensearch-dashboards")
+    for service in services:
+        block = _service_block(compose, service)
+        assert "symbol-egress-gateway" not in block, f"{service} must not reference the symbol egress gateway"
+        assert "MEMORY_SYMBOL_EGRESS_GATEWAY_URL" not in block, f"{service} must not carry the egress gateway URL"

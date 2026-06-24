@@ -71,6 +71,18 @@ def test_destination_policy_accepts_narrow_official_redirect() -> None:
     assert port == 443
 
 
+@pytest.mark.parametrize("path", [
+    "/download/symbols/../etc/passwd",
+    "/download/symbols/%2e%2e/secret",
+    "/download/symbols/%2E%2E/secret",
+    "/download/symbols/%2e%2E/secret",
+])
+def test_destination_policy_rejects_path_traversal(path: str) -> None:
+    url = f"https://msdl.microsoft.com{path}"
+    with pytest.raises(SymbolFetchError):
+        validate_destination(url, initial=True, initial_host="msdl.microsoft.com", redirect_suffixes=[".blob.core.windows.net"])
+
+
 @pytest.mark.parametrize("raw", ["127.0.0.1", "169.254.169.254", "10.0.0.1", "192.168.1.19", "::1", "fe80::1", "fc00::1"])
 def test_private_and_local_addresses_are_not_global(raw: str) -> None:
     assert not ipaddress.ip_address(raw).is_global

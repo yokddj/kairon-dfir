@@ -9,6 +9,38 @@ It is NOT a generic proxy.  The only accepted method is POST, the only
 accepted path is /internal/symbol-fetch, and clients do not provide a URL,
 host, port, headers, or query parameters.  The gateway constructs the
 official URL itself from the validated PDB/GUID/age in the signed payload.
+
+Least-privilege destination policy
+----------------------------------
+
+The only allowed destination is the official Microsoft public symbol
+server, with a narrow, explicit allowlist:
+
+* Scheme: HTTPS
+* Initial host: ``msdl.microsoft.com`` (exact, case-insensitive, no
+  wildcards; ``foo.microsoft.com`` and ``*.microsoft.com`` are rejected)
+* Port: 443 only
+* Initial path prefix: ``/download/symbols/`` (the rest of the path is
+  server-derived from the signed PDB/GUID/age, never user-supplied)
+* Method: GET only (HEAD is not used by the fetcher and is rejected)
+* Redirects: each hop re-validated for HTTPS, port 443, host in
+  allowlist, IP-literal rejection, and public address resolution.
+  Redirect path must not contain control characters, backslashes, or
+  ``..`` segments (including percent-encoded variants).  The redirect
+  count is capped by ``MEMORY_SYMBOL_MAX_REDIRECTS`` (default 5).
+
+All other destinations are rejected, including:
+
+* HTTP (any non-200/non-redirect response from a non-listed host)
+* IP-literal destinations
+* Userinfo in URLs (``user@host``, ``user:pass@host``)
+* Query-driven destination overrides
+* Path traversal (``..``, ``%2e%2e``, ``%2E%2E``)
+* Private, loopback, link-local, multicast, unspecified, or reserved
+  addresses resolved from the allowlisted host
+* DNS rebinding (each hop is DNS-pinned to the first resolved address;
+  even if the answer changes between redirects, the TCP destination is
+  fixed)
 """
 from __future__ import annotations
 
@@ -39,9 +71,41 @@ logger = logging.getLogger("symbol-egress-gateway")
 
 
 # ---------------------------------------------------------------------------
-# Policy (same as the in-fetcher policy, kept self-contained to avoid coupling)
+# Least-privilege policy constants
 # ---------------------------------------------------------------------------
 
+# The official Microsoft public symbol server.  Any deviation from this
+# exact value (case-insensitive) is rejected at the policy layer.  Wildcards
+# like *.microsoft.com are not allowed; the only permitted host is
+# ``msdl.microsoft.com`` and the Azure blob-storage CDN suffix for
+# redirects.
+APPROVED_INITIAL_HOST = "msdl.microsoft.com"
+
+# The path prefix under which every official PDB is published.  The gateway
+# only ever issues requests whose path begins with this exact prefix.
+APPROVED_INITIAL_PATH_PREFIX = "/download/symbols/"
+
+# The only accepted upstream method.  HEAD is not used by the fetcher and
+# is explicitly rejected.
+APPROVED_METHODS = frozenset({"GET"})
+
+# Per-hop redirect host suffixes.  Microsoft publishes symbols under
+# ``<random>.blob.core.windows.net`` shards; only this exact single-label
+# suffix is permitted on redirects.  Apex ``blob.core.windows.net`` and
+# lookalike hosts (``notblob.core.windows.net``) are rejected by the
+# label-parsing policy.
+APPROVED_REDIRECT_SUFFIXES = frozenset({".blob.core.windows.net"})
+
+# Path-segment characters that indicate traversal, even when percent-
+# encoded.  Reject any segment that is exactly ``..`` or its percent-encoded
+# forms (``%2e%2e``, ``%2E%2E``).  Mixed-case encodings are also blocked.
+_TRAVERSAL_SEGMENT = re.compile(r"^(?:%2e%2e|%2E%2E|\.\.)$", re.IGNORECASE)
+
+# Capped redirect hops.  Five is well above the single real-world
+# redirect chain used by Microsoft's CDN.
+DEFAULT_MAX_REDIRECTS = 5
+
+# Pre-compiled regexes for the validated payload.
 PDB_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,120}\.pdb$", re.IGNORECASE)
 PDB_GUID = re.compile(r"^[0-9A-F]{32}$")
 
@@ -132,6 +196,25 @@ def _build_initial_url(pdb_name: str, guid: str, age: int, initial_host: str, pa
 def _validate_path(path: str) -> str:
     if not path or any(ord(char) < 32 for char in path) or "\\" in path:
         raise GatewayError(403, "EGRESS_DENIED_PATH", "Symbol destination path is invalid.")
+    # Reject path-traversal segments ("..", "%2e%2e", "%2E%2E", etc.).
+    for segment in path.split("/"):
+        if _TRAVERSAL_SEGMENT.fullmatch(segment):
+            raise GatewayError(403, "EGRESS_DENIED_PATH", "Symbol destination path contains traversal segments.")
+    return path
+
+
+def _validate_path_prefix(path: str, *, expected_prefix: str) -> str:
+    """Reject any path that does not start with the approved server-derived prefix.
+
+    The path is the only place where a user-derived string (the PDB name,
+    the GUID, the age) is interpolated into the upstream URL.  Enforcing
+    the prefix is the last line of defense against a misconfigured
+    :class:`GatewaySettings` or a future regression in the URL builder.
+    """
+    _validate_path(path)
+    normalized_prefix = expected_prefix.rstrip("/") + "/"
+    if path != normalized_prefix and not path.startswith(normalized_prefix):
+        raise GatewayError(403, "EGRESS_DENIED_PATH", "Symbol destination path is outside the approved /download/symbols/ prefix.")
     return path
 
 
@@ -181,10 +264,21 @@ def _download(pdb_name: str, guid: str, age: int, *, initial_host: str, path_pre
             if parsed.port not in (None, 443):
                 raise GatewayError(403, "EGRESS_DENIED_URL", "Symbol destination port is not 443.")
             path = _validate_path(parsed.path or "/")
+            if redirects == 0:
+                # The first hop is always the official Microsoft symbol
+                # server; enforce the exact path prefix the URL was built
+                # with.  Redirects are validated for safety but not for
+                # prefix because the Azure blob CDN uses a different path
+                # layout (``/symbols/...``).
+                _validate_path_prefix(path, expected_prefix=path_prefix)
             target = path + (f"?{parsed.query}" if parsed.query else "")
             addresses = _public_addresses(host)
             connection = _PinnedHTTPSConnection(host, addresses[0], timeout=max(1, connect_timeout))
             try:
+                # The only accepted method is GET.  HEAD is never used by
+                # the fetcher and is rejected here as a defense-in-depth
+                # measure so the gateway cannot be coerced into a HEAD
+                # probe by a future code change.
                 connection.request("GET", target, headers={"Accept": "application/octet-stream", "User-Agent": "Kairon-Symbol-Egress-Gateway/1"})
                 response = connection.getresponse()
                 if response.status in {301, 302, 303, 307, 308}:
@@ -289,16 +383,39 @@ class GatewaySettings:
     def __init__(self) -> None:
         self.secret = os.environ.get("MEMORY_SYMBOL_EGRESS_GATEWAY_SECRET", "")
         self.replay_window_seconds = int(os.environ.get("MEMORY_SYMBOL_EGRESS_REPLAY_WINDOW_SECONDS", "60"))
-        self.initial_host = os.environ.get("MEMORY_SYMBOL_INITIAL_HOST", "msdl.microsoft.com").lower().rstrip(".")
-        self.path_prefix = os.environ.get("MEMORY_SYMBOL_INITIAL_PATH", "/download/symbols")
-        self.redirect_suffixes = [
+        configured_initial_host = os.environ.get("MEMORY_SYMBOL_INITIAL_HOST", APPROVED_INITIAL_HOST).lower().rstrip(".")
+        if configured_initial_host != APPROVED_INITIAL_HOST:
+            raise RuntimeError(
+                f"MEMORY_SYMBOL_INITIAL_HOST={configured_initial_host!r} is not the approved Microsoft symbol server. "
+                f"The only allowed initial host is {APPROVED_INITIAL_HOST!r}."
+            )
+        self.initial_host = configured_initial_host
+        configured_path_prefix = os.environ.get("MEMORY_SYMBOL_INITIAL_PATH", APPROVED_INITIAL_PATH_PREFIX).rstrip("/")
+        if configured_path_prefix != APPROVED_INITIAL_PATH_PREFIX.rstrip("/"):
+            raise RuntimeError(
+                f"MEMORY_SYMBOL_INITIAL_PATH={configured_path_prefix!r} is not the approved /download/symbols/ prefix."
+            )
+        self.path_prefix = APPROVED_INITIAL_PATH_PREFIX
+        configured_redirect_suffixes = [
             suffix.strip().lower()
             for suffix in os.environ.get("MEMORY_SYMBOL_REDIRECT_SUFFIXES", ".blob.core.windows.net").split(",")
             if suffix.strip()
         ]
+        for suffix in configured_redirect_suffixes:
+            if suffix not in APPROVED_REDIRECT_SUFFIXES:
+                raise RuntimeError(
+                    f"MEMORY_SYMBOL_REDIRECT_SUFFIXES contains {suffix!r}, which is not in the approved redirect allowlist "
+                    f"({sorted(APPROVED_REDIRECT_SUFFIXES)!r})."
+                )
+        self.redirect_suffixes = configured_redirect_suffixes
         self.connect_timeout = int(os.environ.get("MEMORY_SYMBOL_CONNECT_TIMEOUT_SECONDS", "15"))
         self.total_timeout = int(os.environ.get("MEMORY_SYMBOL_DOWNLOAD_TIMEOUT_SECONDS", "180"))
-        self.max_redirects = int(os.environ.get("MEMORY_SYMBOL_MAX_REDIRECTS", "5"))
+        configured_max_redirects = int(os.environ.get("MEMORY_SYMBOL_MAX_REDIRECTS", str(DEFAULT_MAX_REDIRECTS)))
+        if configured_max_redirects < 0 or configured_max_redirects > DEFAULT_MAX_REDIRECTS:
+            raise RuntimeError(
+                f"MEMORY_SYMBOL_MAX_REDIRECTS={configured_max_redirects} is outside the allowed range [0, {DEFAULT_MAX_REDIRECTS}]."
+            )
+        self.max_redirects = configured_max_redirects
         self.max_bytes = int(os.environ.get("MEMORY_SYMBOL_DOWNLOAD_MAX_BYTES", "1073741824"))
         self.max_response_bytes = int(os.environ.get("MEMORY_SYMBOL_EGRESS_MAX_RESPONSE_BYTES", "1073741824"))
         self.bind_host = os.environ.get("MEMORY_SYMBOL_EGRESS_GATEWAY_BIND", "0.0.0.0")
