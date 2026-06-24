@@ -148,34 +148,11 @@ def _backfill_one_evidence(
         .filter(MemoryCachedSymbol.symbol_key == symbol_key)
         .first()
     )
-    # When the source has no historical run (e.g. the cache alone
-    # produced the match), we still need a valid FK pair for the
-    # existing schema.  Generate a stable UUIDv4-like placeholder
-    # that is *not* derived from a high-bit-set integer pattern
-    # (which the SQLAlchemy UUID type on some backends stores as
-    # a float).  The placeholder is a v4 UUID whose top 64 bits
-    # are the SHA-256 hash of the evidence id and the bottom 64
-    # bits are derived from the same hash, ensuring uniqueness
-    # across evidences and avoiding collision with real run ids.
-    import hashlib
-    import uuid as _uuid
-    digest = hashlib.sha256(evidence.id.encode("utf-8")).digest()
-    fallback_run_id = str(
-        _uuid.UUID(bytes=digest[:16], version=4)
-    )
-    fallback_plugin_id = str(
-        _uuid.UUID(bytes=bytes(b ^ 0x01 for b in digest[:16]), version=4)
-    )
     new_row = MemorySymbolRequirement(
         case_id=evidence.case_id,
         evidence_id=evidence.id,
-        # We reuse the schema's foreign keys: when the source is a
-        # historical run, point at that run.  When the source is
-        # the cache alone, fall back to a stable placeholder FK
-        # pair (the probe service can repair these on the next
-        # probe).
-        source_run_id=reconstructed.source_run_id or fallback_run_id,
-        source_plugin_run_id=reconstructed.source_plugin_run_id or fallback_plugin_id,
+        source_run_id=reconstructed.source_run_id,
+        source_plugin_run_id=reconstructed.source_plugin_run_id,
         pdb_name=reconstructed.pdb_name,
         pdb_guid=reconstructed.pdb_guid,
         pdb_age=int(reconstructed.pdb_age),

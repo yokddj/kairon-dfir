@@ -253,8 +253,6 @@ def test_01_page_evidence_triggers_bounded_discovery(
         id=str(_uuid.uuid4()),
         case_id=ev.case_id,
         evidence_id=ev.id,
-        source_run_id=str(_uuid.uuid4()),
-        source_plugin_run_id=str(_uuid.uuid4()),
         pdb_name=fake_discovered.pdb_name,
         pdb_guid=fake_discovered.pdb_guid,
         pdb_age=fake_discovered.pdb_age,
@@ -837,8 +835,6 @@ def test_20_no_regressions_in_dispatch_contract(
         id=str(_uuid.uuid4()),
         case_id=ev.case_id,
         evidence_id=ev.id,
-        source_run_id=str(_uuid.uuid4()),
-        source_plugin_run_id=str(_uuid.uuid4()),
         pdb_name=cached.pdb_name,
         pdb_guid=cached.pdb_guid,
         pdb_age=cached.pdb_age,
@@ -868,3 +864,192 @@ def test_20_no_regressions_in_dispatch_contract(
     assert result["queue"] == get_settings().memory_queue_name
     assert sp.PREP_BLOCKED_SYMBOLS in sp.ALL_PREP_STATES
     assert sp.ui_state_for(sp.PREP_BLOCKED_SYMBOLS) == sp.UI_STATE_BLOCKED
+
+
+# ---------------------------------------------------------------------------
+# Nullable provenance tests (sprint: runless bounded discovery)
+# ---------------------------------------------------------------------------
+
+
+class TestNullableProvenance:
+    """Verify that bounded-discovery requirements can persist with NULL
+    source FKs and that real-analysis requirements still enforce FKs."""
+
+    # ------------------------------------------------------------------
+    # 21. Bounded discovery persists NULL source FKs
+    # ------------------------------------------------------------------
+
+    def test_21_bounded_discovery_null_source_fks(
+        self, db: Session, case_id,
+    ) -> None:
+        """persist_discovered_requirement creates a requirement with
+        source_run_id=None and source_plugin_run_id=None."""
+        ev = _make_evidence(db, case_id, sha256="b" * 64)
+        cached = _make_cached_symbol(db)
+        discovered = DiscoveredRequirement(
+            platform="windows",
+            pdb_name=cached.pdb_name,
+            pdb_guid=cached.pdb_guid,
+            pdb_age=cached.pdb_age,
+            architecture=cached.architecture,
+            discovery_method="windows.info",
+        )
+        requirement, returned_cached, created = persist_discovered_requirement(
+            db, evidence=ev, discovered=discovered,
+        )
+        assert created is True
+        assert requirement.source_run_id is None
+        assert requirement.source_plugin_run_id is None
+        assert requirement.source == SOURCE_BOUNDED_DISCOVERY
+        assert returned_cached is not None
+        assert returned_cached.id == cached.id
+
+    # ------------------------------------------------------------------
+    # 22. Bounded discovery creates zero MemoryScanRun / PluginRun rows
+    # ------------------------------------------------------------------
+
+    def test_22_bounded_discovery_zero_scan_runs(
+        self, db: Session, case_id,
+    ) -> None:
+        """Bounded discovery must not create MemoryScanRun or
+        MemoryPluginRun rows."""
+        scan_before = db.query(MemoryScanRun).count()
+        ev = _make_evidence(db, case_id, sha256="c" * 64)
+        cached = _make_cached_symbol(db)
+        discovered = DiscoveredRequirement(
+            platform="windows",
+            pdb_name=cached.pdb_name,
+            pdb_guid=cached.pdb_guid,
+            pdb_age=cached.pdb_age,
+            architecture=cached.architecture,
+            discovery_method="windows.info",
+        )
+        persist_discovered_requirement(db, evidence=ev, discovered=discovered)
+        scan_after = db.query(MemoryScanRun).count()
+        assert scan_after == scan_before
+
+    # ------------------------------------------------------------------
+    # 23. Exact cached symbol still produces ready
+    # ------------------------------------------------------------------
+
+    def test_23_nullable_source_still_ready(
+        self, db: Session, case_id,
+    ) -> None:
+        """A requirement with null source FKs still reaches READY when
+        the exact cache is present."""
+        ev = _make_evidence(db, case_id, sha256="d" * 64)
+        cached = _make_cached_symbol(db)
+        discovered = DiscoveredRequirement(
+            platform="windows",
+            pdb_name=cached.pdb_name,
+            pdb_guid=cached.pdb_guid,
+            pdb_age=cached.pdb_age,
+            architecture=cached.architecture,
+            discovery_method="windows.info",
+        )
+        requirement, returned_cached, _ = persist_discovered_requirement(
+            db, evidence=ev, discovered=discovered,
+        )
+        assert returned_cached is not None
+        assert requirement.status == "cached"
+
+    # ------------------------------------------------------------------
+    # 24. Missing exact cache produces blocked_symbols
+    # ------------------------------------------------------------------
+
+    def test_24_nullable_source_blocked_symbols(
+        self, db: Session, case_id,
+    ) -> None:
+        """A requirement with null source FKs becomes blocked_symbols
+        when the exact cache is absent."""
+        ev = _make_evidence(db, case_id, sha256="e" * 64)
+        discovered = DiscoveredRequirement(
+            platform="windows",
+            pdb_name="ntoskrnl.exe",
+            pdb_guid="AABBCCDDEEFFGGHHIIJJKKLLMMNNOOPP",
+            pdb_age=1,
+            architecture="x64",
+            discovery_method="windows.info",
+        )
+        requirement, returned_cached, _ = persist_discovered_requirement(
+            db, evidence=ev, discovered=discovered,
+        )
+        assert returned_cached is None
+        assert requirement.status == "unavailable_offline"
+
+    # ------------------------------------------------------------------
+    # 25. Real analysis-derived requirement still accepts real IDs
+    # ------------------------------------------------------------------
+
+    def test_25_real_run_plugin_ids_accepted(
+        self, db: Session, case_id,
+    ) -> None:
+        """A requirement derived from a real scan/plugin run can still
+        store non-null FK values."""
+        ev = _make_evidence(db, case_id, sha256="f" * 64)
+        cached = _make_cached_symbol(db)
+        run_id = str(_uuid.uuid4())
+        plugin_id = str(_uuid.uuid4())
+        req = MemorySymbolRequirement(
+            id=str(_uuid.uuid4()),
+            case_id=ev.case_id,
+            evidence_id=ev.id,
+            source_run_id=run_id,
+            source_plugin_run_id=plugin_id,
+            pdb_name=cached.pdb_name,
+            pdb_guid=cached.pdb_guid,
+            pdb_age=cached.pdb_age,
+            architecture=cached.architecture,
+            symbol_key=cached.symbol_key,
+            status="cached",
+            cached_symbol_id=cached.id,
+            source="probe",
+        )
+        db.add(req)
+        db.commit()
+        assert req.source_run_id == run_id
+        assert req.source_plugin_run_id == plugin_id
+
+    # ------------------------------------------------------------------
+    # 26. No placeholder UUID generation remains
+    # ------------------------------------------------------------------
+
+    def test_26_no_placeholder_uuid_generation(
+        self,
+    ) -> None:
+        """The discovery module must not export any placeholder UUID
+        generator."""
+        import app.services.memory.symbol_requirement_discovery as mod
+        assert not hasattr(mod, "_stable_discovery_uuids")
+        assert not hasattr(mod, "fallback_run_id")
+
+    # ------------------------------------------------------------------
+    # 27. Same content identity reuses requirement
+    # ------------------------------------------------------------------
+
+    def test_27_nullable_source_content_reuse(
+        self, db: Session, case_id,
+    ) -> None:
+        """Re-upload of same SHA reuses existing requirement even with
+        null source FKs."""
+        ev = _make_evidence(db, case_id, sha256="g" * 64)
+        cached = _make_cached_symbol(db)
+        discovered = DiscoveredRequirement(
+            platform="windows",
+            pdb_name=cached.pdb_name,
+            pdb_guid=cached.pdb_guid,
+            pdb_age=cached.pdb_age,
+            architecture=cached.architecture,
+            discovery_method="windows.info",
+        )
+        req1, _, c1 = persist_discovered_requirement(
+            db, evidence=ev, discovered=discovered,
+        )
+        assert c1 is True
+        req2, _, c2 = persist_discovered_requirement(
+            db, evidence=ev, discovered=discovered,
+        )
+        assert c2 is False
+        assert req2.id == req1.id
+        assert req2.source_run_id is None
+        assert req2.source_plugin_run_id is None

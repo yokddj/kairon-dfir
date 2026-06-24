@@ -44,6 +44,13 @@ pure:
    so a subsequent re-upload of the same file does not re-run
    the bounded probe.
 
+   Because bounded discovery deliberately creates no
+   ``MemoryScanRun`` or ``MemoryPluginRun``, the persisted
+   ``source_run_id`` and ``source_plugin_run_id`` are **NULL**.
+   The ``source`` column records ``"bounded_discovery"`` as the
+   truthful provenance; requirements derived from real analysis
+   runs preserve their foreign-key links.
+
 The bounded process failure modes are mapped to structured
 :class:`BoundedDiscoveryError` codes that the preparation
 runtime translates into ``PREP_FAILED`` (retryable) and never
@@ -51,10 +58,8 @@ into ``PREP_UNSUPPORTED`` (Windows is Windows in every outcome).
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 import re
-import uuid as _uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -167,23 +172,6 @@ class DiscoveredRequirement:
     @property
     def _age_range(self) -> tuple[int, int]:
         return _AGE_RANGE
-
-
-def _stable_discovery_uuids(evidence_id: str) -> tuple[str, str]:
-    """Return deterministic placeholder UUIDs for the requirement FK pair.
-
-    The bounded discovery path does not create a ``MemoryScanRun``
-    — the requirement row is persisted with stable placeholder
-    UUIDs derived from the evidence id.  The same scheme is used
-    by the legacy backfill so a probe that later produces a real
-    scan run can repair the row.
-    """
-    digest = hashlib.sha256(evidence_id.encode("utf-8")).digest()
-    fallback_run_id = str(_uuid.UUID(bytes=digest[:16], version=4))
-    fallback_plugin_id = str(
-        _uuid.UUID(bytes=bytes(b ^ 0x01 for b in digest[:16]), version=4)
-    )
-    return fallback_run_id, fallback_plugin_id
 
 
 def discover_windows_symbol_requirement(
@@ -479,14 +467,11 @@ def persist_discovered_requirement(
         db.commit()
         return existing, cached, False
 
-    fallback_run_id, fallback_plugin_id = _stable_discovery_uuids(
-        str(evidence.id)
-    )
     new_row = MemorySymbolRequirement(
         case_id=evidence.case_id,
         evidence_id=str(evidence.id),
-        source_run_id=fallback_run_id,
-        source_plugin_run_id=fallback_plugin_id,
+        source_run_id=None,
+        source_plugin_run_id=None,
         pdb_name=pdb_name,
         pdb_guid=pdb_guid,
         pdb_age=pdb_age,

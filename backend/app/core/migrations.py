@@ -860,6 +860,43 @@ def _v12_preparations_queue_name(connection: Connection) -> None:
         )
 
 
+@register(13, "memory_symbol_requirements_nullable_source_fks")
+def _v13_requirements_nullable_source_fks(connection: Connection) -> None:
+    """Make ``source_run_id`` and ``source_plugin_run_id`` nullable
+    on ``memory_symbol_requirements`` so bounded discovery can
+    persist a requirement without fabricating scan/plugin run rows.
+
+    The foreign-key constraints are preserved for non-null values
+    (real analysis provenance).  The model-level ``nullable=True``
+    handles SQLite (always created fresh); this migration only
+    touches real PostgreSQL deployments.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_symbol_requirements" not in inspector.get_table_names():
+        return
+    dialect = connection.dialect.name
+    if dialect != "postgresql":
+        return
+
+    cols_by_name = {
+        c["name"]: c for c in inspector.get_columns("memory_symbol_requirements")
+    }
+    for col_name in ("source_run_id", "source_plugin_run_id"):
+        col = cols_by_name.get(col_name)
+        if col is None:
+            continue
+        if not bool(col.get("nullable", True)):
+            connection.execute(
+                text(
+                    f"ALTER TABLE memory_symbol_requirements "
+                    f"ALTER COLUMN {col_name} DROP NOT NULL"
+                )
+            )
+            logger.info(
+                "v13: made memory_symbol_requirements.%s nullable", col_name
+            )
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 
