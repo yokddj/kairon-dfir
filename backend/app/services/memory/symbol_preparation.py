@@ -87,6 +87,11 @@ PREP_DISPATCH_FAILED_STATE = "dispatch_failed"
 PREP_PLATFORM_NOT_IDENTIFIED_STATE = "platform_not_identified"
 PREP_PLATFORM_NOT_SUPPORTED_STATE = "platform_not_supported"
 PREP_BLOCKED = "blocked"
+# Sprint: bounded requirement discovery.  The preparation knows
+# the exact symbol requirement but the offline cache is empty;
+# the operator must approve a managed acquisition or seed the
+# cache for preparation to advance to ``ready``.
+PREP_BLOCKED_SYMBOLS = "blocked_symbols"
 
 # Legacy aliases (kept for the migration period).
 PREP_IDENTIFIED = "identified"
@@ -114,6 +119,7 @@ ALL_PREP_STATES = frozenset(
         PREP_PLATFORM_NOT_IDENTIFIED_STATE,
         PREP_PLATFORM_NOT_SUPPORTED_STATE,
         PREP_BLOCKED,
+        PREP_BLOCKED_SYMBOLS,
         # Legacy aliases (still in the DB; keep them in the set so
         # older rows pass validation).
         PREP_IDENTIFIED,
@@ -141,7 +147,7 @@ def ui_state_for(prep_state: str) -> str:
         return UI_STATE_READY
     if prep_state in {PREP_REQUIREMENT_UNKNOWN, PREP_NEGATIVE_CACHED}:
         return UI_STATE_BLOCKED
-    if prep_state in {PREP_BLOCKED, PREP_PLATFORM_NOT_IDENTIFIED_STATE, PREP_PLATFORM_NOT_SUPPORTED_STATE}:
+    if prep_state in {PREP_BLOCKED, PREP_BLOCKED_SYMBOLS, PREP_PLATFORM_NOT_IDENTIFIED_STATE, PREP_PLATFORM_NOT_SUPPORTED_STATE}:
         return UI_STATE_BLOCKED
     if prep_state in {PREP_CANCELLED, PREP_ACQUISITION_FAILED, PREP_UNSUPPORTED, PREP_FAILED, PREP_DISPATCH_FAILED_STATE}:
         return UI_STATE_FAILED
@@ -406,7 +412,7 @@ def mark_preparation(
             preparation.sanitized_message = sanitized_message
         if requirement_id is not None:
             preparation.requirement_id = requirement_id
-    if state in {PREP_READY, PREP_ACQUISITION_FAILED, PREP_REQUIREMENT_UNKNOWN, PREP_UNSUPPORTED, PREP_CANCELLED, PREP_NEGATIVE_CACHED, PREP_BLOCKED, PREP_PLATFORM_NOT_IDENTIFIED_STATE, PREP_PLATFORM_NOT_SUPPORTED_STATE}:
+    if state in {PREP_READY, PREP_ACQUISITION_FAILED, PREP_REQUIREMENT_UNKNOWN, PREP_UNSUPPORTED, PREP_CANCELLED, PREP_NEGATIVE_CACHED, PREP_BLOCKED, PREP_BLOCKED_SYMBOLS, PREP_PLATFORM_NOT_IDENTIFIED_STATE, PREP_PLATFORM_NOT_SUPPORTED_STATE}:
         preparation.completed_at = utc_now_naive()
     if state == PREP_PROBING and preparation.started_at is None:
         preparation.started_at = utc_now_naive()

@@ -42,6 +42,10 @@ PREP_DISPATCH_FAILED = "MEMORY_PREPARATION_DISPATCH_FAILED"
 PREP_QUEUE_MISMATCH = "MEMORY_PREPARATION_QUEUE_MISMATCH"
 PREP_PLATFORM_NOT_IDENTIFIED = "PLATFORM_NOT_IDENTIFIED"
 PREP_PLATFORM_NOT_SUPPORTED = "PLATFORM_NOT_SUPPORTED"
+# Sprint: bounded Windows requirement discovery.
+PREP_BLOCKED_SYMBOLS_ERROR = "WINDOWS_EXACT_SYMBOLS_MISSING"
+PREP_REQUIREMENT_UNKNOWN_ERROR = "WINDOWS_REQUIREMENT_UNKNOWN"
+PREP_DISCOVERY_FAILED_ERROR = "WINDOWS_DISCOVERY_FAILED"
 PREP_STALE_TIMEOUT = "MEMORY_PREPARATION_STALE"
 
 
@@ -325,6 +329,164 @@ def dispatch_memory_preparation(
     }
 
 
+# ---------------------------------------------------------------------------
+# Bounded Windows requirement discovery
+# ---------------------------------------------------------------------------
+
+
+# Bounded-discovery terminal values.  These are local
+# representations, not the public ``PREP_*`` state strings: the
+# orchestrator maps them to ``PREP_READY``, ``PREP_BLOCKED_SYMBOLS``
+# or ``PREP_FAILED`` after the persistence step.
+
+_DISCOVERY_OK = "ok"
+_DISCOVERY_BLOCKED_SYMBOLS = "blocked_symbols"
+_DISCOVERY_REQUIREMENT_UNKNOWN = "requirement_unknown"
+_DISCOVERY_RETRYABLE = "retryable"
+
+
+def _run_bounded_requirement_discovery(
+    db: Session,
+    *,
+    evidence,
+    probe_result,
+    readiness,
+) -> tuple[str | None, str | None, str | None, str | None, dict[str, Any]]:
+    """Run bounded Windows requirement discovery and re-evaluate readiness.
+
+    Returns a tuple of ``(state, reason, error_code,
+    requirement_id, metadata)``.  The ``state`` is one of the
+    internal ``_DISCOVERY_*`` constants above; a ``None`` state
+    means the discovery was skipped (platform != Windows, no
+    discovery method available, etc.) and the caller should keep
+    the original readiness result.
+
+    The function NEVER raises to the caller.  Process failures
+    are translated into ``(PREP_FAILED, retryable)`` so the
+    operator can re-run preparation without an explicit
+    ``unsupported`` verdict.
+    """
+    from app.services.memory.symbol_requirement_discovery import (
+        BoundedDiscoveryError,
+        discover_windows_symbol_requirement,
+        persist_discovered_requirement,
+    )
+
+    if probe_result.platform.value != "windows":
+        # Linux / macOS / unknown must never invoke Windows
+        # discovery.  Keep the original ``windows_probe_required``
+        # result so the operator sees the correct reason.
+        return None, None, None, None, {
+            "skipped": True,
+            "reason": "platform_not_windows",
+            "platform": probe_result.platform.value,
+        }
+
+    work_dir = _discovery_work_dir(evidence)
+    try:
+        canonical = _evidence_canonical_path(evidence)
+    except ValueError as exc:
+        return _DISCOVERY_RETRYABLE, "windows_evidence_path_missing", (
+            "WINDOWS_DISCOVERY_EVIDENCE_PATH_MISSING"
+        ), None, {"platform": "windows", "error": str(exc)[:200]}
+
+    try:
+        discovered = discover_windows_symbol_requirement(canonical, work_dir)
+    except BoundedDiscoveryError as exc:
+        # A bounded-process failure is a retryable probe failure
+        # (``PREP_FAILED``), never ``PREP_UNSUPPORTED`` (Windows
+        # is Windows in every outcome).
+        if not exc.retryable:
+            return _DISCOVERY_REQUIREMENT_UNKNOWN, exc.code, exc.code, None, {
+                "method": "bounded_discovery",
+                "code": exc.code,
+                "message": str(exc)[:200],
+                "retryable": False,
+            }
+        return _DISCOVERY_RETRYABLE, exc.code, exc.code, None, {
+            "method": "bounded_discovery",
+            "code": exc.code,
+            "message": str(exc)[:200],
+            "retryable": True,
+        }
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "bounded Windows discovery raised an unexpected error"
+        )
+        return _DISCOVERY_RETRYABLE, (
+            "WINDOWS_DISCOVERY_UNEXPECTED"
+        ), "WINDOWS_DISCOVERY_UNEXPECTED", None, {
+            "method": "bounded_discovery",
+            "code": "WINDOWS_DISCOVERY_UNEXPECTED",
+            "message": str(exc)[:200],
+            "retryable": True,
+        }
+
+    try:
+        requirement, cached, created = persist_discovered_requirement(
+            db, evidence=evidence, discovered=discovered
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Persistence failures are retryable as well; the bounded
+        # probe succeeded but the row write did not.
+        logger.exception(
+            "bounded Windows discovery: persistence failed"
+        )
+        return _DISCOVERY_RETRYABLE, (
+            "WINDOWS_DISCOVERY_PERSIST_FAILED"
+        ), "WINDOWS_DISCOVERY_PERSIST_FAILED", None, {
+            "method": "bounded_discovery",
+            "code": "WINDOWS_DISCOVERY_PERSIST_FAILED",
+            "discovered": discovered.to_dict(),
+            "message": str(exc)[:200],
+            "retryable": True,
+        }
+
+    requirement_id = str(requirement.id)
+    if cached is not None:
+        return _DISCOVERY_OK, "windows_cache_match", "WINDOWS_EXACT_CACHE_HIT", requirement_id, {
+            "method": discovered.discovery_method,
+            "created": created,
+            "platform": "windows",
+            "requirement": discovered.to_dict(),
+            "cached_symbol_id": str(cached.id),
+            "cached_symbol_key": cached.symbol_key,
+        }
+
+    # Requirement is known but the exact validated symbol is not
+    # cached.  ``blocked_symbols`` (Windows exact symbols
+    # missing) is distinct from ``requirement_unknown`` (we
+    # could not derive the identity).
+    return _DISCOVERY_BLOCKED_SYMBOLS, "windows_symbols_missing", (
+        PREP_BLOCKED_SYMBOLS_ERROR
+    ), requirement_id, {
+        "method": discovered.discovery_method,
+        "created": created,
+        "platform": "windows",
+        "requirement": discovered.to_dict(),
+        "symbol_key": requirement.symbol_key,
+    }
+
+
+def _discovery_work_dir(evidence) -> Path:
+    """Return a writable work dir for bounded discovery output.
+
+    The discovery service writes nothing to disk except for
+    Volatility's temporary scratch files; the work dir is a
+    per-evidence subdirectory under the configured output root.
+    """
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    root = settings.memory_output_dir or "/tmp"
+    try:
+        base = Path(root) / "bounded_discovery" / str(evidence.id)
+        base.mkdir(parents=True, exist_ok=True)
+        return base
+    except OSError:
+        return Path("/tmp")
+
+
 def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
     """Run the OS-agnostic preparation for a single evidence.
 
@@ -333,9 +495,13 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
     and does NOT enqueue further work.
     """
     from app.models.evidence import Evidence
-    from app.services.memory.platform import get_adapter_for_probe
+    from app.services.memory.platform import (
+        ReadinessState,
+        get_adapter_for_probe,
+    )
     from app.services.memory.symbol_preparation import (
         PREP_BLOCKED,
+        PREP_BLOCKED_SYMBOLS,
         PREP_FAILED,
         PREP_PROBING,
         PREP_READY,
@@ -377,6 +543,46 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
         cache_state = _gather_cache_state(db, evidence)
         readiness = adapter.check_readiness(probe=probe_result, cache_state=cache_state)
 
+        # 3a. Bounded discovery (Windows only): when the adapter
+        # signals a discovery step we have not already produced
+        # a terminal state, run the bounded ``windows.info``
+        # probe, persist the discovered requirement and
+        # re-evaluate the cache.  The function returns a
+        # (state, reason, error_code, requirement_id, meta)
+        # tuple that the downstream state-mapping branch
+        # consumes.  ``None`` means "no discovery was performed
+        # or the discovery was inconclusive"; the original
+        # readiness result stands.
+        if readiness.state.value == PREP_BLOCKED and getattr(
+            readiness, "requires_discovery", False
+        ):
+            new_state, new_reason, new_error, new_requirement_id, discovery_meta = (
+                _run_bounded_requirement_discovery(
+                    db,
+                    evidence=evidence,
+                    probe_result=probe_result,
+                    readiness=readiness,
+                )
+            )
+            if new_state is not None:
+                readiness.state = (
+                    ReadinessState.READY
+                    if new_state == _DISCOVERY_OK
+                    else ReadinessState.BLOCKED_SYMBOLS
+                    if new_state == _DISCOVERY_BLOCKED_SYMBOLS
+                    else ReadinessState.BLOCKED
+                    if new_state == _DISCOVERY_REQUIREMENT_UNKNOWN
+                    else ReadinessState.FAILED
+                )
+                readiness.reason = new_reason or readiness.reason
+                readiness.error_code = new_error or readiness.error_code
+                readiness.requirement_id = new_requirement_id or readiness.requirement_id
+                readiness.requires_discovery = False
+                readiness.metadata = {
+                    **dict(readiness.metadata or {}),
+                    "discovery": discovery_meta,
+                }
+
         # 4. Persist the terminal state.
         from app.services.memory.symbol_preparation import (
             mark_preparation,
@@ -387,6 +593,20 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
                 evidence=evidence,
                 state=PREP_READY,
                 reason=readiness.reason,
+                requirement_id=readiness.requirement_id,
+            )
+        elif readiness.state.value == ReadinessState.BLOCKED_SYMBOLS.value:
+            # Requirement known, exact validated symbol absent.
+            # Distinct from ``requirement_unknown`` (we did
+            # derive the identity) and from ``unsupported``
+            # (the operator must seed the cache or approve a
+            # managed acquisition).
+            mark_preparation(
+                db,
+                evidence=evidence,
+                state=PREP_BLOCKED_SYMBOLS,
+                reason=readiness.reason or "windows_symbols_missing",
+                sanitized_message=readiness.error_code or "WINDOWS_EXACT_SYMBOLS_MISSING",
                 requirement_id=readiness.requirement_id,
             )
         elif readiness.state.value == PREP_BLOCKED:

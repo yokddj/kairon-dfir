@@ -80,6 +80,13 @@ class ReadinessState(str, enum.Enum):
 
     READY = "ready"
     BLOCKED = "blocked"
+    # Bounded requirement discovery: the adapter or the
+    # discovery service has the exact symbol requirement, the
+    # operator must seed the cache or approve a managed
+    # acquisition.  Distinct from ``BLOCKED`` (the readiness
+    # itself is OK) and from ``UNSUPPORTED`` (the platform is
+    # Windows in every outcome).
+    BLOCKED_SYMBOLS = "blocked_symbols"
     UNSUPPORTED = "unsupported"
     FAILED = "failed"
 
@@ -111,6 +118,14 @@ class ReadinessResult:
     error_code: str | None = None
     requirement_id: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+    # When True, the preparation runtime should run a bounded
+    # discovery step (e.g. a windows.info probe) to obtain the
+    # exact symbol requirement before persisting a terminal
+    # state.  Adapters that can already see a cache hit or a
+    # persisted requirement leave this False; the runtime
+    # short-circuits to ``ready`` or ``blocked`` without
+    # re-running the probe.
+    requires_discovery: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -119,6 +134,7 @@ class ReadinessResult:
             "error_code": self.error_code,
             "requirement_id": self.requirement_id,
             "metadata": dict(self.metadata),
+            "requires_discovery": self.requires_discovery,
         }
 
 
@@ -636,14 +652,15 @@ class WindowsMemoryAdapter:
             )
         # No cache hit yet.  The image is recognisable as
         # Windows but we still need a probe to record the
-        # symbol requirement.  The upstream pipeline records
-        # the requirement as a side effect; the adapter does
-        # not return READY here.
+        # symbol requirement.  The preparation runtime runs a
+        # bounded ``windows.info`` discovery step, persists the
+        # requirement, and re-evaluates the cache.
         return ReadinessResult(
             state=ReadinessState.BLOCKED,
             reason="windows_probe_required",
             error_code="WINDOWS_PROBE_REQUIRED",
             metadata={"probe_confidence": probe.confidence.value},
+            requires_discovery=True,
         )
 
     def available_profiles(self, probe: MemoryProbeResult) -> list[ProfileDefinition]:
