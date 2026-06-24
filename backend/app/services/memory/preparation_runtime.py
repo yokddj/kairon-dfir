@@ -116,6 +116,8 @@ def _probe_evidence(evidence) -> dict[str, Any]:
         canonical_path=path,
         detected_format=getattr(evidence, "detected_format", None),
         filename=_evidence_filename(evidence),
+        use_volatility_fallback=True,
+        evidence=evidence,
     )
     return {
         "platform": result.platform.value,
@@ -387,18 +389,7 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
                 reason=readiness.reason,
                 requirement_id=readiness.requirement_id,
             )
-        elif readiness.state.value == PREP_UNSUPPORTED:
-            mark_preparation(
-                db,
-                evidence=evidence,
-                state=PREP_UNSUPPORTED,
-                reason=readiness.reason,
-                sanitized_message=readiness.error_code or "platform_not_supported",
-            )
         elif readiness.state.value == PREP_BLOCKED:
-            # BLOCKED is a terminal state for the v1 sprint
-            # (no acquisition).  The UI displays Blocked and
-            # the operator can Retry.
             from app.services.memory.symbol_preparation import (
                 PREP_REQUIREMENT_UNKNOWN as PREP_BLOCKED_LEGACY,
             )
@@ -408,6 +399,26 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
                 state=PREP_BLOCKED_LEGACY,
                 reason=readiness.reason,
                 sanitized_message=readiness.error_code or "blocked",
+            )
+        elif readiness.state.value == PREP_UNSUPPORTED:
+            # Use structured states: platform_not_identified when
+            # the OS could not be determined, platform_not_supported
+            # when a known OS lacks an adapter implementation.
+            from app.services.memory.symbol_preparation import (
+                PREP_PLATFORM_NOT_IDENTIFIED_STATE,
+                PREP_PLATFORM_NOT_SUPPORTED_STATE,
+            )
+            terminal_state = PREP_PLATFORM_NOT_SUPPORTED_STATE
+            if readiness.error_code == "PLATFORM_NOT_IDENTIFIED":
+                terminal_state = PREP_PLATFORM_NOT_IDENTIFIED_STATE
+            elif readiness.error_code == "PLATFORM_NOT_SUPPORTED":
+                terminal_state = PREP_PLATFORM_NOT_SUPPORTED_STATE
+            mark_preparation(
+                db,
+                evidence=evidence,
+                state=terminal_state,
+                reason=readiness.reason,
+                sanitized_message=readiness.error_code or "platform_not_supported",
             )
         else:  # failed
             mark_preparation(

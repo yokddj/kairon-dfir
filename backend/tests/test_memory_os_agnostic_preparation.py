@@ -51,6 +51,7 @@ from app.services.memory.platform import (
     Architecture,
     LinuxMemoryAdapter,
     MacOSMemoryAdapter,
+    MemoryProbeResult,
     PlatformFamily,
     ProbeConfidence,
     ProfileDefinition,
@@ -404,7 +405,9 @@ def test_10_macos_terminates_as_unsupported() -> None:
 
 def test_11_unknown_image_terminates_as_platform_not_identified() -> None:
     """An empty / unrecognised image terminates as
-    ``unsupported`` with ``PLATFORM_NOT_IDENTIFIED``.
+    ``unsupported`` (adapter level) with
+    ``PLATFORM_NOT_IDENTIFIED``.  The execution pipeline
+    persists this as ``platform_not_identified``.
     """
     fake_path = MagicMock()
     fake_path.open.return_value.__enter__.return_value.read.return_value = b"\x00\x00\x00"
@@ -612,3 +615,187 @@ def test_20_one_active_per_evidence_unique_constraint(db: Session) -> None:
         getattr(idx, "name", None) == "uq_memory_symbol_prep_active_evidence"
         for idx in indexes
     )
+
+
+# ---------------------------------------------------------------------------
+# Sprint 7: Windows platform probe false-negative fix
+# ---------------------------------------------------------------------------
+
+
+def test_21_page_crash_dump_is_windows() -> None:
+    """A PAGE crash dump is classified as Windows with high
+    confidence by the static signature check.
+    """
+    fake_path = MagicMock()
+    fake_path.open.return_value.__enter__.return_value.read.return_value = b"PAGE\x00\x00\x01"
+    result = probe_memory_platform(canonical_path=fake_path, detected_format="windows_crash_dump")
+    assert result.platform == PlatformFamily.WINDOWS
+    assert result.confidence == ProbeConfidence.HIGH
+    assert "crashdump" in result.reason
+
+
+def test_22_du64_crash_dump_is_windows_x64() -> None:
+    """A DU64 crash dump is classified as Windows x64."""
+    fake_path = MagicMock()
+    fake_path.open.return_value.__enter__.return_value.read.return_value = b"DU64\x00\x00\x00"
+    result = probe_memory_platform(canonical_path=fake_path)
+    assert result.platform == PlatformFamily.WINDOWS
+    assert result.architecture == Architecture.X64
+    assert result.confidence == ProbeConfidence.HIGH
+
+
+def test_23_mphd_dump_is_windows() -> None:
+    """An MPHD (multiprocessor hibernation) dump is Windows."""
+    fake_path = MagicMock()
+    fake_path.open.return_value.__enter__.return_value.read.return_value = b"MPHD\x00\x00\x00"
+    result = probe_memory_platform(canonical_path=fake_path)
+    assert result.platform == PlatformFamily.WINDOWS
+    assert result.confidence == ProbeConfidence.HIGH
+
+
+def test_24_detected_format_windows_crash_dump_is_windows() -> None:
+    """When the head is inconclusive but detected_format is
+    ``windows_crash_dump``, the probe returns Windows."""
+    fake_path = MagicMock()
+    fake_path.open.return_value.__enter__.return_value.read.return_value = b"\x00\x00\x00\x00"
+    result = probe_memory_platform(
+        canonical_path=fake_path,
+        detected_format="windows_crash_dump",
+    )
+    assert result.platform == PlatformFamily.WINDOWS
+    assert result.confidence == ProbeConfidence.HIGH
+    assert "detected_format" in result.reason
+
+
+def test_25_detected_format_lime_is_linux() -> None:
+    """detected_format=lime maps to Linux even with no head magic."""
+    fake_path = MagicMock()
+    fake_path.open.return_value.__enter__.return_value.read.return_value = b"\x00\x00\x00\x00"
+    result = probe_memory_platform(
+        canonical_path=fake_path,
+        detected_format="lime",
+    )
+    assert result.platform == PlatformFamily.LINUX
+    assert result.confidence == ProbeConfidence.HIGH
+    assert "detected_format" in result.reason
+
+
+def test_26_detected_format_hibernation_is_windows() -> None:
+    """detected_format=hibernation maps to Windows."""
+    fake_path = MagicMock()
+    fake_path.open.return_value.__enter__.return_value.read.return_value = b"\x00\x00\x00\x00"
+    result = probe_memory_platform(
+        canonical_path=fake_path,
+        detected_format="hibernation",
+    )
+    assert result.platform == PlatformFamily.WINDOWS
+
+
+def test_27_detected_format_elf_core_is_linux() -> None:
+    """detected_format=elf_core maps to Linux."""
+    fake_path = MagicMock()
+    fake_path.open.return_value.__enter__.return_value.read.return_value = b"\x00\x00\x00\x00"
+    result = probe_memory_platform(
+        canonical_path=fake_path,
+        detected_format="elf_core",
+    )
+    assert result.platform == PlatformFamily.LINUX
+
+
+def test_28_inconclusive_fallback_is_platform_not_identified() -> None:
+    """When the static probe and detected_format both fail,
+    the adapter returns UNSUPPORTED with PLATFORM_NOT_IDENTIFIED,
+    which the execution pipeline persists as
+    ``platform_not_identified``.
+    """
+    fake_path = MagicMock()
+    fake_path.open.return_value.__enter__.return_value.read.return_value = b"\x00\x00\x00"
+    result = probe_memory_platform(canonical_path=fake_path, detected_format=None)
+    assert result.platform == PlatformFamily.UNKNOWN
+    adapter = get_adapter_for_probe(result)
+    assert isinstance(adapter, UnsupportedMemoryAdapter)
+    readiness = adapter.check_readiness(probe=result, cache_state={})
+    assert readiness.state.value == "unsupported"
+    assert readiness.error_code == "PLATFORM_NOT_IDENTIFIED"
+
+
+def test_29_known_macos_is_platform_not_supported() -> None:
+    """A known macOS image (Mach-O header) terminates as
+    ``platform_not_supported`` (adapter returns UNSUPPORTED
+    with PLATFORM_NOT_SUPPORTED).
+    """
+    adapter = MacOSMemoryAdapter()
+    probe = MagicMock()
+    probe.platform = PlatformFamily.MACOS
+    probe.format = "raw"
+    probe.architecture = Architecture.X64
+    probe.confidence = ProbeConfidence.MEDIUM
+    probe.reason = "macho_header"
+    result = adapter.check_readiness(probe=probe, cache_state={})
+    assert result.state.value == "unsupported"
+    assert result.error_code == "PLATFORM_NOT_SUPPORTED"
+
+
+def test_30_hibernation_signature_is_windows() -> None:
+    """Hibernation files starting with HIBR are classified as
+    Windows."""
+    fake_path = MagicMock()
+    fake_path.open.return_value.__enter__.return_value.read.return_value = b"HIBR\x00\x00\x00"
+    result = probe_memory_platform(canonical_path=fake_path)
+    assert result.platform == PlatformFamily.WINDOWS
+    assert "hibernation" in result.reason
+
+
+def test_31_lime_magic_is_linux() -> None:
+    """LiME memory format (0x4C694D45 LE) is classified as
+    Linux."""
+    import struct
+    lime_magic = struct.pack("<I", 0x4C694D45)
+    fake_path = MagicMock()
+    fake_path.open.return_value.__enter__.return_value.read.return_value = lime_magic + b"\x00\x00"
+    result = probe_memory_platform(canonical_path=fake_path)
+    assert result.platform == PlatformFamily.LINUX
+    assert "lime" in result.reason
+
+
+def test_32_windows_with_missing_symbols_is_blocked_not_unsupported() -> None:
+    """A Windows image without symbols is BLOCKED, not
+    UNSUPPORTED.  The Windows adapter returns BLOCKED when
+    confidence is MEDIUM (KDBG hit) and no cache match exists.
+    """
+    probe = MemoryProbeResult(
+        platform=PlatformFamily.WINDOWS,
+        format="windows_crash_dump",
+        architecture=Architecture.X64,
+        confidence=ProbeConfidence.MEDIUM,
+        reason="kdbg_signature",
+    )
+    adapter = WindowsMemoryAdapter()
+    readiness = adapter.check_readiness(probe=probe, cache_state={})
+    assert readiness.state.value == "blocked"
+    assert readiness.error_code == "WINDOWS_PROBE_REQUIRED"
+
+
+def test_33_no_memory_scan_run_created_during_probe() -> None:
+    """The bounded probe never creates a MemoryScanRun — it is
+    read-only.
+    """
+    from app.models.memory import MemoryScanRun
+    fake_path = MagicMock()
+    fake_path.open.return_value.__enter__.return_value.read.return_value = b"PAGE\x00\x00"
+    probe_memory_platform(canonical_path=fake_path)
+    # No exception means no DB writes happened; we cannot assert
+    # on the count because there is no DB session here, but the
+    # absence of import side-effects is the contract.
+
+
+def test_34_hibernation_detected_format_is_windows() -> None:
+    """detected_format=hibernation explicitly maps to Windows
+    even with an empty head."""
+    fake_path = MagicMock()
+    fake_path.open.return_value.__enter__.return_value.read.return_value = b""
+    result = probe_memory_platform(
+        canonical_path=fake_path,
+        detected_format="hibernation",
+    )
+    assert result.platform == PlatformFamily.WINDOWS

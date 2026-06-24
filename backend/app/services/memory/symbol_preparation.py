@@ -139,8 +139,12 @@ UI_STATE_FAILED = "failed"
 def ui_state_for(prep_state: str) -> str:
     if prep_state == PREP_READY:
         return UI_STATE_READY
-    if prep_state in {PREP_CANCELLED, PREP_REQUIREMENT_UNKNOWN, PREP_ACQUISITION_FAILED, PREP_UNSUPPORTED, PREP_NEGATIVE_CACHED}:
-        return UI_STATE_BLOCKED if prep_state in {PREP_REQUIREMENT_UNKNOWN, PREP_NEGATIVE_CACHED} else UI_STATE_FAILED
+    if prep_state in {PREP_REQUIREMENT_UNKNOWN, PREP_NEGATIVE_CACHED}:
+        return UI_STATE_BLOCKED
+    if prep_state in {PREP_BLOCKED, PREP_PLATFORM_NOT_IDENTIFIED_STATE, PREP_PLATFORM_NOT_SUPPORTED_STATE}:
+        return UI_STATE_BLOCKED
+    if prep_state in {PREP_CANCELLED, PREP_ACQUISITION_FAILED, PREP_UNSUPPORTED, PREP_FAILED, PREP_DISPATCH_FAILED_STATE}:
+        return UI_STATE_FAILED
     return UI_STATE_PREPARING
 
 
@@ -402,7 +406,7 @@ def mark_preparation(
             preparation.sanitized_message = sanitized_message
         if requirement_id is not None:
             preparation.requirement_id = requirement_id
-    if state in {PREP_READY, PREP_ACQUISITION_FAILED, PREP_REQUIREMENT_UNKNOWN, PREP_UNSUPPORTED, PREP_CANCELLED, PREP_NEGATIVE_CACHED}:
+    if state in {PREP_READY, PREP_ACQUISITION_FAILED, PREP_REQUIREMENT_UNKNOWN, PREP_UNSUPPORTED, PREP_CANCELLED, PREP_NEGATIVE_CACHED, PREP_BLOCKED, PREP_PLATFORM_NOT_IDENTIFIED_STATE, PREP_PLATFORM_NOT_SUPPORTED_STATE}:
         preparation.completed_at = utc_now_naive()
     if state == PREP_PROBING and preparation.started_at is None:
         preparation.started_at = utc_now_naive()
