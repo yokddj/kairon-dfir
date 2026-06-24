@@ -232,40 +232,104 @@ def read_pdb_identity(path: Path) -> tuple[str, int]:
 
 
 def validate_pdb(path: Path, identity: SymbolIdentity) -> dict[str, int | str]:
-    """Validate the downloaded PDB identity.
+    """Validate the downloaded PDB identity against the requirement.
 
-    The GUID is the authoritative identity.  The age in Microsoft's URL
-    can differ from the age embedded in the PDB file (Microsoft may
-    re-publish a PDB at the same URL with a different internal age when
-    the file is updated).  When the GUID matches, the age mismatch is
-    reported as a non-fatal warning via the returned metadata.
+    The check is strict: both the GUID and the age must match the
+    authoritative identity recorded in the requirement.  Microsoft
+    re-publishes PDB files at the same URL with a different internal
+    age when the file is updated; the kernel PE's CodeView RSDS
+    record is the authoritative source for the age the kernel was
+    built against.  A discrepancy is surfaced as
+    ``SYMBOL_PDB_IDENTITY_MISMATCH`` with the expected and observed
+    values so the operator can investigate; the caller must not
+    silently rewrite the requirement.
+
+    Returns a dict with ``guid``, ``age`` and ``architecture`` on
+    success.  Raises :class:`SymbolFetchError` with code
+    ``SYMBOL_PDB_IDENTITY_MISMATCH`` on any identity discrepancy.
     """
     guid, age = read_pdb_identity(path)
-    if guid != identity.guid.upper():
-        raise SymbolFetchError("SYMBOL_IDENTITY_MISMATCH", "Downloaded PDB identity does not match the required symbol.")
-    if age != int(identity.age):
-        return {"guid": guid, "expected_age": int(identity.age), "actual_age": int(age), "age_warning": True}
-    return {"guid": guid, "expected_age": int(identity.age), "actual_age": int(age), "age_warning": False}
+    expected_guid = identity.guid.upper()
+    expected_age = int(identity.age)
+    if guid != expected_guid or age != expected_age:
+        raise SymbolFetchError(
+            "SYMBOL_PDB_IDENTITY_MISMATCH",
+            (
+                "Downloaded PDB identity does not match the required symbol: "
+                f"expected GUID={expected_guid} age={expected_age}, "
+                f"observed GUID={guid} age={age}."
+            ),
+            retryable=False,
+        )
+    return {
+        "guid": guid,
+        "expected_guid": expected_guid,
+        "age": int(age),
+        "expected_age": expected_age,
+        "architecture": identity.architecture,
+    }
 
 
 def generate_isf(pdb_path: Path, output_path: Path, identity: SymbolIdentity, *, max_bytes: int) -> dict[str, object]:
+    """Generate the Volatility ISF from a downloaded PDB.
+
+    The validation is split into four distinct layers, each with its
+    own :class:`SymbolFetchError` code so the caller can tell which
+    stage disagreed:
+
+    1. ``SYMBOL_ISF_PARSE_FAILED`` — Volatility could not parse the
+       PDB into a usable ISF (missing sections, schema failure).
+    2. ``SYMBOL_ISF_IDENTITY_MISSING`` — the ISF was generated but
+       the ``metadata.windows.pdb`` identity block is absent.
+    3. ``SYMBOL_ISF_IDENTITY_MISMATCH`` — the ISF identity disagrees
+       with the authoritative requirement (GUID or age differs).
+    4. ``SYMBOL_ISF_VOLATILITY_VALIDATION_FAILED`` — the ISF could
+       not be re-loaded from disk (corrupt compression / truncated).
+
+    All four are permanent failures: the operator must intervene.
+    """
     from volatility3.framework import contexts
     from volatility3.framework.symbols.windows import pdbconv
 
     location = pdb_path.resolve().as_uri()
-    payload = pdbconv.PdbReader(contexts.Context(), location, identity.pdb_name).get_json()
-    metadata = payload.get("metadata") if isinstance(payload, dict) else None
-    if not isinstance(metadata, dict) or not isinstance(payload.get("symbols"), dict) or not isinstance(payload.get("user_types"), dict):
-        raise SymbolFetchError("SYMBOL_ISF_INVALID", "Generated Volatility ISF is invalid.")
-    pdb_metadata = metadata.get("windows", {}).get("pdb", {}) if isinstance(metadata.get("windows"), dict) else {}
-    generated_guid = str(pdb_metadata.get("GUID") or "").replace("-", "").upper()
+    try:
+        payload = pdbconv.PdbReader(contexts.Context(), location, identity.pdb_name).get_json()
+    except Exception as exc:  # noqa: BLE001
+        raise SymbolFetchError(
+            "SYMBOL_ISF_PARSE_FAILED",
+            f"Volatility could not parse the PDB into an ISF: {type(exc).__name__}.",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise SymbolFetchError("SYMBOL_ISF_PARSE_FAILED", "Generated Volatility ISF payload is not a dictionary.")
+    if not isinstance(payload.get("metadata"), dict):
+        raise SymbolFetchError("SYMBOL_ISF_PARSE_FAILED", "Generated Volatility ISF has no metadata section.")
+    if not isinstance(payload.get("symbols"), dict):
+        raise SymbolFetchError("SYMBOL_ISF_PARSE_FAILED", "Generated Volatility ISF has no symbols section.")
+    if not isinstance(payload.get("user_types"), dict):
+        raise SymbolFetchError("SYMBOL_ISF_PARSE_FAILED", "Generated Volatility ISF has no user_types section.")
+    metadata = payload.get("metadata") or {}
+    if not isinstance(metadata.get("windows"), dict):
+        raise SymbolFetchError("SYMBOL_ISF_IDENTITY_MISSING", "Generated Volatility ISF has no windows metadata block.")
+    pdb_metadata = metadata.get("windows", {}).get("pdb")
+    if not isinstance(pdb_metadata, dict):
+        raise SymbolFetchError("SYMBOL_ISF_IDENTITY_MISSING", "Generated Volatility ISF has no PDB identity block.")
+    generated_guid = str(pdb_metadata.get("GUID") or "").replace("-", "").replace("{", "").replace("}", "").upper()
     generated_age = pdb_metadata.get("age")
     try:
         generated_age_value = int(generated_age)
     except (TypeError, ValueError):
         generated_age_value = -1
-    if generated_guid != identity.guid.upper() or generated_age_value != identity.age:
-        raise SymbolFetchError("SYMBOL_ISF_INVALID", "Generated Volatility ISF identity does not match the required symbol.")
+    expected_guid = identity.guid.upper()
+    expected_age = int(identity.age)
+    if generated_guid != expected_guid or generated_age_value != expected_age:
+        raise SymbolFetchError(
+            "SYMBOL_ISF_IDENTITY_MISMATCH",
+            (
+                "Generated Volatility ISF identity does not match the required symbol: "
+                f"expected GUID={expected_guid} age={expected_age}, "
+                f"observed GUID={generated_guid or '<missing>'} age={generated_age_value}."
+            ),
+        )
     output_path.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
     temporary = output_path.with_suffix(output_path.suffix + ".partial")
     digest = hashlib.sha256()
@@ -285,6 +349,6 @@ def generate_isf(pdb_path: Path, output_path: Path, identity: SymbolIdentity, *,
         checked = json.load(handle)
     if not isinstance(checked, dict) or not isinstance(checked.get("metadata"), dict):
         temporary.unlink(missing_ok=True)
-        raise SymbolFetchError("SYMBOL_ISF_INVALID", "Generated Volatility ISF could not be validated.")
+        raise SymbolFetchError("SYMBOL_ISF_VOLATILITY_VALIDATION_FAILED", "Generated Volatility ISF could not be re-loaded from disk.")
     os.replace(temporary, output_path)
-    return {"bytes": len(compressed), "sha256": digest.hexdigest()}
+    return {"bytes": len(compressed), "sha256": digest.hexdigest(), "isf_guid": expected_guid, "isf_age": expected_age}
