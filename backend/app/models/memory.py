@@ -365,8 +365,8 @@ class MemorySymbolRequirement(UUIDMixin, Base):
 
     case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
     evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
-    source_run_id: Mapped[str] = mapped_column(ForeignKey("memory_scan_runs.id", ondelete="CASCADE"), nullable=False, index=True)
-    source_plugin_run_id: Mapped[str] = mapped_column(ForeignKey("memory_plugin_runs.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_run_id: Mapped[str | None] = mapped_column(ForeignKey("memory_scan_runs.id", ondelete="CASCADE"), nullable=True, index=True)
+    source_plugin_run_id: Mapped[str | None] = mapped_column(ForeignKey("memory_plugin_runs.id", ondelete="CASCADE"), nullable=True, index=True)
     pdb_name: Mapped[str] = mapped_column(String(128), nullable=False)
     pdb_guid: Mapped[str] = mapped_column(String(32), nullable=False)
     pdb_age: Mapped[int] = mapped_column(nullable=False)
