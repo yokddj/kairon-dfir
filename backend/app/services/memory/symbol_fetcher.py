@@ -21,6 +21,11 @@ PDB_NAME = re.compile(r"^[A-Za-z0-9_.-]{1,120}\.pdb$", re.IGNORECASE)
 PDB_GUID = re.compile(r"^[0-9A-F]{32}$")
 MSF7_SIGNATURE = b"Microsoft C/C++ MSF 7.00\r\n\x1aDS\x00\x00\x00"
 
+# Path-segment characters that indicate traversal, even when percent-
+# encoded.  Reject any segment that is exactly ``..`` or its percent-encoded
+# forms (``%2e%2e``, ``%2E%2E``).  Mirrors the gateway policy.
+_TRAVERSAL_SEGMENT = re.compile(r"^(?:%2e%2e|%2E%2E|\.\.)$", re.IGNORECASE)
+
 
 class SymbolFetchError(RuntimeError):
     def __init__(self, code: str, message: str, *, retryable: bool = False):
@@ -96,6 +101,9 @@ def validate_destination(url: str, *, initial: bool, initial_host: str, redirect
     path = parsed.path or "/"
     if any(ord(char) < 32 for char in path) or "\\" in path:
         raise SymbolFetchError("SYMBOL_SOURCE_NOT_ALLOWED", "Symbol destination path is invalid.")
+    for segment in path.split("/"):
+        if _TRAVERSAL_SEGMENT.fullmatch(segment):
+            raise SymbolFetchError("SYMBOL_SOURCE_NOT_ALLOWED", "Symbol destination path contains traversal segments.")
     return host, path + (f"?{parsed.query}" if parsed.query else ""), 443
 
 
