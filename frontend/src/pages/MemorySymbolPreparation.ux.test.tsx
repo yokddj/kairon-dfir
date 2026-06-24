@@ -289,6 +289,7 @@ function buildApiMock(evidence: MemoryEvidenceLandingItem, preparation: MemorySy
     getMemorySymbolReadiness: vi.fn(async () => readiness),
     getMemorySymbolPreparation: vi.fn(async () => preparation),
     retryMemorySymbolPreparation: vi.fn(async () => preparation),
+    retryMemoryPreparation: vi.fn(async () => preparation),
     cancelMemoryRunWhenReady: vi.fn(async () => ({ cancelled: 0 })),
     reconcileMemorySymbols: vi.fn(async () => ({ stats: { scanned: 0, queued: 0 } })),
     probeMemorySymbolRequirement: vi.fn(async () => ({

@@ -83,8 +83,10 @@ describe("OS-agnostic memory preparation v1 (frontend)", () => {
     const retry = screen.getByTestId("memory-preparation-retry-button");
     fireEvent.click(retry);
     await waitFor(() => {
-      expect(api.retryMemorySymbolPreparation).toHaveBeenCalled();
+      expect(api.retryMemoryPreparation).toHaveBeenCalledWith(CASE, EVIDENCE);
     });
+    // The legacy endpoint must not be called.
+    expect(api.retryMemorySymbolPreparation).not.toHaveBeenCalled();
   });
 
   it("3) a Ready state hides the preparation controls", () => {

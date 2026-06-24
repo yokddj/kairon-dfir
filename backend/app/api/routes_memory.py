@@ -80,7 +80,6 @@ from app.services.memory.symbol_preparation import (
     reconcile_memory_preparation_states,
     resolve_effective_memory_preparation_state,
     schedule_preparation,
-    requeue_preparation,
     register_evidence_content_identity,
     record_pending_analysis,
     cancel_pending,
@@ -92,6 +91,7 @@ from app.services.memory.symbol_preparation import (
     PREP_QUEUED,
     PREP_READY,
     PREP_PROBING,
+    PREP_DISPATCH_FAILED_STATE,
 )
 from app.services.memory.symbol_probe_controller import probe_evidence_symbol_requirement
 from app.services.memory.symbol_state import (
@@ -275,14 +275,15 @@ def retry_memory_preparation(
     if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
         raise HTTPException(status_code=404, detail="Memory evidence was not found.")
     from app.services.memory.preparation_runtime import (
+        PREP_DISPATCH_FAILED,
         dispatch_memory_preparation,
     )
     result = dispatch_memory_preparation(db, evidence=evidence, force=True)
-    if result.get("state") == "dispatch_failed":
+    if result.get("state") == PREP_DISPATCH_FAILED_STATE:
         raise HTTPException(
             status_code=500,
             detail={
-                "error_code": "MEMORY_PREPARATION_DISPATCH_FAILED",
+                "error_code": PREP_DISPATCH_FAILED,
                 "message": "Preparation could not be enqueued. The Redis broker is unreachable or rejected the job.",
                 "retryable": True,
             },
@@ -979,16 +980,52 @@ def post_memory_symbol_preparation_retry(
     """Re-queue the automatic preparation pipeline for the evidence.
 
     Idempotent.  No payload.  Returns the refreshed readiness.
+
+    The legacy ``/symbol-preparation/retry`` endpoint now routes
+    to the same canonical dispatch service as the sprint-6
+    ``/preparation/retry`` endpoint.  Both paths produce the same
+    dispatch behavior: a single active preparation row, an RQ
+    job in the ``memory`` queue, and a non-null
+    ``worker_task_id`` after a successful response.
+
+    The previous implementation only flipped the row's ``state``
+    to ``PREP_QUEUED`` without enqueueing, leaving the row
+    stranded in ``queued`` with ``worker_task_id = NULL`` until
+    periodic reconciliation swept it.  Older clients that still
+    POST to this URL now receive the same dispatch contract as
+    the new endpoint.
+
+    Deprecation: this endpoint is retained for backward
+    compatibility with older UI builds.  New clients should
+    call ``/preparation/retry`` instead.
     """
     _require_case(db, case_id)
     evidence = _require_evidence_for_case(db, case_id, evidence_id)
-    requeue_preparation(db, evidence=evidence, state=PREP_QUEUED, reason="manual_retry")
-    db.commit()
+    from app.services.memory.preparation_runtime import (
+        PREP_DISPATCH_FAILED,
+        dispatch_memory_preparation,
+    )
+    result = dispatch_memory_preparation(db, evidence=evidence, force=True)
+    if result.get("state") == PREP_DISPATCH_FAILED_STATE:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error_code": PREP_DISPATCH_FAILED,
+                "message": "Preparation could not be enqueued. The Redis broker is unreachable or rejected the job.",
+                "retryable": True,
+            },
+        )
     readiness = compute_memory_readiness(db, evidence=evidence)
     return {
         "case_id": case_id,
         "evidence_id": evidence_id,
-        "requeued": True,
+        "requeued": result.get("task_active", False),
+        "preparation_id": result.get("preparation_id"),
+        "state": result.get("state"),
+        "task_active": result.get("task_active", False),
+        "queue": result.get("queue"),
+        "worker_task_id": result.get("worker_task_id"),
+        "retryable": result.get("retryable", False),
         **readiness.to_dict(),
     }
 

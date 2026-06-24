@@ -121,7 +121,7 @@ export function MemoryPreparationCard({
   const [showDetails, setShowDetails] = useState(false);
 
   const retryMutation = useMutation({
-    mutationFn: () => api.retryMemorySymbolPreparation(caseId, evidenceId),
+    mutationFn: () => api.retryMemoryPreparation(caseId, evidenceId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["memory-symbol-preparation", caseId, evidenceId] });
       void queryClient.invalidateQueries({ queryKey: ["memory-landing", caseId] });

@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../api/client", () => ({
   api: {
     retryMemorySymbolPreparation: vi.fn(),
+    retryMemoryPreparation: vi.fn(),
     cancelMemoryRunWhenReady: vi.fn(),
   },
 }));
@@ -84,7 +85,7 @@ describe("MemoryPreparationCard v1 reconciliation", () => {
   });
 
   it("4) stale card shows 'Memory preparation was interrupted' and Retry preparation", async () => {
-    (api.retryMemorySymbolPreparation as ReturnType<typeof vi.fn>).mockResolvedValue({
+    (api.retryMemoryPreparation as ReturnType<typeof vi.fn>).mockResolvedValue({
       persisted_state: "queued",
       effective_state: "queued",
     });
@@ -111,8 +112,10 @@ describe("MemoryPreparationCard v1 reconciliation", () => {
     expect(retry.textContent).toMatch(/Retry preparation/);
     fireEvent.click(retry);
     await waitFor(() =>
-      expect(api.retryMemorySymbolPreparation).toHaveBeenCalledWith(CASE, EVID),
+      expect(api.retryMemoryPreparation).toHaveBeenCalledWith(CASE, EVID),
     );
+    // The legacy endpoint must not be called.
+    expect(api.retryMemorySymbolPreparation).not.toHaveBeenCalled();
   });
 
   it("5) active task with heartbeat shows the progress bar (real progress)", () => {

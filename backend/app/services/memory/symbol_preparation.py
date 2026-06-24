@@ -364,6 +364,13 @@ def requeue_preparation(
     state: str = PREP_QUEUED,
     reason: str | None = None,
 ) -> MemorySymbolPreparation:
+    """Reset a preparation row's state without enqueueing.
+
+    This is an internal state-reset helper.  It does NOT enqueue
+    an RQ job.  Use
+    :func:`app.services.memory.preparation_runtime.dispatch_memory_preparation`
+    for any user-visible retry that must dispatch a worker task.
+    """
     preparation = schedule_preparation(db, evidence=evidence, state=state, reason=reason)
     preparation.attempts = 0
     preparation.error_code = None
