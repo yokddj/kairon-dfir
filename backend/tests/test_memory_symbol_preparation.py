@@ -505,8 +505,10 @@ def test_negative_cache_prevents_repeated_acquisition(db_session) -> None:
 
 
 def test_progress_for_state_covers_documented_states() -> None:
+    # Sprint 6: queued = 0 (no fake 5%).  All other states
+    # are documented and have a measurable percentage.
     for state, label, percent in [
-        (PREP_QUEUED, "Queued", 5),
+        (PREP_QUEUED, "Queued", 0),
         (PREP_PROBING, "Identifying", 20),
         (PREP_IDENTIFIED, "Requirement identified", 45),
         (PREP_ACQUIRING, "Downloading", 70),

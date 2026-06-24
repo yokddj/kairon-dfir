@@ -4153,6 +4153,21 @@ export const api = {
       `/cases/${caseId}/memory/evidences/${evidenceId}/symbol-preparation/retry`,
       { method: "POST" },
     ),
+  // Sprint 6: OS-agnostic preparation.
+  getMemoryPreparationDiagnostics: (caseId: string, evidenceId: string) =>
+    request<Record<string, unknown>>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/preparation/diagnostics`,
+    ),
+  retryMemoryPreparation: (caseId: string, evidenceId: string) =>
+    request<Record<string, unknown>>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/preparation/retry`,
+      { method: "POST" },
+    ),
+  directMemoryProbe: (caseId: string, evidenceId: string) =>
+    request<{ accepted: boolean; scan_run_id: string; task_id: string }>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/direct-probe`,
+      { method: "POST" },
+    ),
   reconcileMemorySymbols: (caseId: string) =>
     request<{ stats: Record<string, number> }>(`/cases/${caseId}/memory/symbol-reconcile`, {
       method: "POST",

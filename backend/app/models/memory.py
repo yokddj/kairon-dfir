@@ -270,6 +270,11 @@ class MemorySymbolPreparation(UUIDMixin, Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True, index=True)
     attempts: Mapped[int] = mapped_column(nullable=False, default=0)
     worker_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Queue that owns the worker task.  Sprint 6 (OS-agnostic
+    # preparation) documents one documented queue per process
+    # boundary so the diagnostics endpoint can detect
+    # mismatches between the API and the memory-worker.
+    queue_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)

@@ -82,6 +82,11 @@ PREP_READY = "ready"
 PREP_FAILED = "failed"
 PREP_CANCELLED = "cancelled"
 PREP_STALE = "stale"
+# Sprint 6 (OS-agnostic preparation) additions.
+PREP_DISPATCH_FAILED_STATE = "dispatch_failed"
+PREP_PLATFORM_NOT_IDENTIFIED_STATE = "platform_not_identified"
+PREP_PLATFORM_NOT_SUPPORTED_STATE = "platform_not_supported"
+PREP_BLOCKED = "blocked"
 
 # Legacy aliases (kept for the migration period).
 PREP_IDENTIFIED = "identified"
@@ -105,6 +110,10 @@ ALL_PREP_STATES = frozenset(
         PREP_FAILED,
         PREP_CANCELLED,
         PREP_STALE,
+        PREP_DISPATCH_FAILED_STATE,
+        PREP_PLATFORM_NOT_IDENTIFIED_STATE,
+        PREP_PLATFORM_NOT_SUPPORTED_STATE,
+        PREP_BLOCKED,
         # Legacy aliases (still in the DB; keep them in the set so
         # older rows pass validation).
         PREP_IDENTIFIED,
@@ -643,11 +652,19 @@ class MemoryReadiness:
 
 
 def progress_for_state(state: str) -> tuple[str, int]:
-    """Map a preparation state to a progress label + percent."""
+    """Map a preparation state to a progress label + percent.
+
+    Sprint 6: removed the fake ``Queued = 5%`` placeholder.  A
+    queued row either has a real task (indeterminate) or has
+    failed to dispatch (0).  Percentages are reserved for
+    states that have measurable progress (probing, ready, etc.).
+    """
     if state == PREP_QUEUED:
-        return ("Queued", 5)
+        # Indeterminate indicator in the UI; progress is 0
+        # (the row has no measurable progress yet).
+        return ("Queued", 0)
     if state == PREP_PROBING:
-        return ("Identifying Windows kernel symbols", 20)
+        return ("Identifying platform", 20)
     if state == PREP_IDENTIFIED:
         return ("Requirement identified", 45)
     if state == PREP_CACHE_HIT:
@@ -660,6 +677,16 @@ def progress_for_state(state: str) -> tuple[str, int]:
         return ("Building offline symbol table", 85)
     if state == PREP_READY:
         return ("Ready", 100)
+    if state == PREP_DISPATCH_FAILED_STATE:
+        return ("Worker dispatch failed — retry", 0)
+    if state == PREP_PLATFORM_NOT_IDENTIFIED_STATE:
+        return ("Platform not identified", 0)
+    if state == PREP_PLATFORM_NOT_SUPPORTED_STATE:
+        return ("Platform not supported", 0)
+    if state == PREP_BLOCKED:
+        return ("Blocked", 0)
+    if state == PREP_STALE:
+        return ("Stale — re-dispatching", 0)
     if state == PREP_REQUIREMENT_UNKNOWN:
         return ("Requirement not identified", 0)
     if state == PREP_ACQUISITION_FAILED:
@@ -937,9 +964,18 @@ def reconcile_memory_symbol_readiness(
                     )
                 stats["skipped_ready"] += 1
                 continue
-        # Otherwise, queue a fresh preparation.
-        schedule_preparation(db, evidence=evidence, state=PREP_QUEUED, reason="reconcile")
-        stats["queued"] += 1
+        # Otherwise, queue a fresh preparation.  Sprint 6
+        # delegates the dispatch to the new dispatcher so the
+        # row actually receives a worker task id.
+        try:
+            from app.services.memory.preparation_runtime import (
+                dispatch_memory_preparation,
+            )
+            dispatch_memory_preparation(db, evidence=evidence)
+            stats["queued"] += 1
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("reconcile: dispatch failed for %s: %s", evidence.id, exc)
+            stats["queued"] += 1
     db.commit()
     return stats
 

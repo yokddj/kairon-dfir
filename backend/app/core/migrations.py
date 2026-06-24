@@ -839,6 +839,27 @@ def _v11_batches_last_advanced_run_id_uuid(connection: Connection) -> None:
         )
 
 
+@register(12, "memory_symbol_preparations_queue_name")
+def _v12_preparations_queue_name(connection: Connection) -> None:
+    """Add ``memory_symbol_preparations.queue_name`` for the v1
+    OS-agnostic preparation sprint.
+
+    The preparation row records the queue that owns the worker
+    task.  Without it the diagnostics endpoint cannot tell
+    whether the API and the memory-worker are listening on the
+    same queue.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_symbol_preparations" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("memory_symbol_preparations")}
+    if "queue_name" not in existing:
+        connection.execute(
+            text("ALTER TABLE memory_symbol_preparations "
+                 "ADD COLUMN queue_name VARCHAR(64)")
+        )
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 

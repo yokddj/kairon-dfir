@@ -479,10 +479,11 @@ def _run_post_registration_automation(
             register_evidence_content_identity,
             find_requirement_by_content_identity,
             link_evidence_to_requirement,
-            schedule_preparation,
             mark_preparation,
-            PREP_QUEUED,
             PREP_READY,
+        )
+        from app.services.memory.preparation_runtime import (
+            dispatch_memory_preparation,
         )
         from app.core.database import utc_now_naive as _now
         settings = get_settings()
@@ -509,12 +510,11 @@ def _run_post_registration_automation(
                     requirement_id=reused.id,
                 )
             else:
-                schedule_preparation(
-                    db,
-                    evidence=evidence,
-                    state=PREP_QUEUED,
-                    reason="auto_probe_on_upload",
-                )
+                # Sprint 6: dispatch the OS-agnostic preparation
+                # task so the row never stays indefinitely
+                # queued.  The dispatcher enqueues the worker
+                # task AFTER the row commits.
+                dispatch_memory_preparation(db, evidence=evidence)
             db.commit()
     except Exception as prep_exc:  # noqa: BLE001
         logger.warning(

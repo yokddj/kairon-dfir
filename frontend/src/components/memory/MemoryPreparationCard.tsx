@@ -13,15 +13,26 @@ function toneForUIState(uiState: string): Tone {
 }
 
 function cardCopy(prep: MemorySymbolPreparation) {
-  // Use the effective state (post-reconciliation) to drive the
-  // copy.  A persisted "queued" with an effective "ready" is
-  // shown as ready, never as "Queued 5%".
+  // Sprint 6 (OS-agnostic preparation): use the effective
+  // state (post-reconciliation) to drive the copy.  The
+  // states ``dispatch_failed``, ``platform_not_identified``
+  // and ``platform_not_supported`` are now distinct from
+  // the legacy "failed" / "blocked" buckets.
   const state = prep.effective_state || prep.ui_state;
   if (state === "ready" || prep.ui_state === "ready") {
     return {
       title: "Memory analysis ready",
-      subtitle: "Windows symbols and system metadata are available.",
+      subtitle: "Symbols and system metadata are available for this evidence.",
       tone: "good" as const,
+    };
+  }
+  if (state === "dispatch_failed" || prep.error_code === "MEMORY_PREPARATION_DISPATCH_FAILED") {
+    return {
+      title: "Preparation could not be enqueued",
+      subtitle:
+        prep.sanitized_message ||
+        "The worker queue is unreachable. Retry to dispatch a new task.",
+      tone: "bad" as const,
     };
   }
   if (state === "stale" || prep.stale) {
@@ -33,12 +44,39 @@ function cardCopy(prep: MemorySymbolPreparation) {
       tone: "bad" as const,
     };
   }
-  if (state === "failed" || prep.ui_state === "failed") {
+  if (state === "failed" || (prep.ui_state === "failed" && state === "failed")) {
     return {
       title: "Memory preparation failed",
       subtitle:
         prep.sanitized_message ||
-        "Kairon could not obtain the required Windows symbols.",
+        "Kairon could not obtain the required symbols for this evidence.",
+      tone: "bad" as const,
+    };
+  }
+  if (state === "platform_not_supported") {
+    return {
+      title: "Platform not supported",
+      subtitle:
+        prep.sanitized_message ||
+        "Kairon does not currently support this operating system.",
+      tone: "bad" as const,
+    };
+  }
+  if (state === "platform_not_identified") {
+    return {
+      title: "Platform not identified",
+      subtitle:
+        prep.sanitized_message ||
+        "The image does not match a known operating-system family.",
+      tone: "bad" as const,
+    };
+  }
+  if (state === "blocked") {
+    return {
+      title: "Preparation blocked",
+      subtitle:
+        prep.sanitized_message ||
+        "A required dependency is missing. You can retry the preparation.",
       tone: "bad" as const,
     };
   }
@@ -53,7 +91,7 @@ function cardCopy(prep: MemorySymbolPreparation) {
   if (prep.ui_state === "preparing" || prep.task_alive) {
     return {
       title: "Preparing memory analysis",
-      subtitle: prep.progress_label || "Preparing Windows symbols for this evidence.",
+      subtitle: prep.progress_label || "Preparing the memory pipeline for this evidence.",
       tone: "warn" as const,
     };
   }
@@ -61,7 +99,7 @@ function cardCopy(prep: MemorySymbolPreparation) {
     title: "Memory symbols unavailable",
     subtitle:
       prep.sanitized_message ||
-      "Kairon could not obtain the required Windows symbols for this evidence.",
+      "Kairon could not obtain the required symbols for this evidence.",
     tone: "bad" as const,
   };
 }
@@ -167,19 +205,36 @@ export function MemoryPreparationCard({
           been reconciled) AND
         * the task is alive (otherwise the percentage is a stale
           fake value that the analyst should not see).
+
+        Sprint 6: when ``progress_percent`` is 0 the bar uses an
+        indeterminate animation rather than rendering a 0% bar
+        (the previous "Queued 5%" placeholder is gone).
       */}
       {preparation.ui_state === "preparing" &&
       preparation.effective_state !== "ready" &&
       preparation.task_alive ? (
         <div className="mt-3" data-testid="memory-preparation-progress">
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-abyss/60">
-            <div
-              className="h-full rounded-full bg-accent"
-              style={{ width: `${Math.min(100, Math.max(0, preparation.progress_percent))}%` }}
-            />
+            {preparation.progress_percent > 0 ? (
+              <div
+                className="h-full rounded-full bg-accent"
+                style={{ width: `${Math.min(100, Math.max(0, preparation.progress_percent))}%` }}
+              />
+            ) : (
+              <div
+                className="h-full w-1/3 rounded-full bg-accent/70"
+                data-testid="memory-preparation-progress-indeterminate"
+                style={{
+                  animation: "memory-progress-indeterminate 1.2s ease-in-out infinite",
+                }}
+              />
+            )}
           </div>
           <p className="mt-1 text-[10px] text-muted">
-            {preparation.progress_label} · {preparation.progress_percent}%
+            {preparation.progress_label}
+            {preparation.progress_percent > 0
+              ? ` · ${preparation.progress_percent}%`
+              : ""}
           </p>
         </div>
       ) : null}

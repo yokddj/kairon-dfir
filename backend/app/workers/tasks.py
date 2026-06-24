@@ -552,6 +552,40 @@ def enqueue_memory_metadata_scan(memory_scan_run_id: str) -> str:
     return job.id
 
 
+def enqueue_memory_preparation(evidence_id: str) -> str:
+    """Enqueue the OS-agnostic memory preparation task.
+
+    Returns the RQ job id.  The task is dispatched on the
+    single documented ``memory`` queue regardless of the
+    ``memory_execution_mode`` setting so the diagnostics
+    endpoint can detect when the API and the memory-worker
+    are listening on different queues.
+    """
+    timeout = max(60, int(settings.memory_job_timeout_seconds))
+    job = memory_queue.enqueue(
+        "app.workers.tasks.run_memory_preparation",
+        evidence_id,
+        job_timeout=timeout,
+    )
+    return job.id
+
+
+def run_memory_preparation(evidence_id: str) -> None:
+    """Worker entry point for the OS-agnostic preparation.
+
+    The task is intentionally narrow: it probes the image,
+    evaluates readiness through the platform adapter and
+    persists a terminal state.  It does NOT download symbols,
+    does NOT open OpenSearch indices and does NOT enqueue
+    further work.  A follow-up reconciliation may re-dispatch
+    a fresh task if the row goes stale.
+    """
+    from app.services.memory.preparation_runtime import (
+        execute_memory_preparation,
+    )
+    execute_memory_preparation(evidence_id)
+
+
 def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
     from app.services.memory.execution import run_memory_metadata_scan as execute_memory_metadata_scan
 
