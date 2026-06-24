@@ -640,6 +640,7 @@ export type MemorySymbolPreparationState =
   | "failed"
   | "cancelled"
   | "stale"
+  | "blocked_symbols"
   // Legacy aliases kept for backwards compatibility with rows
   // written before the v1 reconciliation sprint.
   | "identified"
@@ -724,6 +725,26 @@ export type MemorySymbolAcquireResponse = {
   source: string;
   error_code: string | null;
   message: string;
+};
+
+export type MemorySymbolBlockedAcquireResponse = {
+  request_id: string | null;
+  acquisition_id: string | null;
+  requirement_id: string | null;
+  cached_symbol_id: string | null;
+  state: string;
+  queue: string;
+  task_id: string | null;
+  task_alive: boolean;
+  retryable: boolean;
+  source_category: string;
+  pdb_name: string | null;
+  pdb_guid: string | null;
+  pdb_age: number | null;
+  architecture: string | null;
+  symbol_key: string | null;
+  message: string;
+  error_code: string | null;
 };
 
 export type MemoryScanRun = {
@@ -4190,6 +4211,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ authorization_acknowledged: true }),
     }),
+  acquireExactMemorySymbols: (caseId: string, evidenceId: string) =>
+    request<MemorySymbolBlockedAcquireResponse>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/symbols/acquire-managed`,
+      { method: "POST", body: JSON.stringify({ authorization_acknowledged: true }) },
+    ),
+  getMemorySymbolAcquisition: (caseId: string, evidenceId: string) =>
+    request<MemorySymbolBlockedAcquireResponse>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/symbols/acquisition`,
+    ),
   listMemoryRuns: (caseId: string, evidenceId?: string) => {
     const query = evidenceId ? `?evidence_id=${encodeURIComponent(evidenceId)}` : "";
     return request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs${query}`);

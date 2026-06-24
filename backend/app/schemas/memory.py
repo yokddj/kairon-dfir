@@ -90,6 +90,32 @@ class MemorySymbolAcquireResponse(BaseModel):
     message: str
 
 
+class MemorySymbolBlockedAcquireRequest(BaseModel):
+    authorization_acknowledged: bool = False
+
+    model_config = {"extra": "forbid"}
+
+
+class MemorySymbolBlockedAcquireResponse(BaseModel):
+    request_id: str | None = None
+    acquisition_id: str | None = None
+    requirement_id: str | None = None
+    cached_symbol_id: str | None = None
+    state: str
+    queue: str
+    task_id: str | None = None
+    task_alive: bool = False
+    retryable: bool = False
+    source_category: str
+    pdb_name: str | None = None
+    pdb_guid: str | None = None
+    pdb_age: int | None = None
+    architecture: str | None = None
+    symbol_key: str | None = None
+    message: str
+    error_code: str | None = None
+
+
 class MemorySymbolRequestCreateRequest(BaseModel):
     authorization_acknowledged: bool = False
 
