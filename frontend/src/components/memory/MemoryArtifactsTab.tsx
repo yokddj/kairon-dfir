@@ -41,25 +41,14 @@ type SubView =
   | "kernel"
   | "suspicious";
 
-const SUBVIEWS: ReadonlyArray<{ key: SubView; label: string; testId: string; description: string }> = [
-  { key: "network", label: "Network", testId: "memory-artifacts-subview-network", description: "TCP/UDP endpoints observed in memory." },
-  { key: "modules", label: "Modules", testId: "memory-artifacts-subview-modules", description: "DLLs and per-process modules (dlllist + ldrmodules)." },
-  { key: "handles", label: "Handles", testId: "memory-artifacts-subview-handles", description: "Kernel handles per process." },
-  { key: "drivers", label: "Drivers", testId: "memory-artifacts-subview-drivers", description: "Loaded drivers (driverscan, scan-only)." },
-  { key: "kernel", label: "Kernel modules", testId: "memory-artifacts-subview-kernel", description: "Kernel modules (windows.modules)." },
-  { key: "suspicious", label: "Suspicious regions", testId: "memory-artifacts-subview-suspicious", description: "Indicators (windows.malfind), needs review." },
+const SUBVIEWS: ReadonlyArray<{ key: SubView; label: string; testId: string; description: string; family: string }> = [
+  { key: "network", label: "Network", testId: "memory-artifacts-subview-network", description: "TCP/UDP endpoints observed in memory.", family: "network" },
+  { key: "modules", label: "Modules", testId: "memory-artifacts-subview-modules", description: "DLLs and per-process modules (dlllist + ldrmodules).", family: "modules" },
+  { key: "handles", label: "Handles", testId: "memory-artifacts-subview-handles", description: "Kernel handles per process.", family: "handles" },
+  { key: "drivers", label: "Drivers", testId: "memory-artifacts-subview-drivers", description: "Loaded drivers (driverscan, scan-only).", family: "drivers" },
+  { key: "kernel", label: "Kernel modules", testId: "memory-artifacts-subview-kernel", description: "Kernel modules (windows.modules).", family: "kernel_modules" },
+  { key: "suspicious", label: "Suspicious regions", testId: "memory-artifacts-subview-suspicious", description: "Indicators (windows.malfind), needs review.", family: "suspicious_regions" },
 ];
-
-function _isArtifactProfile(profile: string | null | undefined): boolean {
-  if (!profile) return false;
-  return [
-    "network_basic",
-    "modules_basic",
-    "handles_basic",
-    "kernel_basic",
-    "suspicious_memory",
-  ].includes(profile);
-}
 
 function reported(value: unknown): string {
   if (value === null || value === undefined || value === "") return "—";
@@ -138,6 +127,40 @@ function CountCard({ label, value, testId }: { label: string; value: number | nu
       <p className="text-[10px] uppercase tracking-[0.18em] text-muted">{label}</p>
       <p className="mt-1 text-base font-semibold text-ink" data-testid={`memory-artifacts-${testId}-value`}>
         {value === null ? "Not analyzed" : value}
+      </p>
+    </div>
+  );
+}
+
+function FamilyCountCard({
+  label,
+  testId,
+  familyValue,
+}: {
+  label: string;
+  testId: string;
+  familyValue?: { count?: number | null; analysis_state?: string | null; active_run?: { id?: string; profile?: string } | null };
+}) {
+  // The per-family card distinguishes the truthful states:
+  // * not_analyzed:    no compatible run yet (show "Not analyzed")
+  // * failed:          latest attempt failed (show "Not analyzed")
+  // * unavailable:     the family is unavailable in this runtime
+  // * analyzed_empty:  successful run with zero rows (show "0")
+  // * analyzed_with_results: successful run with rows (show the count)
+  // * partial:         run finished with plugin failures (show the count)
+  const state = familyValue?.analysis_state ?? "not_analyzed";
+  const count = familyValue?.count ?? 0;
+  const showZero = state === "analyzed_empty" || state === "analyzed_with_results" || state === "partial";
+  const display = showZero ? count : null;
+  return (
+    <div
+      className="rounded-xl border border-line bg-abyss/40 px-3 py-2"
+      data-testid={`memory-artifacts-${testId}`}
+      data-state={state}
+    >
+      <p className="text-[10px] uppercase tracking-[0.18em] text-muted">{label}</p>
+      <p className="mt-1 text-base font-semibold text-ink" data-testid={`memory-artifacts-${testId}-value`}>
+        {display === null ? "Not analyzed" : display}
       </p>
     </div>
   );
@@ -590,6 +613,7 @@ export function MemoryArtifactsTab({
 }: Props) {
   const [subView, setSubView] = useState<SubView>("network");
   const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(50);
   const [filter, setFilter] = useState("");
   const [pidFilter, setPidFilter] = useState("");
   const [objectTypeFilter, setObjectTypeFilter] = useState("");
@@ -599,17 +623,78 @@ export function MemoryArtifactsTab({
   const effectiveRunId = selectedRunId || runOptions?.default_run_id || null;
 
   const overviewQuery = useQuery<MemoryArtifactOverview>({
-    queryKey: ["memory-artifact-overview", caseId, effectiveRunId, evidenceId],
-    queryFn: () => api.getMemoryArtifactOverview(caseId, { run_id: effectiveRunId || undefined }),
+    // The overview now resolves per-family active runs on the
+    // server side, so we do not pass the global default run ID.
+    // Passing it would force a single-run scope and zero out
+    // every family except the one matching the default profile.
+    queryKey: ["memory-artifact-overview", caseId, evidenceId],
+    queryFn: () => api.getMemoryArtifactOverview(caseId, {}),
     refetchOnWindowFocus: false,
   });
   const overview = overviewQuery.data;
 
+  // Per-family active-result queries.  Each one resolves the
+  // correct scan run for its family (handles_basic for handles,
+  // kernel_basic for drivers and kernel modules, etc.) and
+  // returns the real per-family total and items.  The list
+  // queries below use the run id returned by the matching
+  // active-result, so a query for ``handles`` no longer hits
+  // the processes run.
+  const networkActiveQuery = useQuery({
+    queryKey: ["memory-active", caseId, evidenceId, "network", page ,pageSize, filter, pidFilter],
+    queryFn: () => api.getMemoryActiveResult(caseId, evidenceId || "", "network", undefined).then((r) => r),
+    enabled: Boolean(evidenceId) && subView === "network",
+    refetchOnWindowFocus: false,
+  });
+  const modulesActiveQuery = useQuery({
+    queryKey: ["memory-active", caseId, evidenceId, "modules", page ,pageSize, filter, pidFilter],
+    queryFn: () => api.getMemoryActiveResult(caseId, evidenceId || "", "modules", undefined),
+    enabled: Boolean(evidenceId) && subView === "modules",
+    refetchOnWindowFocus: false,
+  });
+  const handlesActiveQuery = useQuery({
+    queryKey: ["memory-active", caseId, evidenceId, "handles", page ,pageSize, objectTypeFilter],
+    queryFn: () => api.getMemoryActiveResult(caseId, evidenceId || "", "handles", undefined, {
+      object_type: objectTypeFilter || undefined,
+    }),
+    enabled: Boolean(evidenceId) && subView === "handles",
+    refetchOnWindowFocus: false,
+  });
+  const driversActiveQuery = useQuery({
+    queryKey: ["memory-active", caseId, evidenceId, "drivers", page],
+    queryFn: () => api.getMemoryActiveResult(caseId, evidenceId || "", "drivers", undefined),
+    enabled: Boolean(evidenceId) && subView === "drivers",
+    refetchOnWindowFocus: false,
+  });
+  const kernelActiveQuery = useQuery({
+    queryKey: ["memory-active", caseId, evidenceId, "kernel_modules", page],
+    queryFn: () => api.getMemoryActiveResult(caseId, evidenceId || "", "kernel_modules", undefined),
+    enabled: Boolean(evidenceId) && subView === "kernel",
+    refetchOnWindowFocus: false,
+  });
+  const suspiciousActiveQuery = useQuery({
+    queryKey: ["memory-active", caseId, evidenceId, "suspicious_regions", page],
+    queryFn: () => api.getMemoryActiveResult(caseId, evidenceId || "", "suspicious_regions", undefined),
+    enabled: Boolean(evidenceId) && subView === "suspicious",
+    refetchOnWindowFocus: false,
+  });
+
+  // Build the per-family list params using the per-family active
+  // run id.  The list endpoints still accept a ``run_id`` query
+  // param; we forward the canonical per-family run id so the
+  // OpenSearch query is correctly scoped.
   const listParams: Record<string, unknown> = useMemo(() => {
+    let activeRunId: string | undefined = effectiveRunId || undefined;
+    if (subView === "network") activeRunId = networkActiveQuery.data?.active_run?.id;
+    else if (subView === "modules") activeRunId = modulesActiveQuery.data?.active_run?.id;
+    else if (subView === "handles") activeRunId = handlesActiveQuery.data?.active_run?.id;
+    else if (subView === "drivers") activeRunId = driversActiveQuery.data?.active_run?.id;
+    else if (subView === "kernel") activeRunId = kernelActiveQuery.data?.active_run?.id;
+    else if (subView === "suspicious") activeRunId = suspiciousActiveQuery.data?.active_run?.id;
     const params: Record<string, unknown> = {
-      run_id: effectiveRunId || undefined,
+      run_id: activeRunId,
       page,
-      page_size: 50,
+      page_size: pageSize,
     };
     if (evidenceId) params.evidence_id = evidenceId;
     if (filter) params.process_name = filter;
@@ -617,7 +702,9 @@ export function MemoryArtifactsTab({
     if (objectTypeFilter) params.object_type = objectTypeFilter;
     if (reviewFilter) params.review_status = reviewFilter;
     return params;
-  }, [effectiveRunId, evidenceId, page, filter, pidFilter, objectTypeFilter, reviewFilter]);
+  }, [effectiveRunId, subView, evidenceId, page, filter, pidFilter, objectTypeFilter, reviewFilter,
+      networkActiveQuery.data, modulesActiveQuery.data, handlesActiveQuery.data,
+      driversActiveQuery.data, kernelActiveQuery.data, suspiciousActiveQuery.data]);
 
   const networkQuery = useQuery<MemoryArtifactList>({
     queryKey: ["memory-artifact-network", caseId, listParams],
@@ -722,14 +809,46 @@ export function MemoryArtifactsTab({
         </p>
 
         <div className="mt-3 grid gap-2 md:grid-cols-3 lg:grid-cols-6" data-testid="memory-artifacts-overview-cards">
-          {overview?.run_status && _isArtifactProfile(overview.profile) ? (
+          {/* The overview endpoint now resolves per-family active
+              runs on the server, so each card shows the count from
+              the correct scan run.  When a family has no
+              successful run yet, the card shows "Not analyzed";
+              when the run completed with zero rows the card shows
+              "0" (analyzed_empty); when the run completed with
+              rows the card shows the count.  No single global
+              run scope is applied. */}
+          {overview ? (
             <>
-              <CountCard label="Network connections" value={overview.network_connections?.count ?? 0} testId="overview-network" />
-              <CountCard label="Process modules" value={overview.process_modules?.count ?? 0} testId="overview-modules" />
-              <CountCard label="Module discrepancies" value={overview.module_discrepancies ?? 0} testId="overview-discrepancies" />
-              <CountCard label="Handles" value={overview.handles?.count ?? 0} testId="overview-handles" />
-              <CountCard label="Drivers" value={overview.drivers?.count ?? 0} testId="overview-drivers" />
-              <CountCard label="Suspicious regions" value={overview.suspicious_regions?.count ?? 0} testId="overview-suspicious" />
+              <FamilyCountCard
+                label="Network connections"
+                testId="overview-network"
+                familyValue={overview.network_connections}
+              />
+              <FamilyCountCard
+                label="Process modules"
+                testId="overview-modules"
+                familyValue={overview.process_modules}
+              />
+              <CountCard
+                label="Module discrepancies"
+                value={overview.module_discrepancies ?? 0}
+                testId="overview-discrepancies"
+              />
+              <FamilyCountCard
+                label="Handles"
+                testId="overview-handles"
+                familyValue={overview.handles}
+              />
+              <FamilyCountCard
+                label="Drivers"
+                testId="overview-drivers"
+                familyValue={overview.drivers}
+              />
+              <FamilyCountCard
+                label="Suspicious regions"
+                testId="overview-suspicious"
+                familyValue={overview.suspicious_regions}
+              />
             </>
           ) : (
             <>

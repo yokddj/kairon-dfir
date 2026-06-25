@@ -55,7 +55,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
-from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition
+from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition, MemorySymbolRequirement
 from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolBlockedAcquireRequest, MemorySymbolBlockedAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
 from app.services.memory.artifact_indexing import (
     get_artifact_document,
@@ -385,6 +385,21 @@ def get_memory_active_result(
     evidence_id: str,
     family: str = Query(...),
     run_id: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    protocol: str | None = Query(default=None),
+    local_address: str | None = Query(default=None),
+    local_port: int | None = Query(default=None),
+    remote_address: str | None = Query(default=None),
+    remote_port: int | None = Query(default=None),
+    state: str | None = Query(default=None),
+    pid: int | None = Query(default=None),
+    process_name: str | None = Query(default=None),
+    module_name: str | None = Query(default=None),
+    path: str | None = Query(default=None),
+    load_state: str | None = Query(default=None),
+    object_type: str | None = Query(default=None),
+    object_name: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> dict:
     """Return the active scan run for a single artifact family of an
@@ -397,6 +412,12 @@ def get_memory_active_result(
     override.  When ``run_id`` is not provided the function returns
     the latest successful run for the family plus a snapshot of the
     latest attempt (which may have failed).
+
+    The response also includes the per-family total count, the
+    paginated items, and a truthful ``analysis_state``.  The page,
+    page_size and filter parameters are forwarded to the canonical
+    per-family list query so the analyst sees the same rows the
+    artefacts page would render.
     """
     _require_case(db, case_id)
     _require_evidence_for_case(db, case_id, evidence_id)
@@ -408,12 +429,30 @@ def get_memory_active_result(
                 "message": f"Unknown artifact family '{family}'.",
             },
         )
+    filters: dict[str, Any] = {
+        "protocol": protocol,
+        "local_address": local_address,
+        "local_port": local_port,
+        "remote_address": remote_address,
+        "remote_port": remote_port,
+        "state": state,
+        "pid": pid,
+        "process_name": process_name,
+        "module_name": module_name,
+        "path": path,
+        "load_state": load_state,
+        "object_type": object_type,
+        "object_name": object_name,
+    }
     return resolve_active_memory_result(
         db,
         case_id=case_id,
         evidence_id=evidence_id,
         family=family,
         preferred_run_id=run_id,
+        page=page,
+        page_size=page_size,
+        filters=filters,
     )
 
 
@@ -1033,11 +1072,93 @@ def get_memory_symbol_preparation(
         "stale_reason": effective["stale_reason"],
         "task_alive": effective["task_alive"],
     })
+    # Surface the latest acquisition status so the UI can render
+    # the structured failure panel (e.g. SYMBOL_PDB_IDENTITY_MISMATCH)
+    # without making a second round-trip to /symbols/acquisition.
+    # The acquisition is a *sibling* of the preparation: the
+    # preparation drives the discovery pipeline, the acquisition
+    # is the actual download against the cached or fetched
+    # requirement.  Both must be visible to the operator.
+    acquisition_summary = _latest_acquisition_summary(db, evidence_id=evidence_id)
+    payload["acquisition"] = acquisition_summary
+    if acquisition_summary.get("error_code"):
+        payload["error_code"] = acquisition_summary["error_code"]
+        # If the canonical preparation message is generic but the
+        # acquisition carries a specific identity-mismatch message,
+        # promote the acquisition message to the card subtitle.
+        if acquisition_summary["error_code"] in {
+            "SYMBOL_PDB_IDENTITY_MISMATCH",
+            "SYMBOL_ACQUISITION_FAILED",
+        }:
+            payload["sanitized_message"] = acquisition_summary.get(
+                "sanitized_message", payload.get("sanitized_message")
+            )
     return {
         "case_id": case_id,
         "evidence_id": evidence_id,
         "filename": evidence.original_filename,
         **payload,
+    }
+
+
+def _latest_acquisition_summary(db: Session, *, evidence_id: str) -> dict:
+    """Return a minimal summary of the most recent acquisition for
+    the evidence, including the expected/observed identities when
+    the acquisition recorded a PDB identity mismatch.
+
+    The function is read-only; it never mutates any row.
+    """
+    from app.models.memory import MemorySymbolAcquisition
+
+    latest = (
+        db.query(MemorySymbolAcquisition)
+        .join(MemorySymbolRequirement, MemorySymbolRequirement.id == MemorySymbolAcquisition.requirement_id)
+        .filter(MemorySymbolRequirement.evidence_id == evidence_id)
+        .order_by(MemorySymbolAcquisition.created_at.desc())
+        .first()
+    )
+    if latest is None:
+        return {
+            "status": None,
+            "error_code": None,
+            "sanitized_message": None,
+            "identity_expected": None,
+            "identity_observed": None,
+            "started_at": None,
+            "completed_at": None,
+        }
+    requirement = db.get(MemorySymbolRequirement, latest.requirement_id)
+    identity_expected: dict | None = None
+    if requirement is not None:
+        identity_expected = {
+            "pdb_name": requirement.pdb_name,
+            "pdb_guid": requirement.pdb_guid,
+            "pdb_age": int(requirement.pdb_age),
+            "architecture": requirement.architecture,
+        }
+    identity_observed: dict | None = None
+    if latest.observed_pdb_guid is not None and latest.observed_pdb_age is not None:
+        identity_observed = {
+            "pdb_guid": str(latest.observed_pdb_guid),
+            "pdb_age": int(latest.observed_pdb_age),
+            "architecture": latest.observed_architecture,
+        }
+    elif latest.metadata_json and isinstance(latest.metadata_json, dict):
+        meta_observed = latest.metadata_json.get("identity_observed")
+        if isinstance(meta_observed, dict):
+            identity_observed = {
+                "pdb_guid": str(meta_observed.get("pdb_guid")),
+                "pdb_age": int(meta_observed.get("pdb_age")) if meta_observed.get("pdb_age") is not None else None,
+                "architecture": meta_observed.get("architecture"),
+            }
+    return {
+        "status": latest.status,
+        "error_code": latest.error_code,
+        "sanitized_message": latest.sanitized_message,
+        "identity_expected": identity_expected,
+        "identity_observed": identity_observed,
+        "started_at": requirement.created_at.isoformat() if requirement is not None else None,
+        "completed_at": latest.completed_at.isoformat() if latest.completed_at else None,
     }
 
 
@@ -2337,13 +2458,25 @@ def _artifact_overview(
 ) -> dict[str, Any]:
     """Return the per-family artifact overview.
 
-    The function uses the unified
-    :func:`app.services.memory.counts.get_memory_family_count` so
-    the numbers are consistent with the catalogue and the Overview.
+    The function resolves the active scan run for every artifact
+    family independently (see
+    :func:`app.services.memory.active_result.resolve_active_memory_result`),
+    so the ``handles`` card shows the count from the
+    ``handles_basic`` run, the ``kernel_modules`` card from
+    ``kernel_basic``, the ``suspicious_regions`` card from
+    ``suspicious_memory`` and so on.  Passing a single ``run_id``
+    is still supported for backwards compatibility: it is treated
+    as a historical override for every family, so the
+    ``runOptions.default_run_id`` (the most recent processes
+    profile) never poisons the artefact counts.
     """
     from app.services.memory.counts import (
         FAMILY_TO_DOCUMENT_TYPE,
         get_memory_family_count,
+    )
+    from app.services.memory.active_result import (
+        resolve_active_memory_result,
+        list_families,
     )
 
     run = _resolve_run(db, case_id, run_id)
@@ -2358,50 +2491,95 @@ def _artifact_overview(
             "run_status": run_status,
             "profile": profile,
             "evidence_id": None,
-            "network_connections": {"count": 0},
-            "process_modules": {"count": 0},
+            "network_connections": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
+            "process_modules": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
             "module_discrepancies": 0,
-            "kernel_modules": {"count": 0},
-            "drivers": {"count": 0},
-            "handles": {"count": 0},
-            "suspicious_regions": {"count": 0},
+            "kernel_modules": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
+            "drivers": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
+            "handles": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
+            "suspicious_regions": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
             "facets": {},
             "normalization_version": "memory_artifact_canonical_v1",
         }
     ensure_memory_index(case_id)
     counts: dict[str, int] = {}
-    for family, doc_type in FAMILY_TO_DOCUMENT_TYPE.items():
+    family_states: dict[str, dict[str, Any]] = {}
+    for family in list_families():
+        if family not in FAMILY_TO_DOCUMENT_TYPE:
+            continue
+        if run_id:
+            # Historical override for every family.  When the requested
+            # run does not belong to this evidence, the per-family
+            # resolver will return ``active_run=None``; we honour the
+            # override anyway and let the count be 0.
+            resolved = resolve_active_memory_result(
+                db,
+                case_id=case_id,
+                evidence_id=evidence_id_value,
+                family=family,
+                preferred_run_id=run_id,
+            )
+        else:
+            resolved = resolve_active_memory_result(
+                db,
+                case_id=case_id,
+                evidence_id=evidence_id_value,
+                family=family,
+            )
+        active_run = resolved.get("active_run") or {}
+        active_run_id = active_run.get("id") if isinstance(active_run, dict) else None
         payload = get_memory_family_count(
             case_id=case_id,
             evidence_id=evidence_id_value,
             family=family,
-            active_run_id=selected_run,
+            active_run_id=active_run_id,
             db=db,
         )
         counts[family] = int(payload["total"])
+        family_states[family] = {
+            "active_run": resolved.get("active_run"),
+            "analysis_state": resolved.get("analysis_state"),
+            "selection_reason": resolved.get("selection_reason"),
+        }
     facets: dict[str, Any] = {}
     module_discrepancies = 0
-    if selected_run:
-        summary_rows = (
-            db.query(MemoryArtifactSummary)
-            .filter(MemoryArtifactSummary.memory_run_id == selected_run, MemoryArtifactSummary.memory_artifact_type == "memory_process_module")
-            .all()
-        )
-        # The merge step persists the discrepancy count in the summary
-        # metadata_json only when merging happened; 0 otherwise.
     return {
         "case_id": case_id,
         "evidence_id": evidence_id_value,
         "selected_run": selected_run,
         "run_status": run_status,
         "profile": profile,
-        "network_connections": {"count": counts["network"]},
-        "process_modules": {"count": counts["modules"]},
+        "network_connections": {
+            "count": counts["network"],
+            "active_run": family_states.get("network", {}).get("active_run"),
+            "analysis_state": family_states.get("network", {}).get("analysis_state", "not_analyzed"),
+        },
+        "process_modules": {
+            "count": counts["modules"],
+            "active_run": family_states.get("modules", {}).get("active_run"),
+            "analysis_state": family_states.get("modules", {}).get("analysis_state", "not_analyzed"),
+        },
         "module_discrepancies": module_discrepancies,
-        "kernel_modules": {"count": counts["kernel_modules"]},
-        "drivers": {"count": counts["drivers"]},
-        "handles": {"count": counts["handles"]},
-        "suspicious_regions": {"count": counts["suspicious_regions"]},
+        "kernel_modules": {
+            "count": counts["kernel_modules"],
+            "active_run": family_states.get("kernel_modules", {}).get("active_run"),
+            "analysis_state": family_states.get("kernel_modules", {}).get("analysis_state", "not_analyzed"),
+        },
+        "drivers": {
+            "count": counts["drivers"],
+            "active_run": family_states.get("drivers", {}).get("active_run"),
+            "analysis_state": family_states.get("drivers", {}).get("analysis_state", "not_analyzed"),
+        },
+        "handles": {
+            "count": counts["handles"],
+            "active_run": family_states.get("handles", {}).get("active_run"),
+            "analysis_state": family_states.get("handles", {}).get("analysis_state", "not_analyzed"),
+        },
+        "suspicious_regions": {
+            "count": counts["suspicious_regions"],
+            "active_run": family_states.get("suspicious_regions", {}).get("active_run"),
+            "analysis_state": family_states.get("suspicious_regions", {}).get("analysis_state", "not_analyzed"),
+        },
         "facets": facets,
         "normalization_version": "memory_artifact_canonical_v1",
     }

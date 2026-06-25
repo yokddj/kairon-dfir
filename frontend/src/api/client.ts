@@ -401,6 +401,10 @@ export type MemoryFamilyState =
   | "historical_override"
   | "unknown_family"
   | "evidence_scope_required"
+  | "analyzed_with_results"
+  | "analyzed_empty"
+  | "partial"
+  | "failed"
   | "historical_override_invalid";
 
 export type MemoryActiveResult = {
@@ -414,6 +418,9 @@ export type MemoryActiveResult = {
   historical_override: boolean;
   total: number;
   items: unknown[];
+  page: number;
+  page_size: number;
+  count_source: string | null;
   analysis_state: MemoryFamilyState;
 };
 
@@ -654,6 +661,25 @@ export type MemorySymbolPreparationState =
 
 export type MemorySymbolPreparationUIState = "ready" | "preparing" | "blocked" | "failed";
 
+export type MemorySymbolAcquisitionSummary = {
+  status: string | null;
+  error_code: string | null;
+  sanitized_message: string | null;
+  identity_expected: {
+    pdb_name: string;
+    pdb_guid: string;
+    pdb_age: number;
+    architecture: string;
+  } | null;
+  identity_observed: {
+    pdb_guid: string;
+    pdb_age: number | null;
+    architecture: string | null;
+  } | null;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
 export type MemorySymbolPreparation = {
   case_id: string;
   evidence_id: string;
@@ -685,6 +711,15 @@ export type MemorySymbolPreparation = {
   pending_intent_kind: "single_profile" | "run_all" | null;
   link_source: string | null;
   content_reused_by_hash: boolean;
+  // Latest acquisition summary surfaced by the canonical preparation
+  // endpoint.  The card uses the ``error_code`` to render the
+  // structured failure panel and the ``identity_expected`` /
+  // ``identity_observed`` payloads to show the analyst exactly
+  // what the symbol server returned.
+  acquisition?: MemorySymbolAcquisitionSummary;
+  // Top-level error code propagated from the latest acquisition.
+  // The card surfaces this to drive the identity-mismatch title.
+  error_code?: string | null;
 };
 
 export type MemoryRunWhenReadyRequest = {
@@ -3955,13 +3990,38 @@ export type MemoryArtifactOverview = {
   selected_run: string | null;
   run_status: string | null;
   profile: string | null;
-  network_connections: { count: number };
-  process_modules: { count: number };
+  evidence_id: string | null;
+  network_connections: {
+    count: number;
+    active_run: MemoryActiveRun | null;
+    analysis_state: MemoryFamilyState;
+  };
+  process_modules: {
+    count: number;
+    active_run: MemoryActiveRun | null;
+    analysis_state: MemoryFamilyState;
+  };
   module_discrepancies: number;
-  kernel_modules: { count: number };
-  drivers: { count: number };
-  handles: { count: number };
-  suspicious_regions: { count: number };
+  kernel_modules: {
+    count: number;
+    active_run: MemoryActiveRun | null;
+    analysis_state: MemoryFamilyState;
+  };
+  drivers: {
+    count: number;
+    active_run: MemoryActiveRun | null;
+    analysis_state: MemoryFamilyState;
+  };
+  handles: {
+    count: number;
+    active_run: MemoryActiveRun | null;
+    analysis_state: MemoryFamilyState;
+  };
+  suspicious_regions: {
+    count: number;
+    active_run: MemoryActiveRun | null;
+    analysis_state: MemoryFamilyState;
+  };
   facets: Record<string, unknown>;
   normalization_version: string;
 };
@@ -4225,10 +4285,39 @@ export const api = {
     return request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs${query}`);
   },
   getMemoryEvidenceLanding: (caseId: string) => request<MemoryEvidenceLanding>(`/cases/${caseId}/memory/landing`),
-  getMemoryActiveResult: (caseId: string, evidenceId: string, family: string, runId?: string) => {
+  getMemoryActiveResult: (
+    caseId: string,
+    evidenceId: string,
+    family: string,
+    runId?: string,
+    filters?: {
+      protocol?: string;
+      local_address?: string;
+      local_port?: number;
+      remote_address?: string;
+      remote_port?: number;
+      state?: string;
+      pid?: number;
+      process_name?: string;
+      module_name?: string;
+      path?: string;
+      load_state?: string;
+      object_type?: string;
+      object_name?: string;
+      page?: number;
+      page_size?: number;
+    },
+  ) => {
     const query = new URLSearchParams();
     query.set("family", family);
     if (runId) query.set("run_id", runId);
+    if (filters) {
+      for (const [key, value] of Object.entries(filters)) {
+        if (value !== undefined && value !== null && value !== "") {
+          query.set(key, String(value));
+        }
+      }
+    }
     return request<MemoryActiveResult>(`/cases/${caseId}/memory/evidences/${evidenceId}/active-result?${query.toString()}`);
   },
   getMemoryAnalysisCatalogue: (caseId: string, evidenceId: string) =>

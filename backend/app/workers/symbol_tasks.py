@@ -12,8 +12,21 @@ from app.models.memory import (
     MemorySymbolAcquisitionRequest,
     MemorySymbolRequirement,
 )
-from app.services.memory.symbol_egress_client import SymbolFetchError, fetch_pdb_via_egress
-from app.services.memory.symbol_fetcher import SymbolFetchError as InnerSymbolFetchError, SymbolIdentity, generate_isf, validate_pdb
+from app.services.memory.symbol_egress_client import (
+    fetch_pdb_via_egress,
+)
+from app.services.memory.symbol_fetcher import (
+    SymbolFetchError,
+    SymbolIdentity,
+    generate_isf,
+    validate_pdb,
+)
+
+# ``SymbolFetchError`` is the single canonical structured acquisition
+# exception; both the egress client and the in-fetcher mirror import
+# it from :mod:`app.services.memory.symbol_fetcher`, so the worker's
+# ``except SymbolFetchError`` catches every failure raised by either
+# component.  No module-specific aliases are required.
 
 
 def _within(root: Path, path: Path) -> bool:

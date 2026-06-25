@@ -25,17 +25,18 @@ from app.services.memory.symbol_egress_auth import (
     SignedRequest,
     sign_request,
 )
+from app.services.memory.symbol_fetcher import SymbolFetchError  # noqa: F401  (re-exported)
 
 
 logger = logging.getLogger(__name__)
 
 
-class SymbolFetchError(RuntimeError):
-    def __init__(self, code: str, message: str, *, retryable: bool = False):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.retryable = retryable
+# ``SymbolFetchError`` is imported from ``app.services.memory.symbol_fetcher``
+# so a single canonical class is shared across the egress client, the
+# fetcher, the in-fetcher mirror, and the worker.  Any module that needs
+# to raise or catch the structured acquisition exception should import it
+# from ``app.services.memory.symbol_fetcher`` (the canonical module) or
+# from ``app.services.memory.symbol_egress_client`` (the re-export).
 
 
 @dataclass(frozen=True)

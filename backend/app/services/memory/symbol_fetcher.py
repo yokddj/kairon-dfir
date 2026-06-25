@@ -28,6 +28,21 @@ _TRAVERSAL_SEGMENT = re.compile(r"^(?:%2e%2e|%2E%2E|\.\.)$", re.IGNORECASE)
 
 
 class SymbolFetchError(RuntimeError):
+    """Canonical structured acquisition exception.
+
+    This class is the single source of truth for the acquisition
+    exception hierarchy.  The HTTP egress client re-exports the
+    same class under the same name so a ``SymbolFetchError`` raised
+    anywhere in the acquisition pipeline is caught by the worker's
+    ``except SymbolFetchError`` clause without per-module aliasing.
+
+    The ``code`` is the stable wire identifier
+    (e.g. ``SYMBOL_PDB_IDENTITY_MISMATCH``,
+    ``SYMBOL_ISF_IDENTITY_MISSING``,
+    ``SYMBOL_EGRESS_TIMEOUT``); the worker persists the code on
+    the acquisition row and the UI uses it to render the
+    structured failure panel.
+    """
     def __init__(self, code: str, message: str, *, retryable: bool = False):
         super().__init__(message)
         self.code = code

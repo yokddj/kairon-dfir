@@ -553,6 +553,9 @@ class MemoryActiveResultRead(BaseModel):
     historical_override: bool = False
     total: int = 0
     items: list = []
+    page: int = 1
+    page_size: int = 50
+    count_source: str | None = None
     analysis_state: str = "not_analyzed"
 
 
