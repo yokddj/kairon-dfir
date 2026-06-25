@@ -61,8 +61,6 @@ services:
       dockerfile: backend/Dockerfile
     env_file:
       - .env
-    environment:
-      MEMORY_SYMBOL_CACHE_ROOT: /volatility-cache/volatility3
     depends_on:
       postgres:
         condition: service_healthy
@@ -78,6 +76,10 @@ services:
       - ./data/local-mounts/data-evidence:/data/evidence:ro
       - ./data/local-mounts/cases:/cases:ro
       - memory-symbol-cache:/volatility-cache:ro
+      - ./operator-symbol-import:/operator-symbol-import:ro
+    environment:
+      MEMORY_SYMBOL_CACHE_ROOT: /volatility-cache/volatility3
+      KAIRON_CLI_OPERATOR_ROOTS: /operator-symbol-import
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "${BACKEND_UVICORN_WORKERS:-1}"]
     group_add:
       - "${MEMORY_EVIDENCE_SHARED_GID:-10001}"
