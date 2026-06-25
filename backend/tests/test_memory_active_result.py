@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from unittest.mock import patch
 from uuid import uuid4
 
 import pytest
@@ -838,3 +839,272 @@ def test_active_result_does_not_mutate_database(db: Session, monkeypatch) -> Non
     )
     after = db.query(MemoryScanRun).count()
     assert before == after
+
+
+# ---------------------------------------------------------------------------
+# evidence_id field query fix
+#
+# In the deployed OpenSearch mapping ``evidence_id`` is a plain ``keyword``
+# field (no ``.keyword`` sub-field).  The old code used
+# ``{"term": {"evidence_id.keyword": evidence_id}}`` which matched zero
+# documents.  The fix uses ``{"term": {"evidence_id": evidence_id}}``.
+# The following tests prove the fix and the full item-returning path.
+# ---------------------------------------------------------------------------
+
+
+class _CaptureSearchClient:
+    """Fake OpenSearch client that captures the last search body and
+    returns caller-specified items and total."""
+
+    def __init__(self, items: list[dict[str, Any]], total: int = 5) -> None:
+        self.items = items
+        self.total = total
+        self.last_index: str | None = None
+        self.last_body: dict[str, Any] | None = None
+        self.last_params: dict[str, Any] | None = None
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def search(self, index: str, body: dict[str, Any], params: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.last_index = index
+        self.last_body = body
+        self.last_params = params
+        self.calls.append(("search", body))
+        return {
+            "hits": {
+                "total": {"value": self.total, "relation": "eq"},
+                "hits": [
+                    {"_id": item.get("document_id", str(i)), "_source": item}
+                    for i, item in enumerate(self.items)
+                ],
+            }
+        }
+
+    def count(self, index: str, body: dict[str, Any], params: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.calls.append(("count", body))
+        return {"count": self.total}
+
+
+class TestEvidenceIdFieldQuery:
+    """Prove ``search_artifact_documents`` and the active-result pipeline
+    use ``evidence_id`` directly (no ``.keyword`` suffix)."""
+
+    # ------------------------------------------------------------------
+    # Unit: the query body structure
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _patch_client(fake: _CaptureSearchClient):
+        """Patch both the artifact-indexing module (module-level
+        import) and the core module (lazy import used by count functions)."""
+        return patch.multiple(
+            "app.services.memory.artifact_indexing",
+            get_opensearch_client=lambda: fake,
+        ), patch.multiple(
+            "app.core.opensearch",
+            get_opensearch_client=lambda: fake,
+        )
+
+    def test_search_artifact_documents_uses_evidence_id_not_keyword(self) -> None:
+        from app.services.memory.artifact_indexing import search_artifact_documents
+
+        fake = _CaptureSearchClient(items=[{"document_id": "a", "evidence_id": "ev-1"}], total=1)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            result = search_artifact_documents(
+                case_id="case-1",
+                document_type="memory_handle",
+                run_id="run-1",
+                evidence_id="ev-1",
+            )
+        assert result["total"] == 1
+        assert len(result["items"]) == 1
+        assert fake.last_body is not None
+        filters = fake.last_body["query"]["bool"]["filter"]
+        evidence_filter = [f for f in filters if "evidence_id" in str(f)]
+        assert len(evidence_filter) == 1, f"evidence_id filter not found in {filters}"
+        ev_filter = evidence_filter[0]
+        assert "evidence_id" in ev_filter["term"]
+        assert ".keyword" not in ev_filter["term"]["evidence_id"], (
+            f"evidence_id filter should NOT use .keyword: {ev_filter}"
+        )
+
+    def test_search_artifact_documents_still_uses_scan_run_id_keyword(self) -> None:
+        """scan_run_id is text with keyword sub-field — .keyword is correct."""
+        from app.services.memory.artifact_indexing import search_artifact_documents
+
+        fake = _CaptureSearchClient(items=[], total=0)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            search_artifact_documents(
+                case_id="case-1",
+                document_type="memory_handle",
+                run_id="run-1",
+                evidence_id="ev-1",
+            )
+        assert fake.last_body is not None
+        filters = fake.last_body["query"]["bool"]["filter"]
+        run_filters = [f for f in filters if "scan_run_id" in str(f)]
+        assert len(run_filters) >= 1
+        run_filter = run_filters[0]
+        assert "scan_run_id.keyword" in run_filter["term"]
+
+    # ------------------------------------------------------------------
+    # Integration: full active-result pipeline returns items
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _make_fake_client(family: str) -> _CaptureSearchClient:
+        items = [
+            {"document_id": f"{family}-{i}", "evidence_id": "ev-1", "family": family}
+            for i in range(3)
+        ]
+        return _CaptureSearchClient(items=items, total=5)
+
+    @pytest.mark.parametrize("family,profile,doc_type", [
+        ("handles", "handles_basic", "memory_handle"),
+        ("modules", "modules_basic", "memory_process_module"),
+        ("drivers", "kernel_basic", "memory_driver"),
+        ("kernel_modules", "kernel_basic", "memory_kernel_module"),
+        ("suspicious_regions", "suspicious_memory", "memory_suspicious_region"),
+    ])
+    def test_family_active_result_returns_items(
+        self, db: Session, family: str, profile: str, doc_type: str,
+    ) -> None:
+        case = _make_case(db)
+        ev = _make_evidence(db, case.id, "a.dmp")
+        _make_run(db, case.id, ev.id, profile, "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+        fake = self._make_fake_client(family)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            result = resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family=family)
+        assert result["total"] == 5, family
+        assert len(result["items"]) == 3, family
+        assert result["count_source"] == "opensearch", family
+        assert result["analysis_state"] == "analyzed_with_results", family
+        assert result["items"][0]["document_id"] == f"{family}-0", family
+
+    # ------------------------------------------------------------------
+    # Isolation
+    # ------------------------------------------------------------------
+
+    def test_evidence_isolation_enforced(self, db: Session) -> None:
+        case = _make_case(db)
+        ev_a = _make_evidence(db, case.id, "a.dmp")
+        _make_evidence(db, case.id, "b.dmp")
+        _make_run(db, case.id, ev_a.id, "handles_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+
+        fake = _CaptureSearchClient(items=[{"document_id": "h-1"}], total=1)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            resolve_active_memory_result(db, case_id=case.id, evidence_id=ev_a.id, family="handles")
+
+        assert fake.last_body is not None
+        filters = fake.last_body["query"]["bool"]["filter"]
+        ev_filters = [f for f in filters if "evidence_id" in str(f)]
+        assert len(ev_filters) >= 1
+        assert "evidence_id" in ev_filters[0]["term"]
+        assert ev_filters[0]["term"]["evidence_id"] == ev_a.id
+
+    def test_run_isolation_enforced(self, db: Session) -> None:
+        case = _make_case(db)
+        ev = _make_evidence(db, case.id, "a.dmp")
+        run = _make_run(db, case.id, ev.id, "handles_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+
+        fake = _CaptureSearchClient(items=[{"document_id": "h-1"}], total=1)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family="handles")
+
+        assert fake.last_body is not None
+        filters = fake.last_body["query"]["bool"]["filter"]
+        run_filters = [f for f in filters if "scan_run_id" in str(f)]
+        assert len(run_filters) >= 1
+        run_filter = run_filters[0]
+        assert "scan_run_id.keyword" in run_filter["term"]
+        assert run_filter["term"]["scan_run_id.keyword"] == run.id
+
+    # ------------------------------------------------------------------
+    # Pagination
+    # ------------------------------------------------------------------
+
+    def test_pagination_returns_different_records(self, db: Session) -> None:
+        case = _make_case(db)
+        ev = _make_evidence(db, case.id, "a.dmp")
+        _make_run(db, case.id, ev.id, "handles_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+
+        page1_items = [{"document_id": f"h-{i}", "evidence_id": ev.id, "family": "handles"} for i in range(2)]
+        page2_items = [{"document_id": f"h-{i+10}", "evidence_id": ev.id, "family": "handles"} for i in range(2)]
+        fake1 = _CaptureSearchClient(items=page1_items, total=50)
+        fake2 = _CaptureSearchClient(items=page2_items, total=50)
+
+        # Each resolve_active_memory_result calls count -> search.
+        # Use side_effect to return a fresh fake for each resolve call.
+        with patch("app.services.memory.artifact_indexing.get_opensearch_client") as oa_patcher, \
+             patch("app.core.opensearch.get_opensearch_client") as oc_patcher:
+            fakes_iter = iter([fake1, fake1, fake2, fake2])
+            oa_patcher.side_effect = lambda: next(fakes_iter)
+            oc_patcher.side_effect = lambda: next(fakes_iter)
+            result1 = resolve_active_memory_result(
+                db, case_id=case.id, evidence_id=ev.id, family="handles", page=1, page_size=2,
+            )
+            result2 = resolve_active_memory_result(
+                db, case_id=case.id, evidence_id=ev.id, family="handles", page=2, page_size=2,
+            )
+
+        assert len(result1["items"]) == 2
+        assert len(result2["items"]) == 2
+        ids1 = {it["document_id"] for it in result1["items"]}
+        ids2 = {it["document_id"] for it in result2["items"]}
+        assert ids1 & ids2 == set(), "page 1 and page 2 must return different records"
+
+    def test_pagination_forwards_page_metadata(self, db: Session) -> None:
+        case = _make_case(db)
+        ev = _make_evidence(db, case.id, "a.dmp")
+        _make_run(db, case.id, ev.id, "handles_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+
+        fake = _CaptureSearchClient(items=[], total=97087)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            result = resolve_active_memory_result(
+                db, case_id=case.id, evidence_id=ev.id, family="handles", page=2, page_size=50,
+            )
+        assert result["total"] == 97087
+        assert result["page"] == 2
+        assert result["page_size"] == 50
+
+    # ------------------------------------------------------------------
+    # Total unchanged while items become populated
+    # ------------------------------------------------------------------
+
+    def test_total_unchanged_while_items_populated(self, db: Session) -> None:
+        case = _make_case(db)
+        ev = _make_evidence(db, case.id, "a.dmp")
+        _make_run(db, case.id, ev.id, "handles_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+
+        fake = _CaptureSearchClient(items=[{"document_id": "h-1"}], total=97087)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            result = resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family="handles")
+        assert result["total"] == 97087
+        assert len(result["items"]) == 1
+        assert result["count_source"] == "opensearch"
+
+    # ------------------------------------------------------------------
+    # No reindex operation
+    # ------------------------------------------------------------------
+
+    def test_no_reindex_operation_performed(self, db: Session) -> None:
+        case = _make_case(db)
+        ev = _make_evidence(db, case.id, "a.dmp")
+        _make_run(db, case.id, ev.id, "handles_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+
+        fake = _CaptureSearchClient(items=[{"document_id": "h-1"}], total=1)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family="handles")
+        call_names = {c[0] for c in fake.calls}
+        assert "search" in call_names
+        assert "count" in call_names
+        assert "put_mapping" not in call_names
+        assert "reindex" not in call_names
+        assert "update_by_query" not in call_names
