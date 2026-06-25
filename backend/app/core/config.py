@@ -172,6 +172,64 @@ class Settings(BaseSettings):
     memory_symbol_negative_cache_ttl_seconds: int = 86400
     # How often the global reconciliation pass may run (seconds).
     memory_symbol_reconcile_interval_seconds: int = 300
+
+    # --- Exact Symbol Recovery Sources v1 ---
+    # Manual import: enabled only when an administrator is ready
+    # to receive operator-supplied PDBs / ISFs / packages.  The
+    # front-end does not control this; only server-side config.
+    memory_symbol_manual_import_enabled: bool = False
+    # Corporate / SymProxy source: enabled only when the operator
+    # has configured at least one source row in
+    # ``memory_symbol_recovery_sources``.  This flag is the master
+    # switch.
+    memory_symbol_corporate_source_enabled: bool = False
+    # Allow automatic fallback across recovery sources.  When
+    # ``False`` the orchestrator stops at the first failure; the
+    # operator must explicitly re-trigger recovery.
+    memory_symbol_automatic_fallback_enabled: bool = False
+    # Maximum bytes for an administrator-uploaded PDB.
+    memory_symbol_pdb_upload_max_bytes: int = 536870912  # 512 MiB
+    # Maximum bytes for an administrator-uploaded ISF (JSON or
+    # JSON.xz).
+    memory_symbol_isf_upload_max_bytes: int = 268435456  # 256 MiB
+    # Maximum bytes for an offline symbol package archive.
+    memory_symbol_package_max_bytes: int = 1073741824  # 1 GiB
+    # Maximum total uncompressed bytes the package extractor will
+    # emit (zip-bomb protection).
+    memory_symbol_package_extract_max_bytes: int = 5368709120  # 5 GiB
+    # Maximum number of files in a single offline package.
+    memory_symbol_package_max_files: int = 100
+    # Allowed file extensions in an offline package.  No
+    # executables, no scripts.
+    memory_symbol_package_allowed_extensions: str = ".pdb,.isf,.json,.xz"
+    # Quarantine directory for administrator imports.  Defaults
+    # to ``<backend_temp_dir>/symbol-import-quarantine``.
+    memory_symbol_import_quarantine_root: str = ""
+    # Corporate symbol server connect/read timeouts.
+    memory_symbol_corporate_connect_timeout_seconds: int = 15
+    memory_symbol_corporate_read_timeout_seconds: int = 120
+
+    # --- Hardening v1: explicit feature gates ---
+    # The Kairon application does not currently provide a mature
+    # authenticated administrator role.  Every administrative
+    # recovery endpoint (manual PDB/ISF/package import, corporate
+    # source configuration, recovery orchestration for non-Microsoft
+    # sources) is gated on ``memory_symbol_admin_recovery_enabled``,
+    # which defaults to ``False``.  When the flag is ``False`` the
+    # endpoints return 404 (not 403) so the existence of the
+    # feature is not advertised to untrusted callers.
+    memory_symbol_admin_recovery_enabled: bool = False
+    # Hard cap on the number of objects in a parsed ISF.  Defends
+    # against maliciously nested JSON.
+    memory_symbol_isf_max_objects: int = 200000
+    # Hard cap on the maximum nesting depth of a parsed ISF.
+    memory_symbol_isf_max_depth: int = 32
+    # Hard cap on the maximum length of any string in the ISF.
+    memory_symbol_isf_max_string_bytes: int = 1_048_576  # 1 MiB
+    # Hard cap on the maximum number of keys in any object.
+    memory_symbol_isf_max_object_keys: int = 10000
+    # Hard cap on the maximum length of any array.
+    memory_symbol_isf_max_array_length: int = 100000
     backend_multipart_max_files: int = 10000
     backend_multipart_max_fields: int = 20000
     backend_multipart_max_part_size: int = 1048576
@@ -415,6 +473,19 @@ class Settings(BaseSettings):
             "build_fingerprint": self.app_build_fingerprint,
             "notice": self.build_notice,
         }
+
+    # --- Exact Symbol Recovery Sources v1: computed properties ---
+
+    @property
+    def memory_symbol_package_extensions(self) -> set[str]:
+        values = str(self.memory_symbol_package_allowed_extensions or "").split(",")
+        extensions = {item.strip().lower() for item in values if item.strip()}
+        return {item if item.startswith(".") else f".{item}" for item in extensions}
+
+    @property
+    def memory_symbol_import_quarantine_path(self) -> Path:
+        value = str(self.memory_symbol_import_quarantine_root or "").strip()
+        return Path(value) if value else self.backend_temp_dir / "symbol-import-quarantine"
 
 
 @lru_cache

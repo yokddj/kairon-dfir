@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette._utils import AwaitableOrContextManagerWrapper
 from starlette.requests import Request
 
-from app.api import routes_activity, routes_cases, routes_command_history, routes_email_artifacts, routes_evidence, routes_events, routes_findings, routes_hosts, routes_indicators, routes_memory, routes_motw, routes_persistence, routes_reports, routes_rules, routes_search, routes_system, routes_tags, routes_timeline, routes_velociraptor
+from app.api import routes_activity, routes_cases, routes_command_history, routes_email_artifacts, routes_evidence, routes_events, routes_findings, routes_hosts, routes_indicators, routes_memory, routes_memory_recovery, routes_motw, routes_persistence, routes_reports, routes_rules, routes_search, routes_system, routes_tags, routes_timeline, routes_velociraptor
 from app.core.config import get_settings
 from app.core.database import init_db
 from app.core.opensearch import ensure_events_indices_safe_settings
@@ -71,6 +71,7 @@ app.include_router(routes_findings.router)
 app.include_router(routes_hosts.router)
 app.include_router(routes_indicators.router)
 app.include_router(routes_memory.router)
+app.include_router(routes_memory_recovery.router)
 app.include_router(routes_motw.router)
 app.include_router(routes_persistence.router)
 app.include_router(routes_reports.router)
