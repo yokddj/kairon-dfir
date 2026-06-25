@@ -971,13 +971,86 @@ def recover_exact_symbol(
 
 
 def _validate_pdb_upload(path: Path, requirement: MemorySymbolRequirement) -> dict[str, Any]:
+    """Read the actual PDB identity and compare it to the requirement.
+
+    Returns a dict with ``pdb_guid`` / ``pdb_age`` / ``architecture`` /
+    ``pdb_name`` populated from the **observed** values so the caller
+    can record them in the canonical ``MemorySymbolAcquisition`` row
+    and surface them to the operator.
+
+    Raises :class:`SymbolFetchError` (``SYMBOL_PDB_IDENTITY_MISMATCH``)
+    when the observed identity does not match the authoritative
+    requirement.  The mismatch message contains both the expected
+    and observed values, but the caller is expected to record the
+    observed values via :func:`read_pdb_identity` separately rather
+    than parsing the human-readable message.
+    """
     identity = make_identity(requirement)
-    validate_pdb(path, identity)
+    # Read the observed identity first so it is available to the
+    # caller even if validation fails.  ``validate_pdb`` itself
+    # re-reads, but on mismatch the values are only available in
+    # the human-readable error string.  The CLI / UI rely on the
+    # canonical fields, so we pre-read them here.
+    observed_guid: str | None = None
+    observed_age: int | None = None
+    try:
+        observed_guid, observed_age = read_pdb_identity(path)
+    except SymbolFetchError:
+        # ``read_pdb_identity`` itself rejects malformed PDBs.
+        # Re-raise with the same code so the caller can record
+        # ``SYMBOL_PDB_INVALID`` rather than a mismatched identity.
+        raise
+    try:
+        validate_pdb(path, identity)
+    except SymbolFetchError:
+        # Re-raise so the caller can record the terminal state.
+        # The observed values are also returned via the caller's
+        # own ``read_pdb_identity`` call before this function
+        # runs (see :func:`_read_pdb_observed_safely`).
+        raise
     return {
-        "pdb_guid": identity.guid.upper(),
-        "pdb_age": int(identity.age),
+        "pdb_guid": (observed_guid or identity.guid).upper(),
+        "pdb_age": int(observed_age if observed_age is not None else identity.age),
         "architecture": identity.architecture,
         "pdb_name": identity.pdb_name,
+    }
+
+
+def _read_pdb_observed_safely(path: Path) -> dict[str, Any]:
+    """Read the observed identity from a PDB and return it as a
+    sanitized dict.  Never raises.
+
+    Returns an empty dict when the PDB is not parseable so the
+    caller can still record the error code that was raised.
+    The returned dict, when populated, contains:
+
+    * ``pdb_guid`` (upper-case, 32 hex chars)
+    * ``pdb_age`` (int)
+    * ``pdb_name`` (the on-disk filename only)
+    * ``pdb_size_bytes`` (int)
+    * ``read_error`` (only when the read failed)
+    """
+    try:
+        guid, age = read_pdb_identity(path)
+    except SymbolFetchError as exc:
+        try:
+            size = path.stat().st_size
+        except OSError:
+            size = 0
+        return {
+            "read_error": exc.code,
+            "pdb_name": path.name,
+            "pdb_size_bytes": int(size),
+        }
+    try:
+        size = path.stat().st_size
+    except OSError:
+        size = 0
+    return {
+        "pdb_guid": guid.upper(),
+        "pdb_age": int(age),
+        "pdb_name": path.name,
+        "pdb_size_bytes": int(size),
     }
 
 
@@ -1042,8 +1115,13 @@ def import_pdb_for_requirement(
             sanitized_message=f"Could not stage upload: {exc!s}",
             identity_expected=identity_expected,
         )
+    # Read the observed identity BEFORE validation so the canonical
+    # fields are available even when ``validate_pdb`` raises.  This
+    # is the value that the UI's "Observed age: N" rendering and the
+    # operator-facing status command rely on.
+    observed = _read_pdb_observed_safely(staged_pdb)
     try:
-        observed = _validate_pdb_upload(staged_pdb, requirement)
+        validated = _validate_pdb_upload(staged_pdb, requirement)
     except SymbolFetchError as exc:
         staged_pdb.unlink(missing_ok=True)
         return RecoveryResult(
@@ -1056,7 +1134,7 @@ def import_pdb_for_requirement(
             error_code=exc.code,
             sanitized_message=exc.message,
             identity_expected=identity_expected,
-            identity_observed={"source": "pdb"},
+            identity_observed=observed,
         )
 
     staging_isf = cache_root / "tmp" / f"{uuid4().hex}.isf"
@@ -1640,3 +1718,632 @@ def import_offline_package(
         }
     finally:
         shutil.rmtree(staging, ignore_errors=True)
+
+
+# ---------------------------------------------------------------------------
+# Operator-only CLI import path
+# ---------------------------------------------------------------------------
+#
+# The ``memory_symbol_admin_recovery_enabled`` feature gate and the
+# ``memory_symbol_manual_import_enabled`` configuration are NOT
+# consulted here.  The CLI is a trusted-maintenance entry point that
+# is only invokable from inside the backend container; it is not
+# exposed to analysts via HTTP, and no frontend control mounts it.
+#
+# The functions below reuse the canonical services
+# (:func:`_validate_pdb_upload`, :func:`_read_pdb_observed_safely`,
+# :func:`_generate_isf_for_upload`, :func:`atomic_promote_cached_symbol`,
+# :func:`link_requirements_to_cache`) so there is exactly one symbol
+# import implementation.
+
+
+def _ensure_operator_cli_attempt_row(
+    db: Session,
+    *,
+    requirement: MemorySymbolRequirement,
+    source_type: str,
+    source_label: str,
+    operator: str,
+    import_job_id: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> MemorySymbolRecoveryAttempt:
+    """Create a fresh ``MemorySymbolRecoveryAttempt`` for a CLI import.
+
+    The DB-level partial unique index
+    ``uq_memory_recovery_attempt_active`` (migration v16) ensures
+    at most one active row per ``(requirement_id, source_type)``
+    tuple.  Multiple terminal rows are allowed so the operator can
+    retry.
+
+    The function returns the newly created (or already-existing
+    active) attempt row.  On a unique-constraint violation, the
+    existing row is returned and the operator is told to wait for
+    the in-flight attempt to complete.
+    """
+    md = dict(metadata or {})
+    md.setdefault("import_job_id", import_job_id)
+    md.setdefault("operator", operator)
+    md.setdefault("source_path", "operator_cli")
+    attempt = MemorySymbolRecoveryAttempt(
+        requirement_id=requirement.id,
+        case_id=requirement.case_id,
+        evidence_id=requirement.evidence_id,
+        source_id=None,
+        source_type=source_type,
+        source_label=source_label,
+        status=ATTEMPT_PENDING,
+        error_code=None,
+        sanitized_message=None,
+        metadata_json=md,
+    )
+    db.add(attempt)
+    try:
+        db.flush()
+    except Exception:
+        db.rollback()
+        existing = (
+            db.query(MemorySymbolRecoveryAttempt)
+            .filter(
+                MemorySymbolRecoveryAttempt.requirement_id == requirement.id,
+                MemorySymbolRecoveryAttempt.source_type == source_type,
+                MemorySymbolRecoveryAttempt.terminal_at.is_(None),
+            )
+            .first()
+        )
+        if existing is not None:
+            return existing
+        raise
+    return attempt
+
+
+def _finalize_attempt(
+    db: Session,
+    *,
+    attempt: MemorySymbolRecoveryAttempt,
+    result: RecoveryResult,
+) -> None:
+    """Persist the terminal state of a CLI import attempt.
+
+    Translates the structured :class:`RecoveryResult` into the
+    attempt's columns and sets ``terminal_at = utc_now_naive()``.
+    Also stores the observed identity in ``metadata_json`` so the
+    UI's fallback parser can display it for legacy rows.
+    """
+    if result.is_ready:
+        attempt.status = ATTEMPT_SUCCEEDED
+    elif result.status == RECOVERY_TERMINAL_NOT_IMPLEMENTED:
+        attempt.status = ATTEMPT_SKIPPED
+    else:
+        attempt.status = ATTEMPT_FAILED
+    attempt.error_code = result.error_code
+    attempt.sanitized_message = result.sanitized_message
+    attempt.terminal_at = utc_now_naive()
+    md = dict(attempt.metadata_json or {})
+    if result.identity_observed:
+        md["identity_observed"] = result.identity_observed
+    if result.identity_expected:
+        md["identity_expected"] = result.identity_expected
+    if result.cached_symbol_id:
+        md["cached_symbol_id"] = str(result.cached_symbol_id)
+    attempt.metadata_json = md
+
+
+def _record_acquisition_observed(
+    db: Session,
+    *,
+    requirement: MemorySymbolRequirement,
+    observed: dict[str, Any],
+    status: str = "failed",
+    error_code: str | None = None,
+    sanitized_message: str | None = None,
+) -> None:
+    """Persist the observed identity in the canonical
+    ``MemorySymbolAcquisition`` row so the UI's
+    ``acquisition.identity_observed`` field is populated for the
+    blocked-symbols card.
+
+    The row is created (or replaced) for the most recent acquisition
+    bound to this requirement.  The function is read-only with
+    respect to requirement identity: it never mutates the
+    requirement row.
+    """
+    from app.models.memory import MemorySymbolAcquisition
+
+    pdb_guid = observed.get("pdb_guid")
+    pdb_age = observed.get("pdb_age")
+    pdb_size = observed.get("pdb_size_bytes")
+    acquisition = (
+        db.query(MemorySymbolAcquisition)
+        .filter(MemorySymbolAcquisition.requirement_id == requirement.id)
+        .order_by(MemorySymbolAcquisition.created_at.desc())
+        .first()
+    )
+    if acquisition is None:
+        acquisition = MemorySymbolAcquisition(
+            requirement_id=requirement.id,
+            status="queued",
+            source_category="operator_cli",
+        )
+        db.add(acquisition)
+    acquisition.observed_pdb_guid = (
+        str(pdb_guid).upper() if pdb_guid else None
+    )
+    if isinstance(pdb_age, int) and pdb_age >= 0:
+        acquisition.observed_pdb_age = int(pdb_age)
+    elif pdb_age is not None:
+        try:
+            acquisition.observed_pdb_age = int(pdb_age)
+        except (TypeError, ValueError):
+            acquisition.observed_pdb_age = None
+    if observed.get("architecture"):
+        acquisition.observed_architecture = observed["architecture"]
+    if status is not None:
+        acquisition.status = status
+    if error_code is not None:
+        acquisition.error_code = error_code
+    if sanitized_message is not None:
+        acquisition.sanitized_message = sanitized_message
+    md = dict(acquisition.metadata_json or {})
+    md.setdefault("operator_cli", True)
+    md["identity_observed"] = {
+        k: v for k, v in observed.items() if k != "read_error"
+    }
+    if pdb_size is not None:
+        try:
+            acquisition.downloaded_bytes = int(pdb_size)
+        except (TypeError, ValueError):
+            pass
+    acquisition.metadata_json = md
+    if status in {"succeeded", "failed", "skipped"}:
+        acquisition.completed_at = utc_now_naive()
+
+
+def cli_import_pdb_for_requirement(
+    db: Session,
+    *,
+    requirement_id: str,
+    file_path: Path,
+    operator: str,
+    import_job_id: str,
+    original_filename: str | None = None,
+    safe_override: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Operator-only PDB import.  Reuses the canonical services.
+
+    Returns a dict suitable for JSON serialization.  The function
+    is independent of ``memory_symbol_admin_recovery_enabled``
+    and ``memory_symbol_manual_import_enabled``.
+
+    The function:
+
+    1. Loads the requirement and shows the expected identity.
+    2. Inspects the actual PDB.
+    3. Compares exact (name, GUID, age, architecture).
+    4. On mismatch: writes a terminal ``MemorySymbolRecoveryAttempt``
+       and a canonical ``MemorySymbolAcquisition`` row with the
+       observed values, then returns ``identity_mismatch``.
+    5. On success: stages to quarantine, generates ISF, atomically
+       promotes through the canonical cache service, links every
+       exact-match requirement, re-evaluates matching preparations,
+       and returns ``ready``.
+    """
+    from app.cli.memory_symbols_runtime import (
+        validate_input_file,
+        compute_sha256,
+    )
+
+    # Local helper to build a failure result and persist a terminal
+    # attempt row in the same transaction.  Used by every error
+    # path so the operator has a faithful audit record of every
+    # CLI invocation, including dry-run failures.
+    def _fail(
+        status: str,
+        *,
+        error_code: str,
+        sanitized_message: str,
+        observed: dict[str, Any] | None = None,
+        sha256: str | None = None,
+        size_bytes: int | None = None,
+        record_acquisition: bool = False,
+        record_attempt: bool = True,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "status": status,
+            "requirement_id": requirement.id,
+            "error_code": error_code,
+            "sanitized_message": sanitized_message,
+            "identity_expected": identity_expected,
+        }
+        if observed is not None:
+            result["identity_observed"] = observed
+        if sha256 is not None:
+            result["sha256"] = sha256
+        if size_bytes is not None:
+            result["size_bytes"] = size_bytes
+        if record_attempt:
+            attempt = _ensure_operator_cli_attempt_row(
+                db,
+                requirement=requirement,
+                source_type="operator_cli_pdb",
+                source_label="Operator CLI PDB import",
+                operator=operator,
+                import_job_id=import_job_id,
+                metadata={
+                    "sha256": sha256,
+                    "size_bytes": size_bytes,
+                    "dry_run": dry_run,
+                    "safe_override": safe_override,
+                },
+            )
+            # Build a minimal RecoveryResult so the finalizer can
+            # write a terminal row.
+            from dataclasses import asdict
+            recovery = RecoveryResult(
+                status=status,
+                requirement_id=requirement.id,
+                error_code=error_code,
+                sanitized_message=sanitized_message,
+                identity_expected=identity_expected,
+                identity_observed=observed,
+            )
+            _finalize_attempt(db, attempt=attempt, result=recovery)
+            if record_acquisition and observed is not None:
+                _record_acquisition_observed(
+                    db,
+                    requirement=requirement,
+                    observed=observed,
+                    status="failed",
+                    error_code=error_code,
+                    sanitized_message=sanitized_message,
+                )
+            db.commit()
+        return result
+
+    # 1. Validate the requirement exists.
+    requirement = db.get(MemorySymbolRequirement, str(requirement_id))
+    if requirement is None:
+        return {
+            "status": RECOVERY_TERMINAL_IMPORT_REJECTED,
+            "requirement_id": str(requirement_id),
+            "error_code": "SYMBOL_REQUIREMENT_UNKNOWN",
+            "sanitized_message": "Requirement not found.",
+        }
+    identity_expected = expected_identity_dict(requirement)
+
+    # 2. Validate the file.
+    try:
+        file_info = validate_input_file(
+            file_path,
+            allowed_extensions={".pdb"},
+            safe_override=safe_override,
+        )
+    except Exception as exc:  # the runtime layer raises typed errors
+        return {
+            "status": RECOVERY_TERMINAL_IMPORT_REJECTED,
+            "requirement_id": requirement.id,
+            "error_code": "SYMBOL_IMPORT_REJECTED",
+            "sanitized_message": str(exc),
+            "identity_expected": identity_expected,
+        }
+
+    # 3. Read the observed identity.
+    observed = _read_pdb_observed_safely(Path(file_info["resolved_path"]))
+    if "read_error" in observed:
+        return _fail(
+            RECOVERY_TERMINAL_VALIDATION_FAILED,
+            error_code=observed["read_error"],
+            sanitized_message="PDB could not be parsed.",
+            observed=observed,
+            sha256=file_info["sha256"],
+            size_bytes=int(file_info["size_bytes"]),
+        )
+    # 4. Compare exact identity.
+    expected_name = (identity_expected["pdb_name"] or "").lower()
+    observed_name = (Path(file_info["resolved_path"]).name or "").lower()
+    if observed_name != expected_name:
+        return _fail(
+            RECOVERY_TERMINAL_IDENTITY_MISMATCH,
+            error_code="SYMBOL_PDB_NAME_MISMATCH",
+            sanitized_message="Imported PDB filename does not match the required symbol.",
+            observed=observed,
+            sha256=file_info["sha256"],
+            size_bytes=int(file_info["size_bytes"]),
+            record_acquisition=True,
+        )
+    if observed.get("pdb_guid") != identity_expected["pdb_guid"]:
+        return _fail(
+            RECOVERY_TERMINAL_IDENTITY_MISMATCH,
+            error_code="SYMBOL_PDB_IDENTITY_MISMATCH",
+            sanitized_message="Imported PDB GUID does not match the required symbol.",
+            observed=observed,
+            sha256=file_info["sha256"],
+            size_bytes=int(file_info["size_bytes"]),
+            record_acquisition=True,
+        )
+    if int(observed.get("pdb_age", -1)) != int(identity_expected["pdb_age"]):
+        return _fail(
+            RECOVERY_TERMINAL_IDENTITY_MISMATCH,
+            error_code="SYMBOL_PDB_IDENTITY_MISMATCH",
+            sanitized_message="Imported PDB age does not match the required symbol.",
+            observed=observed,
+            sha256=file_info["sha256"],
+            size_bytes=int(file_info["size_bytes"]),
+            record_acquisition=True,
+        )
+
+    if dry_run:
+        # Dry-run is a *success*: validate without writing.  No
+        # attempt row is persisted.  The operator is told what
+        # would happen.
+        return {
+            "status": "dry_run",
+            "requirement_id": requirement.id,
+            "error_code": None,
+            "sanitized_message": "Dry run succeeded; no rows written.",
+            "identity_expected": identity_expected,
+            "identity_observed": observed,
+            "sha256": file_info["sha256"],
+            "size_bytes": file_info["size_bytes"],
+            "original_filename": file_info["original_filename"],
+        }
+
+    # 5. Stage the file to the operator quarantine area, then
+    # delegate the canonical cache promotion to
+    # ``import_pdb_for_requirement`` (which itself calls
+    # ``stage_upload_in_cache`` and ``atomic_promote_cached_symbol``).
+    settings = get_settings()
+    quarantine = quarantine_path(settings, suffix=".pdb")
+    quarantine.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+    shutil.copy2(file_info["resolved_path"], quarantine)
+    quarantine.chmod(0o640)
+    try:
+        # Record the attempt row first (active).
+        attempt = _ensure_operator_cli_attempt_row(
+            db,
+            requirement=requirement,
+            source_type="operator_cli_pdb",
+            source_label="Operator CLI PDB import",
+            operator=operator,
+            import_job_id=import_job_id,
+            metadata={
+                "original_filename": file_info["original_filename"],
+                "sha256": file_info["sha256"],
+                "size_bytes": file_info["size_bytes"],
+                "safe_override": safe_override,
+            },
+        )
+        # Record the observed values in the canonical
+        # ``MemorySymbolAcquisition`` row so the UI's
+        # ``acquisition.identity_observed`` is populated.
+        _record_acquisition_observed(
+            db,
+            requirement=requirement,
+            observed=observed,
+            status="succeeded",
+            error_code=None,
+            sanitized_message=None,
+        )
+        result = import_pdb_for_requirement(
+            db,
+            requirement_id=requirement.id,
+            upload_path=quarantine,
+            original_filename=file_info["original_filename"],
+            actor=f"operator_cli:{operator}",
+        )
+        # The canonical function already validated identity; the
+        # result is either ``ready`` (success), ``identity_mismatch``
+        # (impossible because we just compared), or a terminal
+        # error (``validation_failed`` / ``import_rejected``).
+        if result.is_ready and result.cached_symbol_id:
+            # Override the cache row's provenance so the audit trail
+            # truthfully records the operator-CLI source type and
+            # the operator string.  The canonical function used
+            # ``manual_pdb_import``; the CLI must use
+            # ``operator_cli_pdb``.
+            cached = db.get(MemoryCachedSymbol, result.cached_symbol_id)
+            if cached is not None:
+                cached.provenance_source_type = "operator_cli_pdb"
+                cached.provenance_source_name = "Operator CLI PDB import"
+                cached.provenance_actor = f"operator_cli:{operator}"
+        _finalize_attempt(db, attempt=attempt, result=result)
+        db.commit()
+    except Exception as exc:
+        # Roll back, then mark the attempt as failed (if it exists).
+        db.rollback()
+        try:
+            attempt = (
+                db.query(MemorySymbolRecoveryAttempt)
+                .filter(
+                    MemorySymbolRecoveryAttempt.metadata_json["import_job_id"].astext == import_job_id
+                )
+                .order_by(MemorySymbolRecoveryAttempt.created_at.desc())
+                .first()
+            )
+            if attempt is not None:
+                attempt.status = ATTEMPT_FAILED
+                attempt.error_code = "SYMBOL_CLI_UNEXPECTED"
+                attempt.sanitized_message = f"Unexpected CLI error: {type(exc).__name__}"
+                attempt.terminal_at = utc_now_naive()
+                db.commit()
+        except Exception:
+            db.rollback()
+        raise
+    finally:
+        # Always clean up the operator quarantine staging file.
+        quarantine.unlink(missing_ok=True)
+
+    out = result.to_dict()
+    out["sha256"] = file_info["sha256"]
+    out["size_bytes"] = file_info["size_bytes"]
+    out["original_filename"] = file_info["original_filename"]
+    out["import_job_id"] = import_job_id
+    out["operator"] = operator
+    return out
+
+
+def cli_import_isf_for_requirement(
+    db: Session,
+    *,
+    requirement_id: str,
+    file_path: Path,
+    operator: str,
+    import_job_id: str,
+    original_filename: str | None = None,
+    safe_override: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    """Operator-only ISF import.  Reuses the canonical services."""
+    from app.cli.memory_symbols_runtime import (
+        validate_input_file,
+    )
+
+    requirement = db.get(MemorySymbolRequirement, str(requirement_id))
+    if requirement is None:
+        return {
+            "status": RECOVERY_TERMINAL_IMPORT_REJECTED,
+            "requirement_id": str(requirement_id),
+            "error_code": "SYMBOL_REQUIREMENT_UNKNOWN",
+            "sanitized_message": "Requirement not found.",
+        }
+    identity_expected = expected_identity_dict(requirement)
+
+    def _fail(
+        status: str,
+        *,
+        error_code: str,
+        sanitized_message: str,
+        observed: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "status": status,
+            "requirement_id": requirement.id,
+            "error_code": error_code,
+            "sanitized_message": sanitized_message,
+            "identity_expected": identity_expected,
+            "identity_observed": observed,
+            "sha256": sha256,
+            "size_bytes": size_bytes,
+            "original_filename": file_info["original_filename"],
+        }
+        attempt = _ensure_operator_cli_attempt_row(
+            db,
+            requirement=requirement,
+            source_type="operator_cli_isf",
+            source_label="Operator CLI ISF import",
+            operator=operator,
+            import_job_id=import_job_id,
+            metadata={
+                "sha256": sha256,
+                "size_bytes": size_bytes,
+                "dry_run": dry_run,
+                "safe_override": safe_override,
+            },
+        )
+        recovery = RecoveryResult(
+            status=status,
+            requirement_id=requirement.id,
+            error_code=error_code,
+            sanitized_message=sanitized_message,
+            identity_expected=identity_expected,
+            identity_observed=observed,
+        )
+        _finalize_attempt(db, attempt=attempt, result=recovery)
+        db.commit()
+        return result
+
+    try:
+        file_info = validate_input_file(
+            file_path,
+            allowed_extensions={".isf", ".json", ".xz"},
+            safe_override=safe_override,
+        )
+    except Exception as exc:
+        return {
+            "status": RECOVERY_TERMINAL_IMPORT_REJECTED,
+            "requirement_id": requirement.id,
+            "error_code": "SYMBOL_IMPORT_REJECTED",
+            "sanitized_message": str(exc),
+            "identity_expected": identity_expected,
+        }
+    size_bytes = int(file_info["size_bytes"])
+    sha256 = file_info["sha256"]
+
+    if dry_run:
+        return {
+            "status": "dry_run",
+            "requirement_id": requirement.id,
+            "error_code": None,
+            "sanitized_message": "Dry run succeeded; no rows written.",
+            "identity_expected": identity_expected,
+            "identity_observed": None,
+            "sha256": sha256,
+            "size_bytes": size_bytes,
+            "original_filename": file_info["original_filename"],
+        }
+
+    settings = get_settings()
+    quarantine = quarantine_path(settings, suffix=".isf.json")
+    quarantine.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+    shutil.copy2(file_info["resolved_path"], quarantine)
+    quarantine.chmod(0o640)
+    try:
+        attempt = _ensure_operator_cli_attempt_row(
+            db,
+            requirement=requirement,
+            source_type="operator_cli_isf",
+            source_label="Operator CLI ISF import",
+            operator=operator,
+            import_job_id=import_job_id,
+            metadata={
+                "original_filename": file_info["original_filename"],
+                "sha256": sha256,
+                "size_bytes": size_bytes,
+                "safe_override": safe_override,
+            },
+        )
+        result = import_isf_for_requirement(
+            db,
+            requirement_id=requirement.id,
+            upload_path=quarantine,
+            original_filename=file_info["original_filename"],
+            actor=f"operator_cli:{operator}",
+        )
+        if result.is_ready and result.cached_symbol_id:
+            cached = db.get(MemoryCachedSymbol, result.cached_symbol_id)
+            if cached is not None:
+                cached.provenance_source_type = "operator_cli_isf"
+                cached.provenance_source_name = "Operator CLI ISF import"
+                cached.provenance_actor = f"operator_cli:{operator}"
+        _finalize_attempt(db, attempt=attempt, result=result)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        try:
+            attempt = (
+                db.query(MemorySymbolRecoveryAttempt)
+                .filter(
+                    MemorySymbolRecoveryAttempt.metadata_json["import_job_id"].astext == import_job_id
+                )
+                .order_by(MemorySymbolRecoveryAttempt.created_at.desc())
+                .first()
+            )
+            if attempt is not None:
+                attempt.status = ATTEMPT_FAILED
+                attempt.error_code = "SYMBOL_CLI_UNEXPECTED"
+                attempt.sanitized_message = f"Unexpected CLI error: {type(exc).__name__}"
+                attempt.terminal_at = utc_now_naive()
+                db.commit()
+        except Exception:
+            db.rollback()
+        raise
+    finally:
+        quarantine.unlink(missing_ok=True)
+
+    out = result.to_dict()
+    out["sha256"] = sha256
+    out["size_bytes"] = size_bytes
+    out["original_filename"] = file_info["original_filename"]
+    out["import_job_id"] = import_job_id
+    out["operator"] = operator
+    return out

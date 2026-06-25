@@ -600,6 +600,12 @@ MEMORY_RECOVERY_SOURCE_TYPES = {
     "manual_pdb_import",
     "manual_isf_import",
     "offline_symbol_package",
+    # Operator-only CLI import.  Reachable only through
+    # ``python -m app.cli.memory_symbols import-pdb`` /
+    # ``import-isf``; no HTTP route mounts these source types
+    # and no frontend control references them.
+    "operator_cli_pdb",
+    "operator_cli_isf",
 }
 
 MEMORY_RECOVERY_SOURCE_NAMES = {
@@ -608,6 +614,8 @@ MEMORY_RECOVERY_SOURCE_NAMES = {
     "manual_pdb_import": "Administrator-imported PDB",
     "manual_isf_import": "Administrator-imported ISF",
     "offline_symbol_package": "Offline package",
+    "operator_cli_pdb": "Operator CLI PDB import",
+    "operator_cli_isf": "Operator CLI ISF import",
 }
 
 
