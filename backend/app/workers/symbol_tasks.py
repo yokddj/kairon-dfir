@@ -185,6 +185,10 @@ def acquire_windows_symbol(acquisition_id: str, request_id: str) -> None:
                 isf_sha256=str(isf_result["sha256"]),
                 pdb_size_bytes=int(result.bytes_received),
                 isf_size_bytes=int(isf_result["bytes"]),
+                provenance_source_type="microsoft_public",
+                provenance_source_name="Microsoft public",
+                provenance_actor="symbol-fetcher",
+                provenance_acquired_at=utc_now_naive(),
             )
             db.add(cached)
             db.flush()
@@ -262,3 +266,154 @@ def acquire_windows_symbol(acquisition_id: str, request_id: str) -> None:
             # Also log to stderr for visibility
             import logging
             logging.getLogger("rq.worker").error("Symbol acquisition failed for %s: %s\n%s", acquisition.id, exc, tb)
+
+
+def run_admin_pdb_import(import_id: str) -> None:
+    """Process a queued administrator PDB import.
+
+    The HTTP request records the job and returns 202.  This
+    worker function performs the expensive steps: PDB identity
+    validation, Volatility PDB-to-ISF generation, ISF schema
+    validation, and atomic cache promotion.  All four steps
+    are bounded by per-file and per-job resource limits.
+
+    The ``import_id`` identifies a
+    ``MemorySymbolRecoveryAttempt`` row (the orchestrator
+    creates it in the ``pending`` state with the upload path
+    in ``metadata_json``).
+    """
+    from sqlalchemy import desc
+    from app.models.memory import (
+        MemorySymbolRecoveryAttempt,
+    )
+    from app.services.memory.symbol_recovery import (
+        RECOVERY_TERMINAL_NOT_IMPLEMENTED,
+        RECOVERY_TERMINAL_READY,
+        RECOVERY_TERMINAL_VALIDATION_FAILED,
+        RECOVERY_TERMINAL_IMPORT_REJECTED,
+        import_pdb_for_requirement,
+    )
+    db = SessionLocal()
+    try:
+        attempt = db.get(MemorySymbolRecoveryAttempt, str(import_id))
+        if attempt is None:
+            return
+        metadata = dict(attempt.metadata_json or {})
+        requirement_id = str(metadata.get("requirement_id") or "")
+        upload_path = metadata.get("upload_path")
+        original_filename = metadata.get("original_filename") or "upload.pdb"
+        if not requirement_id or not upload_path:
+            attempt.status = "failed"
+            attempt.error_code = "SYMBOL_IMPORT_REJECTED"
+            attempt.sanitized_message = "Queued import missing requirement_id or upload_path."
+            attempt.terminal_at = utc_now_naive()
+            db.commit()
+            return
+        from pathlib import Path
+        upload = Path(str(upload_path))
+        result = import_pdb_for_requirement(
+            db,
+            requirement_id=requirement_id,
+            upload_path=upload,
+            original_filename=str(original_filename),
+            actor="admin-worker",
+        )
+        attempt.status = (
+            "succeeded" if result.status == RECOVERY_TERMINAL_READY else "failed"
+        )
+        attempt.error_code = result.error_code
+        attempt.sanitized_message = result.sanitized_message
+        attempt.terminal_at = utc_now_naive()
+        db.commit()
+    finally:
+        db.close()
+
+
+def run_admin_isf_import(import_id: str) -> None:
+    """Process a queued administrator ISF import.
+
+    The HTTP request records the job and returns 202.  This
+    worker performs the safe-parse validation, the identity
+    check, and the atomic cache promotion.
+    """
+    from app.models.memory import (
+        MemorySymbolRecoveryAttempt,
+    )
+    from app.services.memory.symbol_recovery import (
+        RECOVERY_TERMINAL_READY,
+        import_isf_for_requirement,
+    )
+    from pathlib import Path
+    db = SessionLocal()
+    try:
+        attempt = db.get(MemorySymbolRecoveryAttempt, str(import_id))
+        if attempt is None:
+            return
+        metadata = dict(attempt.metadata_json or {})
+        requirement_id = str(metadata.get("requirement_id") or "")
+        upload_path = metadata.get("upload_path")
+        original_filename = metadata.get("original_filename") or "upload.isf"
+        if not requirement_id or not upload_path:
+            attempt.status = "failed"
+            attempt.error_code = "SYMBOL_IMPORT_REJECTED"
+            attempt.sanitized_message = "Queued import missing requirement_id or upload_path."
+            attempt.terminal_at = utc_now_naive()
+            db.commit()
+            return
+        upload = Path(str(upload_path))
+        result = import_isf_for_requirement(
+            db,
+            requirement_id=requirement_id,
+            upload_path=upload,
+            original_filename=str(original_filename),
+            actor="admin-worker",
+        )
+        attempt.status = (
+            "succeeded" if result.status == RECOVERY_TERMINAL_READY else "failed"
+        )
+        attempt.error_code = result.error_code
+        attempt.sanitized_message = result.sanitized_message
+        attempt.terminal_at = utc_now_naive()
+        db.commit()
+    finally:
+        db.close()
+
+
+def run_admin_package_import(import_id: str) -> None:
+    """Process a queued administrator offline package import."""
+    from app.models.memory import (
+        MemorySymbolRecoveryAttempt,
+    )
+    from app.services.memory.symbol_recovery import (
+        RECOVERY_TERMINAL_READY,
+        import_offline_package,
+    )
+    from pathlib import Path
+    db = SessionLocal()
+    try:
+        attempt = db.get(MemorySymbolRecoveryAttempt, str(import_id))
+        if attempt is None:
+            return
+        metadata = dict(attempt.metadata_json or {})
+        upload_path = metadata.get("upload_path")
+        if not upload_path:
+            attempt.status = "failed"
+            attempt.error_code = "SYMBOL_IMPORT_REJECTED"
+            attempt.sanitized_message = "Queued import missing upload_path."
+            attempt.terminal_at = utc_now_naive()
+            db.commit()
+            return
+        upload = Path(str(upload_path))
+        result = import_offline_package(
+            db, upload_path=upload, actor="admin-worker",
+        )
+        status = result.get("status", "failed")
+        attempt.status = (
+            "succeeded" if status == RECOVERY_TERMINAL_READY else "failed"
+        )
+        attempt.error_code = result.get("error_code")
+        attempt.sanitized_message = result.get("sanitized_message")
+        attempt.terminal_at = utc_now_naive()
+        db.commit()
+    finally:
+        db.close()

@@ -722,6 +722,83 @@ export type MemorySymbolPreparation = {
   error_code?: string | null;
 };
 
+// Exact Symbol Recovery Sources v1 — types
+
+export type MemoryRecoverySourceType =
+  | "microsoft_public"
+  | "corporate_symbol_server"
+  | "manual_pdb_import"
+  | "manual_isf_import"
+  | "offline_symbol_package";
+
+export type MemoryRecoverySourceRead = {
+  id: string;
+  source_type: MemoryRecoverySourceType;
+  name: string;
+  enabled: boolean;
+  priority: number;
+  host: string | null;
+  port: number | null;
+  path_prefix: string | null;
+  tls_required: boolean;
+  credential_secret_name: string | null;
+  configured_by: string;
+  note: string | null;
+};
+
+export type MemoryRecoverySourceCreate = {
+  source_type: MemoryRecoverySourceType;
+  name: string;
+  enabled?: boolean;
+  priority?: number;
+  host?: string;
+  port?: number;
+  path_prefix?: string;
+  tls_required?: boolean;
+  credential_secret_name?: string;
+  note?: string;
+};
+
+export type MemoryRecoverySourceUpdate = {
+  enabled?: boolean;
+  priority?: number;
+  note?: string;
+};
+
+export type MemoryRecoveryAttempt = {
+  id: string;
+  source_type: string;
+  source_label: string;
+  status: string;
+  error_code: string | null;
+  sanitized_message: string | null;
+  created_at: string;
+};
+
+export type MemoryRecoveryResult = {
+  status:
+    | "ready"
+    | "exact_symbol_not_found"
+    | "identity_mismatch"
+    | "source_unavailable"
+    | "validation_failed"
+    | "import_rejected"
+    | "configuration_required";
+  requirement_id: string;
+  attempts: Array<{
+    source_type: string;
+    source_label: string;
+    status: string;
+    error_code?: string;
+    sanitized_message?: string;
+  }>;
+  cached_symbol_id: string | null;
+  error_code: string | null;
+  sanitized_message: string | null;
+  identity_expected: Record<string, unknown> | null;
+  identity_observed: Record<string, unknown> | null;
+};
+
 export type MemoryRunWhenReadyRequest = {
   kind: "single_profile" | "run_all";
   profile?: string;
@@ -4279,6 +4356,74 @@ export const api = {
   getMemorySymbolAcquisition: (caseId: string, evidenceId: string) =>
     request<MemorySymbolBlockedAcquireResponse>(
       `/cases/${caseId}/memory/evidences/${evidenceId}/symbols/acquisition`,
+    ),
+  // Exact Symbol Recovery Sources v1
+  listRecoverySources: () =>
+    request<MemoryRecoverySourceRead[]>(
+      "/admin/memory/symbols/recovery-sources",
+    ),
+  createRecoverySource: (payload: MemoryRecoverySourceCreate) =>
+    request<MemoryRecoverySourceRead>(
+      "/admin/memory/symbols/recovery-sources",
+      {
+        method: "POST",
+        body: JSON.stringify(payload),
+      },
+    ),
+  updateRecoverySource: (
+    id: string,
+    payload: MemoryRecoverySourceUpdate,
+  ) =>
+    request<MemoryRecoverySourceRead>(
+      `/admin/memory/symbols/recovery-sources/${id}`,
+      {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      },
+    ),
+  deleteRecoverySource: (id: string) =>
+    request<{ status: string }>(
+      `/admin/memory/symbols/recovery-sources/${id}`,
+      { method: "DELETE" },
+    ),
+  importPdb: (requirementId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return fetch(
+      `/api/admin/memory/symbols/import-pdb?requirement_id=${encodeURIComponent(requirementId)}`,
+      {
+        method: "POST",
+        body: form,
+      },
+    ).then((res) => res.json() as Promise<MemoryRecoveryResult>);
+  },
+  importIsf: (requirementId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return fetch(
+      `/api/admin/memory/symbols/import-isf?requirement_id=${encodeURIComponent(requirementId)}`,
+      {
+        method: "POST",
+        body: form,
+      },
+    ).then((res) => res.json() as Promise<MemoryRecoveryResult>);
+  },
+  importPackage: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return fetch(
+      "/api/admin/memory/symbols/import-package",
+      { method: "POST", body: form },
+    ).then((res) => res.json() as Promise<MemoryRecoveryResult>);
+  },
+  recoverSymbol: (requirementId: string) =>
+    request<MemoryRecoveryResult>(
+      `/admin/memory/symbols/recover/${requirementId}`,
+      { method: "POST" },
+    ),
+  listRecoveryAttempts: (requirementId: string) =>
+    request<MemoryRecoveryAttempt[]>(
+      `/admin/memory/symbols/attempts/${requirementId}`,
     ),
   listMemoryRuns: (caseId: string, evidenceId?: string) => {
     const query = evidenceId ? `?evidence_id=${encodeURIComponent(evidenceId)}` : "";

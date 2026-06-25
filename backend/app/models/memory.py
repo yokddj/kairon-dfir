@@ -453,6 +453,13 @@ class MemoryCachedSymbol(UUIDMixin, Base):
     isf_size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     validation_status: Mapped[str] = mapped_column(String(32), nullable=False, default="validated")
     source_category: Mapped[str] = mapped_column(String(64), nullable=False, default="official_microsoft_symbols")
+    # Provenance for the Exact Symbol Recovery Sources v1 feature.
+    # These columns are safe to expose to analysts: the secret
+    # value (if any) is never stored on this row.
+    provenance_source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="microsoft_public")
+    provenance_source_name: Mapped[str] = mapped_column(String(128), nullable=False, default="Microsoft public")
+    provenance_actor: Mapped[str] = mapped_column(String(128), nullable=False, default="server-operator")
+    provenance_acquired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
 
@@ -580,4 +587,144 @@ class MemoryAnalysisBatch(UUIDMixin, Base):
     __table_args__ = (
         Index("ix_memory_batch_evidence_status", "evidence_id", "status"),
         Index("ix_memory_batch_case_created", "case_id", "created_at"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Exact Symbol Recovery Sources v1
+# ---------------------------------------------------------------------------
+
+MEMORY_RECOVERY_SOURCE_TYPES = {
+    "microsoft_public",
+    "corporate_symbol_server",
+    "manual_pdb_import",
+    "manual_isf_import",
+    "offline_symbol_package",
+}
+
+MEMORY_RECOVERY_SOURCE_NAMES = {
+    "microsoft_public": "Microsoft public",
+    "corporate_symbol_server": "Corporate symbol server",
+    "manual_pdb_import": "Administrator-imported PDB",
+    "manual_isf_import": "Administrator-imported ISF",
+    "offline_symbol_package": "Offline package",
+}
+
+
+class MemorySymbolRecoverySource(UUIDMixin, Base):
+    """Administrator-configured recovery source for exact symbols.
+
+    Every successful symbol recovery must satisfy exact identity
+    validation (PDB name, GUID, age, architecture, Volatility
+    usability).  No recovery source may supply an approximate or
+    same-name symbol.
+
+    Persistence rules:
+    * Only safe metadata is stored.  Plaintext credentials,
+      internal hostnames, bearer tokens, and full URLs are never
+      stored on this row.
+    * ``host`` and ``path_prefix`` are the only network-address
+      fields; they are admin-supplied and frozen at creation time
+      (the spec forbids runtime mutation that would let an
+      attacker redirect the egress).
+    * The actual outbound secret (if any) is referenced through
+      the project secret mechanism via ``credential_secret_name``
+      (the canonical name of a secret stored in
+      ``memory_symbol_egress_gateway_secret`` / a dedicated
+      env-var lookup).  The secret value is never copied to this
+      row.
+    """
+
+    __tablename__ = "memory_symbol_recovery_sources"
+
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    priority: Mapped[int] = mapped_column(nullable=False, default=100, index=True)
+    # Corporate symbol server only — frozen at creation time.
+    host: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    port: Mapped[int | None] = mapped_column(nullable=True)
+    path_prefix: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    tls_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Name of the secret used to authenticate to the source.  The
+    # secret value itself is never persisted on this row.
+    credential_secret_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Admin / audit fields.  ``configured_by`` is a server-side
+    # label only; the system does not currently provide an
+    # authenticated administrator role, so the value comes from
+    # the deployment host (operator label or "server-operator").
+    configured_by: Mapped[str] = mapped_column(String(128), nullable=False, default="server-operator")
+    note: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (
+        Index("ix_memory_recovery_source_enabled_priority", "enabled", "priority"),
+        UniqueConstraint("source_type", "name", name="uq_memory_recovery_source_type_name"),
+    )
+
+
+class MemorySymbolRecoveryAttempt(UUIDMixin, Base):
+    """One per-source per-requirement attempt record.
+
+    Written by the recovery orchestrator.  The UI uses this table
+    to render the "Microsoft public → pending / Corporate symbol
+    server → succeeded / …" attempt log the operator sees on the
+    blocked-symbols evidence page.
+
+    Safe to expose to analysts: the secret value (if any) is never
+    stored on this row.  ``sanitized_message`` is a short
+    pre-sanitised summary written by the orchestrator.
+
+    Active-attempt uniqueness is enforced by a partial unique
+    index in migration v16: at most one row per
+    ``(requirement_id, source_type)`` may have a NULL
+    ``terminal_at``.  Multiple terminal rows are allowed; the
+    operator may retry by creating a new active row.
+    """
+
+    __tablename__ = "memory_symbol_recovery_attempts"
+
+    requirement_id: Mapped[str] = mapped_column(
+        ForeignKey("memory_symbol_requirements.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_id: Mapped[str | None] = mapped_column(
+        ForeignKey("memory_symbol_recovery_sources.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    source_label: Mapped[str] = mapped_column(String(128), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    # NULL while the attempt is active (pending / in-flight).
+    # Set to ``utc_now_naive()`` when the attempt reaches a
+    # terminal state (``succeeded`` / ``failed`` / ``skipped``).
+    terminal_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True, index=True,
+    )
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    sanitized_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+
+    __table_args__ = (
+        Index("ix_memory_recovery_attempt_requirement", "requirement_id"),
+        Index("ix_memory_recovery_attempt_case_evidence", "case_id", "evidence_id"),
+        # Partial unique index: at most one active attempt per
+        # ``(requirement_id, source_type)`` tuple.  Multiple
+        # terminal rows are allowed (operator retry).  The
+        # partial index is created in migration v16.
+        Index(
+            "uq_memory_recovery_attempt_active",
+            "requirement_id",
+            "source_type",
+            unique=True,
+            postgresql_where=sa.text("terminal_at IS NULL"),
+            sqlite_where=sa.text("terminal_at IS NULL"),
+        ),
     )

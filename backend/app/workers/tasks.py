@@ -570,6 +570,56 @@ def enqueue_memory_preparation(evidence_id: str) -> str:
     return job.id
 
 
+def enqueue_admin_pdb_import(db: Session, *, import_id: str) -> str:
+    """Enqueue an administrator PDB import.
+
+    The job runs on the ``memory`` queue.  The worker function
+    is :func:`app.workers.symbol_tasks.run_admin_pdb_import`.
+    The endpoint that calls this function returns 202 with the
+    job id; the conversion / promotion work runs in the
+    worker.
+    """
+    from app.services.memory import symbol_recovery
+    if not getattr(
+        symbol_recovery.get_settings(),
+        "memory_symbol_admin_recovery_enabled",
+        False,
+    ):
+        # The import row is in the database already; the
+        # worker will refuse to run if the feature is
+        # disabled.
+        pass
+    timeout = max(60, int(settings.memory_job_timeout_seconds))
+    job = memory_queue.enqueue(
+        "app.workers.symbol_tasks.run_admin_pdb_import",
+        str(import_id),
+        job_timeout=timeout,
+    )
+    return job.id
+
+
+def enqueue_admin_isf_import(db: Session, *, import_id: str) -> str:
+    """Enqueue an administrator ISF import."""
+    timeout = max(60, int(settings.memory_job_timeout_seconds))
+    job = memory_queue.enqueue(
+        "app.workers.symbol_tasks.run_admin_isf_import",
+        str(import_id),
+        job_timeout=timeout,
+    )
+    return job.id
+
+
+def enqueue_admin_package_import(db: Session, *, import_id: str) -> str:
+    """Enqueue an administrator offline package import."""
+    timeout = max(60, int(settings.memory_job_timeout_seconds))
+    job = memory_queue.enqueue(
+        "app.workers.symbol_tasks.run_admin_package_import",
+        str(import_id),
+        job_timeout=timeout,
+    )
+    return job.id
+
+
 def run_memory_preparation(evidence_id: str) -> None:
     """Worker entry point for the OS-agnostic preparation.
 

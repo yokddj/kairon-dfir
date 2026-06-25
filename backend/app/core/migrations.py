@@ -940,6 +940,272 @@ def _v14_acquisitions_observed_identity(connection: Connection) -> None:
             )
 
 
+@register(15, "memory_symbol_recovery_sources")
+def _v15_recovery_sources(connection: Connection) -> None:
+    """Add the recovery-sources table and the cache provenance columns.
+
+    The Exact Symbol Recovery Sources v1 feature lets
+    administrators configure additional recovery paths (corporate
+    symbol server, manual PDB/ISF import, offline package) when
+    the Microsoft public symbol path cannot supply an exact
+    matching PDB.  Each cached symbol must also record truthful
+    provenance so the UI can show ``Microsoft public`` /
+    ``Corporate symbol server`` / ``Administrator-imported PDB``
+    / ``Administrator-imported ISF`` / ``Offline package`` to
+    analysts without exposing internal URLs or secrets.
+
+    * New table ``memory_symbol_recovery_sources`` stores the
+      administrator-configured corporate symbol servers.  Only
+      safe metadata is stored; the secret itself is never
+      persisted on the row.
+    * ``memory_cached_symbols`` gains:
+        - ``provenance_source_type`` (String 32)
+        - ``provenance_source_name`` (String 128)
+        - ``provenance_acquired_at`` (timestamp)
+        - ``provenance_actor`` (String 128)
+    * Existing ``MemoryCachedSymbol`` rows are back-filled with
+      ``provenance_source_type = "microsoft_public"`` and
+      ``provenance_source_name = "Microsoft public"`` so the UI
+      can always render a label.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_symbol_recovery_sources" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                "CREATE TABLE memory_symbol_recovery_sources ("
+                "id VARCHAR(36) PRIMARY KEY, "
+                "source_type VARCHAR(32) NOT NULL, "
+                "name VARCHAR(128) NOT NULL, "
+                "enabled BOOLEAN NOT NULL DEFAULT 1, "
+                "priority INTEGER NOT NULL DEFAULT 100, "
+                "host VARCHAR(255), "
+                "port INTEGER, "
+                "path_prefix VARCHAR(512), "
+                "tls_required BOOLEAN NOT NULL DEFAULT 1, "
+                "credential_secret_name VARCHAR(128), "
+                "configured_by VARCHAR(128) NOT NULL DEFAULT 'server-operator', "
+                "note VARCHAR(512), "
+                "metadata_json JSON NOT NULL DEFAULT '{}', "
+                "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                ")"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE UNIQUE INDEX uq_memory_recovery_source_type_name "
+                "ON memory_symbol_recovery_sources (source_type, name)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_recovery_source_type "
+                "ON memory_symbol_recovery_sources (source_type)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_recovery_source_enabled "
+                "ON memory_symbol_recovery_sources (enabled)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_recovery_source_priority "
+                "ON memory_symbol_recovery_sources (priority)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_recovery_source_enabled_priority "
+                "ON memory_symbol_recovery_sources (enabled, priority)"
+            )
+        )
+        logger.info("v15: created memory_symbol_recovery_sources")
+
+    if "memory_symbol_recovery_attempts" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                "CREATE TABLE memory_symbol_recovery_attempts ("
+                "id VARCHAR(36) PRIMARY KEY, "
+                "requirement_id VARCHAR(36) NOT NULL, "
+                "case_id VARCHAR(36) NOT NULL, "
+                "evidence_id VARCHAR(36) NOT NULL, "
+                "source_id VARCHAR(36), "
+                "source_type VARCHAR(32) NOT NULL, "
+                "source_label VARCHAR(128) NOT NULL, "
+                "status VARCHAR(32) NOT NULL, "
+                "error_code VARCHAR(64), "
+                "sanitized_message VARCHAR(512), "
+                "metadata_json JSON NOT NULL DEFAULT '{}', "
+                "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                ")"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_recovery_attempt_requirement "
+                "ON memory_symbol_recovery_attempts (requirement_id)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_recovery_attempt_case_evidence "
+                "ON memory_symbol_recovery_attempts (case_id, evidence_id)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_recovery_attempt_source_type "
+                "ON memory_symbol_recovery_attempts (source_type)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_memory_recovery_attempt_status "
+                "ON memory_symbol_recovery_attempts (status)"
+            )
+        )
+        logger.info("v15: created memory_symbol_recovery_attempts")
+
+    if "memory_cached_symbols" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("memory_cached_symbols")}
+        cache_additions = [
+            ("provenance_source_type", "VARCHAR(32)"),
+            ("provenance_source_name", "VARCHAR(128)"),
+            ("provenance_actor", "VARCHAR(128)"),
+        ]
+        for column_name, column_type in cache_additions:
+            if column_name not in existing:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE memory_cached_symbols "
+                        f"ADD COLUMN {column_name} {column_type}"
+                    )
+                )
+                logger.info(
+                    "v15: added memory_cached_symbols.%s", column_name
+                )
+        # Back-fill provenance for legacy rows so the UI can always
+        # render a non-empty label.
+        connection.execute(
+            text(
+                "UPDATE memory_cached_symbols "
+                "SET provenance_source_type = 'microsoft_public', "
+                "    provenance_source_name = 'Microsoft public' "
+                "WHERE provenance_source_type IS NULL "
+                "   OR provenance_source_type = ''"
+            )
+        )
+        # ``provenance_acquired_at`` mirrors ``created_at`` for
+        # legacy rows; new writes set it explicitly.
+        existing = {c["name"] for c in inspector.get_columns("memory_cached_symbols")}
+        if "provenance_acquired_at" not in existing:
+            connection.execute(
+                text(
+                    "ALTER TABLE memory_cached_symbols "
+                    "ADD COLUMN provenance_acquired_at TIMESTAMP"
+                )
+            )
+        connection.execute(
+            text(
+                "UPDATE memory_cached_symbols "
+                "SET provenance_acquired_at = created_at "
+                "WHERE provenance_acquired_at IS NULL"
+            )
+        )
+
+
+@register(16, "memory_symbol_recovery_attempts_active_uniqueness")
+def _v16_recovery_attempts_active_uniqueness(connection: Connection) -> None:
+    """Add ``terminal_at`` column and a partial unique index that
+    enforces "at most one active attempt per
+    ``(requirement_id, source_type)`` tuple".
+
+    The ``terminal_at`` column is NULL while the attempt is
+    active and is set to the wall-clock time when the attempt
+    reaches a terminal state (``succeeded`` / ``failed`` /
+    ``skipped``).  The partial unique index guarantees the
+    invariant even across multiple backend processes / workers
+    / restarts.
+
+    The migration is idempotent: each step is gated on a
+    pre-condition (column existence, index existence).  Legacy
+    rows are back-filled with a sentinel ``terminal_at`` value
+    so they do not block new active attempts.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_symbol_recovery_attempts" not in inspector.get_table_names():
+        return
+    existing = {
+        c["name"] for c in inspector.get_columns("memory_symbol_recovery_attempts")
+    }
+    if "terminal_at" not in existing:
+        connection.execute(
+            text(
+                "ALTER TABLE memory_symbol_recovery_attempts "
+                "ADD COLUMN terminal_at TIMESTAMP"
+            )
+        )
+        logger.info(
+            "v16: added memory_symbol_recovery_attempts.terminal_at"
+        )
+    # Back-fill legacy rows so the partial unique index can
+    # be created without a "duplicate" error.
+    connection.execute(
+        text(
+            "UPDATE memory_symbol_recovery_attempts "
+            "SET terminal_at = created_at "
+            "WHERE terminal_at IS NULL"
+        )
+    )
+    # Idempotent index creation.  PostgreSQL supports
+    # ``CREATE UNIQUE INDEX IF NOT EXISTS`` and partial
+    # indexes (``WHERE terminal_at IS NULL``).  SQLite does
+    # NOT support ``IF NOT EXISTS`` for indexes reliably, so
+    # we check the inspector first and fall back to a regular
+    # helper index.
+    dialect = connection.dialect.name
+    existing_indexes = {
+        ix["name"] for ix in inspector.get_indexes(
+            "memory_symbol_recovery_attempts"
+        )
+    }
+    try:
+        if dialect == "postgresql":
+            if "uq_memory_recovery_attempt_active" not in existing_indexes:
+                connection.execute(
+                    text(
+                        "CREATE UNIQUE INDEX "
+                        "uq_memory_recovery_attempt_active "
+                        "ON memory_symbol_recovery_attempts "
+                        "(requirement_id, source_type) "
+                        "WHERE terminal_at IS NULL"
+                    )
+                )
+        else:
+            if "ix_memory_recovery_attempt_active" not in existing_indexes:
+                connection.execute(
+                    text(
+                        "CREATE INDEX "
+                        "ix_memory_recovery_attempt_active "
+                        "ON memory_symbol_recovery_attempts "
+                        "(requirement_id, source_type, terminal_at)"
+                    )
+                )
+        logger.info(
+            "v16: ensured active-attempt index on "
+            "memory_symbol_recovery_attempts (requirement_id, "
+            "source_type) WHERE terminal_at IS NULL"
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.info(
+            "v16: active-attempt index not created on %s (%s); "
+            "application enforces the invariant instead",
+            dialect, exc,
+        )
+
+
 def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 

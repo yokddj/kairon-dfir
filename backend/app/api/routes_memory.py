@@ -2832,5 +2832,80 @@ def _require_run_or_any(case_id: str, run_id: str | None) -> None:
     """Light validation: the index may not exist yet, so we only check
     the run_id shape.  The search helpers tolerate missing indexes.
     """
+
+
+# ---------------------------------------------------------------------------
+# Recovery capability status (Hardening v1)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/recovery-capabilities",
+    response_model=None,
+)
+def get_recovery_capabilities(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    """Return the recovery capability status for an evidence.
+
+    The analyst UI uses this endpoint to decide which buttons
+    to show.  The endpoint is truthful: it never claims a
+    feature is available unless the corresponding backend
+    capability is enabled in the server-side configuration.
+
+    A feature whose ``enabled`` flag is ``False`` MUST NOT be
+    advertised in the UI.
+    """
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    settings = get_settings()
+    # The Kairon project does not currently provide a mature
+    # authenticated administrator role.  All manual-recovery
+    # paths (PDB / ISF / package / corporate source) are
+    # disabled by default; the analyst UI is the source of
+    # truth for which paths the operator can complete.  The
+    # ``manual_import_admin_only`` flag is the only signal the
+    # UI may show; it does not itself grant authorization.
+    admin_enabled = bool(
+        getattr(settings, "memory_symbol_admin_recovery_enabled", False),
+    )
+    return {
+        "case_id": case_id,
+        "evidence_id": evidence_id,
+        "microsoft_public_available": bool(
+            getattr(settings, "memory_symbol_managed_download_enabled", False)
+            and getattr(settings, "memory_symbol_execution_mode", "offline_only")
+            == "managed_download"
+        ),
+        "manual_import_disabled": not admin_enabled,
+        "manual_import_admin_only": True,  # always — see SECURITY MODEL
+        "corporate_recovery_not_implemented": True,
+        "offline_package_disabled": not admin_enabled,
+        "exact_cache_available": True,  # always available
+        "configuration": {
+            "memory_symbol_admin_recovery_enabled": admin_enabled,
+            "memory_symbol_managed_download_enabled": bool(
+                getattr(settings, "memory_symbol_managed_download_enabled", False)
+            ),
+            "memory_symbol_corporate_source_enabled": bool(
+                getattr(settings, "memory_symbol_corporate_source_enabled", False)
+            ),
+            "memory_symbol_manual_import_enabled": bool(
+                getattr(settings, "memory_symbol_manual_import_enabled", False)
+            ),
+        },
+        "message": (
+            "Manual imports and corporate recovery are disabled by default. "
+            "Microsoft public exact recovery is available to authorized case "
+            "analysts when the operator has enabled managed download."
+        )
+        if not admin_enabled
+        else (
+            "Manual imports are enabled but still require the deployment to "
+            "restrict /api/admin/memory/symbols/* to a trusted operator network."
+        ),
+    }
     if run_id is not None and not isinstance(run_id, str):
         raise HTTPException(status_code=400, detail="run_id must be a string.")
