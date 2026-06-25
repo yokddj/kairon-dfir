@@ -300,7 +300,7 @@ export function MemoryEvidenceHeader({
         <div
           className="mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100"
           data-testid="memory-symbol-blocker-banner"
-          data-state={prepUiState ?? symbolState}
+          data-state={prepUiState ?? legacySymbolState}
         >
           <p className="font-semibold text-ink">Analysis readiness</p>
           <p className="mt-1" data-testid="memory-symbol-blocker-message">

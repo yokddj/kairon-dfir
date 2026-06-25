@@ -148,17 +148,19 @@ describe("blocked_symbols acquisition UX (frontend)", () => {
   });
 
   it("7) double-click does not dispatch two acquisitions", async () => {
-    (api.acquireExactMemorySymbols as ReturnType<typeof vi.fn>).mockResolvedValue({
-      state: "queued",
-      task_alive: true,
-      message: "",
-      error_code: null,
-    });
+    // The mock returns a never-resolving promise so the
+    // mutation stays pending for the entire test.  The button
+    // is disabled while the mutation is in flight, so
+    // additional clicks are no-ops in the rendered DOM.
+    let resolveAcquire: (v: unknown) => void = () => {};
+    (api.acquireExactMemorySymbols as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise((resolve) => {
+        resolveAcquire = resolve;
+      }),
+    );
     renderCard(basePreparation());
     const button = screen.getByTestId("memory-preparation-acquire-button");
     fireEvent.click(button);
-    // After the first click the button must be disabled, which
-    // means subsequent clicks are no-ops in the rendered DOM.
     await waitFor(() => {
       expect(button).toBeDisabled();
     });
@@ -168,6 +170,13 @@ describe("blocked_symbols acquisition UX (frontend)", () => {
       expect(api.acquireExactMemorySymbols).toHaveBeenCalled();
     });
     expect(api.acquireExactMemorySymbols.mock.calls.length).toBe(1);
+    // Resolve the promise so the test doesn't hang.
+    resolveAcquire({
+      state: "queued",
+      task_alive: true,
+      message: "",
+      error_code: null,
+    });
   });
 
   it("8) does NOT call acquireExactMemorySymbols when the state is not blocked_symbols", () => {
@@ -179,6 +188,13 @@ describe("blocked_symbols acquisition UX (frontend)", () => {
   });
 
   it("9) shows a safe error message when the API returns a failure", async () => {
+    // The card now derives the error message from the canonical
+    // preparation endpoint, which propagates the latest
+    // acquisition error_code.  A POST that returns
+    // ``state="failed"`` with a specific message is treated as a
+    // terminal hint; the button re-enables and the canonical
+    // error_code drives the visible error.  The test therefore
+    // sets the preparation error_code directly.
     (api.acquireExactMemorySymbols as ReturnType<typeof vi.fn>).mockResolvedValue({
       request_id: "req-x",
       acquisition_id: "acq-x",
@@ -190,7 +206,12 @@ describe("blocked_symbols acquisition UX (frontend)", () => {
       message: "The exact PDB was not found at the official source.",
       error_code: "SYMBOL_NOT_FOUND",
     });
-    renderCard(basePreparation());
+    renderCard(
+      basePreparation({
+        error_code: "SYMBOL_ACQUISITION_FAILED",
+        sanitized_message: "The exact PDB was not found at the official source.",
+      }),
+    );
     fireEvent.click(screen.getByTestId("memory-preparation-acquire-button"));
     await waitFor(() => {
       expect(

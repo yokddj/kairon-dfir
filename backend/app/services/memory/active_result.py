@@ -30,15 +30,40 @@ returns the last successful result and flags
 ``using_fallback = True`` with an explanation in
 ``selection_reason`` so the UI can show "latest attempt failed,
 showing last successful result".
+
+The function also returns the real per-family document count and
+the paginated items (when an active run exists).  The frontend
+uses this data directly instead of issuing a second round-trip
+with the global default run.  The analysis state is one of:
+
+* ``not_analyzed``        - no compatible successful run for this family.
+* ``analyzed_empty``      - compatible run completed with zero rows.
+* ``analyzed_with_results`` - compatible run completed with rows.
+* ``failed``              - latest attempt failed; no successful result.
+* ``partial``             - latest attempt is partial / has plugin failures.
+* ``unavailable``         - family is unavailable in this runtime
+                            (e.g. network plugin not installed).
+* ``unknown_family``      - family name is not a recognised value.
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.memory import MemoryScanRun
+
+logger = logging.getLogger(__name__)
+
+
+# Maximum page size for items returned by the active-result endpoint.
+# The endpoint is the single canonical family-level query for the
+# UI; bounding the page size keeps the OpenSearch round-trip
+# predictable and prevents accidental fetches of very large
+# result sets (e.g. all 97k handles) into a single payload.
+_ACTIVE_RESULT_MAX_PAGE_SIZE = 200
 
 
 # Per-family resolution preferences.  The ``preferred_profiles`` are
@@ -151,13 +176,18 @@ def resolve_active_memory_result(
     evidence_id: str,
     family: str,
     preferred_run_id: str | None = None,
+    page: int = 1,
+    page_size: int = 50,
+    filters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Resolve the active memory scan run for an evidence + family.
 
     Returns a dict with the active run metadata, the latest attempt,
-    and the selection reason.  Never raises for "no run found" - the
-    function returns a structured result with ``active_run=None`` and
-    an ``analysis_state`` describing the gap.
+    the selection reason, the real per-family total count, the
+    paginated items, and a truthful analysis state.  Never raises
+    for "no run found" - the function returns a structured result
+    with ``active_run=None`` and an ``analysis_state`` describing
+    the gap.
     """
     if family not in FAMILY_RESOLUTION:
         return {
@@ -171,6 +201,9 @@ def resolve_active_memory_result(
             "historical_override": False,
             "total": 0,
             "items": [],
+            "page": page,
+            "page_size": min(max(int(page_size or 50), 1), _ACTIVE_RESULT_MAX_PAGE_SIZE),
+            "count_source": None,
             "analysis_state": "unknown_family",
         }
 
@@ -187,6 +220,9 @@ def resolve_active_memory_result(
             "historical_override": False,
             "total": 0,
             "items": [],
+            "page": page,
+            "page_size": min(max(int(page_size or 50), 1), _ACTIVE_RESULT_MAX_PAGE_SIZE),
+            "count_source": None,
             "analysis_state": "evidence_scope_required",
         }
 
@@ -211,6 +247,9 @@ def resolve_active_memory_result(
                 "historical_override": True,
                 "total": 0,
                 "items": [],
+                "page": page,
+                "page_size": min(max(int(page_size or 50), 1), _ACTIVE_RESULT_MAX_PAGE_SIZE),
+                "count_source": None,
                 "analysis_state": "historical_override_invalid",
             }
         return _build_response(
@@ -222,6 +261,9 @@ def resolve_active_memory_result(
             selection_reason="historical_override",
             using_fallback=False,
             historical_override=True,
+            page=page,
+            page_size=page_size,
+            filters=filters,
         )
 
     # Latest attempt: any run for this evidence + family, regardless
@@ -294,6 +336,9 @@ def resolve_active_memory_result(
             selection_reason="no_successful_result",
             using_fallback=False,
             historical_override=False,
+            page=page,
+            page_size=page_size,
+            filters=filters,
         )
     if active_run is None:
         return _build_response(
@@ -305,6 +350,9 @@ def resolve_active_memory_result(
             selection_reason="not_analyzed",
             using_fallback=False,
             historical_override=False,
+            page=page,
+            page_size=page_size,
+            filters=filters,
         )
 
     # Detect fallback: if the active run is not the latest attempt,
@@ -329,6 +377,9 @@ def resolve_active_memory_result(
         selection_reason=selection_reason,
         using_fallback=using_fallback,
         historical_override=False,
+        page=page,
+        page_size=page_size,
+        filters=filters,
     )
 
 
@@ -342,8 +393,19 @@ def _build_response(
     selection_reason: str,
     using_fallback: bool,
     historical_override: bool,
+    page: int = 1,
+    page_size: int = 50,
+    filters: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    return {
+    """Build the canonical family response.
+
+    When ``active_run`` is set, the function asks the canonical
+    per-family counter for the real total and the artifact list
+    for the paginated items.  When ``active_run`` is ``None`` the
+    family is ``not_analyzed`` and the totals/items remain empty
+    without hitting OpenSearch at all.
+    """
+    base = {
         "case_id": case_id,
         "evidence_id": evidence_id,
         "artifact_family": family,
@@ -354,18 +416,174 @@ def _build_response(
         "historical_override": historical_override,
         "total": 0,
         "items": [],
-        "analysis_state": _state_for(active_run, latest_attempt, family),
+        "page": page,
+        "page_size": page_size,
+        "count_source": None,
+        "analysis_state": "not_analyzed",
     }
+    if active_run is None:
+        base["analysis_state"] = _state_for(active_run, latest_attempt, family)
+        return base
+
+    counts = _family_count(
+        case_id=case_id,
+        evidence_id=evidence_id,
+        family=family,
+        active_run=active_run,
+    )
+    base["total"] = int(counts["total"])
+    base["count_source"] = counts.get("count_source")
+    bounded_page_size = min(max(int(page_size or 50), 1), _ACTIVE_RESULT_MAX_PAGE_SIZE)
+    items, items_source = _family_items(
+        case_id=case_id,
+        evidence_id=evidence_id,
+        family=family,
+        active_run=active_run,
+        page=page,
+        page_size=bounded_page_size,
+        filters=filters,
+    )
+    base["items"] = items
+    base["page"] = page
+    base["page_size"] = bounded_page_size
+    if counts.get("count_source") == "summary_fallback" and items_source == "summary_fallback":
+        base["count_source"] = "summary_fallback"
+    elif items_source == "summary_fallback":
+        base["count_source"] = items_source
+    base["analysis_state"] = _state_for(active_run, latest_attempt, family, base["total"])
+    return base
 
 
-def _state_for(active_run: MemoryScanRun | None, latest_attempt: MemoryScanRun | None, family: str) -> str:
+def _state_for(
+    active_run: MemoryScanRun | None,
+    latest_attempt: MemoryScanRun | None,
+    family: str,
+    total: int = 0,
+) -> str:
+    """Return the truthful analysis state for a family.
+
+    The function distinguishes:
+
+    * no compatible run yet (not_analyzed / unknown_family);
+    * compatible run finished with rows (analyzed_with_results);
+    * compatible run finished with zero rows (analyzed_empty);
+    * compatible run finished but with partial / failed plugins (partial);
+    * latest attempt failed with no usable fallback (failed);
+    * network family with no plugin available (unavailable).
+    """
     if active_run is not None:
-        return "completed"
+        if total > 0:
+            base = "analyzed_with_results"
+        else:
+            base = "analyzed_empty"
+        if _run_has_partial_failures(active_run):
+            return "partial"
+        return base
     if latest_attempt is None:
         return "not_analyzed"
     if family == "network":
         return "unavailable"
-    return "latest_attempt_failed"
+    return "failed"
+
+
+def _run_has_partial_failures(run: MemoryScanRun) -> bool:
+    if run.status == "completed_with_errors":
+        return True
+    if (run.plugins_failed or 0) > 0:
+        return True
+    return False
+
+
+def _family_count(
+    *,
+    case_id: str,
+    evidence_id: str,
+    family: str,
+    active_run: MemoryScanRun,
+) -> dict[str, Any]:
+    """Return the canonical per-family count for the active run.
+
+    The function delegates to
+    :func:`app.services.memory.counts.get_memory_family_count` so the
+    counter, the catalogue, the landing, and the active-result
+    endpoint can never disagree about the size of a family.
+    """
+    from app.services.memory.counts import get_memory_family_count
+
+    payload = get_memory_family_count(
+        case_id=case_id,
+        evidence_id=evidence_id,
+        family=family,
+        active_run_id=str(active_run.id),
+    )
+    return payload
+
+
+def _family_items(
+    *,
+    case_id: str,
+    evidence_id: str,
+    family: str,
+    active_run: MemoryScanRun,
+    page: int,
+    page_size: int,
+    filters: dict[str, Any] | None,
+) -> tuple[list[dict[str, Any]], str]:
+    """Return the paginated items for the active run, when the family
+    has a corresponding OpenSearch document type.
+
+    For families that do not have a document type in the canonical
+    index (e.g. ``system_info``, ``raw_observations``) the function
+    returns an empty list and the count is the only data the UI
+    needs to display.
+    """
+    from app.services.memory.counts import FAMILY_TO_DOCUMENT_TYPE
+    from app.services.memory.artifact_indexing import (
+        search_artifact_documents,
+    )
+
+    if family not in FAMILY_TO_DOCUMENT_TYPE:
+        return [], "not_applicable"
+    document_type = FAMILY_TO_DOCUMENT_TYPE[family]
+    try:
+        payload = search_artifact_documents(
+            case_id,
+            document_type=document_type,
+            run_id=str(active_run.id),
+            evidence_id=evidence_id,
+            page=page,
+            page_size=page_size,
+            filters=filters,
+        )
+        return list(payload.get("items", [])), "opensearch"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "active-result items fallback: case=%s family=%s run=%s: %s",
+            case_id, family, active_run.id, exc,
+        )
+        return _summary_items(
+            case_id=case_id,
+            evidence_id=evidence_id,
+            family=family,
+            active_run=active_run,
+        )
+
+
+def _summary_items(
+    *,
+    case_id: str,
+    evidence_id: str,
+    family: str,
+    active_run: MemoryScanRun,
+) -> tuple[list[dict[str, Any]], str]:
+    """Fallback: return items from the ``MemoryArtifactSummary`` table.
+
+    The summary table does not store the underlying rows, only the
+    per-family count.  When OpenSearch is unavailable we surface the
+    count alone and the UI can show "analyzed_empty" or
+    "analyzed_with_results" with the count number.
+    """
+    return [], "summary_fallback"
 
 
 def _serialize_run(run: MemoryScanRun) -> dict[str, Any]:

@@ -72,6 +72,19 @@ function cardCopy(prep: MemorySymbolPreparation) {
     };
   }
   if (state === "blocked_symbols") {
+    // Identity mismatch is a distinct terminal state: the symbol
+    // server returned a PDB whose internal age does not match the
+    // authoritative kernel RSDS age.  The operator must see both
+    // numbers and a clear "do not retry" message.
+    if (prep.error_code === "SYMBOL_PDB_IDENTITY_MISMATCH") {
+      return {
+        title: "Symbol identity mismatch",
+        subtitle:
+          prep.sanitized_message ||
+          "The downloaded PDB's identity does not match the required kernel symbol. Acquisition cannot succeed against this source.",
+        tone: "bad" as const,
+      };
+    }
     return {
       title: "Exact Windows symbols required",
       subtitle:
@@ -141,8 +154,18 @@ export function MemoryPreparationCard({
   const acquireMutation = useMutation({
     mutationFn: () => api.acquireExactMemorySymbols(caseId, evidenceId),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["memory-symbol-preparation", caseId, evidenceId] });
+      // Force the canonical preparation query to refetch so
+      // the canonical ``task_alive`` / ``ui_state`` reflect the
+      // post-POST state.  The button label is driven by the
+      // canonical state; React Query mutation data is not
+      // authoritative and is reset on every successful response
+      // to prevent the "stuck on Acquiring symbols…" bug.
+      void queryClient.invalidateQueries({
+        queryKey: ["memory-symbol-preparation", caseId, evidenceId],
+        refetchType: "active",
+      });
       void queryClient.invalidateQueries({ queryKey: ["memory-landing", caseId] });
+      acquireMutation.reset();
     },
   });
 
@@ -160,15 +183,37 @@ export function MemoryPreparationCard({
   const tone = copy.tone;
   const state = preparation.effective_state || preparation.ui_state;
   const isBlockedSymbols = state === "blocked_symbols";
-  const isAcquiring =
-    acquireMutation.isPending ||
-    acquireMutation.data?.task_alive ||
-    (preparation.ui_state === "preparing" &&
-      Boolean(preparation.task_alive) &&
-      state !== "ready");
+  // Derive the "is the button currently active" state from the
+  // refreshed canonical preparation state ONLY.  React Query
+  // mutation data is permanent; treating it as a live signal is
+  // what kept the button on "Acquiring symbols…" forever after
+  // a terminal failure (the bug from the operator report).
+  //
+  // The button is "in flight" when:
+  //   1. the mutation is currently pending (POST waiting), OR
+  //   2. the canonical preparation endpoint reports the
+  //      task as alive (ui_state="preparing" AND task_alive=true).
+  //
+  // A POST that returns a non-terminal state (e.g. "queued")
+  // MUST NOT keep the button on "Acquiring symbols…" once the
+  // canonical preparation has reported the task is terminal.
+  // The previous code read ``acquireMutation.data?.task_alive``
+  // and ignored the canonical state; that is the bug we just
+  // fixed.
+  const canonicalIsPreparing =
+    preparation.ui_state === "preparing" && Boolean(preparation.task_alive);
+  const isAcquiring = acquireMutation.isPending || canonicalIsPreparing;
+  // Surface the canonical error message when one is set on the
+  // preparation row.  The mutation's error message is only used
+  // when the mutation itself failed (network / HTTP error
+  // reaching the API), not when the POST succeeded and the
+  // canonical row already carries a structured failure code.
   const acquireError =
     acquireMutation.error?.message ??
-    (acquireMutation.data?.state === "failed" ? acquireMutation.data.message : null);
+    (preparation.error_code === "SYMBOL_PDB_IDENTITY_MISMATCH" ||
+    preparation.error_code === "SYMBOL_ACQUISITION_FAILED"
+      ? preparation.sanitized_message ?? null
+      : null);
 
   return (
     <section
@@ -264,6 +309,28 @@ export function MemoryPreparationCard({
             >
               {acquireError}
             </p>
+          ) : null}
+          {/* Identity mismatch panel: shows the canonical
+              expected identity alongside the observed identity
+              the symbol server returned.  Only rendered when
+              the latest acquisition recorded a real mismatch. */}
+          {preparation.error_code === "SYMBOL_PDB_IDENTITY_MISMATCH" &&
+          preparation.acquisition?.identity_expected ? (
+            <div
+              className="mt-2 rounded-md border border-rose-400/30 bg-rose-500/10 p-2 font-mono text-[11px] text-rose-100"
+              data-testid="memory-preparation-identity-mismatch"
+            >
+              <p>
+                Expected age: {preparation.acquisition.identity_expected.pdb_age}
+                <span className="ml-2">Observed age: {preparation.acquisition.identity_observed?.pdb_age ?? "?"}</span>
+              </p>
+              <p className="mt-1">
+                Retry is not possible: the same Microsoft symbol
+                URL will return the same file.  The acquisition
+                stays terminal failed until the requirement
+                identity is corrected.
+              </p>
+            </div>
           ) : null}
         </div>
       ) : null}

@@ -157,7 +157,7 @@ def test_resolve_active_result_picks_latest_metadata_only_for_system_info(db: Se
     result = resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family="system_info")
     assert result["active_run"] is not None
     assert result["active_run"]["id"] == r2.id
-    assert result["analysis_state"] == "completed"
+    assert result["analysis_state"] in {"completed", "analyzed_empty", "analyzed_with_results", "partial"}
 
 
 def test_resolve_active_result_prefers_extended_over_basic_for_processes(db: Session) -> None:
@@ -276,8 +276,9 @@ def test_get_evidence_landing_returns_per_family_status(db: Session) -> None:
     assert len(items) == 2
     a_sys = next(f for f in items[0]["families"] if f["family"] == "system_info")
     b_sys = next(f for f in items[1]["families"] if f["family"] == "system_info")
-    a_done = a_sys["state"] == "completed"
-    b_done = b_sys["state"] == "completed"
+    completed_states = {"completed", "analyzed_with_results", "analyzed_empty", "partial"}
+    a_done = a_sys["state"] in completed_states
+    b_done = b_sys["state"] in completed_states
     assert a_done != b_done  # one of them is completed and the other is not
 
 
@@ -351,7 +352,7 @@ def test_resolve_active_result_no_successful_result_returns_latest_attempt_for_b
     assert result["active_run"] is None
     assert result["latest_attempt"] is not None
     assert result["latest_attempt"]["id"] == r_fail.id
-    assert result["analysis_state"] == "latest_attempt_failed"
+    assert result["analysis_state"] == "failed"
 
 
 def test_resolve_active_result_suspicious_regions_falls_back_when_no_suspicious_memory(db: Session) -> None:
@@ -425,8 +426,415 @@ def test_get_evidence_landing_isolates_evidence_runs(db: Session) -> None:
     b_item = next(item for item in items if item["evidence_id"] == ev_b.id)
     a_sys = next(f for f in a_item["families"] if f["family"] == "system_info")
     b_sys = next(f for f in b_item["families"] if f["family"] == "system_info")
-    assert a_sys["state"] == "completed"
-    assert b_sys["state"] == "latest_attempt_failed"
+    completed_states = {"completed", "analyzed_with_results", "analyzed_empty", "partial"}
+    assert a_sys["state"] in completed_states
+    assert b_sys["state"] == "failed"
     # Per-evidence run counts must reflect the local evidence only
     assert a_item["run_count"] == 1
     assert b_item["run_count"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Per-family run resolution (the bug from the operator report)
+# ---------------------------------------------------------------------------
+
+
+def _mock_family_count(monkeypatch, *, total: int, count_source: str = "summary") -> None:
+    """Patch get_memory_family_count so tests can run without OpenSearch."""
+    from app.services.memory import active_result
+
+    def fake_count(*, case_id, evidence_id, family, active_run_id, db=None):
+        return {
+            "family": family,
+            "document_type": active_result.FAMILY_TO_DOCUMENT_TYPE.__class__.__name__ if False else family,
+            "active_run_id": active_run_id,
+            "total": total,
+            "count_source": count_source,
+            "calculated_at": "2026-06-24T00:00:00Z",
+        }
+
+    monkeypatch.setattr(
+        active_result,
+        "_family_count",
+        lambda *, case_id, evidence_id, family, active_run: {
+            "family": family,
+            "document_type": family,
+            "active_run_id": str(active_run.id),
+            "total": total,
+            "count_source": count_source,
+            "calculated_at": "2026-06-24T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        active_result,
+        "_family_items",
+        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "summary_fallback"),
+    )
+
+
+def test_modules_resolves_modules_basic_not_processes(db: Session, monkeypatch) -> None:
+    """Goal A test 1: Modules must use modules_basic, not the global
+    processes_extended default.
+    """
+    _mock_family_count(monkeypatch, total=21339)
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    r_processes = _make_run(db, case.id, ev.id, "processes_extended", "completed", _utc(2026, 6, 16), _utc(2026, 6, 16, 0, 4))
+    r_processes.canonical_materialization_status = "completed"
+    r_processes.canonical_entity_count = 255
+    r_modules = _make_run(db, case.id, ev.id, "modules_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 2))
+    db.commit()
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="modules",
+    )
+    assert result["active_run"] is not None
+    assert result["active_run"]["id"] == r_modules.id
+    assert result["active_run"]["profile"] == "modules_basic"
+
+
+def test_handles_resolves_handles_basic(db: Session, monkeypatch) -> None:
+    """Goal A test 2: Handles must resolve to handles_basic, not the
+    global default process run.
+    """
+    _mock_family_count(monkeypatch, total=97087)
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    r_processes = _make_run(db, case.id, ev.id, "processes_extended", "completed", _utc(2026, 6, 16), _utc(2026, 6, 16, 0, 4))
+    r_processes.canonical_materialization_status = "completed"
+    r_processes.canonical_entity_count = 255
+    r_handles = _make_run(db, case.id, ev.id, "handles_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 2))
+    db.commit()
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="handles",
+    )
+    assert result["active_run"] is not None
+    assert result["active_run"]["id"] == r_handles.id
+    assert result["active_run"]["profile"] == "handles_basic"
+    assert result["total"] == 97087
+
+
+def test_drivers_resolves_kernel_basic(db: Session, monkeypatch) -> None:
+    """Goal A test 3: Drivers must resolve to kernel_basic, not the
+    global default process run.
+    """
+    _mock_family_count(monkeypatch, total=135)
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    r_processes = _make_run(db, case.id, ev.id, "processes_extended", "completed", _utc(2026, 6, 16), _utc(2026, 6, 16, 0, 4))
+    r_processes.canonical_materialization_status = "completed"
+    r_processes.canonical_entity_count = 255
+    r_kernel = _make_run(db, case.id, ev.id, "kernel_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 2))
+    db.commit()
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="drivers",
+    )
+    assert result["active_run"] is not None
+    assert result["active_run"]["id"] == r_kernel.id
+    assert result["active_run"]["profile"] == "kernel_basic"
+
+
+def test_kernel_modules_resolves_kernel_basic(db: Session, monkeypatch) -> None:
+    """Goal A test 4: Kernel modules must resolve to kernel_basic, not
+    the global default process run.
+    """
+    _mock_family_count(monkeypatch, total=169)
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    r_processes = _make_run(db, case.id, ev.id, "processes_extended", "completed", _utc(2026, 6, 16), _utc(2026, 6, 16, 0, 4))
+    r_processes.canonical_materialization_status = "completed"
+    r_processes.canonical_entity_count = 255
+    r_kernel = _make_run(db, case.id, ev.id, "kernel_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 2))
+    db.commit()
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="kernel_modules",
+    )
+    assert result["active_run"] is not None
+    assert result["active_run"]["id"] == r_kernel.id
+    assert result["active_run"]["profile"] == "kernel_basic"
+
+
+def test_suspicious_regions_resolves_suspicious_memory(db: Session, monkeypatch) -> None:
+    """Goal A test 5: Suspicious regions must resolve to
+    suspicious_memory, not the global default process run.
+    """
+    _mock_family_count(monkeypatch, total=19)
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    r_processes = _make_run(db, case.id, ev.id, "processes_extended", "completed", _utc(2026, 6, 16), _utc(2026, 6, 16, 0, 4))
+    r_processes.canonical_materialization_status = "completed"
+    r_processes.canonical_entity_count = 255
+    r_suspicious = _make_run(db, case.id, ev.id, "suspicious_memory", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 2))
+    db.commit()
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="suspicious_regions",
+    )
+    assert result["active_run"] is not None
+    assert result["active_run"]["id"] == r_suspicious.id
+    assert result["active_run"]["profile"] == "suspicious_memory"
+
+
+def test_family_response_returns_real_total_and_items(db: Session, monkeypatch) -> None:
+    """Goal A test 6: The family response must return the real total
+    and items, not hardcoded 0 and [].
+    """
+    from app.services.memory import active_result
+
+    def fake_count(*, case_id, evidence_id, family, active_run):
+        return {
+            "family": family,
+            "document_type": family,
+            "active_run_id": str(active_run.id),
+            "total": 1234,
+            "count_source": "opensearch",
+            "calculated_at": "2026-06-24T00:00:00Z",
+        }
+
+    def fake_items(*, case_id, evidence_id, family, active_run, page, page_size, filters):
+        return ([{"document_id": "doc-1"}, {"document_id": "doc-2"}], "opensearch")
+
+    monkeypatch.setattr(active_result, "_family_count", fake_count)
+    monkeypatch.setattr(active_result, "_family_items", fake_items)
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    _make_run(db, case.id, ev.id, "handles_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="handles",
+    )
+    assert result["total"] == 1234
+    assert len(result["items"]) == 2
+    assert result["items"][0]["document_id"] == "doc-1"
+    assert result["count_source"] == "opensearch"
+    assert result["page"] == 1
+    assert result["page_size"] == 50
+
+
+def test_pagination_for_large_handles_results(db: Session, monkeypatch) -> None:
+    """Goal A test 7: Pagination must respect page and page_size for
+    large families (e.g. 97k handles).
+    """
+    from app.services.memory import active_result
+
+    def fake_count(*, case_id, evidence_id, family, active_run):
+        return {
+            "family": family,
+            "document_type": family,
+            "active_run_id": str(active_run.id),
+            "total": 97087,
+            "count_source": "opensearch",
+            "calculated_at": "2026-06-24T00:00:00Z",
+        }
+
+    captured = {}
+
+    def fake_items(*, case_id, evidence_id, family, active_run, page, page_size, filters):
+        captured["page"] = page
+        captured["page_size"] = page_size
+        return ([{"document_id": f"doc-{page}-{i}"} for i in range(page_size)], "opensearch")
+
+    monkeypatch.setattr(active_result, "_family_count", fake_count)
+    monkeypatch.setattr(active_result, "_family_items", fake_items)
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    _make_run(db, case.id, ev.id, "handles_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="handles", page=2, page_size=50,
+    )
+    assert captured["page"] == 2
+    assert captured["page_size"] == 50
+    assert result["page"] == 2
+    assert result["page_size"] == 50
+    assert result["total"] == 97087
+    assert len(result["items"]) == 50
+
+
+def test_completed_zero_row_run_returns_analyzed_empty(db: Session, monkeypatch) -> None:
+    """Goal A test 8: A successful run with zero rows must return
+    analyzed_empty (NOT not_analyzed).
+    """
+    from app.services.memory import active_result
+
+    monkeypatch.setattr(
+        active_result,
+        "_family_count",
+        lambda *, case_id, evidence_id, family, active_run: {
+            "family": family,
+            "document_type": family,
+            "active_run_id": str(active_run.id),
+            "total": 0,
+            "count_source": "opensearch",
+            "calculated_at": "2026-06-24T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        active_result,
+        "_family_items",
+        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "opensearch"),
+    )
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    _make_run(db, case.id, ev.id, "network_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="network",
+    )
+    assert result["active_run"] is not None
+    assert result["total"] == 0
+    assert result["analysis_state"] == "analyzed_empty"
+    assert result["items"] == []
+
+
+def test_missing_compatible_run_returns_not_analyzed(db: Session) -> None:
+    """Goal A test 9: When no compatible run exists, the family must
+    return not_analyzed.
+    """
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="suspicious_regions",
+    )
+    assert result["active_run"] is None
+    assert result["total"] == 0
+    assert result["items"] == []
+    assert result["analysis_state"] == "not_analyzed"
+
+
+def test_failed_compatible_run_is_not_reported_as_not_analyzed(db: Session) -> None:
+    """Goal A test 10: A failed compatible run is reported as failed,
+    not as not_analyzed.
+    """
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    _make_run(db, case.id, ev.id, "suspicious_memory", "failed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="suspicious_regions",
+    )
+    assert result["active_run"] is None
+    assert result["latest_attempt"] is not None
+    assert result["analysis_state"] == "failed"
+    assert result["total"] == 0
+    assert result["items"] == []
+
+
+def test_active_result_response_carries_count_source(db: Session, monkeypatch) -> None:
+    """The response should expose a count_source so the UI can tell
+    the analyst whether the count came from OpenSearch or the DB
+    fallback.
+    """
+    from app.services.memory import active_result
+
+    monkeypatch.setattr(
+        active_result,
+        "_family_count",
+        lambda *, case_id, evidence_id, family, active_run: {
+            "family": family,
+            "document_type": family,
+            "active_run_id": str(active_run.id),
+            "total": 100,
+            "count_source": "summary",
+            "calculated_at": "2026-06-24T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        active_result,
+        "_family_items",
+        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "summary_fallback"),
+    )
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    _make_run(db, case.id, ev.id, "handles_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="handles",
+    )
+    # When both count and items fall back to the DB summary, the
+    # response surfaces the combined ``summary_fallback`` source.
+    assert result["count_source"] in {"summary", "summary_fallback"}
+    assert result["total"] == 100
+
+
+def test_active_result_handles_pagination_when_run_missing(db: Session) -> None:
+    """The function must still return pagination metadata when the
+    active run is missing (the UI uses page_size to render an empty
+    state consistently).
+    """
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="handles",
+        page=3, page_size=25,
+    )
+    assert result["active_run"] is None
+    assert result["page"] == 3
+    assert result["page_size"] == 25
+
+
+def test_active_result_analysis_state_partial_when_plugins_failed(db: Session, monkeypatch) -> None:
+    """A run that finished with plugin failures is partial: the
+    family is analysable but the analyst should know.
+    """
+    from app.services.memory import active_result
+
+    monkeypatch.setattr(
+        active_result,
+        "_family_count",
+        lambda *, case_id, evidence_id, family, active_run: {
+            "family": family,
+            "document_type": family,
+            "active_run_id": str(active_run.id),
+            "total": 10,
+            "count_source": "opensearch",
+            "calculated_at": "2026-06-24T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        active_result,
+        "_family_items",
+        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "opensearch"),
+    )
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    r = _make_run(
+        db, case.id, ev.id, "handles_basic", "completed_with_errors",
+        _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1),
+        plugin_count=3, plugins_completed=2,
+    )
+    db.commit()
+    result = resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="handles",
+    )
+    assert result["active_run"] is not None
+    assert result["active_run"]["id"] == r.id
+    assert result["analysis_state"] == "partial"
+    assert result["total"] == 10
+
+
+def test_active_result_does_not_mutate_database(db: Session, monkeypatch) -> None:
+    """Resolving the active result for a family must NEVER mutate
+    the database (the function is read-only).
+    """
+    from app.services.memory import active_result
+
+    monkeypatch.setattr(
+        active_result,
+        "_family_count",
+        lambda *, case_id, evidence_id, family, active_run: {
+            "family": family,
+            "document_type": family,
+            "active_run_id": str(active_run.id),
+            "total": 5,
+            "count_source": "summary",
+            "calculated_at": "2026-06-24T00:00:00Z",
+        },
+    )
+    monkeypatch.setattr(
+        active_result,
+        "_family_items",
+        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "summary_fallback"),
+    )
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    _make_run(db, case.id, ev.id, "handles_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+    before = db.query(MemoryScanRun).count()
+    resolve_active_memory_result(
+        db, case_id=case.id, evidence_id=ev.id, family="handles", page=2, page_size=10,
+    )
+    after = db.query(MemoryScanRun).count()
+    assert before == after
