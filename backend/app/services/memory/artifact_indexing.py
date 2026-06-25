@@ -179,7 +179,8 @@ def search_artifact_documents(
         # keyword form for an exact match.
         query_filters.append({"term": {"scan_run_id.keyword": run_id}})
     if evidence_id:
-        query_filters.append({"term": {"evidence_id.keyword": evidence_id}})
+        # evidence_id is mapped as type keyword (no .keyword sub-field).
+        query_filters.append({"term": {"evidence_id": evidence_id}})
     if filters:
         for key, value in filters.items():
             if value is None:
