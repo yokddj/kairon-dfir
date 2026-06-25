@@ -1151,6 +1151,22 @@ def _latest_acquisition_summary(db: Session, *, evidence_id: str) -> dict:
                 "pdb_age": int(meta_observed.get("pdb_age")) if meta_observed.get("pdb_age") is not None else None,
                 "architecture": meta_observed.get("architecture"),
             }
+    # Legacy fallback: rows that predate the canonical
+    # ``observed_pdb_guid`` / ``observed_pdb_age`` columns or
+    # did not write ``metadata_json["identity_observed"]`` may
+    # still carry the observed values in the sanitized message.
+    # Only used as a last-resort parser.
+    if identity_observed is None or identity_observed.get("pdb_age") is None:
+        from app.services.memory.observed_identity import (
+            parse_observed_identity_from_message,
+        )
+        parsed = parse_observed_identity_from_message(latest.sanitized_message)
+        if parsed is not None:
+            if identity_observed is None:
+                identity_observed = {}
+            for key, value in parsed.items():
+                if identity_observed.get(key) is None and value is not None:
+                    identity_observed[key] = value
     return {
         "status": latest.status,
         "error_code": latest.error_code,
