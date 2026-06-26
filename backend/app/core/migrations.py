@@ -1393,12 +1393,13 @@ def _v17_experimental_mismatched_symbol_analysis(connection: Connection) -> None
         }
         if "ix_memory_cached_symbols_classification" not in existing_indexes:
             try:
-                connection.execute(
-                    text(
-                        "CREATE INDEX ix_memory_cached_symbols_classification "
-                        "ON memory_cached_symbols (cache_classification)"
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "CREATE INDEX ix_memory_cached_symbols_classification "
+                            "ON memory_cached_symbols (cache_classification)"
+                        )
                     )
-                )
             except Exception as exc:  # noqa: BLE001
                 logger.info(
                     "v17: classification index not created on %s (%s); "
@@ -1453,12 +1454,13 @@ def _v17_experimental_mismatched_symbol_analysis(connection: Connection) -> None
         ):
             if ix_name not in existing_indexes:
                 try:
-                    connection.execute(
-                        text(
-                            f"CREATE INDEX {ix_name} "
-                            f"ON memory_scan_runs {ix_cols}"
+                    with connection.begin_nested():
+                        connection.execute(
+                            text(
+                                f"CREATE INDEX {ix_name} "
+                                f"ON memory_scan_runs {ix_cols}"
+                            )
                         )
-                    )
                 except Exception as exc:  # noqa: BLE001
                     logger.info(
                         "v17: %s not created on %s (%s)",
@@ -1466,12 +1468,13 @@ def _v17_experimental_mismatched_symbol_analysis(connection: Connection) -> None
                     )
         if "ix_memory_scan_runs_experimental" not in existing_indexes:
             try:
-                connection.execute(
-                    text(
-                        "CREATE INDEX ix_memory_scan_runs_experimental "
-                        "ON memory_scan_runs (experimental_run_id)"
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "CREATE INDEX ix_memory_scan_runs_experimental "
+                            "ON memory_scan_runs (experimental_run_id)"
+                        )
                     )
-                )
             except Exception as exc:  # noqa: BLE001
                 logger.info(
                     "v17: experimental_run_id index not created on %s (%s)",
@@ -1513,12 +1516,13 @@ def _v17_experimental_mismatched_symbol_analysis(connection: Connection) -> None
         ):
             if ix_name not in existing_indexes:
                 try:
-                    connection.execute(
-                        text(
-                            f"CREATE INDEX {ix_name} "
-                            f"ON memory_plugin_runs {ix_cols}"
+                    with connection.begin_nested():
+                        connection.execute(
+                            text(
+                                f"CREATE INDEX {ix_name} "
+                                f"ON memory_plugin_runs {ix_cols}"
+                            )
                         )
-                    )
                 except Exception as exc:  # noqa: BLE001
                     logger.info(
                         "v17: %s not created on %s (%s)",
@@ -1579,9 +1583,10 @@ def _v17_experimental_mismatched_symbol_analysis(connection: Connection) -> None
             ),
         ):
             try:
-                connection.execute(
-                    text(f"CREATE INDEX {ix_name} ON memory_experimental_symbol_candidates {ix_cols}")
-                )
+                with connection.begin_nested():
+                    connection.execute(
+                        text(f"CREATE INDEX {ix_name} ON memory_experimental_symbol_candidates {ix_cols}")
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.info(
                     "v17: %s not created on %s (%s)",
@@ -1590,22 +1595,23 @@ def _v17_experimental_mismatched_symbol_analysis(connection: Connection) -> None
         # Partial unique index: at most one active candidate per
         # requirement.
         try:
-            if dialect == "postgresql":
-                connection.execute(
-                    text(
-                        "CREATE UNIQUE INDEX uq_memory_exp_candidate_active_requirement "
-                        "ON memory_experimental_symbol_candidates (requirement_id) "
-                        "WHERE revoked_at IS NULL"
+            with connection.begin_nested():
+                if dialect == "postgresql":
+                    connection.execute(
+                        text(
+                            "CREATE UNIQUE INDEX uq_memory_exp_candidate_active_requirement "
+                            "ON memory_experimental_symbol_candidates (requirement_id) "
+                            "WHERE revoked_at IS NULL"
+                        )
                     )
-                )
-            else:
-                connection.execute(
-                    text(
-                        "CREATE UNIQUE INDEX uq_memory_exp_candidate_active_requirement "
-                        "ON memory_experimental_symbol_candidates "
-                        "(requirement_id, revoked_at)"
+                else:
+                    connection.execute(
+                        text(
+                            "CREATE UNIQUE INDEX uq_memory_exp_candidate_active_requirement "
+                            "ON memory_experimental_symbol_candidates "
+                            "(requirement_id, revoked_at)"
+                        )
                     )
-                )
         except Exception as exc:  # noqa: BLE001
             logger.info(
                 "v17: candidate active index not created on %s (%s); "
@@ -1681,45 +1687,48 @@ def _v17_experimental_mismatched_symbol_analysis(connection: Connection) -> None
             ("ix_memory_exp_run_deleted", "(deleted_at)"),
         ):
             try:
-                connection.execute(
-                    text(f"CREATE INDEX {ix_name} ON memory_experimental_runs {ix_cols}")
-                )
+                with connection.begin_nested():
+                    connection.execute(
+                        text(f"CREATE INDEX {ix_name} ON memory_experimental_runs {ix_cols}")
+                    )
             except Exception as exc:  # noqa: BLE001
                 logger.info(
                     "v17: %s not created on %s (%s)",
                     ix_name, dialect, exc,
                 )
         try:
-            if dialect == "postgresql":
-                connection.execute(
-                    text(
-                        "CREATE UNIQUE INDEX uq_memory_exp_run_active_evidence "
-                        "ON memory_experimental_runs (case_id, evidence_id) "
-                        "WHERE deleted_at IS NULL AND status NOT IN "
-                        "('candidate_unavailable','cancelled','deleted','completed_untrusted','partial_untrusted','failed_untrusted','canary_failed','canary_inconclusive')"
+            with connection.begin_nested():
+                if dialect == "postgresql":
+                    connection.execute(
+                        text(
+                            "CREATE UNIQUE INDEX uq_memory_exp_run_active_evidence "
+                            "ON memory_experimental_runs (case_id, evidence_id) "
+                            "WHERE deleted_at IS NULL AND status NOT IN "
+                            "('candidate_unavailable','cancelled','deleted','completed_untrusted','partial_untrusted','failed_untrusted','canary_failed','canary_inconclusive')"
+                        )
                     )
-                )
-            else:
-                connection.execute(
-                    text(
-                        "CREATE UNIQUE INDEX uq_memory_exp_run_active_evidence "
-                        "ON memory_experimental_runs (case_id, evidence_id) "
-                        "WHERE deleted_at IS NULL AND status NOT IN "
-                        "('candidate_unavailable','cancelled','deleted','completed_untrusted','partial_untrusted','failed_untrusted','canary_failed','canary_inconclusive')"
+                else:
+                    connection.execute(
+                        text(
+                            "CREATE UNIQUE INDEX uq_memory_exp_run_active_evidence "
+                            "ON memory_experimental_runs (case_id, evidence_id) "
+                            "WHERE deleted_at IS NULL AND status NOT IN "
+                            "('candidate_unavailable','cancelled','deleted','completed_untrusted','partial_untrusted','failed_untrusted','canary_failed','canary_inconclusive')"
+                        )
                     )
-                )
         except Exception as exc:  # noqa: BLE001
             logger.info("v17: active experimental run uniqueness not created on %s (%s)", dialect, exc)
 
     if dialect == "postgresql":
         try:
-            connection.execute(
-                text(
-                    "ALTER TABLE memory_scan_runs "
-                    "ADD CONSTRAINT fk_memory_scan_runs_experimental_run "
-                    "FOREIGN KEY (experimental_run_id) REFERENCES memory_experimental_runs(id) ON DELETE SET NULL"
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "ALTER TABLE memory_scan_runs "
+                        "ADD CONSTRAINT fk_memory_scan_runs_experimental_run "
+                        "FOREIGN KEY (experimental_run_id) REFERENCES memory_experimental_runs(id) ON DELETE SET NULL"
+                    )
                 )
-            )
         except Exception:
             pass
 
