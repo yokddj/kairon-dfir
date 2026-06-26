@@ -122,6 +122,15 @@ ingest_queue = Queue("dfir-ingest", connection=redis_conn)
 rules_queue = Queue("dfir-rules", connection=redis_conn)
 analysis_queue = Queue("dfir-analysis", connection=redis_conn)
 memory_queue = Queue(settings.memory_queue_name, connection=redis_conn)
+# Dedicated queue for experimental mismatched-symbol analysis.
+# The queue is isolated from the validated memory queue so
+# experimental work cannot starve validated analysis.  The
+# queue name is configurable via
+# ``MEMORY_EXPERIMENTAL_TASK_QUEUE``; the default is
+# ``memory-experimental``.
+memory_experimental_queue = Queue(
+    settings.memory_experimental_queue_name, connection=redis_conn
+)
 
 
 def _debug_db_trace(
@@ -568,6 +577,85 @@ def enqueue_memory_preparation(evidence_id: str) -> str:
         job_timeout=timeout,
     )
     return job.id
+
+
+def enqueue_experimental_canary(experimental_run_id: str) -> str:
+    """Enqueue the experimental canary task on the dedicated
+    ``memory-experimental`` queue.
+
+    The function is the single entry point used by the API to
+    dispatch a canary.  The queue is intentionally separate
+    from the validated memory queue so the experimental task
+    can never starve validated analysis.  The task id is
+    returned so the API can record it on the run row.
+    """
+    timeout = max(60, int(settings.memory_experimental_canary_timeout_seconds))
+    job = memory_experimental_queue.enqueue(
+        "app.workers.tasks.run_experimental_canary_task",
+        experimental_run_id,
+        job_timeout=timeout,
+    )
+    return job.id
+
+
+def enqueue_experimental_profile(experimental_run_id: str, profile: str) -> str:
+    """Enqueue a single experimental profile task on the
+    ``memory-experimental`` queue.  The task reads the
+    cached plugin output and indexes it into the experimental
+    OpenSearch index.
+    """
+    timeout = max(60, int(settings.memory_experimental_run_timeout_seconds))
+    job = memory_experimental_queue.enqueue(
+        "app.workers.tasks.run_experimental_profile_task",
+        experimental_run_id,
+        profile,
+        job_timeout=timeout,
+    )
+    return job.id
+
+
+def enqueue_experimental_deletion(case_id: str, evidence_id: str, experimental_run_id: str) -> str:
+    """Enqueue the experimental deletion task on the
+    ``memory-experimental`` queue.  The task clears the
+    OpenSearch documents produced by the run.
+    """
+    timeout = max(60, int(settings.memory_experimental_run_timeout_seconds))
+    job = memory_experimental_queue.enqueue(
+        "app.workers.tasks.run_experimental_deletion_task",
+        case_id,
+        evidence_id,
+        experimental_run_id,
+        job_timeout=timeout,
+    )
+    return job.id
+
+
+def run_experimental_canary_task(experimental_run_id: str) -> str:
+    """RQ entry point for the experimental canary task.
+
+    The function imports the service lazily so the worker
+    can be started without pulling in the experimental
+    modules until they are actually needed.
+    """
+    from app.services.memory.experimental_worker import run_experimental_canary
+
+    return run_experimental_canary(experimental_run_id)
+
+
+def run_experimental_profile_task(experimental_run_id: str, profile: str) -> str:
+    """RQ entry point for a single experimental profile task."""
+    from app.services.memory.experimental_worker import run_experimental_profile
+
+    return run_experimental_profile(experimental_run_id, profile)
+
+
+def run_experimental_deletion_task(case_id: str, evidence_id: str, experimental_run_id: str) -> str:
+    """RQ entry point for the experimental deletion task."""
+    from app.services.memory.experimental_worker import (
+        delete_experimental_run_artifacts,
+    )
+
+    return delete_experimental_run_artifacts(case_id, evidence_id, experimental_run_id)
 
 
 def enqueue_admin_pdb_import(db: Session, *, import_id: str) -> str:

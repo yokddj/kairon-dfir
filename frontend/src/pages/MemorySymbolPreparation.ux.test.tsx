@@ -104,6 +104,15 @@ function makePreparation(overrides: Partial<MemorySymbolPreparation> = {}): Memo
     filename: "memory.dmp",
     ui_state: "preparing",
     preparation_state: "probing",
+    persisted_state: null,
+    effective_state: null,
+    reconciled: false,
+    source_of_truth: null,
+    reconciled_at: null,
+    preparation_id: null,
+    stale: false,
+    stale_reason: null,
+    task_alive: false,
     requirement: null,
     cache_status: "unknown",
     exact_match: false,
@@ -531,7 +540,7 @@ describe("Automatic Windows symbol preparation", () => {
 
   it("14. progress bar reflects preparation progress", async () => {
     const evidence = makeEvidence();
-    const preparation = makePreparation({ ui_state: "preparing", progress_percent: 70 });
+    const preparation = makePreparation({ ui_state: "preparing", progress_percent: 70, task_alive: true, effective_state: "probing" });
     setup(buildApiMock(evidence, preparation, makeReadiness()));
     const card = await screen.findByTestId("memory-preparation-card");
     const progress = within(card).getByTestId("memory-preparation-progress");

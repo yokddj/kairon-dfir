@@ -129,15 +129,26 @@ def _minimal_environment() -> dict[str, str]:
     return env
 
 
-def run_plugin(plugin: str, evidence_path: Path, work_dir: Path, *, timeout_seconds: int | None = None, max_output_bytes: int | None = None) -> VolatilityRunResult:
+def run_plugin(
+    plugin: str,
+    evidence_path: Path,
+    work_dir: Path,
+    *,
+    timeout_seconds: int | None = None,
+    max_output_bytes: int | None = None,
+    offline: bool = True,
+    cache_path: Path | None = None,
+    symbol_path: Path | None = None,
+) -> VolatilityRunResult:
     settings = get_settings()
     executable, display = resolve_volatility_executable()
     # Normal memory analysis is always offline. Managed downloads belong only
     # to the dedicated symbol-fetcher service.
-    offline = True
     xdg_cache = str(os.environ.get("XDG_CACHE_HOME") or "").strip()
-    cache_path = Path(xdg_cache) / "volatility3" if xdg_cache else None
-    symbol_path = cache_path / "symbols" if cache_path else None
+    default_cache_path = Path(xdg_cache) / "volatility3" if xdg_cache else None
+    default_symbol_path = default_cache_path / "symbols" if default_cache_path else None
+    cache_path = cache_path or default_cache_path
+    symbol_path = symbol_path or default_symbol_path
     if cache_path is not None and symbol_path is not None:
         cache_path.mkdir(parents=True, exist_ok=True, mode=0o750)
         symbol_path.mkdir(parents=True, exist_ok=True, mode=0o750)

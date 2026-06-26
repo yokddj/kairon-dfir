@@ -422,6 +422,19 @@ export function MemoryPreparationCard({
           ) : null}
         </div>
       ) : null}
+      {isBlockedSymbols ? (
+        <div
+          className="mt-3 rounded-xl border border-warning/40 bg-warning/10 p-2 text-[11px] text-warning"
+          data-testid="memory-preparation-experimental-banner"
+        >
+          <p>
+            The exact required symbol is unavailable.  An isolated
+            <strong> experimental / untrusted</strong> mismatched-symbol
+            workflow is available to the operator and never affects the
+            validated preparation state shown above.
+          </p>
+        </div>
+      ) : null}
     </section>
   );
 }

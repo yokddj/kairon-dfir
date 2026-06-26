@@ -284,10 +284,13 @@ def test_get_evidence_landing_returns_per_family_status(db: Session) -> None:
 
 
 def test_catalogue_returns_eight_profiles_with_network_unavailable(db: Session) -> None:
+    from app.services.memory.catalogue import NETWORK_UNAVAILABLE_REASON
+
     case = _make_case(db)
     ev = _make_evidence(db, case.id, "a.dmp")
     _make_run(db, case.id, ev.id, "metadata_only", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
-    catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
+    with patch("app.services.memory.counts.get_memory_family_count", return_value={"total": 0}):
+        catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
     assert len(catalogue) == 8
     profiles = [item["profile"] for item in catalogue]
     assert "metadata_only" in profiles
@@ -297,8 +300,7 @@ def test_catalogue_returns_eight_profiles_with_network_unavailable(db: Session) 
     # In the unit test runtime the network plugin is not installed,
     # so the catalogue must mark it as Unavailable with a reason.
     assert network["available"] is False
-    assert network["availability_reason"] is not None
-    assert "network plugin" in network["availability_reason"].lower()
+    assert network["availability_reason"] == NETWORK_UNAVAILABLE_REASON
 
 
 def test_catalogue_returns_count_from_artifact_summaries(db: Session) -> None:

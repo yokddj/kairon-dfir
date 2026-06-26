@@ -466,17 +466,6 @@ def test_only_one_active_batch_per_evidence(db: Session) -> None:
         enqueued.append(run_id)
         return f"rq-{run_id}"
 
-    # Mark the preparation as ready so the new automatic pipeline
-    # does not block the batch with MEMORY_SYMBOL_PREPARATION_IN_PROGRESS.
-    from app.models.memory import MemorySymbolPreparation
-    prep = MemorySymbolPreparation(
-        case_id=case.id,
-        evidence_id=ev.id,
-        state="ready",
-        state_reason="test_setup",
-    )
-    db.add(prep)
-    db.commit()
     create_run_all_batch(
         db, case_id=case.id, evidence_id=ev.id, mode="rerun_all",
         authorization_acknowledged=True, continue_on_failure=True,

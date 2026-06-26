@@ -142,6 +142,7 @@ def find_exact_cache(db: Session, requirement: MemorySymbolRequirement) -> Memor
     cached = (
         db.query(MemoryCachedSymbol)
         .filter(MemoryCachedSymbol.symbol_key == requirement.symbol_key)
+        .filter(MemoryCachedSymbol.cache_classification == "exact")
         .first()
     )
     if cached is None:

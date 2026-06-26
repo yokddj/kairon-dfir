@@ -105,12 +105,34 @@ class MemoryScanRun(UUIDMixin, Base):
         String(32), nullable=True
     )
     canonical_materialized_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    # Trust domain for the run.  ``validated`` runs are produced by
+    # exact symbol matches and may be used by validated forensic
+    # views; ``experimental`` runs use a mismatched symbol and are
+    # kept in an isolated trust domain.  Default is ``validated`` for
+    # every existing run created before the experimental feature.
+    # See ``app/services/memory/experimental_trust.py`` for the
+    # single source of truth on the trust boundary.
+    analysis_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="validated", index=True
+    )
+    trust_level: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="validated", index=True
+    )
+    symbol_match_type: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="exact", index=True
+    )
+    experimental_run_id: Mapped[str | None] = mapped_column(
+        ForeignKey("memory_experimental_runs.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     created_at: Mapped[datetime] = mapped_column(default=utc_now_naive, nullable=False)
 
     case = relationship("Case", back_populates="memory_scan_runs")
     evidence = relationship("Evidence", back_populates="memory_scan_runs")
     artifact_summaries = relationship("MemoryArtifactSummary", back_populates="memory_run", cascade="all, delete-orphan")
     plugin_runs = relationship("MemoryPluginRun", back_populates="memory_scan_run", cascade="all, delete-orphan")
+    experimental_run = relationship("MemoryExperimentalRun", foreign_keys=[experimental_run_id])
 
     @property
     def plugins_skipped(self) -> int:
@@ -135,6 +157,15 @@ class MemoryPluginRun(UUIDMixin, Base):
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
+    # Trust fields (mirror ``MemoryScanRun``).  All validated
+    # MemoryPluginRun rows default to ``validated`` trust; the
+    # experimental flow writes ``untrusted``.
+    analysis_mode: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="validated", index=True
+    )
+    trust_level: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="validated", index=True
+    )
     created_at: Mapped[datetime] = mapped_column(default=utc_now_naive, nullable=False)
 
     memory_scan_run = relationship("MemoryScanRun", back_populates="plugin_runs")
@@ -460,6 +491,25 @@ class MemoryCachedSymbol(UUIDMixin, Base):
     provenance_source_name: Mapped[str] = mapped_column(String(128), nullable=False, default="Microsoft public")
     provenance_actor: Mapped[str] = mapped_column(String(128), nullable=False, default="server-operator")
     provenance_acquired_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    # Cache classification for the Experimental Mismatched-Symbol
+    # Analysis v1 feature.  ``exact`` rows are produced by the
+    # exact-symbol path and are the only rows that satisfy the
+    # standard readiness contract.  ``experimental_candidate`` rows
+    # carry a same-name/same-GUID/age-mismatch symbol and may only
+    # be used by the experimental run flow.  The default is
+    # ``exact``; new columns are added in migration v17.
+    cache_classification: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="exact", index=True
+    )
+    # When ``cache_classification = "experimental_candidate"`` the
+    # cache row records the *required* identity (PDB name, GUID,
+    # age, architecture) the candidate was created for.  This is
+    # the only way the experimental run can verify that the symbol
+    # it consumes is the one the operator approved.
+    required_pdb_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    required_pdb_guid: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    required_pdb_age: Mapped[int | None] = mapped_column(nullable=True)
+    required_architecture: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
 
@@ -587,6 +637,23 @@ class MemoryAnalysisBatch(UUIDMixin, Base):
     __table_args__ = (
         Index("ix_memory_batch_evidence_status", "evidence_id", "status"),
         Index("ix_memory_batch_case_created", "case_id", "created_at"),
+        # Database-enforced invariant: at most one active batch per
+        # (case, evidence).  Terminal states (completed, failed,
+        # cancelled) are excluded so a new batch may start after the
+        # previous one reaches a terminal state.  The companion
+        # migration creates the matching index on existing databases.
+        Index(
+            "uq_memory_analysis_batches_one_active",
+            "case_id",
+            "evidence_id",
+            unique=True,
+            postgresql_where=sa.text(
+                "status IN ('queued', 'running')"
+            ),
+            sqlite_where=sa.text(
+                "status IN ('queued', 'running')"
+            ),
+        ),
     )
 
 
@@ -735,4 +802,255 @@ class MemorySymbolRecoveryAttempt(UUIDMixin, Base):
             postgresql_where=sa.text("terminal_at IS NULL"),
             sqlite_where=sa.text("terminal_at IS NULL"),
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Experimental Mismatched-Symbol Analysis v1
+# ---------------------------------------------------------------------------
+
+# Trust fields and run states for the experimental analysis mode.  These
+# constants are the single source of truth for the trust domain boundary
+# between validated forensic analysis and experimental, untrusted
+# mismatched-symbol analysis.  The same constants are referenced from
+# ``app/services/memory/experimental_trust.py``.
+EXPERIMENTAL_ANALYSIS_MODES = {"validated", "experimental"}
+EXPERIMENTAL_TRUST_LEVELS = {"validated", "untrusted"}
+EXPERIMENTAL_SYMBOL_MATCH_TYPES = {
+    "exact",
+    "guid_only_age_mismatch",
+}
+EXPERIMENTAL_RUN_STATUSES = {
+    "candidate_unavailable",
+    "acknowledgement_required",
+    "canary_queued",
+    "canary_running",
+    "canary_passed",
+    "canary_degraded",
+    "canary_failed",
+    "canary_inconclusive",
+    "full_run_queued",
+    "full_run_running",
+    "completed_untrusted",
+    "partial_untrusted",
+    "failed_untrusted",
+    "cancelled",
+    "deleted",
+}
+EXPERIMENTAL_CANARY_STATUSES = {
+    "pending",
+    "running",
+    "passed",
+    "degraded",
+    "failed",
+    "inconclusive",
+    "skipped",
+}
+EXPERIMENTAL_ACK_WARNING_VERSION = "experimental-mismatch-ack-v1"
+
+
+class MemoryExperimentalSymbolCandidate(UUIDMixin, Base):
+    """A mismatched Windows symbol candidate eligible for experimental runs.
+
+    The candidate represents a same-name / same-GUID / age-mismatch /
+    compatible-architecture PDB or ISF that the operator has supplied
+    for *triage-only* analysis.  The candidate is NEVER linked to a
+    ``MemorySymbolRequirement`` and NEVER changes the requirement's
+    ``pdb_age``.  A candidate only exists while its parent
+    ``MemorySymbolRequirement`` remains ``blocked_symbols``.
+
+    The candidate is created in the operator CLI path
+    (``app/cli/memory_symbols.py``) and exposed read-only through
+    the API.  It is *not* visible in the standard analyst views.
+    """
+
+    __tablename__ = "memory_experimental_symbol_candidates"
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
+    # The exact-symbol requirement this candidate was created for.  The
+    # requirement is never mutated; the candidate simply lives in a
+    # separate trust domain.
+    requirement_id: Mapped[str] = mapped_column(
+        ForeignKey("memory_symbol_requirements.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # The cache row carrying the candidate symbol; classification
+    # MUST be ``experimental_candidate``.  We denormalise
+    # ``required_*`` columns for fast trust verification.
+    cached_symbol_id: Mapped[str] = mapped_column(
+        ForeignKey("memory_cached_symbols.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Required identity (from the requirement).
+    required_pdb_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    required_pdb_guid: Mapped[str] = mapped_column(String(32), nullable=False)
+    required_pdb_age: Mapped[int] = mapped_column(nullable=False)
+    required_architecture: Mapped[str] = mapped_column(String(32), nullable=False)
+    # Observed identity (from the cached symbol).
+    observed_pdb_name: Mapped[str] = mapped_column(String(128), nullable=False)
+    observed_pdb_guid: Mapped[str] = mapped_column(String(32), nullable=False)
+    observed_pdb_age: Mapped[int] = mapped_column(nullable=False)
+    observed_architecture: Mapped[str] = mapped_column(String(32), nullable=False)
+    symbol_match_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    # The exact mismatch observed.  ``guid_only_age_mismatch`` is
+    # the only allowed match type for now.
+    symbol_warning: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Provenance.
+    provenance_source_type: Mapped[str] = mapped_column(String(32), nullable=False, default="operator_cli_pdb")
+    provenance_source_name: Mapped[str] = mapped_column(String(128), nullable=False, default="Operator CLI")
+    provenance_actor: Mapped[str] = mapped_column(String(128), nullable=False, default="server-operator")
+    # Source path.  Stored for audit, never returned to the analyst
+    # via the standard symbol view.  Exposed only on
+    # ``GET .../experimental-symbol-candidates`` to the analyst who
+    # owns the case.
+    source_host_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    pdb_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    isf_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    isf_validation_status: Mapped[str] = mapped_column(String(32), nullable=False, default="validated")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True, index=True)
+    revoked_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    revocation_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    metadata_json: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
+
+    __table_args__ = (
+        Index("ix_memory_exp_candidate_case_evidence", "case_id", "evidence_id"),
+        # Only one *active* candidate per requirement at a time.
+        # Multiple terminal rows (revoked) are allowed.
+        Index(
+            "uq_memory_exp_candidate_active_requirement",
+            "requirement_id",
+            unique=True,
+            postgresql_where=sa.text("revoked_at IS NULL"),
+            sqlite_where=sa.text("revoked_at IS NULL"),
+        ),
+    )
+
+
+class MemoryExperimentalRun(UUIDMixin, Base):
+    """An isolated, never-trusted mismatched-symbol analysis run.
+
+    The run owns its ``MemoryScanRun`` and ``MemoryPluginRun`` rows
+    through the ``experimental_run_id`` foreign key on
+    ``MemoryScanRun``.  The run also owns a canary phase that
+    MUST complete successfully (or be explicitly operator-overridden
+    on a degraded status) before any full experimental analysis
+    runs.
+
+    A run is created only after:
+
+    1. the operator supplied an eligible candidate;
+    2. the operator POSTed an acknowledgement payload;
+    3. the server-side acknowledgement payload was verified.
+
+    Deleting a run deletes all of its plugin runs and (via the
+    worker) clears the experimental OpenSearch index entries.
+    The exact symbol cache, the exact symbol requirement, and
+    the validated runs are NEVER touched.
+    """
+
+    __tablename__ = "memory_experimental_runs"
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
+    candidate_id: Mapped[str] = mapped_column(
+        ForeignKey("memory_experimental_symbol_candidates.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    requirement_id: Mapped[str] = mapped_column(
+        ForeignKey("memory_symbol_requirements.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    cached_symbol_id: Mapped[str] = mapped_column(
+        ForeignKey("memory_cached_symbols.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Status of the run.  See ``EXPERIMENTAL_RUN_STATUSES`` for the
+    # exhaustive set of values.  ``acknowledgement_required`` is
+    # the initial state; the run never advances to ``canary_*``
+    # until the acknowledgement payload is verified.
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="acknowledgement_required", index=True)
+    # Acknowledgement snapshot.  Persisted verbatim on the row.
+    acknowledgement_actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    acknowledgement_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    acknowledgement_warning_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    acknowledgement_required_pdb_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    acknowledgement_required_pdb_guid: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    acknowledgement_required_pdb_age: Mapped[int | None] = mapped_column(nullable=True)
+    acknowledgement_required_architecture: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    acknowledgement_observed_pdb_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    acknowledgement_observed_pdb_guid: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    acknowledgement_observed_pdb_age: Mapped[int | None] = mapped_column(nullable=True)
+    acknowledgement_observed_architecture: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    acknowledgement_warning_text: Mapped[str | None] = mapped_column(sa.Text, nullable=True)
+    # Canary phase.  The canary runs before any full analysis.
+    canary_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending", index=True)
+    canary_started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    canary_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    canary_score: Mapped[float | None] = mapped_column(nullable=True)
+    canary_checks: Mapped[list] = mapped_column(JSONVariant, nullable=False, default=list)
+    canary_summary: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
+    # Operator-only override for ``canary_inconclusive`` /
+    # ``canary_degraded`` states.  The run may only proceed when
+    # the operator explicitly accepts the canary outcome.
+    canary_override_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    canary_override_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    canary_override_actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    canary_override_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Requested profile set for the canary and (if the canary
+    # passes) the full run.
+    requested_profiles: Mapped[list] = mapped_column(JSONVariant, nullable=False, default=list)
+    canary_profiles: Mapped[list] = mapped_column(JSONVariant, nullable=False, default=list)
+    # Worker tracking.
+    canary_worker_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    full_worker_task_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # Aggregate counts.
+    profiles_queued: Mapped[int] = mapped_column(default=0, nullable=False)
+    profiles_completed: Mapped[int] = mapped_column(default=0, nullable=False)
+    profiles_failed: Mapped[int] = mapped_column(default=0, nullable=False)
+    profiles_cancelled: Mapped[int] = mapped_column(default=0, nullable=False)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    cancelled_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    cancellation_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True, index=True)
+    deleted_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    deletion_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    audit_metadata_json: Mapped[dict] = mapped_column(JSONVariant, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+
+    __table_args__ = (
+        Index("ix_memory_exp_run_case_evidence", "case_id", "evidence_id"),
+        Index("ix_memory_exp_run_status", "status"),
+        Index(
+            "uq_memory_exp_run_active_evidence",
+            "case_id",
+            "evidence_id",
+            unique=True,
+            postgresql_where=sa.text(
+                "deleted_at IS NULL AND status NOT IN ('candidate_unavailable','cancelled','deleted','completed_untrusted','partial_untrusted','failed_untrusted','canary_failed','canary_inconclusive')"
+            ),
+            sqlite_where=sa.text(
+                "deleted_at IS NULL AND status NOT IN ('candidate_unavailable','cancelled','deleted','completed_untrusted','partial_untrusted','failed_untrusted','canary_failed','canary_inconclusive')"
+            ),
+        ),
+    )
+
+    case = relationship("Case")
+    evidence = relationship("Evidence")
+    candidate = relationship("MemoryExperimentalSymbolCandidate")
+    requirement = relationship("MemorySymbolRequirement")
+    cached_symbol = relationship("MemoryCachedSymbol")
+    scan_runs = relationship(
+        "MemoryScanRun",
+        primaryjoin="foreign(MemoryScanRun.experimental_run_id)==MemoryExperimentalRun.id",
+        viewonly=True,
     )

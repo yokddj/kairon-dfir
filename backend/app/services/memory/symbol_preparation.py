@@ -540,6 +540,7 @@ def exact_cache_match_for_requirement(
     cached = (
         db.query(MemoryCachedSymbol)
         .filter(MemoryCachedSymbol.symbol_key == requirement.symbol_key)
+        .filter(MemoryCachedSymbol.cache_classification == "exact")
         .first()
     )
     if cached is None:

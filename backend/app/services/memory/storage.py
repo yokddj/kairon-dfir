@@ -21,6 +21,17 @@ def memory_run_dir(case_id: str, evidence_id: str, run_id: str) -> Path:
     return path
 
 
+def experimental_memory_run_dir(case_id: str, evidence_id: str, run_id: str) -> Path:
+    settings = get_settings()
+    output_root = settings.memory_output_root
+    if output_root:
+        path = output_root / "evidence" / case_id / evidence_id / "memory" / "experimental" / "runs" / run_id
+    else:
+        path = build_evidence_root(case_id, evidence_id) / "memory" / "experimental" / "runs" / run_id
+    path.mkdir(parents=True, exist_ok=True, mode=0o750)
+    return path
+
+
 def relative_to_data_dir(path: Path) -> str:
     resolved = path.resolve()
     settings = get_settings()

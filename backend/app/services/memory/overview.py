@@ -280,7 +280,10 @@ def _can_analyze(evidence, db: Session | None = None) -> bool:
         if requirement is not None and requirement.symbol_key:
             cached = (
                 db.query(MemoryCachedSymbol)
-                .filter(MemoryCachedSymbol.symbol_key == requirement.symbol_key)
+                .filter(
+                    MemoryCachedSymbol.symbol_key == requirement.symbol_key,
+                    MemoryCachedSymbol.cache_classification == "exact",
+                )
                 .first()
             )
             if cached is None:
