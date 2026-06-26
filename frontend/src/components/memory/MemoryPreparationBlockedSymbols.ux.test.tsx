@@ -222,10 +222,10 @@ describe("blocked_symbols acquisition UX (frontend)", () => {
     expect(err.textContent).toMatch(/not found/i);
   });
 
-  it("10) does not render the requirement block for non-blocked states", () => {
+  it("10) renders the requirement block for ready state (technical details)", () => {
     renderCard(basePreparation({ effective_state: "ready", ui_state: "ready" }));
     expect(
-      screen.queryByTestId("memory-preparation-requirement"),
-    ).not.toBeInTheDocument();
+      screen.getByTestId("memory-preparation-requirement"),
+    ).toBeInTheDocument();
   });
 });

@@ -115,30 +115,28 @@ export function MemoryEvidenceHeader({
     evidence.operator_override,
   );
   const canAnalyze = evidence.can_analyze !== false;
-  // Symbol gating: when the per-evidence symbol readiness is in a
-  // state that blocks metadata analysis, the Run analysis button
-  // must be disabled with a clear, evidence-specific reason.  The
-  // symbol resolution panel below offers the resolution path.  The
-  // new automatic preparation pipeline (`symbolPreparation`) takes
-  // priority: when it reports ui_state="preparing" the button is
-  // disabled with a structured "preparing" message.
   const legacySymbolState = symbolReadiness?.state ?? "unknown";
-  const prepUiState = symbolPreparation?.ui_state ?? null;
+  // Symbol gating: trust the canonical preparation fields
+  // when available.  Native-compatible or ready evidence is
+  // never blocked by symbol readiness.
+  const prepState = symbolPreparation?.effective_state || symbolPreparation?.ui_state;
+  const prepReady = prepState === "ready";
+  const prepNativeReady = prepReady && symbolPreparation?.native_compatible === true;
+  const prepCanAnalyze = symbolPreparation?.can_analyze_metadata;
   const symbolBlocksAnalysis =
-    legacySymbolState === "missing" ||
-    legacySymbolState === "acquisition_required" ||
-    legacySymbolState === "acquiring" ||
-    legacySymbolState === "acquisition_pending" ||
-    legacySymbolState === "failed" ||
-    legacySymbolState === "incompatible" ||
-    legacySymbolState === "unsupported" ||
-    prepUiState === "preparing" ||
-    prepUiState === "blocked" ||
-    prepUiState === "failed";
-  const runDisabled = !canAnalyze || symbolBlocksAnalysis;
+    !prepReady &&
+    !prepNativeReady &&
+    (
+      (legacySymbolState !== "unknown" && legacySymbolState !== "cached") ||
+      prepState === "preparing" ||
+      prepState === "blocked" ||
+      prepState === "blocked_symbols" ||
+      prepState === "failed"
+    );
+  const runDisabled = !canAnalyze || (symbolBlocksAnalysis && !prepCanAnalyze);
   const runTitle = !canAnalyze
     ? "Confirm the evidence type before starting analysis."
-    : symbolBlocksAnalysis
+    : symbolBlocksAnalysis && !prepCanAnalyze
       ? symbolPreparation?.sanitized_message ||
         symbolReadiness?.sanitized_message ||
         "Resolve the Windows symbol requirement before running analysis."
@@ -300,7 +298,7 @@ export function MemoryEvidenceHeader({
         <div
           className="mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100"
           data-testid="memory-symbol-blocker-banner"
-          data-state={prepUiState ?? legacySymbolState}
+          data-state={prepState ?? legacySymbolState}
         >
           <p className="font-semibold text-ink">Analysis readiness</p>
           <p className="mt-1" data-testid="memory-symbol-blocker-message">
