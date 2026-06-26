@@ -170,7 +170,14 @@ def queue_symbol_acquisition(db: Session, case_id: str, evidence_id: str, *, set
         raise SymbolControlError(exc.code, exc.message) from exc
 
     # Skip work if the symbol is already cached.
-    cached = db.query(MemoryCachedSymbol).filter(MemoryCachedSymbol.symbol_key == requirement.symbol_key).first()
+    cached = (
+        db.query(MemoryCachedSymbol)
+        .filter(
+            MemoryCachedSymbol.symbol_key == requirement.symbol_key,
+            MemoryCachedSymbol.cache_classification == "exact",
+        )
+        .first()
+    )
     if cached:
         completed = MemorySymbolAcquisition(
             requirement_id=requirement.id,
@@ -240,7 +247,16 @@ def evidence_symbol_readiness(db: Session, case_id: str, evidence_id: str, *, se
         .order_by(MemorySymbolRequirement.created_at.desc())
         .first()
     )
-    cached = db.query(MemoryCachedSymbol).filter(MemoryCachedSymbol.symbol_key == requirement.symbol_key).first() if requirement else None
+    cached = (
+        db.query(MemoryCachedSymbol)
+        .filter(
+            MemoryCachedSymbol.symbol_key == requirement.symbol_key,
+            MemoryCachedSymbol.cache_classification == "exact",
+        )
+        .first()
+        if requirement
+        else None
+    )
     symbols_required = failed_run is not None and cached is None
     pending_request = (
         db.query(MemorySymbolAcquisitionRequest)

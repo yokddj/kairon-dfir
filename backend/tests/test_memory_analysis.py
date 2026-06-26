@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 from io import BytesIO
@@ -1126,12 +1127,18 @@ def test_execution_indexing_failure_retains_raw_output(db_session, tmp_path: Pat
     monkeypatch.setattr(memory_execution, "SessionLocal", lambda: SessionContext())
     monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=evidence, path=evidence_file, size_bytes=evidence_file.stat().st_size))
     monkeypatch.setattr(memory_execution.backend_readiness, "check_volatility3_backend", lambda: {"ready": True, "version": "Volatility 3 Framework 2.8.0"})
-    monkeypatch.setattr(memory_execution, "run_plugin", lambda _plugin, _path, _work_dir: SimpleNamespace(argv_display=["vol", "-f", "[evidence]", "-r", "json", "windows.info"], stdout=b'{"Kernel Base":"0xf8000000"}', stderr=b"", duration_ms=7))
+    valid_windows_info = [
+        {"Variable": "Kernel Base", "Value": "0xf8000000", "__children": []},
+        {"Variable": "NtMajorVersion", "Value": "10", "__children": []},
+        {"Variable": "NtMinorVersion", "Value": "0", "__children": []},
+        {"Variable": "MachineType", "Value": "34404", "__children": []},
+    ]
+    monkeypatch.setattr(memory_execution, "run_plugin", lambda _plugin, _path, _work_dir: SimpleNamespace(argv_display=["vol", "-f", "[evidence]", "-r", "json", "windows.info"], stdout=json.dumps(valid_windows_info).encode("utf-8"), stderr=b"", duration_ms=7))
     monkeypatch.setattr(memory_execution, "index_memory_system_info", lambda _case_id, _document: (_ for _ in ()).throw(RuntimeError("/secret/index failed")))
     monkeypatch.setattr(memory_execution, "memory_run_dir", lambda _case_id, _evidence_id, run_id: tmp_path / "data" / "evidence" / CASE_ID / MEMORY_EVIDENCE_ID / "memory" / "runs" / run_id)
     monkeypatch.setattr(memory_execution, "relative_to_data_dir", lambda path: str(path.relative_to(tmp_path / "data")))
-    monkeypatch.setattr(memory_execution, "write_atomic_bytes", lambda path, data: {"path": str(path.relative_to(tmp_path / "data")), "sha256": "a" * 64, "size": len(data)})
-    monkeypatch.setattr(memory_execution, "write_atomic_json", lambda path, payload: {"path": str(path.relative_to(tmp_path / "data")), "sha256": "b" * 64, "size": 12})
+    monkeypatch.setattr(memory_execution, "write_atomic_bytes", lambda path, data, **_kwargs: {"path": str(path.relative_to(tmp_path / "data")), "sha256": "a" * 64, "size": len(data)})
+    monkeypatch.setattr(memory_execution, "write_atomic_json", lambda path, payload, **_kwargs: {"path": str(path.relative_to(tmp_path / "data")), "sha256": "b" * 64, "size": 12})
 
     memory_execution.run_memory_metadata_scan(run.id)
     db_session.refresh(run)
@@ -1240,7 +1247,7 @@ def test_invalid_volatility_json_is_classified_before_normalization(db_session, 
     db_session.add(plugin_run)
     db_session.commit()
     monkeypatch.setattr(memory_execution, "run_plugin", lambda *_args: SimpleNamespace(stdout=b"not-json", stderr=b"", duration_ms=4, argv_display=["vol", "windows.info"]))
-    monkeypatch.setattr(memory_execution, "write_atomic_bytes", lambda *_args: {"path": "raw.json", "sha256": "a" * 64, "size": 8})
+    monkeypatch.setattr(memory_execution, "write_atomic_bytes", lambda *_args, **_kwargs: {"path": "raw.json", "sha256": "a" * 64, "size": 8})
 
     with pytest.raises(volatility_runner.VolatilityRunnerError) as exc_info:
         memory_execution._execute_plugin(db_session, run, plugin_run, "windows.info", tmp_path / "memory.mem", tmp_path)

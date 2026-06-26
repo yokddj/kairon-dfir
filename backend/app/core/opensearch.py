@@ -265,6 +265,18 @@ def get_memory_index(case_id: str) -> str:
     return f"{settings.opensearch_memory_index_prefix}-{case_id}"
 
 
+def get_memory_experimental_index(case_id: str) -> str:
+    """Return the per-case experimental index name.
+
+    Experimental results are kept in a *separate* index so they
+    cannot leak into the validated artifact views.  The index
+    name is ``{prefix}-{case_id}`` where the prefix is the
+    ``opensearch_memory_experimental_index_prefix`` setting
+    (default ``dfir-memory-experimental``).
+    """
+    return f"{settings.opensearch_memory_experimental_index_prefix}-{case_id}"
+
+
 def index_exists(client: OpenSearch, index: str) -> bool:
     try:
         return bool(client.indices.exists(index=index))

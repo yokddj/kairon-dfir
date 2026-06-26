@@ -9,6 +9,7 @@ import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysi
 import { MemoryHistoryPanel } from "../components/memory/MemoryHistoryPanel";
 import { MemoryTypeConfirmationModal } from "../components/memory/MemoryTypeConfirmationModal";
 import { MemorySymbolResolutionPanel } from "../components/memory/MemorySymbolResolutionPanel";
+import { MemoryExperimentalResultsPanel } from "../components/memory/MemoryExperimentalResultsPanel";
 import { MemoryPreparationCard } from "../components/memory/MemoryPreparationCard";
 import { MEMORY_TABS, isMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 
@@ -202,6 +203,9 @@ export default function MemoryEvidencePage() {
     },
   });
   const symbolPreparation = symbolPreparationQuery.data ?? null;
+  const showExperimentalPanel =
+    Boolean(symbolPreparation) &&
+    (symbolPreparation?.effective_state || symbolPreparation?.ui_state) === "blocked_symbols";
   // The catalogue modal needs to know whether preparation is
   // "ready" (effective_state=ready) so it can show or hide the
   // Run-all button.  When the symbol preparation query is still
@@ -283,6 +287,10 @@ export default function MemoryEvidencePage() {
           evidenceId={evidenceId}
           preparation={symbolPreparation}
         />
+      ) : null}
+
+      {showExperimentalPanel ? (
+        <MemoryExperimentalResultsPanel caseId={caseId} evidenceId={evidenceId} />
       ) : null}
 
       {activeBatch ? (

@@ -4110,6 +4110,130 @@ export type MemoryArtifactDetail = {
   provenance: Record<string, unknown>;
 };
 
+// ---------------------------------------------------------------------------
+// Experimental Mismatched-Symbol Analysis v1 — types
+// ---------------------------------------------------------------------------
+
+export type ExperimentalIdentity = {
+  pdb_name: string;
+  pdb_guid: string;
+  pdb_age: number;
+  architecture: string;
+};
+
+export type ExperimentalTrustState = {
+  enabled: boolean;
+  has_active_candidate: boolean;
+  has_active_run: boolean;
+  run_id: string | null;
+  run_status: string | null;
+  canary_status: string | null;
+  last_completed_at: string | null;
+};
+
+export type ExperimentalWarning = {
+  warning_version: string;
+  warning_text: string;
+  checkbox_text: string;
+  required_fields: string[];
+};
+
+export type ExperimentalCandidate = {
+  id: string;
+  case_id: string;
+  evidence_id: string;
+  requirement_id: string;
+  cached_symbol_id: string;
+  required_identity: ExperimentalIdentity;
+  observed_identity: ExperimentalIdentity;
+  symbol_match_type: string;
+  symbol_warning: string;
+  provenance_source_type: string;
+  provenance_source_name: string;
+  provenance_actor: string;
+  pdb_sha256: string;
+  isf_sha256: string;
+  isf_validation_status: string;
+  created_at: string | null;
+  revoked_at: string | null;
+  revoked_by: string | null;
+  revocation_reason: string | null;
+};
+
+export type ExperimentalRun = {
+  id: string;
+  case_id: string;
+  evidence_id: string;
+  candidate_id: string;
+  requirement_id: string;
+  cached_symbol_id: string;
+  status: string;
+  acknowledgement: {
+    actor: string | null;
+    actor_trust?: string | null;
+    acknowledged_at: string | null;
+    warning_version: string | null;
+    required_identity: ExperimentalIdentity | null;
+    observed_identity: ExperimentalIdentity | null;
+  };
+  canary: {
+    status: string;
+    score: number | null;
+    checks: Array<{ name: string; status: string; detail: string; value?: unknown }>;
+    summary: Record<string, unknown>;
+    started_at: string | null;
+    completed_at: string | null;
+    override_required: boolean;
+    override_at: string | null;
+    override_actor: string | null;
+    override_reason: string | null;
+  };
+  requested_profiles: string[];
+  canary_profiles: string[];
+  allowed_profiles: string[];
+  canary_profile: string;
+  canary_plugins: string[];
+  profiles_queued: number;
+  profiles_completed: number;
+  profiles_failed: number;
+  profiles_cancelled: number;
+  started_at: string | null;
+  completed_at: string | null;
+  cancelled_at: string | null;
+  cancelled_by: string | null;
+  cancellation_reason: string | null;
+  deleted_at: string | null;
+  deleted_by: string | null;
+  deletion_reason: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type ExperimentalRunArtifacts = {
+  items: Array<Record<string, unknown>>;
+  total: number;
+  page: number;
+  page_size: number;
+  run_status?: string;
+  trust_level?: string;
+  error?: string;
+};
+
+export type ExperimentalExportPayload = {
+  warning: string;
+  warning_full_text: string;
+  trust_level: string;
+  run_id: string;
+  case_id: string;
+  evidence_id: string;
+  required_identity: ExperimentalIdentity | null;
+  observed_identity: ExperimentalIdentity | null;
+  canary: ExperimentalRun["canary"];
+  status: string;
+  items: Array<Record<string, unknown>>;
+  total: number;
+};
+
 function buildArtifactQuery(path: string, params: Record<string, unknown> | undefined): string {
   const query = new URLSearchParams();
   if (!params) return path;
@@ -4356,6 +4480,169 @@ export const api = {
   getMemorySymbolAcquisition: (caseId: string, evidenceId: string) =>
     request<MemorySymbolBlockedAcquireResponse>(
       `/cases/${caseId}/memory/evidences/${evidenceId}/symbols/acquisition`,
+    ),
+  // Experimental Mismatched-Symbol Analysis v1
+  getExperimentalTrust: (caseId: string, evidenceId: string) =>
+    request<ExperimentalTrustState>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-trust`,
+    ),
+  getExperimentalWarning: (caseId: string, evidenceId: string) =>
+    request<ExperimentalWarning>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-warning`,
+    ),
+  getExperimentalProfileCatalogue: (caseId: string, evidenceId: string) =>
+    request<{
+      canary_profile: string;
+      canary_plugins: string[];
+      profiles: Array<{
+        profile: string;
+        family: string;
+        title: string;
+        description: string;
+        cost_label: string;
+        est_duration_seconds: number;
+        requires_canary_pass: boolean;
+        plugins: string[];
+        supported_os_families: string[];
+      }>;
+    }>(`/cases/${caseId}/memory/evidences/${evidenceId}/experimental-profile-catalogue`),
+  listExperimentalCandidates: (caseId: string, evidenceId: string) =>
+    request<{ items: ExperimentalCandidate[] }>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-symbol-candidates`,
+    ),
+  registerExperimentalCandidate: (
+    caseId: string,
+    evidenceId: string,
+      payload: {
+        cached_symbol_id: string;
+        source_host_path?: string;
+        actor: string;
+      },
+  ) =>
+    request<ExperimentalCandidate>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-symbol-candidates`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  revokeExperimentalCandidate: (
+    caseId: string,
+    evidenceId: string,
+    candidateId: string,
+    payload: { client_actor_label?: string; reason: string },
+  ) =>
+    request<ExperimentalCandidate>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-symbol-candidates/${candidateId}/revoke`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  listExperimentalRuns: (
+    caseId: string,
+    evidenceId: string,
+    includeDeleted = false,
+  ) =>
+    request<{ items: ExperimentalRun[] }>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-runs${
+        includeDeleted ? "?include_deleted=true" : ""
+      }`,
+    ),
+  createExperimentalRun: (
+    caseId: string,
+    evidenceId: string,
+    payload: { requested_profiles?: string[] },
+  ) =>
+    request<ExperimentalRun>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-runs`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  getExperimentalRun: (caseId: string, evidenceId: string, runId: string) =>
+    request<ExperimentalRun>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-runs/${runId}`,
+    ),
+  acknowledgeExperimentalRun: (
+    caseId: string,
+    evidenceId: string,
+    runId: string,
+    payload: Record<string, unknown>,
+  ) =>
+    request<ExperimentalRun>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-runs/${runId}/acknowledge`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  startExperimentalCanary: (caseId: string, evidenceId: string, runId: string) =>
+    request<ExperimentalRun>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-runs/${runId}/start-canary`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+  overrideExperimentalCanary: (
+    caseId: string,
+    evidenceId: string,
+    runId: string,
+    payload: { client_actor_label?: string; reason: string },
+  ) =>
+    request<ExperimentalRun>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-runs/${runId}/canary-override`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  continueExperimentalRun: (caseId: string, evidenceId: string, runId: string) =>
+    request<ExperimentalRun>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-runs/${runId}/continue`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+  cancelExperimentalRun: (
+    caseId: string,
+    evidenceId: string,
+    runId: string,
+    payload: { client_actor_label?: string; reason: string },
+  ) =>
+    request<ExperimentalRun>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-runs/${runId}/cancel`,
+      { method: "POST", body: JSON.stringify(payload) },
+    ),
+  finalizeExperimentalRun: (
+    caseId: string,
+    evidenceId: string,
+    runId: string,
+    outcome: string,
+  ) =>
+    request<ExperimentalRun>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-runs/${runId}/finalize`,
+      {
+        method: "POST",
+        body: JSON.stringify({ outcome }),
+      },
+    ),
+  deleteExperimentalRun: (
+    caseId: string,
+    evidenceId: string,
+    runId: string,
+    payload: { client_actor_label?: string; reason: string },
+  ) =>
+    request<ExperimentalRun>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-runs/${runId}`,
+      { method: "DELETE", body: JSON.stringify(payload) },
+    ),
+  getExperimentalRunArtifacts: (
+    caseId: string,
+    evidenceId: string,
+    runId: string,
+    params: { document_type?: string; page?: number; page_size?: number } = {},
+  ) => {
+    const search = new URLSearchParams();
+    if (params.document_type) search.set("document_type", params.document_type);
+    if (params.page) search.set("page", String(params.page));
+    if (params.page_size) search.set("page_size", String(params.page_size));
+    const qs = search.toString();
+    return request<ExperimentalRunArtifacts>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-runs/${runId}/artifacts${
+        qs ? `?${qs}` : ""
+      }`,
+    );
+  },
+  exportExperimentalRun: (
+    caseId: string,
+    evidenceId: string,
+    runId: string,
+  ) =>
+    request<ExperimentalExportPayload>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/experimental-runs/${runId}/export`,
     ),
   // Exact Symbol Recovery Sources v1
   listRecoverySources: () =>

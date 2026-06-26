@@ -197,6 +197,123 @@ def _make_summary(
     return s
 
 
+def _make_exact_readiness(
+    db: Session,
+    *,
+    evidence: Evidence,
+    pdb_name: str = "ntkrnlmp.pdb",
+    pdb_guid: str = "D801A9AFC0FB7761380800F708633DEA",
+    pdb_age: int = 1,
+    architecture: str = "x64",
+    state: str = "ready",
+    create_cache: bool = True,
+    cache_classification: str = "exact",
+) -> None:
+    """Create the truthful exact-symbol readiness fixture for an evidence.
+
+    Builds the full set of rows that ``compute_memory_readiness``
+    expects in order to report ``UI_STATE_READY``:
+
+    * a ``MemorySymbolRequirement`` with a canonical ``symbol_key``;
+    * a ``MemoryCachedSymbol`` that satisfies that ``symbol_key``;
+    * a ``MemoryEvidenceSymbolLink`` that connects the evidence to
+      the requirement;
+    * a ``MemorySymbolPreparation`` row in the requested state that
+      points at the requirement.
+
+    The default state is ``"ready"`` so that ``create_run_all_batch``
+    proceeds past the ``MEMORY_SYMBOL_PREPARATION_IN_PROGRESS`` gate.
+    Tests that exercise the blocked/queued paths can override
+    ``state`` (e.g. ``"queued"``, ``"blocked_symbols"``) and/or
+    skip the cached-symbol step.
+    """
+    from app.models.memory import (
+        MemoryCachedSymbol,
+        MemoryEvidenceSymbolLink,
+        MemorySymbolPreparation,
+        MemorySymbolRequirement,
+    )
+
+    symbol_key = f"{pdb_name}/{pdb_guid}-{pdb_age}"
+    requirement = MemorySymbolRequirement(
+        case_id=evidence.case_id,
+        evidence_id=evidence.id,
+        pdb_name=pdb_name,
+        pdb_guid=pdb_guid,
+        pdb_age=pdb_age,
+        requested_pdb_age=pdb_age,
+        age_corrected=False,
+        architecture=architecture,
+        symbol_key=symbol_key,
+        status="cached",
+        source="probe",
+        confidence="high",
+    )
+    db.add(requirement)
+    db.flush()
+    cached = None
+    if create_cache:
+        cached = (
+            db.query(MemoryCachedSymbol)
+            .filter(MemoryCachedSymbol.symbol_key == symbol_key)
+            .first()
+        )
+        if cached is None:
+            cached = MemoryCachedSymbol(
+                symbol_key=symbol_key,
+                pdb_name=pdb_name,
+                pdb_guid=pdb_guid,
+                pdb_age=pdb_age,
+                architecture=architecture,
+                pdb_relative_path=f"cache/{symbol_key}.pdb",
+                isf_relative_path=f"cache/{symbol_key}.json",
+                pdb_sha256="0" * 64,
+                isf_sha256="0" * 64,
+                pdb_size_bytes=1,
+                isf_size_bytes=1,
+                validation_status="validated",
+                source_category="official_microsoft_symbols",
+                provenance_source_type="microsoft_public",
+                provenance_source_name="Microsoft public",
+                provenance_actor="server-operator",
+                cache_classification=cache_classification,
+            )
+            db.add(cached)
+            db.flush()
+        requirement.cached_symbol_id = cached.id
+    link = MemoryEvidenceSymbolLink(
+        case_id=evidence.case_id,
+        evidence_id=evidence.id,
+        requirement_id=requirement.id,
+        link_source="probe",
+        state="cached",
+    )
+    db.add(link)
+    db.flush()
+    prep = (
+        db.query(MemorySymbolPreparation)
+        .filter(MemorySymbolPreparation.evidence_id == evidence.id)
+        .order_by(MemorySymbolPreparation.created_at.desc())
+        .first()
+    )
+    if prep is None:
+        prep = MemorySymbolPreparation(
+            case_id=evidence.case_id,
+            evidence_id=evidence.id,
+            state=state,
+            state_reason="test_setup",
+            requirement_id=requirement.id,
+            active=True,
+        )
+        db.add(prep)
+    else:
+        prep.state = state
+        prep.state_reason = "test_setup"
+        prep.requirement_id = requirement.id
+        prep.active = True
+    db.commit()
+
+
 # ---------- 1. Overview returns active result per family ----------
 
 
@@ -331,6 +448,7 @@ def test_run_all_uses_fixed_order(db: Session) -> None:
 
 def test_sequential_execution_and_no_overlap(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(db, evidence=ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -406,6 +524,7 @@ def test_failed_run_does_not_replace_active_result(db: Session) -> None:
 
 def test_continue_on_failure_advances_after_failure(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(db, evidence=ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -448,6 +567,7 @@ def test_continue_on_failure_advances_after_failure(db: Session) -> None:
 
 def test_metadata_only_failure_stops_batch(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(db, evidence=ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -480,6 +600,7 @@ def test_metadata_only_failure_stops_batch(db: Session) -> None:
 
 def test_cancel_prevents_next_profile(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(db, evidence=ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -512,6 +633,7 @@ def test_cancel_prevents_next_profile(db: Session) -> None:
 
 def test_double_click_does_not_create_two_batches(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(db, evidence=ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -546,6 +668,7 @@ def test_double_click_does_not_create_two_batches(db: Session) -> None:
 
 def test_batch_scoped_by_evidence_id(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(db, evidence=ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -578,6 +701,11 @@ def test_batch_scoped_by_evidence_id(db: Session) -> None:
     )
     db.add(ev2)
     db.flush()
+    # Each evidence has its own readiness.  The first evidence was
+    # readied by the test setup; the second needs the same fixture
+    # so the batch can pass the ``MEMORY_SYMBOL_PREPARATION_IN_PROGRESS``
+    # gate.
+    _make_exact_readiness(db, evidence=ev2)
     create_run_all_batch(
         db,
         case_id=case.id,
@@ -638,6 +766,95 @@ def test_authorization_required(db: Session) -> None:
     assert excinfo.value.code == "MEMORY_BATCH_AUTHORIZATION_REQUIRED"
 
 
+def test_missing_preparation_blocks_run_all(db: Session) -> None:
+    case, ev = _make_case_and_evidence(db)
+
+    with pytest.raises(MemoryBatchError) as excinfo:
+        create_run_all_batch(
+            db,
+            case_id=case.id,
+            evidence_id=ev.id,
+            mode="rerun_all",
+            authorization_acknowledged=True,
+            continue_on_failure=True,
+            enqueue_fn=lambda run_id: f"rq-{run_id}",
+        )
+    assert excinfo.value.code == "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS"
+
+
+def test_queued_preparation_blocks_run_all(db: Session) -> None:
+    case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(db, evidence=ev, state="queued", create_cache=False)
+
+    with pytest.raises(MemoryBatchError) as excinfo:
+        create_run_all_batch(
+            db,
+            case_id=case.id,
+            evidence_id=ev.id,
+            mode="rerun_all",
+            authorization_acknowledged=True,
+            continue_on_failure=True,
+            enqueue_fn=lambda run_id: f"rq-{run_id}",
+        )
+    assert excinfo.value.code == "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS"
+
+
+def test_ready_exact_preparation_permits_run_all(db: Session) -> None:
+    case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(db, evidence=ev)
+
+    result = create_run_all_batch(
+        db,
+        case_id=case.id,
+        evidence_id=ev.id,
+        mode="rerun_all",
+        authorization_acknowledged=True,
+        continue_on_failure=True,
+        enqueue_fn=lambda run_id: f"rq-{run_id}",
+    )
+    assert result["batch"].status == "running"
+
+
+def test_blocked_symbols_prevents_validated_run_all(db: Session) -> None:
+    case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(db, evidence=ev, state="blocked_symbols", create_cache=False)
+
+    with pytest.raises(MemoryBatchError) as excinfo:
+        create_run_all_batch(
+            db,
+            case_id=case.id,
+            evidence_id=ev.id,
+            mode="rerun_all",
+            authorization_acknowledged=True,
+            continue_on_failure=True,
+            enqueue_fn=lambda run_id: f"rq-{run_id}",
+        )
+    assert excinfo.value.code == "MEMORY_SYMBOLS_REQUIRED"
+
+
+def test_experimental_candidate_does_not_make_validated_preparation_ready(db: Session) -> None:
+    case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(
+        db,
+        evidence=ev,
+        state="blocked_symbols",
+        create_cache=True,
+        cache_classification="experimental_candidate",
+    )
+
+    with pytest.raises(MemoryBatchError) as excinfo:
+        create_run_all_batch(
+            db,
+            case_id=case.id,
+            evidence_id=ev.id,
+            mode="rerun_all",
+            authorization_acknowledged=True,
+            continue_on_failure=True,
+            enqueue_fn=lambda run_id: f"rq-{run_id}",
+        )
+    assert excinfo.value.code == "MEMORY_SYMBOLS_REQUIRED"
+
+
 # ---------- 23. No disk index writes happen during planning ----------
 
 
@@ -667,6 +884,7 @@ def test_planning_does_not_create_normalized_event(db: Session) -> None:
 
 def test_network_rejection_does_not_enqueue(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(db, evidence=ev)
     enqueued: list[str] = []
 
     def fake_enqueue(run_id: str) -> str:
@@ -699,6 +917,7 @@ def test_network_rejection_does_not_enqueue(db: Session) -> None:
 
 def test_active_result_preserved_during_running_batch(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(db, evidence=ev)
     completed_run = _make_run(db, case_id=case.id, evidence_id=ev.id, profile="metadata_only", status="completed", minutes_ago=60)
     enqueued: list[str] = []
 

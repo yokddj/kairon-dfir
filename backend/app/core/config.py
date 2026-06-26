@@ -236,6 +236,29 @@ class Settings(BaseSettings):
     backend_enable_experimental_folder_upload: bool = False
     backend_experimental_folder_upload_max_files: int = 2000
     backend_experimental_folder_upload_max_total_bytes: int = 2147483648
+    # Experimental Mismatched-Symbol Analysis v1.  When ``False``
+    # (the default) the experimental endpoints return 404, the
+    # operator CLI refuses to create candidates, and no
+    # ``MemoryExperimentalSymbolCandidate`` / ``MemoryExperimentalRun``
+    # rows can be created.  The flag is the single authoritative
+    # switch for the entire trust domain boundary.
+    memory_symbol_experimental_mismatch_enabled: bool = False
+    # Worker queue for experimental analysis tasks.  Isolated from
+    # the validated memory queue so experimental work cannot starve
+    # validated analysis.
+    memory_experimental_task_queue: str = "memory-experimental"
+    # OpenSearch index prefix for the experimental results.  The
+    # full index name is ``{prefix}-{case_id}``.
+    opensearch_memory_experimental_index_prefix: str = "dfir-memory-experimental"
+    # Per-run timeout (seconds) for the experimental canary and
+    # full-run profile dispatch.  Defaults are conservative
+    # ceilings; the worker task timeouts override them.
+    memory_experimental_canary_timeout_seconds: int = 600
+    memory_experimental_run_timeout_seconds: int = 3600
+    # Acknowledgement contract.  The frontend must echo the
+    # warning text verbatim.  The default is the canonical
+    # "experimental-mismatch-ack-v1" string.
+    memory_experimental_ack_warning_version: str = "experimental-mismatch-ack-v1"
     backend_max_extracted_files: int = 50000
     backend_max_extracted_bytes: int = 10737418240
     backend_data_dir: Path = Path("/app/data")
@@ -394,6 +417,23 @@ class Settings(BaseSettings):
         if not value or any(token in value for token in " ;&|`$<>\n\r/\\"):
             return "memory"
         return value
+
+    @property
+    def memory_experimental_queue_name(self) -> str:
+        value = str(self.memory_experimental_task_queue or "memory-experimental").strip()
+        if not value or any(token in value for token in " ;&|`$<>\n\r/\\"):
+            return "memory-experimental"
+        return value
+
+    @property
+    def opensearch_memory_experimental_index(self) -> str:
+        """Default case-shared index for experimental results.
+
+        A per-case index is created on demand by
+        ``ensure_memory_experimental_index(case_id)``.  The
+        prefix is shared with all per-case indices.
+        """
+        return str(self.opensearch_memory_experimental_index_prefix or "dfir-memory-experimental")
 
     @property
     def memory_output_root(self) -> Path | None:

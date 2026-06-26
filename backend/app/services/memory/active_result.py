@@ -230,6 +230,15 @@ def resolve_active_memory_result(
         db.query(MemoryScanRun)
         .filter(MemoryScanRun.case_id == case_id)
         .filter(MemoryScanRun.evidence_id == evidence_id)
+        # Trust boundary: the validated active-result resolver
+        # never returns experimental / untrusted runs.  See
+        # ``app/services/memory/experimental_trust.py`` for the
+        # single source of truth on the trust filter.  The
+        # experimental view uses a different resolver.
+        .filter(
+            (MemoryScanRun.trust_level.is_(None))
+            | (MemoryScanRun.trust_level == "validated")
+        )
     )
 
     # Historical override: validate it is a real run for this evidence.

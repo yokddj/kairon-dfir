@@ -69,6 +69,45 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
 """
 
 
+def _index_exists(connection: Connection, name: str) -> bool:
+    """Check whether an index with ``name`` already exists.
+
+    Used by migrations that need to be idempotent on both
+    PostgreSQL and SQLite, neither of which supports a
+    ``CREATE INDEX IF NOT EXISTS`` form with a partial WHERE
+    clause that works uniformly on both engines.
+    """
+    dialect = connection.dialect.name
+    if dialect == "postgresql":
+        row = connection.execute(
+            text("SELECT 1 FROM pg_indexes WHERE indexname = :n"),
+            {"n": name},
+        ).fetchone()
+        return row is not None
+    row = connection.execute(
+        text("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = :n"),
+        {"n": name},
+    ).fetchone()
+    return row is not None
+
+
+def _create_index_dialect_aware(
+    connection: Connection,
+    *,
+    name: str,
+    create_sql: str,
+) -> None:
+    """Create ``create_sql`` if no index with ``name`` exists.
+
+    The caller supplies the dialect-correct DDL.  We avoid
+    ``IF NOT EXISTS`` because SQLite does not support it for
+    partial indexes.
+    """
+    if _index_exists(connection, name):
+        return
+    connection.execute(text(create_sql))
+
+
 def ensure_migrations_table(connection: Connection) -> None:
     connection.execute(text(SCHEMA_MIGRATIONS_TABLE_DDL))
 
@@ -180,13 +219,37 @@ def _v2_batches_runtime_columns(connection: Connection) -> None:
                 )
             )
     # Partial unique index: at most one active batch per (case, evidence).
-    connection.execute(
-        text(
-            "CREATE UNIQUE INDEX IF NOT EXISTS ix_memory_analysis_batches_one_active "
-            "ON memory_analysis_batches (case_id, evidence_id) "
-            "WHERE status IN ('queued', 'running')"
+    # The name ``uq_memory_analysis_batches_one_active`` matches the
+    # SQLAlchemy model so ``Base.metadata.create_all`` is a no-op on
+    # fresh databases.  The index uses a dialect-aware form:
+    # PostgreSQL keeps the WHERE clause; SQLite ignores the partial
+    # predicate (the app enforces the active-state invariant
+    # process-locally as a fallback) but the index still exists.
+    dialect = connection.dialect.name
+    if dialect == "postgresql":
+        _create_index_dialect_aware(
+            connection,
+            name="uq_memory_analysis_batches_one_active",
+            create_sql=(
+                "CREATE UNIQUE INDEX uq_memory_analysis_batches_one_active "
+                "ON memory_analysis_batches (case_id, evidence_id) "
+                "WHERE status IN ('queued', 'running')"
+            ),
         )
-    )
+    else:
+        # SQLite: a plain non-partial unique index is enough because
+        # the test path enforces the active-state invariant.  We
+        # exclude the WHERE clause to keep the index valid on
+        # SQLite.  The application-level guard in
+        # ``find_active_batch`` is the authoritative check.
+        _create_index_dialect_aware(
+            connection,
+            name="uq_memory_analysis_batches_one_active",
+            create_sql=(
+                "CREATE UNIQUE INDEX uq_memory_analysis_batches_one_active "
+                "ON memory_analysis_batches (case_id, evidence_id)"
+            ),
+        )
     # Index used by the reconciler and the active-batch poll endpoint.
     connection.execute(
         text(
@@ -602,44 +665,91 @@ def _v10_memory_symbol_preparation_reconciliation(connection: Connection) -> Non
     on PostgreSQL.  On SQLite the WHERE clause is ignored but the
     index still exists.
     """
-    # Use ADD COLUMN IF NOT EXISTS so the migration is idempotent
-    # on PostgreSQL (>= 9.6).  SQLite does not support IF NOT
-    # EXISTS on ADD COLUMN, so we wrap each statement in a try /
-    # except to swallow the "duplicate column" error.
-    def _safe_add(column_sql: str) -> None:
-        try:
-            connection.execute(text(column_sql))
-        except Exception as exc:  # noqa: BLE001
-            # SQLite raises "duplicate column" the second time.
-            if "duplicate column" not in str(exc).lower() and "already exists" not in str(exc).lower():
-                raise
-    _safe_add(
-        "ALTER TABLE memory_symbol_preparations ADD COLUMN IF NOT EXISTS last_heartbeat_at TIMESTAMP"
+    dialect = connection.dialect.name
+    # ``ADD COLUMN IF NOT EXISTS`` is PostgreSQL 9.6+ syntax.  SQLite
+    # has no equivalent on ``ALTER TABLE``; it raises a syntax error
+    # instead of a "duplicate column" error.  Use dialect-aware
+    # SQL: PostgreSQL keeps the idempotent ``IF NOT EXISTS`` form;
+    # SQLite inspects ``PRAGMA table_info`` to decide whether the
+    # column already exists before issuing ``ADD COLUMN``.
+    def _add_column_if_missing(
+        column_name: str,
+        column_type_sql: str,
+        not_null: bool = False,
+        default_sql: str = "",
+    ) -> None:
+        if dialect == "postgresql":
+            clauses = [column_type_sql]
+            if not_null:
+                clauses.append("NOT NULL")
+            if default_sql:
+                clauses.append(f"DEFAULT {default_sql}")
+            column_def = " ".join(clauses)
+            connection.execute(
+                text(
+                    "ALTER TABLE memory_symbol_preparations "
+                    f"ADD COLUMN IF NOT EXISTS {column_name} {column_def}"
+                )
+            )
+            return
+        # SQLite: check the column catalog first.
+        existing = {
+            str(row[1])  # PRAGMA table_info: name is column index 1
+            for row in connection.execute(
+                text("PRAGMA table_info(memory_symbol_preparations)")
+            ).fetchall()
+        }
+        if column_name in existing:
+            return
+        clauses = [column_type_sql]
+        if not_null:
+            clauses.append("NOT NULL")
+        if default_sql:
+            clauses.append(f"DEFAULT {default_sql}")
+        column_def = " ".join(clauses)
+        connection.execute(
+            text(
+                "ALTER TABLE memory_symbol_preparations "
+                f"ADD COLUMN {column_name} {column_def}"
+            )
+        )
+
+    def _create_index_if_missing(index_name: str, create_sql: str) -> None:
+        if dialect == "postgresql":
+            connection.execute(text(create_sql))
+            return
+        # SQLite: check sqlite_master for an existing index.
+        existing = {
+            str(row[0])  # SELECT name: name is column index 0
+            for row in connection.execute(
+                text("SELECT name FROM sqlite_master WHERE type = 'index'")
+            ).fetchall()
+        }
+        if index_name in existing:
+            return
+        connection.execute(text(create_sql))
+
+    _add_column_if_missing("last_heartbeat_at", "TIMESTAMP")
+    _add_column_if_missing("current_step", "VARCHAR(64)")
+    _add_column_if_missing(
+        "progress_percent", "INTEGER", not_null=True, default_sql="0",
     )
-    _safe_add(
-        "ALTER TABLE memory_symbol_preparations ADD COLUMN IF NOT EXISTS current_step VARCHAR(64)"
+    _add_column_if_missing("source_of_truth", "VARCHAR(64)")
+    _add_column_if_missing("reconciled_at", "TIMESTAMP")
+    _add_column_if_missing(
+        "active", "BOOLEAN", not_null=True, default_sql="TRUE",
     )
-    _safe_add(
-        "ALTER TABLE memory_symbol_preparations ADD COLUMN IF NOT EXISTS progress_percent INTEGER NOT NULL DEFAULT 0"
-    )
-    _safe_add(
-        "ALTER TABLE memory_symbol_preparations ADD COLUMN IF NOT EXISTS source_of_truth VARCHAR(64)"
-    )
-    _safe_add(
-        "ALTER TABLE memory_symbol_preparations ADD COLUMN IF NOT EXISTS reconciled_at TIMESTAMP"
-    )
-    _safe_add(
-        "ALTER TABLE memory_symbol_preparations ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE"
-    )
-    _safe_add(
-        "CREATE INDEX IF NOT EXISTS ix_memory_symbol_preparations_active ON memory_symbol_preparations (active)"
+    _create_index_if_missing(
+        "ix_memory_symbol_preparations_active",
+        "CREATE INDEX ix_memory_symbol_preparations_active ON memory_symbol_preparations (active)",
     )
     # Partial unique index: one active preparation per evidence.
-    # The IF NOT EXISTS clause is supported by PostgreSQL 9.5+
-    # and silently ignored by SQLite when the index already exists.
-    _safe_add(
-        "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_symbol_prep_active_evidence "
-        "ON memory_symbol_preparations (evidence_id) WHERE active = TRUE"
+    # The IF NOT EXISTS clause is supported by PostgreSQL 9.5+ and
+    # silently ignored by SQLite when the index already exists.
+    _create_index_if_missing(
+        "uq_memory_symbol_prep_active_evidence",
+        "CREATE UNIQUE INDEX uq_memory_symbol_prep_active_evidence "
+        "ON memory_symbol_preparations (evidence_id) WHERE active = TRUE",
     )
 
 
@@ -1204,6 +1314,424 @@ def _v16_recovery_attempts_active_uniqueness(connection: Connection) -> None:
             "application enforces the invariant instead",
             dialect, exc,
         )
+
+
+@register(17, "memory_experimental_mismatched_symbol_analysis")
+def _v17_experimental_mismatched_symbol_analysis(connection: Connection) -> None:
+    """Add the experimental mismatched-symbol analysis trust domain.
+
+    The feature is opt-in via the ``MEMORY_SYMBOL_EXPERIMENTAL_ENABLED``
+    server-side flag (default False).  The database is migrated even
+    when the flag is off so that the schema is stable; the
+    application-level gates prevent any untrusted data from being
+    created or consumed when the flag is False.
+
+    The migration is idempotent and only adds objects that are
+    missing.  The schema is engineered so a partial unique index
+    enforces "at most one active candidate per requirement" and so
+    that the existing exact-symbol flow is unaffected.
+
+    Additions:
+
+    * ``memory_cached_symbols`` gains:
+
+        - ``cache_classification`` (VARCHAR 32, default ``exact``)
+        - ``required_pdb_name`` / ``required_pdb_guid`` /
+          ``required_pdb_age`` / ``required_architecture`` (NULL for
+          exact rows)
+
+    * ``memory_scan_runs`` gains:
+
+        - ``analysis_mode`` (VARCHAR 32, default ``validated``)
+        - ``trust_level`` (VARCHAR 32, default ``validated``)
+        - ``symbol_match_type`` (VARCHAR 32, default ``exact``)
+        - ``experimental_run_id`` (FK ``memory_experimental_runs.id``)
+
+    * ``memory_plugin_runs`` gains:
+
+        - ``analysis_mode`` (VARCHAR 32, default ``validated``)
+        - ``trust_level`` (VARCHAR 32, default ``validated``)
+
+    * New table ``memory_experimental_symbol_candidates`` storing the
+      operator-supplied mismatched symbol and its required identity.
+      A partial unique index enforces "at most one active candidate
+      per requirement".
+
+    * New table ``memory_experimental_runs`` storing the
+      acknowledgement, the canary phase outcome, the requested
+      profile set, and the deletion/audit fields.
+    """
+    inspector = _inspector_for(connection)
+    dialect = connection.dialect.name
+
+    # 1. ``memory_cached_symbols`` additions
+    if "memory_cached_symbols" in inspector.get_table_names():
+        existing = {
+            c["name"] for c in inspector.get_columns("memory_cached_symbols")
+        }
+        additions = [
+            ("cache_classification", "VARCHAR(32) NOT NULL DEFAULT 'exact'"),
+            ("required_pdb_name", "VARCHAR(128)"),
+            ("required_pdb_guid", "VARCHAR(32)"),
+            ("required_pdb_age", "INTEGER"),
+            ("required_architecture", "VARCHAR(32)"),
+        ]
+        for column_name, column_type in additions:
+            if column_name not in existing:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE memory_cached_symbols "
+                        f"ADD COLUMN {column_name} {column_type}"
+                    )
+                )
+                logger.info(
+                    "v17: added memory_cached_symbols.%s", column_name
+                )
+        # Index for fast "list experimental candidates" lookups.
+        existing_indexes = {
+            ix["name"] for ix in inspector.get_indexes("memory_cached_symbols")
+        }
+        if "ix_memory_cached_symbols_classification" not in existing_indexes:
+            try:
+                connection.execute(
+                    text(
+                        "CREATE INDEX ix_memory_cached_symbols_classification "
+                        "ON memory_cached_symbols (cache_classification)"
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.info(
+                    "v17: classification index not created on %s (%s); "
+                    "application falls back to a full table scan",
+                    dialect, exc,
+                )
+
+    # 2. ``memory_scan_runs`` additions
+    if "memory_scan_runs" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("memory_scan_runs")}
+        additions = [
+            ("analysis_mode", "VARCHAR(32) NOT NULL DEFAULT 'validated'"),
+            ("trust_level", "VARCHAR(32) NOT NULL DEFAULT 'validated'"),
+            ("symbol_match_type", "VARCHAR(32) NOT NULL DEFAULT 'exact'"),
+        ]
+        for column_name, column_type in additions:
+            if column_name not in existing:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE memory_scan_runs "
+                        f"ADD COLUMN {column_name} {column_type}"
+                    )
+                )
+                logger.info("v17: added memory_scan_runs.%s", column_name)
+        for column_name, value in (
+            ("analysis_mode", "validated"),
+            ("trust_level", "validated"),
+            ("symbol_match_type", "exact"),
+        ):
+            if column_name in {c["name"] for c in inspector.get_columns("memory_scan_runs")}:
+                connection.execute(
+                    text(
+                        f"UPDATE memory_scan_runs SET {column_name} = :value WHERE {column_name} IS NULL"
+                    ),
+                    {"value": value},
+                )
+        if "experimental_run_id" not in existing:
+            connection.execute(
+                text(
+                    "ALTER TABLE memory_scan_runs "
+                    "ADD COLUMN experimental_run_id VARCHAR(36)"
+                )
+            )
+            logger.info("v17: added memory_scan_runs.experimental_run_id")
+        existing_indexes = {
+            ix["name"] for ix in inspector.get_indexes("memory_scan_runs")
+        }
+        for ix_name, ix_cols in (
+            ("ix_memory_scan_runs_mode", "(analysis_mode)"),
+            ("ix_memory_scan_runs_trust", "(trust_level)"),
+            ("ix_memory_scan_runs_match", "(symbol_match_type)"),
+        ):
+            if ix_name not in existing_indexes:
+                try:
+                    connection.execute(
+                        text(
+                            f"CREATE INDEX {ix_name} "
+                            f"ON memory_scan_runs {ix_cols}"
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.info(
+                        "v17: %s not created on %s (%s)",
+                        ix_name, dialect, exc,
+                    )
+        if "ix_memory_scan_runs_experimental" not in existing_indexes:
+            try:
+                connection.execute(
+                    text(
+                        "CREATE INDEX ix_memory_scan_runs_experimental "
+                        "ON memory_scan_runs (experimental_run_id)"
+                    )
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.info(
+                    "v17: experimental_run_id index not created on %s (%s)",
+                    dialect, exc,
+                )
+
+    # 3. ``memory_plugin_runs`` additions
+    if "memory_plugin_runs" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("memory_plugin_runs")}
+        for column_name, column_type in (
+            ("analysis_mode", "VARCHAR(32) NOT NULL DEFAULT 'validated'"),
+            ("trust_level", "VARCHAR(32) NOT NULL DEFAULT 'validated'"),
+        ):
+            if column_name not in existing:
+                connection.execute(
+                    text(
+                        f"ALTER TABLE memory_plugin_runs "
+                        f"ADD COLUMN {column_name} {column_type}"
+                    )
+                )
+                logger.info("v17: added memory_plugin_runs.%s", column_name)
+        for column_name, value in (
+            ("analysis_mode", "validated"),
+            ("trust_level", "validated"),
+        ):
+            if column_name in {c["name"] for c in inspector.get_columns("memory_plugin_runs")}:
+                connection.execute(
+                    text(
+                        f"UPDATE memory_plugin_runs SET {column_name} = :value WHERE {column_name} IS NULL"
+                    ),
+                    {"value": value},
+                )
+        existing_indexes = {
+            ix["name"] for ix in inspector.get_indexes("memory_plugin_runs")
+        }
+        for ix_name, ix_cols in (
+            ("ix_memory_plugin_runs_mode", "(analysis_mode)"),
+            ("ix_memory_plugin_runs_trust", "(trust_level)"),
+        ):
+            if ix_name not in existing_indexes:
+                try:
+                    connection.execute(
+                        text(
+                            f"CREATE INDEX {ix_name} "
+                            f"ON memory_plugin_runs {ix_cols}"
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.info(
+                        "v17: %s not created on %s (%s)",
+                        ix_name, dialect, exc,
+                    )
+
+    # 4. New table ``memory_experimental_symbol_candidates``.
+    if "memory_experimental_symbol_candidates" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                "CREATE TABLE memory_experimental_symbol_candidates ("
+                "id VARCHAR(36) PRIMARY KEY, "
+                "case_id VARCHAR(36) NOT NULL REFERENCES cases(id) ON DELETE CASCADE, "
+                "evidence_id VARCHAR(36) NOT NULL REFERENCES evidences(id) ON DELETE CASCADE, "
+                "requirement_id VARCHAR(36) NOT NULL REFERENCES memory_symbol_requirements(id) ON DELETE CASCADE, "
+                "cached_symbol_id VARCHAR(36) NOT NULL REFERENCES memory_cached_symbols(id) ON DELETE CASCADE, "
+                "required_pdb_name VARCHAR(128) NOT NULL, "
+                "required_pdb_guid VARCHAR(32) NOT NULL, "
+                "required_pdb_age INTEGER NOT NULL, "
+                "required_architecture VARCHAR(32) NOT NULL, "
+                "observed_pdb_name VARCHAR(128) NOT NULL, "
+                "observed_pdb_guid VARCHAR(32) NOT NULL, "
+                "observed_pdb_age INTEGER NOT NULL, "
+                "observed_architecture VARCHAR(32) NOT NULL, "
+                "symbol_match_type VARCHAR(32) NOT NULL, "
+                "symbol_warning VARCHAR(255) NOT NULL, "
+                "provenance_source_type VARCHAR(32) NOT NULL DEFAULT 'operator_cli_pdb', "
+                "provenance_source_name VARCHAR(128) NOT NULL DEFAULT 'Operator CLI', "
+                "provenance_actor VARCHAR(128) NOT NULL DEFAULT 'server-operator', "
+                "source_host_path VARCHAR(512), "
+                "pdb_sha256 VARCHAR(64) NOT NULL, "
+                "isf_sha256 VARCHAR(64) NOT NULL, "
+                "isf_validation_status VARCHAR(32) NOT NULL DEFAULT 'validated', "
+                "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                "revoked_at TIMESTAMP, "
+                "revoked_by VARCHAR(128), "
+                "revocation_reason VARCHAR(512), "
+                "metadata_json JSON NOT NULL DEFAULT '{}'"
+                ")"
+            )
+        )
+        for ix_name, ix_cols in (
+            (
+                "ix_memory_exp_candidate_case_evidence",
+                "(case_id, evidence_id)",
+            ),
+            (
+                "ix_memory_exp_candidate_requirement",
+                "(requirement_id)",
+            ),
+            (
+                "ix_memory_exp_candidate_cached_symbol",
+                "(cached_symbol_id)",
+            ),
+            (
+                "ix_memory_exp_candidate_revoked",
+                "(revoked_at)",
+            ),
+        ):
+            try:
+                connection.execute(
+                    text(f"CREATE INDEX {ix_name} ON memory_experimental_symbol_candidates {ix_cols}")
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.info(
+                    "v17: %s not created on %s (%s)",
+                    ix_name, dialect, exc,
+                )
+        # Partial unique index: at most one active candidate per
+        # requirement.
+        try:
+            if dialect == "postgresql":
+                connection.execute(
+                    text(
+                        "CREATE UNIQUE INDEX uq_memory_exp_candidate_active_requirement "
+                        "ON memory_experimental_symbol_candidates (requirement_id) "
+                        "WHERE revoked_at IS NULL"
+                    )
+                )
+            else:
+                connection.execute(
+                    text(
+                        "CREATE UNIQUE INDEX uq_memory_exp_candidate_active_requirement "
+                        "ON memory_experimental_symbol_candidates "
+                        "(requirement_id, revoked_at)"
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.info(
+                "v17: candidate active index not created on %s (%s); "
+                "application enforces the invariant",
+                dialect, exc,
+            )
+
+    # 5. New table ``memory_experimental_runs``.
+    if "memory_experimental_runs" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                "CREATE TABLE memory_experimental_runs ("
+                "id VARCHAR(36) PRIMARY KEY, "
+                "case_id VARCHAR(36) NOT NULL REFERENCES cases(id) ON DELETE CASCADE, "
+                "evidence_id VARCHAR(36) NOT NULL REFERENCES evidences(id) ON DELETE CASCADE, "
+                "candidate_id VARCHAR(36) NOT NULL REFERENCES memory_experimental_symbol_candidates(id) ON DELETE CASCADE, "
+                "requirement_id VARCHAR(36) NOT NULL REFERENCES memory_symbol_requirements(id) ON DELETE CASCADE, "
+                "cached_symbol_id VARCHAR(36) NOT NULL REFERENCES memory_cached_symbols(id) ON DELETE CASCADE, "
+                "status VARCHAR(32) NOT NULL DEFAULT 'acknowledgement_required', "
+                "acknowledgement_actor VARCHAR(128), "
+                "acknowledgement_at TIMESTAMP, "
+                "acknowledgement_warning_version VARCHAR(64), "
+                "acknowledgement_required_pdb_name VARCHAR(128), "
+                "acknowledgement_required_pdb_guid VARCHAR(32), "
+                "acknowledgement_required_pdb_age INTEGER, "
+                "acknowledgement_required_architecture VARCHAR(32), "
+                "acknowledgement_observed_pdb_name VARCHAR(128), "
+                "acknowledgement_observed_pdb_guid VARCHAR(32), "
+                "acknowledgement_observed_pdb_age INTEGER, "
+                "acknowledgement_observed_architecture VARCHAR(32), "
+                "acknowledgement_warning_text TEXT, "
+                "canary_status VARCHAR(32) NOT NULL DEFAULT 'pending', "
+                "canary_started_at TIMESTAMP, "
+                "canary_completed_at TIMESTAMP, "
+                "canary_score DOUBLE PRECISION, "
+                "canary_checks JSON NOT NULL DEFAULT '[]', "
+                "canary_summary JSON NOT NULL DEFAULT '{}', "
+                "canary_override_required BOOLEAN NOT NULL DEFAULT false, "
+                "canary_override_at TIMESTAMP, "
+                "canary_override_actor VARCHAR(128), "
+                "canary_override_reason VARCHAR(512), "
+                "requested_profiles JSON NOT NULL DEFAULT '[]', "
+                "canary_profiles JSON NOT NULL DEFAULT '[]', "
+                "canary_worker_task_id VARCHAR(255), "
+                "full_worker_task_id VARCHAR(255), "
+                "profiles_queued INTEGER NOT NULL DEFAULT 0, "
+                "profiles_completed INTEGER NOT NULL DEFAULT 0, "
+                "profiles_failed INTEGER NOT NULL DEFAULT 0, "
+                "profiles_cancelled INTEGER NOT NULL DEFAULT 0, "
+                "started_at TIMESTAMP, "
+                "completed_at TIMESTAMP, "
+                "cancelled_at TIMESTAMP, "
+                "cancelled_by VARCHAR(128), "
+                "cancellation_reason VARCHAR(512), "
+                "deleted_at TIMESTAMP, "
+                "deleted_by VARCHAR(128), "
+                "deletion_reason VARCHAR(512), "
+                "audit_metadata_json JSON NOT NULL DEFAULT '{}', "
+                "created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, "
+                "updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                ")"
+            )
+        )
+        for ix_name, ix_cols in (
+            ("ix_memory_exp_run_case", "(case_id)"),
+            ("ix_memory_exp_run_evidence", "(evidence_id)"),
+            ("ix_memory_exp_run_case_evidence", "(case_id, evidence_id)"),
+            ("ix_memory_exp_run_candidate", "(candidate_id)"),
+            ("ix_memory_exp_run_requirement", "(requirement_id)"),
+            ("ix_memory_exp_run_cached_symbol", "(cached_symbol_id)"),
+            ("ix_memory_exp_run_status", "(status)"),
+            ("ix_memory_exp_run_canary", "(canary_status)"),
+            ("ix_memory_exp_run_deleted", "(deleted_at)"),
+        ):
+            try:
+                connection.execute(
+                    text(f"CREATE INDEX {ix_name} ON memory_experimental_runs {ix_cols}")
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.info(
+                    "v17: %s not created on %s (%s)",
+                    ix_name, dialect, exc,
+                )
+        try:
+            if dialect == "postgresql":
+                connection.execute(
+                    text(
+                        "CREATE UNIQUE INDEX uq_memory_exp_run_active_evidence "
+                        "ON memory_experimental_runs (case_id, evidence_id) "
+                        "WHERE deleted_at IS NULL AND status NOT IN "
+                        "('candidate_unavailable','cancelled','deleted','completed_untrusted','partial_untrusted','failed_untrusted','canary_failed','canary_inconclusive')"
+                    )
+                )
+            else:
+                connection.execute(
+                    text(
+                        "CREATE UNIQUE INDEX uq_memory_exp_run_active_evidence "
+                        "ON memory_experimental_runs (case_id, evidence_id) "
+                        "WHERE deleted_at IS NULL AND status NOT IN "
+                        "('candidate_unavailable','cancelled','deleted','completed_untrusted','partial_untrusted','failed_untrusted','canary_failed','canary_inconclusive')"
+                    )
+                )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("v17: active experimental run uniqueness not created on %s (%s)", dialect, exc)
+
+    if dialect == "postgresql":
+        try:
+            connection.execute(
+                text(
+                    "ALTER TABLE memory_scan_runs "
+                    "ADD CONSTRAINT fk_memory_scan_runs_experimental_run "
+                    "FOREIGN KEY (experimental_run_id) REFERENCES memory_experimental_runs(id) ON DELETE SET NULL"
+                )
+            )
+        except Exception:
+            pass
+
+    # 6. Backfill: every existing MemoryScanRun and MemoryPluginRun is
+    # implicitly validated / exact.  SQLite stores booleans as
+    # integers; ALTER TABLE DEFAULT takes care of legacy rows.  The
+    # application-level invariants on cache_classification and on
+    # the unique index on experimental candidates are the
+    # authoritative gates.
+    logger.info(
+        "v17: experimental mismatched-symbol analysis migration complete"
+    )
 
 
 def _inspector_for(connection: Connection):

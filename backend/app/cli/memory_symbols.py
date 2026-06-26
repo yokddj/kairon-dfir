@@ -56,6 +56,18 @@ from app.services.memory.symbol_approval import (
     show_request,
     summarize_pending_for_operator,
 )
+from app.services.memory.experimental_lifecycle import (
+    ExperimentalLifecycleError,
+    record_cli_candidate,
+    trust_state,
+)
+from app.services.memory.experimental_import import (
+    ExperimentalImportError,
+    cli_import_experimental_isf_for_requirement,
+    cli_import_experimental_pdb_for_requirement,
+    inspect_experimental_pdb_for_requirement,
+)
+from app.services.memory.experimental_trust import is_experimental_enabled
 
 
 def _print_json(data) -> None:
@@ -821,6 +833,218 @@ def cmd_status_requirement(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_register_experimental_candidate(args: argparse.Namespace) -> int:
+    """Register an exact cache row as an experimental mismatched candidate.
+
+    The function refuses to run when the experimental feature
+    flag is off.  It only writes a ``MemoryExperimentalSymbolCandidate``
+    row; the exact symbol cache and the requirement are NEVER
+    mutated.  The function is read-only on disk and never
+    downloads symbols.
+    """
+    if not is_experimental_enabled():
+        print(
+            "experimental mismatched-symbol analysis is disabled "
+            "(memory_symbol_experimental_mismatch_enabled=False)",
+            file=sys.stderr,
+        )
+        return 2
+    try:
+        with SessionLocal() as db:
+            candidate = record_cli_candidate(
+                db,
+                case_id=args.case_id,
+                evidence_id=args.evidence_id,
+                cached_symbol_id=args.cached_symbol_id,
+                source_host_path=args.source_host_path,
+                actor=args.actor,
+            )
+        if args.json:
+            _print_json(
+                {
+                    "id": candidate.id,
+                    "case_id": candidate.case_id,
+                    "evidence_id": candidate.evidence_id,
+                    "requirement_id": candidate.requirement_id,
+                    "cached_symbol_id": candidate.cached_symbol_id,
+                    "required_pdb_name": candidate.required_pdb_name,
+                    "required_pdb_guid": candidate.required_pdb_guid,
+                    "required_pdb_age": int(candidate.required_pdb_age),
+                    "required_architecture": candidate.required_architecture,
+                    "observed_pdb_name": candidate.observed_pdb_name,
+                    "observed_pdb_guid": candidate.observed_pdb_guid,
+                    "observed_pdb_age": int(candidate.observed_pdb_age),
+                    "observed_architecture": candidate.observed_architecture,
+                    "symbol_match_type": candidate.symbol_match_type,
+                    "symbol_warning": candidate.symbol_warning,
+                    "created_at": candidate.created_at.isoformat() if candidate.created_at else None,
+                }
+            )
+        else:
+            print("Experimental candidate registered.")
+            print(f"  candidate_id        : {candidate.id}")
+            print(f"  required identity   : {candidate.required_pdb_name} / {candidate.required_pdb_guid} / age={int(candidate.required_pdb_age)} / {candidate.required_architecture}")
+            print(f"  observed identity   : {candidate.observed_pdb_name} / {candidate.observed_pdb_guid} / age={int(candidate.observed_pdb_age)} / {candidate.observed_architecture}")
+            print(f"  symbol_match_type   : {candidate.symbol_match_type}")
+            print(f"  symbol_warning      : {candidate.symbol_warning}")
+        return 0
+    except ExperimentalLifecycleError as exc:
+        print(f"refused: {exc.error_code}: {exc.message}", file=sys.stderr)
+        return 2
+
+
+def cmd_status_experimental(args: argparse.Namespace) -> int:
+    """Return the experimental trust state for a case/evidence pair."""
+    with SessionLocal() as db:
+        state = trust_state(db, case_id=args.case_id, evidence_id=args.evidence_id)
+    if args.json:
+        _print_json(state)
+    else:
+        print("Experimental trust state:")
+        for key, value in state.items():
+            print(f"  {key:>22}: {value}")
+    return 0
+
+
+def cmd_inspect_experimental_pdb(args: argparse.Namespace) -> int:
+    from pathlib import Path
+
+    try:
+        with SessionLocal() as db:
+            result = inspect_experimental_pdb_for_requirement(
+                db,
+                requirement_id=args.requirement_id,
+                file_path=Path(args.file),
+                safe_override=args.safe_override,
+            )
+    except (ExperimentalImportError, Exception) as exc:
+        if args.json:
+            _print_json({
+                "status": "invalid",
+                "error_code": getattr(exc, "code", "EXPERIMENTAL_IMPORT_REJECTED"),
+                "sanitized_message": getattr(exc, "message", str(exc)),
+            })
+        else:
+            print(f"ERROR: {getattr(exc, 'code', 'EXPERIMENTAL_IMPORT_REJECTED')}: {getattr(exc, 'message', exc)}", file=sys.stderr)
+        return 2
+    if args.json:
+        _print_json(result)
+    else:
+        print("Experimental PDB candidate is eligible.")
+        print(f"  requirement_id      : {result['requirement_id']}")
+        print(f"  required age        : {result['required_identity']['pdb_age']}")
+        print(f"  observed age        : {result['observed_identity']['pdb_age']}")
+        print(f"  sha256              : {result['sha256']}")
+        print(f"  size_bytes          : {result['size_bytes']}")
+    return 0
+
+
+def _cli_print_experimental_result(result: dict, *, as_json: bool) -> int:
+    if as_json:
+        _print_json(result)
+    else:
+        print(f"status             : {result.get('status')}")
+        if result.get("requirement_id"):
+            print(f"requirement_id     : {result['requirement_id']}")
+        if result.get("candidate_id"):
+            print(f"candidate_id       : {result['candidate_id']}")
+        if result.get("cached_symbol_id"):
+            print(f"cached_symbol_id   : {result['cached_symbol_id']}")
+        if result.get("required_identity"):
+            print(f"required_age       : {result['required_identity'].get('pdb_age')}")
+        if result.get("observed_identity"):
+            print(f"observed_age       : {result['observed_identity'].get('pdb_age')}")
+        if result.get("sha256"):
+            print(f"sha256             : {result['sha256']}")
+        if result.get("size_bytes") is not None:
+            print(f"size_bytes         : {result['size_bytes']}")
+        if result.get("sanitized_message"):
+            print(f"sanitized_message  : {result['sanitized_message']}")
+    return 0 if result.get("status") in {"ready", "dry_run", "eligible"} else 2
+
+
+def cmd_import_experimental_pdb(args: argparse.Namespace) -> int:
+    from pathlib import Path
+    from app.cli.memory_symbols_runtime import prompt_for_confirmation
+
+    try:
+        with SessionLocal() as db:
+            preflight = cli_import_experimental_pdb_for_requirement(
+                db,
+                requirement_id=args.requirement_id,
+                file_path=Path(args.file),
+                operator_label=args.operator_label,
+                safe_override=args.safe_override,
+                dry_run=True,
+            )
+            if args.dry_run:
+                return _cli_print_experimental_result(preflight, as_json=args.json)
+            if not args.json:
+                print("== Operator experimental symbol import (sanitized) ==")
+                print(f"  required age : {preflight['required_identity']['pdb_age']}")
+                print(f"  observed age : {preflight['observed_identity']['pdb_age']}")
+                print(f"  sha256       : {preflight['sha256']}")
+                print(f"  size_bytes   : {preflight['size_bytes']}")
+            if not prompt_for_confirmation("Type 'yes' to confirm, or Ctrl+C to abort: ", assume_yes=args.yes):
+                print("Aborted.")
+                return 1
+            result = cli_import_experimental_pdb_for_requirement(
+                db,
+                requirement_id=args.requirement_id,
+                file_path=Path(args.file),
+                operator_label=args.operator_label,
+                safe_override=args.safe_override,
+                dry_run=False,
+            )
+    except ExperimentalImportError as exc:
+        return _cli_print_experimental_result(
+            {"status": "import_rejected", "error_code": exc.code, "sanitized_message": exc.message},
+            as_json=args.json,
+        )
+    return _cli_print_experimental_result(result, as_json=args.json)
+
+
+def cmd_import_experimental_isf(args: argparse.Namespace) -> int:
+    from pathlib import Path
+    from app.cli.memory_symbols_runtime import prompt_for_confirmation
+
+    try:
+        with SessionLocal() as db:
+            preflight = cli_import_experimental_isf_for_requirement(
+                db,
+                requirement_id=args.requirement_id,
+                file_path=Path(args.file),
+                operator_label=args.operator_label,
+                safe_override=args.safe_override,
+                dry_run=True,
+            )
+            if args.dry_run:
+                return _cli_print_experimental_result(preflight, as_json=args.json)
+            if not args.json:
+                print("== Operator experimental ISF import (sanitized) ==")
+                print(f"  required age : {preflight['required_identity']['pdb_age']}")
+                print(f"  observed age : {preflight['observed_identity']['pdb_age']}")
+                print(f"  sha256       : {preflight['sha256']}")
+                print(f"  size_bytes   : {preflight['size_bytes']}")
+            if not prompt_for_confirmation("Type 'yes' to confirm, or Ctrl+C to abort: ", assume_yes=args.yes):
+                print("Aborted.")
+                return 1
+            result = cli_import_experimental_isf_for_requirement(
+                db,
+                requirement_id=args.requirement_id,
+                file_path=Path(args.file),
+                operator_label=args.operator_label,
+                safe_override=args.safe_override,
+                dry_run=False,
+            )
+    except ExperimentalImportError as exc:
+        return _cli_print_experimental_result(
+            {"status": "import_rejected", "error_code": exc.code, "sanitized_message": exc.message},
+            as_json=args.json,
+        )
+    return _cli_print_experimental_result(result, as_json=args.json)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m app.cli.memory_symbols",
@@ -960,6 +1184,74 @@ def build_parser() -> argparse.ArgumentParser:
     p_status_req.add_argument("--requirement-id", required=True, help="MemorySymbolRequirement UUID.")
     p_status_req.add_argument("--json", action="store_true", help="Emit structured JSON output.")
     p_status_req.set_defaults(func=cmd_status_requirement)
+
+    # ------------------------------------------------------------------
+    # Experimental mismatched-symbol analysis
+    # ------------------------------------------------------------------
+    p_inspect_exp_pdb = sub.add_parser(
+        "inspect-experimental-pdb",
+        help="Inspect a mismatched experimental PDB against a stored requirement.",
+    )
+    p_inspect_exp_pdb.add_argument("--file", required=True)
+    p_inspect_exp_pdb.add_argument("--requirement-id", required=True)
+    p_inspect_exp_pdb.add_argument("--json", action="store_true")
+    p_inspect_exp_pdb.add_argument("--safe-override", action="store_true")
+    p_inspect_exp_pdb.set_defaults(func=cmd_inspect_experimental_pdb)
+
+    p_import_exp_pdb = sub.add_parser(
+        "import-experimental-pdb",
+        help="Import a mismatched experimental PDB for a stored requirement.",
+    )
+    p_import_exp_pdb.add_argument("--file", required=True)
+    p_import_exp_pdb.add_argument("--requirement-id", required=True)
+    p_import_exp_pdb.add_argument("--operator-label", required=True)
+    p_import_exp_pdb.add_argument("--dry-run", action="store_true")
+    p_import_exp_pdb.add_argument("--yes", action="store_true")
+    p_import_exp_pdb.add_argument("--json", action="store_true")
+    p_import_exp_pdb.add_argument("--safe-override", action="store_true")
+    p_import_exp_pdb.set_defaults(func=cmd_import_experimental_pdb)
+
+    p_import_exp_isf = sub.add_parser(
+        "import-experimental-isf",
+        help="Import a mismatched experimental ISF for a stored requirement.",
+    )
+    p_import_exp_isf.add_argument("--file", required=True)
+    p_import_exp_isf.add_argument("--requirement-id", required=True)
+    p_import_exp_isf.add_argument("--operator-label", required=True)
+    p_import_exp_isf.add_argument("--dry-run", action="store_true")
+    p_import_exp_isf.add_argument("--yes", action="store_true")
+    p_import_exp_isf.add_argument("--json", action="store_true")
+    p_import_exp_isf.add_argument("--safe-override", action="store_true")
+    p_import_exp_isf.set_defaults(func=cmd_import_experimental_isf)
+
+    p_register_exp = sub.add_parser(
+        "register-experimental-candidate",
+        help=(
+            "Register an existing exact candidate cache row as an "
+            "experimental mismatched-symbol candidate.  The candidate "
+            "is NEVER linked to the exact symbol path.  Requires the "
+            "experimental feature flag to be enabled."
+        ),
+    )
+    p_register_exp.add_argument("--case-id", required=True)
+    p_register_exp.add_argument("--evidence-id", required=True)
+    p_register_exp.add_argument("--cached-symbol-id", required=True)
+    p_register_exp.add_argument(
+        "--source-host-path", default=None,
+        help="Audit-only.  Where the file lived on the host.  Never used for I/O.",
+    )
+    p_register_exp.add_argument("--actor", default="server-operator")
+    p_register_exp.add_argument("--json", action="store_true")
+    p_register_exp.set_defaults(func=cmd_register_experimental_candidate)
+
+    p_status_exp = sub.add_parser(
+        "status-experimental",
+        help="Return the experimental trust state for a case/evidence pair.",
+    )
+    p_status_exp.add_argument("--case-id", required=True)
+    p_status_exp.add_argument("--evidence-id", required=True)
+    p_status_exp.add_argument("--json", action="store_true")
+    p_status_exp.set_defaults(func=cmd_status_experimental)
 
     return parser
 
