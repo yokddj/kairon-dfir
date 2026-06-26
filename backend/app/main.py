@@ -176,6 +176,30 @@ def on_startup() -> None:
         logger.warning("memory preparation state reconciliation skipped: %s", exc)
     finally:
         db.close()
+    # Native probe stale reconciliation: queued probes with
+    # missing jobs and running probes with expired heartbeats are
+    # marked failed so retry is possible.
+    from app.services.memory.native_probe import (
+        reconcile_stale_probes,
+        schedule_periodic_reconciliation_if_needed,
+    )
+
+    db = SessionLocal()
+    try:
+        stale_count = reconcile_stale_probes(db)
+        if stale_count > 0:
+            logger.info("native probe stale reconciliation: %d", stale_count)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("native probe stale reconciliation skipped: %s", exc)
+    finally:
+        db.close()
+
+    try:
+        scheduled = schedule_periodic_reconciliation_if_needed()
+        if scheduled:
+            logger.info("native probe periodic reconciliation scheduled")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("native probe periodic reconciliation scheduling skipped: %s", exc)
 
 
 @app.get("/health")

@@ -1054,3 +1054,84 @@ class MemoryExperimentalRun(UUIDMixin, Base):
         primaryjoin="foreign(MemoryScanRun.experimental_run_id)==MemoryExperimentalRun.id",
         viewonly=True,
     )
+
+
+NATIVE_PROBE_STATUSES = {
+    "queued",
+    "running",
+    "compatible",
+    "incompatible",
+    "failed",
+    "timeout",
+}
+
+
+class MemoryNativeProbe(UUIDMixin, Base):
+    """A bounded Volatility-native compatibility probe for a Windows requirement.
+
+    When Kairon's internal PDB parser reports an age mismatch (e.g. required=1,
+    observed=5) that would normally produce ``blocked_symbols``, this probe
+    runs the pinned Volatility engine against the evidence using the symbol
+    downloaded through the approved egress gateway.  If Volatility succeeds and
+    produces structurally valid output, the evidence is marked compatible and
+    normal validated analysis can proceed.
+    """
+
+    __tablename__ = "memory_native_probes"
+
+    case_id: Mapped[str] = mapped_column(
+        ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    evidence_id: Mapped[str] = mapped_column(
+        ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    requirement_id: Mapped[str] = mapped_column(
+        ForeignKey("memory_symbol_requirements.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    status: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="queued", index=True
+    )
+    queue_job_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    vol_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    plugin: Mapped[str] = mapped_column(String(128), nullable=False, default="windows.pslist.PsList")
+    exit_code: Mapped[int | None] = mapped_column(nullable=True)
+
+    output_row_count: Mapped[int | None] = mapped_column(nullable=True)
+    output_hash: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    sanitized_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    structural_validation: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
+
+    heartbeat_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    started_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    completed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=False), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=False), nullable=False, default=utc_now_naive
+    )
+
+    __table_args__ = (
+        Index("ix_memory_native_probe_evidence", "case_id", "evidence_id"),
+        Index("ix_memory_native_probe_status", "status"),
+        Index(
+            "uq_memory_native_probe_active",
+            "evidence_id",
+            unique=True,
+            postgresql_where=sa.text(
+                "status IN ('queued', 'running')"
+            ),
+            sqlite_where=sa.text(
+                "status IN ('queued', 'running')"
+            ),
+        ),
+    )
+
+    case = relationship("Case")
+    evidence = relationship("Evidence")
+    requirement = relationship("MemorySymbolRequirement")

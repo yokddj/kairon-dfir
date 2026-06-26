@@ -711,6 +711,8 @@ export type MemorySymbolPreparation = {
   pending_intent_kind: "single_profile" | "run_all" | null;
   link_source: string | null;
   content_reused_by_hash: boolean;
+  native_compatible?: boolean;
+  native_compatibility_reason?: string | null;
   // Latest acquisition summary surfaced by the canonical preparation
   // endpoint.  The card uses the ``error_code`` to render the
   // structured failure panel and the ``identity_expected`` /
@@ -720,6 +722,21 @@ export type MemorySymbolPreparation = {
   // Top-level error code propagated from the latest acquisition.
   // The card surfaces this to drive the identity-mismatch title.
   error_code?: string | null;
+};
+
+export type NativeProbeStatus = {
+  probe_id: string | null;
+  status: "never_run" | "queued" | "running" | "compatible" | "incompatible" | "failed" | "timeout";
+  plugin?: string;
+  vol_version?: string;
+  exit_code?: number;
+  output_row_count?: number;
+  structural_validation?: Record<string, unknown>;
+  sanitized_error?: string;
+  started_at?: string;
+  completed_at?: string;
+  compatible?: boolean;
+  compatibility_details?: Record<string, unknown>;
 };
 
 // Exact Symbol Recovery Sources v1 — types
@@ -4430,6 +4447,15 @@ export const api = {
     request<MemorySymbolReadiness>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbol-readiness`),
   getMemorySymbolPreparation: (caseId: string, evidenceId: string) =>
     request<MemorySymbolPreparation>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbol-preparation`),
+  startNativeProbe: (caseId: string, evidenceId: string) =>
+    request<{ probe_id: string; status: string; plugin: string; requirement_id: string }>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/native-probe`,
+      { method: "POST", body: JSON.stringify({}) },
+    ),
+  getNativeProbeStatus: (caseId: string, evidenceId: string) =>
+    request<Record<string, unknown>>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/native-probe`,
+    ),
   retryMemorySymbolPreparation: (caseId: string, evidenceId: string) =>
     request<MemorySymbolPreparation>(
       `/cases/${caseId}/memory/evidences/${evidenceId}/symbol-preparation/retry`,

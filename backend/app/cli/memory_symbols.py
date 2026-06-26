@@ -906,6 +906,87 @@ def cmd_status_experimental(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_native_probe(args: argparse.Namespace) -> int:
+    """Run or dry-run a Volatility-native compatibility probe."""
+    from app.core.config import get_settings
+    from app.services.memory.native_probe import (
+        NativeProbeError,
+        queue_native_probe,
+    )
+    from app.services.memory.symbol_blocked_acquisition import (
+        load_active_requirement,
+    )
+
+    with SessionLocal() as db:
+        requirement = load_active_requirement(
+            db, case_id=args.case_id, evidence_id=args.evidence_id,
+        )
+        if requirement is None:
+            print("No active Windows symbol requirement for this evidence.", file=sys.stderr)
+            return 1
+
+        settings = get_settings()
+        diag = {
+            "vol_version": "2.28.0",
+            "executable": "vol",
+            "plugin": args.plugin,
+            "renderer": "json",
+            "offline": False,
+            "force_isf": False,
+            "effective_cache_root": str(settings.memory_native_probe_cache_path),
+            "timeout_seconds": settings.memory_native_probe_timeout_seconds,
+            "max_output_bytes": settings.memory_native_probe_max_output_bytes,
+            "queue": settings.memory_native_probe_queue_name,
+            "effective_command": (
+                f"vol -f <canonical-evidence-path> -r json {args.plugin}"
+            ),
+            "requirement": {
+                "pdb_name": requirement.pdb_name,
+                "pdb_guid": requirement.pdb_guid,
+                "pdb_age": int(requirement.pdb_age),
+                "architecture": requirement.architecture,
+            },
+        }
+
+        if args.dry_run:
+            diag["mode"] = "dry_run"
+            if args.json:
+                _print_json(diag)
+            else:
+                print("Effective native probe configuration:")
+                for key, value in diag.items():
+                    print(f"  {key:>24}: {value}")
+            return 0
+
+        if not args.execute:
+            print("Pass --dry-run or --execute.", file=sys.stderr)
+            return 1
+
+        diag["mode"] = "execute"
+        try:
+            probe = queue_native_probe(
+                db,
+                case_id=args.case_id,
+                evidence_id=args.evidence_id,
+                requirement_id=str(requirement.id),
+                actor="operator_cli",
+            )
+            diag["probe_id"] = str(probe.id)
+            diag["status"] = "queued"
+            if args.json:
+                _print_json(diag)
+            else:
+                print(f"Native probe enqueued: {probe.id}")
+        except NativeProbeError as exc:
+            if args.json:
+                _print_json({"error": exc.code, "message": exc.message})
+            else:
+                print(f"Error: {exc.code} - {exc.message}", file=sys.stderr)
+            return 1
+
+    return 0
+
+
 def cmd_inspect_experimental_pdb(args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -1252,6 +1333,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_status_exp.add_argument("--evidence-id", required=True)
     p_status_exp.add_argument("--json", action="store_true")
     p_status_exp.set_defaults(func=cmd_status_experimental)
+
+    p_native_probe = sub.add_parser(
+        "native-probe",
+        help="Run or dry-run a Volatility-native compatibility probe "
+        "for a Windows requirement.",
+    )
+    p_native_probe.add_argument("--case-id", required=True)
+    p_native_probe.add_argument("--evidence-id", required=True)
+    p_native_probe.add_argument(
+        "--plugin",
+        default="windows.pslist.PsList",
+        help="Volatility plugin to use for compatibility validation.",
+    )
+    p_native_probe.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the effective configuration only; do not run the probe.",
+    )
+    p_native_probe.add_argument(
+        "--execute",
+        action="store_true",
+        help="Execute the probe (creates DB row, enqueues worker task).",
+    )
+    p_native_probe.add_argument("--json", action="store_true")
+    p_native_probe.set_defaults(func=cmd_native_probe)
 
     return parser
 

@@ -730,6 +730,40 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
     execute_memory_metadata_scan(memory_scan_run_id)
 
 
+def enqueue_native_probe(probe_id: str) -> str:
+    timeout = max(60, int(settings.memory_native_probe_timeout_seconds))
+    native_queue = Queue(settings.memory_native_probe_queue_name, connection=redis_conn)
+    job = native_queue.enqueue(
+        "app.workers.tasks.run_native_probe",
+        probe_id,
+        job_timeout=timeout,
+    )
+    return job.id
+
+
+def run_native_probe(probe_id: str) -> str:
+    from app.services.memory.native_probe import execute_native_probe
+
+    return execute_native_probe(probe_id)
+
+
+def _enqueue_native_probe_reconciliation() -> str:
+    """Enqueue a periodic reconciliation task on the native probe queue."""
+    timeout = max(30, int(settings.memory_native_probe_timeout_seconds // 10))
+    native_queue = Queue(settings.memory_native_probe_queue_name, connection=redis_conn)
+    job = native_queue.enqueue(
+        "app.workers.tasks._run_native_probe_reconciliation",
+        job_timeout=timeout,
+    )
+    return job.id
+
+
+def _run_native_probe_reconciliation() -> str:
+    from app.services.memory.native_probe import run_periodic_reconciliation
+
+    return run_periodic_reconciliation()
+
+
 def _metadata_phase_timings_snapshot(metadata: dict) -> list[dict]:
     snapshot = [dict(item) for item in metadata.get("phase_timings") or [] if isinstance(item, dict)]
     current = metadata.get("current_phase_timing")

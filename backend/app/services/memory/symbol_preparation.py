@@ -647,6 +647,8 @@ class MemoryReadiness:
     pending_intent_kind: str | None  # "single_profile" | "run_all" | None
     link_source: str | None
     content_reused_by_hash: bool
+    native_compatible: bool = False
+    native_compatibility_reason: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -656,6 +658,8 @@ class MemoryReadiness:
             "requirement": self.requirement,
             "cache_status": self.cache_status,
             "exact_match": self.exact_match,
+            "native_compatible": self.native_compatible,
+            "native_compatibility_reason": self.native_compatibility_reason,
             "pending_request_id": self.pending_request_id,
             "blocker": self.blocker,
             "sanitized_message": self.sanitized_message,
@@ -802,6 +806,8 @@ def compute_memory_readiness(
                     requirement_row = _legacy_to_requirement(legacy)
         except Exception:  # noqa: BLE001
             pass
+    native_compat = False
+    native_reason = None
     ui_state = ui_state_for(preparation_state)
     if preparation_state == PREP_READY:
         can_analyze = True
@@ -833,6 +839,28 @@ def compute_memory_readiness(
         can_run_all = False
         blocker = "This image is not a supported Windows memory image."
         sanitized = blocker
+    elif preparation_state == PREP_BLOCKED_SYMBOLS:
+        native = None
+        if requirement_row is not None:
+            from app.services.memory.native_probe import check_native_compatibility
+            native = check_native_compatibility(
+                db, evidence_id=evidence.id, requirement_id=requirement_row.id
+            )
+        if native and native.get("compatible"):
+            can_analyze = True
+            can_run_all = True
+            blocker = None
+            sanitized = (
+                "Volatility successfully resolved and validated the Windows "
+                "symbols for this evidence."
+            )
+            native_compat = True
+            native_reason = native.get("reason")
+        else:
+            can_analyze = False
+            can_run_all = False
+            blocker = "Windows symbols are not ready yet."
+            sanitized = blocker
     elif preparation_state in {PREP_ACQUISITION_FAILED, PREP_CANCELLED}:
         can_analyze = False
         can_run_all = False
@@ -863,6 +891,8 @@ def compute_memory_readiness(
         requirement=requirement_dict,
         cache_status=cache_status,
         exact_match=exact_match,
+        native_compatible=native_compat,
+        native_compatibility_reason=native_reason,
         pending_request_id=None,
         blocker=blocker,
         sanitized_message=sanitized,
@@ -1166,6 +1196,24 @@ def resolve_effective_memory_preparation_state(
         new_state = PREP_READY
         new_progress = 100
         source_of_truth = "successful_metadata_run"
+    elif persisted_state == PREP_BLOCKED_SYMBOLS:
+        # Check if a volatility-native probe has marked this
+        # evidence compatible.  The native probe successfully ran
+        # stock Volatility with full automagic against the real
+        # evidence.
+        from app.services.memory.native_probe import check_native_compatibility
+
+        req_id = prep.requirement_id if prep is not None else None
+        if req_id:
+            native = check_native_compatibility(
+                db, evidence_id=evidence_id, requirement_id=req_id,
+            )
+            if native and native.get("compatible"):
+                new_state = PREP_READY
+                new_progress = 100
+                source_of_truth = "volatility_native_compatible"
+    if new_state is not None:
+        pass  # fall through to state reconciliation below
     elif task_alive:
         # 4: the RQ worker is still working on this row.  We do
         # NOT touch the persisted state; the worker will.

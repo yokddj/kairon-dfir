@@ -203,6 +203,23 @@ export default function MemoryEvidencePage() {
     },
   });
   const symbolPreparation = symbolPreparationQuery.data ?? null;
+
+  const nativeProbeQuery = useQuery({
+    queryKey: ["native-probe", caseId, evidenceId],
+    queryFn: () => api.getNativeProbeStatus(caseId, evidenceId),
+    enabled: Boolean(caseId && evidenceId && symbolPreparation
+      && (symbolPreparation.effective_state || symbolPreparation.ui_state) === "blocked_symbols"),
+    refetchOnWindowFocus: false,
+    refetchInterval: (query) => {
+      const data = query.state.data as { status?: string } | undefined;
+      const status = data?.status;
+      if (status === "queued" || status === "running") {
+        return 3_000;
+      }
+      return false;
+    },
+  });
+
   const showExperimentalPanel =
     Boolean(symbolPreparation) &&
     (symbolPreparation?.effective_state || symbolPreparation?.ui_state) === "blocked_symbols";
@@ -286,6 +303,7 @@ export default function MemoryEvidencePage() {
           caseId={caseId}
           evidenceId={evidenceId}
           preparation={symbolPreparation}
+          nativeProbeStatus={nativeProbeQuery.data ?? null}
         />
       ) : null}
 

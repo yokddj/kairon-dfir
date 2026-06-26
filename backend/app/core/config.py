@@ -259,6 +259,32 @@ class Settings(BaseSettings):
     # warning text verbatim.  The default is the canonical
     # "experimental-mismatch-ack-v1" string.
     memory_experimental_ack_warning_version: str = "experimental-mismatch-ack-v1"
+    # Volatility-native compatibility probe.  When a Windows
+    # requirement is blocked because the internal PDB parser reports
+    # an age mismatch, the native probe runs the pinned Volatility
+    # engine to test whether the symbol material is actually usable.
+    # If Volatility succeeds, normal validated analysis can proceed
+    # with readiness reason ``VOLATILITY_NATIVE_SYMBOL_COMPATIBLE``.
+    memory_native_probe_enabled: bool = False
+    memory_native_probe_timeout_seconds: int = 600
+    memory_native_probe_max_output_bytes: int = 10485760
+    memory_native_probe_plugin: str = "windows.pslist.PsList"
+    memory_native_probe_malformed_row_ratio: float = 0.5
+    memory_native_probe_min_process_rows: int = 3
+    memory_native_probe_cache_root: str = "/volatility-cache/volatility3"
+    memory_native_probe_task_queue: str = "memory-native-probe"
+    memory_native_probe_stale_seconds: int = 900
+    memory_native_probe_worker_concurrency: int = 1
+
+    @property
+    def memory_native_probe_cache_path(self) -> Path:
+        value = str(self.memory_native_probe_cache_root or "").strip()
+        return Path(value) if value else Path("/volatility-cache/volatility3")
+
+    @property
+    def memory_native_probe_queue_name(self) -> str:
+        value = str(self.memory_native_probe_task_queue or "memory-native-probe").strip()
+        return value if value else "memory-native-probe"
     backend_max_extracted_files: int = 50000
     backend_max_extracted_bytes: int = 10737418240
     backend_data_dir: Path = Path("/app/data")

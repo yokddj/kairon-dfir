@@ -55,7 +55,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
-from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition, MemorySymbolRequirement
+from app.models.memory import MemoryArtifactSummary, MemoryNativeProbe, MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition, MemorySymbolRequirement
 from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolBlockedAcquireRequest, MemorySymbolBlockedAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
 from app.services.memory.artifact_indexing import (
     get_artifact_document,
@@ -1558,6 +1558,22 @@ def reconcile_all_memory_preparations_endpoint(
     max_evidences = int(payload.get("max_evidences", 200))
     stats = reconcile_memory_preparation_states(db, max_evidences=max_evidences)
     return stats
+
+
+@router.post("/memory/native-probes/reconcile", response_model=None)
+def reconcile_native_probes_endpoint(
+    db: Session = Depends(get_db),
+) -> dict:
+    """Reconcile stale native probes.  Idempotent."""
+    from app.services.memory.native_probe import (
+        reconcile_stale_probes,
+        reconciliation_diagnostics,
+    )
+
+    count = reconcile_stale_probes(db)
+    return {"reconciled": count, "diagnostics": reconciliation_diagnostics()}
+
+
 def get_memory_runs(
     case_id: str,
     evidence_id: str | None = Query(default=None),
@@ -1642,6 +1658,8 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
         elif symbol_state_obj.requirement is None:
             # Allow the user to press "Run analysis" once; the
             # resulting run will probe the requirement itself.
+            pass
+        elif _is_native_compatible(db, evidence_id=evidence.id, requirement=symbol_state_obj.requirement):
             pass
         else:
             available, gate_code, _ = acquisition_gate()
@@ -2844,6 +2862,20 @@ def get_memory_artifact_detail(
     }
 
 
+def _is_native_compatible(db: Session, *, evidence_id: str, requirement) -> bool:
+    """Return True when a successful native probe makes this evidence analysis-ready."""
+    from app.services.memory.native_probe import check_native_compatibility
+
+    try:
+        req_id = str(requirement.id) if requirement else None
+    except Exception:
+        return False
+    if not req_id:
+        return False
+    result = check_native_compatibility(db, evidence_id=evidence_id, requirement_id=req_id)
+    return bool(result and result.get("compatible"))
+
+
 def _require_run_or_any(case_id: str, run_id: str | None) -> None:
     """Light validation: the index may not exist yet, so we only check
     the run_id shape.  The search helpers tolerate missing indexes.
@@ -2925,3 +2957,149 @@ def get_recovery_capabilities(
     }
     if run_id is not None and not isinstance(run_id, str):
         raise HTTPException(status_code=400, detail="run_id must be a string.")
+
+
+# ---------------------------------------------------------------------------
+# Volatility-native compatibility probe
+# ---------------------------------------------------------------------------
+
+
+from pydantic import BaseModel as _NativeProbeBaseModel
+
+
+class NativeProbeRequest(_NativeProbeBaseModel):
+    plugin: str | None = None
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/native-probe",
+    response_model=None,
+    status_code=201,
+)
+def start_native_probe(
+    case_id: str,
+    evidence_id: str,
+    payload: NativeProbeRequest = NativeProbeRequest(),
+    db=Depends(get_db),
+):
+    from app.services.memory.native_probe import (
+        NativeProbeError,
+        queue_native_probe,
+    )
+    from app.services.memory.symbol_blocked_acquisition import (
+        load_active_requirement,
+    )
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    requirement = load_active_requirement(
+        db, case_id=case_id, evidence_id=evidence_id,
+    )
+    if requirement is None:
+        raise HTTPException(
+            status_code=404,
+            detail={
+                "error_code": "NATIVE_PROBE_REQUIREMENT_MISSING",
+                "message": "No Windows symbol requirement exists for this evidence.",
+            },
+        )
+    try:
+        probe = queue_native_probe(
+            db,
+            case_id=case_id,
+            evidence_id=evidence_id,
+            requirement_id=str(requirement.id),
+        )
+    except NativeProbeError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={"error_code": exc.code, "message": exc.message},
+        )
+    return {
+        "probe_id": str(probe.id),
+        "status": probe.status,
+        "plugin": probe.plugin,
+        "requirement_id": str(requirement.id),
+        "required_pdb_name": requirement.pdb_name,
+        "required_pdb_guid": requirement.pdb_guid,
+        "required_pdb_age": int(requirement.pdb_age),
+    }
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/native-probe",
+    response_model=None,
+)
+def get_native_probe_status(
+    case_id: str,
+    evidence_id: str,
+    db=Depends(get_db),
+):
+    from app.core.config import get_settings
+    from app.services.memory.native_probe import (
+        check_native_compatibility,
+        schedule_periodic_reconciliation_if_needed as _try_schedule,
+    )
+    from app.services.memory.symbol_blocked_acquisition import (
+        load_active_requirement,
+    )
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    try:
+        _try_schedule()
+    except Exception:
+        pass
+    settings = get_settings()
+    requirement = load_active_requirement(
+        db, case_id=case_id, evidence_id=evidence_id,
+    )
+
+    diag = {
+        "vol_version": "2.28.0",
+        "executable": "vol",
+        "renderer": "json",
+        "offline_flag": False,
+        "forced_isf": False,
+        "effective_cache_root": str(settings.memory_native_probe_cache_path),
+        "queue": settings.memory_native_probe_queue_name,
+    }
+
+    probe = (
+        db.query(MemoryNativeProbe)
+        .filter(
+            MemoryNativeProbe.evidence_id == evidence_id,
+        )
+        .order_by(MemoryNativeProbe.created_at.desc())
+        .first()
+    )
+    if probe is None:
+        if requirement is not None:
+            compat = check_native_compatibility(
+                db, evidence_id=evidence_id, requirement_id=str(requirement.id),
+            )
+            if compat:
+                return {"compatible": True, "details": compat, **diag}
+        return {"probe_id": None, "status": "never_run", **diag}
+
+    result = {
+        "probe_id": str(probe.id),
+        "status": probe.status,
+        "plugin": probe.plugin,
+        "vol_version": probe.vol_version,
+        "exit_code": probe.exit_code,
+        "output_row_count": probe.output_row_count,
+        "structural_validation": probe.structural_validation,
+        "sanitized_error": probe.sanitized_error,
+        "started_at": probe.started_at.isoformat() if probe.started_at else None,
+        "completed_at": probe.completed_at.isoformat() if probe.completed_at else None,
+        **diag,
+    }
+    if requirement is not None:
+        compat = check_native_compatibility(
+            db, evidence_id=evidence_id, requirement_id=str(requirement.id),
+        )
+        if compat:
+            result["compatible"] = True
+            result["compatibility_details"] = compat
+    return result

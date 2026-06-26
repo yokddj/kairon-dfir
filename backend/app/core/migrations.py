@@ -1747,3 +1747,97 @@ def _inspector_for(connection: Connection):
     from sqlalchemy import inspect
 
     return inspect(connection)
+
+
+# ---------------------------------------------------------------------------
+# v18: Volatility-native compatibility probe table
+# ---------------------------------------------------------------------------
+
+
+@register(18, "volatility_native_probe_table")
+def _v18_native_probe(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    existing_tables = inspector.get_table_names()
+
+    if "memory_native_probes" not in existing_tables:
+        connection.execute(
+            text(
+                """
+                CREATE TABLE memory_native_probes (
+                    id VARCHAR NOT NULL,
+                    case_id VARCHAR NOT NULL,
+                    evidence_id VARCHAR NOT NULL,
+                    requirement_id VARCHAR NOT NULL,
+                    status VARCHAR(32) NOT NULL DEFAULT 'queued',
+                    queue_job_id VARCHAR(128),
+                    vol_version VARCHAR(64),
+                    plugin VARCHAR(128) NOT NULL DEFAULT 'windows.pslist.PsList',
+                    exit_code INTEGER,
+                    output_row_count INTEGER,
+                    output_hash VARCHAR(128),
+                    sanitized_error VARCHAR(1024),
+                    structural_validation JSON,
+                    heartbeat_at TIMESTAMP,
+                    started_at TIMESTAMP,
+                    completed_at TIMESTAMP,
+                    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (id),
+                    CONSTRAINT fk_native_probe_case FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE CASCADE,
+                    CONSTRAINT fk_native_probe_evidence FOREIGN KEY (evidence_id) REFERENCES evidences(id) ON DELETE CASCADE,
+                    CONSTRAINT fk_native_probe_requirement FOREIGN KEY (requirement_id) REFERENCES memory_symbol_requirements(id) ON DELETE CASCADE
+                )
+                """
+            )
+        )
+        logger.info("v18: created memory_native_probes table")
+
+    # Create indexes (idempotent via savepoints)
+    for index_sql, index_name in [
+        (
+            "CREATE INDEX IF NOT EXISTS ix_memory_native_probe_evidence "
+            "ON memory_native_probes (case_id, evidence_id)",
+            "ix_memory_native_probe_evidence",
+        ),
+        (
+            "CREATE INDEX IF NOT EXISTS ix_memory_native_probe_status "
+            "ON memory_native_probes (status)",
+            "ix_memory_native_probe_status",
+        ),
+    ]:
+        try:
+            savepoint = connection.begin_nested()
+            connection.execute(text(index_sql))
+            savepoint.commit()
+        except Exception as exc:
+            savepoint.rollback()
+            logger.info(
+                "v18: index %s not created on %s (%s)",
+                index_name, connection.engine.dialect.name, exc,
+            )
+
+    # Partial unique index: one active probe per evidence
+    dialect = connection.engine.dialect.name
+    if dialect == "sqlite":
+        active_index_sql = (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_native_probe_active "
+            "ON memory_native_probes (evidence_id) "
+            "WHERE status IN ('queued', 'running')"
+        )
+    else:
+        active_index_sql = (
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_native_probe_active "
+            "ON memory_native_probes (evidence_id) "
+            "WHERE status IN ('queued', 'running')"
+        )
+    try:
+        savepoint = connection.begin_nested()
+        connection.execute(text(active_index_sql))
+        savepoint.commit()
+    except Exception as exc:
+        savepoint.rollback()
+        logger.info(
+            "v18: active probe uniqueness not created on %s (%s)",
+            dialect, exc,
+        )
+
+    logger.info("v18: volatility native probe table migration complete")
