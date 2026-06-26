@@ -434,10 +434,10 @@ def cli_import_experimental_pdb_for_requirement(
     try:
         staged_pdb = _stage_to_quarantine(source, suffix=".pdb")
         identity = SymbolIdentity(
-            inspection["observed_identity"]["pdb_name"],
-            inspection["observed_identity"]["pdb_guid"],
-            int(inspection["observed_identity"]["pdb_age"]),
-            inspection["observed_identity"]["architecture"],
+            requirement.pdb_name,
+            requirement.pdb_guid,
+            int(requirement.pdb_age),
+            requirement.architecture,
         )
         staged_isf = _quarantine_root() / f"{uuid4().hex}.json.xz"
         generate_isf(
