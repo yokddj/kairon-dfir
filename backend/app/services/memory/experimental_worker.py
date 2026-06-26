@@ -89,7 +89,7 @@ def _ensure_scan_run(
 ) -> MemoryScanRun:
     scan_run = (
         db.query(MemoryScanRun)
-        .filter(MemoryScanRun.experimental_run_id == run.id, MemoryScanRun.profile == profile)
+        .filter(MemoryScanRun.experimental_run_id == str(run.id), MemoryScanRun.profile == profile)
         .order_by(MemoryScanRun.created_at.desc())
         .first()
     )
