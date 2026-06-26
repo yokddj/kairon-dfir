@@ -619,6 +619,62 @@ def cancel_pending(
 
 
 # -----------------------------------------------------------------------------
+# Canonical authorization
+# -----------------------------------------------------------------------------
+
+
+def _load_native_compat(
+    db: Session,
+    evidence: Evidence,
+    requirement_row: MemorySymbolRequirement | None,
+) -> tuple[bool, str | None]:
+    if requirement_row is None:
+        return False, None
+    from app.services.memory.native_probe import check_native_compatibility
+
+    native = check_native_compatibility(
+        db, evidence_id=evidence.id, requirement_id=requirement_row.id
+    )
+    if native and native.get("compatible"):
+        return True, native.get("reason")
+    return False, None
+
+
+def can_execute_validated_memory_analysis(
+    db: Session,
+    *,
+    evidence_id: str,
+) -> tuple[bool, str, str | None]:
+    """Canonical authorization for validated memory analysis.
+
+    Returns ``(allowed, readiness_source, blocker)``.  Accepts
+    evidence when any supported validated path is ready:
+
+    1. Exact symbols present in the cache.
+    2. Volatility native compatibility confirmed.
+    3. Successful validated metadata preparation already established.
+
+    The caller may use ``readiness_source`` to tailor the UI message.
+    """
+    from app.models.evidence import Evidence
+
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None:
+        return False, "blocked", "Evidence not found."
+
+    readiness = compute_memory_readiness(db, evidence=evidence)
+    if readiness.can_analyze_metadata:
+        if readiness.native_compatible:
+            return True, "volatility_native_compatible", None
+        if readiness.exact_match:
+            return True, "exact_cache_hit", None
+        return True, "prior_metadata_preparation", None
+    if readiness.preparation_state == "blocked_symbols":
+        return False, "blocked_symbols", readiness.blocker or readiness.sanitized_message or "Windows symbols are not ready for this evidence."
+    return False, "blocked", readiness.blocker or readiness.sanitized_message or "Windows symbols are not ready."
+
+
+# -----------------------------------------------------------------------------
 # Top-level readiness
 # -----------------------------------------------------------------------------
 
@@ -806,19 +862,21 @@ def compute_memory_readiness(
                     requirement_row = _legacy_to_requirement(legacy)
         except Exception:  # noqa: BLE001
             pass
-    native_compat = False
-    native_reason = None
+    native_compat, native_reason = _load_native_compat(db, evidence, requirement_row)
     ui_state = ui_state_for(preparation_state)
-    if preparation_state == PREP_READY:
+    if preparation_state == PREP_READY or preparation_state in {PREP_CACHE_HIT}:
         can_analyze = True
         can_run_all = True
         blocker: str | None = None
-        sanitized = "The exact required Windows symbols are present in the cache."
-    elif preparation_state in {PREP_CACHE_HIT}:
-        can_analyze = True
-        can_run_all = True
-        blocker = None
-        sanitized = "The exact required Windows symbols are present in the cache."
+        if native_compat:
+            sanitized = (
+                "Volatility native compatibility confirmed. "
+                "The evidence is ready for validated analysis."
+            )
+        elif exact_match:
+            sanitized = "The exact required Windows symbols are present in the cache."
+        else:
+            sanitized = "A successful metadata preparation already established readiness for this evidence."
     elif preparation_state in {PREP_PROBING, PREP_QUEUED, PREP_IDENTIFIED, PREP_ACQUISITION_PENDING, PREP_ACQUIRING, PREP_ISF_CREATION}:
         can_analyze = False
         can_run_all = False
@@ -840,13 +898,7 @@ def compute_memory_readiness(
         blocker = "This image is not a supported Windows memory image."
         sanitized = blocker
     elif preparation_state == PREP_BLOCKED_SYMBOLS:
-        native = None
-        if requirement_row is not None:
-            from app.services.memory.native_probe import check_native_compatibility
-            native = check_native_compatibility(
-                db, evidence_id=evidence.id, requirement_id=requirement_row.id
-            )
-        if native and native.get("compatible"):
+        if native_compat:
             can_analyze = True
             can_run_all = True
             blocker = None
@@ -854,8 +906,6 @@ def compute_memory_readiness(
                 "Volatility successfully resolved and validated the Windows "
                 "symbols for this evidence."
             )
-            native_compat = True
-            native_reason = native.get("reason")
         else:
             can_analyze = False
             can_run_all = False

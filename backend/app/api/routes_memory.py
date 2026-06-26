@@ -1640,40 +1640,32 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
                 ),
             },
         )
-    # Per-evidence Windows symbol preflight (single profile).  We
-    # refuse to enqueue a metadata_only run when the exact required
-    # symbol is not cached.  This is the path that previously
-    # produced the "server error" because it created a MemoryScanRun
-    # that immediately failed with SYMBOLS_UNAVAILABLE; we now block
-    # it before any run is created.
-    if profile == "metadata_only":
-        symbol_state_obj = evidence_symbol_state(
-            db,
-            case_id=evidence.case_id,
-            evidence_id=evidence.id,
-            acquisition_gate_available=False,
-        )
-        if symbol_state_obj.state == STATE_CACHED:
-            pass
-        elif symbol_state_obj.requirement is None:
-            # Allow the user to press "Run analysis" once; the
-            # resulting run will probe the requirement itself.
-            pass
-        elif _is_native_compatible(db, evidence_id=evidence.id, requirement=symbol_state_obj.requirement):
+    # Per-evidence symbol preflight.  Use the canonical readiness
+    # check so native-compatible evidence and prior successful
+    # metadata runs are treated as ready even when the exact symbol
+    # age does not match.  Profiling-only fallback: when no
+    # requirement has been recorded yet, allow metadata_only
+    # so the run probes the requirement itself.
+    from app.services.memory.symbol_preparation import can_execute_validated_memory_analysis
+    allowed, reason, blocker_message = can_execute_validated_memory_analysis(
+        db, evidence_id=evidence.id,
+    )
+    if not allowed:
+        # Allow metadata_only when no requirement exists yet; the
+        # run itself will probe and record the requirement.
+        if profile == "metadata_only" and not _any_requirement_for_evidence(db, evidence.id):
             pass
         else:
-            available, gate_code, _ = acquisition_gate()
+            available, _gate_code, _ = acquisition_gate()
             raise HTTPException(
                 status_code=409,
                 detail={
                     "error_code": EC_SYMBOLS_REQUIRED,
-                    "message": symbol_state_obj.blocker
-                    or "Windows symbols required for this evidence are not cached.",
+                    "message": blocker_message or "Windows symbols required for this evidence are not cached.",
                     "evidence_id": evidence.id,
-                    "symbol_status": symbol_state_obj.state,
-                    "can_acquire": bool(available and symbol_state_obj.acquisition_supported),
-                    "required_identifier": symbol_state_obj.requirement.identifier if symbol_state_obj.requirement else None,
-                    "blocker": symbol_state_obj.blocker,
+                    "symbol_status": "missing",
+                    "can_acquire": bool(available),
+                    "blocker": blocker_message,
                 },
             )
     backend_overview = get_memory_backend_overview()
@@ -2860,6 +2852,26 @@ def get_memory_artifact_detail(
         "fields": document,
         "provenance": document.get("provenance", {}),
     }
+
+
+def _any_requirement_for_evidence(db: Session, evidence_id: str) -> bool:
+    """Return True when at least one requirement is recorded for the evidence."""
+    from app.models.memory import MemorySymbolRequirement
+    from app.models.memory import MemoryEvidenceSymbolLink
+
+    link = (
+        db.query(MemoryEvidenceSymbolLink)
+        .filter(MemoryEvidenceSymbolLink.evidence_id == evidence_id)
+        .first()
+    )
+    if link and link.requirement_id:
+        return True
+    return (
+        db.query(MemorySymbolRequirement)
+        .filter(MemorySymbolRequirement.evidence_id == evidence_id)
+        .first()
+        is not None
+    )
 
 
 def _is_native_compatible(db: Session, *, evidence_id: str, requirement) -> bool:

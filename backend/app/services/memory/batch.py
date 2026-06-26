@@ -284,122 +284,88 @@ def create_run_all_batch(
             "Confirm the evidence type before running the batch.",
             status_code=409,
         )
-    # Per-evidence Windows symbol preflight.  The batch MUST NOT be
-    # created if the exact required symbol is not cached **and** a
-    # requirement has already been recorded for this evidence.  When
-    # no requirement has been recorded yet the metadata_only
-    # profile IS the probe that records the requirement; we allow
-    # the batch to proceed so the analyst can run metadata_only
-    # once.  After that run finishes, the requirement is recorded
-    # and the next batch attempt is blocked with
-    # MEMORY_SYMBOLS_REQUIRED until symbols are acquired.
-    from app.services.memory.symbol_state import (
-        EC_SYMBOLS_REQUIRED,
-        STATE_CACHED,
-        evidence_symbol_state,
-    )
+    # Per-evidence symbol preflight using canonical readiness.
+    # Native-compatible or prior-metadata-prepared evidence is treated
+    # as ready regardless of exact age matching.  When no requirement
+    # has been recorded yet, metadata_only will probe it.
     from app.services.memory.symbol_preparation import (
+        can_execute_validated_memory_analysis,
         compute_memory_readiness,
         record_pending_analysis,
         UI_STATE_READY,
         UI_STATE_PREPARING,
     )
+    EC_SYMBOLS_REQUIRED = "MEMORY_SYMBOLS_REQUIRED"
 
-    symbol_state = evidence_symbol_state(
-        db,
-        case_id=case_id,
-        evidence_id=evidence_id,
-        acquisition_gate_available=False,
-    )
-    # Prefer the new automatic preparation pipeline: when the
-    # preparation has reached ``ready`` the batch may proceed.  When
-    # the preparation is still pending we record an intent row
-    # and return 202 so the UI shows a "Preparing" state and starts
-    # the batch when ready.
     prep = compute_memory_readiness(db, evidence=evidence)
-    if prep.ui_state == UI_STATE_READY:
+    allowed, reason, blocker_message = can_execute_validated_memory_analysis(
+        db, evidence_id=evidence_id,
+    )
+    if allowed:
         pass
     elif prep.ui_state == UI_STATE_PREPARING:
-        if symbol_state.state == STATE_CACHED:
-            pass
-        else:
-            requested_profiles: list[str] = []
-            try:
-                plan = _plan_for_mode(
-                    db,
-                    case_id=case_id,
-                    evidence_id=evidence_id,
-                    mode=mode,
-                )
-                requested_profiles = list(plan.get("selected_profiles", []))
-            except Exception:  # noqa: BLE001
-                requested_profiles = list(RUN_ALL_PROFILES)
-            record_pending_analysis(
+        requested_profiles: list[str] = []
+        try:
+            plan = _plan_for_mode(
                 db,
                 case_id=case_id,
                 evidence_id=evidence_id,
-                kind="run_all",
                 mode=mode,
-                requested_profiles=requested_profiles,
             )
-            db.commit()
-            raise MemoryBatchError(
-                "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS",
-                (
-                    "Windows symbols are being prepared for this evidence. "
-                    "The batch will start automatically once preparation is ready."
-                ),
-                status_code=409,
-                extra={
-                    "evidence_id": evidence_id,
-                    "preparation_state": prep.preparation_state,
-                    "progress_label": prep.progress_label,
-                    "progress_percent": prep.progress_percent,
-                    "auto_start": True,
-                },
-            )
-    elif prep.ui_state in {"blocked", "failed"}:
-        # True blocker; cannot proceed.
-        from app.services.memory.symbol_control import acquisition_gate as _acq_gate
-        available, gate_code, _ = _acq_gate()
+            requested_profiles = list(plan.get("selected_profiles", []))
+        except Exception:  # noqa: BLE001
+            requested_profiles = list(RUN_ALL_PROFILES)
+        record_pending_analysis(
+            db,
+            case_id=case_id,
+            evidence_id=evidence_id,
+            kind="run_all",
+            mode=mode,
+            requested_profiles=requested_profiles,
+        )
+        db.commit()
         raise MemoryBatchError(
-            EC_SYMBOLS_REQUIRED,
-            prep.sanitized_message or "Windows symbols are not available for this evidence.",
+            "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS",
+            (
+                "Windows symbols are being prepared for this evidence. "
+                "The batch will start automatically once preparation is ready."
+            ),
             status_code=409,
             extra={
                 "evidence_id": evidence_id,
                 "preparation_state": prep.preparation_state,
-                "blocker": prep.sanitized_message,
-                "can_acquire": bool(available and prep.ui_state != "failed"),
-                "auto_retry": True,
+                "progress_label": prep.progress_label,
+                "progress_percent": prep.progress_percent,
+                "auto_start": True,
             },
         )
-    elif symbol_state.state == STATE_CACHED:
-        pass
-    elif symbol_state.requirement is None:
-        # No requirement has been recorded yet.  Allow the batch;
-        # metadata_only will probe the requirement and either succeed
-        # (cache hit) or fail (record the requirement and surface
-        # MEMORY_SYMBOLS_REQUIRED on the next attempt).
-        pass
-    else:
-        # The exact symbol is not cached.  We do NOT create a batch
-        # and we do NOT create a MemoryScanRun.  The structured
-        # response (with ``symbol_status``, ``can_acquire``) tells
-        # the UI exactly which path to follow.
+    elif reason == "blocked_symbols":
         from app.services.memory.symbol_control import acquisition_gate as _acq_gate
         available, gate_code, _ = _acq_gate()
         raise MemoryBatchError(
             EC_SYMBOLS_REQUIRED,
-            symbol_state.blocker
-            or "Windows symbols required for this evidence are not cached.",
+            blocker_message or prep.sanitized_message or "Windows symbols are not available for this evidence.",
             status_code=409,
             extra={
                 "evidence_id": evidence_id,
-                "symbol_status": symbol_state.state,
-                "can_acquire": bool(available and symbol_state.acquisition_supported),
-                "required_identifier": symbol_state.requirement.identifier if symbol_state.requirement else None,
-                "blocker": symbol_state.blocker,
+                "preparation_state": prep.preparation_state,
+                "blocker": blocker_message or prep.sanitized_message,
+                "can_acquire": bool(available),
+                "auto_retry": True,
+            },
+        )
+    else:
+        from app.services.memory.symbol_control import acquisition_gate as _acq_gate
+        available, gate_code, _ = _acq_gate()
+        raise MemoryBatchError(
+            EC_SYMBOLS_REQUIRED,
+            blocker_message or "Windows symbols required for this evidence are not cached.",
+            status_code=409,
+            extra={
+                "evidence_id": evidence_id,
+                "symbol_status": "missing",
+                "can_acquire": bool(available),
+                "blocker": blocker_message,
             },
         )
     try:

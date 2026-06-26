@@ -713,6 +713,7 @@ export type MemorySymbolPreparation = {
   content_reused_by_hash: boolean;
   native_compatible?: boolean;
   native_compatibility_reason?: string | null;
+  source_of_truth?: string | null;
   // Latest acquisition summary surfaced by the canonical preparation
   // endpoint.  The card uses the ``error_code`` to render the
   // structured failure panel and the ``identity_expected`` /

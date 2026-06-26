@@ -39,16 +39,22 @@ function NativeProbeStatusLabel({ status }: { status: Record<string, unknown> | 
 
 
 function cardCopy(prep: MemorySymbolPreparation) {
-  // Sprint 6 (OS-agnostic preparation): use the effective
-  // state (post-reconciliation) to drive the copy.  The
-  // states ``dispatch_failed``, ``platform_not_identified``
-  // and ``platform_not_supported`` are now distinct from
-  // the legacy "failed" / "blocked" buckets.
   const state = prep.effective_state || prep.ui_state;
-  if (state === "ready" || prep.ui_state === "ready") {
+  const isReady = state === "ready" || prep.ui_state === "ready";
+  const nativeReady = isReady && (prep.native_compatible === true);
+
+  if (nativeReady) {
     return {
       title: "Memory analysis ready",
-      subtitle: "Symbols and system metadata are available for this evidence.",
+      subtitle: prep.sanitized_message || "Volatility native compatibility confirmed for this evidence.",
+      tone: "good" as const,
+      info: prep.exact_match ? undefined : "Exact PDB age differs, but Volatility successfully validated this evidence.",
+    };
+  }
+  if (isReady) {
+    return {
+      title: "Memory analysis ready",
+      subtitle: prep.sanitized_message || "Symbols and system metadata are available for this evidence.",
       tone: "good" as const,
     };
   }
@@ -215,7 +221,11 @@ export function MemoryPreparationCard({
   const copy = cardCopy(preparation);
   const tone = copy.tone;
   const state = preparation.effective_state || preparation.ui_state;
+  const isReady = state === "ready" || preparation.ui_state === "ready";
   const isBlockedSymbols = state === "blocked_symbols";
+  const nativeReady = isReady && (preparation.native_compatible === true);
+  // Show probe/acquire only when truly blocked (no compat, no ready state)
+  const showSymbolActions = isBlockedSymbols && !nativeReady;
   // Derive the "is the button currently active" state from the
   // refreshed canonical preparation state ONLY.  React Query
   // mutation data is permanent; treating it as a live signal is
@@ -280,9 +290,14 @@ export function MemoryPreparationCard({
           >
             {copy.subtitle}
           </p>
+          {"info" in copy && copy.info ? (
+            <p className="mt-1 text-[11px] text-muted" data-testid="memory-preparation-info">
+              {copy.info}
+            </p>
+          ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
-          {isBlockedSymbols ? (
+          {showSymbolActions ? (
             <>
               <button
                 type="button"
@@ -310,7 +325,7 @@ export function MemoryPreparationCard({
               </button>
             </>
           ) : null}
-          {preparation.ui_state !== "ready" ? (
+          {!isReady ? (
             <button
               type="button"
               onClick={() => retryMutation.mutate()}
@@ -332,7 +347,7 @@ export function MemoryPreparationCard({
         </div>
       </div>
 
-      {isBlockedSymbols && preparation.requirement ? (
+      {(isBlockedSymbols || isReady) && preparation.requirement ? (
         <div
           className="mt-3 rounded-xl border border-line bg-abyss/40 p-2 text-[11px] text-muted"
           data-testid="memory-preparation-requirement"
@@ -450,7 +465,15 @@ export function MemoryPreparationCard({
         >
           <p className="font-mono">
             <span>preparation_state: {preparation.preparation_state}</span>
+            <span className="ml-2">effective_state: {preparation.effective_state}</span>
             <span className="ml-2">cache_status: {preparation.cache_status}</span>
+            <span className="ml-2">exact_match: {String(preparation.exact_match)}</span>
+            {preparation.native_compatible ? (
+              <span className="ml-2">native_compatible: true</span>
+            ) : null}
+            {preparation.native_compatibility_reason ? (
+              <span className="ml-2">native_reason: {preparation.native_compatibility_reason}</span>
+            ) : null}
             {preparation.link_source ? (
               <span className="ml-2">link_source: {preparation.link_source}</span>
             ) : null}
@@ -466,9 +489,14 @@ export function MemoryPreparationCard({
               <span className="ml-2">Arch: {preparation.requirement.architecture}</span>
             </p>
           ) : null}
+          {preparation.source_of_truth ? (
+            <p className="mt-1 font-mono">
+              readiness_source: {preparation.source_of_truth}
+            </p>
+          ) : null}
         </div>
       ) : null}
-      {isBlockedSymbols && preparation.native_compatible ? (
+      {nativeReady && preparation.native_compatible ? (
         <div
           className="mt-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-2 text-[11px] text-emerald-100"
           data-testid="memory-preparation-native-compatible"
@@ -510,7 +538,7 @@ export function MemoryPreparationCard({
         </div>
       ) : null}
 
-      {isBlockedSymbols && nativeProbeStatus ? (
+      {nativeReady && nativeProbeStatus ? (
         <div
           className="mt-3 rounded-xl border border-accent/30 bg-accent/10 p-2 text-[11px] text-accent"
           data-testid="memory-preparation-native-probe-status"
