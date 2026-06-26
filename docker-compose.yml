@@ -145,6 +145,7 @@ services:
     tmpfs:
       - /tmp
       - /app/data/tmp
+      - /usr/local/lib/python3.12/site-packages/volatility3/symbols/windows
     cap_drop:
       - ALL
     security_opt:
