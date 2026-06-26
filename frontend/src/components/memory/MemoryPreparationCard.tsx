@@ -494,6 +494,16 @@ export function MemoryPreparationCard({
               native_reason: {preparation.native_compatibility_reason}
             </p>
           ) : null}
+          {preparation.content_reused_by_hash ? (
+            <p className="mt-1 font-mono">
+              <span>reused_by_hash: true</span>
+            </p>
+          ) : null}
+          {preparation.link_source ? (
+            <p className="mt-1 font-mono">
+              <span>link_source: {preparation.link_source}</span>
+            </p>
+          ) : null}
         </div>
       ) : null}
       {nativeReady && preparation.native_compatible ? (

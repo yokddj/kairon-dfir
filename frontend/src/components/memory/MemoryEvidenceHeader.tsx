@@ -114,15 +114,17 @@ export function MemoryEvidenceHeader({
     evidence.detection_confidence,
     evidence.operator_override,
   );
-  const canAnalyze = evidence.can_analyze !== false;
+  // Canonical analysis capability: when the preparation endpoint
+  // is available, trust its authoritative can_analyze_metadata field
+  // (which already accounts for native compatibility, metadata
+  // readiness, and symbol state).  Fall back to the legacy
+  // evidence.can_analyze field only when preparation data is absent.
+  const prepCanAnalyze = symbolPreparation?.can_analyze_metadata;
+  const canLaunchAnalysis = prepCanAnalyze ?? (evidence.can_analyze !== false);
   const legacySymbolState = symbolReadiness?.state ?? "unknown";
-  // Symbol gating: trust the canonical preparation fields
-  // when available.  Native-compatible or ready evidence is
-  // never blocked by symbol readiness.
   const prepState = symbolPreparation?.effective_state || symbolPreparation?.ui_state;
   const prepReady = prepState === "ready";
   const prepNativeReady = prepReady && symbolPreparation?.native_compatible === true;
-  const prepCanAnalyze = symbolPreparation?.can_analyze_metadata;
   const symbolBlocksAnalysis =
     !prepReady &&
     !prepNativeReady &&
@@ -133,8 +135,8 @@ export function MemoryEvidenceHeader({
       prepState === "blocked_symbols" ||
       prepState === "failed"
     );
-  const runDisabled = !canAnalyze || (symbolBlocksAnalysis && !prepCanAnalyze);
-  const runTitle = !canAnalyze
+  const runDisabled = !canLaunchAnalysis || (symbolBlocksAnalysis && !prepCanAnalyze);
+  const runTitle = !canLaunchAnalysis
     ? "Confirm the evidence type before starting analysis."
     : symbolBlocksAnalysis && !prepCanAnalyze
       ? symbolPreparation?.sanitized_message ||
