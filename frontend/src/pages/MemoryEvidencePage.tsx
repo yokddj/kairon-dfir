@@ -268,6 +268,10 @@ export default function MemoryEvidencePage() {
         onReturnToLatest={handleReturnToLatest}
         catalogue={catalogueQuery.data ?? null}
         onOpenCatalogue={() => {
+          if (isReadyState && symbolPreparation?.can_analyze_metadata) {
+            setCatalogueOpen(true);
+            return;
+          }
           if (evidence.can_analyze === false) {
             setConfirmationOpen(true);
             return;
