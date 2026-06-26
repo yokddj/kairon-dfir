@@ -2866,10 +2866,25 @@ def _is_native_compatible(db: Session, *, evidence_id: str, requirement) -> bool
     """Return True when a successful native probe makes this evidence analysis-ready."""
     from app.services.memory.native_probe import check_native_compatibility
 
+    req_id: str | None = None
     try:
-        req_id = str(requirement.id) if requirement else None
-    except Exception:
-        return False
+        req_id = str(requirement.id)
+    except AttributeError:
+        pass
+    if not req_id and requirement is not None:
+        try:
+            ident = requirement.identifier
+            from app.models.memory import MemorySymbolRequirement
+            row = (
+                db.query(MemorySymbolRequirement)
+                .filter(MemorySymbolRequirement.symbol_key == ident)
+                .order_by(MemorySymbolRequirement.created_at.desc())
+                .first()
+            )
+            if row is not None:
+                req_id = str(row.id)
+        except Exception:
+            return False
     if not req_id:
         return False
     result = check_native_compatibility(db, evidence_id=evidence_id, requirement_id=req_id)
