@@ -222,10 +222,127 @@ describe("blocked_symbols acquisition UX (frontend)", () => {
     expect(err.textContent).toMatch(/not found/i);
   });
 
-  it("10) renders the requirement block for ready state (technical details)", () => {
+  it("10) does not render the requirement block for ready state (errors no longer shown)", () => {
     renderCard(basePreparation({ effective_state: "ready", ui_state: "ready" }));
     expect(
-      screen.getByTestId("memory-preparation-requirement"),
+      screen.queryByTestId("memory-preparation-requirement"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("11) ready state renders collapsed details toggle that expands to show PDB info", () => {
+    renderCard(basePreparation({ effective_state: "ready", ui_state: "ready" }));
+    expect(
+      screen.getByTestId("memory-preparation-toggle-details"),
     ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("memory-preparation-details"),
+    ).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("memory-preparation-toggle-details"));
+    const details = screen.getByTestId("memory-preparation-details");
+    expect(details).toBeInTheDocument();
+    expect(details.textContent).toMatch(/ntkrnlmp\.pdb/);
+    expect(details.textContent).toMatch(/D801A9AFC0FB7761380800F708633DEA/);
+    expect(details.textContent).toMatch(/req age: 1/);
+    expect(details.textContent).toMatch(/Arch: x64/);
+  });
+
+  it("12) native-compatible ready state renders ready card with success message", () => {
+    renderCard(
+      basePreparation({
+        effective_state: "ready",
+        ui_state: "ready",
+        native_compatible: true,
+        native_compatibility_reason: "VOLATILITY_NATIVE_SYMBOL_COMPATIBLE",
+      }),
+    );
+    expect(screen.getByTestId("memory-preparation-title").textContent).toMatch(
+      /memory analysis ready/i,
+    );
+    expect(screen.getByTestId("memory-preparation-subtitle").textContent).toMatch(
+      /volatility successfully resolved/i,
+    );
+  });
+
+  it("13) native-compatible ready state hides Acquire symbols and native probe buttons", () => {
+    renderCard(
+      basePreparation({
+        effective_state: "ready",
+        ui_state: "ready",
+        native_compatible: true,
+        native_compatibility_reason: "VOLATILITY_NATIVE_SYMBOL_COMPATIBLE",
+      }),
+    );
+    expect(
+      screen.queryByTestId("memory-preparation-acquire-button"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("memory-preparation-native-probe-button"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("14) native-compatible ready state shows native-compatible green banner", () => {
+    renderCard(
+      basePreparation({
+        effective_state: "ready",
+        ui_state: "ready",
+        native_compatible: true,
+        native_compatibility_reason: "VOLATILITY_NATIVE_SYMBOL_COMPATIBLE",
+        acquisition: {
+          identity_expected: { pdb_name: "ntkrnlmp.pdb", pdb_guid: "D801A9AFC0FB7761380800F708633DEA", pdb_age: 1, architecture: "x64" },
+          identity_observed: { pdb_guid: "D801A9AFC0FB7761380800F708633DEA", pdb_age: 5 },
+        },
+      }),
+    );
+    expect(
+      screen.getByTestId("memory-preparation-native-compatible"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("memory-preparation-experimental-banner"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("15) native-compatible ready state shows info note when exact_match is false", () => {
+    renderCard(
+      basePreparation({
+        effective_state: "ready",
+        ui_state: "ready",
+        native_compatible: true,
+        exact_match: false,
+      }),
+    );
+    expect(screen.getByTestId("memory-preparation-info").textContent).toMatch(
+      /exact pdb age differs/i,
+    );
+  });
+
+  it("16) native-compatible ready state hides info note when exact_match is true", () => {
+    renderCard(
+      basePreparation({
+        effective_state: "ready",
+        ui_state: "ready",
+        native_compatible: true,
+        exact_match: true,
+      }),
+    );
+    expect(
+      screen.queryByTestId("memory-preparation-info"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("17) native-compatible ready collapsed details shows canonical state fields", () => {
+    renderCard(
+      basePreparation({
+        effective_state: "ready",
+        ui_state: "ready",
+        native_compatible: true,
+        native_compatibility_reason: "VOLATILITY_NATIVE_SYMBOL_COMPATIBLE",
+        cache_status: "miss",
+      }),
+    );
+    fireEvent.click(screen.getByTestId("memory-preparation-toggle-details"));
+    const details = screen.getByTestId("memory-preparation-details");
+    expect(details.textContent).toMatch(/compat: native/);
+    expect(details.textContent).toMatch(/cache: miss/);
+    expect(details.textContent).toMatch(/exact_match: false/);
   });
 });

@@ -204,11 +204,16 @@ export default function MemoryEvidencePage() {
   });
   const symbolPreparation = symbolPreparationQuery.data ?? null;
 
+  const prepEffectiveState = symbolPreparation?.effective_state || symbolPreparation?.ui_state;
+  const isBlockedSymbols = prepEffectiveState === "blocked_symbols";
+  const isReadyState = prepEffectiveState === "ready";
+  const isNativeReady = isReadyState && symbolPreparation?.native_compatible === true;
+
   const nativeProbeQuery = useQuery({
     queryKey: ["native-probe", caseId, evidenceId],
     queryFn: () => api.getNativeProbeStatus(caseId, evidenceId),
     enabled: Boolean(caseId && evidenceId && symbolPreparation
-      && (symbolPreparation.effective_state || symbolPreparation.ui_state) === "blocked_symbols"),
+      && (isBlockedSymbols || isNativeReady)),
     refetchOnWindowFocus: false,
     refetchInterval: (query) => {
       const data = query.state.data as { status?: string } | undefined;
@@ -221,15 +226,14 @@ export default function MemoryEvidencePage() {
   });
 
   const showExperimentalPanel =
-    Boolean(symbolPreparation) &&
-    (symbolPreparation?.effective_state || symbolPreparation?.ui_state) === "blocked_symbols";
+    Boolean(symbolPreparation) && isBlockedSymbols;
   // The catalogue modal needs to know whether preparation is
   // "ready" (effective_state=ready) so it can show or hide the
   // Run-all button.  When the symbol preparation query is still
   // loading we treat readiness as unknown (null) and the modal
   // falls back to a conservative state.
   const readinessReady: boolean | null = symbolPreparation
-    ? (symbolPreparation.effective_state || symbolPreparation.ui_state) === "ready"
+    ? isReadyState
     : null;
 
   const handleReturnToLatest = useCallback(() => {
@@ -284,13 +288,13 @@ export default function MemoryEvidencePage() {
         </div>
       ) : null}
 
-      {tab === "overview" && readinessByEvidence.get(evidenceId)?.sanitized_message ? (
+      {tab === "overview" && !isReadyState && readinessByEvidence.get(evidenceId)?.sanitized_message ? (
         <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs text-rose-100">
           {readinessByEvidence.get(evidenceId)?.sanitized_message}
         </div>
       ) : null}
 
-      {evidence && symbolReadiness ? (
+      {evidence && symbolReadiness && !isReadyState ? (
         <MemorySymbolResolutionPanel
           caseId={caseId}
           evidenceId={evidenceId}
