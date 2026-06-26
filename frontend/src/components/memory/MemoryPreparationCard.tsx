@@ -12,6 +12,32 @@ function toneForUIState(uiState: string): Tone {
   return "neutral";
 }
 
+function NativeProbeStatusLabel({ status }: { status: Record<string, unknown> | null }) {
+  const s = (status?.status as string) ?? "never_run";
+  if (s === "never_run" || s === null) return <p>Not tested with native Volatility.</p>;
+  if (s === "queued") return <p>Queued for native Volatility testing.</p>;
+  if (s === "running") return <p>Testing with native Volatility&hellip;</p>;
+  if (s === "compatible")
+    return <p>Volatility successfully resolved and validated this evidence using its native Windows symbol workflow.</p>;
+  if (s === "incompatible")
+    return (
+      <p>
+        Native Volatility produced malformed output.
+        {status?.sanitized_error ? ` ${String(status.sanitized_error)}` : ""}
+      </p>
+    );
+  if (s === "timeout") return <p>Native Volatility probe timed out.</p>;
+  if (s === "failed")
+    return (
+      <p>
+        Native Volatility probe failed.
+        {status?.sanitized_error ? ` ${String(status.sanitized_error)}` : ""}
+      </p>
+    );
+  return null;
+}
+
+
 function cardCopy(prep: MemorySymbolPreparation) {
   // Sprint 6 (OS-agnostic preparation): use the effective
   // state (post-reconciliation) to drive the copy.  The
@@ -130,6 +156,7 @@ type Props = {
   caseId: string;
   evidenceId: string;
   preparation: MemorySymbolPreparation | null;
+  nativeProbeStatus?: Record<string, unknown> | null;
   onRetry?: () => void;
 };
 
@@ -137,6 +164,7 @@ export function MemoryPreparationCard({
   caseId,
   evidenceId,
   preparation,
+  nativeProbeStatus,
   onRetry,
 }: Props) {
   const queryClient = useQueryClient();
@@ -154,18 +182,23 @@ export function MemoryPreparationCard({
   const acquireMutation = useMutation({
     mutationFn: () => api.acquireExactMemorySymbols(caseId, evidenceId),
     onSuccess: () => {
-      // Force the canonical preparation query to refetch so
-      // the canonical ``task_alive`` / ``ui_state`` reflect the
-      // post-POST state.  The button label is driven by the
-      // canonical state; React Query mutation data is not
-      // authoritative and is reset on every successful response
-      // to prevent the "stuck on Acquiring symbols…" bug.
       void queryClient.invalidateQueries({
         queryKey: ["memory-symbol-preparation", caseId, evidenceId],
         refetchType: "active",
       });
       void queryClient.invalidateQueries({ queryKey: ["memory-landing", caseId] });
       acquireMutation.reset();
+    },
+  });
+
+  const nativeProbeMutation = useMutation({
+    mutationFn: () => api.startNativeProbe(caseId, evidenceId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: ["memory-symbol-preparation", caseId, evidenceId],
+        refetchType: "active",
+      });
+      void queryClient.invalidateQueries({ queryKey: ["native-probe", caseId, evidenceId] });
     },
   });
 
@@ -250,19 +283,32 @@ export function MemoryPreparationCard({
         </div>
         <div className="flex flex-wrap gap-2">
           {isBlockedSymbols ? (
-            <button
-              type="button"
-              onClick={() => acquireMutation.mutate()}
-              disabled={acquireMutation.isPending || isAcquiring}
-              className="rounded-xl border border-accent/40 bg-accent/20 px-3 py-1.5 text-xs text-accent disabled:opacity-50"
-              data-testid="memory-preparation-acquire-button"
-            >
-              {acquireMutation.isPending
-                ? "Acquiring…"
-                : isAcquiring
-                  ? "Acquiring symbols…"
-                  : "Acquire exact symbols"}
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => acquireMutation.mutate()}
+                disabled={acquireMutation.isPending || isAcquiring}
+                className="rounded-xl border border-accent/40 bg-accent/20 px-3 py-1.5 text-xs text-accent disabled:opacity-50"
+                data-testid="memory-preparation-acquire-button"
+              >
+                {acquireMutation.isPending
+                  ? "Acquiring…"
+                  : isAcquiring
+                    ? "Acquiring symbols…"
+                    : "Acquire exact symbols"}
+              </button>
+              <button
+                type="button"
+                onClick={() => nativeProbeMutation.mutate()}
+                disabled={nativeProbeMutation.isPending}
+                className="rounded-xl border border-accent/40 bg-accent/20 px-3 py-1.5 text-xs text-accent disabled:opacity-50"
+                data-testid="memory-preparation-native-probe-button"
+              >
+                {nativeProbeMutation.isPending
+                  ? "Testing…"
+                  : "Test with native Volatility"}
+              </button>
+            </>
           ) : null}
           {preparation.ui_state !== "ready" ? (
             <button
@@ -422,6 +468,34 @@ export function MemoryPreparationCard({
           ) : null}
         </div>
       ) : null}
+      {isBlockedSymbols && preparation.native_compatible ? (
+        <div
+          className="mt-3 rounded-xl border border-emerald-400/30 bg-emerald-500/10 p-2 text-[11px] text-emerald-100"
+          data-testid="memory-preparation-native-compatible"
+        >
+          <p>
+            Volatility successfully resolved and validated the Windows
+            symbols for this evidence. Compatible with native Volatility
+            execution.
+          </p>
+          {preparation.native_compatibility_reason ? (
+            <p className="mt-1 font-mono">
+              Reason: {preparation.native_compatibility_reason}
+            </p>
+          ) : null}
+          {preparation.requirement ? (
+            <p className="mt-1 font-mono">
+              Required age: {preparation.requirement.pdb_age}
+              <span className="ml-2">
+                Parser-observed age: {preparation.requirement.pdb_age}
+              </span>
+              <span className="ml-2">
+                Compatibility: confirmed by Volatility native execution
+              </span>
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       {isBlockedSymbols ? (
         <div
           className="mt-3 rounded-xl border border-warning/40 bg-warning/10 p-2 text-[11px] text-warning"
@@ -433,6 +507,15 @@ export function MemoryPreparationCard({
             workflow is available to the operator and never affects the
             validated preparation state shown above.
           </p>
+        </div>
+      ) : null}
+
+      {isBlockedSymbols && nativeProbeStatus ? (
+        <div
+          className="mt-3 rounded-xl border border-accent/30 bg-accent/10 p-2 text-[11px] text-accent"
+          data-testid="memory-preparation-native-probe-status"
+        >
+          <NativeProbeStatusLabel status={nativeProbeStatus} />
         </div>
       ) : null}
     </section>
