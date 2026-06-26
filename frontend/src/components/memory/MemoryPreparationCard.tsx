@@ -4,6 +4,17 @@ import { api, type MemorySymbolPreparation } from "../../api/client";
 
 type Tone = "good" | "warn" | "bad" | "neutral";
 
+type CanonicalReadiness = "ready" | "blocked_symbols" | "preparing" | "failed" | "unknown";
+
+function getEffectiveMemoryReadiness(prep: MemorySymbolPreparation): CanonicalReadiness {
+  const effective = prep.effective_state || prep.ui_state;
+  if (effective === "ready") return "ready";
+  if (effective === "blocked_symbols") return "blocked_symbols";
+  if (effective === "preparing" || prep.ui_state === "preparing" || prep.task_alive) return "preparing";
+  if (effective === "failed") return "failed";
+  return "unknown";
+}
+
 function toneForUIState(uiState: string): Tone {
   if (uiState === "ready") return "good";
   if (uiState === "preparing") return "warn";
@@ -40,13 +51,14 @@ function NativeProbeStatusLabel({ status }: { status: Record<string, unknown> | 
 
 function cardCopy(prep: MemorySymbolPreparation) {
   const state = prep.effective_state || prep.ui_state;
-  const isReady = state === "ready" || prep.ui_state === "ready";
+  const canonical = getEffectiveMemoryReadiness(prep);
+  const isReady = canonical === "ready";
   const nativeReady = isReady && (prep.native_compatible === true);
 
   if (nativeReady) {
     return {
       title: "Memory analysis ready",
-      subtitle: prep.sanitized_message || "Volatility native compatibility confirmed for this evidence.",
+      subtitle: "Volatility successfully resolved and validated this evidence using its native Windows symbol workflow.",
       tone: "good" as const,
       info: prep.exact_match ? undefined : "Exact PDB age differs, but Volatility successfully validated this evidence.",
     };
@@ -218,11 +230,11 @@ export function MemoryPreparationCard({
   if (!preparation) {
     return null;
   }
+  const canonical = getEffectiveMemoryReadiness(preparation);
   const copy = cardCopy(preparation);
   const tone = copy.tone;
-  const state = preparation.effective_state || preparation.ui_state;
-  const isReady = state === "ready" || preparation.ui_state === "ready";
-  const isBlockedSymbols = state === "blocked_symbols";
+  const isReady = canonical === "ready";
+  const isBlockedSymbols = canonical === "blocked_symbols";
   const nativeReady = isReady && (preparation.native_compatible === true);
   // Show probe/acquire only when truly blocked (no compat, no ready state)
   const showSymbolActions = isBlockedSymbols && !nativeReady;
@@ -347,7 +359,7 @@ export function MemoryPreparationCard({
         </div>
       </div>
 
-      {(isBlockedSymbols || isReady) && preparation.requirement ? (
+      {isBlockedSymbols && preparation.requirement ? (
         <div
           className="mt-3 rounded-xl border border-line bg-abyss/40 p-2 text-[11px] text-muted"
           data-testid="memory-preparation-requirement"
@@ -371,10 +383,6 @@ export function MemoryPreparationCard({
               {acquireError}
             </p>
           ) : null}
-          {/* Identity mismatch panel: shows the canonical
-              expected identity alongside the observed identity
-              the symbol server returned.  Only rendered when
-              the latest acquisition recorded a real mismatch. */}
           {preparation.error_code === "SYMBOL_PDB_IDENTITY_MISMATCH" &&
           preparation.acquisition?.identity_expected ? (
             <div
@@ -464,34 +472,26 @@ export function MemoryPreparationCard({
           data-testid="memory-preparation-details"
         >
           <p className="font-mono">
-            <span>preparation_state: {preparation.preparation_state}</span>
-            <span className="ml-2">effective_state: {preparation.effective_state}</span>
-            <span className="ml-2">cache_status: {preparation.cache_status}</span>
+            <span>state: {preparation.effective_state || preparation.ui_state}</span>
+            <span className="ml-2">cache: {preparation.cache_status}</span>
             <span className="ml-2">exact_match: {String(preparation.exact_match)}</span>
-            {preparation.native_compatible ? (
-              <span className="ml-2">native_compatible: true</span>
-            ) : null}
-            {preparation.native_compatibility_reason ? (
-              <span className="ml-2">native_reason: {preparation.native_compatibility_reason}</span>
-            ) : null}
-            {preparation.link_source ? (
-              <span className="ml-2">link_source: {preparation.link_source}</span>
-            ) : null}
-            {preparation.content_reused_by_hash ? (
-              <span className="ml-2">reused_by_hash: true</span>
-            ) : null}
+            <span className="ml-2">compat: {preparation.native_compatible === true ? "native Volatility" : "no"}</span>
+            <span className="ml-2">source: {preparation.source_of_truth || "—"}</span>
           </p>
           {preparation.requirement ? (
             <p className="mt-1 font-mono">
               <span>PDB: {preparation.requirement.pdb_name}</span>
               <span className="ml-2">GUID: {preparation.requirement.pdb_guid}</span>
-              <span className="ml-2">Age: {preparation.requirement.pdb_age}</span>
+              <span className="ml-2">req age: {preparation.requirement.pdb_age}</span>
               <span className="ml-2">Arch: {preparation.requirement.architecture}</span>
+              {preparation.acquisition?.identity_observed?.pdb_age != null ? (
+                <span className="ml-2">observed age: {preparation.acquisition.identity_observed.pdb_age}</span>
+              ) : null}
             </p>
           ) : null}
-          {preparation.source_of_truth ? (
+          {preparation.native_compatible && preparation.native_compatibility_reason ? (
             <p className="mt-1 font-mono">
-              readiness_source: {preparation.source_of_truth}
+              native_reason: {preparation.native_compatibility_reason}
             </p>
           ) : null}
         </div>
