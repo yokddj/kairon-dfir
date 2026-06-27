@@ -154,7 +154,8 @@ describe("MemoryUploadPage", () => {
   it("surfaces the stored resumable session prompt after refresh", async () => {
     localStorage.setItem("kairon-memory-upload:case-1", JSON.stringify({ uploadId: "upload-1", filename: "authorized.mem", expectedBytes: 6, providedHost: "HOSTA" }));
     renderPage();
-    expect(await screen.findByText(/Re-select the same file to continue only the missing chunks/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Upload paused/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Reselect the same authorized\.mem file to continue from chunk 1 of 2/i)).toBeInTheDocument();
   });
 
   it("shows retry evidence registration when canonical upload is preserved", async () => {
