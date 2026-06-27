@@ -114,7 +114,7 @@ from app.services.memory.symbol_state import (
 )
 from app.models.memory import MemorySymbolAcquisition, MemorySymbolAcquisitionRequest
 from app.services.memory.upload_readiness import MAX_SELECTED_SIZE_BYTES, get_memory_upload_readiness
-from app.services.memory.upload_lifecycle import get_memory_upload, public_memory_upload_status, reconcile_memory_upload, retry_preserved_memory_upload_registration
+from app.services.memory.upload_lifecycle import MemoryUploadRegistrationError, get_memory_upload, public_memory_upload_status, reconcile_memory_upload, retry_preserved_memory_upload_registration
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
 from app.workers.tasks import enqueue_memory_metadata_scan
 
@@ -146,6 +146,27 @@ def _require_evidence_for_case(db: Session, case_id: str, evidence_id: str) -> E
     if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
         raise HTTPException(status_code=404, detail="Memory evidence was not found for this case.")
     return evidence
+
+
+def _require_memory_run(
+    db: Session,
+    run_id: str,
+    *,
+    case_id: str | None = None,
+    evidence_id: str | None = None,
+) -> MemoryScanRun:
+    """Validate that the run exists and optionally belongs to an expected
+    case/evidence.  Returns the MemoryScanRun row.  Raises 404 on any
+    mismatch.
+    """
+    run = db.get(MemoryScanRun, run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Memory run not found")
+    if case_id is not None and run.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Memory run not found for this case.")
+    if evidence_id is not None and run.evidence_id != evidence_id:
+        raise HTTPException(status_code=404, detail="Memory run not found for this evidence.")
+    return run
 
 
 @router.get("/memory/backends", response_model=MemoryBackendOverviewRead)
@@ -1466,6 +1487,26 @@ def retry_memory_upload_registration_endpoint(
         raise HTTPException(status_code=404, detail="Memory upload was not found.") from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except MemoryUploadRegistrationError as exc:
+        if exc.code == "MEMORY_EVIDENCE_DUPLICATE":
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error_code": exc.code,
+                    "duplicate": True,
+                    "existing_evidence_id": exc.existing_evidence_id,
+                    "existing_filename": exc.existing_filename,
+                    "message": exc.message,
+                },
+            ) from exc
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error_code": "MEMORY_EVIDENCE_REGISTRATION_RETRY_FAILED",
+                "message": "Evidence registration retry could not complete.",
+                "exception_class": exc.exception_class or exc.__class__.__name__,
+            },
+        ) from exc
     except Exception as exc:  # pragma: no cover - defensive
         raise HTTPException(
             status_code=503,
@@ -1588,7 +1629,7 @@ def get_memory_runs(
 
 
 @router.post("/evidences/{evidence_id}/memory/scan", response_model=MemoryStartScanResponse, status_code=status.HTTP_202_ACCEPTED)
-def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None = None, db: Session = Depends(get_db)) -> MemoryStartScanResponse:
+def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None = None, case_id: str = Query(...), db: Session = Depends(get_db)) -> MemoryStartScanResponse:
     profile = (payload.profile if payload else "metadata_only") or "metadata_only"
     try:
         resolved_plugins = resolve_profile_plugins(profile)
@@ -1597,6 +1638,8 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
     evidence = db.get(Evidence, evidence_id)
     if not evidence:
         raise HTTPException(status_code=404, detail="Evidence not found")
+    if evidence.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Evidence not found for this case.")
     if evidence.evidence_type != EvidenceType.memory_dump:
         raise HTTPException(status_code=400, detail="Memory scan registration is only supported for memory_dump evidence.")
     if not settings.memory_analysis_enabled:
@@ -1713,17 +1756,12 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
 
 @router.get("/memory/runs/{run_id}", response_model=MemoryRunDetailRead)
 def get_memory_run(run_id: str, db: Session = Depends(get_db)) -> MemoryScanRun:
-    run = db.get(MemoryScanRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Memory run not found")
-    return run
+    return _require_memory_run(db, run_id)
 
 
 @router.get("/memory/runs/{run_id}/system-info", response_model=MemorySystemInfoRead)
 def get_memory_run_system_info(run_id: str, db: Session = Depends(get_db)) -> dict:
-    run = db.get(MemoryScanRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Memory run not found")
+    run = _require_memory_run(db, run_id)
     system_info = (run.metadata_json or {}).get("system_info")
     if not isinstance(system_info, dict):
         raise HTTPException(status_code=404, detail="Memory system information is not available for this run.")
@@ -1736,6 +1774,24 @@ def get_case_memory_system_info(case_id: str, db: Session = Depends(get_db)) -> 
     runs = (
         db.query(MemoryScanRun)
         .filter(MemoryScanRun.case_id == case_id, MemoryScanRun.status.in_(["completed", "completed_with_errors"]))
+        .order_by(MemoryScanRun.completed_at.desc().nullslast(), MemoryScanRun.created_at.desc())
+        .all()
+    )
+    results: list[dict] = []
+    for run in runs:
+        system_info = (run.metadata_json or {}).get("system_info")
+        if isinstance(system_info, dict):
+            results.append(system_info)
+    return results
+
+
+@router.get("/cases/{case_id}/memory/evidences/{evidence_id}/system-info", response_model=list[MemorySystemInfoRead])
+def get_evidence_memory_system_info(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    runs = (
+        db.query(MemoryScanRun)
+        .filter(MemoryScanRun.case_id == case_id, MemoryScanRun.evidence_id == evidence_id, MemoryScanRun.status.in_(["completed", "completed_with_errors"]))
         .order_by(MemoryScanRun.completed_at.desc().nullslast(), MemoryScanRun.created_at.desc())
         .all()
     )
@@ -1841,9 +1897,7 @@ def get_memory_run_processes(
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ) -> dict:
-    run = db.get(MemoryScanRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Memory run not found")
+    run = _require_memory_run(db, run_id)
     if source_plugin and source_plugin not in {"windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"}:
         raise HTTPException(status_code=400, detail="Unsupported memory process source plugin filter.")
     return search_memory_processes(run.case_id, run_id=run.id, pid=pid, ppid=ppid, process_name=process_name, source_plugin=source_plugin, present_in_pslist=present_in_pslist, present_in_psscan=present_in_psscan, has_command_line=has_command_line, active=active, page=page, page_size=page_size)
@@ -1852,7 +1906,7 @@ def get_memory_run_processes(
 @router.get("/cases/{case_id}/memory/processes", response_model=MemoryProcessListRead)
 def get_case_memory_processes(
     case_id: str,
-    evidence_id: str | None = Query(default=None),
+    evidence_id: str = Query(...),
     run_id: str | None = Query(default=None),
     pid: int | None = Query(default=None),
     ppid: int | None = Query(default=None),
@@ -1870,17 +1924,13 @@ def get_case_memory_processes(
     if source_plugin and source_plugin not in {"windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"}:
         raise HTTPException(status_code=400, detail="Unsupported memory process source plugin filter.")
     if run_id:
-        run = db.get(MemoryScanRun, run_id)
-        if not run or run.case_id != case_id:
-            raise HTTPException(status_code=404, detail="Memory run not found")
+        _require_memory_run(db, run_id, case_id=case_id)
     return search_memory_processes(case_id, run_id=run_id, evidence_id=evidence_id, pid=pid, ppid=ppid, process_name=process_name, source_plugin=source_plugin, present_in_pslist=present_in_pslist, present_in_psscan=present_in_psscan, has_command_line=has_command_line, active=active, page=page, page_size=page_size)
 
 
 @router.get("/memory/runs/{run_id}/process-tree", response_model=MemoryProcessTreeRead)
 def get_memory_process_tree(run_id: str, db: Session = Depends(get_db)) -> dict:
-    run = db.get(MemoryScanRun, run_id)
-    if not run:
-        raise HTTPException(status_code=404, detail="Memory run not found")
+    run = _require_memory_run(db, run_id)
     processes = search_memory_processes(run.case_id, run_id=run.id, page=1, page_size=200)["items"]
     edges = search_memory_edges(run.case_id, run_id=run.id)
     pids = {item.get("process", {}).get("pid") for item in processes}
@@ -1923,8 +1973,10 @@ def _jsonify_system_info(value):
     return value
 
 
-def _resolve_run(db: Session, case_id: str, run_id: str | None, profile: str | None) -> MemoryScanRun:
+def _resolve_run(db: Session, case_id: str, run_id: str | None, profile: str | None, evidence_id: str | None = None) -> MemoryScanRun:
     query = db.query(MemoryScanRun).filter(MemoryScanRun.case_id == case_id)
+    if evidence_id:
+        query = query.filter(MemoryScanRun.evidence_id == evidence_id)
     if run_id:
         run = query.filter(MemoryScanRun.id == run_id).first()
         if not run:
@@ -1976,14 +2028,15 @@ def _is_visible_profile(profile: str | None) -> bool:
 
 
 @router.get("/cases/{case_id}/memory/runs/options", response_model=MemoryRunSelectorRead)
-def get_memory_run_options(case_id: str, db: Session = Depends(get_db)) -> dict:
+def get_memory_run_options(case_id: str, evidence_id: str | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
     _require_case(db, case_id)
-    runs = (
+    query = (
         db.query(MemoryScanRun)
         .filter(MemoryScanRun.case_id == case_id)
-        .order_by(MemoryScanRun.created_at.desc())
-        .all()
     )
+    if evidence_id:
+        query = query.filter(MemoryScanRun.evidence_id == evidence_id)
+    runs = query.order_by(MemoryScanRun.created_at.desc()).all()
     completed_process = next(
         (
             r
@@ -2017,15 +2070,23 @@ def get_memory_run_options(case_id: str, db: Session = Depends(get_db)) -> dict:
     }
 
 
+@router.get("/cases/{case_id}/memory/evidences/{evidence_id}/runs/options", response_model=MemoryRunSelectorRead)
+def get_evidence_memory_run_options(case_id: str, evidence_id: str, db: Session = Depends(get_db)):
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    return get_memory_run_options(case_id=case_id, evidence_id=evidence_id, db=db)
+
+
 @router.get("/cases/{case_id}/memory/process-entities/summary", response_model=MemoryRenormalizeSummaryRead)
 def get_canonical_process_summary(
     case_id: str,
     run_id: str | None = Query(default=None),
     profile: str | None = Query(default=None, pattern="^(processes_basic|processes_extended)$"),
+    evidence_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> dict:
     _require_case(db, case_id)
-    run = _resolve_run(db, case_id, run_id, profile)
+    run = _resolve_run(db, case_id, run_id, profile, evidence_id=evidence_id)
     summary = canonical_entities.fetch_canonical_summary(case_id, run_id=run.id)
     return {
         "case_id": case_id,
@@ -2084,7 +2145,7 @@ def get_canonical_process_entities(
     _require_case(db, case_id)
     if evidence_id:
         _require_evidence_for_case(db, case_id, evidence_id)
-    run = _resolve_run(db, case_id, run_id, profile)
+    run = _resolve_run(db, case_id, run_id, profile, evidence_id=evidence_id)
     result = canonical_entities.fetch_canonical_entities(
         case_id,
         run_id=run.id,
@@ -2118,14 +2179,15 @@ def get_canonical_process_entity_detail(
     case_id: str,
     entity_id: str,
     run_id: str | None = Query(default=None),
+    evidence_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> dict:
     _require_case(db, case_id)
-    run = _resolve_run(db, case_id, run_id, profile="processes_extended")
+    run = _resolve_run(db, case_id, run_id, profile="processes_extended", evidence_id=evidence_id)
     entity = canonical_entities.fetch_canonical_entity(case_id, run_id=run.id, entity_id=entity_id)
     if entity is None:
         # Try basic profile too
-        run2 = _resolve_run(db, case_id, None, profile="processes_basic")
+        run2 = _resolve_run(db, case_id, None, profile="processes_basic", evidence_id=evidence_id)
         entity = canonical_entities.fetch_canonical_entity(case_id, run_id=run2.id, entity_id=entity_id)
         if entity is None:
             raise HTTPException(status_code=404, detail="Memory process entity was not found.")
@@ -2172,6 +2234,7 @@ def get_canonical_process_tree(
     case_id: str,
     run_id: str | None = Query(default=None),
     profile: str | None = Query(default=None, pattern="^(processes_basic|processes_extended)$"),
+    evidence_id: str | None = Query(default=None),
     root_pid: int | None = Query(default=None, ge=0),
     root_entity_id: str | None = Query(default=None, max_length=128),
     depth: int = Query(default=3, ge=1, le=10),
@@ -2184,7 +2247,7 @@ def get_canonical_process_tree(
     db: Session = Depends(get_db),
 ) -> dict:
     _require_case(db, case_id)
-    run = _resolve_run(db, case_id, run_id, profile)
+    run = _resolve_run(db, case_id, run_id, profile, evidence_id=evidence_id)
     return canonical_entities.fetch_canonical_tree(
         case_id,
         run_id=run.id,
@@ -2200,9 +2263,13 @@ def get_canonical_process_tree(
     )
 
 
-@router.post("/cases/{case_id}/memory/process-entities/renormalize", response_model=MemoryRenormalizeSummaryRead)
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/process-entities/renormalize",
+    response_model=MemoryRenormalizeSummaryRead,
+)
 def renormalize_canonical_entities(
     case_id: str,
+    evidence_id: str,
     payload: _RenormalizeRequest,
     db: Session = Depends(get_db),
 ) -> dict:
@@ -2214,9 +2281,8 @@ def renormalize_canonical_entities(
     summary without writing to OpenSearch.
     """
     _require_case(db, case_id)
-    run = db.get(MemoryScanRun, payload.run_id)
-    if not run or run.case_id != case_id:
-        raise HTTPException(status_code=404, detail="Memory run not found for this case.")
+    _require_evidence_for_case(db, case_id, evidence_id)
+    run = _require_memory_run(db, payload.run_id, case_id=case_id, evidence_id=evidence_id)
     if not _is_process_profile(run.profile):
         raise HTTPException(status_code=400, detail="Renormalization is only supported for processes_basic/processes_extended runs.")
     evidence = db.get(Evidence, run.evidence_id)
@@ -2262,9 +2328,7 @@ def rematerialize_canonical(
     from app.services.memory.process_entities import fetch_legacy_process_documents
 
     _require_case(db, case_id)
-    run = db.get(MemoryScanRun, run_id)
-    if not run or run.case_id != case_id:
-        raise HTTPException(status_code=404, detail="Memory run not found for this case.")
+    run = _require_memory_run(db, payload.run_id, case_id=case_id)
     if not _is_process_profile(run.profile):
         raise HTTPException(
             status_code=400,
@@ -2313,11 +2377,12 @@ def rematerialize_canonical(
 
 
 @router.post(
-    "/cases/{case_id}/memory/process-entities/recompute-tree",
+    "/cases/{case_id}/memory/evidences/{evidence_id}/process-entities/recompute-tree",
     response_model=MemoryRenormalizeSummaryRead,
 )
 def recompute_canonical_tree(
     case_id: str,
+    evidence_id: str,
     payload: _RenormalizeRequest,
     db: Session = Depends(get_db),
 ) -> dict:
@@ -2332,9 +2397,8 @@ def recompute_canonical_tree(
     symbol cache, the workers or the disk index.
     """
     _require_case(db, case_id)
-    run = db.get(MemoryScanRun, payload.run_id)
-    if not run or run.case_id != case_id:
-        raise HTTPException(status_code=404, detail="Memory run not found for this case.")
+    _require_evidence_for_case(db, case_id, evidence_id)
+    run = _require_memory_run(db, payload.run_id, case_id=case_id, evidence_id=evidence_id)
     if not _is_process_profile(run.profile):
         raise HTTPException(status_code=400, detail="Recompute-tree is only supported for processes_basic/processes_extended runs.")
     # Fetch all canonical entities for the run in pages.
@@ -2403,7 +2467,7 @@ _ARTIFACT_DOC_TYPES = {
 }
 
 
-def _resolve_run(db: Session, case_id: str, run_id: str | None, profile: str | None = None) -> MemoryScanRun | None:
+def _resolve_run(db: Session, case_id: str, run_id: str | None, profile: str | None = None, evidence_id: str | None = None) -> MemoryScanRun | None:
     """Resolve a memory run for a case.
 
     The 4-arg signature (``profile``) is kept as an optional parameter
@@ -2417,10 +2481,14 @@ def _resolve_run(db: Session, case_id: str, run_id: str | None, profile: str | N
         run = db.get(MemoryScanRun, run_id)
         if run is None or run.case_id != case_id:
             return None
+        if evidence_id and run.evidence_id != evidence_id:
+            return None
         return run
     if not profile:
         return None
     query = db.query(MemoryScanRun).filter(MemoryScanRun.case_id == case_id)
+    if evidence_id:
+        query = query.filter(MemoryScanRun.evidence_id == evidence_id)
     return (
         query.filter(
             MemoryScanRun.profile == profile,
@@ -2509,8 +2577,7 @@ def _artifact_overview(
     selected_run = run.id if run else None
     run_status = run.status if run else None
     profile = run.profile if run else None
-    evidence_id_value = evidence_id or (run.evidence_id if run else None)
-    if not evidence_id_value:
+    if not evidence_id:
         return {
             "case_id": case_id,
             "selected_run": selected_run,
@@ -2541,7 +2608,7 @@ def _artifact_overview(
             resolved = resolve_active_memory_result(
                 db,
                 case_id=case_id,
-                evidence_id=evidence_id_value,
+                evidence_id=evidence_id,
                 family=family,
                 preferred_run_id=run_id,
             )
@@ -2549,14 +2616,14 @@ def _artifact_overview(
             resolved = resolve_active_memory_result(
                 db,
                 case_id=case_id,
-                evidence_id=evidence_id_value,
+                evidence_id=evidence_id,
                 family=family,
             )
         active_run = resolved.get("active_run") or {}
         active_run_id = active_run.get("id") if isinstance(active_run, dict) else None
         payload = get_memory_family_count(
             case_id=case_id,
-            evidence_id=evidence_id_value,
+            evidence_id=evidence_id,
             family=family,
             active_run_id=active_run_id,
             db=db,
@@ -2571,7 +2638,7 @@ def _artifact_overview(
     module_discrepancies = 0
     return {
         "case_id": case_id,
-        "evidence_id": evidence_id_value,
+        "evidence_id": evidence_id,
         "selected_run": selected_run,
         "run_status": run_status,
         "profile": profile,
@@ -2615,12 +2682,11 @@ def _artifact_overview(
 def get_case_memory_artifacts_overview(
     case_id: str,
     run_id: str | None = Query(default=None),
-    evidence_id: str | None = Query(default=None),
+    evidence_id: str = Query(...),
     db: Session = Depends(get_db),
 ):
     _require_case(db, case_id)
-    if evidence_id is not None:
-        _require_evidence_for_case(db, case_id, evidence_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
     return _artifact_overview(case_id, db, run_id, evidence_id=evidence_id)
 
 
@@ -2663,7 +2729,7 @@ def list_memory_network_connections(
     db: Session = Depends(get_db),
 ):
     _require_evidence_for_case(db, case_id, evidence_id)
-    _require_run_or_any(case_id, run_id)
+    _require_run_or_any(db, case_id, run_id)
     filters: dict[str, Any] = {
         "protocol": protocol,
         "local_address": local_address,
@@ -2701,7 +2767,7 @@ def list_memory_process_modules(
     db: Session = Depends(get_db),
 ):
     _require_evidence_for_case(db, case_id, evidence_id)
-    _require_run_or_any(case_id, run_id)
+    _require_run_or_any(db, case_id, run_id)
     filters: dict[str, Any] = {
         "pid": pid,
         "process_name": process_name,
@@ -2741,7 +2807,7 @@ def list_memory_handles(
     db: Session = Depends(get_db),
 ):
     _require_evidence_for_case(db, case_id, evidence_id)
-    _require_run_or_any(case_id, run_id)
+    _require_run_or_any(db, case_id, run_id)
     filters: dict[str, Any] = {
         "pid": pid,
         "process_name": process_name,
@@ -2769,7 +2835,7 @@ def list_memory_kernel_modules(
     db: Session = Depends(get_db),
 ):
     _require_evidence_for_case(db, case_id, evidence_id)
-    _require_run_or_any(case_id, run_id)
+    _require_run_or_any(db, case_id, run_id)
     return _artifact_list(
         case_id,
         document_type="memory_kernel_module",
@@ -2790,7 +2856,7 @@ def list_memory_drivers(
     db: Session = Depends(get_db),
 ):
     _require_evidence_for_case(db, case_id, evidence_id)
-    _require_run_or_any(case_id, run_id)
+    _require_run_or_any(db, case_id, run_id)
     return _artifact_list(
         case_id,
         document_type="memory_driver",
@@ -2815,7 +2881,7 @@ def list_memory_suspicious_regions(
     db: Session = Depends(get_db),
 ):
     _require_evidence_for_case(db, case_id, evidence_id)
-    _require_run_or_any(case_id, run_id)
+    _require_run_or_any(db, case_id, run_id)
     filters: dict[str, Any] = {
         "pid": pid,
         "process_name": process_name,
@@ -2903,10 +2969,17 @@ def _is_native_compatible(db: Session, *, evidence_id: str, requirement) -> bool
     return bool(result and result.get("compatible"))
 
 
-def _require_run_or_any(case_id: str, run_id: str | None) -> None:
-    """Light validation: the index may not exist yet, so we only check
-    the run_id shape.  The search helpers tolerate missing indexes.
+def _require_run_or_any(db: Session, case_id: str, run_id: str | None) -> None:
+    """Validate that the run exists if run_id is provided.
+
+    When ``run_id`` is not None, verify the run exists and belongs
+    to the case.  Raise 404 if not found.  The search helpers
+    tolerate missing indexes for None run_id.
     """
+    if run_id is not None:
+        run = db.get(MemoryScanRun, run_id)
+        if run is None or run.case_id != case_id:
+            raise HTTPException(status_code=404, detail="Memory run not found")
 
 
 # ---------------------------------------------------------------------------

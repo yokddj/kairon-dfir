@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 from fastapi import UploadFile
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -72,8 +73,8 @@ def _accepted_capacity(size: int, *, phase: str, bytes_already_staged: int = 0):
     return SimpleNamespace(finalization_strategy="atomic_rename", staging_and_final_same_filesystem=True)
 
 
-def _case(db, case_id: str = CASE_ID) -> Case:
-    item = Case(id=case_id, name="Memory Case")
+def _case(db, case_id: str = CASE_ID, name: str = "Memory Case") -> Case:
+    item = Case(id=case_id, name=name)
     db.add(item)
     db.commit()
     return item
@@ -467,7 +468,7 @@ def test_memory_scan_requires_authorization_acknowledgement_when_enabled(db_sess
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
 
     with pytest.raises(Exception) as exc_info:
-        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(profile="metadata_only"), db_session)
+        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(profile="metadata_only"), case_id=evidence.case_id, db=db_session)
 
     assert getattr(exc_info.value, "status_code", None) == 400
     assert "Authorization acknowledgement" in str(getattr(exc_info.value, "detail", ""))
@@ -479,7 +480,7 @@ def test_memory_scan_disabled_by_default(db_session, monkeypatch: pytest.MonkeyP
     evidence = _evidence(db_session)
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=False))
 
-    response = routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), db_session)
+    response = routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), case_id=evidence.case_id, db=db_session)
 
     assert response.status == "disabled"
     assert response.accepted is False
@@ -492,7 +493,7 @@ def test_memory_scan_rejects_non_memory_evidence(db_session, monkeypatch: pytest
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True))
 
     with pytest.raises(Exception) as exc_info:
-        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), db_session)
+        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), case_id=evidence.case_id, db=db_session)
 
     assert getattr(exc_info.value, "status_code", None) == 400
 
@@ -503,7 +504,7 @@ def test_memory_scan_external_execution_disabled_rejects_without_run(db_session,
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=False))
 
     with pytest.raises(Exception) as exc_info:
-        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), db_session)
+        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), case_id=evidence.case_id, db=db_session)
 
     assert getattr(exc_info.value, "status_code", None) == 403
     assert db_session.query(MemoryScanRun).count() == 0
@@ -518,7 +519,7 @@ def test_memory_scan_queues_metadata_only_when_enabled(db_session, monkeypatch: 
     monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=evidence))
     monkeypatch.setattr(routes_memory, "enqueue_memory_metadata_scan", lambda _run_id: "job-1")
 
-    response = routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), db_session)
+    response = routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), case_id=evidence.case_id, db=db_session)
     run = db_session.query(MemoryScanRun).one()
     plugin_run = db_session.query(MemoryPluginRun).one()
 
@@ -562,7 +563,7 @@ def test_memory_evidence_does_not_create_normalized_events(db_session, monkeypat
     evidence = _evidence(db_session)
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=False))
 
-    routes_memory.start_memory_scan(evidence.id, None, db_session)
+    routes_memory.start_memory_scan(evidence.id, None, case_id=evidence.case_id, db=db_session)
 
     assert db_session.query(Artifact).filter(Artifact.evidence_id == evidence.id).count() == 0
     assert db_session.query(MemoryArtifactSummary).filter(MemoryArtifactSummary.evidence_id == evidence.id).count() == 0
@@ -574,7 +575,7 @@ def test_memory_evidence_does_not_write_to_existing_events_index(db_session, mon
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=False))
     monkeypatch.setattr(memory_overview, "count_documents", lambda _index: {"count": 0})
 
-    routes_memory.start_memory_scan(evidence.id, None, db_session)
+    routes_memory.start_memory_scan(evidence.id, None, case_id=evidence.case_id, db=db_session)
     overview = memory_overview.get_case_memory_overview(db_session, CASE_ID)
 
     assert overview["has_disk_events"] is False
@@ -895,7 +896,7 @@ def test_memory_scan_prevents_duplicate_active_run(db_session, monkeypatch: pyte
     monkeypatch.setattr(routes_memory, "validate_memory_execution_request", lambda _db, _evidence_id: object())
 
     with pytest.raises(Exception) as exc_info:
-        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), db_session)
+        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), case_id=evidence.case_id, db=db_session)
 
     assert getattr(exc_info.value, "status_code", None) == 409
 
@@ -1408,3 +1409,51 @@ def test_memory_output_dir_relative_path(monkeypatch: pytest.MonkeyPatch, tmp_pa
     info = memory_storage.write_atomic_bytes(run_dir / "windows.info.json", b"{}")
 
     assert info["path"] == f"memory-output/evidence/{CASE_ID}/{MEMORY_EVIDENCE_ID}/memory/runs/run-1/windows.info.json"
+
+
+def test_renormalize_canonical_entities_rejects_foreign_evidence_run(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case(db_session)
+    ev_a = _evidence(db_session, case_id=case.id, evidence_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    ev_b = _evidence(db_session, case_id=case.id, evidence_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    run_b = MemoryScanRun(case_id=case.id, evidence_id=ev_b.id, profile="processes_basic", status="completed")
+    db_session.add(run_b)
+    db_session.commit()
+    called = {"fetch": 0}
+    monkeypatch.setattr(routes_memory.canonical_entities, "fetch_legacy_process_documents", lambda *_a, **_k: called.__setitem__("fetch", called["fetch"] + 1) or [])
+    with pytest.raises(HTTPException) as exc:
+        routes_memory.renormalize_canonical_entities(case.id, ev_a.id, routes_memory._RenormalizeRequest(run_id=run_b.id, dry_run=True), db_session)
+    assert exc.value.status_code == 404
+    assert called["fetch"] == 0
+
+
+def test_renormalize_canonical_entities_accepts_matching_evidence_run(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case(db_session)
+    ev_a = _evidence(db_session, case_id=case.id, evidence_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    run_a = MemoryScanRun(case_id=case.id, evidence_id=ev_a.id, profile="processes_basic", status="completed")
+    db_session.add(run_a)
+    db_session.commit()
+    monkeypatch.setattr(routes_memory.canonical_entities, "fetch_legacy_process_documents", lambda *_a, **_k: [{"id": "doc-1"}])
+    monkeypatch.setattr(routes_memory.canonical_entities, "renormalize_documents", lambda *_a, **_k: {"summary": {"source_documents": 1, "normalization_version": "v1"}})
+    payload = routes_memory.renormalize_canonical_entities(case.id, ev_a.id, routes_memory._RenormalizeRequest(run_id=run_a.id, dry_run=True), db_session)
+    assert payload["materialization_status"] == "dry_run"
+
+
+def test_recompute_canonical_tree_rejects_foreign_case_or_evidence_run_without_opensearch_calls(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    case_a = _case(db_session, case_id="aaaaaaaa-1111-4111-8111-111111111111")
+    case_b = _case(db_session, case_id="bbbbbbbb-2222-4222-8222-222222222222")
+    ev_a = _evidence(db_session, case_id=case_a.id, evidence_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+    ev_b = _evidence(db_session, case_id=case_a.id, evidence_id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")
+    ev_c = _evidence(db_session, case_id=case_b.id, evidence_id="cccccccc-cccc-4ccc-8ccc-cccccccccccc")
+    run_b = MemoryScanRun(case_id=case_a.id, evidence_id=ev_b.id, profile="processes_basic", status="completed")
+    run_c = MemoryScanRun(case_id=case_b.id, evidence_id=ev_c.id, profile="processes_basic", status="completed")
+    db_session.add_all([run_b, run_c])
+    db_session.commit()
+    called = {"fetch": 0, "client": 0}
+    monkeypatch.setattr(routes_memory.canonical_entities, "fetch_canonical_entities", lambda *_a, **_k: called.__setitem__("fetch", called["fetch"] + 1) or {"items": []})
+    monkeypatch.setattr(routes_memory, "get_opensearch_client", lambda: called.__setitem__("client", called["client"] + 1), raising=False)
+    for bad_run in (run_b.id, run_c.id, "dddddddd-dddd-4ddd-8ddd-dddddddddddd"):
+        with pytest.raises(HTTPException) as exc:
+            routes_memory.recompute_canonical_tree(case_a.id, ev_a.id, routes_memory._RenormalizeRequest(run_id=bad_run, dry_run=True), db_session)
+        assert exc.value.status_code == 404
+    assert called["fetch"] == 0
+    assert called["client"] == 0

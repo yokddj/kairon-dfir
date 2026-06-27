@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { MemoryWorkspace } from "../components/MemoryWorkspace";
 import { MemoryEvidenceHeader } from "../components/memory/MemoryEvidenceHeader";
+import { MemoryEvidenceSelector } from "../components/memory/MemoryEvidenceSelector";
 import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysisCatalogueModal";
 import { MemoryHistoryPanel } from "../components/memory/MemoryHistoryPanel";
 import { MemoryTypeConfirmationModal } from "../components/memory/MemoryTypeConfirmationModal";
@@ -36,6 +37,7 @@ function familyForTab(tab: MemoryTab, artifact?: string | null): string {
 export default function MemoryEvidencePage() {
   const { caseId = "", evidenceId = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
+  const navigate = useNavigate();
   const { setActiveCaseId } = useActiveCase();
   const [catalogueOpen, setCatalogueOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -133,8 +135,8 @@ export default function MemoryEvidencePage() {
       setConfirmationToast("Memory evidence type confirmed. Analysis is now available.");
       // Invalidate every query that depends on the evidence status.
       void queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
-      void queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId] });
-      void queryClient.invalidateQueries({ queryKey: ["memory-readiness", caseId] });
+      void queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId, evidenceId] });
+      void queryClient.invalidateQueries({ queryKey: ["memory-readiness", caseId, evidenceId] });
       window.setTimeout(() => setConfirmationToast(null), 5000);
     },
     onError: (error: Error & { errorCode?: string }) => {
@@ -244,6 +246,8 @@ export default function MemoryEvidencePage() {
     }, { replace: true });
   }, [setSearchParams]);
 
+  const landingItems = landingQuery.data?.items ?? [];
+
   if (overviewQuery.isLoading) {
     return <div className="rounded-[28px] border border-line bg-panel/70 p-8 text-sm text-muted shadow-panel">Loading evidence...</div>;
   }
@@ -258,6 +262,17 @@ export default function MemoryEvidencePage() {
 
   return (
     <div className="space-y-6" data-testid="memory-evidence-workspace">
+      {landingItems.length > 1 ? (
+        <MemoryEvidenceSelector
+          caseId={caseId}
+          selectedEvidenceId={evidenceId}
+          evidences={landingItems}
+          onChange={(newEvidenceId) => {
+            navigate(`/cases/${caseId}/memory/${newEvidenceId}`);
+          }}
+        />
+      ) : null}
+
       <MemoryEvidenceHeader
         caseId={caseId}
         evidence={evidence}
@@ -281,7 +296,7 @@ export default function MemoryEvidencePage() {
         symbolReadiness={symbolReadiness}
         symbolPreparation={symbolPreparation}
       />
- 
+
       {confirmationToast ? (
         <div
           className="rounded-xl border border-mint/30 bg-mint/10 p-3 text-xs text-ink"
@@ -354,7 +369,7 @@ export default function MemoryEvidencePage() {
         </section>
       ) : null}
 
-      <MemoryWorkspace caseId={caseId} evidenceId={evidenceId} />
+      <MemoryWorkspace key={evidenceId} caseId={caseId} evidenceId={evidenceId} />
 
       {catalogueOpen && catalogueQuery.data && evidence ? (
         <MemoryAnalysisCatalogueModal

@@ -29,6 +29,7 @@ const PROFILE_COPY: Record<Profile, { title: string; description: string }> = {
 type Props = {
   caseId: string;
   overview: MemoryOverview;
+  evidenceId?: string;
   readinessByEvidence: Map<string, MemoryEvidenceReadiness | undefined>;
   canRunMetadata: boolean;
   canRunProcessProfiles: boolean;
@@ -52,6 +53,7 @@ function ProfileCopy({ profile }: { profile: Profile }): string {
 export function MemoryAnalyzeAction({
   caseId,
   overview,
+  evidenceId: evidenceIdProp,
   readinessByEvidence,
   canRunMetadata,
   canRunProcessProfiles,
@@ -63,7 +65,7 @@ export function MemoryAnalyzeAction({
 
   const startMutation = useMutation({
     mutationFn: (vars: { evidenceId: string; profile: Profile }) =>
-      api.startMemoryScan(vars.evidenceId, vars.profile, true),
+      api.startMemoryScan(caseId, vars.evidenceId, vars.profile, true),
     onSuccess: (result) => {
       setFeedback(result.message);
       queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
@@ -72,7 +74,9 @@ export function MemoryAnalyzeAction({
     },
   });
 
-  const evidence = overview.evidences[0];
+  const evidence = evidenceIdProp
+    ? overview.evidences.find((e) => e.id === evidenceIdProp) ?? null
+    : null;
   const readiness = evidence ? readinessByEvidence.get(evidence.id) : undefined;
   const canRunSelected =
     profile === "metadata_only"
@@ -134,23 +138,29 @@ export function MemoryAnalyzeAction({
       </div>
 
       <div className="mt-3 flex flex-wrap gap-2">
-        <button
-          type="button"
-          disabled={!evidence || !canRunSelected || startMutation.isPending}
-          onClick={handleRun}
-          data-testid="analyze-run-button"
-          className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-50"
-        >
-          {startMutation.isPending ? "Starting analysis..." : "Run selected analysis"}
-        </button>
-        {!canRunMetadata ? (
-          <p className="text-xs text-rose-200">
-            {volatilityBackend?.message || "Volatility 3 is not ready for memory analysis."}
-          </p>
-        ) : null}
-        {evidence && readiness && !readiness.can_analyze && readiness.sanitized_message ? (
-          <p className="text-xs text-rose-200">{readiness.sanitized_message}</p>
-        ) : null}
+        {!evidence ? (
+          <p className="text-xs text-amber-200">Select a memory evidence above to begin analysis.</p>
+        ) : (
+          <>
+            <button
+              type="button"
+              disabled={!canRunSelected || startMutation.isPending}
+              onClick={handleRun}
+              data-testid="analyze-run-button"
+              className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-50"
+            >
+              {startMutation.isPending ? "Starting analysis..." : "Run selected analysis"}
+            </button>
+            {!canRunMetadata ? (
+              <p className="text-xs text-rose-200">
+                {volatilityBackend?.message || "Volatility 3 is not ready for memory analysis."}
+              </p>
+            ) : null}
+            {readiness && !readiness.can_analyze && readiness.sanitized_message ? (
+              <p className="text-xs text-rose-200">{readiness.sanitized_message}</p>
+            ) : null}
+          </>
+        )}
       </div>
 
       {feedback ? <p className="mt-2 text-xs text-emerald-200" data-testid="analyze-feedback">{feedback}</p> : null}

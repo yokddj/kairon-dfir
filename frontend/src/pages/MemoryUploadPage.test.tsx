@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -110,7 +110,7 @@ describe("MemoryUploadPage", () => {
     expect(getMemoryUploadReadinessMock).toHaveBeenCalledWith("case-1", 6);
     expect(await screen.findByText(/Upload completed/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Open Memory Analysis/i }));
-    expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/memory?evidence_id=ev-memory");
+    expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/memory/ev-memory");
   });
 
   it("shows validating immediately and rechecks the exact selected size before multipart upload", async () => {
@@ -194,6 +194,30 @@ describe("MemoryUploadPage", () => {
 
     expect(await screen.findByText(/Synchronous upload client failure/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Retry upload/i })).toBeInTheDocument();
+  });
+
+  it("shows duplicate warning and opens existing evidence without treating it as a generic failure", async () => {
+    const duplicateError = Object.assign(new Error("This memory image is already registered in this case."), {
+      errorCode: "MEMORY_EVIDENCE_DUPLICATE",
+      detail: {
+        existing_evidence_id: "ev-existing",
+        existing_filename: "authorized.mem",
+        message: "This memory image is already registered in this case.",
+      },
+    });
+    uploadEvidenceMock.mockRejectedValue(duplicateError);
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+
+    const warning = await screen.findByTestId("memory-upload-duplicate-warning");
+    expect(warning).toBeInTheDocument();
+    expect(warning).toHaveTextContent(/already registered in this case/i);
+    await userEvent.click(screen.getByRole("button", { name: /Open existing evidence/i }));
+    expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/memory/ev-existing");
   });
 
   it("prevents duplicate clicks while the first request is active", async () => {

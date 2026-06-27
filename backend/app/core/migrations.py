@@ -1841,3 +1841,46 @@ def _v18_native_probe(connection: Connection) -> None:
         )
 
     logger.info("v18: volatility native probe table migration complete")
+
+
+# ---------------------------------------------------------------------------
+# v19: Audit orphan memory_upload evidence references (no FK yet)
+# ---------------------------------------------------------------------------
+
+
+MEMORY_UPLOAD_ORPHAN_PREFLIGHT_SQL = """
+SELECT
+    mu.id,
+    mu.case_id,
+    mu.evidence_id,
+    mu.status,
+    mu.created_at
+FROM memory_uploads mu
+LEFT JOIN evidences e ON e.id = mu.evidence_id
+WHERE mu.evidence_id IS NOT NULL
+  AND e.id IS NULL
+"""
+
+
+@register(19, "memory_uploads_evidence_audit")
+def _v19_memory_upload_evidence_audit(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    existing_tables = inspector.get_table_names()
+    if "memory_uploads" not in existing_tables or "evidences" not in existing_tables:
+        logger.info("v19: memory_uploads/evidences table missing, skipping upload evidence audit")
+        return
+
+    try:
+        orphan_rows = connection.execute(text(MEMORY_UPLOAD_ORPHAN_PREFLIGHT_SQL)).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        logger.info("v19: orphan preflight query failed (%s)", exc)
+        orphan_rows = []
+
+    logger.info("v19: memory_uploads orphan evidence reference count=%s", len(orphan_rows))
+
+    if not _index_exists(connection, "ix_memory_upload_case_evidence"):
+        _create_index_dialect_aware(
+            connection,
+            name="ix_memory_upload_case_evidence",
+            create_sql="CREATE INDEX ix_memory_upload_case_evidence ON memory_uploads (case_id, evidence_id)",
+        )

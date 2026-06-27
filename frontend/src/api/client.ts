@@ -129,19 +129,28 @@ async function uploadFormData<T>(path: string, formData: FormData, options?: Upl
               const bodyText = await response.text();
               const contentType = response.headers.get("content-type") ?? "";
               if (!response.ok) {
-                let detail = bodyText || `HTTP ${response.status}`;
+                let detail: unknown = bodyText || `HTTP ${response.status}`;
+                let errorCode: string | null = null;
+                let humanMessage: string | null = null;
                 try {
-                  const parsed = JSON.parse(bodyText) as { detail?: string | Record<string, unknown> };
-                  detail =
-                    typeof parsed.detail === "string"
-                      ? parsed.detail
-                      : parsed.detail
-                        ? JSON.stringify(parsed.detail)
-                        : detail;
+                  const parsed = JSON.parse(bodyText) as { detail?: string | { error_code?: string; message?: string } };
+                  if (typeof parsed.detail === "string") {
+                    detail = parsed.detail;
+                    humanMessage = parsed.detail;
+                  } else if (parsed.detail && typeof parsed.detail === "object") {
+                    detail = parsed.detail;
+                    errorCode = parsed.detail.error_code ?? null;
+                    humanMessage = parsed.detail.message ?? null;
+                  }
                 } catch {
                   // Keep raw response text when JSON parsing fails.
                 }
-                const error = new Error(detail) as UploadAttemptError;
+                const error = new ApiError(
+                  response.status,
+                  errorCode,
+                  humanMessage || bodyText || `HTTP ${response.status}`,
+                  detail,
+                ) as ApiError & UploadAttemptError;
                 error.nonRetryable = true;
                 throw error;
               }
@@ -165,24 +174,33 @@ async function uploadFormData<T>(path: string, formData: FormData, options?: Upl
               xhr.onabort = () => reject(new Error("Upload aborted"));
               xhr.onload = () => {
                 const contentType = xhr.getResponseHeader("content-type") ?? "";
-                if (xhr.status < 200 || xhr.status >= 300) {
-                  let detail = xhr.responseText || `HTTP ${xhr.status}`;
-                  try {
-                    const parsed = JSON.parse(xhr.responseText) as { detail?: string | Record<string, unknown> };
-                    detail =
-                      typeof parsed.detail === "string"
-                        ? parsed.detail
-                        : parsed.detail
-                          ? JSON.stringify(parsed.detail)
-                          : detail;
-                  } catch {
-                    // Keep raw response text when JSON parsing fails.
-                  }
-                  const error = new Error(detail) as UploadAttemptError;
-                  error.nonRetryable = true;
-                  reject(error);
-                  return;
-                }
+                 if (xhr.status < 200 || xhr.status >= 300) {
+                   let detail: unknown = xhr.responseText || `HTTP ${xhr.status}`;
+                   let errorCode: string | null = null;
+                   let humanMessage: string | null = null;
+                   try {
+                     const parsed = JSON.parse(xhr.responseText) as { detail?: string | { error_code?: string; message?: string } };
+                     if (typeof parsed.detail === "string") {
+                       detail = parsed.detail;
+                       humanMessage = parsed.detail;
+                     } else if (parsed.detail && typeof parsed.detail === "object") {
+                       detail = parsed.detail;
+                       errorCode = parsed.detail.error_code ?? null;
+                       humanMessage = parsed.detail.message ?? null;
+                     }
+                   } catch {
+                     // Keep raw response text when JSON parsing fails.
+                   }
+                   const error = new ApiError(
+                     xhr.status,
+                     errorCode,
+                     humanMessage || xhr.responseText || `HTTP ${xhr.status}`,
+                     detail,
+                   ) as ApiError & UploadAttemptError;
+                   error.nonRetryable = true;
+                   reject(error);
+                   return;
+                 }
                 if (!xhr.responseText) {
                   resolve(undefined as T);
                   return;
@@ -4796,11 +4814,12 @@ export const api = {
     request<MemoryAnalysisBatch>(`/cases/${caseId}/memory/evidences/${evidenceId}/analysis-batches/${batchId}/cancel`, {
       method: "POST",
     }),
-  startMemoryScan: (evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", authorizationAcknowledged = false) =>
-    request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan`, { method: "POST", body: JSON.stringify({ profile, authorization_acknowledged: authorizationAcknowledged }) }),
+  startMemoryScan: (caseId: string, evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", authorizationAcknowledged = false) =>
+    request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan?case_id=${encodeURIComponent(caseId)}`, { method: "POST", body: JSON.stringify({ profile, authorization_acknowledged: authorizationAcknowledged }) }),
   getMemoryRun: (runId: string) => request<MemoryRunDetail>(`/memory/runs/${runId}`),
   getMemoryRunSystemInfo: (runId: string) => request<MemorySystemInfo>(`/memory/runs/${runId}/system-info`),
   getCaseMemorySystemInfo: (caseId: string) => request<MemorySystemInfo[]>(`/cases/${caseId}/memory/system-info`),
+  getEvidenceMemorySystemInfo: (caseId: string, evidenceId: string) => request<MemorySystemInfo[]>(`/cases/${caseId}/memory/evidences/${evidenceId}/system-info`),
   getCaseMemoryProcesses: (caseId: string, params?: { run_id?: string; pid?: number; process_name?: string; source_plugin?: string; page?: number; page_size?: number }) => {
     const query = new URLSearchParams();
     if (params?.run_id) query.set("run_id", params.run_id);
@@ -4813,6 +4832,7 @@ export const api = {
   },
   getMemoryProcessTree: (runId: string) => request<MemoryProcessTree>(`/memory/runs/${runId}/process-tree`),
   getMemoryRunOptions: (caseId: string) => request<MemoryRunSelector>(`/cases/${caseId}/memory/runs/options`),
+  getEvidenceMemoryRunOptions: (caseId: string, evidenceId: string) => request<MemoryRunSelector>(`/cases/${caseId}/memory/evidences/${evidenceId}/runs/options`),
   probeMemoryImage: (caseId: string, evidenceId: string) =>
     request<MemoryImageProbeResult>(
       `/cases/${caseId}/evidences/probe-memory-image?evidence_id=${encodeURIComponent(evidenceId)}`,
@@ -4896,16 +4916,17 @@ export const api = {
     if (params?.search) query.set("search", params.search);
     return request<MemoryProcessTreeEntity>(`/cases/${caseId}/memory/process-tree-canonical${query.size ? `?${query.toString()}` : ""}`);
   },
-  renormalizeProcessEntities: (caseId: string, runId: string, dryRun = true) =>
-    request<MemoryRenormalizeSummary>(`/cases/${caseId}/memory/process-entities/renormalize`, {
+  renormalizeProcessEntities: (caseId: string, evidenceId: string, runId: string, dryRun = true) =>
+    request<MemoryRenormalizeSummary>(`/cases/${caseId}/memory/evidences/${evidenceId}/process-entities/renormalize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ run_id: runId, dry_run: dryRun }),
     }),
   // Core memory artifact endpoints
-  getMemoryArtifactOverview: (caseId: string, params?: { run_id?: string | null }) => {
+  getMemoryArtifactOverview: (caseId: string, params?: { run_id?: string | null; evidence_id?: string }) => {
     const query = new URLSearchParams();
     if (params?.run_id) query.set("run_id", params.run_id);
+    if (params?.evidence_id) query.set("evidence_id", params.evidence_id);
     return request<MemoryArtifactOverview>(`/cases/${caseId}/memory/artifacts/overview${query.size ? `?${query.toString()}` : ""}`);
   },
   getMemoryNetworkConnections: (

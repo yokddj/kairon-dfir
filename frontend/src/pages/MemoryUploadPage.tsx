@@ -13,6 +13,12 @@ const MEMORY_EXTENSIONS = [".raw", ".mem", ".dmp", ".dump", ".bin", ".img", ".vm
 
 type UploadStage = "idle" | "validating" | "uploading" | "verifying" | "finalizing" | "completed" | "failed";
 
+type DuplicateMemoryUpload = {
+  existingEvidenceId: string;
+  existingFilename: string | null;
+  message: string;
+};
+
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0 B";
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -66,6 +72,7 @@ export default function MemoryUploadPage() {
   const [status, setStatus] = useState("");
   const [progress, setProgress] = useState({ loaded: 0, total: 0 });
   const [uploadedEvidence, setUploadedEvidence] = useState<Evidence | null>(null);
+  const [duplicateUpload, setDuplicateUpload] = useState<DuplicateMemoryUpload | null>(null);
   const [acceptedReadiness, setAcceptedReadiness] = useState<MemoryUploadReadiness | null>(null);
   const [activeUploadId, setActiveUploadId] = useState<string | null>(() => localStorage.getItem(`kairon-memory-upload:${caseId}`));
   const [finalizationStartedAt, setFinalizationStartedAt] = useState<number | null>(null);
@@ -185,10 +192,31 @@ export default function MemoryUploadPage() {
     return "The selected file can be uploaded as isolated memory_dump evidence.";
   }, [extensionAllowed, file, fileWithinLimit, readiness]);
 
+  function handleDuplicateError(error: unknown): boolean {
+    const duplicateError = error as { errorCode?: string | null; detail?: unknown; message?: string };
+    if (duplicateError?.errorCode !== "MEMORY_EVIDENCE_DUPLICATE") return false;
+    const detail = (duplicateError.detail && typeof duplicateError.detail === "object")
+      ? duplicateError.detail as { existing_evidence_id?: string; existing_filename?: string | null; message?: string }
+      : {};
+    const existingEvidenceId = String(detail.existing_evidence_id || "").trim();
+    if (!existingEvidenceId) return false;
+    localStorage.removeItem(`kairon-memory-upload:${caseId}`);
+    setActiveUploadId(null);
+    setStage("idle");
+    setStatus("");
+    setDuplicateUpload({
+      existingEvidenceId,
+      existingFilename: detail.existing_filename ?? null,
+      message: detail.message || duplicateError.message || "This memory image is already registered in this case.",
+    });
+    return true;
+  }
+
   async function upload() {
-    setStage("validating");
-    setStatus("Validating upload…");
-    setUploadedEvidence(null);
+      setStage("validating");
+      setStatus("Validating upload…");
+      setUploadedEvidence(null);
+      setDuplicateUpload(null);
     let uploadTransferred = false;
     let uploadId: string | null = null;
     try {
@@ -234,6 +262,7 @@ export default function MemoryUploadPage() {
       setStage("completed");
       setStatus("Memory image uploaded and registered.");
     } catch (error) {
+      if (handleDuplicateError(error)) return;
       const reason = error instanceof Error ? error.message : "Memory image upload failed.";
       if (uploadTransferred) {
         try {
@@ -286,11 +315,12 @@ export default function MemoryUploadPage() {
       if (result.status === "completed" && result.evidence_id) {
         localStorage.removeItem(`kairon-memory-upload:${caseId}`);
         setActiveUploadId(null);
-        navigate(`/cases/${caseId}/memory?evidence_id=${result.evidence_id}`);
+        navigate(`/cases/${caseId}/memory/${result.evidence_id}`);
         return;
       }
       await statusQuery.refetch();
     } catch (err) {
+      if (handleDuplicateError(err)) return;
       setStatus(err instanceof Error ? err.message : "Evidence registration retry failed");
     }
   }
@@ -414,7 +444,7 @@ export default function MemoryUploadPage() {
               ) : null}
               {serverActive.evidence_id ? (
                 <Link
-                  to={`/cases/${caseId}/memory?evidence_id=${serverActive.evidence_id}`}
+                  to={`/cases/${caseId}/memory/${serverActive.evidence_id}`}
                   className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss"
                 >
                   Open evidence
@@ -458,7 +488,7 @@ export default function MemoryUploadPage() {
           <label className="block"><span className="text-sm text-muted">Source host</span><input value={providedHost} onChange={(event) => setProvidedHost(event.target.value)} placeholder="HOSTA or hosta.example.local" className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none" /></label>
           <button type="button" onClick={() => inputRef.current?.click()} disabled={stage === "uploading" || stage === "verifying" || stage === "finalizing"} className="self-end rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted disabled:opacity-60">Select RAM image</button>
         </div>
-        <input ref={inputRef} data-testid="memory-image-file-input" aria-label="Memory image file" type="file" accept={MEMORY_EXTENSIONS.join(",") + ",application/octet-stream"} className="hidden" onChange={(event) => { const next = event.target.files?.[0] || null; setFile(next); setUploadedEvidence(null); setAcceptedReadiness(null); setStage("idle"); setStatus(next ? `Selected ${next.name}` : ""); }} />
+        <input ref={inputRef} data-testid="memory-image-file-input" aria-label="Memory image file" type="file" accept={MEMORY_EXTENSIONS.join(",") + ",application/octet-stream"} className="hidden" onChange={(event) => { const next = event.target.files?.[0] || null; setFile(next); setUploadedEvidence(null); setDuplicateUpload(null); setAcceptedReadiness(null); setStage("idle"); setStatus(next ? `Selected ${next.name}` : ""); }} />
         {file ? <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm"><p className="truncate font-medium text-ink" title={file.name}>{file.name}</p><p className="mt-1 text-muted">Extension: {extension || "none"} · Size: {formatBytes(file.size)} · Detected type: {extensionAllowed ? "Memory image" : "Unsupported"}</p><p className={`mt-2 ${extensionAllowed && fileWithinLimit && readiness?.can_accept_selected_size ? "text-mint" : "text-warning"}`}>{summary}</p></div> : null}
       </section>
 
@@ -469,7 +499,18 @@ export default function MemoryUploadPage() {
         {stage !== "idle" ? <div className="mt-4"><div className="flex justify-between text-xs text-muted"><span>{stage}</span><span>{formatBytes(progress.loaded)} / {formatBytes(progress.total)} · {percent}% transferred</span></div><div className="mt-2 h-3 overflow-hidden rounded-full bg-abyss"><div className={`h-full transition-all ${stage === "failed" ? "bg-rose-500" : stage === "completed" ? "bg-mint" : "bg-accent"}`} style={{ width: `${percent}%` }} /></div><p className={`mt-3 text-sm ${stage === "failed" ? "text-rose-200" : "text-muted"}`}>{status}</p>{stage === "verifying" || stage === "finalizing" ? <><p className="mt-2 text-xs text-muted" role="status">Server finalization is active · {elapsedSeconds}s elapsed.</p>{elapsedSeconds >= 30 ? <p className="mt-2 text-xs text-warning">The file has been transferred. Kairon is still finalizing the evidence.</p> : null}</> : null}</div> : null}
         {activeUploadId && stage !== "completed" ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => void statusQuery.refetch()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Check status</button>{statusQuery.data?.retryable ? <button type="button" onClick={() => void reconcileUpload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Retry finalization</button> : null}{statusQuery.data?.failure_code === "upload_bytes_lost" ? <button type="button" onClick={() => void prepareReupload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Prepare new upload</button> : null}</div> : null}
         {stage === "failed" && !activeUploadId ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => void retryUpload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Retry upload</button><button type="button" onClick={() => inputRef.current?.click()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Select another file</button></div> : null}
-        {uploadedEvidence ? <div className="mt-4 rounded-2xl border border-mint/30 bg-mint/10 p-4 text-sm"><p className="font-semibold text-ink">Upload completed</p><p className="mt-1 text-muted">Evidence ID: {uploadedEvidence.id}</p><p className="mt-1 text-muted">Type: Memory image · Size: {formatBytes(uploadedEvidence.size_bytes)}</p><div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => navigate(`/cases/${caseId}/memory?evidence_id=${uploadedEvidence.id}`)} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">Open Memory Analysis</button><button type="button" onClick={() => { setFile(null); setUploadedEvidence(null); setStage("idle"); setStatus(""); setProgress({ loaded: 0, total: 0 }); }} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Upload another memory image</button></div></div> : null}
+        {duplicateUpload ? (
+          <div className="mt-4 rounded-2xl border border-warning/30 bg-warning/10 p-4 text-sm" data-testid="memory-upload-duplicate-warning">
+            <p className="font-semibold text-ink">This memory image is already registered in this case.</p>
+            <p className="mt-1 text-muted">{duplicateUpload.message}</p>
+            {duplicateUpload.existingFilename ? <p className="mt-1 text-muted">Existing evidence: {duplicateUpload.existingFilename}</p> : null}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button type="button" onClick={() => navigate(`/cases/${caseId}/memory/${duplicateUpload.existingEvidenceId}`)} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">Open existing evidence</button>
+              <button type="button" onClick={() => setDuplicateUpload(null)} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Cancel</button>
+            </div>
+          </div>
+        ) : null}
+        {uploadedEvidence ? <div className="mt-4 rounded-2xl border border-mint/30 bg-mint/10 p-4 text-sm"><p className="font-semibold text-ink">Upload completed</p><p className="mt-1 text-muted">Evidence ID: {uploadedEvidence.id}</p><p className="mt-1 text-muted">Type: Memory image · Size: {formatBytes(uploadedEvidence.size_bytes)}</p><div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => navigate(`/cases/${caseId}/memory/${uploadedEvidence.id}`)} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">Open Memory Analysis</button><button type="button" onClick={() => { setFile(null); setUploadedEvidence(null); setStage("idle"); setStatus(""); setProgress({ loaded: 0, total: 0 }); }} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Upload another memory image</button></div></div> : null}
       </section>
     </div>
   );

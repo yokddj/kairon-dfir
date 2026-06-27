@@ -1995,6 +1995,17 @@ def upload_evidence(
         try:
             return register_memory_evidence(upload_state.id, db=db)
         except MemoryUploadRegistrationError as exc:
+            if exc.code == "MEMORY_EVIDENCE_DUPLICATE":
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "error_code": exc.code,
+                        "duplicate": True,
+                        "existing_evidence_id": exc.existing_evidence_id,
+                        "existing_filename": exc.existing_filename,
+                        "message": exc.message,
+                    },
+                ) from exc
             # Structured registration error: log the FULL exception
             # (no swallowing) and surface the structured code to the
             # analyst.  The canonical blob is preserved.

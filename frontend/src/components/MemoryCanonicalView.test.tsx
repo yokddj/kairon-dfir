@@ -14,6 +14,7 @@ const renormalizeProcessEntitiesMock = vi.fn();
 vi.mock("../api/client", () => ({
   api: {
     getMemoryRunOptions: (...args: unknown[]) => getMemoryRunOptionsMock(...args),
+    getEvidenceMemoryRunOptions: (...args: unknown[]) => getMemoryRunOptionsMock(...args),
     getCanonicalProcessEntities: (...args: unknown[]) => getCanonicalProcessEntitiesMock(...args),
     getCanonicalProcessSummary: (...args: unknown[]) => getCanonicalProcessSummaryMock(...args),
     getCanonicalProcessTree: (...args: unknown[]) => getCanonicalProcessTreeMock(...args),

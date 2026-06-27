@@ -45,6 +45,7 @@ from app.services.memory import upload_lifecycle as lifecycle_module
 from app.services.memory.upload_lifecycle import (
     ACTIVE_STATUSES,
     ERR_REGISTRATION_DB_CONSTRAINT,
+    ERR_REGISTRATION_DUPLICATE,
     ERR_REGISTRATION_FAILED,
     REG_STAGE_COMPLETED,
     REG_STAGE_FAILED_REGISTRATION,
@@ -385,6 +386,25 @@ def test_same_sha_different_case_allowed(
     assert evidence_a.case_id == case_a.id
     assert evidence_b.case_id == case_b.id
     assert db.query(Evidence).count() == 2
+
+
+def test_same_sha_same_case_rejected_as_duplicate(
+    db: Session, data_dir: Path
+) -> None:
+    case = _make_case(db)
+    payload = b"\x00" * 4096
+    sha = _sha256_of(payload)
+    item_a = _make_failed_upload(db, case_id=case.id, data_dir=data_dir, payload=payload, sha256=sha)
+    item_b = _make_failed_upload(db, case_id=case.id, data_dir=data_dir, payload=payload, sha256=sha)
+    evidence_a = register_memory_evidence_from_upload(item_a.id, db=db)
+    with pytest.raises(MemoryUploadRegistrationError) as excinfo:
+        register_memory_evidence_from_upload(item_b.id, db=db)
+    db.refresh(item_b)
+    assert excinfo.value.code == ERR_REGISTRATION_DUPLICATE
+    assert excinfo.value.existing_evidence_id == evidence_a.id
+    assert item_b.failure_code == ERR_REGISTRATION_DUPLICATE
+    assert item_b.retryable is False
+    assert db.query(Evidence).filter(Evidence.case_id == case.id).count() == 1
 
 
 # ---------------------------------------------------------------------------

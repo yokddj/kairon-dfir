@@ -4,6 +4,7 @@ import { type MemoryRunSelector, type MemorySystemInfo, api } from "../../api/cl
 
 type Props = {
   caseId: string;
+  evidenceId?: string;
   runOptions: MemoryRunSelector | null;
   selectedRunId: string | null;
   onSelectRunId: (next: string | null) => void;
@@ -104,20 +105,23 @@ function SystemInfoCard({ item, runId, isPrimary }: { item: MemorySystemInfo; ru
   );
 }
 
-export function MemorySystemTab({ caseId, runOptions, selectedRunId, onSelectRunId }: Props) {
+export function MemorySystemTab({ caseId, evidenceId, runOptions, selectedRunId, onSelectRunId }: Props) {
   const effectiveRunId = selectedRunId || runOptions?.default_run_id || null;
   const systemInfoQuery = useQuery({
-    queryKey: ["memory-system-info", caseId],
-    queryFn: () => api.getCaseMemorySystemInfo(caseId),
+    queryKey: ["memory-system-info", caseId, evidenceId ?? ""],
+    queryFn: () =>
+      evidenceId
+        ? api.getEvidenceMemorySystemInfo(caseId, evidenceId)
+        : api.getCaseMemorySystemInfo(caseId),
     enabled: Boolean(caseId),
     refetchOnWindowFocus: false,
   });
 
   const [showHistorical, setShowHistorical] = useState(false);
 
-  const infos = (systemInfoQuery.data || []).slice();
-  const primary = infos[0];
-  const historical = infos.slice(1);
+  const allInfos = (systemInfoQuery.data || []).slice();
+  const primary = allInfos[0];
+  const historical = allInfos.slice(1);
 
   return (
     <div className="space-y-4" data-testid="memory-system-tab">

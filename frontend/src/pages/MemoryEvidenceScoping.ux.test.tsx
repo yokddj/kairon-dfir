@@ -353,6 +353,13 @@ describe("Memory evidence scoping v1", () => {
     expect(screen.getByTestId("memory-evidence-size")).toHaveTextContent(/GiB/);
   });
 
+  it("shows not found for an invalid evidence URL and does not fall back to another evidence", async () => {
+    renderWorkspaceAt("/cases/case-1/memory/ev-missing");
+    expect(await screen.findByText(/Memory evidence was not found for this case/i)).toBeInTheDocument();
+    expect(screen.queryByTestId("memory-evidence-header")).not.toBeInTheDocument();
+    expect(screen.queryByText(/ws01\.dmp/i)).not.toBeInTheDocument();
+  });
+
   it("shows the Latest successful badge in the evidence header", async () => {
     renderWorkspaceAt("/cases/case-1/memory/ev-A");
     const badge = await screen.findByTestId("memory-active-result-badge");
@@ -547,7 +554,7 @@ describe("Memory evidence scoping v1", () => {
       window.confirm = vi.fn().mockReturnValue(true);
       fireEvent.click(runBtn);
       await waitFor(() => {
-        expect(startMemoryScanMock).toHaveBeenCalledWith("ev-A", "suspicious_memory", true);
+        expect(startMemoryScanMock).toHaveBeenCalledWith("case-1", "ev-A", "suspicious_memory", true);
       });
     } else {
       // The default view (first analysis) intentionally hides
