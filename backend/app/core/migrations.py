@@ -1856,8 +1856,24 @@ SELECT
     mu.status,
     mu.created_at
 FROM memory_uploads mu
-LEFT JOIN evidences e ON e.id = mu.evidence_id
+LEFT JOIN evidences e ON e.id::text = mu.evidence_id
 WHERE mu.evidence_id IS NOT NULL
+  AND mu.evidence_id != ''
+  AND e.id IS NULL
+"""
+
+
+MEMORY_UPLOAD_ORPHAN_PREFLIGHT_POSTGRES_SQL = """
+SELECT
+    mu.id,
+    mu.case_id,
+    mu.evidence_id,
+    mu.status,
+    mu.created_at
+FROM memory_uploads mu
+LEFT JOIN evidences e ON e.id = CAST(mu.evidence_id AS uuid)
+WHERE mu.evidence_id IS NOT NULL
+  AND mu.evidence_id != ''
   AND e.id IS NULL
 """
 
@@ -1870,11 +1886,19 @@ def _v19_memory_upload_evidence_audit(connection: Connection) -> None:
         logger.info("v19: memory_uploads/evidences table missing, skipping upload evidence audit")
         return
 
+    dialect = connection.dialect.name
+    preflight_sql = (
+        MEMORY_UPLOAD_ORPHAN_PREFLIGHT_POSTGRES_SQL
+        if dialect == "postgresql"
+        else MEMORY_UPLOAD_ORPHAN_PREFLIGHT_SQL
+    )
+
+    orphan_rows = []
     try:
-        orphan_rows = connection.execute(text(MEMORY_UPLOAD_ORPHAN_PREFLIGHT_SQL)).fetchall()
+        with connection.begin_nested():
+            orphan_rows = connection.execute(text(preflight_sql)).fetchall()
     except Exception as exc:  # noqa: BLE001
         logger.info("v19: orphan preflight query failed (%s)", exc)
-        orphan_rows = []
 
     logger.info("v19: memory_uploads orphan evidence reference count=%s", len(orphan_rows))
 
