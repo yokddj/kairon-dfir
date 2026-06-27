@@ -84,7 +84,7 @@ describe("MemoryPreparationCard v1 reconciliation", () => {
     expect(title.textContent).toMatch(/Memory analysis ready/);
   });
 
-  it("4) stale card shows 'Memory preparation was interrupted' and Retry preparation", async () => {
+  it("4) stale card shows 'Memory preparation was interrupted' but Retry is only for failed state", () => {
     (api.retryMemoryPreparation as ReturnType<typeof vi.fn>).mockResolvedValue({
       persisted_state: "queued",
       effective_state: "queued",
@@ -108,14 +108,7 @@ describe("MemoryPreparationCard v1 reconciliation", () => {
     });
     const title = screen.getByTestId("memory-preparation-title");
     expect(title.textContent).toMatch(/Memory preparation was interrupted/);
-    const retry = screen.getByTestId("memory-preparation-retry-button");
-    expect(retry.textContent).toMatch(/Retry preparation/);
-    fireEvent.click(retry);
-    await waitFor(() =>
-      expect(api.retryMemoryPreparation).toHaveBeenCalledWith(CASE, EVID),
-    );
-    // The legacy endpoint must not be called.
-    expect(api.retryMemorySymbolPreparation).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("memory-preparation-retry-button")).toBeNull();
   });
 
   it("5) active task with heartbeat shows the progress bar (real progress)", () => {

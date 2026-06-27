@@ -736,3 +736,24 @@ def test_repair_preserved_memory_uploads_apply(
     db.refresh(failed)
     assert failed.status == "completed"
     assert db.get(Evidence, failed.evidence_id) is not None
+
+
+def test_auto_preparation_is_enabled_by_default() -> None:
+    from app.core.config import Settings
+    assert Settings().memory_auto_preparation is True
+
+
+def test_upload_registration_runs_post_registration_automation_when_flag_on(
+    db: Session, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    case = _make_case(db)
+    item = _make_failed_upload(db, case_id=case.id, data_dir=data_dir)
+    from app.services.memory.upload_lifecycle import _run_post_registration_automation
+    called = {"runs": 0}
+    monkeypatch.setattr(
+        "app.services.memory.upload_lifecycle._run_post_registration_automation",
+        lambda *a, **k: called.__setitem__("runs", called["runs"] + 1),
+    )
+    evidence = register_memory_evidence_from_upload(item.id, db=db)
+    assert evidence is not None
+    assert called["runs"] >= 1

@@ -69,26 +69,12 @@ describe("symbol acquisition terminal state (frontend)", () => {
     vi.clearAllMocks();
   });
 
-  it("1) initial POST may return queued (the button briefly shows 'Acquiring…')", async () => {
-    (api.acquireExactMemorySymbols as ReturnType<typeof vi.fn>).mockResolvedValue({
-      state: "queued",
-      task_alive: true,
-      message: "queued",
-      error_code: null,
-    });
+  it("1) the 'Acquire exact symbols' button has been removed from the simplified UI", () => {
     renderCard(basePreparation());
-    fireEvent.click(screen.getByTestId("memory-preparation-acquire-button"));
-    await waitFor(() => {
-      expect(api.acquireExactMemorySymbols).toHaveBeenCalledTimes(1);
-    });
+    expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
   });
 
-  it("2) a terminal failed state from the canonical preparation clears the 'Acquiring…' UI", () => {
-    // The button label must be 'Acquire exact symbols', NOT
-    // 'Acquiring symbols…', when the canonical preparation has
-    // task_alive=false and ui_state=blocked (the bug from the
-    // operator report: stale mutation data kept the button
-    // stuck on "Acquiring symbols…").
+  it("2) a terminal failed state from the canonical preparation no longer shows the acquire button", () => {
     renderCard(
       basePreparation({
         ui_state: "blocked",
@@ -96,9 +82,7 @@ describe("symbol acquisition terminal state (frontend)", () => {
         task_alive: false,
       }),
     );
-    const button = screen.getByTestId("memory-preparation-acquire-button");
-    expect(button.textContent).toMatch(/acquire exact symbols/i);
-    expect(button.textContent).not.toMatch(/acquiring symbols/i);
+    expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
   });
 
   it("3) a stale task_alive=true on the canonical preparation enables the canonical 'Acquiring' state", () => {
@@ -117,7 +101,7 @@ describe("symbol acquisition terminal state (frontend)", () => {
     );
   });
 
-  it("4) the button is NOT disabled when the canonical preparation is terminal failed", () => {
+  it("4) the acquire button is not rendered when the canonical preparation is terminal failed", () => {
     renderCard(
       basePreparation({
         ui_state: "blocked",
@@ -125,8 +109,7 @@ describe("symbol acquisition terminal state (frontend)", () => {
         task_alive: false,
       }),
     );
-    const button = screen.getByTestId("memory-preparation-acquire-button");
-    expect(button).not.toBeDisabled();
+    expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
   });
 
   it("5) the button is enabled when the canonical preparation reports task_alive=true only because the row is in 'preparing' state", () => {
@@ -153,13 +136,12 @@ describe("symbol acquisition terminal state (frontend)", () => {
     );
   });
 
-  it("6) the button is rendered with the 'Acquire exact symbols' label for the canonical blocked_symbols state", () => {
+  it("6) the acquire button is not rendered for the canonical blocked_symbols state", () => {
     renderCard(basePreparation());
-    const button = screen.getByTestId("memory-preparation-acquire-button");
-    expect(button.textContent).toMatch(/acquire exact symbols/i);
+    expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
   });
 
-  it("7) identity-mismatch card shows expected and observed ages", () => {
+  it("7) identity-mismatch card shows title and ages in subtitle and diagnostics", () => {
     renderCard(
       basePreparation({
         error_code: "SYMBOL_PDB_IDENTITY_MISMATCH",
@@ -187,50 +169,29 @@ describe("symbol acquisition terminal state (frontend)", () => {
     expect(screen.getByTestId("memory-preparation-title").textContent).toMatch(
       /symbol identity mismatch/i,
     );
-    const mismatchPanel = screen.getByTestId("memory-preparation-identity-mismatch");
-    expect(mismatchPanel.textContent).toMatch(/expected age: 1/i);
-    expect(mismatchPanel.textContent).toMatch(/observed age: 5/i);
-    expect(mismatchPanel.textContent).toMatch(/retry is not possible/i);
+    expect(screen.getByTestId("memory-preparation-subtitle").textContent).toMatch(
+      /expected age=1, observed age=5/,
+    );
+    fireEvent.click(screen.getByTestId("memory-preparation-toggle-details"));
+    const details = screen.getByTestId("memory-preparation-details");
+    expect(details.textContent).toMatch(/req age: 1/);
+    expect(details.textContent).toMatch(/observed age: 5/);
   });
 
-  it("8) a POST that returns state='failed' is treated as terminal: the button re-enables and the canonical error is shown", async () => {
-    (api.acquireExactMemorySymbols as ReturnType<typeof vi.fn>).mockResolvedValue({
-      state: "failed",
-      task_alive: false,
-      message: "The exact PDB was not found at the official source.",
-      error_code: "SYMBOL_NOT_FOUND",
-    });
+  it("8) the acquire button is removed; the canonical error is shown through the title", () => {
     renderCard(
       basePreparation({
         error_code: "SYMBOL_ACQUISITION_FAILED",
         sanitized_message: "The exact PDB was not found at the official source.",
       }),
     );
-    fireEvent.click(screen.getByTestId("memory-preparation-acquire-button"));
-    await waitFor(() => {
-      expect(api.acquireExactMemorySymbols).toHaveBeenCalledTimes(1);
-    });
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("memory-preparation-acquire-error"),
-      ).toBeInTheDocument();
-    });
-    const err = screen.getByTestId("memory-preparation-acquire-error");
-    expect(err.textContent).toMatch(/not found/i);
+    expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
+    expect(screen.getByTestId("memory-preparation-title").textContent).toMatch(/exact windows symbols required/i);
   });
 
-  it("9) a POST that returns state='queued' does NOT cause the button to stay on 'Acquiring symbols…' forever after the canonical task ends", async () => {
-    (api.acquireExactMemorySymbols as ReturnType<typeof vi.fn>).mockResolvedValue({
-      state: "queued",
-      task_alive: true,
-      message: "queued",
-      error_code: null,
-    });
+  it("9) after the canonical task ends, the acquire button remains absent (no stale mutation state)", () => {
     const { rerender } = renderCard(basePreparation());
-    fireEvent.click(screen.getByTestId("memory-preparation-acquire-button"));
-    await waitFor(() => {
-      expect(api.acquireExactMemorySymbols).toHaveBeenCalledTimes(1);
-    });
+    expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
     // Simulate the canonical preparation refetch: the task is
     // now terminal (task_alive=false, ui_state=blocked).
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
@@ -247,11 +208,7 @@ describe("symbol acquisition terminal state (frontend)", () => {
         />
       </QueryClientProvider>,
     );
-    const button = screen.getByTestId("memory-preparation-acquire-button");
-    // After the canonical state arrives, the button is driven
-    // by the canonical state — NOT by the stale mutation data.
-    expect(button.textContent).toMatch(/acquire exact symbols/i);
-    expect(button.textContent).not.toMatch(/acquiring symbols/i);
+    expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
   });
 
   it("10) the page does NOT auto-dispatch a second acquisition on its own", () => {

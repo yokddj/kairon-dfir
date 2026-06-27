@@ -1856,7 +1856,7 @@ SELECT
     mu.status,
     mu.created_at
 FROM memory_uploads mu
-LEFT JOIN evidences e ON e.id::text = mu.evidence_id
+LEFT JOIN evidences e ON e.id = mu.evidence_id
 WHERE mu.evidence_id IS NOT NULL
   AND mu.evidence_id != ''
   AND e.id IS NULL
