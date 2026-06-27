@@ -12,17 +12,18 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.database import Base
-from app.core.migrations import MIGRATIONS, run_migrations
+from app.core.migrations import MEMORY_UPLOAD_ORPHAN_PREFLIGHT_SQL, MIGRATIONS, run_migrations
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
 from app.models.memory import (
     MEMORY_BATCH_STATUSES,
     MemoryAnalysisBatch,
     MemoryArtifactSummary,
+    MemoryUpload,
     MemoryScanRun,
 )
 from app.services.memory.active_result import resolve_active_memory_result
@@ -811,6 +812,99 @@ def test_migration_runner_upgrade() -> None:
         from sqlalchemy import text
         cols = {row[1] for row in conn.execute(text("PRAGMA table_info(memory_analysis_batches)")).fetchall()}
     assert {"version", "last_advanced_run_id", "reconciled_at", "failure_reason", "requested_by"} <= cols
+
+
+def test_v19_memory_upload_audit_preserves_orphan_rows_and_is_idempotent() -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    Session_ = sessionmaker(bind=engine)
+    with Session_() as session:
+        case = Case(id="aaaaaaaa-1111-4111-8111-111111111111", name="Case 1")
+        session.add(case)
+        session.flush()
+        evidence = Evidence(
+            id="bbbbbbbb-2222-4222-8222-222222222222",
+            case_id=case.id,
+            original_filename="mem1",
+            stored_path="/tmp/m1",
+            original_path="/tmp/m1",
+            storage_mode=EvidenceStorageMode.uploaded,
+            is_external=False,
+            copy_to_storage=True,
+            evidence_type=EvidenceType.memory_dump,
+            sha256="0" * 64,
+            size_bytes=1,
+            ingest_status=IngestStatus.completed,
+            path_validation={},
+            ingest_source={},
+            metadata_json={},
+            error_log={},
+        )
+        session.add(evidence)
+        rows = [
+            ("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", evidence.id, "failed"),
+            ("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2", "missing-1", "queued"),
+            ("cccccccc-cccc-4ccc-8ccc-ccccccccccc3", "missing-2", "uploading"),
+            ("dddddddd-dddd-4ddd-8ddd-ddddddddddd4", "missing-3", "failed"),
+            ("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee5", "missing-4", "stale"),
+        ]
+        for upload_id, evidence_id, status in rows:
+            session.add(MemoryUpload(
+                id=upload_id,
+                case_id=case.id,
+                evidence_id=evidence_id,
+                status=status,
+                bytes_received=1,
+                expected_bytes=1,
+                display_name="mem.img",
+                source_host="HOSTA",
+                extension=".img",
+                staging_name="s",
+                canonical_relative_path="evidence/x",
+                retryable=True,
+                metadata_json={},
+            ))
+        session.commit()
+    applied = run_migrations(engine)
+    assert 19 in applied
+    applied_again = run_migrations(engine)
+    assert applied_again == []
+    with engine.begin() as conn:
+        orphan_rows = conn.execute(text(MEMORY_UPLOAD_ORPHAN_PREFLIGHT_SQL)).fetchall()
+        assert len(orphan_rows) >= 4
+        count = conn.execute(text("SELECT COUNT(*) FROM memory_uploads")).scalar_one()
+        assert count == 5
+
+
+def test_v19_memory_upload_audit_leaves_history_queryable() -> None:
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    Session_ = sessionmaker(bind=engine)
+    with Session_() as session:
+        case = Case(id="aaaaaaaa-1111-4111-8111-111111111111", name="Case 1")
+        session.add(case)
+        session.flush()
+        session.add(MemoryUpload(
+            id="ffffffff-ffff-4fff-8fff-fffffffffff6",
+            case_id=case.id,
+            evidence_id="missing-1",
+            status="failed",
+            bytes_received=1,
+            expected_bytes=1,
+            display_name="mem.img",
+            source_host="HOSTA",
+            extension=".img",
+            staging_name="s",
+            canonical_relative_path="evidence/x",
+            retryable=True,
+            metadata_json={},
+        ))
+        session.commit()
+    run_migrations(engine)
+    with Session_() as session:
+        row = session.query(MemoryUpload).one()
+    assert row.evidence_id == "missing-1"
+    assert row.status == "failed"
 
 
 # ---------------------------------------------------------------------------

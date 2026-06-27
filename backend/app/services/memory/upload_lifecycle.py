@@ -605,6 +605,9 @@ def register_preserved_memory_upload(
             item.registration_attempts = (item.registration_attempts or 0) + 1
             db.commit()
             raise RuntimeError(item.failure_message)
+        duplicate = _find_duplicate_memory_evidence(db, item)
+        if duplicate is not None:
+            _raise_duplicate_memory_upload(db, item, duplicate)
         # The canonical blob is preserved; register the Evidence row
         # in the critical transaction.  We also mark the upload as
         # ``registration_pending`` BEFORE the INSERT so a parallel
@@ -754,6 +757,8 @@ class MemoryUploadRegistrationError(RuntimeError):
         evidence_id: str,
         canonical_preserved: bool,
         exception_class: str | None = None,
+        existing_evidence_id: str | None = None,
+        existing_filename: str | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
@@ -762,6 +767,47 @@ class MemoryUploadRegistrationError(RuntimeError):
         self.evidence_id = evidence_id
         self.canonical_preserved = canonical_preserved
         self.exception_class = exception_class
+        self.existing_evidence_id = existing_evidence_id
+        self.existing_filename = existing_filename
+
+
+def _find_duplicate_memory_evidence(db: Session, item: MemoryUpload) -> Evidence | None:
+    if not item.sha256:
+        return None
+    return (
+        db.query(Evidence)
+        .filter(
+            Evidence.case_id == item.case_id,
+            Evidence.evidence_type == EvidenceType.memory_dump,
+            Evidence.sha256 == item.sha256,
+            Evidence.size_bytes == int(item.expected_bytes or 0),
+            Evidence.id != item.evidence_id,
+        )
+        .order_by(Evidence.created_at.desc())
+        .first()
+    )
+
+
+def _raise_duplicate_memory_upload(db: Session, item: MemoryUpload, existing: Evidence) -> None:
+    item.status = "failed"
+    item.stage = REG_STAGE_FAILED_REGISTRATION
+    item.registration_state = None
+    item.failure_code = ERR_REGISTRATION_DUPLICATE
+    item.failure_message = "This memory image is already registered in this case."
+    item.retryable = False
+    item.canonical_preserved = True
+    item.last_registration_error_code = ERR_REGISTRATION_DUPLICATE
+    item.last_registration_error_class = None
+    db.commit()
+    raise MemoryUploadRegistrationError(
+        ERR_REGISTRATION_DUPLICATE,
+        item.failure_message,
+        item_id=item.id,
+        evidence_id=item.evidence_id,
+        canonical_preserved=True,
+        existing_evidence_id=existing.id,
+        existing_filename=existing.original_filename,
+    )
 
 
 def mark_memory_upload_failed(upload_id: str, code: str, message: str, *, retryable: bool, db: Session | None = None) -> MemoryUpload:
@@ -893,6 +939,9 @@ def register_memory_evidence_from_upload(
                 canonical_preserved=True,
                 exception_class="HashMismatchError",
             )
+        duplicate = _find_duplicate_memory_evidence(db, item)
+        if duplicate is not None:
+            _raise_duplicate_memory_upload(db, item, duplicate)
         # Steps 6-8: create the Evidence row in the critical
         # transaction.  We mark the upload as ``registering``
         # first so a parallel retry can detect the in-flight

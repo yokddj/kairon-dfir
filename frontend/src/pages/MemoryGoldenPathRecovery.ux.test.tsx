@@ -1,7 +1,7 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes, useSearchParams } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useParams, useSearchParams } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../api/client", () => ({
@@ -84,10 +84,12 @@ beforeEach(() => {
 const renderPage = (initialEntry: string = `/cases/${CASE}/memory/upload`) => {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchInterval: false } } });
   const MemoryAnalysis = () => {
+    const { evidenceId: _e } = useParams();
     const [params] = useSearchParams();
+    const eid = _e || params.get("evidence_id") || "none";
     return (
       <div data-testid="memory-analysis-page">
-        Memory Analysis Page · evidence_id={params.get("evidence_id") || "none"}
+        Memory Analysis Page · /memory/{eid}
       </div>
     );
   };
@@ -97,6 +99,7 @@ const renderPage = (initialEntry: string = `/cases/${CASE}/memory/upload`) => {
         <Routes>
           <Route path="/cases/:caseId/memory/upload" element={<MemoryUploadPage />} />
           <Route path="/cases/:caseId/memory" element={<MemoryAnalysis />} />
+          <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryAnalysis />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -157,7 +160,7 @@ describe("Memory Golden Path Recovery v1", () => {
       const button = await screen.findByTestId("memory-upload-retry-registration");
       fireEvent.click(button);
       await waitFor(() =>
-        expect(screen.getByTestId("memory-analysis-page").textContent).toContain(`evidence_id=${EVIDENCE_ID}`),
+      expect(screen.getByTestId("memory-analysis-page").textContent).toContain(`/memory/${EVIDENCE_ID}`),
       );
       expect(clickSpy).not.toHaveBeenCalled();
     } finally {
@@ -195,7 +198,7 @@ describe("Memory Golden Path Recovery v1", () => {
     const button = await screen.findByTestId("memory-upload-retry-registration");
     fireEvent.click(button);
     await waitFor(() =>
-      expect(screen.getByTestId("memory-analysis-page").textContent).toContain(`evidence_id=${EVIDENCE_ID}`),
+      expect(screen.getByTestId("memory-analysis-page").textContent).toContain(`/memory/${EVIDENCE_ID}`),
     );
     expect(localStorage.getItem(`kairon-memory-upload:${CASE}`)).toBeNull();
   });

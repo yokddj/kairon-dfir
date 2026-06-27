@@ -38,6 +38,7 @@ const TONE_CLASS: Record<string, string> = {
 
 type MemoryCanonicalViewProps = {
   caseId: string;
+  evidenceId?: string;
   runId?: string | null;
   processName?: string;
   onProcessName?: (next: string) => void;
@@ -49,6 +50,7 @@ type MemoryCanonicalViewProps = {
 
 export function MemoryCanonicalView({
   caseId,
+  evidenceId,
   runId,
   processName: externalProcessName,
   onProcessName: externalOnProcessName,
@@ -79,8 +81,11 @@ export function MemoryCanonicalView({
   const setSelectedEntityId = externalOnSelectEntityId ?? setInternalSelectedEntityId;
 
   const runOptionsQuery = useQuery({
-    queryKey: ["memory-run-options", caseId],
-    queryFn: () => api.getMemoryRunOptions(caseId),
+    queryKey: ["memory-run-options", caseId, evidenceId ?? ""],
+    queryFn: () =>
+      evidenceId
+        ? api.getEvidenceMemoryRunOptions(caseId, evidenceId)
+        : api.getMemoryRunOptions(caseId),
     enabled: Boolean(caseId),
     refetchOnWindowFocus: false,
   });
@@ -110,7 +115,7 @@ export function MemoryCanonicalView({
   });
 
   const summaryQuery = useQuery({
-    queryKey: ["canonical-summary", caseId, effectiveRunId],
+    queryKey: ["canonical-summary", caseId, evidenceId ?? "", effectiveRunId],
     queryFn: () => api.getCanonicalProcessSummary(caseId, { run_id: effectiveRunId || undefined }),
     enabled: Boolean(caseId && effectiveRunId),
     refetchOnWindowFocus: false,
@@ -137,7 +142,7 @@ export function MemoryCanonicalView({
   });
 
   const renormalizeDryMutation = useMutation({
-    mutationFn: () => api.renormalizeProcessEntities(caseId, effectiveRunId as string, true),
+    mutationFn: () => api.renormalizeProcessEntities(caseId, evidenceId as string, effectiveRunId as string, true),
     onSuccess: (summary: MemoryRenormalizeSummary) => {
       const s = summarizeRenormalization(summary);
       setDryRunMessage(
@@ -150,7 +155,7 @@ export function MemoryCanonicalView({
   });
 
   const renormalizeApplyMutation = useMutation({
-    mutationFn: () => api.renormalizeProcessEntities(caseId, effectiveRunId as string, false),
+    mutationFn: () => api.renormalizeProcessEntities(caseId, evidenceId as string, effectiveRunId as string, false),
     onSuccess: (summary: MemoryRenormalizeSummary) => {
       const s = summarizeRenormalization(summary);
       setApplyMessage(

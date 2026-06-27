@@ -95,15 +95,23 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
     refetchOnWindowFocus: false,
   });
 
+  const overview = overviewQuery.data;
+
+  const effectiveEvidenceId =
+    evidenceIdProp || (overview?.evidences?.length === 1 ? overview?.evidences?.[0]?.id : undefined);
+
   const runOptionsQuery = useQuery({
-    queryKey: ["memory-run-options", caseId],
-    queryFn: () => api.getMemoryRunOptions(caseId),
+    queryKey: ["memory-run-options", caseId, effectiveEvidenceId ?? ""],
+    queryFn: () =>
+      effectiveEvidenceId
+        ? api.getEvidenceMemoryRunOptions(caseId, effectiveEvidenceId)
+        : api.getMemoryRunOptions(caseId),
     enabled: Boolean(caseId),
     refetchOnWindowFocus: false,
   });
 
   const summaryQuery = useQuery({
-    queryKey: ["canonical-summary", caseId, selectedRunId ?? runOptionsQuery.data?.default_run_id ?? null],
+    queryKey: ["canonical-summary", caseId, effectiveEvidenceId ?? "", selectedRunId ?? runOptionsQuery.data?.default_run_id ?? null],
     queryFn: () =>
       api.getCanonicalProcessSummary(caseId, {
         run_id: selectedRunId || runOptionsQuery.data?.default_run_id || undefined,
@@ -112,8 +120,6 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
     refetchOnWindowFocus: false,
   });
 
-  const overview = overviewQuery.data;
-  const effectiveEvidenceId = evidenceIdProp || overview?.evidences?.[0]?.id || undefined;
   const evidenceReadinessQueries = useQueries({
     queries: (overview?.evidences || []).map((evidence) => ({
       queryKey: ["memory-evidence-readiness", caseId, evidence.id],
@@ -224,6 +230,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
         {tab === "processes" ? (
           <MemoryProcessesTab
             caseId={caseId}
+            evidenceId={effectiveEvidenceId}
             runId={effectiveRunId}
             runOptions={runOptionsQuery.data ?? null}
             selectedRunId={selectedRunId}
@@ -285,6 +292,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
         {tab === "system" ? (
           <MemorySystemTab
             caseId={caseId}
+            evidenceId={effectiveEvidenceId}
             runOptions={runOptionsQuery.data ?? null}
             selectedRunId={selectedRunId}
             onSelectRunId={setSelectedRunId}
@@ -312,6 +320,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
         <MemoryAnalyzeAction
           caseId={caseId}
           overview={overview}
+          evidenceId={effectiveEvidenceId}
           readinessByEvidence={readinessByEvidence}
           canRunMetadata={canRunMetadata}
           canRunProcessProfiles={canRunProcessProfiles}

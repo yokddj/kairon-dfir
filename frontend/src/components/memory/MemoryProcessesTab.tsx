@@ -7,6 +7,7 @@ type Profile = "processes_basic" | "processes_extended" | "metadata_only" | null
 
 type Props = {
   caseId: string;
+  evidenceId?: string;
   runId: string | null;
   runOptions: MemoryRunSelector | null;
   selectedRunId: string | null;
@@ -25,6 +26,7 @@ type Props = {
 
 export function MemoryProcessesTab({
   caseId,
+  evidenceId,
   runId,
   runOptions,
   selectedRunId,
@@ -53,6 +55,7 @@ export function MemoryProcessesTab({
       <div className="rounded-[28px] border border-line bg-panel/60 p-3 shadow-panel">
         <MemoryCanonicalView
           caseId={caseId}
+          evidenceId={evidenceId}
           runId={effectiveRunId}
           processName={processName}
           onProcessName={onProcessName}
