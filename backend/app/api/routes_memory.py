@@ -8,7 +8,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.exc import DataError, IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -56,7 +56,7 @@ from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryArtifactSummary, MemoryNativeProbe, MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition, MemorySymbolRequirement
-from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolBlockedAcquireRequest, MemorySymbolBlockedAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadReadinessRead, MemoryUploadStatusRead
+from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolBlockedAcquireRequest, MemorySymbolBlockedAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadFinalizeRequest, MemoryUploadReadinessRead, MemoryUploadSessionCreateRequest, MemoryUploadSessionCreateResponse, MemoryUploadStatusRead
 from app.services.memory.artifact_indexing import (
     get_artifact_document,
     link_process_entities,
@@ -70,6 +70,14 @@ from app.services.memory.indexing import ensure_memory_index, get_memory_documen
 from app.services.memory.normalizers import normalize_windows_info
 from app.services.memory.storage import memory_run_dir
 from app.services.memory.overview import get_case_memory_overview, get_evidence_landing, list_memory_evidences
+from app.services.memory.upload_sessions import (
+    MemoryUploadSessionError,
+    cancel_memory_upload_session,
+    create_memory_upload_session,
+    finalize_memory_upload_session,
+    store_memory_upload_chunk,
+    upload_status_with_chunks,
+)
 from app.services.memory.active_result import resolve_active_memory_result, list_families as _list_artifact_families
 from app.services.memory.catalogue import build_analysis_catalogue, MemoryProfileUnavailableError
 from app.services.memory.symbol_control import SymbolControlError, acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure, queue_symbol_acquisition, request_status_dict, request_symbol_acquisition_awaiting_approval
@@ -1382,7 +1390,7 @@ def get_active_memory_upload_endpoint(case_id: str, db: Session = Depends(get_db
     item = find_active_memory_upload(db, case_id)
     if item is None:
         return None
-    return public_memory_upload_status(item)
+    return upload_status_with_chunks(item, db=db)
 
 
 @router.get("/cases/{case_id}/memory/uploads/{upload_id}", response_model=MemoryUploadStatusRead)
@@ -1394,7 +1402,113 @@ def get_memory_upload_status(case_id: str, upload_id: str, db: Session = Depends
         raise HTTPException(status_code=404, detail="Memory upload was not found.") from exc
     if item is None:
         raise HTTPException(status_code=404, detail="Memory upload was not found.")
-    return public_memory_upload_status(item)
+    return upload_status_with_chunks(item, db=db)
+
+
+def _raise_upload_session_error(exc: MemoryUploadSessionError) -> HTTPException:
+    detail: Any
+    if exc.detail:
+        detail = {"error_code": exc.code, "message": exc.message, **exc.detail}
+    else:
+        detail = {"error_code": exc.code, "message": exc.message}
+    if exc.code in {"MEMORY_UPLOAD_NOT_FOUND"}:
+        return HTTPException(status_code=404, detail=detail)
+    if exc.code in {
+        "MEMORY_UPLOAD_TOO_LARGE",
+        "MEMORY_UPLOAD_INSUFFICIENT_SPACE",
+        "MEMORY_UPLOAD_CASE_QUOTA_EXCEEDED",
+        "MEMORY_UPLOAD_CHUNK_TOO_LARGE",
+        "MEMORY_UPLOAD_INVALID_CHUNK_INDEX",
+        "MEMORY_UPLOAD_INVALID_CHUNK_LENGTH",
+        "MEMORY_UPLOAD_INVALID_SHA256",
+        "MEMORY_UPLOAD_CHUNKS_MISSING",
+        "MEMORY_UPLOAD_SHA256_MISMATCH",
+        "MEMORY_UPLOAD_FINAL_SIZE_MISMATCH",
+    }:
+        return HTTPException(status_code=409, detail=detail)
+    if exc.code == "MEMORY_UPLOAD_TERMINAL":
+        return HTTPException(status_code=409, detail=detail)
+    if exc.code == "MEMORY_UPLOAD_CHUNK_CONFLICT":
+        return HTTPException(status_code=409, detail=detail)
+    if exc.code == "MEMORY_UPLOAD_SESSION_EXPIRED":
+        return HTTPException(status_code=409, detail=detail)
+    if exc.code == "MEMORY_UPLOAD_AUTHORIZATION_REQUIRED":
+        return HTTPException(status_code=400, detail=detail)
+    if exc.code == "MEMORY_UPLOAD_HOST_REQUIRED":
+        return HTTPException(status_code=400, detail=detail)
+    if exc.code == "MEMORY_UPLOAD_UNSUPPORTED_EXTENSION":
+        return HTTPException(status_code=400, detail=detail)
+    if exc.code == "MEMORY_UPLOAD_CONFLICT":
+        return HTTPException(status_code=409, detail=detail)
+    if exc.code == "MEMORY_EVIDENCE_DUPLICATE":
+        return HTTPException(status_code=409, detail=detail)
+    return HTTPException(status_code=400, detail=detail)
+
+
+@router.post("/cases/{case_id}/memory/uploads", response_model=MemoryUploadSessionCreateResponse, status_code=status.HTTP_201_CREATED)
+def create_memory_upload_session_endpoint(
+    case_id: str,
+    payload: MemoryUploadSessionCreateRequest,
+    db: Session = Depends(get_db),
+) -> dict:
+    _require_case(db, case_id)
+    try:
+        item = create_memory_upload_session(
+            db,
+            case_id=case_id,
+            filename=payload.filename,
+            expected_size_bytes=payload.expected_size_bytes,
+            provided_host=payload.provided_host,
+            authorization_acknowledged=payload.authorization_acknowledged,
+            expected_sha256=payload.expected_sha256,
+        )
+    except MemoryUploadSessionError as exc:
+        raise _raise_upload_session_error(exc) from exc
+    payload_dict = upload_status_with_chunks(item, db=db)
+    payload_dict["resumable"] = True
+    return payload_dict
+
+
+@router.put("/cases/{case_id}/memory/uploads/{upload_id}/chunks/{chunk_index}", response_model=MemoryUploadStatusRead)
+async def upload_memory_upload_chunk_endpoint(
+    case_id: str,
+    upload_id: str,
+    chunk_index: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict:
+    _require_case(db, case_id)
+    try:
+        item = await store_memory_upload_chunk(
+            db,
+            case_id=case_id,
+            upload_id=upload_id,
+            chunk_index=chunk_index,
+            request=request,
+        )
+    except MemoryUploadSessionError as exc:
+        raise _raise_upload_session_error(exc) from exc
+    return upload_status_with_chunks(item, db=db)
+
+
+@router.post("/cases/{case_id}/memory/uploads/{upload_id}/finalize", response_model=MemoryUploadStatusRead)
+def finalize_memory_upload_endpoint(
+    case_id: str,
+    upload_id: str,
+    payload: MemoryUploadFinalizeRequest | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    _require_case(db, case_id)
+    try:
+        item, _evidence = finalize_memory_upload_session(
+            db,
+            case_id=case_id,
+            upload_id=upload_id,
+            expected_sha256=(payload.expected_sha256 if payload else None),
+        )
+    except MemoryUploadSessionError as exc:
+        raise _raise_upload_session_error(exc) from exc
+    return upload_status_with_chunks(item, db=db)
 
 
 @router.post("/cases/{case_id}/memory/uploads/{upload_id}/reconcile", response_model=MemoryUploadStatusRead)
@@ -1428,7 +1542,6 @@ def cancel_memory_upload_endpoint(
       delete a canonical evidence file even if requested.
     * Only the staged (incomplete) file is deleted.
     """
-    from app.services.memory.upload_lifecycle import cancel_memory_upload
     _require_case(db, case_id)
     item = get_memory_upload(db, case_id, upload_id)
     if item is None:
@@ -1442,12 +1555,10 @@ def cancel_memory_upload_endpoint(
     operator = payload.get("operator") or "server-operator"
     reason = (payload.get("reason") or "").strip() or "operator requested cancel"
     try:
-        cancelled = cancel_memory_upload(
-            case_id, upload_id, operator=operator, reason=reason, db=db,
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail="Memory upload was not found.") from exc
-    return public_memory_upload_status(cancelled)
+        cancelled = cancel_memory_upload_session(db, case_id=case_id, upload_id=upload_id, reason=f"{operator}: {reason}")
+    except MemoryUploadSessionError as exc:
+        raise _raise_upload_session_error(exc) from exc
+    return upload_status_with_chunks(cancelled, db=db)
 
 
 @router.post(
@@ -1615,6 +1726,7 @@ def reconcile_native_probes_endpoint(
     return {"reconciled": count, "diagnostics": reconciliation_diagnostics()}
 
 
+@router.get("/cases/{case_id}/memory/runs", response_model=list[MemoryScanRunRead])
 def get_memory_runs(
     case_id: str,
     evidence_id: str | None = Query(default=None),

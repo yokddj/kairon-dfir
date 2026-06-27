@@ -1,9 +1,11 @@
 import { useMemo, useState } from "react";
-import { type MemoryScanRun } from "../../api/client";
+import { type MemoryEvidenceLandingItem, type MemoryScanRun } from "../../api/client";
 
 type Props = {
   caseId: string;
+  evidenceId?: string;
   runs: MemoryScanRun[];
+  landingItems: MemoryEvidenceLandingItem[];
 };
 
 type StatusFilter = "all" | "completed" | "failed" | "running" | "queued" | "pending";
@@ -35,7 +37,7 @@ function StatusBadge({ status }: { status: string }) {
   return <span className="rounded-md border border-sky-400/30 bg-sky-500/10 px-2 py-0.5 text-[10px] text-sky-100">{status}</span>;
 }
 
-export function MemoryRunsTab({ runs }: Props) {
+export function MemoryRunsTab({ evidenceId, runs, landingItems }: Props) {
   const [status, setStatus] = useState<StatusFilter>("all");
   const [profile, setProfile] = useState<ProfileFilter>("all");
   const [failuresOnly, setFailuresOnly] = useState(false);
@@ -63,14 +65,27 @@ export function MemoryRunsTab({ runs }: Props) {
       })
       .sort((left, right) => (right.created_at > left.created_at ? 1 : -1));
   }, [runs, status, profile, failuresOnly, query]);
+  const landingByEvidence = useMemo(() => new Map(landingItems.map((item) => [item.evidence_id, item])), [landingItems]);
+  const scopeLabel = evidenceId ? "Selected evidence only" : "All memory evidence runs";
+  const scopeDescription = evidenceId
+    ? "Only runs for the currently selected memory evidence are shown here."
+    : "Case-wide history across every memory evidence in this case. Newest first.";
+  const selectedEvidence = evidenceId ? landingByEvidence.get(evidenceId) : null;
 
   return (
     <div className="space-y-4" data-testid="memory-runs-tab">
       <section className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel">
         <header className="flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Memory runs</h3>
-            <p className="mt-1 text-xs text-muted">Complete history of every memory analysis run for this case. Newest first.</p>
+            <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">{scopeLabel}</h3>
+            <p className="mt-1 text-xs text-muted">{scopeDescription}</p>
+            {selectedEvidence ? (
+              <p className="mt-2 text-xs text-muted">
+                Evidence: <span className="text-ink">{selectedEvidence.filename}</span>
+                {" · "}
+                Host: <span className="text-ink">{selectedEvidence.detected_host || "Unknown"}</span>
+              </p>
+            ) : null}
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <label className="text-muted" htmlFor="runs-status">Status</label>
@@ -127,6 +142,8 @@ export function MemoryRunsTab({ runs }: Props) {
             <thead className="bg-abyss/70 text-left text-xs uppercase tracking-[0.14em] text-muted">
               <tr>
                 <th className="px-3 py-2">Status</th>
+                {!evidenceId ? <th className="px-3 py-2">Memory evidence</th> : null}
+                {!evidenceId ? <th className="px-3 py-2">Host</th> : null}
                 <th className="px-3 py-2">Profile</th>
                 <th className="px-3 py-2">Created</th>
                 <th className="px-3 py-2">Duration</th>
@@ -140,6 +157,8 @@ export function MemoryRunsTab({ runs }: Props) {
               {filtered.map((run) => (
                 <tr key={run.id} data-testid={`run-row-${run.id}`}>
                   <td className="px-3 py-2"><StatusBadge status={run.status} /></td>
+                  {!evidenceId ? <td className="px-3 py-2 text-muted">{landingByEvidence.get(run.evidence_id)?.filename || `${run.evidence_id.slice(0, 8)}...`}</td> : null}
+                  {!evidenceId ? <td className="px-3 py-2 text-muted">{landingByEvidence.get(run.evidence_id)?.detected_host || "Unknown"}</td> : null}
                   <td className="px-3 py-2 text-muted">{run.profile}</td>
                   <td className="px-3 py-2 text-muted">{run.created_at}</td>
                   <td className="px-3 py-2 text-muted">{durationLabel(run.duration_ms)}</td>

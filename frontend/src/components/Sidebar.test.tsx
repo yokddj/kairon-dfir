@@ -57,4 +57,11 @@ describe("Memory navigation", () => {
     // The Memory entry is hidden because it requires a case.
     expect(screen.queryByRole("link", { name: /Memory Analysis/i })).not.toBeInTheDocument();
   });
+
+  it("uses min-h-screen so the sidebar only scrolls when content exceeds the viewport", () => {
+    const { container } = renderSidebar();
+    const classTokens = (container.querySelector("aside")?.className || "").split(/\s+/);
+    expect(classTokens).toContain("min-h-screen");
+    expect(classTokens).not.toContain("h-screen");
+  });
 });

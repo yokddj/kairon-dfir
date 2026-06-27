@@ -72,6 +72,13 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
     setActiveCaseId(caseId);
   }, [caseId, setActiveCaseId]);
 
+  useEffect(() => {
+    setSelectedRunId(null);
+    setProfile(null);
+    setSearch("");
+    setSelectedEntityId(null);
+  }, [evidenceIdProp]);
+
   const overviewQuery = useQuery({
     queryKey: ["memory-overview", caseId],
     queryFn: () => api.getMemoryOverview(caseId),
@@ -96,6 +103,24 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
   });
 
   const overview = overviewQuery.data;
+
+  const landingQuery = useQuery({
+    queryKey: ["memory-evidence-landing", caseId],
+    queryFn: () => api.getMemoryEvidenceLanding(caseId),
+    enabled: Boolean(caseId && tab === "runs"),
+    refetchOnWindowFocus: false,
+  });
+
+  const runsQuery = useQuery({
+    queryKey: ["memory-runs-tab", caseId, evidenceIdProp ?? "case"],
+    queryFn: () => api.listMemoryRuns(caseId, evidenceIdProp || undefined),
+    enabled: Boolean(caseId && tab === "runs"),
+    refetchOnWindowFocus: false,
+    refetchInterval: (query) => {
+      const runs = query.state.data ?? [];
+      return runs.some((run) => ["pending", "queued", "running"].includes(run.status)) ? 3000 : false;
+    },
+  });
 
   const effectiveEvidenceId =
     evidenceIdProp || (overview?.evidences?.length === 1 ? overview?.evidences?.[0]?.id : undefined);
@@ -301,8 +326,11 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
 
         {tab === "runs" ? (
           <MemoryRunsTab
+            key={evidenceIdProp ?? "case-wide"}
             caseId={caseId}
-            runs={overview?.runs ?? []}
+            evidenceId={evidenceIdProp}
+            runs={runsQuery.data ?? []}
+            landingItems={landingQuery.data?.items ?? []}
           />
         ) : null}
 
