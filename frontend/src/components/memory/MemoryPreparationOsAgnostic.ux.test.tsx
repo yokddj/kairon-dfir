@@ -156,7 +156,7 @@ describe("OS-agnostic memory preparation v1 (frontend)", () => {
     expect(card.textContent).not.toMatch(/unavailable/i);
   });
 
-  it("6) historical results remain visible after a stale row", () => {
+  it("6) historical results remain visible after a stale row without the retry button", () => {
     renderCard({
       id: "prep-h",
       case_id: CASE,
@@ -170,8 +170,7 @@ describe("OS-agnostic memory preparation v1 (frontend)", () => {
     expect(screen.getByTestId("memory-preparation-title").textContent).toMatch(
       /interrupted/i,
     );
-    // Retry is still exposed for stale rows.
-    expect(screen.getByTestId("memory-preparation-retry-button")).toBeInTheDocument();
+    expect(screen.queryByTestId("memory-preparation-retry-button")).toBeNull();
   });
 
   it("7) no fake 5% is shown anywhere in the preparing state", () => {

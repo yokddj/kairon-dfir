@@ -67,24 +67,24 @@ describe("blocked_symbols acquisition UX (frontend)", () => {
     vi.clearAllMocks();
   });
 
-  it("1) renders an 'Acquire exact symbols' button when state is blocked_symbols", () => {
+  it("1) the 'Acquire exact symbols' button has been removed from the simplified UI", () => {
     renderCard(basePreparation());
-    const button = screen.getByTestId("memory-preparation-acquire-button");
-    expect(button).toBeInTheDocument();
-    expect(button.textContent).toMatch(/acquire exact symbols/i);
+    expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
   });
 
-  it("2) shows the exact PDB / GUID / age / architecture on the card", () => {
+  it("2) shows the exact PDB / GUID / age / architecture inside 'Advanced diagnostics'", () => {
     renderCard(basePreparation());
-    const requirement = screen.getByTestId("memory-preparation-requirement");
-    expect(requirement.textContent).toMatch(/ntkrnlmp\.pdb/);
-    expect(requirement.textContent).toMatch(/D801A9AFC0FB7761380800F708633DEA/);
-    expect(requirement.textContent).toMatch(/Age: 1/);
-    expect(requirement.textContent).toMatch(/Arch: x64/);
+    fireEvent.click(screen.getByTestId("memory-preparation-toggle-details"));
+    const details = screen.getByTestId("memory-preparation-details");
+    expect(details.textContent).toMatch(/ntkrnlmp\.pdb/);
+    expect(details.textContent).toMatch(/D801A9AFC0FB7761380800F708633DEA/);
+    expect(details.textContent).toMatch(/req age: 1/);
+    expect(details.textContent).toMatch(/Arch: x64/);
   });
 
-  it("3) shows the cache miss marker on the card", () => {
+  it("3) shows the cache miss marker inside 'Advanced diagnostics'", () => {
     renderCard(basePreparation());
+    fireEvent.click(screen.getByTestId("memory-preparation-toggle-details"));
     const miss = screen.getByTestId("memory-preparation-cache-miss");
     expect(miss.textContent).toMatch(/cache miss/i);
   });
@@ -96,36 +96,13 @@ describe("blocked_symbols acquisition UX (frontend)", () => {
     );
   });
 
-  it("5) clicking the button calls acquireExactMemorySymbols exactly once", async () => {
-    (api.acquireExactMemorySymbols as ReturnType<typeof vi.fn>).mockResolvedValue({
-      request_id: "req-1",
-      acquisition_id: "acq-1",
-      requirement_id: "rid-1",
-      cached_symbol_id: null,
-      state: "queued",
-      queue: "memory-symbols",
-      task_id: "rq-job-1",
-      task_alive: true,
-      retryable: false,
-      source_category: "official_microsoft_symbols",
-      pdb_name: "ntkrnlmp.pdb",
-      pdb_guid: "D801A9AFC0FB7761380800F708633DEA",
-      pdb_age: 1,
-      architecture: "x64",
-      symbol_key: "ntkrnlmp.pdb/D801A9AFC0FB7761380800F708633DEA-1",
-      message: "The acquisition was queued on the isolated symbol-fetcher queue.",
-      error_code: null,
-    });
+  it("5) the acquire button is not rendered; acquireExactMemorySymbols is never called", () => {
     renderCard(basePreparation());
-    const button = screen.getByTestId("memory-preparation-acquire-button");
-    fireEvent.click(button);
-    await waitFor(() => {
-      expect(api.acquireExactMemorySymbols).toHaveBeenCalledTimes(1);
-    });
-    expect(api.acquireExactMemorySymbols).toHaveBeenCalledWith(CASE, EVIDENCE);
+    expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
+    expect(api.acquireExactMemorySymbols).not.toHaveBeenCalled();
   });
 
-  it("6) the button is disabled while the mutation is pending", async () => {
+  it("6) the acquire button is not rendered; no pending mutation UI", () => {
     let resolveAcquire: (v: unknown) => void = () => {};
     (api.acquireExactMemorySymbols as ReturnType<typeof vi.fn>).mockReturnValue(
       new Promise((resolve) => {
@@ -133,12 +110,7 @@ describe("blocked_symbols acquisition UX (frontend)", () => {
       }),
     );
     renderCard(basePreparation());
-    const button = screen.getByTestId("memory-preparation-acquire-button");
-    fireEvent.click(button);
-    await waitFor(() => {
-      expect(button).toBeDisabled();
-    });
-    expect(button.textContent).toMatch(/acquiring/i);
+    expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
     resolveAcquire({
       state: "queued",
       task_alive: true,
@@ -147,36 +119,10 @@ describe("blocked_symbols acquisition UX (frontend)", () => {
     });
   });
 
-  it("7) double-click does not dispatch two acquisitions", async () => {
-    // The mock returns a never-resolving promise so the
-    // mutation stays pending for the entire test.  The button
-    // is disabled while the mutation is in flight, so
-    // additional clicks are no-ops in the rendered DOM.
-    let resolveAcquire: (v: unknown) => void = () => {};
-    (api.acquireExactMemorySymbols as ReturnType<typeof vi.fn>).mockReturnValue(
-      new Promise((resolve) => {
-        resolveAcquire = resolve;
-      }),
-    );
+  it("7) no acquire button exists, so no double-dispatch can occur", () => {
     renderCard(basePreparation());
-    const button = screen.getByTestId("memory-preparation-acquire-button");
-    fireEvent.click(button);
-    await waitFor(() => {
-      expect(button).toBeDisabled();
-    });
-    fireEvent.click(button);
-    fireEvent.click(button);
-    await waitFor(() => {
-      expect(api.acquireExactMemorySymbols).toHaveBeenCalled();
-    });
-    expect(api.acquireExactMemorySymbols.mock.calls.length).toBe(1);
-    // Resolve the promise so the test doesn't hang.
-    resolveAcquire({
-      state: "queued",
-      task_alive: true,
-      message: "",
-      error_code: null,
-    });
+    expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
+    expect(api.acquireExactMemorySymbols).not.toHaveBeenCalled();
   });
 
   it("8) does NOT call acquireExactMemorySymbols when the state is not blocked_symbols", () => {
@@ -187,39 +133,15 @@ describe("blocked_symbols acquisition UX (frontend)", () => {
     expect(api.acquireExactMemorySymbols).not.toHaveBeenCalled();
   });
 
-  it("9) shows a safe error message when the API returns a failure", async () => {
-    // The card now derives the error message from the canonical
-    // preparation endpoint, which propagates the latest
-    // acquisition error_code.  A POST that returns
-    // ``state="failed"`` with a specific message is treated as a
-    // terminal hint; the button re-enables and the canonical
-    // error_code drives the visible error.  The test therefore
-    // sets the preparation error_code directly.
-    (api.acquireExactMemorySymbols as ReturnType<typeof vi.fn>).mockResolvedValue({
-      request_id: "req-x",
-      acquisition_id: "acq-x",
-      state: "failed",
-      task_alive: false,
-      retryable: false,
-      source_category: "official_microsoft_symbols",
-      symbol_key: null,
-      message: "The exact PDB was not found at the official source.",
-      error_code: "SYMBOL_NOT_FOUND",
-    });
+  it("9) the acquire button is removed; the subtitle surfaces the error message", () => {
     renderCard(
       basePreparation({
         error_code: "SYMBOL_ACQUISITION_FAILED",
         sanitized_message: "The exact PDB was not found at the official source.",
       }),
     );
-    fireEvent.click(screen.getByTestId("memory-preparation-acquire-button"));
-    await waitFor(() => {
-      expect(
-        screen.getByTestId("memory-preparation-acquire-error"),
-      ).toBeInTheDocument();
-    });
-    const err = screen.getByTestId("memory-preparation-acquire-error");
-    expect(err.textContent).toMatch(/not found/i);
+    expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
+    expect(screen.getByTestId("memory-preparation-subtitle").textContent).toMatch(/not found/i);
   });
 
   it("10) does not render the requirement block for ready state (errors no longer shown)", () => {

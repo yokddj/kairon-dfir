@@ -1457,3 +1457,209 @@ def test_recompute_canonical_tree_rejects_foreign_case_or_evidence_run_without_o
         assert exc.value.status_code == 404
     assert called["fetch"] == 0
     assert called["client"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Sprint: Automatic memory preparation & simplified analysis UX v1
+# ---------------------------------------------------------------------------
+
+
+def test_auto_preparation_flag_defaults_to_true() -> None:
+    from app.core.config import Settings, get_settings
+    settings = Settings()
+    assert settings.memory_auto_preparation is True
+
+
+def test_auto_preparation_dispatches_when_flag_is_true(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case(db_session)
+    ev = _evidence(db_session, case_id=case.id)
+    from app.services.memory.preparation_runtime import dispatch_memory_preparation
+    from app.models.memory import MemorySymbolPreparation as MSP
+    monkeypatch.setattr("app.workers.tasks.enqueue_memory_preparation", lambda *a, **k: "job-id")
+    result = dispatch_memory_preparation(db_session, evidence=ev)
+    assert result is not None
+    prep = db_session.query(MSP).filter(MSP.evidence_id == ev.id, MSP.active == True).first()
+    assert prep is not None
+    assert prep.state == "queued"
+
+
+def test_auto_preparation_does_not_re_enqueue_existing_ready(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case(db_session)
+    ev = _evidence(db_session, case_id=case.id)
+    from app.services.memory.preparation_runtime import dispatch_memory_preparation
+    from app.models.memory import MemorySymbolPreparation as MSP
+    monkeypatch.setattr("app.workers.tasks.enqueue_memory_preparation", lambda *a, **k: "job-id")
+    result1 = dispatch_memory_preparation(db_session, evidence=ev)
+    assert result1 is not None
+    prep = db_session.query(MSP).filter(MSP.evidence_id == ev.id, MSP.active == True).first()
+    prep.state = "ready"
+    prep.reconciled_at = MSP.reconciled_at  # set by dispatch
+    db_session.commit()
+    result2 = dispatch_memory_preparation(db_session, evidence=ev)
+    assert result2 is not None
+    assert result2.get("task_active") is False
+    active_count = db_session.query(MSP).filter(MSP.evidence_id == ev.id, MSP.active == True).count()
+    assert active_count == 1
+
+
+def test_preparation_one_active_per_evidence(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case(db_session)
+    ev = _evidence(db_session, case_id=case.id)
+    from app.services.memory.preparation_runtime import dispatch_memory_preparation
+    from app.models.memory import MemorySymbolPreparation as MSP
+    monkeypatch.setattr("app.workers.tasks.enqueue_memory_preparation", lambda *a, **k: "job-1")
+    dispatch_memory_preparation(db_session, evidence=ev)
+    monkeypatch.setattr("app.workers.tasks.enqueue_memory_preparation", lambda *a, **k: "job-2")
+    dispatch_memory_preparation(db_session, evidence=ev)
+    active_count = db_session.query(MSP).filter(MSP.evidence_id == ev.id, MSP.active == True).count()
+    assert active_count == 1
+
+
+def test_native_volatility_probe_helper_works_on_mock_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.memory.preparation_runtime import _run_native_volatility_probe
+    import json
+    valid_output = json.dumps([
+        {"PID": 0, "ImageFileName": "Idle"},
+        {"PID": 4, "ImageFileName": "System"},
+        {"PID": 100, "ImageFileName": "svchost.exe"},
+        {"PID": 200, "ImageFileName": "explorer.exe"},
+        {"PID": 300, "ImageFileName": "cmd.exe"},
+        {"PID": 400, "ImageFileName": "notepad.exe"},
+    ])
+    sp_run_result = type("CompletedProcess", (), {
+        "returncode": 0,
+        "stdout": valid_output,
+        "stderr": "",
+    })
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: sp_run_result)
+    result = _run_native_volatility_probe(
+        evidence=SimpleNamespace(id="test-id"),
+        canonical_path=Path("/tmp/test.dmp"),
+    )
+    assert result["compatible"] is True
+    assert result["reason"] == "compatible"
+    assert result["row_count"] == 6
+
+
+def test_native_volatility_probe_rejects_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.memory.preparation_runtime import _run_native_volatility_probe
+    sp_run_result = type("CompletedProcess", (), {
+        "returncode": 0,
+        "stdout": "not valid json {{{",
+        "stderr": "",
+    })
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: sp_run_result)
+    result = _run_native_volatility_probe(
+        evidence=SimpleNamespace(id="test-id"),
+        canonical_path=Path("/tmp/test.dmp"),
+    )
+    assert result["compatible"] is False
+    assert "Malformed" in str(result.get("reason", ""))
+
+
+def test_native_volatility_probe_rejects_missing_pid4(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.memory.preparation_runtime import _run_native_volatility_probe
+    import json
+    valid_output = json.dumps([
+        {"PID": 0, "ImageFileName": "Idle"},
+        {"PID": 100, "ImageFileName": "svchost.exe"},
+        {"PID": 200, "ImageFileName": "explorer.exe"},
+    ])
+    sp_run_result = type("CompletedProcess", (), {
+        "returncode": 0,
+        "stdout": valid_output,
+        "stderr": "",
+    })
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: sp_run_result)
+    result = _run_native_volatility_probe(
+        evidence=SimpleNamespace(id="test-id"),
+        canonical_path=Path("/tmp/test.dmp"),
+    )
+    assert result["compatible"] is False
+    assert "System" in str(result.get("reason", ""))
+
+
+def test_catalogue_ready_evidence_has_available_profiles(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case(db_session)
+    ev = _evidence(db_session, case_id=case.id)
+    from app.services.memory.catalogue import build_analysis_catalogue
+    from app.services.memory.symbol_preparation import (
+        compute_memory_readiness,
+        UI_STATE_READY,
+    )
+    monkeypatch.setattr("app.services.memory.catalogue._probe_network_via_worker", lambda: (True, "ok"))
+    monkeypatch.setattr(
+        "app.services.memory.symbol_preparation.compute_memory_readiness",
+        lambda *a, **k: type("Readiness", (), {
+            "ui_state": UI_STATE_READY,
+            "preparation_state": "ready",
+            "progress_label": "Ready",
+            "progress_percent": 100,
+            "exact_match": False,
+            "native_compatible": True,
+            "sanitized_message": None,
+            "source_of_truth": "volatility_native_compatible",
+        })(),
+    )
+    items = build_analysis_catalogue(db_session, case_id=case.id, evidence_id=ev.id)
+    available = [i for i in items if i["available"]]
+    assert len(available) > 0
+    assert len(available) >= 6
+    profiles = {i["profile"] for i in available}
+    assert "processes_basic" in profiles
+    assert "metadata_only" in profiles
+
+
+def test_catalogue_not_empty_when_ready_regardless_of_exact_match(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case(db_session)
+    ev = _evidence(db_session, case_id=case.id)
+    from app.services.memory.catalogue import build_analysis_catalogue
+    from app.services.memory.symbol_preparation import (
+        compute_memory_readiness,
+        UI_STATE_READY,
+    )
+    monkeypatch.setattr("app.services.memory.catalogue._probe_network_via_worker", lambda: (True, "ok"))
+    monkeypatch.setattr(
+        "app.services.memory.symbol_preparation.compute_memory_readiness",
+        lambda *a, **k: type("Readiness", (), {
+            "ui_state": UI_STATE_READY,
+            "preparation_state": "ready",
+            "progress_label": "Ready",
+            "progress_percent": 100,
+            "exact_match": False,
+            "native_compatible": False,
+            "sanitized_message": None,
+            "source_of_truth": "successful_metadata_run",
+        })(),
+    )
+    items = build_analysis_catalogue(db_session, case_id=case.id, evidence_id=ev.id)
+    available = [i for i in items if i["available"]]
+    assert len(available) > 0
+    assert len(available) >= 6
+
+
+def test_catalogue_shows_blocked_when_preparation_not_ready(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case(db_session)
+    ev = _evidence(db_session, case_id=case.id)
+    from app.services.memory.catalogue import build_analysis_catalogue
+    from app.services.memory.symbol_preparation import (
+        compute_memory_readiness,
+        UI_STATE_BLOCKED,
+    )
+    monkeypatch.setattr("app.services.memory.catalogue._probe_network_via_worker", lambda: (True, "ok"))
+    monkeypatch.setattr(
+        "app.services.memory.symbol_preparation.compute_memory_readiness",
+        lambda *a, **k: type("Readiness", (), {
+            "ui_state": UI_STATE_BLOCKED,
+            "preparation_state": "blocked",
+            "progress_label": "Blocked",
+            "progress_percent": 0,
+            "exact_match": False,
+            "native_compatible": False,
+            "sanitized_message": "Symbols not available.",
+            "source_of_truth": None,
+        })(),
+    )
+    items = build_analysis_catalogue(db_session, case_id=case.id, evidence_id=ev.id)
+    available = [i for i in items if i["available"]]
+    assert len(available) == 0

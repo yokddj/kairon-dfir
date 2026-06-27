@@ -583,6 +583,30 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
                     "discovery": discovery_meta,
                 }
 
+        # 3b. Automatic native Volatility fallback: when exact
+        # symbols are not cached, run stock Volatility with
+        # full automagic.  This is the primary analyst-facing
+        # compatibility path.  The native probe runs inline
+        # (the memory-worker has Volatility3 installed).
+        if readiness.state.value == ReadinessState.BLOCKED_SYMBOLS.value:
+            native_result = _run_native_volatility_probe(
+                evidence=evidence,
+                canonical_path=_evidence_canonical_path(evidence),
+            )
+            if native_result.get("compatible"):
+                readiness.state = ReadinessState.READY
+                readiness.reason = "volatility_native_compatible"
+                readiness.error_code = None
+                readiness.metadata = {
+                    **dict(readiness.metadata or {}),
+                    "native_probe": native_result,
+                }
+            else:
+                readiness.metadata = {
+                    **dict(readiness.metadata or {}),
+                    "native_probe": native_result,
+                }
+
         # 4. Persist the terminal state.
         from app.services.memory.symbol_preparation import (
             mark_preparation,
@@ -679,6 +703,163 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
         return {"state": "failed", "error_code": "PREPARATION_RUNTIME_ERROR"}
     finally:
         db.close()
+
+
+def _run_native_volatility_probe(
+    *,
+    evidence,
+    canonical_path: Path,
+) -> dict[str, Any]:
+    """Run stock Volatility with full automagic against the evidence.
+
+    Returns a dict with ``compatible`` (bool) and diagnostic
+    fields.  The function is a read-only, bounded subprocess
+    invocation of ``vol -f <path> -r json windows.pslist.PsList``.
+    It does NOT persist any state to the database.
+    """
+    import hashlib
+    import json
+    import os
+    import subprocess
+    import time
+
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    vol_exe = os.environ.get("VOLATILITY3_EXECUTABLE", "vol")
+    plugin = "windows.pslist.PsList"
+
+    result: dict[str, Any] = {
+        "compatible": False,
+        "reason": None,
+        "plugin": plugin,
+        "vol_exe": vol_exe,
+        "exit_code": None,
+        "row_count": 0,
+    }
+    try:
+        proc = subprocess.run(
+            [vol_exe, "-f", str(canonical_path), "-r", "json", plugin],
+            capture_output=True,
+            text=True,
+            timeout=getattr(settings, "memory_native_probe_timeout_seconds", 60),
+            start_new_session=True,
+        )
+    except subprocess.TimeoutExpired:
+        result["reason"] = f"Volatility timed out after {getattr(settings, 'memory_native_probe_timeout_seconds', 60)}s."
+        return result
+    except FileNotFoundError:
+        result["reason"] = f"Volatility executable {vol_exe!r} not found."
+        return result
+    except Exception as exc:
+        result["reason"] = f"Volatility subprocess error: {exc}"
+        return result
+
+    result["exit_code"] = proc.returncode
+    stderr = proc.stderr or ""
+
+    if proc.returncode != 0:
+        result["reason"] = f"Volatility exited with code {proc.returncode}. {stderr[:200]}"
+        return result
+
+    raw_output = proc.stdout or ""
+    if not raw_output.strip():
+        result["reason"] = "Volatility produced empty output."
+        return result
+
+    try:
+        payload = json.loads(raw_output)
+    except json.JSONDecodeError as exc:
+        result["reason"] = f"Malformed JSON output: {exc}"
+        return result
+
+    rows = _extract_native_rows(payload)
+    result["row_count"] = len(rows)
+    result["output_hash"] = hashlib.sha256(raw_output.encode("utf-8")).hexdigest()
+
+    min_rows = getattr(settings, "memory_native_probe_min_process_rows", 5)
+    malformed_max = getattr(settings, "memory_native_probe_malformed_row_ratio", 0.75)
+
+    if len(rows) < min_rows:
+        result["reason"] = f"Only {len(rows)} process row(s); minimum is {min_rows}."
+        return result
+
+    has_pid = _any_valid_pid(rows)
+    if not has_pid:
+        result["reason"] = "No valid PID column found."
+        return result
+
+    has_pid4 = _has_pid4_system(rows)
+    if not has_pid4:
+        result["reason"] = "PID 4 / System process not found."
+        return result
+
+    printable_ratio = _printable_name_ratio(rows)
+    if printable_ratio < 0.3:
+        result["reason"] = f"Only {printable_ratio:.0%} of process names are printable."
+        return result
+
+    malformed_ratio = _malformed_row_ratio(rows)
+    if malformed_ratio > malformed_max:
+        result["reason"] = f"{malformed_ratio:.0%} of rows are malformed; max is {malformed_max:.0%}."
+        return result
+
+    result["compatible"] = True
+    result["reason"] = "compatible"
+    return result
+
+
+def _extract_native_rows(payload: Any) -> list[dict]:
+    if isinstance(payload, list):
+        return [r for r in payload if isinstance(r, dict)]
+    if isinstance(payload, dict):
+        for _key, value in payload.items():
+            if isinstance(value, list):
+                return [r for r in value if isinstance(r, dict)]
+    return []
+
+
+def _any_valid_pid(rows: list[dict]) -> bool:
+    for row in rows:
+        pid = row.get("PID") or row.get("pid") or row.get("ProcessId")
+        if isinstance(pid, int) and pid > 0:
+            return True
+    return False
+
+
+def _has_pid4_system(rows: list[dict]) -> bool:
+    for row in rows:
+        pid = row.get("PID") or row.get("pid") or row.get("ProcessId")
+        if pid == 4:
+            return True
+        name = row.get("ImageFileName") or row.get("Name") or row.get("ProcessName") or ""
+        if "System" in str(name):
+            return True
+    return False
+
+
+def _printable_name_ratio(rows: list[dict]) -> float:
+    total = len(rows)
+    if total == 0:
+        return 0.0
+    printable = 0
+    for row in rows:
+        name = str(row.get("ImageFileName") or row.get("Name") or row.get("ProcessName") or "")
+        if any(c.isalpha() for c in name) and not all(ord(c) < 32 for c in name):
+            printable += 1
+    return printable / total
+
+
+def _malformed_row_ratio(rows: list[dict]) -> float:
+    total = len(rows)
+    if total == 0:
+        return 0.0
+    malformed = 0
+    for row in rows:
+        pid = row.get("PID") or row.get("pid") or row.get("ProcessId")
+        if not isinstance(pid, int) or pid < 0:
+            malformed += 1
+    return malformed / total
 
 
 def _gather_cache_state(db: Session, evidence) -> dict[str, Any]:

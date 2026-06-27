@@ -197,29 +197,6 @@ export function MemoryPreparationCard({
     },
   });
 
-  const acquireMutation = useMutation({
-    mutationFn: () => api.acquireExactMemorySymbols(caseId, evidenceId),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: ["memory-symbol-preparation", caseId, evidenceId],
-        refetchType: "active",
-      });
-      void queryClient.invalidateQueries({ queryKey: ["memory-landing", caseId] });
-      acquireMutation.reset();
-    },
-  });
-
-  const nativeProbeMutation = useMutation({
-    mutationFn: () => api.startNativeProbe(caseId, evidenceId),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({
-        queryKey: ["memory-symbol-preparation", caseId, evidenceId],
-        refetchType: "active",
-      });
-      void queryClient.invalidateQueries({ queryKey: ["native-probe", caseId, evidenceId] });
-    },
-  });
-
   const cancelIntentMutation = useMutation({
     mutationFn: () => api.cancelMemoryRunWhenReady(caseId, evidenceId),
     onSuccess: () => {
@@ -236,39 +213,6 @@ export function MemoryPreparationCard({
   const isReady = canonical === "ready";
   const isBlockedSymbols = canonical === "blocked_symbols";
   const nativeReady = isReady && (preparation.native_compatible === true);
-  // Show probe/acquire only when truly blocked (no compat, no ready state)
-  const showSymbolActions = isBlockedSymbols && !nativeReady;
-  // Derive the "is the button currently active" state from the
-  // refreshed canonical preparation state ONLY.  React Query
-  // mutation data is permanent; treating it as a live signal is
-  // what kept the button on "Acquiring symbols…" forever after
-  // a terminal failure (the bug from the operator report).
-  //
-  // The button is "in flight" when:
-  //   1. the mutation is currently pending (POST waiting), OR
-  //   2. the canonical preparation endpoint reports the
-  //      task as alive (ui_state="preparing" AND task_alive=true).
-  //
-  // A POST that returns a non-terminal state (e.g. "queued")
-  // MUST NOT keep the button on "Acquiring symbols…" once the
-  // canonical preparation has reported the task is terminal.
-  // The previous code read ``acquireMutation.data?.task_alive``
-  // and ignored the canonical state; that is the bug we just
-  // fixed.
-  const canonicalIsPreparing =
-    preparation.ui_state === "preparing" && Boolean(preparation.task_alive);
-  const isAcquiring = acquireMutation.isPending || canonicalIsPreparing;
-  // Surface the canonical error message when one is set on the
-  // preparation row.  The mutation's error message is only used
-  // when the mutation itself failed (network / HTTP error
-  // reaching the API), not when the POST succeeded and the
-  // canonical row already carries a structured failure code.
-  const acquireError =
-    acquireMutation.error?.message ??
-    (preparation.error_code === "SYMBOL_PDB_IDENTITY_MISMATCH" ||
-    preparation.error_code === "SYMBOL_ACQUISITION_FAILED"
-      ? preparation.sanitized_message ?? null
-      : null);
 
   return (
     <section
@@ -309,35 +253,7 @@ export function MemoryPreparationCard({
           ) : null}
         </div>
         <div className="flex flex-wrap gap-2">
-          {showSymbolActions ? (
-            <>
-              <button
-                type="button"
-                onClick={() => acquireMutation.mutate()}
-                disabled={acquireMutation.isPending || isAcquiring}
-                className="rounded-xl border border-accent/40 bg-accent/20 px-3 py-1.5 text-xs text-accent disabled:opacity-50"
-                data-testid="memory-preparation-acquire-button"
-              >
-                {acquireMutation.isPending
-                  ? "Acquiring…"
-                  : isAcquiring
-                    ? "Acquiring symbols…"
-                    : "Acquire exact symbols"}
-              </button>
-              <button
-                type="button"
-                onClick={() => nativeProbeMutation.mutate()}
-                disabled={nativeProbeMutation.isPending}
-                className="rounded-xl border border-accent/40 bg-accent/20 px-3 py-1.5 text-xs text-accent disabled:opacity-50"
-                data-testid="memory-preparation-native-probe-button"
-              >
-                {nativeProbeMutation.isPending
-                  ? "Testing…"
-                  : "Test with native Volatility"}
-              </button>
-            </>
-          ) : null}
-          {!isReady ? (
+          {canonical === "failed" || preparation.ui_state === "failed" ? (
             <button
               type="button"
               onClick={() => retryMutation.mutate()}
@@ -354,55 +270,12 @@ export function MemoryPreparationCard({
             className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted"
             data-testid="memory-preparation-toggle-details"
           >
-            {showDetails ? "Hide details" : "View details"}
+            {showDetails ? "Hide diagnostics" : "Advanced diagnostics"}
           </button>
         </div>
       </div>
 
-      {isBlockedSymbols && preparation.requirement ? (
-        <div
-          className="mt-3 rounded-xl border border-line bg-abyss/40 p-2 text-[11px] text-muted"
-          data-testid="memory-preparation-requirement"
-        >
-          <p className="font-mono">
-            Required symbol: {preparation.requirement.pdb_name}
-            <span className="ml-2">GUID: {preparation.requirement.pdb_guid}</span>
-            <span className="ml-2">Age: {preparation.requirement.pdb_age}</span>
-            <span className="ml-2">Arch: {preparation.requirement.architecture}</span>
-          </p>
-          {preparation.cache_status === "miss" ? (
-            <p className="mt-1 font-mono" data-testid="memory-preparation-cache-miss">
-              Cache miss.
-            </p>
-          ) : null}
-          {acquireError ? (
-            <p
-              className="mt-1 font-mono text-rose-300"
-              data-testid="memory-preparation-acquire-error"
-            >
-              {acquireError}
-            </p>
-          ) : null}
-          {preparation.error_code === "SYMBOL_PDB_IDENTITY_MISMATCH" &&
-          preparation.acquisition?.identity_expected ? (
-            <div
-              className="mt-2 rounded-md border border-rose-400/30 bg-rose-500/10 p-2 font-mono text-[11px] text-rose-100"
-              data-testid="memory-preparation-identity-mismatch"
-            >
-              <p>
-                Expected age: {preparation.acquisition.identity_expected.pdb_age}
-                <span className="ml-2">Observed age: {preparation.acquisition.identity_observed?.pdb_age ?? "?"}</span>
-              </p>
-              <p className="mt-1">
-                Retry is not possible: the same Microsoft symbol
-                URL will return the same file.  The acquisition
-                stays terminal failed until the requirement
-                identity is corrected.
-              </p>
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+
 
       {/*
         Show the progress bar ONLY when:
@@ -479,15 +352,20 @@ export function MemoryPreparationCard({
             <span className="ml-2">source: {preparation.source_of_truth || "—"}</span>
           </p>
           {preparation.requirement ? (
-            <p className="mt-1 font-mono">
-              <span>PDB: {preparation.requirement.pdb_name}</span>
-              <span className="ml-2">GUID: {preparation.requirement.pdb_guid}</span>
-              <span className="ml-2">req age: {preparation.requirement.pdb_age}</span>
-              <span className="ml-2">Arch: {preparation.requirement.architecture}</span>
-              {preparation.acquisition?.identity_observed?.pdb_age != null ? (
-                <span className="ml-2">observed age: {preparation.acquisition.identity_observed.pdb_age}</span>
+            <>
+              <p className="mt-1 font-mono">
+                <span>PDB: {preparation.requirement.pdb_name}</span>
+                <span className="ml-2">GUID: {preparation.requirement.pdb_guid}</span>
+                <span className="ml-2">req age: {preparation.requirement.pdb_age}</span>
+                <span className="ml-2">Arch: {preparation.requirement.architecture}</span>
+                {preparation.acquisition?.identity_observed?.pdb_age != null ? (
+                  <span className="ml-2">observed age: {preparation.acquisition.identity_observed.pdb_age}</span>
+                ) : null}
+              </p>
+              {preparation.cache_status === "miss" ? (
+                <p className="mt-1 font-mono" data-testid="memory-preparation-cache-miss">Cache miss.</p>
               ) : null}
-            </p>
+            </>
           ) : null}
           {preparation.native_compatible && preparation.native_compatibility_reason ? (
             <p className="mt-1 font-mono">

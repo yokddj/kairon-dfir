@@ -147,7 +147,7 @@ class Settings(BaseSettings):
     # materialization).  When False, the memory upload lifecycle
     # only registers the Evidence row and never schedules
     # background work as part of the critical path.
-    memory_auto_preparation: bool = False
+    memory_auto_preparation: bool = True
     # Run all (sequential profile batch) is enabled in the v1
     # stabilization sprint.  The UI only exposes the action when
     # the evidence preparation is "ready" (effective_state=ready);
