@@ -3,6 +3,7 @@ from pathlib import Path
 import re
 
 from pydantic import Field
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -59,14 +60,18 @@ class Settings(BaseSettings):
     memory_preferred_backend: str = "volatility3"
     memory_max_upload_size: int = 2147483648
     memory_upload_enabled: bool = False
-    memory_upload_max_bytes: int = 2147483648
-    memory_upload_chunk_size_bytes: int = 4194304
+    memory_upload_max_bytes: int = 34359738368
+    memory_upload_chunk_size_bytes: int = 67108864
     memory_upload_staging_root: str = ""
     memory_upload_cleanup_age_seconds: int = 86400
-    memory_upload_request_timeout_seconds: int = 0
-    memory_upload_verification_timeout_seconds: int = 300
-    memory_upload_finalization_timeout_seconds: int = 120
+    memory_upload_request_timeout_seconds: int = 1800
+    memory_upload_verification_timeout_seconds: int = 1800
+    memory_upload_finalization_timeout_seconds: int = 1800
     memory_upload_stale_timeout_seconds: int = 900
+    memory_upload_session_ttl_seconds: int = 86400
+    memory_upload_min_free_space_bytes: int = 53687091200
+    memory_upload_case_quota_bytes: int = 107374182400
+    memory_upload_max_parallel_chunks: int = 2
     memory_upload_allowed_extensions: str = ".raw,.mem,.dmp,.dump,.bin,.img,.vmem,.lime"
     memory_job_timeout_seconds: int = 900
     memory_plugin_timeout_seconds: int = 600
@@ -515,6 +520,26 @@ class Settings(BaseSettings):
         values = str(self.memory_upload_allowed_extensions or "").split(",")
         extensions = {item.strip().lower() for item in values if item.strip()}
         return {item if item.startswith(".") else f".{item}" for item in extensions}
+
+    @model_validator(mode="after")
+    def validate_memory_upload_settings(self) -> "Settings":
+        if self.memory_upload_max_bytes < 10 * 1024 * 1024 * 1024:
+            raise ValueError("MEMORY_UPLOAD_MAX_BYTES must be at least 10 GiB")
+        if self.memory_upload_chunk_size_bytes <= 0:
+            raise ValueError("MEMORY_UPLOAD_CHUNK_BYTES must be greater than zero")
+        if self.memory_upload_chunk_size_bytes > self.memory_upload_max_bytes:
+            raise ValueError("MEMORY_UPLOAD_CHUNK_BYTES must not exceed MEMORY_UPLOAD_MAX_BYTES")
+        if self.memory_upload_session_ttl_seconds <= 0:
+            raise ValueError("MEMORY_UPLOAD_SESSION_TTL_SECONDS must be greater than zero")
+        if self.memory_upload_request_timeout_seconds <= 0:
+            raise ValueError("MEMORY_UPLOAD_REQUEST_TIMEOUT_SECONDS must be greater than zero")
+        if self.memory_upload_min_free_space_bytes < 0:
+            raise ValueError("MEMORY_UPLOAD_MIN_FREE_SPACE_BYTES must not be negative")
+        if self.memory_upload_case_quota_bytes <= 0:
+            raise ValueError("MEMORY_UPLOAD_CASE_QUOTA_BYTES must be greater than zero")
+        if self.memory_upload_max_parallel_chunks <= 0:
+            raise ValueError("MEMORY_UPLOAD_MAX_PARALLEL_CHUNKS must be greater than zero")
+        return self
 
     @property
     def allowed_evidence_roots(self) -> list[Path]:

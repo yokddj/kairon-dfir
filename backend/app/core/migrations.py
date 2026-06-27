@@ -1908,3 +1908,34 @@ def _v19_memory_upload_evidence_audit(connection: Connection) -> None:
             name="ix_memory_upload_case_evidence",
             create_sql="CREATE INDEX ix_memory_upload_case_evidence ON memory_uploads (case_id, evidence_id)",
         )
+
+
+@register(20, "memory_upload_sessions_resumable_fields")
+def _v20_memory_upload_sessions_resumable_fields(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    if "memory_uploads" not in inspector.get_table_names():
+        return
+
+    existing = {c["name"] for c in inspector.get_columns("memory_uploads")}
+    column_defs = {
+        "expected_sha256": "VARCHAR(128)",
+        "chunk_size_bytes": "BIGINT NOT NULL DEFAULT 0",
+        "total_chunks": "INTEGER NOT NULL DEFAULT 0",
+        "received_chunk_count": "INTEGER NOT NULL DEFAULT 0",
+        "expires_at": "TIMESTAMP",
+        "finalized_at": "TIMESTAMP",
+    }
+    for column_name, column_type in column_defs.items():
+        if column_name in existing:
+            continue
+        connection.execute(
+            text(
+                f"ALTER TABLE memory_uploads ADD COLUMN {column_name} {column_type}"
+            )
+        )
+
+    _create_index_dialect_aware(
+        connection,
+        name="ix_memory_uploads_expires_at",
+        create_sql="CREATE INDEX ix_memory_uploads_expires_at ON memory_uploads (expires_at)",
+    )

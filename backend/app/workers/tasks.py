@@ -764,6 +764,23 @@ def _run_native_probe_reconciliation() -> str:
     return run_periodic_reconciliation()
 
 
+def _enqueue_memory_upload_cleanup() -> str:
+    job = memory_queue.enqueue(
+        "app.workers.tasks._run_memory_upload_cleanup",
+        job_timeout=max(60, int(get_settings().memory_job_timeout_seconds or 900)),
+        result_ttl=300,
+        failure_ttl=1800,
+        description="memory upload cleanup",
+    )
+    return str(job.id)
+
+
+def _run_memory_upload_cleanup() -> str:
+    from app.services.memory.upload_sessions import run_periodic_cleanup
+
+    return run_periodic_cleanup()
+
+
 def _metadata_phase_timings_snapshot(metadata: dict) -> list[dict]:
     snapshot = [dict(item) for item in metadata.get("phase_timings") or [] if isinstance(item, dict)]
     current = metadata.get("current_phase_timing")

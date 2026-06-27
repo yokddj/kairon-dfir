@@ -1,3 +1,5 @@
+import asyncio
+import hashlib
 import json
 import os
 import subprocess
@@ -26,6 +28,7 @@ from app.services.memory import normalizers as memory_normalizers
 from app.services.memory import overview as memory_overview
 from app.services.memory import storage as memory_storage
 from app.services.memory import upload_readiness
+from app.services.memory import upload_sessions
 from app.services.memory import upload_capacity
 from app.services.memory import upload_lifecycle
 from app.services.memory import validation as memory_validation
@@ -69,8 +72,42 @@ class _UploadSlotStub:
         return None
 
 
+class _ChunkRequestStub:
+    def __init__(self, data: bytes, headers: dict[str, str] | None = None):
+        self._data = data
+        self.headers = headers or {"content-length": str(len(data))}
+
+    async def stream(self):
+        midpoint = max(1, len(self._data) // 2)
+        yield self._data[:midpoint]
+        yield self._data[midpoint:]
+
+
 def _accepted_capacity(size: int, *, phase: str, bytes_already_staged: int = 0):
     return SimpleNamespace(finalization_strategy="atomic_rename", staging_and_final_same_filesystem=True)
+
+
+def _upload_session_settings(tmp_path: Path, **overrides):
+    values = {
+        "backend_data_dir": tmp_path / "data",
+        "backend_temp_dir": tmp_path / "data" / "tmp",
+        "memory_upload_enabled": True,
+        "memory_upload_max_bytes": 32 * 1024 * 1024 * 1024,
+        "memory_max_upload_size": 32 * 1024 * 1024 * 1024,
+        "memory_upload_chunk_size_bytes": 8,
+        "memory_upload_extensions": {".dmp", ".mem"},
+        "memory_upload_staging_path": tmp_path / "data" / "tmp" / "memory-uploads",
+        "memory_upload_session_ttl_seconds": 3600,
+        "memory_upload_min_free_space_bytes": 0,
+        "memory_upload_case_quota_bytes": 128 * 1024 * 1024 * 1024,
+        "memory_upload_max_parallel_chunks": 2,
+        "memory_plugin_output_max_bytes": 1024,
+        "memory_output_root": tmp_path / "data" / "memory-output",
+        "memory_analysis_enabled": True,
+        "memory_evidence_shared_gid": os.getgid(),
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
 
 
 def _case(db, case_id: str = CASE_ID, name: str = "Memory Case") -> Case:
@@ -440,7 +477,292 @@ def test_memory_upload_finalization_timeout_preserves_valid_canonical(tmp_path: 
     canonical = settings.backend_data_dir / "evidence" / CASE_ID / evidence_id / "original" / "memory-image.mem"
     assert exc_info.value.code == "finalization_timeout"
     assert canonical.read_bytes() == data
-    assert not list(settings.memory_upload_staging_path.glob("*.memory-upload.part"))
+
+
+def test_memory_upload_readiness_accepts_20gb_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = SimpleNamespace(
+        memory_upload_max_bytes=32 * 1024 * 1024 * 1024,
+        memory_max_upload_size=32 * 1024 * 1024 * 1024,
+        memory_upload_enabled=True,
+        memory_upload_chunk_size_bytes=64 * 1024 * 1024,
+        memory_upload_max_parallel_chunks=2,
+        memory_upload_case_quota_bytes=128 * 1024 * 1024 * 1024,
+        memory_analysis_enabled=True,
+        memory_upload_extensions={".dmp"},
+    )
+    monkeypatch.setattr(upload_readiness, "get_settings", lambda: settings)
+    monkeypatch.setattr(upload_readiness, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True, "dedicated_worker_online": True}]})
+    monkeypatch.setattr(upload_readiness, "_capacity_snapshot", lambda _db, expected_bytes: {
+        "staging_available_bytes": 200 * 1024 * 1024 * 1024,
+        "canonical_storage_available_bytes": 200 * 1024 * 1024 * 1024,
+        "memory_output_available_bytes": 200 * 1024 * 1024 * 1024,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+    monkeypatch.setattr(upload_readiness, "_case_memory_usage_bytes", lambda _db, _case_id: 0)
+
+    readiness = upload_readiness.get_memory_upload_readiness(CASE_ID, 20 * 1024 * 1024 * 1024)
+
+    assert readiness["can_accept_selected_size"] is True
+    assert readiness["max_upload_bytes"] == 32 * 1024 * 1024 * 1024
+    assert readiness["recommended_chunk_size_bytes"] == 64 * 1024 * 1024
+    assert readiness["resumable"] is True
+
+
+def test_create_memory_upload_session_rejects_above_max(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path, memory_upload_max_bytes=10))
+
+    with pytest.raises(upload_sessions.MemoryUploadSessionError) as exc_info:
+        upload_sessions.create_memory_upload_session(
+            db_session,
+            case_id=CASE_ID,
+            filename="memory.dmp",
+            expected_size_bytes=11,
+            provided_host="WS01",
+            authorization_acknowledged=True,
+        )
+
+    assert exc_info.value.code == "MEMORY_UPLOAD_TOO_LARGE"
+
+
+def test_create_memory_upload_session_enforces_case_quota(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    _evidence(db_session, stored_path=str(tmp_path / "existing.dmp"))
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path, memory_upload_case_quota_bytes=1025))
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+        "staging_available_bytes": 10_000,
+        "canonical_storage_available_bytes": 10_000,
+        "memory_output_available_bytes": 10_000,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+
+    with pytest.raises(upload_sessions.MemoryUploadSessionError) as exc_info:
+        upload_sessions.create_memory_upload_session(
+            db_session,
+            case_id=CASE_ID,
+            filename="memory.dmp",
+            expected_size_bytes=2,
+            provided_host="WS01",
+            authorization_acknowledged=True,
+        )
+
+    assert exc_info.value.code == "MEMORY_UPLOAD_CASE_QUOTA_EXCEEDED"
+
+
+def test_chunk_upload_is_idempotent_for_same_bytes(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path))
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+        "staging_available_bytes": 10_000,
+        "canonical_storage_available_bytes": 10_000,
+        "memory_output_available_bytes": 10_000,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+
+    session = upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=8,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+    data = b"abcdefgh"
+    chunk_sha = hashlib.sha256(data).hexdigest()
+
+    first = asyncio.run(upload_sessions.store_memory_upload_chunk(
+        db_session,
+        case_id=CASE_ID,
+        upload_id=session.id,
+        chunk_index=0,
+        request=_ChunkRequestStub(data, {"content-length": "8", "x-kairon-chunk-sha256": chunk_sha}),
+    ))
+    second = asyncio.run(upload_sessions.store_memory_upload_chunk(
+        db_session,
+        case_id=CASE_ID,
+        upload_id=session.id,
+        chunk_index=0,
+        request=_ChunkRequestStub(data, {"content-length": "8", "x-kairon-chunk-sha256": chunk_sha}),
+    ))
+
+    assert first.bytes_received == 8
+    assert second.bytes_received == 8
+    assert second.received_chunk_count == 1
+
+
+def test_chunk_upload_rejects_mismatched_retransmission(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path))
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+        "staging_available_bytes": 10_000,
+        "canonical_storage_available_bytes": 10_000,
+        "memory_output_available_bytes": 10_000,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+    session = upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=8,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+    first = b"abcdefgh"
+    second = b"abcxxxxx"
+
+    asyncio.run(upload_sessions.store_memory_upload_chunk(
+        db_session,
+        case_id=CASE_ID,
+        upload_id=session.id,
+        chunk_index=0,
+        request=_ChunkRequestStub(first, {"content-length": "8", "x-kairon-chunk-sha256": hashlib.sha256(first).hexdigest()}),
+    ))
+    with pytest.raises(upload_sessions.MemoryUploadSessionError) as exc_info:
+        asyncio.run(upload_sessions.store_memory_upload_chunk(
+            db_session,
+            case_id=CASE_ID,
+            upload_id=session.id,
+            chunk_index=0,
+            request=_ChunkRequestStub(second, {"content-length": "8", "x-kairon-chunk-sha256": hashlib.sha256(second).hexdigest()}),
+        ))
+
+    assert exc_info.value.code == "MEMORY_UPLOAD_CHUNK_CONFLICT"
+
+
+def test_finalize_fails_when_chunks_missing(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path))
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+        "staging_available_bytes": 10_000,
+        "canonical_storage_available_bytes": 10_000,
+        "memory_output_available_bytes": 10_000,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+    session = upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=16,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+
+    with pytest.raises(upload_sessions.MemoryUploadSessionError) as exc_info:
+        upload_sessions.finalize_memory_upload_session(db_session, case_id=CASE_ID, upload_id=session.id)
+
+    assert exc_info.value.code == "MEMORY_UPLOAD_CHUNKS_MISSING"
+
+
+def test_finalize_streams_sha256_and_registers_evidence(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    settings = _upload_session_settings(tmp_path)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: settings)
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+        "staging_available_bytes": 10_000,
+        "canonical_storage_available_bytes": 10_000,
+        "memory_output_available_bytes": 10_000,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+    monkeypatch.setattr(upload_sessions, "secure_uploaded_memory_permissions", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(upload_lifecycle, "get_settings", lambda: SimpleNamespace(
+        memory_auto_preparation=False,
+        backend_data_dir=settings.backend_data_dir,
+        memory_upload_session_ttl_seconds=settings.memory_upload_session_ttl_seconds,
+    ))
+    session = upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=8,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+    data = b"abcdefgh"
+    asyncio.run(upload_sessions.store_memory_upload_chunk(
+        db_session,
+        case_id=CASE_ID,
+        upload_id=session.id,
+        chunk_index=0,
+        request=_ChunkRequestStub(data, {"content-length": "8", "x-kairon-chunk-sha256": hashlib.sha256(data).hexdigest()}),
+    ))
+
+    upload_state, evidence = upload_sessions.finalize_memory_upload_session(db_session, case_id=CASE_ID, upload_id=session.id)
+
+    assert evidence is not None
+    assert evidence.evidence_type == EvidenceType.memory_dump
+    assert evidence.size_bytes == 8
+    assert upload_state.status == "completed"
+    assert upload_state.sha256 == hashlib.sha256(data).hexdigest()
+    assert db_session.query(Evidence).filter(Evidence.id == evidence.id).count() == 1
+
+
+def test_get_memory_runs_filters_by_evidence(db_session) -> None:
+    _case(db_session)
+    _evidence(db_session, evidence_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1")
+    _evidence(db_session, evidence_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2")
+    db_session.add_all([
+        MemoryScanRun(case_id=CASE_ID, evidence_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", profile="metadata_only", status="completed"),
+        MemoryScanRun(case_id=CASE_ID, evidence_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2", profile="processes_basic", status="completed"),
+    ])
+    db_session.commit()
+
+    runs = routes_memory.get_memory_runs(CASE_ID, evidence_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1", db=db_session)
+
+    assert len(runs) == 1
+    assert runs[0].evidence_id == "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1"
+
+
+def test_cleanup_expires_abandoned_upload_session(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path, memory_upload_cleanup_age_seconds=60))
+    session = upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=8,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+    session.expires_at = upload_lifecycle.utc_now_naive()
+    db_session.add(session)
+    db_session.commit()
+
+    stats = upload_sessions.cleanup_expired_memory_upload_sessions(db_session, limit=10)
+
+    db_session.refresh(session)
+    assert stats["expired"] == 1
+    assert session.status == "expired"
+
+
+def test_cleanup_does_not_delete_active_upload_session(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path, memory_upload_cleanup_age_seconds=60))
+    session = upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=8,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+
+    stats = upload_sessions.cleanup_expired_memory_upload_sessions(db_session, limit=10)
+
+    db_session.refresh(session)
+    assert stats["expired"] == 0
+    assert session.status == "created"
 
 
 def test_memory_upload_disabled_rejects_memory_extension(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -849,9 +1171,16 @@ def test_memory_upload_readiness_reports_five_gib_limit_without_paths(tmp_path: 
         memory_analysis_enabled=True,
     )
     monkeypatch.setattr(upload_readiness, "get_settings", lambda: settings)
-    monkeypatch.setattr(upload_capacity, "get_settings", lambda: settings)
     monkeypatch.setattr(upload_readiness, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True, "dedicated_worker_online": True}]})
-    monkeypatch.setattr(upload_capacity, "_snapshot", lambda _path: upload_capacity.FilesystemSnapshot(device=1, available_bytes=13 * 1024 * 1024 * 1024))
+    monkeypatch.setattr(upload_readiness, "_case_memory_usage_bytes", lambda _db, _case_id: 0)
+    monkeypatch.setattr(upload_readiness, "_capacity_snapshot", lambda _db, expected_bytes: {
+        "staging_available_bytes": 13 * 1024 * 1024 * 1024,
+        "canonical_storage_available_bytes": 13 * 1024 * 1024 * 1024,
+        "memory_output_available_bytes": 13 * 1024 * 1024 * 1024,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
 
     result = upload_readiness.get_memory_upload_readiness(CASE_ID, selected_size_bytes=5 * 1024 * 1024 * 1024)
 
@@ -876,9 +1205,16 @@ def test_memory_upload_readiness_blocks_insufficient_storage(tmp_path: Path, mon
         memory_analysis_enabled=True,
     )
     monkeypatch.setattr(upload_readiness, "get_settings", lambda: settings)
-    monkeypatch.setattr(upload_capacity, "get_settings", lambda: settings)
     monkeypatch.setattr(upload_readiness, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True, "dedicated_worker_online": True}]})
-    monkeypatch.setattr(upload_capacity, "_snapshot", lambda _path: upload_capacity.FilesystemSnapshot(device=1, available_bytes=7 * 1024 * 1024 * 1024))
+    monkeypatch.setattr(upload_readiness, "_case_memory_usage_bytes", lambda _db, _case_id: 0)
+    monkeypatch.setattr(upload_readiness, "_capacity_snapshot", lambda _db, expected_bytes: {
+        "staging_available_bytes": 7 * 1024 * 1024 * 1024,
+        "canonical_storage_available_bytes": 7 * 1024 * 1024 * 1024,
+        "memory_output_available_bytes": 7 * 1024 * 1024 * 1024,
+        "required_capacity_bytes": expected_bytes + upload_capacity.SAFETY_MARGIN_BYTES + upload_capacity.MIN_OUTPUT_ALLOWANCE_BYTES,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": False,
+    })
 
     result = upload_readiness.get_memory_upload_readiness(CASE_ID, selected_size_bytes=5 * 1024 * 1024 * 1024)
 

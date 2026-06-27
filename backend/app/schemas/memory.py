@@ -250,6 +250,11 @@ class MemoryUploadReadinessRead(BaseModel):
     upload_enabled: bool
     max_upload_bytes: int
     max_upload_display: str
+    recommended_chunk_size_bytes: int
+    resumable: bool
+    max_parallel_chunks: int
+    case_quota_bytes: int
+    case_quota_remaining_bytes: int
     allowed_extensions: list[str]
     staging_available_bytes: int
     canonical_storage_available_bytes: int
@@ -266,14 +271,46 @@ class MemoryUploadReadinessRead(BaseModel):
 
 class MemoryUploadStatusRead(BaseModel):
     upload_id: str
+    case_id: str | None = None
     status: str
     bytes_received: int
     expected_bytes: int
+    expected_sha256: str | None = None
+    chunk_size_bytes: int = 0
+    total_chunks: int = 0
+    received_chunk_count: int = 0
+    received_chunks: list[int] = []
+    missing_chunks: list[int] = []
+    progress_percent: int = 0
     evidence_id: str | None = None
     failure_code: str | None = None
+    failure_message: str | None = None
     message: str
     updated_at: datetime
+    created_at: datetime | None = None
+    expires_at: datetime | None = None
+    finalized_at: datetime | None = None
     retryable: bool
+
+
+class MemoryUploadSessionCreateRequest(BaseModel):
+    filename: str
+    expected_size_bytes: int
+    provided_host: str
+    authorization_acknowledged: bool = False
+    expected_sha256: str | None = None
+
+    model_config = {"extra": "forbid"}
+
+
+class MemoryUploadSessionCreateResponse(MemoryUploadStatusRead):
+    resumable: bool = True
+
+
+class MemoryUploadFinalizeRequest(BaseModel):
+    expected_sha256: str | None = None
+
+    model_config = {"extra": "forbid"}
 
 
 class MemoryStartScanRequest(BaseModel):

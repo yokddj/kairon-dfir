@@ -201,6 +201,28 @@ def on_startup() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("native probe periodic reconciliation scheduling skipped: %s", exc)
 
+    from app.services.memory.upload_sessions import (
+        cleanup_expired_memory_upload_sessions,
+        schedule_periodic_cleanup_if_needed,
+    )
+
+    db = SessionLocal()
+    try:
+        upload_cleanup = cleanup_expired_memory_upload_sessions(db)
+        if upload_cleanup.get("expired", 0) > 0 or upload_cleanup.get("purged", 0) > 0:
+            logger.info("memory upload cleanup: %s", upload_cleanup)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory upload cleanup skipped: %s", exc)
+    finally:
+        db.close()
+
+    try:
+        scheduled = schedule_periodic_cleanup_if_needed()
+        if scheduled:
+            logger.info("memory upload periodic cleanup scheduled")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory upload periodic cleanup scheduling skipped: %s", exc)
+
 
 @app.get("/health")
 def health() -> dict:

@@ -19,6 +19,7 @@ const getCaseMemoryProcessesMock = vi.fn();
 const getMemoryProcessTreeMock = vi.fn();
 const startMemoryScanMock = vi.fn();
 const renormalizeProcessEntitiesMock = vi.fn();
+const listMemoryRunsMock = vi.fn();
 const getMemoryEvidenceLandingMock = vi.fn();
 const getMemoryActiveResultMock = vi.fn();
 const getMemoryAnalysisCatalogueMock = vi.fn();
@@ -41,6 +42,7 @@ vi.mock("../api/client", () => ({
     getMemoryProcessTree: (...args: unknown[]) => getMemoryProcessTreeMock(...args),
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
     renormalizeProcessEntities: (...args: unknown[]) => renormalizeProcessEntitiesMock(...args),
+    listMemoryRuns: (...args: unknown[]) => listMemoryRunsMock(...args),
     getMemoryEvidenceLanding: (...args: unknown[]) => getMemoryEvidenceLandingMock(...args),
     getMemoryActiveResult: (...args: unknown[]) => getMemoryActiveResultMock(...args),
     getMemoryAnalysisCatalogue: (...args: unknown[]) => getMemoryAnalysisCatalogueMock(...args),
@@ -334,6 +336,9 @@ describe("MemoryAnalysisPage workspace", () => {
     getMemoryProcessTreeMock.mockResolvedValue({ run_id: "run-basic", nodes: [], edges: [], orphan_count: 0, root_count: 0, warnings: [], source_plugins: [], total_process_count: 0 });
     startMemoryScanMock.mockResolvedValue({ accepted: true, evidence_id: "ev-memory", run_id: "run-basic", status: "queued", message: "queued", run: null });
     renormalizeProcessEntitiesMock.mockResolvedValue({ ...summary(), materialization_status: "applied" });
+    listMemoryRunsMock.mockResolvedValue([
+      { id: "run-basic", case_id: "case-1", evidence_id: "ev-memory", backend: "volatility3", profile: "processes_basic", status: "completed", requested_plugin_count: 4, plugin_count: 4, plugins_completed: 4, plugins_failed: 0, plugins_skipped: 0, started_at: "2026-06-16T00:00:00Z", completed_at: "2026-06-16T00:00:30Z", duration_ms: 30000, output_dir: null, metadata_json: {}, error_log: {}, backend_version: "2.28.0", worker_task_id: null, cancellation_requested: false, created_at: "2026-06-16T00:00:00Z" },
+    ]);
     getMemoryEvidenceLandingMock.mockResolvedValue({
       case_id: "case-1",
       items: [

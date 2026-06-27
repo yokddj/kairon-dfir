@@ -95,6 +95,13 @@ type UploadFormDataOptions = {
   transport?: UploadTransport;
 };
 
+type UploadBlobOptions = {
+  method?: "PUT" | "POST";
+  contentType?: string;
+  headers?: Record<string, string>;
+  onProgress?: (progress: UploadProgress) => void;
+};
+
 async function buildZipFromFolder(files: File[], archiveName = "raw-folder.zip"): Promise<File> {
   const entries: Zippable = {};
   for (const file of files) {
@@ -223,6 +230,82 @@ async function uploadFormData<T>(path: string, formData: FormData, options?: Upl
   }
   const detail = lastError instanceof Error && lastError.message ? ` ${lastError.message}` : "";
   throw new Error(`The backend could not be reached during upload. Tried: ${attemptedUrls.join(" | ")}.${detail}`);
+}
+
+async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBlobOptions): Promise<T> {
+  let lastError: UploadAttemptError | unknown;
+  for (const baseUrl of API_BASE_URLS) {
+    const url = `${baseUrl}${path}`;
+    try {
+      return await new Promise<T>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open(options?.method ?? "PUT", url, true);
+        xhr.setRequestHeader("Accept", "application/json");
+        if (options?.contentType) {
+          xhr.setRequestHeader("Content-Type", options.contentType);
+        }
+        for (const [key, value] of Object.entries(options?.headers ?? {})) {
+          xhr.setRequestHeader(key, value);
+        }
+        xhr.upload.onprogress = (event) => {
+          options?.onProgress?.({
+            loaded: event.loaded,
+            total: event.total || blob.size,
+            lengthComputable: event.lengthComputable,
+          });
+        };
+        xhr.onerror = () => reject(new Error(`Network error while uploading to ${url}`));
+        xhr.onabort = () => reject(new Error("Upload aborted"));
+        xhr.onload = () => {
+          const contentType = xhr.getResponseHeader("content-type") ?? "";
+          if (xhr.status < 200 || xhr.status >= 300) {
+            let detail: unknown = xhr.responseText || `HTTP ${xhr.status}`;
+            let errorCode: string | null = null;
+            let humanMessage: string | null = null;
+            try {
+              const parsed = JSON.parse(xhr.responseText) as { detail?: string | { error_code?: string; message?: string } };
+              if (typeof parsed.detail === "string") {
+                detail = parsed.detail;
+                humanMessage = parsed.detail;
+              } else if (parsed.detail && typeof parsed.detail === "object") {
+                detail = parsed.detail;
+                errorCode = parsed.detail.error_code ?? null;
+                humanMessage = parsed.detail.message ?? null;
+              }
+            } catch {
+              // Preserve raw text for non-JSON errors.
+            }
+            const error = new ApiError(
+              xhr.status,
+              errorCode,
+              humanMessage || xhr.responseText || `HTTP ${xhr.status}`,
+              detail,
+            ) as ApiError & UploadAttemptError;
+            error.nonRetryable = true;
+            reject(error);
+            return;
+          }
+          if (!xhr.responseText) {
+            resolve(undefined as T);
+            return;
+          }
+          if (contentType.includes("application/json")) {
+            resolve(JSON.parse(xhr.responseText) as T);
+            return;
+          }
+          resolve(xhr.responseText as T);
+        };
+        xhr.send(blob);
+      });
+    } catch (error) {
+      lastError = error;
+      if ((error as UploadAttemptError | undefined)?.nonRetryable) {
+        throw error;
+      }
+    }
+  }
+  const detail = lastError instanceof Error && lastError.message ? ` ${lastError.message}` : "";
+  throw new Error(`The backend could not be reached during upload. Tried the configured API endpoints.${detail}`);
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -1279,6 +1362,11 @@ export type MemoryUploadReadiness = {
   upload_enabled: boolean;
   max_upload_bytes: number;
   max_upload_display: string;
+  recommended_chunk_size_bytes: number;
+  resumable: boolean;
+  max_parallel_chunks: number;
+  case_quota_bytes: number;
+  case_quota_remaining_bytes: number;
   allowed_extensions: string[];
   staging_available_bytes: number;
   canonical_storage_available_bytes: number;
@@ -1297,18 +1385,27 @@ export type MemoryUploadStatus = {
   upload_id: string;
   case_id?: string;
   evidence_id: string | null;
-  status: "validating" | "uploading" | "verifying" | "finalizing" | "completed" | "failed" | "cancelled" | "stale" | "inconsistent";
+  status: "created" | "validating" | "uploading" | "verifying" | "finalizing" | "completed" | "failed" | "cancelled" | "expired" | "stale" | "inconsistent";
   stage?: string | null;
   registration_state?: string | null;
   registration_attempts?: number;
   canonical_preserved?: boolean;
   bytes_received: number;
   expected_bytes: number;
+  expected_sha256?: string | null;
+  chunk_size_bytes?: number;
+  total_chunks?: number;
+  received_chunk_count?: number;
+  received_chunks?: number[];
+  missing_chunks?: number[];
+  progress_percent?: number;
   filename?: string;
   extension?: string;
   created_at?: string;
   updated_at: string;
   last_heartbeat?: string;
+  expires_at?: string | null;
+  finalized_at?: string | null;
   stale_after_seconds?: number;
   stale?: boolean;
   resumable?: boolean;
@@ -1316,10 +1413,19 @@ export type MemoryUploadStatus = {
   is_active?: boolean;
   failure_code: string | null;
   failure_message?: string | null;
+  duplicate?: { existing_evidence_id?: string; existing_filename?: string | null };
   last_registration_error_code?: string | null;
   last_registration_error_class?: string | null;
   message: string;
   retryable: boolean;
+};
+
+export type MemoryUploadSessionCreateRequest = {
+  filename: string;
+  expected_size_bytes: number;
+  provided_host: string;
+  authorization_acknowledged: boolean;
+  expected_sha256?: string;
 };
 
 export type ProblematicArtifact = {
@@ -4411,6 +4517,23 @@ export const api = {
     return request<MemoryUploadReadiness>(`/cases/${caseId}/memory/upload-readiness${query}`);
   },
   getMemoryUploadStatus: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}`),
+  createMemoryUploadSession: (caseId: string, payload: MemoryUploadSessionCreateRequest) =>
+    request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads`, { method: "POST", body: JSON.stringify(payload) }),
+  uploadMemoryUploadChunk: (
+    caseId: string,
+    uploadId: string,
+    chunkIndex: number,
+    blob: Blob,
+    options?: { chunkSha256?: string; onProgress?: (progress: UploadProgress) => void },
+  ) =>
+    uploadBlob<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/chunks/${chunkIndex}`, blob, {
+      method: "PUT",
+      contentType: "application/octet-stream",
+      headers: options?.chunkSha256 ? { "X-Kairon-Chunk-SHA256": options.chunkSha256 } : undefined,
+      onProgress: options?.onProgress,
+    }),
+  finalizeMemoryUpload: (caseId: string, uploadId: string, payload?: { expected_sha256?: string }) =>
+    request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/finalize`, { method: "POST", body: JSON.stringify(payload ?? {}) }),
   reconcileMemoryUpload: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/reconcile`, { method: "POST" }),
   retryMemoryUploadRegistration: (caseId: string, uploadId: string) =>
     request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/retry-registration`, { method: "POST" }),

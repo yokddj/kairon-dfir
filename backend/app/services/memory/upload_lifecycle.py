@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 # Legacy coarse status (bytes pipeline).  Kept for backwards
 # compatibility with existing API consumers; the new
 # ``registration_state`` column tracks the post-bytes recovery flow.
-ACTIVE_STATUSES = {"validating", "uploading", "verifying", "finalizing", "registration_pending"}
-TERMINAL_STATUSES = {"completed", "failed", "inconsistent"}
+ACTIVE_STATUSES = {"created", "validating", "uploading", "verifying", "finalizing", "registration_pending"}
+TERMINAL_STATUSES = {"completed", "failed", "cancelled", "expired", "inconsistent"}
 
 # Registration lifecycle states (migration v9).  These describe the
 # post-bytes flow: the canonical blob is already preserved; we just
@@ -99,10 +99,15 @@ def create_memory_upload(
     extension: str,
     metadata: dict[str, Any],
     db: Session | None = None,
+    initial_status: str = "validating",
+    chunk_size_bytes: int = 0,
+    total_chunks: int = 0,
+    expected_sha256: str | None = None,
+    staging_name: str | None = None,
 ) -> MemoryUpload:
     upload_id = normalize_upload_id(upload_id)
     evidence_id = str(uuid4())
-    staging_name = f"{case_id}-{evidence_id}.memory-upload.part"
+    staging_name = staging_name or f"{case_id}-{evidence_id}.memory-upload.part"
     canonical_relative = str(Path("evidence") / case_id / evidence_id / "original" / f"memory-image{extension}")
     owns_session = db is None
     db = db or SessionLocal()
@@ -116,18 +121,29 @@ def create_memory_upload(
             id=upload_id,
             case_id=case_id,
             evidence_id=evidence_id,
-            status="validating",
+            status=initial_status,
             bytes_received=0,
             expected_bytes=expected_bytes,
+            expected_sha256=expected_sha256,
             display_name=safe_display_filename(display_name),
             source_host=source_host,
             extension=extension,
             staging_name=staging_name,
             canonical_relative_path=canonical_relative,
+            chunk_size_bytes=int(chunk_size_bytes or 0),
+            total_chunks=int(total_chunks or 0),
+            received_chunk_count=0,
             lock_token=upload_id,
             metadata_json=dict(metadata),
             progress_at=utc_now_naive(),
             updated_at=utc_now_naive(),
+            expires_at=utc_now_naive()
+            + timedelta(
+                seconds=max(
+                    300,
+                    int(getattr(get_settings(), "memory_upload_session_ttl_seconds", 86400) or 86400),
+                )
+            ),
         )
         db.add(item)
         db.commit()
@@ -181,7 +197,7 @@ def find_active_memory_upload(db: Session, case_id: str) -> MemoryUpload | None:
         db.query(_MU)
         .filter(
             _MU.case_id == case_id,
-            _MU.status.in_(("validating", "uploading", "verifying", "finalizing", "stale")),
+            _MU.status.in_(("created", "validating", "uploading", "verifying", "finalizing", "stale")),
         )
         .order_by(_MU.updated_at.desc())
         .first()
@@ -195,12 +211,14 @@ def public_memory_upload_status(
 ) -> dict[str, Any]:
     messages = {
         "validating": "Validating memory upload.",
+        "created": "Upload session created. Ready to receive chunks.",
         "uploading": "The transfer reached Kairon; the server is persisting the staged evidence.",
         "verifying": "The file has been transferred. Kairon is verifying the staged evidence.",
         "finalizing": "The file has been transferred. Kairon is finalizing the evidence.",
         "completed": "Memory image uploaded and registered.",
         "failed": item.failure_message or "Memory upload failed.",
         "cancelled": "Memory upload was cancelled by the operator.",
+        "expired": item.failure_message or "Memory upload session expired.",
         "stale": item.failure_message or "Memory upload is stale; reconcile or cancel to continue.",
         "inconsistent": item.failure_message or "Memory upload storage is inconsistent and requires review.",
     }
@@ -247,6 +265,12 @@ def public_memory_upload_status(
         "last_registration_error_class": getattr(item, "last_registration_error_class", None),
         "message": messages.get(item.status, "Memory upload state is unavailable."),
         "retryable": bool(item.retryable),
+        "chunk_size_bytes": int(getattr(item, "chunk_size_bytes", 0) or 0),
+        "total_chunks": int(getattr(item, "total_chunks", 0) or 0),
+        "received_chunk_count": int(getattr(item, "received_chunk_count", 0) or 0),
+        "expected_sha256": getattr(item, "expected_sha256", None),
+        "expires_at": getattr(item, "expires_at", None),
+        "finalized_at": getattr(item, "finalized_at", None),
         "evidence_detection_status": evidence.detection_status if evidence is not None else None,
         "evidence_detected_format": evidence.detected_format if evidence is not None else None,
     }
@@ -300,7 +324,12 @@ def cancel_memory_upload(
         canonical = _canonical_path(item)
         try:
             if staging.exists() and not canonical.exists():
-                staging.unlink()
+                if staging.is_dir():
+                    import shutil
+
+                    shutil.rmtree(staging, ignore_errors=True)
+                else:
+                    staging.unlink()
         except OSError:
             pass
         db.commit()
