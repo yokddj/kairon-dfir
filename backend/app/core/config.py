@@ -139,7 +139,7 @@ class Settings(BaseSettings):
     # minimal critical path is preserved.  When the operator
     # enables MEMORY_AUTO_PREPARATION the symbol probe and
     # acquisition are turned back on.
-    memory_auto_symbol_probe: bool = False
+    memory_auto_symbol_probe: bool = True
     memory_auto_symbol_acquire: bool = False
     # Master switch for the entire post-registration automation
     # pipeline (probe, content identity, symbol preparation
