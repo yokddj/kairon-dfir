@@ -34,7 +34,7 @@ async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   for (const baseUrl of API_BASE_URLS) {
     attemptedUrls.push(`${baseUrl}${path}`);
     try {
-      return await fetch(`${baseUrl}${path}`, init);
+      return await fetch(`${baseUrl}${path}`, { cache: "no-store", ...init });
     } catch (error) {
       lastError = error;
       failureDetails.push(`${baseUrl}${path} => ${error instanceof Error && error.message ? error.message : String(error)}`);
