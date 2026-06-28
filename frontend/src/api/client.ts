@@ -27,14 +27,14 @@ const API_BASE_URLS = Array.from(
 );
 export const API_BASE_URL = API_BASE_URLS[0] ?? fallbackApiBase;
 
-async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   let lastError: unknown;
   const attemptedUrls: string[] = [];
   const failureDetails: string[] = [];
   for (const baseUrl of API_BASE_URLS) {
     attemptedUrls.push(`${baseUrl}${path}`);
     try {
-      return await fetch(`${baseUrl}${path}`, { cache: "no-store", ...init });
+      return await fetch(`${baseUrl}${path}`, { ...init, cache: "no-store" });
     } catch (error) {
       lastError = error;
       failureDetails.push(`${baseUrl}${path} => ${error instanceof Error && error.message ? error.message : String(error)}`);
