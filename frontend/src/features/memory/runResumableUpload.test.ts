@@ -466,7 +466,7 @@ describe("runResumableUpload", () => {
     expect(finalize).not.toHaveBeenCalled();
   });
 
-  it("timeout reconciles accepted chunk and continues without retrying it", async () => {
+  it("timeout does not advance to the next chunk even when status would show it received", async () => {
     const uploadId = "timeout-ack";
     const file = makeFile(12);
     const chunkSize = 4;
@@ -493,18 +493,7 @@ describe("runResumableUpload", () => {
       }
       throw new Error("unexpected chunk");
     });
-    const finalize = vi.fn(async () =>
-      makeStatus({
-        upload_id: uploadId,
-        status: "completed",
-        evidence_id: "ev-timeout-ack",
-        bytes_received: file.size,
-        expected_bytes: file.size,
-        missing_chunks: [],
-        received_chunks: [0, 1, 2],
-        received_chunk_count: 3,
-      }),
-    );
+    const finalize = vi.fn();
     const onProgress = vi.fn();
 
     const result = await runResumableUpload({
@@ -519,109 +508,14 @@ describe("runResumableUpload", () => {
       sleep: sleepImmediate,
     });
 
-    expect(result.type).toBe("completed");
-    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([2]);
-    expect(onProgress).toHaveBeenCalledWith({ loaded: 12, total: 12 });
-    expect(finalize).toHaveBeenCalledTimes(1);
+    expect(result.type).toBe("failed");
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([2, 2, 2, 2]);
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(onProgress).not.toHaveBeenCalledWith({ loaded: 12, total: 12 });
+    expect(finalize).not.toHaveBeenCalled();
   });
 
-  it("continues outer loop through two recovered chunks then normal success", async () => {
-    const uploadId = "recover-continues";
-    const file = makeFile(24);
-    const chunkSize = 4;
-    const received: number[] = [0, 1, 2];
-    const attemptsByChunk = new Map<number, number>();
-    const signalsByChunk = new Map<number, AbortSignal[]>();
-
-    const buildStatus = (overrides: Partial<MemoryUploadStatus> = {}) =>
-      makeStatus({
-        upload_id: uploadId,
-        expected_bytes: file.size,
-        chunk_size_bytes: chunkSize,
-        total_chunks: 6,
-        received_chunk_count: received.length,
-        received_chunks: [...received],
-        bytes_received: received.reduce(
-          (total, index) => total + chunkBytes(file.size, chunkSize, index),
-          0,
-        ),
-        missing_chunks: Array.from({ length: 6 }, (_, i) => i).filter(
-          (i) => !received.includes(i),
-        ),
-        ...overrides,
-      });
-
-    const getStatus = vi.fn(async () => buildStatus());
-    const uploadChunk = vi.fn(
-      async (
-        _uid: string,
-        chunkIndex: number,
-        _blob: Blob,
-        signal: AbortSignal,
-      ) => {
-        attemptsByChunk.set(
-          chunkIndex,
-          (attemptsByChunk.get(chunkIndex) ?? 0) + 1,
-        );
-        signalsByChunk.set(chunkIndex, [
-          ...(signalsByChunk.get(chunkIndex) ?? []),
-          signal,
-        ]);
-        expect(signal.aborted).toBe(false);
-        if (!received.includes(chunkIndex)) {
-          received.push(chunkIndex);
-          received.sort((a, b) => a - b);
-        }
-        if (chunkIndex === 3 || chunkIndex === 4) {
-          throw new Error("Upload timed out. Your network may be unavailable.");
-        }
-        return buildStatus();
-      },
-    );
-    const finalize = vi.fn(async () =>
-      makeStatus({
-        upload_id: uploadId,
-        status: "completed",
-        evidence_id: "ev-recover-continues",
-        bytes_received: file.size,
-        expected_bytes: file.size,
-        chunk_size_bytes: chunkSize,
-        total_chunks: 6,
-        received_chunk_count: 6,
-        received_chunks: [0, 1, 2, 3, 4, 5],
-        missing_chunks: [],
-        progress_percent: 100,
-      }),
-    );
-    const onProgress = vi.fn();
-
-    const result = await runResumableUpload({
-      uploadId,
-      file,
-      chunkSize,
-      getStatus,
-      uploadChunk,
-      finalize,
-      signal: new AbortController().signal,
-      onProgress,
-      sleep: sleepImmediate,
-    });
-
-    expect(result.type).toBe("completed");
-    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([3, 4, 5]);
-    expect(attemptsByChunk.get(3)).toBe(1);
-    expect(attemptsByChunk.get(4)).toBe(1);
-    expect(attemptsByChunk.get(5)).toBe(1);
-    expect(signalsByChunk.get(4)?.[0].aborted).toBe(false);
-    expect(signalsByChunk.get(5)?.[0].aborted).toBe(false);
-    expect(onProgress).toHaveBeenCalledWith({ loaded: 16, total: 24 });
-    expect(onProgress).toHaveBeenCalledWith({ loaded: 20, total: 24 });
-    expect(onProgress).toHaveBeenCalledWith({ loaded: 24, total: 24 });
-    expect(finalize).toHaveBeenCalledTimes(1);
-    expect(finalize).toHaveBeenCalledWith(uploadId);
-  });
-
-  it("network failure reconciles accepted chunk and continues", async () => {
+  it("network failure does not advance even if the chunk later appears in status", async () => {
     const uploadId = "network-ack";
     const file = makeFile(8);
     const chunkSize = 4;
@@ -641,16 +535,16 @@ describe("runResumableUpload", () => {
       received.push(chunkIndex);
       throw new Error("Network error while uploading");
     });
-    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev-network", bytes_received: file.size, expected_bytes: file.size, missing_chunks: [], received_chunks: [0, 1], received_chunk_count: 2 }));
+    const finalize = vi.fn();
 
     const result = await runResumableUpload({ uploadId, file, chunkSize, getStatus, uploadChunk, finalize, signal: new AbortController().signal, sleep: sleepImmediate });
 
-    expect(result.type).toBe("completed");
-    expect(uploadChunk).toHaveBeenCalledTimes(1);
-    expect(finalize).toHaveBeenCalledTimes(1);
+    expect(result.type).toBe("failed");
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([1, 1, 1, 1]);
+    expect(finalize).not.toHaveBeenCalled();
   });
 
-  it("response parsing failure reconciles accepted chunk and continues", async () => {
+  it("response parsing failure does not advance", async () => {
     const uploadId = "parse-ack";
     const file = makeFile(8);
     const chunkSize = 4;
@@ -661,12 +555,13 @@ describe("runResumableUpload", () => {
       received.push(chunkIndex);
       throw new Error("Upload response parsing failed after successful HTTP 200.");
     });
-    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev-parse", bytes_received: file.size, expected_bytes: file.size, missing_chunks: [], received_chunks: [0, 1], received_chunk_count: 2 }));
+    const finalize = vi.fn();
 
     const result = await runResumableUpload({ uploadId, file, chunkSize, getStatus, uploadChunk, finalize, signal: new AbortController().signal, sleep: sleepImmediate });
 
-    expect(result.type).toBe("completed");
+    expect(result.type).toBe("failed");
     expect(uploadChunk).toHaveBeenCalledTimes(1);
+    expect(finalize).not.toHaveBeenCalled();
   });
 
   it("timeout with missing chunk retries the same chunk and then continues", async () => {
@@ -691,7 +586,7 @@ describe("runResumableUpload", () => {
     expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([1, 1]);
   });
 
-  it("HTTP 500 reconciles accepted chunk and continues", async () => {
+  it("HTTP 500 does not advance from status reconciliation", async () => {
     const uploadId = "http500-ack";
     const file = makeFile(8);
     const chunkSize = 4;
@@ -702,12 +597,13 @@ describe("runResumableUpload", () => {
       received.push(chunkIndex);
       throw new ApiError(500, null, "Server error", null);
     });
-    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev-500", bytes_received: file.size, expected_bytes: file.size, missing_chunks: [], received_chunks: [0, 1], received_chunk_count: 2 }));
+    const finalize = vi.fn();
 
     const result = await runResumableUpload({ uploadId, file, chunkSize, getStatus, uploadChunk, finalize, signal: new AbortController().signal, sleep: sleepImmediate });
 
-    expect(result.type).toBe("completed");
-    expect(uploadChunk).toHaveBeenCalledTimes(1);
+    expect(result.type).toBe("failed");
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([1, 1, 1, 1]);
+    expect(finalize).not.toHaveBeenCalled();
   });
 
   it("HTTP 500 with missing chunk retries", async () => {

@@ -9,7 +9,7 @@ import {
   type MemoryUploadStatus,
 } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
-import { runResumableUpload } from "../features/memory/runResumableUpload";
+import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
 
 const MEMORY_EXTENSIONS = [".raw", ".mem", ".dmp", ".dump", ".bin", ".img", ".vmem", ".lime", ".aff4"];
 
@@ -498,7 +498,7 @@ export default function MemoryUploadPage() {
         getStatus: (uploadId) => api.getMemoryUploadStatus(caseId, uploadId),
         uploadChunk: async (uploadId, chunkIndex, blob, signal) => {
           const chunkSha256 = await sha256Hex(blob);
-          const effectiveChunkSize = remoteStatus.chunk_size_bytes || acceptedReadiness?.recommended_chunk_size_bytes || 64 * 1024 * 1024;
+          const effectiveChunkSize = remoteStatus.chunk_size_bytes || acceptedReadiness?.recommended_chunk_size_bytes || DEFAULT_CHUNK_SIZE;
           const totalChunks = remoteStatus.total_chunks || Math.ceil(selectedFile.size / effectiveChunkSize);
           setStage("uploading");
           setStatus(`Uploading chunk ${chunkIndex + 1} of ${totalChunks}`);

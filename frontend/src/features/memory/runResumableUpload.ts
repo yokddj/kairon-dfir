@@ -2,7 +2,7 @@ import { ApiError, type MemoryUploadStatus } from "../../api/client";
 
 export const CHUNK_UPLOAD_MAX_RETRIES = 3;
 export const CHUNK_UPLOAD_RETRY_BASE_DELAY_MS = 500;
-export const DEFAULT_CHUNK_SIZE = 64 * 1024 * 1024;
+export const DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024;
 
 export type RunResumableUploadArgs = {
   uploadId: string;
@@ -38,11 +38,6 @@ type MissingChunksInfo = {
   chunkSize: number;
   totalChunks: number;
   missingChunks: number[];
-};
-
-type ChunkUploadResult = {
-  status: MemoryUploadStatus;
-  recovered: boolean;
 };
 
 function deriveMissingChunks(
@@ -104,24 +99,9 @@ function shouldRetryChunkUpload(error: unknown): boolean {
       error.message.includes("Network error") ||
       error.message.includes("backend could not be reached") ||
       error.message.includes("Upload timed out") ||
-      error.message.includes("Upload response parsing failed") ||
       error.name === "TypeError"
     );
   }
-  return false;
-}
-
-function shouldReconcileAmbiguousChunkUpload(error: unknown): boolean {
-  if (error instanceof ApiError) {
-    if ([400, 401, 403, 404, 409, 422].includes(error.status)) return false;
-    return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
-  }
-  return shouldRetryChunkUpload(error);
-}
-
-function statusAcknowledgesChunk(status: MemoryUploadStatus, chunkIndex: number): boolean {
-  if (status.received_chunks?.includes(chunkIndex)) return true;
-  if (status.missing_chunks?.includes(chunkIndex)) return false;
   return false;
 }
 
@@ -152,11 +132,10 @@ async function uploadChunkWithRetry(
   chunkSize: number,
   totalChunks: number,
   signal: AbortSignal,
-  getStatus: RunResumableUploadArgs["getStatus"],
   uploadChunk: RunResumableUploadArgs["uploadChunk"],
   onProgress: ((info: { loaded: number; total: number }) => void) | undefined,
   sleep: (ms: number) => Promise<void>,
-): Promise<ChunkUploadResult> {
+): Promise<MemoryUploadStatus> {
   const blob = sliceChunk(file, chunkIndex, chunkSize);
   for (let attempt = 0; attempt <= CHUNK_UPLOAD_MAX_RETRIES; attempt += 1) {
     if (signal.aborted) throw new Error("Upload aborted");
@@ -168,22 +147,10 @@ async function uploadChunkWithRetry(
           total: status.expected_bytes,
         });
       }
-      return { status, recovered: false };
+      return status;
     } catch (error) {
       if (signal.aborted) {
         throw new Error("Upload aborted");
-      }
-      if (shouldReconcileAmbiguousChunkUpload(error)) {
-        const reconciledStatus = await getStatus(uploadId);
-        if (statusAcknowledgesChunk(reconciledStatus, chunkIndex)) {
-          if (onProgress) {
-            onProgress({
-              loaded: reconciledStatus.bytes_received,
-              total: reconciledStatus.expected_bytes,
-            });
-          }
-          return { status: reconciledStatus, recovered: true };
-        }
       }
       if (!shouldRetryChunkUpload(error) || attempt >= CHUNK_UPLOAD_MAX_RETRIES) {
         throw error;
@@ -272,23 +239,18 @@ export async function runResumableUpload(
     const previousMissingCount = missingChunks.length;
 
     try {
-      const chunkResult = await uploadChunkWithRetry(
+      await uploadChunkWithRetry(
         uploadId,
         file,
         chunkIndex,
         effectiveChunkSize,
         totalChunks,
         signal,
-        getStatus,
         uploadChunk,
         onProgress,
         sleep,
       );
-      currentStatus = chunkResult.status;
-
-      if (!chunkResult.recovered) {
-        currentStatus = await getStatus(uploadId);
-      }
+      currentStatus = await getStatus(uploadId);
     } catch (error) {
       if (error instanceof Error && error.message === "Upload aborted") {
         return { type: "aborted" };
