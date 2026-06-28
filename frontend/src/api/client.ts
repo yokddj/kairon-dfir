@@ -4524,13 +4524,14 @@ export const api = {
     uploadId: string,
     chunkIndex: number,
     blob: Blob,
-    options?: { chunkSha256?: string; onProgress?: (progress: UploadProgress) => void },
+    options?: { chunkSha256?: string; onProgress?: (progress: UploadProgress) => void; signal?: AbortSignal },
   ) =>
     uploadBlob<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/chunks/${chunkIndex}`, blob, {
       method: "PUT",
       contentType: "application/octet-stream",
       headers: options?.chunkSha256 ? { "X-Kairon-Chunk-SHA256": options.chunkSha256 } : undefined,
       onProgress: options?.onProgress,
+      signal: options?.signal,
     }),
   finalizeMemoryUpload: (caseId: string, uploadId: string, payload?: { expected_sha256?: string }) =>
     request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/finalize`, { method: "POST", body: JSON.stringify(payload ?? {}) }),
