@@ -208,6 +208,7 @@ def public_memory_upload_status(
     item: MemoryUpload,
     evidence: Evidence | None = None,
     db: Session | None = None,
+    integrity_status: str | None = None,
 ) -> dict[str, Any]:
     messages = {
         "validating": "Validating memory upload.",
@@ -228,8 +229,10 @@ def public_memory_upload_status(
     last_heartbeat = item.progress_at
     now = utc_now_naive()
     stale = bool(is_active and last_heartbeat and (now - last_heartbeat).total_seconds() > stale_after)
+    staging_healthy = integrity_status == "healthy" if integrity_status is not None else True
     resumable = bool(
-        item.retryable
+        staging_healthy
+        and item.retryable
         and item.status not in {"completed", "inconsistent"}
         and (item.status != "failed" or bool(item.retryable))
     )
@@ -239,7 +242,7 @@ def public_memory_upload_status(
     if evidence is None and db is not None:
         evidence = db.get(Evidence, item.evidence_id)
     canonical_exists = _canonical_path(item).exists()
-    return {
+    response: dict[str, Any] = {
         "upload_id": item.id,
         "case_id": item.case_id,
         "evidence_id": item.evidence_id if item.status == "completed" else None,
@@ -274,6 +277,9 @@ def public_memory_upload_status(
         "evidence_detection_status": evidence.detection_status if evidence is not None else None,
         "evidence_detected_format": evidence.detected_format if evidence is not None else None,
     }
+    if integrity_status is not None:
+        response["integrity_status"] = integrity_status
+    return response
 
 
 def cancel_memory_upload(

@@ -413,6 +413,28 @@ export default function MemoryUploadPage() {
     return true;
   }
 
+  function handleCorruptedSession(error: unknown): boolean {
+    const corruptedError = error as { errorCode?: string | null; detail?: unknown; message?: string };
+    const code = corruptedError?.errorCode || "";
+    const msg = corruptedError?.message || "";
+    const isStagingError = code.startsWith("MEMORY_UPLOAD_STAGING_")
+      || msg.includes("staging integrity")
+      || msg.includes("STAGING_");
+    if (!isStagingError) return false;
+    const detail = (corruptedError.detail && typeof corruptedError.detail === "object")
+      ? corruptedError.detail as Record<string, unknown>
+      : {};
+    setStage("failed");
+    setStatus(
+      corruptedError.message
+      || "Upload data is incomplete on the server. Some previously acknowledged chunks are missing. Restart this upload from the beginning.",
+    );
+    setBrowserTransferError(
+      `Staging integrity: ${String(detail?.integrity_status || "unknown")}. Missing chunks: ${JSON.stringify(detail?.missing_chunks || [])}`,
+    );
+    return true;
+  }
+
   async function upload(uploadIdOverride?: string) {
     if (browserTransferRunningRef.current) return;
     setStage("validating");
@@ -454,6 +476,13 @@ export default function MemoryUploadPage() {
         providedHost: providedHost.trim(),
       });
       setActiveUploadIdTracked(remoteStatus.upload_id);
+
+      if (remoteStatus.integrity_status && remoteStatus.integrity_status !== "healthy") {
+        const err = new Error("Upload data is incomplete on the server. Some previously acknowledged chunks are missing. Restart this upload from the beginning.") as Error & { errorCode?: string | null; detail?: unknown };
+        err.errorCode = `MEMORY_UPLOAD_STAGING_${String(remoteStatus.integrity_status).toUpperCase()}`;
+        err.detail = { integrity_status: remoteStatus.integrity_status, missing_chunks: remoteStatus.missing_chunks };
+        throw err;
+      }
 
       const transferController = new AbortController();
       browserTransferAbortControllerRef.current = transferController;
@@ -504,6 +533,7 @@ export default function MemoryUploadPage() {
     } catch (error) {
       if (handleActiveSessionConflict(error)) return;
       if (handleDuplicateError(error)) return;
+      if (handleCorruptedSession(error)) return;
       stopBrowserTransfer(error instanceof Error ? error.message : "Memory image upload failed.");
     } finally {
       browserTransferAbortControllerRef.current = null;
@@ -630,6 +660,58 @@ export default function MemoryUploadPage() {
         </div>
       </section>
 
+      {serverActive && serverActive.integrity_status && serverActive.integrity_status !== "healthy" ? (
+        <section data-testid="memory-corrupted-session-panel" className="rounded-[28px] border border-rose-400/40 bg-rose-500/10 p-5 text-sm">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold text-rose-100">Upload data is incomplete on the server</h3>
+              <p className="mt-1 text-sm text-rose-100/80">
+                Some previously acknowledged chunks are missing from staging storage.
+                {serverActive.integrity_status === "staging_missing"
+                  ? " The staging directory is missing."
+                  : ` Integrity status: ${serverActive.integrity_status}.`}
+              </p>
+              <p className="mt-1 text-sm text-rose-100/60">
+                Restart this upload from the beginning.
+              </p>
+              <details className="mt-2">
+                <summary className="cursor-pointer text-xs text-muted">View technical details</summary>
+                <pre className="mt-2 max-h-32 overflow-auto rounded-xl border border-line bg-abyss/80 p-3 text-xs text-muted">
+                  {JSON.stringify({
+                    integrity_status: serverActive.integrity_status,
+                    failure_code: serverActive.failure_code,
+                    received_chunks: serverActive.received_chunks,
+                    missing_chunks: serverActive.missing_chunks,
+                    updated_at: serverActive.updated_at,
+                  }, null, 2)}
+                </pre>
+              </details>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {serverActive.cancellable ? (
+                <button
+                  type="button"
+                  data-testid="memory-corrupted-cancel"
+                  onClick={() => {
+                    const reason = "Corrupted session - staging missing";
+                    browserTransferAbortControllerRef.current?.abort();
+                    api.cancelMemoryUpload(caseId, serverActive.upload_id, reason)
+                      .then(() => {
+                        writeStoredUpload(caseId, null);
+                        setActiveUploadIdTracked(null);
+                        void activeUploadQuery.refetch();
+                      })
+                      .catch((err) => setStatus(err instanceof Error ? err.message : "Cancel failed"));
+                  }}
+                  className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100"
+                >
+                  Cancel and start over
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </section>
+      ) : null}
       {serverActive && serverActive.is_active ? (
         <section data-testid="memory-active-upload-panel" className="rounded-[28px] border border-warning/30 bg-warning/10 p-5 text-sm">
           <div className="flex flex-wrap items-start justify-between gap-3">

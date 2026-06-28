@@ -293,6 +293,22 @@ async def store_memory_upload_chunk(
         db.commit()
         raise MemoryUploadSessionError(item.failure_code, item.failure_message)
 
+    integrity = check_memory_upload_staging_integrity(item)
+    integrity_status = integrity["integrity_status"]
+    if integrity_status not in (_STAGING_INTEGRITY_HEALTHY, _STAGING_INTEGRITY_EXTRA_CHUNKS):
+        item.status = "failed"
+        item.failure_code = "MEMORY_UPLOAD_STAGING_INCONSISTENT"
+        item.failure_message = f"Staging integrity check failed: {integrity_status}. Restart the upload from the beginning."
+        item.retryable = True
+        item.failure_code = f"MEMORY_UPLOAD_STAGING_{integrity_status.upper()}"
+        db.add(item)
+        db.commit()
+        raise MemoryUploadSessionError(
+            item.failure_code,
+            item.failure_message,
+            detail={"integrity_status": integrity_status, "missing_chunks": integrity.get("missing_db_chunks_on_disk", [])},
+        )
+
     expected_size = int(item.expected_bytes or 0)
     chunk_size = int(item.chunk_size_bytes or 0)
     expected_length = min(chunk_size, expected_size - (chunk_index * chunk_size))
@@ -306,7 +322,9 @@ async def store_memory_upload_chunk(
     if existing is not None:
         existing_size = int(existing.get("size") or 0)
         existing_sha = str(existing.get("sha256") or "")
-        if existing_size == expected_length and (not declared_chunk_sha or existing_sha == declared_chunk_sha):
+        chunk_path = _chunk_path(item, chunk_index)
+        file_exists = chunk_path.exists() and chunk_path.is_file() and not chunk_path.is_symlink()
+        if existing_size == expected_length and file_exists and (not declared_chunk_sha or existing_sha == declared_chunk_sha):
             return item
 
     target_dir = _chunk_dir(item)
@@ -367,6 +385,136 @@ async def store_memory_upload_chunk(
     return item
 
 
+_STAGING_INTEGRITY_HEALTHY = "healthy"
+_STAGING_INTEGRITY_STAGING_MISSING = "staging_missing"
+_STAGING_INTEGRITY_MISSING_CHUNKS = "missing_chunks_on_disk"
+_STAGING_INTEGRITY_EXTRA_CHUNKS = "extra_chunks_on_disk"
+_STAGING_INTEGRITY_SIZE_MISMATCH = "size_mismatch"
+_STAGING_INTEGRITY_HASH_MISMATCH = "hash_mismatch"
+
+
+def check_memory_upload_staging_integrity(
+    item: MemoryUpload,
+    *,
+    verify_hashes: bool = False,
+) -> dict[str, Any]:
+    session_root = _session_root(item)
+    if not session_root.exists() or not session_root.is_dir():
+        return {
+            "integrity_status": _STAGING_INTEGRITY_STAGING_MISSING,
+            "resumable": False,
+            "repairable": False,
+            "expected_chunks": int(item.total_chunks or 0),
+            "db_received_chunks": int(item.received_chunk_count or 0),
+            "disk_chunks": 0,
+            "missing_db_chunks_on_disk": [],
+            "extra_disk_chunks": [],
+            "size_mismatches": [],
+            "hash_mismatches": [],
+        }
+
+    chunks_dir = _chunk_dir(item)
+    db_chunks = _received_chunks(item)
+    db_indices = sorted(int(k) for k in db_chunks.keys())
+    disk_indices: list[int] = []
+    missing_db_chunks_on_disk: list[int] = []
+    size_mismatches: list[int] = []
+    hash_mismatches: list[int] = []
+
+    if not chunks_dir.exists() or not chunks_dir.is_dir():
+        return {
+            "integrity_status": _STAGING_INTEGRITY_STAGING_MISSING,
+            "resumable": False,
+            "repairable": False,
+            "expected_chunks": int(item.total_chunks or 0),
+            "db_received_chunks": int(item.received_chunk_count or 0),
+            "disk_chunks": 0,
+            "missing_db_chunks_on_disk": db_indices,
+            "extra_disk_chunks": [],
+            "size_mismatches": [],
+            "hash_mismatches": [],
+        }
+
+    for entry in sorted(chunks_dir.iterdir()):
+        if not entry.is_file() or entry.is_symlink():
+            continue
+        if entry.name.endswith(".part"):
+            continue
+        name = entry.name
+        if not name.endswith(".chunk"):
+            continue
+        try:
+            index = int(name.split(".")[0])
+        except (ValueError, IndexError):
+            continue
+        disk_indices.append(index)
+
+    disk_indices.sort()
+
+    for index in db_indices:
+        chunk_path = _chunk_path(item, index)
+        if not chunk_path.exists() or not chunk_path.is_file():
+            missing_db_chunks_on_disk.append(index)
+            continue
+        chunk_meta = db_chunks.get(str(index), {})
+        expected_size = int(chunk_meta.get("size") or 0)
+        actual_size = int(chunk_path.stat().st_size)
+        if expected_size != 0 and actual_size != expected_size:
+            size_mismatches.append(index)
+            continue
+        if verify_hashes:
+            expected_sha = str(chunk_meta.get("sha256") or "")
+            if expected_sha:
+                actual_sha = _sha256_file(chunk_path)
+                if actual_sha != expected_sha:
+                    hash_mismatches.append(index)
+
+    extra_disk_chunks = sorted(set(disk_indices) - set(db_indices))
+    disk_chunk_count = len(disk_indices)
+
+    if missing_db_chunks_on_disk:
+        status = _STAGING_INTEGRITY_MISSING_CHUNKS
+        resumable = False
+        repairable = False
+    elif size_mismatches:
+        status = _STAGING_INTEGRITY_SIZE_MISMATCH
+        resumable = False
+        repairable = False
+    elif hash_mismatches:
+        status = _STAGING_INTEGRITY_HASH_MISMATCH
+        resumable = False
+        repairable = False
+    elif extra_disk_chunks:
+        status = _STAGING_INTEGRITY_EXTRA_CHUNKS
+        resumable = True
+        repairable = True
+    else:
+        status = _STAGING_INTEGRITY_HEALTHY
+        resumable = True
+        repairable = True
+
+    return {
+        "integrity_status": status,
+        "resumable": resumable,
+        "repairable": repairable,
+        "expected_chunks": int(item.total_chunks or 0),
+        "db_received_chunks": int(item.received_chunk_count or 0),
+        "disk_chunks": disk_chunk_count,
+        "missing_db_chunks_on_disk": missing_db_chunks_on_disk,
+        "extra_disk_chunks": extra_disk_chunks,
+        "size_mismatches": size_mismatches,
+        "hash_mismatches": hash_mismatches,
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for blob in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(blob)
+    return digest.hexdigest()
+
+
 def _cleanup_session_storage(item: MemoryUpload) -> None:
     session_root = _session_root(item)
     if session_root.exists() and not session_root.is_symlink():
@@ -385,6 +533,21 @@ def finalize_memory_upload_session(
         raise MemoryUploadSessionError("MEMORY_UPLOAD_NOT_FOUND", "Memory upload session was not found.")
     if item.status in {"completed", "cancelled", "expired", "inconsistent"}:
         return item, db.get(Evidence, item.evidence_id) if item.status == "completed" else None
+
+    integrity = check_memory_upload_staging_integrity(item, verify_hashes=True)
+    integrity_status = integrity["integrity_status"]
+    if integrity_status != _STAGING_INTEGRITY_HEALTHY:
+        item.status = "failed"
+        item.failure_code = "MEMORY_UPLOAD_STAGING_INCONSISTENT"
+        item.failure_message = f"Cannot finalize: staging integrity is {integrity_status}."
+        item.retryable = True
+        db.add(item)
+        db.commit()
+        raise MemoryUploadSessionError(
+            "MEMORY_UPLOAD_STAGING_INCONSISTENT",
+            item.failure_message,
+            detail={"integrity_status": integrity_status, "missing_chunks": integrity.get("missing_db_chunks_on_disk", []), "size_mismatches": integrity.get("size_mismatches", []), "hash_mismatches": integrity.get("hash_mismatches", [])},
+        )
 
     expected_client_sha = _sanitize_sha256(expected_sha256 or item.expected_sha256)
     chunks = _received_chunks(item)
@@ -503,7 +666,6 @@ def cancel_memory_upload_session(db: Session, *, case_id: str, upload_id: str, r
         raise MemoryUploadSessionError("MEMORY_UPLOAD_ALREADY_COMPLETED", "Completed uploads cannot be cancelled.")
     if item.status in {"cancelled", "expired", "failed", "inconsistent"}:
         return item
-    _cleanup_session_storage(item)
     item.status = "cancelled"
     item.retryable = False
     item.failure_code = "MEMORY_UPLOAD_CANCELLED"
@@ -511,6 +673,7 @@ def cancel_memory_upload_session(db: Session, *, case_id: str, upload_id: str, r
     _touch_session(item)
     db.add(item)
     db.commit()
+    _cleanup_session_storage(item)
     db.refresh(item)
     return item
 
@@ -531,7 +694,6 @@ def cleanup_expired_memory_upload_sessions(db: Session, *, limit: int = 50) -> d
     )
     removed = 0
     for item in expired:
-        _cleanup_session_storage(item)
         item.status = "expired"
         item.failure_code = "MEMORY_UPLOAD_SESSION_EXPIRED"
         item.failure_message = "Upload session expired without receiving the remaining chunks."
@@ -553,10 +715,15 @@ def cleanup_expired_memory_upload_sessions(db: Session, *, limit: int = 50) -> d
     )
     purged = 0
     for item in stale_terminal:
-        _cleanup_session_storage(item)
         purged += 1
 
     db.commit()
+
+    for item in expired:
+        _cleanup_session_storage(item)
+    for item in stale_terminal:
+        _cleanup_session_storage(item)
+
     return {"expired": removed, "purged": purged}
 
 
@@ -590,7 +757,13 @@ def run_periodic_cleanup() -> str:
 
 
 def upload_status_with_chunks(item: MemoryUpload, *, db: Session | None = None) -> dict[str, Any]:
-    payload = public_memory_upload_status(item, db=db)
+    integrity = check_memory_upload_staging_integrity(item)
+    corrupted = integrity["integrity_status"] != _STAGING_INTEGRITY_HEALTHY
+    payload = public_memory_upload_status(
+        item,
+        db=db,
+        integrity_status=integrity["integrity_status"] if corrupted else None,
+    )
     total_chunks = int(item.total_chunks or 0)
     received = sorted(int(index) for index in _received_chunks(item).keys())
     missing = [index for index in range(total_chunks) if index not in set(received)]
@@ -610,6 +783,12 @@ def upload_status_with_chunks(item: MemoryUpload, *, db: Session | None = None) 
             "failure_message": item.failure_message,
         }
     )
+    if corrupted:
+        payload["integrity_status"] = integrity["integrity_status"]
+        payload["resumable"] = False
+        payload["repairable"] = integrity.get("repairable", False)
+        payload["failure_code"] = payload.get("failure_code") or f"MEMORY_UPLOAD_STAGING_{integrity['integrity_status'].upper()}"
+        payload["failure_message"] = payload.get("failure_message") or f"Upload staging is {integrity['integrity_status']}. Restart the upload from the beginning."
     duplicate = _session_metadata(item).get("duplicate")
     if isinstance(duplicate, dict):
         payload["duplicate"] = duplicate
