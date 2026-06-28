@@ -99,8 +99,8 @@ type UploadBlobOptions = {
   method?: "PUT" | "POST";
   contentType?: string;
   headers?: Record<string, string>;
-  onProgress?: (progress: UploadProgress) => void;
   signal?: AbortSignal;
+  timeoutMs?: number;
 };
 
 async function buildZipFromFolder(files: File[], archiveName = "raw-folder.zip"): Promise<File> {
@@ -233,91 +233,135 @@ async function uploadFormData<T>(path: string, formData: FormData, options?: Upl
   throw new Error(`The backend could not be reached during upload. Tried: ${attemptedUrls.join(" | ")}.${detail}`);
 }
 
-async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBlobOptions): Promise<T> {
+const UPLOAD_BLOB_DEFAULT_TIMEOUT_MS = 300_000;
+
+export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBlobOptions): Promise<T> {
   let lastError: UploadAttemptError | unknown;
+  let lastRetryable = false;
   for (const baseUrl of API_BASE_URLS) {
     const url = `${baseUrl}${path}`;
+
+    const headers = new Headers();
+    headers.set("Accept", "application/json");
+    if (options?.contentType) {
+      headers.set("Content-Type", options.contentType);
+    }
+    for (const [key, value] of Object.entries(options?.headers ?? {})) {
+      headers.set(key, value);
+    }
+
+    const timeoutMs = options?.timeoutMs ?? UPLOAD_BLOB_DEFAULT_TIMEOUT_MS;
+    const timeoutController = new AbortController();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const onParentAbort = () => {
+      if (!timeoutController.signal.aborted) {
+        timeoutController.abort();
+      }
+    };
+
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        throw new Error("Upload aborted");
+      }
+      options.signal.addEventListener("abort", onParentAbort, { once: true });
+    }
+
+    if (timeoutMs > 0) {
+      timeoutId = setTimeout(() => {
+        if (!timeoutController.signal.aborted) {
+          timeoutController.abort();
+        }
+      }, timeoutMs);
+    }
+
     try {
-      return await new Promise<T>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open(options?.method ?? "PUT", url, true);
-        xhr.setRequestHeader("Accept", "application/json");
-        if (options?.contentType) {
-          xhr.setRequestHeader("Content-Type", options.contentType);
+      const fetchInit: RequestInit = {
+        method: options?.method ?? "PUT",
+        headers,
+        body: blob,
+        signal: timeoutController.signal,
+        cache: "no-store",
+      };
+
+      const response = await fetch(url, fetchInit);
+      const contentType = response.headers.get("content-type") ?? "";
+
+      if (!response.ok) {
+        const bodyText = await response.text();
+        let detail: unknown = bodyText || `HTTP ${response.status}`;
+        let errorCode: string | null = null;
+        let humanMessage: string | null = null;
+        try {
+          const parsed = JSON.parse(bodyText) as {
+            detail?: string | { error_code?: string; message?: string };
+          };
+          if (typeof parsed.detail === "string") {
+            detail = parsed.detail;
+            humanMessage = parsed.detail;
+          } else if (parsed.detail && typeof parsed.detail === "object") {
+            detail = parsed.detail;
+            errorCode = parsed.detail.error_code ?? null;
+            humanMessage = parsed.detail.message ?? null;
+          }
+        } catch {
+          // Preserve raw text for non-JSON errors.
         }
-        for (const [key, value] of Object.entries(options?.headers ?? {})) {
-          xhr.setRequestHeader(key, value);
-        }
-        const onAbort = () => {
-          xhr.abort();
-        };
-        options?.signal?.addEventListener("abort", onAbort, { once: true });
-        xhr.upload.onprogress = (event) => {
-          options?.onProgress?.({
-            loaded: event.loaded,
-            total: event.total || blob.size,
-            lengthComputable: event.lengthComputable,
-          });
-        };
-        xhr.onerror = () => {
-          options?.signal?.removeEventListener("abort", onAbort);
-          reject(new Error(`Network error while uploading to ${url}`));
-        };
-        xhr.onabort = () => {
-          options?.signal?.removeEventListener("abort", onAbort);
-          reject(new Error("Upload aborted"));
-        };
-        xhr.onload = () => {
-          options?.signal?.removeEventListener("abort", onAbort);
-          const contentType = xhr.getResponseHeader("content-type") ?? "";
-          if (xhr.status < 200 || xhr.status >= 300) {
-            let detail: unknown = xhr.responseText || `HTTP ${xhr.status}`;
-            let errorCode: string | null = null;
-            let humanMessage: string | null = null;
-            try {
-              const parsed = JSON.parse(xhr.responseText) as { detail?: string | { error_code?: string; message?: string } };
-              if (typeof parsed.detail === "string") {
-                detail = parsed.detail;
-                humanMessage = parsed.detail;
-              } else if (parsed.detail && typeof parsed.detail === "object") {
-                detail = parsed.detail;
-                errorCode = parsed.detail.error_code ?? null;
-                humanMessage = parsed.detail.message ?? null;
-              }
-            } catch {
-              // Preserve raw text for non-JSON errors.
-            }
-            const error = new ApiError(
-              xhr.status,
-              errorCode,
-              humanMessage || xhr.responseText || `HTTP ${xhr.status}`,
-              detail,
-            ) as ApiError & UploadAttemptError;
-            error.nonRetryable = true;
-            reject(error);
-            return;
-          }
-          if (!xhr.responseText) {
-            resolve(undefined as T);
-            return;
-          }
-          if (contentType.includes("application/json")) {
-            resolve(JSON.parse(xhr.responseText) as T);
-            return;
-          }
-          resolve(xhr.responseText as T);
-        };
-        xhr.send(blob);
-      });
+        const error = new ApiError(
+          response.status,
+          errorCode,
+          humanMessage || bodyText || `HTTP ${response.status}`,
+          detail,
+        ) as ApiError & UploadAttemptError;
+        error.nonRetryable = true;
+        throw error;
+      }
+
+      if (response.status === 204) {
+        return undefined as T;
+      }
+      if (!contentType.includes("application/json")) {
+        return (await response.text()) as T;
+      }
+      const responseJson = (await response.json()) as T;
+      return responseJson;
     } catch (error) {
+      const isAbortError =
+        error instanceof DOMException && error.name === "AbortError";
+
+      if (isAbortError && options?.signal?.aborted) {
+        throw new Error("Upload aborted");
+      }
+
+      if (isAbortError) {
+        lastError = error;
+        lastRetryable = true;
+        continue;
+      }
+
       lastError = error;
+      lastRetryable = false;
       if ((error as UploadAttemptError | undefined)?.nonRetryable) {
         throw error;
       }
+    } finally {
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
+      if (options?.signal) {
+        options.signal.removeEventListener("abort", onParentAbort);
+      }
     }
   }
-  const detail = lastError instanceof Error && lastError.message ? ` ${lastError.message}` : "";
-  throw new Error(`The backend could not be reached during upload. Tried the configured API endpoints.${detail}`);
+
+  if (lastRetryable && lastError instanceof DOMException) {
+    throw new Error("Upload timed out. Your network may be unavailable. Check your connection and try again.");
+  }
+
+  const detail =
+    lastError instanceof Error && lastError.message
+      ? ` ${lastError.message}`
+      : "";
+  throw new Error(
+    `The backend could not be reached during upload. Tried the configured API endpoints.${detail}`,
+  );
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -4536,13 +4580,12 @@ export const api = {
     uploadId: string,
     chunkIndex: number,
     blob: Blob,
-    options?: { chunkSha256?: string; onProgress?: (progress: UploadProgress) => void; signal?: AbortSignal },
+    options?: { chunkSha256?: string; signal?: AbortSignal },
   ) =>
     uploadBlob<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/chunks/${chunkIndex}`, blob, {
       method: "PUT",
       contentType: "application/octet-stream",
       headers: options?.chunkSha256 ? { "X-Kairon-Chunk-SHA256": options.chunkSha256 } : undefined,
-      onProgress: options?.onProgress,
       signal: options?.signal,
     }),
   finalizeMemoryUpload: (caseId: string, uploadId: string, payload?: { expected_sha256?: string }) =>
