@@ -9,6 +9,7 @@ import {
   type MemoryUploadStatus,
 } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
+import { runResumableUpload } from "../features/memory/runResumableUpload";
 
 const MEMORY_EXTENSIONS = [".raw", ".mem", ".dmp", ".dump", ".bin", ".img", ".vmem", ".lime", ".aff4"];
 
@@ -39,6 +40,8 @@ type ActiveSessionConflict = {
   expiresAt: string;
   cancellable: boolean;
 };
+
+const SPEED_STALE_AFTER_MS = 3000;
 
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0 B";
@@ -111,10 +114,18 @@ export default function MemoryUploadPage() {
   const { caseId = "" } = useParams();
   const { setActiveCaseId } = useActiveCase();
   const navigate = useNavigate();
+  const storedUpload = readStoredUpload(caseId);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const retryRegistrationInFlight = useRef(false);
   const bypassUploadBlocking = useRef(false);
-  const storedUpload = readStoredUpload(caseId);
+  const mountedRef = useRef(true);
+  const activeUploadIdRef = useRef<string | null>(storedUpload?.uploadId || null);
+  const fileRef = useRef<File | null>(null);
+  const browserTransferAbortControllerRef = useRef<AbortController | null>(null);
+  const browserTransferRunningRef = useRef(false);
+  const browserTransferStartedAtRef = useRef<number | null>(null);
+  const lastAckAtRef = useRef<number | null>(null);
+  const lastAckBytesRef = useRef(0);
 
   const [file, setFile] = useState<File | null>(null);
   const [providedHost, setProvidedHost] = useState(storedUpload?.providedHost || "");
@@ -131,6 +142,8 @@ export default function MemoryUploadPage() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [activeSessionConflict, setActiveSessionConflict] = useState<ActiveSessionConflict | null>(null);
   const [restartPhase, setRestartPhase] = useState<"idle" | "confirming" | "executing">("idle");
+  const [browserTransferRunning, setBrowserTransferRunning] = useState(false);
+  const [browserTransferError, setBrowserTransferError] = useState<string | null>(null);
 
   const readinessQuery = useQuery({
     queryKey: ["memory-upload-readiness", caseId, file?.size || 0],
@@ -183,6 +196,7 @@ export default function MemoryUploadPage() {
     }
     if (!providedHost.trim()) return "Source host is required.";
     if (!acknowledged) return "Authorization acknowledgement is required.";
+    if (storedUpload?.uploadId && resumeSessionMatchesFile) return null;
     if (readinessQuery.isLoading || readinessQuery.isFetching) return "Memory upload readiness is still being checked.";
     if (readinessQuery.error || !readiness) return "Backend upload readiness is unavailable.";
     if (!readiness.upload_enabled) return "Memory image upload is disabled by server configuration.";
@@ -193,12 +207,29 @@ export default function MemoryUploadPage() {
   const canUpload = uploadBlockingReason === null;
   const percent = progress.total > 0 ? Math.min(100, Math.round((progress.loaded / progress.total) * 100)) : 0;
   const etaSeconds = speedBytesPerSecond > 0 ? Math.max(0, Math.round((progress.total - progress.loaded) / speedBytesPerSecond)) : null;
-  const isBrowserTransferActive = ["uploading", "verifying", "finalizing"].includes(stage) && Boolean(file) && resumeSessionMatchesFile;
+  const isBrowserTransferActive = browserTransferRunning;
   const needsFileReselection = Boolean(activeUploadId && storedUpload?.uploadId && !file);
 
   useEffect(() => {
     if (caseId) setActiveCaseId(caseId);
   }, [caseId, setActiveCaseId]);
+
+  useEffect(() => {
+    fileRef.current = file;
+  }, [file]);
+
+  useEffect(() => {
+    activeUploadIdRef.current = activeUploadId;
+  }, [activeUploadId]);
+
+  useEffect(() => {
+    browserTransferRunningRef.current = browserTransferRunning;
+  }, [browserTransferRunning]);
+
+  useEffect(() => () => {
+    mountedRef.current = false;
+    browserTransferAbortControllerRef.current?.abort();
+  }, []);
 
   useEffect(() => {
     if (!["created", "uploading", "verifying", "finalizing"].includes(stage)) return;
@@ -213,7 +244,7 @@ export default function MemoryUploadPage() {
   useEffect(() => {
     if (statusQuery.error && activeUploadId) {
       writeStoredUpload(caseId, null);
-      setActiveUploadId(null);
+      setActiveUploadIdTracked(null);
     }
   }, [statusQuery.error, activeUploadId, caseId]);
 
@@ -226,10 +257,27 @@ export default function MemoryUploadPage() {
   }, [finalizationStartedAt, stage]);
 
   useEffect(() => {
+    if (!browserTransferRunning || speedBytesPerSecond <= 0) return;
+    const timer = window.setInterval(() => {
+      if (!lastAckAtRef.current || Date.now() - lastAckAtRef.current <= SPEED_STALE_AFTER_MS) return;
+      setSpeedBytesPerSecond(0);
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [browserTransferRunning, speedBytesPerSecond]);
+
+  useEffect(() => {
     const uploadStatus = statusQuery.data;
     if (!uploadStatus) return;
-    setProgress({ loaded: uploadStatus.bytes_received, total: uploadStatus.expected_bytes });
-    setStatus(uploadStatus.message);
+    setProgress((current) => ({
+      loaded: browserTransferRunningRef.current ? Math.max(current.loaded, uploadStatus.bytes_received) : uploadStatus.bytes_received,
+      total: uploadStatus.expected_bytes,
+    }));
+    if (!browserTransferRunningRef.current) {
+      setStatus(uploadStatus.message);
+    }
+    if (browserTransferRunningRef.current) {
+      return;
+    }
     if (["created", "uploading", "verifying", "finalizing", "validating"].includes(uploadStatus.status)) {
       const isStalledWithoutFile = uploadStatus.status === "uploading" && activeUploadId && !file;
       const isMismatchedFile = uploadStatus.status === "uploading" && activeUploadId && file && !resumeSessionMatchesFile;
@@ -247,7 +295,7 @@ export default function MemoryUploadPage() {
     if (uploadStatus.status === "completed" && uploadStatus.evidence_id) {
       setStage("completed");
       writeStoredUpload(caseId, null);
-      setActiveUploadId(null);
+      setActiveUploadIdTracked(null);
       void api.getEvidence(uploadStatus.evidence_id).then((evidence) => setUploadedEvidence(evidence));
       return;
     }
@@ -255,6 +303,60 @@ export default function MemoryUploadPage() {
       setStage("failed");
     }
   }, [caseId, file, finalizationStartedAt, resumeSessionMatchesFile, statusQuery.data, activeUploadId]);
+
+  function setActiveUploadIdTracked(nextUploadId: string | null) {
+    activeUploadIdRef.current = nextUploadId;
+    setActiveUploadId(nextUploadId);
+  }
+
+  function setBrowserTransferRunningTracked(isRunning: boolean) {
+    browserTransferRunningRef.current = isRunning;
+    setBrowserTransferRunning(isRunning);
+  }
+
+  function resetTransferMetrics(acknowledgedBytes = 0) {
+    browserTransferStartedAtRef.current = null;
+    lastAckAtRef.current = null;
+    lastAckBytesRef.current = acknowledgedBytes;
+    setSpeedBytesPerSecond(0);
+  }
+
+  function syncAcknowledgedProgress(loaded: number, total: number) {
+    const now = Date.now();
+    setProgress({ loaded, total });
+    let nextSpeed = 0;
+    if (lastAckAtRef.current !== null && now > lastAckAtRef.current && loaded > lastAckBytesRef.current) {
+      nextSpeed = (loaded - lastAckBytesRef.current) / ((now - lastAckAtRef.current) / 1000);
+    } else if (browserTransferStartedAtRef.current !== null && now > browserTransferStartedAtRef.current && loaded > 0) {
+      nextSpeed = loaded / ((now - browserTransferStartedAtRef.current) / 1000);
+    }
+    setSpeedBytesPerSecond(Number.isFinite(nextSpeed) && nextSpeed > 0 ? nextSpeed : 0);
+    lastAckAtRef.current = now;
+    lastAckBytesRef.current = loaded;
+  }
+
+  function stopBrowserTransfer(message: string, { paused = true }: { paused?: boolean } = {}) {
+    browserTransferAbortControllerRef.current?.abort();
+    browserTransferAbortControllerRef.current = null;
+    setBrowserTransferRunningTracked(false);
+    resetTransferMetrics(lastAckBytesRef.current);
+    setStatus(message);
+    setBrowserTransferError(paused ? message : null);
+    setStage("idle");
+  }
+
+  async function finalizeCompletedUpload(uploadStatus: MemoryUploadStatus, selectedFile: File) {
+    if (uploadStatus.evidence_id) {
+      const evidence = await api.getEvidence(uploadStatus.evidence_id);
+      setUploadedEvidence(evidence);
+    }
+    writeStoredUpload(caseId, null);
+    setActiveUploadIdTracked(null);
+    setProgress({ loaded: selectedFile.size, total: selectedFile.size });
+    setStage("completed");
+    setStatus("Memory image uploaded and registered.");
+    setBrowserTransferError(null);
+  }
 
   const summary = useMemo(() => {
     if (!file) return "Select an authorized Windows memory image to begin.";
@@ -299,7 +401,7 @@ export default function MemoryUploadPage() {
     const existingEvidenceId = String(detail.existing_evidence_id || "").trim();
     if (!existingEvidenceId) return false;
     writeStoredUpload(caseId, null);
-    setActiveUploadId(null);
+    setActiveUploadIdTracked(null);
     setStage("idle");
     setStatus("");
     setDuplicateUpload({
@@ -310,91 +412,102 @@ export default function MemoryUploadPage() {
     return true;
   }
 
-  async function continueChunkedUpload(uploadStatus: MemoryUploadStatus, selectedFile: File) {
-    const chunkSize = uploadStatus.chunk_size_bytes || readiness?.recommended_chunk_size_bytes || 64 * 1024 * 1024;
-    const totalChunks = uploadStatus.total_chunks || Math.ceil(selectedFile.size / chunkSize);
-    const missingChunks = uploadStatus.missing_chunks && uploadStatus.missing_chunks.length > 0
-      ? uploadStatus.missing_chunks
-      : Array.from({ length: totalChunks }, (_, index) => index);
-    let uploadedBaseline = uploadStatus.bytes_received || 0;
-    let completedThisAttempt = 0;
-    const startedAt = Date.now();
-
-    for (const chunkIndex of missingChunks) {
-      const start = chunkIndex * chunkSize;
-      const end = Math.min(selectedFile.size, start + chunkSize);
-      const blob = selectedFile.slice(start, end);
-      const chunkSha256 = await sha256Hex(blob);
-      setStage("uploading");
-      setStatus(`Uploading chunk ${chunkIndex + 1} of ${totalChunks}`);
-      await api.uploadMemoryUploadChunk(caseId, uploadStatus.upload_id, chunkIndex, blob, {
-        chunkSha256,
-        onProgress: ({ loaded }) => {
-          const totalLoaded = uploadedBaseline + completedThisAttempt + loaded;
-          setProgress({ loaded: totalLoaded, total: selectedFile.size });
-          const elapsed = Math.max(1, (Date.now() - startedAt) / 1000);
-          setSpeedBytesPerSecond(totalLoaded / elapsed);
-        },
-      });
-      completedThisAttempt += blob.size;
-    }
-
-    setStage("verifying");
-    setStatus("Upload transferred; verifying and finalizing");
-    setFinalizationStartedAt(Date.now());
-    setSpeedBytesPerSecond(0);
-    const finalized = await api.finalizeMemoryUpload(caseId, uploadStatus.upload_id);
-    if (finalized.evidence_id) {
-      const evidence = await api.getEvidence(finalized.evidence_id);
-      setUploadedEvidence(evidence);
-      writeStoredUpload(caseId, null);
-      setActiveUploadId(null);
-      setProgress({ loaded: selectedFile.size, total: selectedFile.size });
-      setStage("completed");
-      setStatus("Memory image uploaded and registered.");
-      return;
-    }
-    setStatus(finalized.message);
-  }
-
   async function upload(uploadIdOverride?: string) {
+    if (browserTransferRunningRef.current) return;
     setStage("validating");
     setStatus("Validating upload…");
     setUploadedEvidence(null);
     setDuplicateUpload(null);
+    setBrowserTransferError(null);
+    setFinalizationStartedAt(null);
+    setElapsedSeconds(0);
+    setBrowserTransferRunningTracked(true);
+    resetTransferMetrics(lastAckBytesRef.current);
     try {
       if (!bypassUploadBlocking.current && (uploadBlockingReason || !file)) {
         throw new Error(uploadBlockingReason || "No file selected.");
       }
-      setProgress({ loaded: 0, total: file.size });
-      const currentReadiness = await api.getMemoryUploadReadiness(caseId, file.size);
+      const selectedFile = fileRef.current;
+      if (!selectedFile || selectedFile.size <= 0) {
+        throw new Error("The selected file is empty or its browser file handle is no longer valid. Select the file again.");
+      }
+      setProgress((current) => ({ loaded: Math.min(current.loaded, selectedFile.size), total: selectedFile.size }));
+      const currentReadiness = await api.getMemoryUploadReadiness(caseId, selectedFile.size);
       if (!currentReadiness.upload_enabled || !currentReadiness.can_accept_selected_size) {
         throw new Error(currentReadiness.message || "Memory upload readiness could not be confirmed.");
       }
       setAcceptedReadiness(currentReadiness);
-      const effectiveUploadId = uploadIdOverride || activeUploadId;
-      const uploadStatus = effectiveUploadId
+      const effectiveUploadId = uploadIdOverride || activeUploadIdRef.current;
+      const remoteStatus = effectiveUploadId
         ? await api.getMemoryUploadStatus(caseId, effectiveUploadId)
         : await api.createMemoryUploadSession(caseId, {
-            filename: file.name,
-            expected_size_bytes: file.size,
+            filename: selectedFile.name,
+            expected_size_bytes: selectedFile.size,
             provided_host: providedHost.trim(),
             authorization_acknowledged: true,
           });
       writeStoredUpload(caseId, {
-        uploadId: uploadStatus.upload_id,
-        filename: file.name,
-        expectedBytes: file.size,
+        uploadId: remoteStatus.upload_id,
+        filename: selectedFile.name,
+        expectedBytes: selectedFile.size,
         providedHost: providedHost.trim(),
       });
-      setActiveUploadId(uploadStatus.upload_id);
-      await continueChunkedUpload(uploadStatus, file);
+      setActiveUploadIdTracked(remoteStatus.upload_id);
+
+      const transferController = new AbortController();
+      browserTransferAbortControllerRef.current = transferController;
+      browserTransferStartedAtRef.current = Date.now();
+      lastAckAtRef.current = Date.now();
+      lastAckBytesRef.current = remoteStatus.bytes_received || 0;
+      syncAcknowledgedProgress(remoteStatus.bytes_received || 0, selectedFile.size);
+      setBrowserTransferError(null);
+
+      const result = await runResumableUpload({
+        uploadId: remoteStatus.upload_id,
+        file: selectedFile,
+        getStatus: (uploadId) => api.getMemoryUploadStatus(caseId, uploadId),
+        uploadChunk: async (uploadId, chunkIndex, blob, signal) => {
+          const chunkSha256 = await sha256Hex(blob);
+          const effectiveChunkSize = remoteStatus.chunk_size_bytes || acceptedReadiness?.recommended_chunk_size_bytes || 64 * 1024 * 1024;
+          const totalChunks = remoteStatus.total_chunks || Math.ceil(selectedFile.size / effectiveChunkSize);
+          setStage("uploading");
+          setStatus(`Uploading chunk ${chunkIndex + 1} of ${totalChunks}`);
+          return api.uploadMemoryUploadChunk(caseId, uploadId, chunkIndex, blob, { chunkSha256, signal });
+        },
+        finalize: (uploadId) => {
+          setStage("verifying");
+          setStatus("Upload transferred; verifying and finalizing");
+          setFinalizationStartedAt(Date.now());
+          setSpeedBytesPerSecond(0);
+          return api.finalizeMemoryUpload(caseId, uploadId);
+        },
+        signal: transferController.signal,
+        onProgress: (info) => syncAcknowledgedProgress(info.loaded, info.total),
+      });
+
+      if (result.type === "completed" || result.type === "terminal") {
+        await finalizeCompletedUpload(result.status, selectedFile);
+        return;
+      }
+      if (result.type === "aborted") {
+        stopBrowserTransfer("Upload paused. Resume upload to continue the remaining chunks.");
+        return;
+      }
+      if (result.type === "stalled") {
+        stopBrowserTransfer("Upload progress stalled. Resume upload to continue.");
+        return;
+      }
+      if (result.type === "failed") {
+        throw new Error(result.message);
+      }
     } catch (error) {
       if (handleActiveSessionConflict(error)) return;
       if (handleDuplicateError(error)) return;
-      setSpeedBytesPerSecond(0);
-      setStage("failed");
-      setStatus(error instanceof Error ? error.message : "Memory image upload failed.");
+      stopBrowserTransfer(error instanceof Error ? error.message : "Memory image upload failed.");
+    } finally {
+      browserTransferAbortControllerRef.current = null;
+      setBrowserTransferRunningTracked(false);
+      bypassUploadBlocking.current = false;
     }
   }
 
@@ -425,7 +538,7 @@ export default function MemoryUploadPage() {
       setStatus(result.message);
       if (result.status === "completed" && result.evidence_id) {
         writeStoredUpload(caseId, null);
-        setActiveUploadId(null);
+        setActiveUploadIdTracked(null);
         navigate(`/cases/${caseId}/memory/${result.evidence_id}`);
         return;
       }
@@ -440,9 +553,10 @@ export default function MemoryUploadPage() {
 
   async function prepareReupload() {
     writeStoredUpload(caseId, null);
-    setActiveUploadId(null);
+    setActiveUploadIdTracked(null);
     setStage("idle");
     setStatus("");
+    setBrowserTransferError(null);
     setProgress({ loaded: 0, total: file?.size || 0 });
     await readinessQuery.refetch();
   }
@@ -466,11 +580,11 @@ export default function MemoryUploadPage() {
       expectedBytes: file.size,
       providedHost: providedHost.trim(),
     });
-    setActiveUploadId(uploadId);
+    setActiveUploadIdTracked(uploadId);
     setActiveSessionConflict(null);
     setStage("idle");
     bypassUploadBlocking.current = true;
-    setTimeout(() => { void upload(uploadId).finally(() => { bypassUploadBlocking.current = false; }); }, 0);
+    void upload(uploadId);
   }
 
   async function executeCancelAndRestart() {
@@ -483,12 +597,13 @@ export default function MemoryUploadPage() {
         "Operator requested restart",
       );
       writeStoredUpload(caseId, null);
-      setActiveUploadId(null);
+      browserTransferAbortControllerRef.current?.abort();
+      setActiveUploadIdTracked(null);
       setActiveSessionConflict(null);
       setRestartPhase("idle");
       setStage("idle");
       bypassUploadBlocking.current = true;
-      void upload().finally(() => { bypassUploadBlocking.current = false; });
+      void upload();
     } catch (error) {
       setRestartPhase("idle");
       setStatus(error instanceof Error ? error.message : "Failed to cancel the existing upload session.");
@@ -550,10 +665,11 @@ export default function MemoryUploadPage() {
                   onClick={() => {
                     const reason = window.prompt("Cancel and discard incomplete upload?", "Operator requested cancel");
                     if (!reason) return;
+                    browserTransferAbortControllerRef.current?.abort();
                     api.cancelMemoryUpload(caseId, serverActive.upload_id, reason)
                       .then(() => {
                         writeStoredUpload(caseId, null);
-                        setActiveUploadId(null);
+                        setActiveUploadIdTracked(null);
                         void activeUploadQuery.refetch();
                       })
                       .catch((error) => setStatus(error instanceof Error ? error.message : "Cancel failed"));
@@ -605,6 +721,7 @@ export default function MemoryUploadPage() {
         </div>
         <input ref={inputRef} data-testid="memory-image-file-input" aria-label="Memory image file" type="file" accept={MEMORY_EXTENSIONS.join(",") + ",application/octet-stream"} className="hidden" onChange={(event) => {
           const next = event.target.files?.[0] || null;
+          fileRef.current = next;
           setFile(next);
           setUploadedEvidence(null);
           setDuplicateUpload(null);
@@ -617,9 +734,16 @@ export default function MemoryUploadPage() {
       </section>
 
       <section className="rounded-[28px] border border-line bg-panel/60 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-semibold">Upload</h3><p className="mt-1 text-sm text-muted">Stages: session creation, bounded chunk transfer, verification, finalization, completed, failed.</p></div><button type="button" onClick={() => { if (needsFileReselection) { inputRef.current?.click(); } else { void upload(); } }} disabled={!canUpload && !needsFileReselection} className="rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-50">{needsFileReselection ? "Select file to resume" : stage === "validating" ? "Validating upload…" : activeUploadId ? "Resume upload" : "Upload memory image"}</button></div>
+          <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-semibold">Upload</h3><p className="mt-1 text-sm text-muted">Stages: session creation, bounded chunk transfer, verification, finalization, completed, failed.</p></div><button type="button" onClick={() => { if (needsFileReselection) { inputRef.current?.click(); } else { void upload(); } }} disabled={(browserTransferRunning || !canUpload) && !needsFileReselection} className="rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-50">{needsFileReselection ? "Select file to resume" : stage === "validating" ? "Validating upload…" : activeUploadId ? "Resume upload" : "Upload memory image"}</button></div>
         {uploadBlockingReason && stage === "idle" ? <p className="mt-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning" role="status">{uploadBlockingReason}</p> : null}
         {status && stage === "idle" ? <p className="mt-3 rounded-xl border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-100" role="status">{status}</p> : null}
+        {browserTransferError && activeUploadId && file && !browserTransferRunning ? (
+          <div className="mt-4 rounded-2xl border border-warning/30 bg-warning/10 p-4 text-sm" data-testid="memory-upload-paused">
+            <p className="font-semibold text-ink">Upload paused</p>
+            <p className="mt-1 text-muted">{browserTransferError}</p>
+            <p className="mt-1 text-muted">Last acknowledged progress: {formatBytes(progress.loaded)} of {formatBytes(progress.total || file.size)}.</p>
+          </div>
+        ) : null}
         {acceptedReadiness ? <p className="mt-3 text-xs text-muted">Resumable upload enabled · Chunk size: {formatBytes(acceptedReadiness.recommended_chunk_size_bytes)} · Finalization: {acceptedReadiness.finalization_strategy === "staged_copy" ? "staged copy" : "atomic move"}</p> : null}
         {activeSessionConflict ? (
           <div className="mt-4 rounded-2xl border border-warning/30 bg-warning/10 p-4 text-sm" data-testid="memory-active-session-conflict">
@@ -637,7 +761,7 @@ export default function MemoryUploadPage() {
                 type="button"
                 data-testid="memory-conflict-resume"
                 onClick={() => void resumeExistingSession()}
-                disabled={restartPhase !== "idle"}
+                disabled={restartPhase !== "idle" || browserTransferRunning}
                 className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-50"
               >
                 Resume existing upload
