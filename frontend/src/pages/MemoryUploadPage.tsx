@@ -90,9 +90,13 @@ function writeStoredUpload(caseId: string, value: StoredUploadSession | null) {
 }
 
 async function sha256Hex(blob: Blob): Promise<string | undefined> {
-  if (typeof globalThis.crypto?.subtle?.digest !== "function") return undefined;
-  const digest = await globalThis.crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
-  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+  try {
+    if (typeof globalThis.crypto?.subtle?.digest !== "function") return undefined;
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+    return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return undefined;
+  }
 }
 
 function readinessLabel(readiness?: MemoryUploadReadiness) {
@@ -227,11 +231,11 @@ export default function MemoryUploadPage() {
     setProgress({ loaded: uploadStatus.bytes_received, total: uploadStatus.expected_bytes });
     setStatus(uploadStatus.message);
     if (["created", "uploading", "verifying", "finalizing", "validating"].includes(uploadStatus.status)) {
-      const isStalledWithoutFile = uploadStatus.status === "uploading" && storedUpload?.uploadId && !file;
-      const isMismatchedFile = uploadStatus.status === "uploading" && storedUpload?.uploadId && file && !resumeSessionMatchesFile;
-      if (isStalledWithoutFile || isMismatchedFile) {
-        // Resumable session exists but browser has no matching file — keep idle
-        // so the file picker remains enabled for reselection.
+      const isStalledWithoutFile = uploadStatus.status === "uploading" && activeUploadId && !file;
+      const isMismatchedFile = uploadStatus.status === "uploading" && activeUploadId && file && !resumeSessionMatchesFile;
+      const isReadyToResume = stage === "idle" && uploadStatus.status === "uploading" && file && resumeSessionMatchesFile;
+      if (isStalledWithoutFile || isMismatchedFile || isReadyToResume) {
+        // Keep idle so the user can trigger resume manually.
       } else {
         setStage(uploadStatus.status as UploadStage);
       }
@@ -250,7 +254,7 @@ export default function MemoryUploadPage() {
     if (["failed", "cancelled", "expired", "inconsistent"].includes(uploadStatus.status)) {
       setStage("failed");
     }
-  }, [caseId, file, finalizationStartedAt, resumeSessionMatchesFile, statusQuery.data, storedUpload]);
+  }, [caseId, file, finalizationStartedAt, resumeSessionMatchesFile, statusQuery.data, activeUploadId]);
 
   const summary = useMemo(() => {
     if (!file) return "Select an authorized Windows memory image to begin.";
@@ -353,7 +357,7 @@ export default function MemoryUploadPage() {
     setStatus(finalized.message);
   }
 
-  async function upload() {
+  async function upload(uploadIdOverride?: string) {
     setStage("validating");
     setStatus("Validating upload…");
     setUploadedEvidence(null);
@@ -368,8 +372,9 @@ export default function MemoryUploadPage() {
         throw new Error(currentReadiness.message || "Memory upload readiness could not be confirmed.");
       }
       setAcceptedReadiness(currentReadiness);
-      const uploadStatus = activeUploadId
-        ? await api.getMemoryUploadStatus(caseId, activeUploadId)
+      const effectiveUploadId = uploadIdOverride || activeUploadId;
+      const uploadStatus = effectiveUploadId
+        ? await api.getMemoryUploadStatus(caseId, effectiveUploadId)
         : await api.createMemoryUploadSession(caseId, {
             filename: file.name,
             expected_size_bytes: file.size,
@@ -464,7 +469,8 @@ export default function MemoryUploadPage() {
     setActiveUploadId(uploadId);
     setActiveSessionConflict(null);
     setStage("idle");
-    setTimeout(() => { void upload(); }, 0);
+    bypassUploadBlocking.current = true;
+    setTimeout(() => { void upload(uploadId).finally(() => { bypassUploadBlocking.current = false; }); }, 0);
   }
 
   async function executeCancelAndRestart() {

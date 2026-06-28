@@ -152,7 +152,7 @@ describe("MemoryUploadPage", () => {
     await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
 
     await waitFor(() => expect(createMemoryUploadSessionMock).toHaveBeenCalledWith("case-1", expect.objectContaining({ filename: "authorized.mem", expected_size_bytes: 6, provided_host: "HOSTA", authorization_acknowledged: true })));
-    expect(await screen.findByRole("button", { name: /Resume upload/i })).toBeInTheDocument();
+    expect(await screen.findByText(/Upload completed/i)).toBeInTheDocument();
   });
 
   it("surfaces the stored resumable session prompt after refresh", async () => {
@@ -353,6 +353,32 @@ describe("MemoryUploadPage", () => {
     await waitFor(() => expect(screen.queryByTestId("memory-active-session-conflict")).not.toBeInTheDocument());
   });
 
+  it("new upload sends all chunks sequentially", async () => {
+    createMemoryUploadSessionMock.mockResolvedValue(uploadStatus({ upload_id: "upload-1", status: "created", bytes_received: 0, expected_bytes: 12, chunk_size_bytes: 4, total_chunks: 3, received_chunk_count: 0, received_chunks: [], missing_chunks: [0, 1, 2] }));
+    uploadMemoryUploadChunkMock.mockResolvedValue(uploadStatus({ upload_id: "upload-1", status: "uploading" }));
+    finalizeMemoryUploadMock.mockResolvedValue(uploadStatus({ status: "completed", evidence_id: "ev-memory", bytes_received: 12, missing_chunks: [], received_chunk_count: 3, progress_percent: 100, message: "Memory image uploaded and registered." }));
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["123456789012"], "authorized.mem"));
+
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+
+    await waitFor(() => {
+      expect(uploadMemoryUploadChunkMock).toHaveBeenCalledWith(
+        "case-1", "upload-1", 0, expect.any(Blob), expect.objectContaining({}),
+      );
+      expect(uploadMemoryUploadChunkMock).toHaveBeenCalledWith(
+        "case-1", "upload-1", 1, expect.any(Blob), expect.objectContaining({}),
+      );
+      expect(uploadMemoryUploadChunkMock).toHaveBeenCalledWith(
+        "case-1", "upload-1", 2, expect.any(Blob), expect.objectContaining({}),
+      );
+    });
+    expect(finalizeMemoryUploadMock).toHaveBeenCalledWith("case-1", "upload-1");
+  });
+
   it("keep existing upload dismisses confirmation without cancelling", async () => {
     createMemoryUploadSessionMock.mockRejectedValue(conflictError({
       existing_upload_id: "conflict-1",
@@ -383,5 +409,57 @@ describe("MemoryUploadPage", () => {
     await waitFor(() => expect(screen.queryByTestId("memory-conflict-confirm-restart")).not.toBeInTheDocument());
     expect(cancelMemoryUploadMock).not.toHaveBeenCalled();
     expect(screen.getByTestId("memory-active-session-conflict")).toBeInTheDocument();
+  });
+
+  it("status query uploading does not overwrite idle stage when file matches (deadlock regression)", async () => {
+    localStorage.setItem("kairon-memory-upload:case-1", JSON.stringify({ uploadId: "upload-1", filename: "authorized.mem", expectedBytes: 6, providedHost: "HOSTA" }));
+    getMemoryUploadStatusMock.mockResolvedValue(uploadStatus({ status: "uploading", bytes_received: 4, received_chunk_count: 1, expected_bytes: 6 }));
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+
+    await waitFor(() => expect(getMemoryUploadStatusMock).toHaveBeenCalledWith("case-1", "upload-1"));
+    const button = screen.getByRole("button", { name: /Resume upload/i });
+    expect(button).toBeEnabled();
+  });
+
+  it("multi-chunk upload after conflict resume sends all missing chunks", async () => {
+    createMemoryUploadSessionMock.mockRejectedValue(conflictError({
+      existing_upload_id: "conflict-1",
+      filename: "authorized.mem",
+      expected_bytes: 12,
+      received_bytes: 8,
+      received_chunk_count: 2,
+      total_chunks: 3,
+      status: "uploading",
+      resumable: true,
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      cancellable: true,
+    }));
+    getMemoryUploadStatusMock.mockImplementation(() => Promise.resolve(
+      uploadStatus({ upload_id: "conflict-1", status: "uploading", bytes_received: 8, expected_bytes: 12, chunk_size_bytes: 4, total_chunks: 3, received_chunk_count: 2, received_chunks: [0, 1], missing_chunks: [2] }),
+    ));
+    uploadMemoryUploadChunkMock.mockResolvedValue(uploadStatus({ status: "uploading", bytes_received: 12, received_chunk_count: 3, received_chunks: [0, 1, 2], missing_chunks: [] }));
+    finalizeMemoryUploadMock.mockResolvedValue(uploadStatus({ status: "completed", evidence_id: "ev-memory", bytes_received: 12, missing_chunks: [], received_chunk_count: 3, progress_percent: 100, message: "Memory image uploaded and registered." }));
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["123456789012"], "authorized.mem"));
+
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+    await screen.findByTestId("memory-active-session-conflict");
+
+    await userEvent.click(screen.getByTestId("memory-conflict-resume"));
+
+    await waitFor(() => {
+      expect(uploadMemoryUploadChunkMock).toHaveBeenCalledWith(
+        "case-1", "conflict-1", 2, expect.any(Blob), expect.objectContaining({}),
+      );
+    });
+    expect(finalizeMemoryUploadMock).toHaveBeenCalledWith("case-1", "conflict-1");
+    expect(await screen.findByText(/Memory image uploaded and registered/i)).toBeInTheDocument();
   });
 });
