@@ -61,7 +61,7 @@ class Settings(BaseSettings):
     memory_max_upload_size: int = 2147483648
     memory_upload_enabled: bool = False
     memory_upload_max_bytes: int = 34359738368
-    memory_upload_chunk_size_bytes: int = 67108864
+    memory_upload_chunk_size_bytes: int = 8388608
     memory_upload_staging_root: str = ""
     memory_upload_cleanup_age_seconds: int = 86400
     memory_upload_request_timeout_seconds: int = 1800

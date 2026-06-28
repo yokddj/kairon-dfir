@@ -72,7 +72,7 @@ function readiness(overrides = {}) {
     upload_enabled: true,
     max_upload_bytes: 34_359_738_368,
     max_upload_display: "32 GiB",
-    recommended_chunk_size_bytes: 67_108_864,
+    recommended_chunk_size_bytes: 8_388_608,
     resumable: true,
     max_parallel_chunks: 2,
     case_quota_bytes: 107_374_182_400,
@@ -233,7 +233,7 @@ describe("MemoryUploadPage", () => {
     renderPage();
     expect(await screen.findByRole("heading", { name: /Add memory image/i })).toBeInTheDocument();
     expect(await screen.findByText(/32 GiB/i)).toBeInTheDocument();
-    expect(await screen.findByText(/64\.0 MiB/i)).toBeInTheDocument();
+    expect(await screen.findByText(/8\.0 MiB/i)).toBeInTheDocument();
     expect(await screen.findByText(/Case quota remaining/i)).toBeInTheDocument();
   });
 
@@ -590,7 +590,7 @@ describe("MemoryUploadPage", () => {
     expect(createMemoryUploadSessionMock).not.toHaveBeenCalled();
   });
 
-  it("one resume click stays active across recovered chunks and continues", async () => {
+  it("one resume click pauses on timed out chunk without creating a new session", async () => {
     const uploadId = "recover-page-1";
     const expectedBytes = 24;
     const chunkSize = 4;
@@ -615,10 +615,7 @@ describe("MemoryUploadPage", () => {
       if (!received.includes(chunkIndex)) {
         received = [...received, chunkIndex].sort((a, b) => a - b);
       }
-      if (chunkIndex === 3 || chunkIndex === 4) {
-        return Promise.reject(new Error("Upload timed out. Your network may be unavailable."));
-      }
-      return Promise.resolve(buildStatus());
+      return Promise.reject(new Error("Upload timed out. Your network may be unavailable."));
     });
     finalizeMemoryUploadMock.mockResolvedValue(uploadStatus({
       upload_id: uploadId,
@@ -642,14 +639,12 @@ describe("MemoryUploadPage", () => {
     fireEvent.change(screen.getByLabelText(/Memory image file/i), { target: { files: [new File([new Uint8Array(expectedBytes).fill(0x41)], "authorized.mem")] } });
     fireEvent.click(screen.getByRole("button", { name: /Resume upload/i }));
 
-    await waitFor(() => {
-      expect(uploadMemoryUploadChunkMock.mock.calls.map((call) => call[2])).toEqual([3, 4, 5]);
-    });
+    await waitFor(() => expect(screen.getAllByText(/Upload timed out/i).length).toBeGreaterThan(0), { timeout: 6000 });
     expect(runResumableUploadMock).toHaveBeenCalledTimes(1);
     expect(createMemoryUploadSessionMock).not.toHaveBeenCalled();
-    expect(finalizeMemoryUploadMock).toHaveBeenCalledTimes(1);
-    expect(finalizeMemoryUploadMock).toHaveBeenCalledWith("case-1", uploadId);
-  });
+    expect(uploadMemoryUploadChunkMock.mock.calls.map((call) => call[2])).toEqual([3, 3, 3, 3]);
+    expect(finalizeMemoryUploadMock).not.toHaveBeenCalled();
+  }, 10_000);
 
   it("pauses upload without creating new session when controller fails", async () => {
     const failedStatus = uploadStatus({ upload_id: "resume-3", expected_bytes: 16, chunk_size_bytes: 4, total_chunks: 4, received_chunks: [0, 1], received_chunk_count: 2, bytes_received: 8, missing_chunks: [2, 3], status: "uploading" });

@@ -14,6 +14,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   globalThis.fetch = globalThis.fetch || originalFetch;
 });
 
@@ -32,8 +33,74 @@ function mockResponse(
   });
 }
 
-function mockNetworkError() {
-  return Promise.reject(new TypeError("Failed to fetch"));
+type XhrScenario = {
+  status?: number;
+  responseText?: string;
+  contentType?: string;
+  error?: boolean;
+  timeout?: boolean;
+};
+
+function installMockXhr(scenarios: XhrScenario[]) {
+  const instances: Array<{
+    method?: string;
+    url?: string;
+    async?: boolean;
+    headers: Record<string, string>;
+    body?: XMLHttpRequestBodyInit | null;
+    timeout: number;
+    abort: () => void;
+  }> = [];
+  class MockXHR {
+    method?: string;
+    url?: string;
+    async?: boolean;
+    headers: Record<string, string> = {};
+    body?: XMLHttpRequestBodyInit | null;
+    status = 0;
+    responseText = "";
+    timeout = 0;
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    ontimeout: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    private contentType = "application/json";
+    open(method: string, url: string, async: boolean) {
+      this.method = method;
+      this.url = url;
+      this.async = async;
+    }
+    setRequestHeader(key: string, value: string) {
+      this.headers[key.toLowerCase()] = value;
+    }
+    getResponseHeader(key: string) {
+      return key.toLowerCase() === "content-type" ? this.contentType : null;
+    }
+    send(body?: XMLHttpRequestBodyInit | null) {
+      this.body = body;
+      instances.push(this);
+      const scenario = scenarios.shift() ?? { status: 200, responseText: JSON.stringify({ ok: true }) };
+      setTimeout(() => {
+        if (scenario.error) {
+          this.onerror?.();
+          return;
+        }
+        if (scenario.timeout) {
+          this.ontimeout?.();
+          return;
+        }
+        this.status = scenario.status ?? 200;
+        this.responseText = scenario.responseText ?? JSON.stringify({ ok: true });
+        this.contentType = scenario.contentType ?? "application/json";
+        this.onload?.();
+      }, 0);
+    }
+    abort() {
+      this.onabort?.();
+    }
+  }
+  vi.stubGlobal("XMLHttpRequest", MockXHR);
+  return instances;
 }
 
 describe("apiFetch cache policy", () => {
@@ -110,52 +177,58 @@ describe("apiFetch cache policy", () => {
   });
 });
 
-describe("uploadBlob fetch transport", () => {
+describe("uploadBlob XHR transport", () => {
   it("uses PUT method", async () => {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse({ ok: true }));
+    const instances = installMockXhr([{ responseText: JSON.stringify({ ok: true }) }]);
 
     const { uploadBlob } = await import("./client");
     await uploadBlob("/upload", new Blob(["test"]));
 
-    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
-    expect(init).toHaveProperty("method", "PUT");
+    expect(instances[0].method).toBe("PUT");
   });
 
   it("sends the exact Blob body", async () => {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse({ ok: true }));
+    const instances = installMockXhr([{ responseText: JSON.stringify({ ok: true }) }]);
 
     const { uploadBlob } = await import("./client");
     const blob = new Blob(["hello world"]);
     await uploadBlob("/upload", blob);
 
-    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
-    expect(init).toHaveProperty("body");
-    expect(init.body).toBe(blob);
+    expect(instances[0].body).toBe(blob);
   });
 
-  it("uses cache: no-store on the fetch call", async () => {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse({ ok: true }));
+  it("sends no-store cache header", async () => {
+    const instances = installMockXhr([{ responseText: JSON.stringify({ ok: true }) }]);
 
     const { uploadBlob } = await import("./client");
     await uploadBlob("/upload", new Blob(["test"]));
 
-    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
-    expect(init).toHaveProperty("cache", "no-store");
+    expect(instances[0].headers["cache-control"]).toBe("no-store");
   });
 
-  it("passes AbortSignal to fetch", async () => {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse({ ok: true }));
-
+  it("throws aborted error when parent signal is aborted", async () => {
+    installMockXhr([{ responseText: JSON.stringify({ ok: true }) }]);
     const { uploadBlob } = await import("./client");
     const controller = new AbortController();
-    await uploadBlob("/upload", new Blob(["test"]), { signal: controller.signal });
+    controller.abort();
 
-    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
-    expect(init.signal).toBeInstanceOf(AbortSignal);
+    await expect(uploadBlob("/upload", new Blob(["test"]), { signal: controller.signal })).rejects.toThrow("Upload aborted");
+  });
+
+  it("stops immediately when parent aborts an in-flight XHR", async () => {
+    const instances = installMockXhr([{ responseText: JSON.stringify({ ok: true }) }, { responseText: JSON.stringify({ ok: true }) }]);
+    const { uploadBlob } = await import("./client");
+    const controller = new AbortController();
+
+    const promise = uploadBlob("/upload", new Blob(["test"]), { signal: controller.signal });
+    controller.abort();
+
+    await expect(promise).rejects.toThrow("Upload aborted");
+    expect(instances).toHaveLength(1);
   });
 
   it("preserves Content-Type and custom headers", async () => {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse({ ok: true }));
+    const instances = installMockXhr([{ responseText: JSON.stringify({ ok: true }) }]);
 
     const { uploadBlob } = await import("./client");
     await uploadBlob("/upload", new Blob(["test"]), {
@@ -163,17 +236,13 @@ describe("uploadBlob fetch transport", () => {
       headers: { "X-Kairon-Chunk-SHA256": "abc123" },
     });
 
-    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
-    const headers = init.headers as Headers;
-    expect(headers.get("content-type")).toBe("application/octet-stream");
-    expect(headers.get("x-kairon-chunk-sha256")).toBe("abc123");
-    expect(headers.get("accept")).toBe("application/json");
+    expect(instances[0].headers["content-type"]).toBe("application/octet-stream");
+    expect(instances[0].headers["x-kairon-chunk-sha256"]).toBe("abc123");
+    expect(instances[0].headers.accept).toBe("application/json");
   });
 
   it("resolves parsed JSON on HTTP 200", async () => {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      mockResponse({ upload_id: "u-1", status: "uploading" }),
-    );
+    installMockXhr([{ responseText: JSON.stringify({ upload_id: "u-1", status: "uploading" }) }]);
 
     const { uploadBlob } = await import("./client");
     const result = await uploadBlob<{ upload_id: string }>("/upload", new Blob(["test"]));
@@ -182,9 +251,7 @@ describe("uploadBlob fetch transport", () => {
   });
 
   it("resolves parsed JSON on HTTP 201", async () => {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      mockResponse({ created: true }, 201),
-    );
+    installMockXhr([{ status: 201, responseText: JSON.stringify({ created: true }) }]);
 
     const { uploadBlob } = await import("./client");
     const result = await uploadBlob<{ created: boolean }>("/upload", new Blob(["test"]));
@@ -192,13 +259,15 @@ describe("uploadBlob fetch transport", () => {
     expect(result).toEqual({ created: true });
   });
 
+  it("resolves undefined on HTTP 204", async () => {
+    installMockXhr([{ status: 204, responseText: "", contentType: "" }]);
+
+    const { uploadBlob } = await import("./client");
+    await expect(uploadBlob("/upload", new Blob(["test"]))).resolves.toBeUndefined();
+  });
+
   it("rejects structured 409 with error_code", async () => {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      new Response(
-        JSON.stringify({ detail: { error_code: "MEMORY_UPLOAD_CHUNK_CONFLICT", message: "Chunk already received." } }),
-        { status: 409, headers: { "content-type": "application/json" } },
-      ),
-    );
+    installMockXhr([{ status: 409, responseText: JSON.stringify({ detail: { error_code: "MEMORY_UPLOAD_CHUNK_CONFLICT", message: "Chunk already received." } }) }]);
 
     const { uploadBlob } = await import("./client");
     await expect(
@@ -211,12 +280,7 @@ describe("uploadBlob fetch transport", () => {
   });
 
   it("rejects 422 with structured error", async () => {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      new Response(
-        JSON.stringify({ detail: { error_code: "MEMORY_UPLOAD_INVALID_CHUNK_LENGTH", message: "Chunk length mismatch." } }),
-        { status: 422, headers: { "content-type": "application/json" } },
-      ),
-    );
+    installMockXhr([{ status: 422, responseText: JSON.stringify({ detail: { error_code: "MEMORY_UPLOAD_INVALID_CHUNK_LENGTH", message: "Chunk length mismatch." } }) }]);
 
     const { uploadBlob } = await import("./client");
     await expect(
@@ -229,9 +293,7 @@ describe("uploadBlob fetch transport", () => {
   });
 
   it("rejects 500 as API error", async () => {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      new Response("Internal Server Error", { status: 500, headers: { "content-type": "text/plain" } }),
-    );
+    installMockXhr([{ status: 500, responseText: "Internal Server Error", contentType: "text/plain" }]);
 
     const { uploadBlob } = await import("./client");
     await expect(
@@ -242,55 +304,16 @@ describe("uploadBlob fetch transport", () => {
   });
 
   it("retries on network failure across base URLs", async () => {
-    // First call fails with network error, second succeeds
-    (globalThis.fetch as ReturnType<typeof vi.fn>)
-      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
-      .mockResolvedValueOnce(mockResponse({ ok: true }));
+    installMockXhr([{ error: true }, { responseText: JSON.stringify({ ok: true }) }]);
 
     const { uploadBlob } = await import("./client");
     const result = await uploadBlob<{ ok: boolean }>("/upload", new Blob(["test"]));
 
     expect(result).toEqual({ ok: true });
-    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
   });
 
-  it("throws aborted error when parent signal is aborted", async () => {
-    const abortError = new DOMException("The operation was aborted.", "AbortError");
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockRejectedValue(abortError);
-
-    const { uploadBlob } = await import("./client");
-    const controller = new AbortController();
-    controller.abort();
-
-    await expect(
-      uploadBlob("/upload", new Blob(["test"]), { signal: controller.signal }),
-    ).rejects.toThrow("Upload aborted");
-  });
-
-  it("does not create XMLHttpRequest", async () => {
-    const xhrSpy = vi.spyOn(globalThis as unknown as { XMLHttpRequest: typeof XMLHttpRequest }, "XMLHttpRequest", "get");
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse({ ok: true }));
-
-    const { uploadBlob } = await import("./client");
-    await uploadBlob("/upload", new Blob(["test"]));
-
-    expect(xhrSpy).not.toHaveBeenCalled();
-    xhrSpy.mockRestore();
-  });
-
-  it("timeout aborts fetch and cleans up", async () => {
-    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
-    fetchMock.mockImplementation((_url: unknown, init?: RequestInit) => {
-      return new Promise<Response>((resolve, reject) => {
-        const id = setTimeout(() => resolve(mockResponse({ ok: true })), 5000);
-        if (init?.signal) {
-          init.signal.addEventListener("abort", () => {
-            clearTimeout(id);
-            reject(new DOMException("The operation was aborted.", "AbortError"));
-          }, { once: true });
-        }
-      });
-    });
+  it("timeout rejects without treating upload as success", async () => {
+    installMockXhr([{ timeout: true }, { timeout: true }]);
 
     const { uploadBlob } = await import("./client");
     const promise = uploadBlob("/upload", new Blob(["test"]), { timeoutMs: 10 });
@@ -298,37 +321,8 @@ describe("uploadBlob fetch transport", () => {
     await expect(promise).rejects.toThrow("Upload timed out");
   });
 
-  it("clears timeout after normal success", async () => {
-    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse({ ok: true }));
-
-    const { uploadBlob } = await import("./client");
-    await uploadBlob("/upload", new Blob(["test"]), { timeoutMs: 1000 });
-
-    expect(clearTimeoutSpy).toHaveBeenCalled();
-  });
-
-  it("clears timeout after timeout/error", async () => {
-    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
-    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
-    fetchMock.mockImplementation((_url: unknown, init?: RequestInit) => {
-      return new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => {
-          reject(new DOMException("The operation was aborted.", "AbortError"));
-        }, { once: true });
-      });
-    });
-
-    const { uploadBlob } = await import("./client");
-    await expect(uploadBlob("/upload", new Blob(["test"]), { timeoutMs: 1 })).rejects.toThrow("Upload timed out");
-
-    expect(clearTimeoutSpy).toHaveBeenCalled();
-  });
-
-  it("reports malformed successful JSON as ambiguous parsing failure", async () => {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      new Response("{", { status: 200, headers: { "content-type": "application/json" } }),
-    );
+  it("reports malformed successful JSON as parsing failure", async () => {
+    installMockXhr([{ responseText: "{", contentType: "application/json" }]);
 
     const { uploadBlob } = await import("./client");
     await expect(uploadBlob("/upload", new Blob(["test"]))).rejects.toThrow("Upload response parsing failed after successful HTTP 200");
@@ -337,24 +331,22 @@ describe("uploadBlob fetch transport", () => {
 
 describe("uploadMemoryUploadChunk integration", () => {
   it("preserves chunk SHA-256 header through API", async () => {
-    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
-      mockResponse({ upload_id: "u-1", status: "uploading" } as MemoryUploadStatus),
-    );
+    const instances = installMockXhr([{ status: 204, responseText: "", contentType: "" }]);
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse({ upload_id: "u-1", status: "uploading" } as MemoryUploadStatus));
 
     const { api } = await import("./client");
     await api.uploadMemoryUploadChunk("case-1", "upload-1", 0, new Blob(["data"]), {
       chunkSha256: "deadbeef",
     });
 
-    const [, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
-    const headers = init.headers as Headers;
-    expect(headers.get("x-kairon-chunk-sha256")).toBe("deadbeef");
-    expect(headers.get("accept")).toBe("application/json");
-    expect(headers.get("content-type")).toBe("application/octet-stream");
+    expect(instances[0].headers["x-kairon-chunk-sha256"]).toBe("deadbeef");
+    expect(instances[0].headers.accept).toBe("application/json");
+    expect(instances[0].headers["content-type"]).toBe("application/octet-stream");
   });
 
   it("returns MemoryUploadStatus on success", async () => {
     const status = { upload_id: "u-1", status: "uploading" } as MemoryUploadStatus;
+    installMockXhr([{ status: 204, responseText: "", contentType: "" }]);
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse(status));
 
     const { api } = await import("./client");
@@ -363,17 +355,16 @@ describe("uploadMemoryUploadChunk integration", () => {
     expect(result).toEqual(status);
   });
 
-  it("accepts empty successful PUT response and fetches authoritative status", async () => {
+  it("accepts 204 successful PUT response and fetches authoritative status", async () => {
     const status = { upload_id: "u-1", status: "uploading", bytes_received: 4, expected_bytes: 8 } as MemoryUploadStatus;
-    (globalThis.fetch as ReturnType<typeof vi.fn>)
-      .mockResolvedValueOnce(new Response("", { status: 200, headers: { "content-type": "application/json" } }))
-      .mockResolvedValueOnce(mockResponse(status));
+    installMockXhr([{ status: 204, responseText: "", contentType: "" }]);
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockResponse(status));
 
     const { api } = await import("./client");
     const result = await api.uploadMemoryUploadChunk("case-1", "u-1", 0, new Blob(["data"]));
 
     expect(result).toEqual(status);
-    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
-    expect(String((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[1][0])).toContain("/cases/case-1/memory/uploads/u-1");
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(String((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("/cases/case-1/memory/uploads/u-1");
   });
 });

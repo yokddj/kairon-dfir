@@ -241,129 +241,115 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
   for (const baseUrl of API_BASE_URLS) {
     const url = `${baseUrl}${path}`;
 
-    const headers = new Headers();
-    headers.set("Accept", "application/json");
-    if (options?.contentType) {
-      headers.set("Content-Type", options.contentType);
-    }
-    for (const [key, value] of Object.entries(options?.headers ?? {})) {
-      headers.set(key, value);
-    }
-
-    const timeoutMs = options?.timeoutMs ?? UPLOAD_BLOB_DEFAULT_TIMEOUT_MS;
-    const timeoutController = new AbortController();
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
-    const onParentAbort = () => {
-      if (!timeoutController.signal.aborted) {
-        timeoutController.abort();
-      }
-    };
-
-    if (options?.signal) {
-      if (options.signal.aborted) {
-        throw new Error("Upload aborted");
-      }
-      options.signal.addEventListener("abort", onParentAbort, { once: true });
-    }
-
-    if (timeoutMs > 0) {
-      timeoutId = setTimeout(() => {
-        if (!timeoutController.signal.aborted) {
-          timeoutController.abort();
-        }
-      }, timeoutMs);
-    }
-
     try {
-      const fetchInit: RequestInit = {
-        method: options?.method ?? "PUT",
-        headers,
-        body: blob,
-        signal: timeoutController.signal,
-        cache: "no-store",
-      };
-
-      const response = await fetch(url, fetchInit);
-      const contentType = response.headers.get("content-type") ?? "";
-
-      if (!response.ok) {
-        const bodyText = await response.text();
-        let detail: unknown = bodyText || `HTTP ${response.status}`;
-        let errorCode: string | null = null;
-        let humanMessage: string | null = null;
-        try {
-          const parsed = JSON.parse(bodyText) as {
-            detail?: string | { error_code?: string; message?: string };
-          };
-          if (typeof parsed.detail === "string") {
-            detail = parsed.detail;
-            humanMessage = parsed.detail;
-          } else if (parsed.detail && typeof parsed.detail === "object") {
-            detail = parsed.detail;
-            errorCode = parsed.detail.error_code ?? null;
-            humanMessage = parsed.detail.message ?? null;
+      return await new Promise<T>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        let settled = false;
+        const cleanup = () => {
+          if (options?.signal) {
+            options.signal.removeEventListener("abort", onParentAbort);
           }
-        } catch {
-          // Preserve raw text for non-JSON errors.
+        };
+        const finish = (fn: () => void) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          fn();
+        };
+        const onParentAbort = () => xhr.abort();
+
+        if (options?.signal) {
+          if (options.signal.aborted) {
+            reject(new Error("Upload aborted"));
+            return;
+          }
+          options.signal.addEventListener("abort", onParentAbort, { once: true });
         }
-        const error = new ApiError(
-          response.status,
-          errorCode,
-          humanMessage || bodyText || `HTTP ${response.status}`,
-          detail,
-        ) as ApiError & UploadAttemptError;
-        error.nonRetryable = true;
+
+        xhr.open(options?.method ?? "PUT", url, true);
+        xhr.setRequestHeader("Accept", "application/json");
+        xhr.setRequestHeader("Cache-Control", "no-store");
+        if (options?.contentType) {
+          xhr.setRequestHeader("Content-Type", options.contentType);
+        }
+        for (const [key, value] of Object.entries(options?.headers ?? {})) {
+          xhr.setRequestHeader(key, value);
+        }
+        xhr.timeout = options?.timeoutMs ?? UPLOAD_BLOB_DEFAULT_TIMEOUT_MS;
+        xhr.onabort = () => finish(() => reject(new Error("Upload aborted")));
+        xhr.onerror = () => finish(() => reject(new Error(`Network error while uploading to ${url}`)));
+        xhr.ontimeout = () => finish(() => {
+          const error = new Error("Upload timed out. Your network may be unavailable. Check your connection and try again.");
+          (error as UploadAttemptError).nonRetryable = false;
+          reject(error);
+        });
+        xhr.onload = () => finish(() => {
+          const contentType = xhr.getResponseHeader("content-type") ?? "";
+          const bodyText = xhr.responseText || "";
+          if (xhr.status < 200 || xhr.status >= 300) {
+            let detail: unknown = bodyText || `HTTP ${xhr.status}`;
+            let errorCode: string | null = null;
+            let humanMessage: string | null = null;
+            try {
+              const parsed = JSON.parse(bodyText) as {
+                detail?: string | { error_code?: string; message?: string };
+              };
+              if (typeof parsed.detail === "string") {
+                detail = parsed.detail;
+                humanMessage = parsed.detail;
+              } else if (parsed.detail && typeof parsed.detail === "object") {
+                detail = parsed.detail;
+                errorCode = parsed.detail.error_code ?? null;
+                humanMessage = parsed.detail.message ?? null;
+              }
+            } catch {
+              // Preserve raw text for non-JSON errors.
+            }
+            const error = new ApiError(
+              xhr.status,
+              errorCode,
+              humanMessage || bodyText || `HTTP ${xhr.status}`,
+              detail,
+            ) as ApiError & UploadAttemptError;
+            error.nonRetryable = true;
+            reject(error);
+            return;
+          }
+
+          if (xhr.status === 204 || !bodyText) {
+            resolve(undefined as T);
+            return;
+          }
+          if (!contentType.includes("application/json")) {
+            resolve(bodyText as T);
+            return;
+          }
+          try {
+            resolve(JSON.parse(bodyText) as T);
+          } catch (parseError) {
+            const message = parseError instanceof Error && parseError.message ? parseError.message : String(parseError);
+            reject(new Error(`Upload response parsing failed after successful HTTP ${xhr.status}. ${message}`));
+          }
+        });
+        xhr.send(blob);
+      });
+    } catch (error) {
+      lastError = error;
+      lastRetryable = error instanceof Error && error.message.includes("Upload timed out");
+      if (error instanceof Error && error.message === "Upload aborted") {
         throw error;
       }
-
-      if (response.status === 204) {
-        return undefined as T;
-      }
-      if (!contentType.includes("application/json")) {
-        return (await response.text()) as T;
-      }
-      const bodyText = await response.text();
-      if (!bodyText) {
-        return undefined as T;
-      }
-      try {
-        return JSON.parse(bodyText) as T;
-      } catch (parseError) {
-        const message = parseError instanceof Error && parseError.message ? parseError.message : String(parseError);
-        throw new Error(`Upload response parsing failed after successful HTTP ${response.status}. ${message}`);
-      }
-    } catch (error) {
-      const isAbortError =
-        error instanceof DOMException && error.name === "AbortError";
-
-      if (isAbortError && options?.signal?.aborted) {
-        throw new Error("Upload aborted");
-      }
-
-      if (isAbortError) {
-        lastError = error;
-        lastRetryable = true;
-        continue;
-      }
-
-      lastError = error;
-      lastRetryable = false;
       if (error instanceof Error && error.message.includes("Upload response parsing failed")) {
         throw error;
       }
       if ((error as UploadAttemptError | undefined)?.nonRetryable) {
         throw error;
       }
-    } finally {
-      if (timeoutId !== undefined) clearTimeout(timeoutId);
-      if (options?.signal) {
-        options.signal.removeEventListener("abort", onParentAbort);
-      }
     }
   }
 
-  if (lastRetryable && lastError instanceof DOMException) {
-    throw new Error("Upload timed out. Your network may be unavailable. Check your connection and try again.");
+  if (lastRetryable && lastError instanceof Error) {
+    throw lastError;
   }
 
   const detail =

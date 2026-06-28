@@ -715,6 +715,159 @@ def test_chunk_upload_is_idempotent_for_same_bytes(db_session, tmp_path: Path, m
     assert second.received_chunk_count == 1
 
 
+def test_chunk_endpoint_returns_204_after_streaming_chunk(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path))
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+        "staging_available_bytes": 10_000,
+        "canonical_storage_available_bytes": 10_000,
+        "memory_output_available_bytes": 10_000,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+    session = upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=8,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+    data = b"abcdefgh"
+
+    response = asyncio.run(routes_memory.upload_memory_upload_chunk_endpoint(
+        CASE_ID,
+        session.id,
+        0,
+        _ChunkRequestStub(data, {"content-length": "8", "x-kairon-chunk-sha256": hashlib.sha256(data).hexdigest()}),
+        db_session,
+    ))
+
+    db_session.refresh(session)
+    assert response.status_code == 204
+    assert response.headers["content-length"] == "0"
+    assert session.received_chunk_count == 1
+    assert session.bytes_received == 8
+
+
+def test_existing_session_retains_original_chunk_size(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path, memory_upload_chunk_size_bytes=64 * 1024 * 1024))
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+        "staging_available_bytes": 100_000_000,
+        "canonical_storage_available_bytes": 100_000_000,
+        "memory_output_available_bytes": 100_000_000,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+    session = upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=128 * 1024 * 1024,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path, memory_upload_chunk_size_bytes=8 * 1024 * 1024))
+    status_payload = upload_sessions.upload_status_with_chunks(session, db=db_session)
+
+    assert session.chunk_size_bytes == 64 * 1024 * 1024
+    assert status_payload["chunk_size_bytes"] == 64 * 1024 * 1024
+    assert status_payload["total_chunks"] == 2
+
+
+def test_twenty_consecutive_chunks_complete_normally(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    _case(db_session)
+    chunk_size = 1024 * 1024
+    total_chunks = 20
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path, memory_upload_chunk_size_bytes=chunk_size))
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+        "staging_available_bytes": 100_000_000,
+        "canonical_storage_available_bytes": 100_000_000,
+        "memory_output_available_bytes": 100_000_000,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+    session = upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=chunk_size * total_chunks,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+
+    durations: list[float] = []
+    for chunk_index in range(total_chunks):
+        data = bytes([chunk_index % 251]) * chunk_size
+        started = time.perf_counter()
+        asyncio.run(upload_sessions.store_memory_upload_chunk(
+            db_session,
+            case_id=CASE_ID,
+            upload_id=session.id,
+            chunk_index=chunk_index,
+            request=_ChunkRequestStub(data, {"content-length": str(chunk_size), "x-kairon-chunk-sha256": hashlib.sha256(data).hexdigest()}),
+        ))
+        durations.append(time.perf_counter() - started)
+
+    db_session.refresh(session)
+    median_duration = sorted(durations)[len(durations) // 2]
+    max_duration = max(durations)
+    print(f"20 chunk upload durations: median={median_duration:.4f}s max={max_duration:.4f}s")
+    assert session.received_chunk_count == total_chunks
+    assert session.bytes_received == chunk_size * total_chunks
+    assert max_duration < 5
+    assert median_duration < 2
+
+
+def test_representative_chunk_sizes_complete_normally(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    _case(db_session)
+    durations: dict[int, float] = {}
+    for size_mib in [1, 4, 8, 16, 32, 64]:
+        size = size_mib * 1024 * 1024
+        monkeypatch.setattr(upload_sessions, "get_settings", lambda size=size: _upload_session_settings(tmp_path, memory_upload_chunk_size_bytes=size))
+        monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+            "staging_available_bytes": 200_000_000,
+            "canonical_storage_available_bytes": 200_000_000,
+            "memory_output_available_bytes": 200_000_000,
+            "required_capacity_bytes": expected_bytes,
+            "finalization_strategy": "atomic_move",
+            "can_accept_selected_size": True,
+        })
+        session = upload_sessions.create_memory_upload_session(
+            db_session,
+            case_id=CASE_ID,
+            filename=f"memory-{size_mib}.dmp",
+            expected_size_bytes=size,
+            provided_host="WS01",
+            authorization_acknowledged=True,
+        )
+        data = bytes([size_mib]) * size
+        started = time.perf_counter()
+        asyncio.run(upload_sessions.store_memory_upload_chunk(
+            db_session,
+            case_id=CASE_ID,
+            upload_id=session.id,
+            chunk_index=0,
+            request=_ChunkRequestStub(data, {"content-length": str(size), "x-kairon-chunk-sha256": hashlib.sha256(data).hexdigest()}),
+        ))
+        durations[size_mib] = time.perf_counter() - started
+        db_session.refresh(session)
+        assert session.received_chunk_count == 1
+        assert session.bytes_received == size
+
+    print("representative chunk durations: " + ", ".join(f"{size_mib}MiB={duration:.4f}s" for size_mib, duration in durations.items()))
+    assert all(duration < 5 for duration in durations.values())
+
+
 def test_chunk_upload_rejects_mismatched_retransmission(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path))

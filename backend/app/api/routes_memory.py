@@ -8,7 +8,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from sqlalchemy.exc import DataError, IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -1471,14 +1471,18 @@ def create_memory_upload_session_endpoint(
     return payload_dict
 
 
-@router.put("/cases/{case_id}/memory/uploads/{upload_id}/chunks/{chunk_index}", response_model=MemoryUploadStatusRead)
+@router.put(
+    "/cases/{case_id}/memory/uploads/{upload_id}/chunks/{chunk_index}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
 async def upload_memory_upload_chunk_endpoint(
     case_id: str,
     upload_id: str,
     chunk_index: int,
     request: Request,
     db: Session = Depends(get_db),
-) -> dict:
+) -> Response:
     _require_case(db, case_id)
     try:
         item = await store_memory_upload_chunk(
@@ -1490,7 +1494,7 @@ async def upload_memory_upload_chunk_endpoint(
         )
     except MemoryUploadSessionError as exc:
         raise _raise_upload_session_error(exc) from exc
-    return upload_status_with_chunks(item, db=db)
+    return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"Content-Length": "0"})
 
 
 @router.post("/cases/{case_id}/memory/uploads/{upload_id}/finalize", response_model=MemoryUploadStatusRead)
