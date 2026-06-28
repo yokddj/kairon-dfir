@@ -605,4 +605,190 @@ describe("MemoryUploadPage", () => {
     await waitFor(() => expect(runResumableUploadMock).toHaveBeenCalledTimes(1));
     expect(createMemoryUploadSessionMock).not.toHaveBeenCalled();
   });
+
+  it("shows completed UI when controller returns completed result", async () => {
+    const uploadId = "completed-ui-1";
+    const completedStatus = uploadStatus({
+      upload_id: uploadId,
+      status: "completed",
+      evidence_id: "ev-completed",
+      bytes_received: 12,
+      expected_bytes: 12,
+      chunk_size_bytes: 4,
+      total_chunks: 3,
+      received_chunk_count: 3,
+      received_chunks: [0, 1, 2],
+      missing_chunks: [],
+      progress_percent: 100,
+      message: "Memory image uploaded and registered.",
+    });
+    runResumableUploadMock.mockResolvedValue({ type: "completed", status: completedStatus });
+    localStorage.setItem(
+      "kairon-memory-upload:case-1",
+      JSON.stringify({
+        uploadId,
+        filename: "authorized.mem",
+        expectedBytes: 12,
+        providedHost: "HOSTA",
+      }),
+    );
+    getMemoryUploadStatusMock.mockResolvedValue(
+      uploadStatus({
+        upload_id: uploadId,
+        status: "uploading",
+        bytes_received: 4,
+        expected_bytes: 12,
+        received_chunk_count: 1,
+        total_chunks: 3,
+        received_chunks: [0],
+        missing_chunks: [1, 2],
+      }),
+    );
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    fireEvent.change(screen.getByLabelText(/Source host/i), {
+      target: { value: "HOSTA" },
+    });
+    fireEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    fireEvent.change(screen.getByLabelText(/Memory image file/i), {
+      target: { files: [new File([new Uint8Array(12).fill(0x41)], "authorized.mem")] },
+    });
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /Resume upload/i })).not.toBeDisabled();
+    });
+    fireEvent.click(screen.getByRole("button", { name: /Resume upload/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Upload completed/)).toBeTruthy();
+    });
+    expect(createMemoryUploadSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("clicking Check status shows Checking then restores", async () => {
+    const uploadId = "check-status-1";
+    getActiveMemoryUploadMock.mockResolvedValue({
+      is_active: true,
+      upload_id: uploadId,
+      filename: "authorized.mem",
+      status: "uploading",
+      stale: false,
+    });
+    getMemoryUploadStatusMock.mockResolvedValue(
+      uploadStatus({
+        upload_id: uploadId,
+        status: "uploading",
+        bytes_received: 67108864,
+        expected_bytes: 1024,
+        received_chunk_count: 1,
+        total_chunks: 4,
+        received_chunks: [0],
+        missing_chunks: [1, 2, 3],
+      }),
+    );
+    localStorage.setItem(
+      "kairon-memory-upload:case-1",
+      JSON.stringify({
+        uploadId,
+        filename: "authorized.mem",
+        expectedBytes: 20,
+        providedHost: "HOSTA",
+      }),
+    );
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+
+    const checkButton = screen.getByTestId("memory-active-check-status");
+    expect(checkButton.textContent).toBe("Check status");
+
+    fireEvent.click(checkButton);
+    await waitFor(() => {
+      expect(checkButton.textContent).toBe("Checking…");
+    });
+    await waitFor(() => {
+      expect(checkButton.textContent).toBe("Check status");
+    });
+    expect(getActiveMemoryUploadMock).toHaveBeenCalled();
+    expect(getMemoryUploadStatusMock).toHaveBeenCalled();
+  });
+
+  it("clicking Check status in upload section calls API and updates progress", async () => {
+    const uploadId = "check-status-2";
+    getMemoryUploadStatusMock.mockResolvedValue(
+      uploadStatus({
+        upload_id: uploadId,
+        status: "uploading",
+        bytes_received: 8,
+        expected_bytes: 12,
+        received_chunk_count: 2,
+        total_chunks: 3,
+        received_chunks: [0, 1],
+        missing_chunks: [2],
+      }),
+    );
+    localStorage.setItem(
+      "kairon-memory-upload:case-1",
+      JSON.stringify({
+        uploadId,
+        filename: "authorized.mem",
+        expectedBytes: 12,
+        providedHost: "HOSTA",
+      }),
+    );
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+
+    const checkButton = screen.getByTestId("memory-upload-check-status");
+    expect(checkButton).toBeTruthy();
+    expect(checkButton.textContent).toBe("Check status");
+
+    fireEvent.click(checkButton);
+    await waitFor(() => {
+      expect(checkButton.textContent).toBe("Checking…");
+    });
+    await waitFor(() => {
+      expect(checkButton.textContent).toBe("Check status");
+    });
+    expect(getMemoryUploadStatusMock).toHaveBeenCalled();
+    expect(createMemoryUploadSessionMock).not.toHaveBeenCalled();
+    expect(screen.getByText(/Kairon has safely stored 8 B of 12 B/)).toBeTruthy();
+  });
+
+  it("clicking Check status shows Checking state on API error", async () => {
+    const uploadId = "check-status-3";
+    getMemoryUploadStatusMock.mockResolvedValue(
+      uploadStatus({
+        upload_id: uploadId,
+        status: "uploading",
+        bytes_received: 4,
+        expected_bytes: 12,
+        received_chunk_count: 1,
+        total_chunks: 3,
+        received_chunks: [0],
+        missing_chunks: [1, 2],
+      }),
+    );
+    localStorage.setItem(
+      "kairon-memory-upload:case-1",
+      JSON.stringify({
+        uploadId,
+        filename: "authorized.mem",
+        expectedBytes: 12,
+        providedHost: "HOSTA",
+      }),
+    );
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+
+    const checkButton = screen.getByTestId("memory-upload-check-status");
+    getMemoryUploadStatusMock.mockRejectedValue(new Error("Backend unavailable"));
+    fireEvent.click(checkButton);
+    await waitFor(() => {
+      expect(checkButton.textContent).toBe("Checking…");
+    });
+    await waitFor(() => {
+      expect(checkButton.textContent).toBe("Check status");
+    });
+    expect(getMemoryUploadStatusMock).toHaveBeenCalled();
+    expect(createMemoryUploadSessionMock).not.toHaveBeenCalled();
+  });
 });

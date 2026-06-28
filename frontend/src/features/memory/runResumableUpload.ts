@@ -53,7 +53,11 @@ function deriveMissingChunks(
   const missingChunks =
     uploadStatus.missing_chunks != null
       ? uploadStatus.missing_chunks
-      : Array.from({ length: totalChunks }, (_, index) => index);
+      : uploadStatus.received_chunks != null
+        ? Array.from({ length: totalChunks }, (_, i) => i).filter(
+            (i) => !new Set(uploadStatus.received_chunks).has(i),
+          )
+        : Array.from({ length: totalChunks }, (_, index) => index);
   return { chunkSize: effectiveChunkSize, totalChunks, missingChunks };
 }
 

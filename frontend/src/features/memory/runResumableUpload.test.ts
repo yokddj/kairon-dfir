@@ -835,4 +835,70 @@ describe("runResumableUpload", () => {
     expect(lastProgress.loaded).toBe(file.size);
     expect(lastProgress.total).toBe(file.size);
   });
+
+  it("derives missing chunks from received_chunks when missing_chunks is absent", async () => {
+    const uploadId = "received-only";
+    const file = makeFile(8);
+    const chunkSize = 4;
+    const received: number[] = [0];
+
+    function buildStatus(overrides: Partial<MemoryUploadStatus> = {}) {
+      const base = makeStatus({
+        upload_id: uploadId,
+        expected_bytes: file.size,
+        chunk_size_bytes: chunkSize,
+        total_chunks: 2,
+        received_chunk_count: received.length,
+        received_chunks: [...received],
+        bytes_received: received.reduce(
+          (t, i) => t + chunkBytes(file.size, chunkSize, i),
+          0,
+        ),
+        progress_percent: Math.round(
+          (received.reduce((t, i) => t + chunkBytes(file.size, chunkSize, i), 0) /
+            file.size) *
+            100,
+        ),
+        ...overrides,
+      });
+      delete (base as Record<string, unknown>).missing_chunks;
+      return base;
+    }
+
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(
+      async (_uid: string, chunkIndex: number) => {
+        received.push(chunkIndex);
+        return buildStatus();
+      },
+    );
+    const finalize = vi.fn(async () =>
+      makeStatus({
+        upload_id: uploadId,
+        status: "completed",
+        evidence_id: "ev-received",
+        bytes_received: file.size,
+        expected_bytes: file.size,
+        missing_chunks: [],
+        received_chunks: [0, 1],
+        received_chunk_count: 2,
+        progress_percent: 100,
+      }),
+    );
+
+    const result = await runResumableUpload({
+      uploadId,
+      file,
+      chunkSize,
+      getStatus,
+      uploadChunk,
+      finalize,
+      signal: new AbortController().signal,
+      sleep: sleepImmediate,
+    });
+
+    expect(result.type).toBe("completed");
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([1]);
+    expect(finalize).toHaveBeenCalledTimes(1);
+  });
 });
