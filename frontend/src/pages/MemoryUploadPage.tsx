@@ -27,6 +27,19 @@ type StoredUploadSession = {
   providedHost: string;
 };
 
+type ActiveSessionConflict = {
+  existingUploadId: string;
+  filename: string;
+  expectedBytes: number;
+  receivedBytes: number;
+  receivedChunkCount: number;
+  totalChunks: number;
+  status: string;
+  resumable: boolean;
+  expiresAt: string;
+  cancellable: boolean;
+};
+
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0 B";
   const units = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -96,6 +109,7 @@ export default function MemoryUploadPage() {
   const navigate = useNavigate();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const retryRegistrationInFlight = useRef(false);
+  const bypassUploadBlocking = useRef(false);
   const storedUpload = readStoredUpload(caseId);
 
   const [file, setFile] = useState<File | null>(null);
@@ -111,6 +125,8 @@ export default function MemoryUploadPage() {
   const [activeUploadId, setActiveUploadId] = useState<string | null>(storedUpload?.uploadId || null);
   const [finalizationStartedAt, setFinalizationStartedAt] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [activeSessionConflict, setActiveSessionConflict] = useState<ActiveSessionConflict | null>(null);
+  const [restartPhase, setRestartPhase] = useState<"idle" | "confirming" | "executing">("idle");
 
   const readinessQuery = useQuery({
     queryKey: ["memory-upload-readiness", caseId, file?.size || 0],
@@ -151,6 +167,7 @@ export default function MemoryUploadPage() {
       && (!storedUpload.expectedBytes || storedUpload.expectedBytes === file.size),
   );
   const uploadBlockingReason = useMemo(() => {
+    if (activeSessionConflict) return "An upload session already exists for this memory image. Choose Resume, Cancel and restart, or Select another file.";
     if (stage !== "idle") return "An upload action is already in progress or requires recovery.";
     if (activeUploadId && !file) return "A resumable upload session exists. Re-select the same file to continue from the missing chunks.";
     if (!file) return "No file selected.";
@@ -168,7 +185,7 @@ export default function MemoryUploadPage() {
     if (!fileWithinLimit) return "The selected file exceeds the configured maximum memory upload size.";
     if (!readiness.can_accept_selected_size) return readiness.message || "Storage capacity check rejected the selected file.";
     return null;
-  }, [acknowledged, activeUploadId, extensionAllowed, file, fileWithinLimit, providedHost, readiness, readinessQuery.error, readinessQuery.isFetching, readinessQuery.isLoading, resumeSessionMatchesFile, stage, storedUpload?.uploadId]);
+  }, [acknowledged, activeSessionConflict, activeUploadId, extensionAllowed, file, fileWithinLimit, providedHost, readiness, readinessQuery.error, readinessQuery.isFetching, readinessQuery.isLoading, resumeSessionMatchesFile, stage, storedUpload?.uploadId]);
   const canUpload = uploadBlockingReason === null;
   const percent = progress.total > 0 ? Math.min(100, Math.round((progress.loaded / progress.total) * 100)) : 0;
   const etaSeconds = speedBytesPerSecond > 0 ? Math.max(0, Math.round((progress.total - progress.loaded) / speedBytesPerSecond)) : null;
@@ -245,6 +262,30 @@ export default function MemoryUploadPage() {
     return "The selected file can be uploaded as isolated memory_dump evidence.";
   }, [extensionAllowed, file, fileWithinLimit, readiness, resumeSessionMatchesFile, storedUpload?.uploadId]);
 
+  function handleActiveSessionConflict(error: unknown): boolean {
+    const conflictError = error as { errorCode?: string | null; detail?: unknown };
+    if (conflictError?.errorCode !== "MEMORY_UPLOAD_ACTIVE_SESSION_EXISTS") return false;
+    const detail = (conflictError.detail && typeof conflictError.detail === "object")
+      ? conflictError.detail as Record<string, unknown>
+      : {};
+    setActiveSessionConflict({
+      existingUploadId: String(detail.existing_upload_id || ""),
+      filename: String(detail.filename || ""),
+      expectedBytes: Number(detail.expected_bytes || 0),
+      receivedBytes: Number(detail.received_bytes || 0),
+      receivedChunkCount: Number(detail.received_chunk_count || 0),
+      totalChunks: Number(detail.total_chunks || 0),
+      status: String(detail.status || "uploading"),
+      resumable: Boolean(detail.resumable),
+      expiresAt: String(detail.expires_at || ""),
+      cancellable: Boolean(detail.cancellable),
+    });
+    setStage("idle");
+    setStatus("");
+    setSpeedBytesPerSecond(0);
+    return true;
+  }
+
   function handleDuplicateError(error: unknown): boolean {
     const duplicateError = error as { errorCode?: string | null; detail?: unknown; message?: string };
     if (duplicateError?.errorCode !== "MEMORY_EVIDENCE_DUPLICATE") return false;
@@ -318,7 +359,7 @@ export default function MemoryUploadPage() {
     setUploadedEvidence(null);
     setDuplicateUpload(null);
     try {
-      if (uploadBlockingReason || !file) {
+      if (!bypassUploadBlocking.current && (uploadBlockingReason || !file)) {
         throw new Error(uploadBlockingReason || "No file selected.");
       }
       setProgress({ loaded: 0, total: file.size });
@@ -344,6 +385,7 @@ export default function MemoryUploadPage() {
       setActiveUploadId(uploadStatus.upload_id);
       await continueChunkedUpload(uploadStatus, file);
     } catch (error) {
+      if (handleActiveSessionConflict(error)) return;
       if (handleDuplicateError(error)) return;
       setSpeedBytesPerSecond(0);
       setStage("failed");
@@ -398,6 +440,53 @@ export default function MemoryUploadPage() {
     setStatus("");
     setProgress({ loaded: 0, total: file?.size || 0 });
     await readinessQuery.refetch();
+  }
+
+  function dismissActiveSessionConflict() {
+    setActiveSessionConflict(null);
+    setRestartPhase("idle");
+  }
+
+  async function resumeExistingSession() {
+    if (!activeSessionConflict || !file) return;
+    if (file.name !== activeSessionConflict.filename || file.size !== activeSessionConflict.expectedBytes) {
+      setStatus("The selected file does not match the existing upload session.");
+      setActiveSessionConflict(null);
+      return;
+    }
+    const uploadId = activeSessionConflict.existingUploadId;
+    writeStoredUpload(caseId, {
+      uploadId,
+      filename: file.name,
+      expectedBytes: file.size,
+      providedHost: providedHost.trim(),
+    });
+    setActiveUploadId(uploadId);
+    setActiveSessionConflict(null);
+    setStage("idle");
+    setTimeout(() => { void upload(); }, 0);
+  }
+
+  async function executeCancelAndRestart() {
+    if (!activeSessionConflict || !file) return;
+    setRestartPhase("executing");
+    try {
+      await api.cancelMemoryUpload(
+        caseId,
+        activeSessionConflict.existingUploadId,
+        "Operator requested restart",
+      );
+      writeStoredUpload(caseId, null);
+      setActiveUploadId(null);
+      setActiveSessionConflict(null);
+      setRestartPhase("idle");
+      setStage("idle");
+      bypassUploadBlocking.current = true;
+      void upload().finally(() => { bypassUploadBlocking.current = false; });
+    } catch (error) {
+      setRestartPhase("idle");
+      setStatus(error instanceof Error ? error.message : "Failed to cancel the existing upload session.");
+    }
   }
 
   if (!caseId) {
@@ -524,7 +613,79 @@ export default function MemoryUploadPage() {
       <section className="rounded-[28px] border border-line bg-panel/60 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3"><div><h3 className="text-lg font-semibold">Upload</h3><p className="mt-1 text-sm text-muted">Stages: session creation, bounded chunk transfer, verification, finalization, completed, failed.</p></div><button type="button" onClick={() => { if (needsFileReselection) { inputRef.current?.click(); } else { void upload(); } }} disabled={!canUpload && !needsFileReselection} className="rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-50">{needsFileReselection ? "Select file to resume" : stage === "validating" ? "Validating upload…" : activeUploadId ? "Resume upload" : "Upload memory image"}</button></div>
         {uploadBlockingReason && stage === "idle" ? <p className="mt-3 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning" role="status">{uploadBlockingReason}</p> : null}
+        {status && stage === "idle" ? <p className="mt-3 rounded-xl border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-100" role="status">{status}</p> : null}
         {acceptedReadiness ? <p className="mt-3 text-xs text-muted">Resumable upload enabled · Chunk size: {formatBytes(acceptedReadiness.recommended_chunk_size_bytes)} · Finalization: {acceptedReadiness.finalization_strategy === "staged_copy" ? "staged copy" : "atomic move"}</p> : null}
+        {activeSessionConflict ? (
+          <div className="mt-4 rounded-2xl border border-warning/30 bg-warning/10 p-4 text-sm" data-testid="memory-active-session-conflict">
+            <p className="font-semibold text-ink">Existing upload found</p>
+            <p className="mt-1 font-mono text-muted">{activeSessionConflict.filename}</p>
+            <p className="mt-1 text-muted">
+              {formatBytes(activeSessionConflict.receivedBytes)} of {formatBytes(activeSessionConflict.expectedBytes)} uploaded
+              {activeSessionConflict.totalChunks > 0 ? ` (${activeSessionConflict.receivedChunkCount} of ${activeSessionConflict.totalChunks} chunks)` : ""}
+            </p>
+            {activeSessionConflict.expiresAt ? (
+              <p className="mt-1 text-xs text-muted">Session valid until {new Date(activeSessionConflict.expiresAt).toLocaleString()}</p>
+            ) : null}
+            <div className="mt-4 flex flex-wrap gap-2">
+              <button
+                type="button"
+                data-testid="memory-conflict-resume"
+                onClick={() => void resumeExistingSession()}
+                disabled={restartPhase !== "idle"}
+                className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-50"
+              >
+                Resume existing upload
+              </button>
+              {activeSessionConflict.cancellable ? (
+                restartPhase === "confirming" ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-xs text-warning">Restart upload? This will discard {formatBytes(activeSessionConflict.receivedBytes)} already uploaded.</span>
+                    <button
+                      type="button"
+                      data-testid="memory-conflict-confirm-restart"
+                      onClick={() => void executeCancelAndRestart()}
+                      disabled={restartPhase === "executing"}
+                      className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 disabled:opacity-50"
+                    >
+                      {restartPhase === "executing" ? "Restarting…" : "Cancel and restart"}
+                    </button>
+                    <button
+                      type="button"
+                      data-testid="memory-conflict-keep-existing"
+                      onClick={() => setRestartPhase("idle")}
+                      disabled={restartPhase === "executing"}
+                      className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50"
+                    >
+                      Keep existing upload
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    data-testid="memory-conflict-cancel-restart"
+                    onClick={() => setRestartPhase("confirming")}
+                    disabled={restartPhase !== "idle"}
+                    className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 disabled:opacity-50"
+                  >
+                    Cancel and start over
+                  </button>
+                )
+              ) : null}
+              <button
+                type="button"
+                data-testid="memory-conflict-select-another"
+                onClick={() => {
+                  dismissActiveSessionConflict();
+                  inputRef.current?.click();
+                }}
+                disabled={restartPhase !== "idle"}
+                className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50"
+              >
+                Select another file
+              </button>
+            </div>
+          </div>
+        ) : null}
         {stage !== "idle" ? <div className="mt-4"><div className="flex justify-between text-xs text-muted"><span>{stage}</span><span>{formatBytes(progress.loaded)} / {formatBytes(progress.total)} · {percent}% transferred</span></div><div className="mt-2 h-3 overflow-hidden rounded-full bg-abyss"><div className={`h-full transition-all ${stage === "failed" ? "bg-rose-500" : stage === "completed" ? "bg-mint" : "bg-accent"}`} style={{ width: `${percent}%` }} /></div><p className={`mt-3 text-sm ${stage === "failed" ? "text-rose-200" : "text-muted"}`}>{status}</p>{stage === "uploading" ? <p className="mt-2 text-xs text-muted">Speed: {speedBytesPerSecond > 0 ? `${formatBytes(speedBytesPerSecond)}/s` : "Calculating"} · ETA: {formatSeconds(etaSeconds)}</p> : null}{stage === "verifying" || stage === "finalizing" ? <><p className="mt-2 text-xs text-muted" role="status">Server finalization is active · {elapsedSeconds}s elapsed.</p>{elapsedSeconds >= 30 ? <p className="mt-2 text-xs text-warning">The file has been transferred. Kairon is still finalizing the evidence.</p> : null}</> : null}</div> : null}
         {activeUploadId && stage !== "completed" ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => void statusQuery.refetch()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Check status</button>{statusQuery.data?.retryable ? <button type="button" onClick={() => void reconcileUpload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Retry finalization</button> : null}{statusQuery.data?.failure_code === "upload_bytes_lost" ? <button type="button" onClick={() => void prepareReupload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Prepare new upload</button> : null}{statusQuery.data?.status === "failed" && file && activeUploadId ? <button type="button" onClick={() => void upload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Resume missing chunks</button> : null}</div> : null}
         {stage === "failed" && !activeUploadId ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => void retryUpload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Retry upload</button><button type="button" onClick={() => inputRef.current?.click()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Select another file</button></div> : null}

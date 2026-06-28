@@ -553,6 +553,125 @@ def test_create_memory_upload_session_enforces_case_quota(db_session, tmp_path: 
     assert exc_info.value.code == "MEMORY_UPLOAD_CASE_QUOTA_EXCEEDED"
 
 
+def test_create_memory_upload_session_conflict_returns_enriched_409(
+    db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _case(db_session)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path))
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+        "staging_available_bytes": 10_000,
+        "canonical_storage_available_bytes": 10_000,
+        "memory_output_available_bytes": 10_000,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+
+    upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=4096,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+
+    with pytest.raises(upload_sessions.MemoryUploadSessionError) as exc_info:
+        upload_sessions.create_memory_upload_session(
+            db_session,
+            case_id=CASE_ID,
+            filename="memory.dmp",
+            expected_size_bytes=4096,
+            provided_host="WS01",
+            authorization_acknowledged=True,
+        )
+
+    assert exc_info.value.code == "MEMORY_UPLOAD_ACTIVE_SESSION_EXISTS"
+    detail = exc_info.value.detail
+    assert detail is not None
+    assert "existing_upload_id" in detail
+    assert detail["filename"] == "memory.dmp"
+    assert detail["expected_bytes"] == 4096
+    assert "status" in detail
+    assert detail["resumable"] is True
+    assert detail["cancellable"] is True
+    assert detail["total_chunks"] > 0
+
+
+def test_create_memory_upload_session_same_name_different_size_no_conflict(
+    db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _case(db_session)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path))
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+        "staging_available_bytes": 10_000,
+        "canonical_storage_available_bytes": 10_000,
+        "memory_output_available_bytes": 10_000,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+
+    upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=4096,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+
+    second = upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=8192,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+
+    assert second.id is not None
+    assert second.display_name == "memory.dmp"
+    assert second.expected_bytes == 8192
+
+
+def test_create_memory_upload_session_different_case_no_conflict(
+    db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _case(db_session, case_id=CASE_ID)
+    _case(db_session, case_id="dddddddd-4444-4444-8444-444444444444", name="Case B")
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path))
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+        "staging_available_bytes": 10_000,
+        "canonical_storage_available_bytes": 10_000,
+        "memory_output_available_bytes": 10_000,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+
+    upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=4096,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+
+    second = upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id="dddddddd-4444-4444-8444-444444444444",
+        filename="memory.dmp",
+        expected_size_bytes=4096,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+
+    assert second.id is not None
+    assert second.case_id == "dddddddd-4444-4444-8444-444444444444"
+
+
 def test_chunk_upload_is_idempotent_for_same_bytes(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     monkeypatch.setattr(upload_sessions, "get_settings", lambda: _upload_session_settings(tmp_path))

@@ -206,13 +206,30 @@ def create_memory_upload_session(
         .filter(
             MemoryUpload.case_id == case_id,
             MemoryUpload.display_name == safe_name,
+            MemoryUpload.expected_bytes == expected_size_bytes,
             MemoryUpload.status.in_(tuple(ACTIVE_UPLOAD_SESSION_STATUSES)),
         )
         .order_by(MemoryUpload.created_at.desc())
         .first()
     )
     if conflicting is not None:
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_CONFLICT", "Another upload session for this memory image is already active.")
+        received = sorted(int(index) for index in _received_chunks(conflicting).keys())
+        raise MemoryUploadSessionError(
+            "MEMORY_UPLOAD_ACTIVE_SESSION_EXISTS",
+            "Another upload session for this memory image is already active.",
+            detail={
+                "existing_upload_id": str(conflicting.id),
+                "filename": conflicting.display_name,
+                "expected_bytes": int(conflicting.expected_bytes or 0),
+                "received_bytes": int(conflicting.bytes_received or 0),
+                "received_chunk_count": int(conflicting.received_chunk_count or len(received)),
+                "total_chunks": int(conflicting.total_chunks or 0),
+                "status": conflicting.status,
+                "resumable": True,
+                "expires_at": conflicting.expires_at.isoformat() if conflicting.expires_at else None,
+                "cancellable": conflicting.status in {"created", "validating", "uploading", "verifying", "finalizing"},
+            },
+        )
 
     case_quota = int(settings.memory_upload_case_quota_bytes or 0)
     case_usage = _case_memory_usage_bytes(db, case_id)
