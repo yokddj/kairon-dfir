@@ -100,6 +100,7 @@ type UploadBlobOptions = {
   contentType?: string;
   headers?: Record<string, string>;
   onProgress?: (progress: UploadProgress) => void;
+  signal?: AbortSignal;
 };
 
 async function buildZipFromFolder(files: File[], archiveName = "raw-folder.zip"): Promise<File> {
@@ -247,6 +248,10 @@ async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBlobOptio
         for (const [key, value] of Object.entries(options?.headers ?? {})) {
           xhr.setRequestHeader(key, value);
         }
+        const onAbort = () => {
+          xhr.abort();
+        };
+        options?.signal?.addEventListener("abort", onAbort, { once: true });
         xhr.upload.onprogress = (event) => {
           options?.onProgress?.({
             loaded: event.loaded,
@@ -254,9 +259,16 @@ async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBlobOptio
             lengthComputable: event.lengthComputable,
           });
         };
-        xhr.onerror = () => reject(new Error(`Network error while uploading to ${url}`));
-        xhr.onabort = () => reject(new Error("Upload aborted"));
+        xhr.onerror = () => {
+          options?.signal?.removeEventListener("abort", onAbort);
+          reject(new Error(`Network error while uploading to ${url}`));
+        };
+        xhr.onabort = () => {
+          options?.signal?.removeEventListener("abort", onAbort);
+          reject(new Error("Upload aborted"));
+        };
         xhr.onload = () => {
+          options?.signal?.removeEventListener("abort", onAbort);
           const contentType = xhr.getResponseHeader("content-type") ?? "";
           if (xhr.status < 200 || xhr.status >= 300) {
             let detail: unknown = xhr.responseText || `HTTP ${xhr.status}`;
