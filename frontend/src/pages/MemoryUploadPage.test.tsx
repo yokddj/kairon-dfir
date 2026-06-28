@@ -590,6 +590,67 @@ describe("MemoryUploadPage", () => {
     expect(createMemoryUploadSessionMock).not.toHaveBeenCalled();
   });
 
+  it("one resume click stays active across recovered chunks and continues", async () => {
+    const uploadId = "recover-page-1";
+    const expectedBytes = 24;
+    const chunkSize = 4;
+    const totalChunks = 6;
+    let received = [0, 1, 2];
+
+    const buildStatus = () => uploadStatus({
+      upload_id: uploadId,
+      status: "uploading",
+      expected_bytes: expectedBytes,
+      bytes_received: received.reduce((total, chunkIndex) => total + chunkBytes(expectedBytes, chunkSize, chunkIndex), 0),
+      chunk_size_bytes: chunkSize,
+      total_chunks: totalChunks,
+      received_chunk_count: received.length,
+      received_chunks: [...received],
+      missing_chunks: Array.from({ length: totalChunks }, (_, index) => index).filter((index) => !received.includes(index)),
+    });
+
+    localStorage.setItem("kairon-memory-upload:case-1", JSON.stringify({ uploadId, filename: "authorized.mem", expectedBytes, providedHost: "HOSTA" }));
+    getMemoryUploadStatusMock.mockImplementation(() => Promise.resolve(buildStatus()));
+    uploadMemoryUploadChunkMock.mockImplementation((_caseId: string, _uploadId: string, chunkIndex: number) => {
+      if (!received.includes(chunkIndex)) {
+        received = [...received, chunkIndex].sort((a, b) => a - b);
+      }
+      if (chunkIndex === 3 || chunkIndex === 4) {
+        return Promise.reject(new Error("Upload timed out. Your network may be unavailable."));
+      }
+      return Promise.resolve(buildStatus());
+    });
+    finalizeMemoryUploadMock.mockResolvedValue(uploadStatus({
+      upload_id: uploadId,
+      status: "completed",
+      evidence_id: "ev-memory",
+      expected_bytes: expectedBytes,
+      bytes_received: expectedBytes,
+      chunk_size_bytes: chunkSize,
+      total_chunks: totalChunks,
+      received_chunk_count: totalChunks,
+      received_chunks: [0, 1, 2, 3, 4, 5],
+      missing_chunks: [],
+      progress_percent: 100,
+      message: "Memory image uploaded and registered.",
+    }));
+
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    fireEvent.change(screen.getByLabelText(/Source host/i), { target: { value: "HOSTA" } });
+    fireEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    fireEvent.change(screen.getByLabelText(/Memory image file/i), { target: { files: [new File([new Uint8Array(expectedBytes).fill(0x41)], "authorized.mem")] } });
+    fireEvent.click(screen.getByRole("button", { name: /Resume upload/i }));
+
+    await waitFor(() => {
+      expect(uploadMemoryUploadChunkMock.mock.calls.map((call) => call[2])).toEqual([3, 4, 5]);
+    });
+    expect(runResumableUploadMock).toHaveBeenCalledTimes(1);
+    expect(createMemoryUploadSessionMock).not.toHaveBeenCalled();
+    expect(finalizeMemoryUploadMock).toHaveBeenCalledTimes(1);
+    expect(finalizeMemoryUploadMock).toHaveBeenCalledWith("case-1", uploadId);
+  });
+
   it("pauses upload without creating new session when controller fails", async () => {
     const failedStatus = uploadStatus({ upload_id: "resume-3", expected_bytes: 16, chunk_size_bytes: 4, total_chunks: 4, received_chunks: [0, 1], received_chunk_count: 2, bytes_received: 8, missing_chunks: [2, 3], status: "uploading" });
     runResumableUploadMock.mockResolvedValue({ type: "failed", message: "Chunk already exists." });

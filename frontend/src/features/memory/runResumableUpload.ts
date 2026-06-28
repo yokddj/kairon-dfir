@@ -40,6 +40,11 @@ type MissingChunksInfo = {
   missingChunks: number[];
 };
 
+type ChunkUploadResult = {
+  status: MemoryUploadStatus;
+  recovered: boolean;
+};
+
 function deriveMissingChunks(
   uploadStatus: MemoryUploadStatus,
   file: File,
@@ -151,7 +156,7 @@ async function uploadChunkWithRetry(
   uploadChunk: RunResumableUploadArgs["uploadChunk"],
   onProgress: ((info: { loaded: number; total: number }) => void) | undefined,
   sleep: (ms: number) => Promise<void>,
-): Promise<MemoryUploadStatus> {
+): Promise<ChunkUploadResult> {
   const blob = sliceChunk(file, chunkIndex, chunkSize);
   for (let attempt = 0; attempt <= CHUNK_UPLOAD_MAX_RETRIES; attempt += 1) {
     if (signal.aborted) throw new Error("Upload aborted");
@@ -163,7 +168,7 @@ async function uploadChunkWithRetry(
           total: status.expected_bytes,
         });
       }
-      return status;
+      return { status, recovered: false };
     } catch (error) {
       if (signal.aborted) {
         throw new Error("Upload aborted");
@@ -177,7 +182,7 @@ async function uploadChunkWithRetry(
               total: reconciledStatus.expected_bytes,
             });
           }
-          return reconciledStatus;
+          return { status: reconciledStatus, recovered: true };
         }
       }
       if (!shouldRetryChunkUpload(error) || attempt >= CHUNK_UPLOAD_MAX_RETRIES) {
@@ -267,7 +272,7 @@ export async function runResumableUpload(
     const previousMissingCount = missingChunks.length;
 
     try {
-      currentStatus = await uploadChunkWithRetry(
+      const chunkResult = await uploadChunkWithRetry(
         uploadId,
         file,
         chunkIndex,
@@ -279,6 +284,11 @@ export async function runResumableUpload(
         onProgress,
         sleep,
       );
+      currentStatus = chunkResult.status;
+
+      if (!chunkResult.recovered) {
+        currentStatus = await getStatus(uploadId);
+      }
     } catch (error) {
       if (error instanceof Error && error.message === "Upload aborted") {
         return { type: "aborted" };
@@ -289,15 +299,14 @@ export async function runResumableUpload(
       return { type: "failed", message: "Chunk upload failed." };
     }
 
-    const nextStatus = await getStatus(uploadId);
     if (onProgress) {
       onProgress({
-        loaded: nextStatus.bytes_received,
-        total: nextStatus.expected_bytes,
+        loaded: currentStatus.bytes_received,
+        total: currentStatus.expected_bytes,
       });
     }
     const nextMissingInfo = deriveMissingChunks(
-      nextStatus,
+      currentStatus,
       file,
       chunkSize,
     );
@@ -305,8 +314,8 @@ export async function runResumableUpload(
 
     if (
       nextMissingCount >= previousMissingCount &&
-      !TERMINAL_STATUSES.has(nextStatus.status) &&
-      nextStatus.status !== "completed"
+      !TERMINAL_STATUSES.has(currentStatus.status) &&
+      currentStatus.status !== "completed"
     ) {
       return {
         type: "stalled",
@@ -317,7 +326,6 @@ export async function runResumableUpload(
       };
     }
 
-    currentStatus = nextStatus;
   }
 
   const authoritativeStatus = await getStatus(uploadId);

@@ -525,6 +525,102 @@ describe("runResumableUpload", () => {
     expect(finalize).toHaveBeenCalledTimes(1);
   });
 
+  it("continues outer loop through two recovered chunks then normal success", async () => {
+    const uploadId = "recover-continues";
+    const file = makeFile(24);
+    const chunkSize = 4;
+    const received: number[] = [0, 1, 2];
+    const attemptsByChunk = new Map<number, number>();
+    const signalsByChunk = new Map<number, AbortSignal[]>();
+
+    const buildStatus = (overrides: Partial<MemoryUploadStatus> = {}) =>
+      makeStatus({
+        upload_id: uploadId,
+        expected_bytes: file.size,
+        chunk_size_bytes: chunkSize,
+        total_chunks: 6,
+        received_chunk_count: received.length,
+        received_chunks: [...received],
+        bytes_received: received.reduce(
+          (total, index) => total + chunkBytes(file.size, chunkSize, index),
+          0,
+        ),
+        missing_chunks: Array.from({ length: 6 }, (_, i) => i).filter(
+          (i) => !received.includes(i),
+        ),
+        ...overrides,
+      });
+
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(
+      async (
+        _uid: string,
+        chunkIndex: number,
+        _blob: Blob,
+        signal: AbortSignal,
+      ) => {
+        attemptsByChunk.set(
+          chunkIndex,
+          (attemptsByChunk.get(chunkIndex) ?? 0) + 1,
+        );
+        signalsByChunk.set(chunkIndex, [
+          ...(signalsByChunk.get(chunkIndex) ?? []),
+          signal,
+        ]);
+        expect(signal.aborted).toBe(false);
+        if (!received.includes(chunkIndex)) {
+          received.push(chunkIndex);
+          received.sort((a, b) => a - b);
+        }
+        if (chunkIndex === 3 || chunkIndex === 4) {
+          throw new Error("Upload timed out. Your network may be unavailable.");
+        }
+        return buildStatus();
+      },
+    );
+    const finalize = vi.fn(async () =>
+      makeStatus({
+        upload_id: uploadId,
+        status: "completed",
+        evidence_id: "ev-recover-continues",
+        bytes_received: file.size,
+        expected_bytes: file.size,
+        chunk_size_bytes: chunkSize,
+        total_chunks: 6,
+        received_chunk_count: 6,
+        received_chunks: [0, 1, 2, 3, 4, 5],
+        missing_chunks: [],
+        progress_percent: 100,
+      }),
+    );
+    const onProgress = vi.fn();
+
+    const result = await runResumableUpload({
+      uploadId,
+      file,
+      chunkSize,
+      getStatus,
+      uploadChunk,
+      finalize,
+      signal: new AbortController().signal,
+      onProgress,
+      sleep: sleepImmediate,
+    });
+
+    expect(result.type).toBe("completed");
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([3, 4, 5]);
+    expect(attemptsByChunk.get(3)).toBe(1);
+    expect(attemptsByChunk.get(4)).toBe(1);
+    expect(attemptsByChunk.get(5)).toBe(1);
+    expect(signalsByChunk.get(4)?.[0].aborted).toBe(false);
+    expect(signalsByChunk.get(5)?.[0].aborted).toBe(false);
+    expect(onProgress).toHaveBeenCalledWith({ loaded: 16, total: 24 });
+    expect(onProgress).toHaveBeenCalledWith({ loaded: 20, total: 24 });
+    expect(onProgress).toHaveBeenCalledWith({ loaded: 24, total: 24 });
+    expect(finalize).toHaveBeenCalledTimes(1);
+    expect(finalize).toHaveBeenCalledWith(uploadId);
+  });
+
   it("network failure reconciles accepted chunk and continues", async () => {
     const uploadId = "network-ack";
     const file = makeFile(8);
