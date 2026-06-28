@@ -1432,6 +1432,8 @@ def _raise_upload_session_error(exc: MemoryUploadSessionError) -> HTTPException:
         return HTTPException(status_code=409, detail=detail)
     if exc.code == "MEMORY_UPLOAD_SESSION_EXPIRED":
         return HTTPException(status_code=409, detail=detail)
+    if exc.code and exc.code.startswith("MEMORY_UPLOAD_STAGING_"):
+        return HTTPException(status_code=409, detail=detail)
     if exc.code == "MEMORY_UPLOAD_AUTHORIZATION_REQUIRED":
         return HTTPException(status_code=400, detail=detail)
     if exc.code == "MEMORY_UPLOAD_HOST_REQUIRED":

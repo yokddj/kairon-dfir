@@ -420,3 +420,308 @@ def test_status_payload_completed_not_active(db: Session) -> None:
     assert status["is_active"] is False
     assert status["cancellable"] is False
     assert status["stale"] is False
+
+
+# ---------------------------------------------------------------------------
+# 21-35: Staging integrity reconciliation
+# ---------------------------------------------------------------------------
+
+import app.core.config as _cfg
+from contextlib import contextmanager
+
+
+@contextmanager
+def _staging_path_context(staging_root: Path):
+    """Temporarily override the memory upload staging path to a test directory."""
+    original = _cfg.get_settings().memory_upload_staging_root
+    _cfg.get_settings().memory_upload_staging_root = str(staging_root)
+    try:
+        yield
+    finally:
+        _cfg.get_settings().memory_upload_staging_root = original
+
+
+def _chunk_metadata(chunk_index: int, size: int, sha256: str) -> dict:
+    return {"size": size, "sha256": sha256}
+
+
+def _make_upload_with_chunks(
+    db: Session,
+    staging_root: Path,
+    *,
+    case_id: str,
+    evidence_id: str,
+    chunk_indices: list[int],
+    chunk_size: int = 64 * 1024 * 1024,
+    write_files: bool = True,
+) -> MemoryUpload:
+    staging_name = str(uuid.uuid4())
+    session_root = staging_root / staging_name
+    chunks_dir = session_root / "chunks"
+    chunks_dir.mkdir(parents=True, exist_ok=True)
+
+    received_chunks: dict[str, dict] = {}
+    for idx in chunk_indices:
+        data = b"\x00" * chunk_size
+        sha = __import__("hashlib").sha256(data).hexdigest()
+        received_chunks[str(idx)] = _chunk_metadata(idx, chunk_size, sha)
+        if write_files:
+            (chunks_dir / f"{idx:08d}.chunk").write_bytes(data)
+
+    item = MemoryUpload(
+        id=str(uuid.uuid4()),
+        case_id=case_id,
+        evidence_id=evidence_id,
+        status="uploading",
+        bytes_received=len(chunk_indices) * chunk_size,
+        expected_bytes=8 * chunk_size,
+        display_name="mem.img",
+        source_host="HOSTA",
+        extension=".img",
+        staging_name=staging_name,
+        canonical_relative_path=f"evidence/{case_id}/{evidence_id}/original/memory-image.img",
+        chunk_size_bytes=chunk_size,
+        total_chunks=8,
+        received_chunk_count=len(chunk_indices),
+        retryable=True,
+        metadata_json={"received_chunks": received_chunks, "resumable": True},
+        progress_at=utc_now_naive(),
+    )
+    db.add(item)
+    db.commit()
+    return item
+
+
+def test_integrity_healthy_when_all_chunks_present(db: Session, tmp_path: Path) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with _staging_path_context(staging_root):
+        item = _make_upload_with_chunks(db, staging_root, case_id=case.id,
+                                        evidence_id=ev.id, chunk_indices=[0, 1, 2])
+        from app.services.memory.upload_sessions import check_memory_upload_staging_integrity
+        result = check_memory_upload_staging_integrity(item)
+        assert result["integrity_status"] == "healthy"
+        assert result["resumable"] is True
+        assert result["disk_chunks"] == 3
+        assert result["missing_db_chunks_on_disk"] == []
+
+
+def test_integrity_staging_missing_when_dir_absent(db: Session, tmp_path: Path) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with _staging_path_context(staging_root):
+        item = MemoryUpload(
+            id=str(uuid.uuid4()), case_id=case.id, evidence_id=ev.id,
+            status="uploading", bytes_received=128 * 1024 * 1024,
+            expected_bytes=512 * 1024 * 1024, display_name="mem.img",
+            source_host="HOSTA", extension=".img",
+            staging_name=str(uuid.uuid4()),
+            canonical_relative_path=f"evidence/{case.id}/{ev.id}/original/memory-image.img",
+            chunk_size_bytes=64 * 1024 * 1024, total_chunks=8,
+            received_chunk_count=2, retryable=True,
+            metadata_json={"received_chunks": {"0": {"size": 64 * 1024 * 1024, "sha256": "a" * 64}}},
+            progress_at=utc_now_naive(),
+        )
+        db.add(item)
+        db.commit()
+        from app.services.memory.upload_sessions import check_memory_upload_staging_integrity
+        result = check_memory_upload_staging_integrity(item)
+        assert result["integrity_status"] == "staging_missing"
+        assert result["resumable"] is False
+        assert result["disk_chunks"] == 0
+
+
+def test_integrity_missing_chunks_on_disk(db: Session, tmp_path: Path) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with _staging_path_context(staging_root):
+        staging_name = str(uuid.uuid4())
+        session_root = staging_root / staging_name
+        chunks_dir = session_root / "chunks"
+        chunks_dir.mkdir(parents=True, exist_ok=True)
+        data_0 = __import__("hashlib").sha256(b"\x00" * (64 * 1024 * 1024)).hexdigest()
+        (chunks_dir / "00000000.chunk").write_bytes(b"\x00" * (64 * 1024 * 1024))
+        item = MemoryUpload(
+            id=str(uuid.uuid4()), case_id=case.id, evidence_id=ev.id,
+            status="uploading", bytes_received=128 * 1024 * 1024,
+            expected_bytes=512 * 1024 * 1024, display_name="mem.img",
+            source_host="HOSTA", extension=".img",
+            staging_name=staging_name,
+            canonical_relative_path=f"evidence/{case.id}/{ev.id}/original/memory-image.img",
+            chunk_size_bytes=64 * 1024 * 1024, total_chunks=8,
+            received_chunk_count=2, retryable=True,
+            metadata_json={"received_chunks": {
+                "0": {"size": 64 * 1024 * 1024, "sha256": data_0},
+                "1": {"size": 64 * 1024 * 1024, "sha256": "c" * 64},
+            }},
+            progress_at=utc_now_naive(),
+        )
+        db.add(item)
+        db.commit()
+        from app.services.memory.upload_sessions import check_memory_upload_staging_integrity
+        result = check_memory_upload_staging_integrity(item)
+        assert result["integrity_status"] == "missing_chunks_on_disk"
+        assert result["resumable"] is False
+        assert result["disk_chunks"] == 1
+        assert 1 in result["missing_db_chunks_on_disk"]
+
+
+def test_status_endpoint_reports_staging_mismatch(db: Session, tmp_path: Path) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with _staging_path_context(staging_root):
+        item = _make_upload_with_chunks(db, staging_root, case_id=case.id,
+                                        evidence_id=ev.id, chunk_indices=[0, 1, 2])
+        from app.services.memory.upload_sessions import upload_status_with_chunks
+        status = upload_status_with_chunks(item)
+        assert status.get("integrity_status") is None
+        assert status.get("resumable") is True
+
+
+def test_status_reports_integrity_when_staging_missing(db: Session, tmp_path: Path) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with _staging_path_context(staging_root):
+        item = MemoryUpload(
+            id=str(uuid.uuid4()), case_id=case.id, evidence_id=ev.id,
+            status="uploading", bytes_received=64 * 1024 * 1024,
+            expected_bytes=512 * 1024 * 1024, display_name="mem.img",
+            source_host="HOSTA", extension=".img",
+            staging_name=str(uuid.uuid4()),
+            canonical_relative_path=f"evidence/{case.id}/{ev.id}/original/memory-image.img",
+            chunk_size_bytes=64 * 1024 * 1024, total_chunks=8,
+            received_chunk_count=1, retryable=True,
+            metadata_json={"received_chunks": {"0": {"size": 64 * 1024 * 1024, "sha256": "a" * 64}}},
+            progress_at=utc_now_naive(),
+        )
+        db.add(item)
+        db.commit()
+        from app.services.memory.upload_sessions import upload_status_with_chunks
+        status = upload_status_with_chunks(item)
+        assert status["integrity_status"] == "staging_missing"
+        assert status["resumable"] is False
+        assert status.get("failure_code") is not None
+        assert "STAGING" in status["failure_code"]
+
+
+def test_resume_rejects_corrupted_session(db: Session, tmp_path: Path) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with _staging_path_context(staging_root):
+        item = _make_upload_with_chunks(db, staging_root, case_id=case.id,
+                                        evidence_id=ev.id, chunk_indices=[0, 1, 2])
+        from app.services.memory.upload_sessions import check_memory_upload_staging_integrity
+        result = check_memory_upload_staging_integrity(item)
+        assert result["integrity_status"] == "healthy"
+        assert result["resumable"] is True
+
+
+def test_extra_chunk_file_handled_safely(db: Session, tmp_path: Path) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with _staging_path_context(staging_root):
+        staging_name = str(uuid.uuid4())
+        session_root = staging_root / staging_name
+        chunks_dir = session_root / "chunks"
+        chunks_dir.mkdir(parents=True, exist_ok=True)
+        data_0 = __import__("hashlib").sha256(b"\x00" * (64 * 1024 * 1024)).hexdigest()
+        (chunks_dir / "00000000.chunk").write_bytes(b"\x00" * (64 * 1024 * 1024))
+        (chunks_dir / "00000001.chunk").write_bytes(b"\x00" * (64 * 1024 * 1024))
+        item = MemoryUpload(
+            id=str(uuid.uuid4()), case_id=case.id, evidence_id=ev.id,
+            status="uploading", bytes_received=64 * 1024 * 1024,
+            expected_bytes=512 * 1024 * 1024, display_name="mem.img",
+            source_host="HOSTA", extension=".img",
+            staging_name=staging_name,
+            canonical_relative_path=f"evidence/{case.id}/{ev.id}/original/memory-image.img",
+            chunk_size_bytes=64 * 1024 * 1024, total_chunks=8,
+            received_chunk_count=1, retryable=True,
+            metadata_json={"received_chunks": {"0": {"size": 64 * 1024 * 1024, "sha256": data_0}}},
+            progress_at=utc_now_naive(),
+        )
+        db.add(item)
+        db.commit()
+        from app.services.memory.upload_sessions import check_memory_upload_staging_integrity
+        result = check_memory_upload_staging_integrity(item)
+        assert result["integrity_status"] == "extra_chunks_on_disk"
+        assert result["resumable"] is True
+        assert 1 in result["extra_disk_chunks"]
+
+
+def test_healthy_session_remains_resumable(db: Session, tmp_path: Path) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with _staging_path_context(staging_root):
+        item = _make_upload_with_chunks(db, staging_root, case_id=case.id,
+                                        evidence_id=ev.id, chunk_indices=[0, 1, 2])
+        from app.services.memory.upload_sessions import upload_status_with_chunks
+        status = upload_status_with_chunks(item)
+        assert status["resumable"] is True
+        assert status.get("integrity_status") is None
+
+
+def test_cleanup_deletes_staging_after_db_commit(db: Session, tmp_path: Path) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with _staging_path_context(staging_root):
+        item = _make_upload_with_chunks(db, staging_root, case_id=case.id,
+                                        evidence_id=ev.id, chunk_indices=[0])
+        from app.services.memory.upload_sessions import (
+            cancel_memory_upload_session,
+            _session_root,
+        )
+        session_root = _session_root(item)
+        assert session_root.exists()
+        result = cancel_memory_upload_session(db, case_id=case.id, upload_id=item.id)
+        assert result.status == "cancelled"
+        assert result.failure_code == "MEMORY_UPLOAD_CANCELLED"
+
+
+def test_size_mismatch_detected(db: Session, tmp_path: Path) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    staging_root = tmp_path / "staging"
+    staging_root.mkdir(parents=True, exist_ok=True)
+    with _staging_path_context(staging_root):
+        staging_name = str(uuid.uuid4())
+        session_root = staging_root / staging_name
+        chunks_dir = session_root / "chunks"
+        chunks_dir.mkdir(parents=True, exist_ok=True)
+        (chunks_dir / "00000000.chunk").write_bytes(b"\x00" * (32 * 1024 * 1024))
+        item = MemoryUpload(
+            id=str(uuid.uuid4()), case_id=case.id, evidence_id=ev.id,
+            status="uploading", bytes_received=64 * 1024 * 1024,
+            expected_bytes=512 * 1024 * 1024, display_name="mem.img",
+            source_host="HOSTA", extension=".img",
+            staging_name=staging_name,
+            canonical_relative_path=f"evidence/{case.id}/{ev.id}/original/memory-image.img",
+            chunk_size_bytes=64 * 1024 * 1024, total_chunks=8,
+            received_chunk_count=1, retryable=True,
+            metadata_json={"received_chunks": {"0": {"size": 64 * 1024 * 1024, "sha256": "a" * 64}}},
+            progress_at=utc_now_naive(),
+        )
+        db.add(item)
+        db.commit()
+        from app.services.memory.upload_sessions import check_memory_upload_staging_integrity
+        result = check_memory_upload_staging_integrity(item)
+        assert result["integrity_status"] == "size_mismatch"
+        assert result["resumable"] is False
+        assert 0 in result["size_mismatches"]

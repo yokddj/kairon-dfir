@@ -1464,7 +1464,9 @@ export type MemoryUploadStatus = {
   finalized_at?: string | null;
   stale_after_seconds?: number;
   stale?: boolean;
+  integrity_status?: string | null;
   resumable?: boolean;
+  repairable?: boolean;
   cancellable?: boolean;
   is_active?: boolean;
   failure_code: string | null;
