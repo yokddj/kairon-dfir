@@ -97,9 +97,26 @@ function shouldRetryChunkUpload(error: unknown): boolean {
   if (error instanceof Error) {
     return (
       error.message.includes("Network error") ||
-      error.message.includes("backend could not be reached")
+      error.message.includes("backend could not be reached") ||
+      error.message.includes("Upload timed out") ||
+      error.message.includes("Upload response parsing failed") ||
+      error.name === "TypeError"
     );
   }
+  return false;
+}
+
+function shouldReconcileAmbiguousChunkUpload(error: unknown): boolean {
+  if (error instanceof ApiError) {
+    if ([400, 401, 403, 404, 409, 422].includes(error.status)) return false;
+    return error.status === 408 || error.status === 425 || error.status === 429 || error.status >= 500;
+  }
+  return shouldRetryChunkUpload(error);
+}
+
+function statusAcknowledgesChunk(status: MemoryUploadStatus, chunkIndex: number): boolean {
+  if (status.received_chunks?.includes(chunkIndex)) return true;
+  if (status.missing_chunks?.includes(chunkIndex)) return false;
   return false;
 }
 
@@ -109,13 +126,16 @@ async function abortableSleep(
   sleepImp: (ms: number) => Promise<void>,
 ): Promise<void> {
   if (signal.aborted) throw new Error("Upload aborted");
+  let onAbort: (() => void) | undefined;
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => resolve(), ms);
-    const onAbort = () => {
+    onAbort = () => {
       clearTimeout(timer);
       reject(new Error("Upload aborted"));
     };
     signal.addEventListener("abort", onAbort, { once: true });
+  }).finally(() => {
+    if (onAbort) signal.removeEventListener("abort", onAbort);
   });
   await sleepImp(0);
 }
@@ -127,6 +147,7 @@ async function uploadChunkWithRetry(
   chunkSize: number,
   totalChunks: number,
   signal: AbortSignal,
+  getStatus: RunResumableUploadArgs["getStatus"],
   uploadChunk: RunResumableUploadArgs["uploadChunk"],
   onProgress: ((info: { loaded: number; total: number }) => void) | undefined,
   sleep: (ms: number) => Promise<void>,
@@ -144,6 +165,21 @@ async function uploadChunkWithRetry(
       }
       return status;
     } catch (error) {
+      if (signal.aborted) {
+        throw new Error("Upload aborted");
+      }
+      if (shouldReconcileAmbiguousChunkUpload(error)) {
+        const reconciledStatus = await getStatus(uploadId);
+        if (statusAcknowledgesChunk(reconciledStatus, chunkIndex)) {
+          if (onProgress) {
+            onProgress({
+              loaded: reconciledStatus.bytes_received,
+              total: reconciledStatus.expected_bytes,
+            });
+          }
+          return reconciledStatus;
+        }
+      }
       if (!shouldRetryChunkUpload(error) || attempt >= CHUNK_UPLOAD_MAX_RETRIES) {
         throw error;
       }
@@ -238,6 +274,7 @@ export async function runResumableUpload(
         effectiveChunkSize,
         totalChunks,
         signal,
+        getStatus,
         uploadChunk,
         onProgress,
         sleep,
