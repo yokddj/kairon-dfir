@@ -101,6 +101,10 @@ function uploadStatus(overrides = {}) {
   };
 }
 
+function conflictError(detail: Record<string, unknown>) {
+  return { status: 409, errorCode: "MEMORY_UPLOAD_ACTIVE_SESSION_EXISTS", detail, message: "Another upload session for this memory image is already active." };
+}
+
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   return render(
@@ -116,7 +120,7 @@ function renderPage() {
 
 describe("MemoryUploadPage", () => {
   beforeEach(() => {
-    navigateMock.mockReset();
+    vi.resetAllMocks();
     localStorage.clear();
     getMemoryUploadReadinessMock.mockResolvedValue(readiness());
     getActiveMemoryUploadMock.mockResolvedValue(null);
@@ -170,5 +174,214 @@ describe("MemoryUploadPage", () => {
     }));
     renderPage();
     expect(await screen.findByTestId("memory-upload-retry-registration")).toBeInTheDocument();
+  });
+
+  it("renders active-session conflict panel with resume and cancel options", async () => {
+    createMemoryUploadSessionMock.mockRejectedValue(conflictError({
+      existing_upload_id: "conflict-1",
+      filename: "authorized.mem",
+      expected_bytes: 6,
+      received_bytes: 4,
+      received_chunk_count: 1,
+      total_chunks: 2,
+      status: "uploading",
+      resumable: true,
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      cancellable: true,
+    }));
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+
+    const panel = await screen.findByTestId("memory-active-session-conflict");
+    expect(panel).toHaveTextContent(/Existing upload found/);
+    expect(panel).toHaveTextContent(/authorized\.mem/);
+    expect(screen.getByTestId("memory-conflict-resume")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-conflict-cancel-restart")).toBeInTheDocument();
+  });
+
+  it("resume existing upload reuses existing upload ID", async () => {
+    createMemoryUploadSessionMock.mockRejectedValue(conflictError({
+      existing_upload_id: "conflict-1",
+      filename: "authorized.mem",
+      expected_bytes: 6,
+      received_bytes: 4,
+      received_chunk_count: 1,
+      total_chunks: 2,
+      status: "uploading",
+      resumable: true,
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      cancellable: true,
+    }));
+    getMemoryUploadStatusMock.mockResolvedValue(uploadStatus({ upload_id: "conflict-1", status: "uploading", bytes_received: 4, received_chunk_count: 1, received_chunks: [0], missing_chunks: [1] }));
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+    await screen.findByTestId("memory-active-session-conflict");
+
+    await userEvent.click(screen.getByTestId("memory-conflict-resume"));
+
+    await waitFor(() => expect(getMemoryUploadStatusMock).toHaveBeenCalledWith("case-1", "conflict-1"));
+    expect(createMemoryUploadSessionMock).toHaveBeenCalledTimes(1); // only the initial failed call
+  });
+
+  it("resume validates file match before proceeding", async () => {
+    createMemoryUploadSessionMock.mockRejectedValue(conflictError({
+      existing_upload_id: "conflict-1",
+      filename: "authorized.mem",
+      expected_bytes: 100,
+      received_bytes: 0,
+      received_chunk_count: 0,
+      total_chunks: 1,
+      status: "uploading",
+      resumable: true,
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      cancellable: true,
+    }));
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+    await screen.findByTestId("memory-active-session-conflict");
+
+    await userEvent.click(screen.getByTestId("memory-conflict-resume"));
+
+    expect(await screen.findByText(/does not match the existing upload session/i)).toBeInTheDocument();
+  });
+
+  it("cancel and restart shows confirmation then cancels and creates new session", async () => {
+    createMemoryUploadSessionMock
+      .mockRejectedValueOnce(conflictError({
+        existing_upload_id: "conflict-1",
+        filename: "authorized.mem",
+        expected_bytes: 6,
+        received_bytes: 4,
+        received_chunk_count: 1,
+        total_chunks: 2,
+        status: "uploading",
+        resumable: true,
+        expires_at: new Date(Date.now() + 3600_000).toISOString(),
+        cancellable: true,
+      }))
+      .mockResolvedValueOnce(uploadStatus({ upload_id: "new-upload-2" }));
+    cancelMemoryUploadMock.mockResolvedValue(uploadStatus({ status: "cancelled", upload_id: "conflict-1" }));
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+    await screen.findByTestId("memory-active-session-conflict");
+
+    await userEvent.click(screen.getByTestId("memory-conflict-cancel-restart"));
+    expect(screen.getByTestId("memory-conflict-confirm-restart")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-conflict-keep-existing")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("memory-conflict-confirm-restart"));
+
+    await waitFor(() => expect(cancelMemoryUploadMock).toHaveBeenCalledWith("case-1", "conflict-1", "Operator requested restart"));
+    await waitFor(() => expect(createMemoryUploadSessionMock).toHaveBeenCalledTimes(2));
+  });
+
+  it("cancel failure prevents new session creation", async () => {
+    createMemoryUploadSessionMock.mockRejectedValue(conflictError({
+      existing_upload_id: "conflict-1",
+      filename: "authorized.mem",
+      expected_bytes: 6,
+      received_bytes: 4,
+      received_chunk_count: 1,
+      total_chunks: 2,
+      status: "uploading",
+      resumable: true,
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      cancellable: true,
+    }));
+    cancelMemoryUploadMock.mockRejectedValue(new Error("cancel failed"));
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+    await screen.findByTestId("memory-active-session-conflict");
+
+    await userEvent.click(screen.getByTestId("memory-conflict-cancel-restart"));
+    await userEvent.click(screen.getByTestId("memory-conflict-confirm-restart"));
+
+    await waitFor(() => expect(cancelMemoryUploadMock).toHaveBeenCalled());
+    expect(createMemoryUploadSessionMock).toHaveBeenCalledTimes(1); // only the initial failed call
+    expect(await screen.findByText(/cancel failed/i)).toBeInTheDocument();
+  });
+
+  it("select another file dismisses conflict and opens file picker", async () => {
+    createMemoryUploadSessionMock.mockRejectedValue(conflictError({
+      existing_upload_id: "conflict-1",
+      filename: "authorized.mem",
+      expected_bytes: 6,
+      received_bytes: 0,
+      received_chunk_count: 0,
+      total_chunks: 2,
+      status: "uploading",
+      resumable: true,
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      cancellable: true,
+    }));
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+    await screen.findByTestId("memory-active-session-conflict");
+
+    await userEvent.click(screen.getByTestId("memory-conflict-select-another"));
+
+    await waitFor(() => expect(screen.queryByTestId("memory-active-session-conflict")).not.toBeInTheDocument());
+  });
+
+  it("keep existing upload dismisses confirmation without cancelling", async () => {
+    createMemoryUploadSessionMock.mockRejectedValue(conflictError({
+      existing_upload_id: "conflict-1",
+      filename: "authorized.mem",
+      expected_bytes: 6,
+      received_bytes: 4,
+      received_chunk_count: 1,
+      total_chunks: 2,
+      status: "uploading",
+      resumable: true,
+      expires_at: new Date(Date.now() + 3600_000).toISOString(),
+      cancellable: true,
+    }));
+    renderPage();
+    await screen.findByText(/Memory image upload is available/i);
+    await userEvent.type(screen.getByLabelText(/Source host/i), "HOSTA");
+    await userEvent.click(screen.getByLabelText(/I confirm that I own this memory image/i));
+    await userEvent.upload(screen.getByLabelText(/Memory image file/i), new File(["memory"], "authorized.mem"));
+
+    await userEvent.click(screen.getByRole("button", { name: /Upload memory image/i }));
+    await screen.findByTestId("memory-active-session-conflict");
+
+    await userEvent.click(screen.getByTestId("memory-conflict-cancel-restart"));
+    await screen.findByTestId("memory-conflict-keep-existing");
+
+    await userEvent.click(screen.getByTestId("memory-conflict-keep-existing"));
+
+    await waitFor(() => expect(screen.queryByTestId("memory-conflict-confirm-restart")).not.toBeInTheDocument());
+    expect(cancelMemoryUploadMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId("memory-active-session-conflict")).toBeInTheDocument();
   });
 });

@@ -1438,7 +1438,7 @@ def _raise_upload_session_error(exc: MemoryUploadSessionError) -> HTTPException:
         return HTTPException(status_code=400, detail=detail)
     if exc.code == "MEMORY_UPLOAD_UNSUPPORTED_EXTENSION":
         return HTTPException(status_code=400, detail=detail)
-    if exc.code == "MEMORY_UPLOAD_CONFLICT":
+    if exc.code == "MEMORY_UPLOAD_ACTIVE_SESSION_EXISTS":
         return HTTPException(status_code=409, detail=detail)
     if exc.code == "MEMORY_EVIDENCE_DUPLICATE":
         return HTTPException(status_code=409, detail=detail)
