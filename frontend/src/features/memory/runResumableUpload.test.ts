@@ -466,6 +466,212 @@ describe("runResumableUpload", () => {
     expect(finalize).not.toHaveBeenCalled();
   });
 
+  it("timeout reconciles accepted chunk and continues without retrying it", async () => {
+    const uploadId = "timeout-ack";
+    const file = makeFile(12);
+    const chunkSize = 4;
+    const received: number[] = [0, 1];
+
+    const buildStatus = (overrides: Partial<MemoryUploadStatus> = {}) =>
+      makeStatus({
+        upload_id: uploadId,
+        expected_bytes: file.size,
+        chunk_size_bytes: chunkSize,
+        total_chunks: 3,
+        received_chunk_count: received.length,
+        received_chunks: [...received],
+        bytes_received: received.length * chunkSize,
+        missing_chunks: [0, 1, 2].filter((i) => !received.includes(i)),
+        ...overrides,
+      });
+
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      if (chunkIndex === 2) {
+        received.push(2);
+        throw new Error("Upload timed out. Your network may be unavailable.");
+      }
+      throw new Error("unexpected chunk");
+    });
+    const finalize = vi.fn(async () =>
+      makeStatus({
+        upload_id: uploadId,
+        status: "completed",
+        evidence_id: "ev-timeout-ack",
+        bytes_received: file.size,
+        expected_bytes: file.size,
+        missing_chunks: [],
+        received_chunks: [0, 1, 2],
+        received_chunk_count: 3,
+      }),
+    );
+    const onProgress = vi.fn();
+
+    const result = await runResumableUpload({
+      uploadId,
+      file,
+      chunkSize,
+      getStatus,
+      uploadChunk,
+      finalize,
+      signal: new AbortController().signal,
+      onProgress,
+      sleep: sleepImmediate,
+    });
+
+    expect(result.type).toBe("completed");
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([2]);
+    expect(onProgress).toHaveBeenCalledWith({ loaded: 12, total: 12 });
+    expect(finalize).toHaveBeenCalledTimes(1);
+  });
+
+  it("network failure reconciles accepted chunk and continues", async () => {
+    const uploadId = "network-ack";
+    const file = makeFile(8);
+    const chunkSize = 4;
+    const received: number[] = [0];
+    const buildStatus = () => makeStatus({
+      upload_id: uploadId,
+      expected_bytes: file.size,
+      chunk_size_bytes: chunkSize,
+      total_chunks: 2,
+      received_chunk_count: received.length,
+      received_chunks: [...received],
+      bytes_received: received.length * chunkSize,
+      missing_chunks: [0, 1].filter((i) => !received.includes(i)),
+    });
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      received.push(chunkIndex);
+      throw new Error("Network error while uploading");
+    });
+    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev-network", bytes_received: file.size, expected_bytes: file.size, missing_chunks: [], received_chunks: [0, 1], received_chunk_count: 2 }));
+
+    const result = await runResumableUpload({ uploadId, file, chunkSize, getStatus, uploadChunk, finalize, signal: new AbortController().signal, sleep: sleepImmediate });
+
+    expect(result.type).toBe("completed");
+    expect(uploadChunk).toHaveBeenCalledTimes(1);
+    expect(finalize).toHaveBeenCalledTimes(1);
+  });
+
+  it("response parsing failure reconciles accepted chunk and continues", async () => {
+    const uploadId = "parse-ack";
+    const file = makeFile(8);
+    const chunkSize = 4;
+    const received: number[] = [0];
+    const buildStatus = () => makeStatus({ upload_id: uploadId, expected_bytes: file.size, chunk_size_bytes: chunkSize, total_chunks: 2, received_chunk_count: received.length, received_chunks: [...received], bytes_received: received.length * chunkSize, missing_chunks: [0, 1].filter((i) => !received.includes(i)) });
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      received.push(chunkIndex);
+      throw new Error("Upload response parsing failed after successful HTTP 200.");
+    });
+    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev-parse", bytes_received: file.size, expected_bytes: file.size, missing_chunks: [], received_chunks: [0, 1], received_chunk_count: 2 }));
+
+    const result = await runResumableUpload({ uploadId, file, chunkSize, getStatus, uploadChunk, finalize, signal: new AbortController().signal, sleep: sleepImmediate });
+
+    expect(result.type).toBe("completed");
+    expect(uploadChunk).toHaveBeenCalledTimes(1);
+  });
+
+  it("timeout with missing chunk retries the same chunk and then continues", async () => {
+    const uploadId = "timeout-missing";
+    const file = makeFile(8);
+    const chunkSize = 4;
+    const received: number[] = [0];
+    let attempts = 0;
+    const buildStatus = () => makeStatus({ upload_id: uploadId, expected_bytes: file.size, chunk_size_bytes: chunkSize, total_chunks: 2, received_chunk_count: received.length, received_chunks: [...received], bytes_received: received.length * chunkSize, missing_chunks: [0, 1].filter((i) => !received.includes(i)) });
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("Upload timed out. Your network may be unavailable.");
+      received.push(chunkIndex);
+      return buildStatus();
+    });
+    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev-timeout-missing", bytes_received: file.size, expected_bytes: file.size, missing_chunks: [], received_chunks: [0, 1], received_chunk_count: 2 }));
+
+    const result = await runResumableUpload({ uploadId, file, chunkSize, getStatus, uploadChunk, finalize, signal: new AbortController().signal, sleep: sleepImmediate });
+
+    expect(result.type).toBe("completed");
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([1, 1]);
+  });
+
+  it("HTTP 500 reconciles accepted chunk and continues", async () => {
+    const uploadId = "http500-ack";
+    const file = makeFile(8);
+    const chunkSize = 4;
+    const received: number[] = [0];
+    const buildStatus = () => makeStatus({ upload_id: uploadId, expected_bytes: file.size, chunk_size_bytes: chunkSize, total_chunks: 2, received_chunk_count: received.length, received_chunks: [...received], bytes_received: received.length * chunkSize, missing_chunks: [0, 1].filter((i) => !received.includes(i)) });
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      received.push(chunkIndex);
+      throw new ApiError(500, null, "Server error", null);
+    });
+    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev-500", bytes_received: file.size, expected_bytes: file.size, missing_chunks: [], received_chunks: [0, 1], received_chunk_count: 2 }));
+
+    const result = await runResumableUpload({ uploadId, file, chunkSize, getStatus, uploadChunk, finalize, signal: new AbortController().signal, sleep: sleepImmediate });
+
+    expect(result.type).toBe("completed");
+    expect(uploadChunk).toHaveBeenCalledTimes(1);
+  });
+
+  it("HTTP 500 with missing chunk retries", async () => {
+    const uploadId = "http500-missing";
+    const file = makeFile(8);
+    const chunkSize = 4;
+    const received: number[] = [0];
+    let attempts = 0;
+    const buildStatus = () => makeStatus({ upload_id: uploadId, expected_bytes: file.size, chunk_size_bytes: chunkSize, total_chunks: 2, received_chunk_count: received.length, received_chunks: [...received], bytes_received: received.length * chunkSize, missing_chunks: [0, 1].filter((i) => !received.includes(i)) });
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      attempts += 1;
+      if (attempts === 1) throw new ApiError(500, null, "Server error", null);
+      received.push(chunkIndex);
+      return buildStatus();
+    });
+    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev-500-retry", bytes_received: file.size, expected_bytes: file.size, missing_chunks: [], received_chunks: [0, 1], received_chunk_count: 2 }));
+
+    const result = await runResumableUpload({ uploadId, file, chunkSize, getStatus, uploadChunk, finalize, signal: new AbortController().signal, sleep: sleepImmediate });
+
+    expect(result.type).toBe("completed");
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([1, 1]);
+  });
+
+  it("parent abort skips acknowledgement recovery status request", async () => {
+    const uploadId = "abort-no-recovery";
+    const file = makeFile(8);
+    const chunkSize = 4;
+    const controller = new AbortController();
+    const statusTemplate = makeStatus({ upload_id: uploadId, expected_bytes: file.size, chunk_size_bytes: chunkSize, total_chunks: 2, received_chunks: [0], received_chunk_count: 1, bytes_received: 4, missing_chunks: [1] });
+    const getStatus = vi.fn(async () => ({ ...statusTemplate }));
+    const uploadChunk = vi.fn(async () => {
+      controller.abort();
+      throw new Error("Upload timed out. Your network may be unavailable.");
+    });
+    const finalize = vi.fn();
+
+    const result = await runResumableUpload({ uploadId, file, chunkSize, getStatus, uploadChunk, finalize, signal: controller.signal, sleep: sleepImmediate });
+
+    expect(result.type).toBe("aborted");
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(finalize).not.toHaveBeenCalled();
+  });
+
+  it("HTTP 422 remains strict without ambiguous recovery", async () => {
+    const uploadId = "unprocessable";
+    const file = makeFile(8);
+    const statusTemplate = makeStatus({ upload_id: uploadId, expected_bytes: file.size, chunk_size_bytes: 4, total_chunks: 2, received_chunks: [0], received_chunk_count: 1, bytes_received: 4, missing_chunks: [1] });
+    const getStatus = vi.fn(async () => ({ ...statusTemplate }));
+    const uploadChunk = vi.fn(async () => {
+      throw new ApiError(422, "MEMORY_UPLOAD_INVALID_CHUNK_LENGTH", "Chunk length mismatch.", null);
+    });
+
+    const result = await runResumableUpload({ uploadId, file, chunkSize: 4, getStatus, uploadChunk, finalize: vi.fn(), signal: new AbortController().signal, sleep: sleepImmediate });
+
+    expect(result.type).toBe("failed");
+    expect(getStatus).toHaveBeenCalledTimes(1);
+    expect(uploadChunk).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retry HTTP 409 conflict", async () => {
     const uploadId = "conflict-1";
     const file = makeFile(8);

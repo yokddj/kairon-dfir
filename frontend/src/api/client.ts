@@ -322,8 +322,16 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
       if (!contentType.includes("application/json")) {
         return (await response.text()) as T;
       }
-      const responseJson = (await response.json()) as T;
-      return responseJson;
+      const bodyText = await response.text();
+      if (!bodyText) {
+        return undefined as T;
+      }
+      try {
+        return JSON.parse(bodyText) as T;
+      } catch (parseError) {
+        const message = parseError instanceof Error && parseError.message ? parseError.message : String(parseError);
+        throw new Error(`Upload response parsing failed after successful HTTP ${response.status}. ${message}`);
+      }
     } catch (error) {
       const isAbortError =
         error instanceof DOMException && error.name === "AbortError";
@@ -340,6 +348,9 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
 
       lastError = error;
       lastRetryable = false;
+      if (error instanceof Error && error.message.includes("Upload response parsing failed")) {
+        throw error;
+      }
       if ((error as UploadAttemptError | undefined)?.nonRetryable) {
         throw error;
       }
@@ -4577,19 +4588,21 @@ export const api = {
   getMemoryUploadStatus: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}`),
   createMemoryUploadSession: (caseId: string, payload: MemoryUploadSessionCreateRequest) =>
     request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads`, { method: "POST", body: JSON.stringify(payload) }),
-  uploadMemoryUploadChunk: (
+  uploadMemoryUploadChunk: async (
     caseId: string,
     uploadId: string,
     chunkIndex: number,
     blob: Blob,
     options?: { chunkSha256?: string; signal?: AbortSignal },
-  ) =>
-    uploadBlob<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/chunks/${chunkIndex}`, blob, {
+  ) => {
+    const status = await uploadBlob<MemoryUploadStatus | undefined>(`/cases/${caseId}/memory/uploads/${uploadId}/chunks/${chunkIndex}`, blob, {
       method: "PUT",
       contentType: "application/octet-stream",
       headers: options?.chunkSha256 ? { "X-Kairon-Chunk-SHA256": options.chunkSha256 } : undefined,
       signal: options?.signal,
-    }),
+    });
+    return status ?? request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}`);
+  },
   finalizeMemoryUpload: (caseId: string, uploadId: string, payload?: { expected_sha256?: string }) =>
     request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/finalize`, { method: "POST", body: JSON.stringify(payload ?? {}) }),
   reconcileMemoryUpload: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}/reconcile`, { method: "POST" }),

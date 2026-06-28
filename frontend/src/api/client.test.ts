@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, expect, it, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import type { MemoryUploadStatus } from "./client";
 
 const originalFetch = globalThis.fetch;
@@ -9,6 +9,12 @@ beforeAll(() => {
 
 beforeEach(() => {
   (globalThis.fetch as ReturnType<typeof vi.fn>).mockClear();
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  globalThis.fetch = globalThis.fetch || originalFetch;
 });
 
 afterAll(() => {
@@ -291,6 +297,42 @@ describe("uploadBlob fetch transport", () => {
 
     await expect(promise).rejects.toThrow("Upload timed out");
   });
+
+  it("clears timeout after normal success", async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse({ ok: true }));
+
+    const { uploadBlob } = await import("./client");
+    await uploadBlob("/upload", new Blob(["test"]), { timeoutMs: 1000 });
+
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+  });
+
+  it("clears timeout after timeout/error", async () => {
+    const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+    const fetchMock = globalThis.fetch as ReturnType<typeof vi.fn>;
+    fetchMock.mockImplementation((_url: unknown, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+        }, { once: true });
+      });
+    });
+
+    const { uploadBlob } = await import("./client");
+    await expect(uploadBlob("/upload", new Blob(["test"]), { timeoutMs: 1 })).rejects.toThrow("Upload timed out");
+
+    expect(clearTimeoutSpy).toHaveBeenCalled();
+  });
+
+  it("reports malformed successful JSON as ambiguous parsing failure", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response("{", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+
+    const { uploadBlob } = await import("./client");
+    await expect(uploadBlob("/upload", new Blob(["test"]))).rejects.toThrow("Upload response parsing failed after successful HTTP 200");
+  });
 });
 
 describe("uploadMemoryUploadChunk integration", () => {
@@ -319,5 +361,19 @@ describe("uploadMemoryUploadChunk integration", () => {
     const result = await api.uploadMemoryUploadChunk("case-1", "u-1", 0, new Blob(["data"]));
 
     expect(result).toEqual(status);
+  });
+
+  it("accepts empty successful PUT response and fetches authoritative status", async () => {
+    const status = { upload_id: "u-1", status: "uploading", bytes_received: 4, expected_bytes: 8 } as MemoryUploadStatus;
+    (globalThis.fetch as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(new Response("", { status: 200, headers: { "content-type": "application/json" } }))
+      .mockResolvedValueOnce(mockResponse(status));
+
+    const { api } = await import("./client");
+    const result = await api.uploadMemoryUploadChunk("case-1", "u-1", 0, new Blob(["data"]));
+
+    expect(result).toEqual(status);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+    expect(String((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[1][0])).toContain("/cases/case-1/memory/uploads/u-1");
   });
 });
