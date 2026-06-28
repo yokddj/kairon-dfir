@@ -182,15 +182,6 @@ export async function runResumableUpload(
   const sleep = injectedSleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
   let currentStatus = await getStatus(uploadId);
-  console.log("[KAIRON-DEBUG] INITIAL STATUS", {
-    received_chunk_count: currentStatus.received_chunk_count,
-    total_chunks: currentStatus.total_chunks,
-    status: currentStatus.status,
-    has_missing_chunks: currentStatus.missing_chunks !== null && currentStatus.missing_chunks !== undefined,
-    missing_chunks_len: currentStatus.missing_chunks?.length,
-    has_received_chunks: currentStatus.received_chunks !== null && currentStatus.received_chunks !== undefined,
-    received_chunks_len: currentStatus.received_chunks?.length,
-  });
 
   if (currentStatus.status === "completed" && currentStatus.evidence_id) {
     return { type: "terminal", status: currentStatus };
@@ -221,15 +212,6 @@ export async function runResumableUpload(
 
     const { chunkSize: effectiveChunkSize, totalChunks, missingChunks } =
       deriveMissingChunks(currentStatus, file, chunkSize);
-
-    console.log("[KAIRON-DEBUG] LOOP START", {
-      status: currentStatus.status,
-      received_chunk_count: currentStatus.received_chunk_count,
-      missing_count: missingChunks.length,
-      totalChunks,
-      first_missing: missingChunks[0],
-      last_missing: missingChunks[missingChunks.length - 1],
-    });
 
     if (missingChunks.length === 0) {
       const authoritativeStatus = await getStatus(uploadId);
@@ -289,21 +271,6 @@ export async function runResumableUpload(
       !TERMINAL_STATUSES.has(nextStatus.status) &&
       nextStatus.status !== "completed"
     ) {
-      console.log("[KAIRON-DEBUG] STALL DETECTED", {
-        uploadId,
-        chunkIndex,
-        previousMissingCount,
-        nextMissingCount,
-        nextStatus: {
-          received_chunk_count: nextStatus.received_chunk_count,
-          total_chunks: nextStatus.total_chunks,
-          status: nextStatus.status,
-          has_missing_chunks: nextStatus.missing_chunks !== null && nextStatus.missing_chunks !== undefined,
-          missing_chunks_len: nextStatus.missing_chunks?.length,
-          has_received_chunks: nextStatus.received_chunks !== null && nextStatus.received_chunks !== undefined,
-          received_chunks_len: nextStatus.received_chunks?.length,
-        },
-      });
       return {
         type: "stalled",
         uploadId,
@@ -312,12 +279,6 @@ export async function runResumableUpload(
         nextMissingCount,
       };
     }
-
-    console.log("[KAIRON-DEBUG] CHUNK OK, continuing", {
-      chunkIndex,
-      previousMissingCount,
-      nextMissingCount,
-    });
 
     currentStatus = nextStatus;
   }

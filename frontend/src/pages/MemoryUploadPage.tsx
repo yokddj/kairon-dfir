@@ -486,8 +486,6 @@ export default function MemoryUploadPage() {
         onProgress: (info) => syncAcknowledgedProgress(info.loaded, info.total),
       });
 
-      console.log("[KAIRON-DEBUG] CONTROLLER RESULT", result);
-
       if (result.type === "completed" || result.type === "terminal") {
         await finalizeCompletedUpload(result.status, selectedFile);
         return;
