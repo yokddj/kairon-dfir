@@ -31,6 +31,8 @@ import hashlib
 import re
 from typing import Any, Iterable
 
+from app.services.memory.pids import normalize_pid
+
 
 NORMALIZATION_VERSION = "memory_artifact_canonical_v1"
 MAX_PREVIEW_BYTES = 256
@@ -111,12 +113,7 @@ def _lookup(row: dict[str, Any], *names: str) -> Any:
 
 
 def _int_or_none(value: Any) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        return int(str(value), 0)
-    except (TypeError, ValueError):
-        return None
+    return normalize_pid(value)
 
 
 def _str_or_none(value: Any, limit: int = MAX_NAME_LENGTH) -> str | None:

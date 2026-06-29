@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -132,6 +133,32 @@ def test_netscan_normalizes_ipv4() -> None:
     assert first["pid"] == 4
     assert first["process_name"] == "System"
     assert first["normalization_version"] == NORMALIZATION_VERSION
+
+
+def test_artifact_bulk_partial_failures_are_counted(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.memory import artifact_indexing
+
+    client = MagicMock()
+    client.indices.exists.return_value = True
+    client.bulk.return_value = {
+        "errors": True,
+        "items": [
+            {"index": {"_id": "ok"}},
+            {"index": {"_id": "bad", "error": {"type": "mapper_parsing_exception", "reason": "bad pid"}}},
+        ],
+    }
+    monkeypatch.setattr(artifact_indexing, "get_opensearch_client", lambda: client)
+
+    result = index_artifact_documents(
+        CASE,
+        [
+            {"document_id": "ok", "document_type": "memory_network_connection", "pid": 4},
+            {"document_id": "bad", "document_type": "memory_network_connection", "pid": "bad"},
+        ],
+    )
+
+    assert result == {"indexed": 1, "errors": 1}
+    assert client.indices.refresh.called
 
 
 # ---------------------------------------------------------------------------

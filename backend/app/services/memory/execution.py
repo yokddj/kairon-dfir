@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal, utc_now_naive
+from app.core.config import get_settings
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
 from app.services.memory import backend_readiness
 from app.services.memory.evidence_access import MemoryStorageAccessError, validate_current_process_output_access
@@ -401,6 +403,70 @@ def _normalize_artifact_payload(
         "conflicts": 0,
         "normalization_version": NORMALIZATION_VERSION,
     }
+
+
+def reindex_completed_process_run_from_raw(db: Session, run_id: str) -> dict[str, Any]:
+    """Re-normalize and reindex an existing process run without Volatility.
+
+    This recovery path is for runs whose plugins completed and retained raw
+    JSON outputs, but process indexing failed.  It is idempotent because the
+    process normalizer derives the same deterministic document IDs for the
+    same run and raw plugin rows.
+    """
+    run = db.get(MemoryScanRun, run_id)
+    if run is None:
+        return {"reindexed": False, "reason": "run_not_found"}
+    if run.status not in {"completed", "completed_with_errors"}:
+        return {"reindexed": False, "reason": "run_not_terminal"}
+    plugin_runs = (
+        db.query(MemoryPluginRun)
+        .filter(MemoryPluginRun.memory_scan_run_id == run.id, MemoryPluginRun.plugin.in_(PROCESS_PLUGINS), MemoryPluginRun.status == "completed")
+        .all()
+    )
+    process_results: list[dict[str, Any]] = []
+    missing: list[str] = []
+    for plugin_run in plugin_runs:
+        path = _resolve_raw_output_path(plugin_run.output_relative_path)
+        if path is None or not path.is_file():
+            missing.append(plugin_run.plugin)
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        process_results.append(_normalize_process_payload(plugin_run.plugin, payload))
+    if not process_results:
+        return {"reindexed": False, "reason": "raw_process_outputs_unavailable", "missing_plugins": missing}
+    merged = merge_memory_process_results(process_results, case_id=run.case_id, evidence_id=run.evidence_id, memory_run_id=run.id)
+    documents = merged["processes"] + merged["edges"]
+    indexing = index_memory_documents(run.case_id, documents)
+    _run_canonical_materialization(db, run, documents=merged["processes"])
+    run.metadata_json = {
+        **(run.metadata_json or {}),
+        "process_counts": {"memory_process": len(merged["processes"]), "memory_process_edge": len(merged["edges"])},
+        "parse_warnings": merged["warnings"],
+        "reindexing": {"processes": indexing, "missing_plugins": missing, "reindexed_at": utc_iso()},
+    }
+    _upsert_summary(db, run, "memory_process", len(merged["processes"]), {"profile": run.profile, "sources": sorted({plugin for item in merged["processes"] for plugin in item.get("plugins", [])}), "warnings": merged["warnings"][:20]})
+    _upsert_summary(db, run, "memory_process_edge", len(merged["edges"]), {"profile": run.profile})
+    if run.plugins_failed == 0 and indexing.get("errors", 0) == 0:
+        run.status = "completed"
+        run.error_log = {}
+    db.commit()
+    return {"reindexed": True, "indexing": indexing, "missing_plugins": missing, "processes": len(merged["processes"]), "edges": len(merged["edges"])}
+
+
+def _resolve_raw_output_path(relative_path: str | None) -> Path | None:
+    if not relative_path:
+        return None
+    path = Path(relative_path)
+    if path.is_absolute():
+        return path
+    settings = get_settings()
+    candidates = [settings.backend_data_dir / path]
+    if str(path).startswith("memory-output/") and settings.memory_output_root:
+        candidates.append(settings.memory_output_root / Path(str(path)[len("memory-output/"):]))
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return candidates[0] if candidates else None
 
 
 def _index_artifact_results(

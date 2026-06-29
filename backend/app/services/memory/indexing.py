@@ -4,6 +4,7 @@ import logging
 from typing import Any
 
 from app.core.opensearch import get_memory_index, get_opensearch_client
+from app.services.memory.pids import normalize_pid
 
 
 logger = logging.getLogger(__name__)
@@ -71,14 +72,37 @@ def index_memory_documents(case_id: str, documents: list[dict[str, Any]]) -> dic
     index = ensure_memory_index(case_id)
     client = get_opensearch_client()
     indexed = 0
+    errors = 0
     for document in documents:
-        doc_id = document.get("document_id")
-        response = client.index(index=index, id=doc_id, body=document, refresh=False)
+        sanitized = sanitize_memory_process_document(document)
+        doc_id = sanitized.get("document_id")
+        try:
+            response = client.index(index=index, id=doc_id, body=sanitized, refresh=False)
+        except Exception as exc:  # noqa: BLE001
+            errors += 1
+            logger.warning("memory process index error: id=%s error=%s", doc_id, exc)
+            continue
         if response.get("result") in {"created", "updated"}:
             indexed += 1
     if documents:
         client.indices.refresh(index=index)
-    return {"index": index, "indexed": indexed}
+    return {"index": index, "indexed": indexed, "errors": errors}
+
+
+def sanitize_memory_process_document(document: dict[str, Any]) -> dict[str, Any]:
+    """Last-mile guard before writing PID fields to the memory index."""
+    safe = dict(document)
+    process = safe.get("process")
+    if isinstance(process, dict):
+        process = dict(process)
+        process["pid"] = normalize_pid(process.get("pid"))
+        process["ppid"] = normalize_pid(process.get("ppid"))
+        safe["process"] = process
+    if "parent_pid" in safe:
+        safe["parent_pid"] = normalize_pid(safe.get("parent_pid"))
+    if "child_pid" in safe:
+        safe["child_pid"] = normalize_pid(safe.get("child_pid"))
+    return safe
 
 
 def search_memory_processes(case_id: str, *, run_id: str | None = None, evidence_id: str | None = None, pid: int | None = None, ppid: int | None = None, process_name: str | None = None, source_plugin: str | None = None, present_in_pslist: bool | None = None, present_in_psscan: bool | None = None, has_command_line: bool | None = None, active: bool | None = None, page: int = 1, page_size: int = 50) -> dict[str, Any]:
