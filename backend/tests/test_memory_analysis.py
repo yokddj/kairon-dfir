@@ -17,11 +17,12 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import routes_evidence
 from app.api import routes_memory
+from app.core.config import get_settings
 from app.core.database import Base, get_db
 from app.models.artifact import Artifact
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType, IngestStatus
-from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun, MemoryUpload
+from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun, MemorySymbolPreparation, MemoryUpload
 from app.services.memory import backend_readiness
 from app.services.memory import execution as memory_execution
 from app.services.memory.evidence_access import MemoryStorageAccessError
@@ -510,6 +511,10 @@ def test_memory_upload_readiness_accepts_20gb_metadata(monkeypatch: pytest.Monke
     assert readiness["max_upload_bytes"] == 32 * 1024 * 1024 * 1024
     assert readiness["recommended_chunk_size_bytes"] == 64 * 1024 * 1024
     assert readiness["resumable"] is True
+
+
+def test_default_memory_upload_chunk_size_is_64_mib() -> None:
+    assert get_settings().memory_upload_chunk_size_bytes == 64 * 1024 * 1024
 
 
 def test_create_memory_upload_session_rejects_above_max(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1479,6 +1484,7 @@ def test_memory_scan_queues_metadata_only_when_enabled(db_session, monkeypatch: 
     _case(db_session)
     evidence = _evidence(db_session)
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
+    monkeypatch.setattr(memory_execution.backend_readiness, "get_settings", lambda: _backend_settings(memory_process_profile_enabled=True))
     monkeypatch.setattr(routes_memory, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True}]})
     monkeypatch.setattr(routes_memory, "validate_memory_execution_request", lambda _db, _evidence_id: object())
     monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=evidence))
@@ -1495,6 +1501,123 @@ def test_memory_scan_queues_metadata_only_when_enabled(db_session, monkeypatch: 
     assert run.plugin_count == 1
     assert run.worker_task_id == "job-1"
     assert plugin_run.plugin == "windows.info"
+
+
+@pytest.mark.parametrize("prep_state", ["platform_not_identified", "requirement_unknown", "blocked_symbols", "failed"])
+def test_memory_scan_allows_direct_volatility_when_preparation_not_ready(db_session, monkeypatch: pytest.MonkeyPatch, prep_state: str) -> None:
+    _case(db_session)
+    evidence = _evidence(db_session)
+    db_session.add(MemorySymbolPreparation(
+        case_id=evidence.case_id,
+        evidence_id=evidence.id,
+        state=prep_state,
+        sanitized_message="Windows symbols are not ready yet.",
+        active=True,
+    ))
+    db_session.commit()
+    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
+    monkeypatch.setattr(routes_memory, "resolve_profile_plugins", lambda profile: ["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"])
+    monkeypatch.setattr(memory_execution.backend_readiness, "get_settings", lambda: _backend_settings(memory_process_profile_enabled=True))
+    monkeypatch.setattr(routes_memory, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True}]})
+    monkeypatch.setattr(routes_memory, "validate_memory_execution_request", lambda _db, _evidence_id: object())
+    monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=evidence))
+    monkeypatch.setattr(routes_memory, "enqueue_memory_metadata_scan", lambda _run_id: "job-direct")
+
+    response = routes_memory.start_memory_scan(
+        evidence.id,
+        MemoryStartScanRequest(profile="processes_basic", authorization_acknowledged=True),
+        case_id=evidence.case_id,
+        db=db_session,
+    )
+    run = db_session.query(MemoryScanRun).one()
+    plugins = [item.plugin for item in db_session.query(MemoryPluginRun).order_by(MemoryPluginRun.created_at.asc()).all()]
+
+    assert response.accepted is True
+    assert run.status == "queued"
+    assert run.profile == "processes_basic"
+    assert plugins[0] == "windows.info"
+    assert plugins == ["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"]
+
+
+def test_memory_scan_worker_unavailable_still_blocks(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    evidence = _evidence(db_session)
+    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
+    monkeypatch.setattr(routes_memory, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": False, "message": "Volatility missing"}]})
+
+    with pytest.raises(Exception) as exc_info:
+        routes_memory.start_memory_scan(
+            evidence.id,
+            MemoryStartScanRequest(authorization_acknowledged=True),
+            case_id=evidence.case_id,
+            db=db_session,
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 503
+    assert db_session.query(MemoryScanRun).count() == 0
+
+
+def test_catalogue_does_not_block_on_platform_or_symbol_preparation(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case(db_session)
+    ev = _evidence(db_session, case_id=case.id)
+    db_session.add(MemorySymbolPreparation(
+        case_id=case.id,
+        evidence_id=ev.id,
+        state="platform_not_identified",
+        sanitized_message="PLATFORM_NOT_IDENTIFIED",
+        active=True,
+    ))
+    db_session.commit()
+    from app.services.memory.catalogue import build_analysis_catalogue
+
+    monkeypatch.setattr("app.services.memory.catalogue._probe_network_via_worker", lambda: (False, "network unavailable"))
+
+    items = build_analysis_catalogue(db_session, case_id=case.id, evidence_id=ev.id)
+    by_profile = {item["profile"]: item for item in items}
+
+    assert by_profile["metadata_only"]["available"] is True
+    assert by_profile["processes_basic"]["available"] is True
+    assert by_profile["metadata_only"]["gate_type"] == "available"
+    assert "symbol" not in str(by_profile["metadata_only"].get("availability_reason") or "").lower()
+
+
+def test_run_all_unknown_preparation_creates_one_existing_evidence_run(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    case = _case(db_session)
+    evidence_file = tmp_path / "memory.mem"
+    evidence_file.write_bytes(b"synthetic")
+    ev = _evidence(db_session, case_id=case.id, stored_path=str(evidence_file))
+    db_session.add(MemorySymbolPreparation(
+        case_id=case.id,
+        evidence_id=ev.id,
+        state="requirement_unknown",
+        sanitized_message="MEMORY_SYMBOL_REQUIREMENT_UNKNOWN",
+        active=True,
+    ))
+    db_session.commit()
+    settings = _backend_settings(
+        memory_run_all_enabled=True,
+        memory_process_profile_enabled=True,
+        allowed_memory_profiles=["metadata_only", "processes_basic"],
+        allowed_memory_plugins=["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"],
+    )
+    monkeypatch.setattr(routes_memory, "get_settings", lambda: settings)
+    monkeypatch.setattr("app.core.config.get_settings", lambda: SimpleNamespace(**settings.__dict__, backend_data_dir=tmp_path, memory_output_root=tmp_path / "out"))
+    monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=ev))
+    monkeypatch.setattr("app.workers.tasks.enqueue_memory_metadata_scan", lambda _run_id: "job-run-all")
+
+    result = routes_memory.post_run_all_batch(
+        case.id,
+        ev.id,
+        payload={"authorization_acknowledged": True, "mode": "missing_or_failed"},
+        db=db_session,
+    )
+
+    assert result["status"] == "running"
+    assert db_session.query(Evidence).count() == 1
+    assert db_session.query(MemoryScanRun).count() == 1
+    run = db_session.query(MemoryScanRun).one()
+    assert run.evidence_id == ev.id
+    assert run.profile == "metadata_only"
 
 
 def test_memory_profiles_resolve_server_side(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2722,7 +2845,7 @@ def test_catalogue_not_empty_when_ready_regardless_of_exact_match(db_session, mo
     assert len(available) >= 6
 
 
-def test_catalogue_shows_blocked_when_preparation_not_ready(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_catalogue_shows_available_when_preparation_not_ready(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     case = _case(db_session)
     ev = _evidence(db_session, case_id=case.id)
     from app.services.memory.catalogue import build_analysis_catalogue
@@ -2746,4 +2869,5 @@ def test_catalogue_shows_blocked_when_preparation_not_ready(db_session, monkeypa
     )
     items = build_analysis_catalogue(db_session, case_id=case.id, evidence_id=ev.id)
     available = [i for i in items if i["available"]]
-    assert len(available) == 0
+    assert len(available) > 0
+    assert {item["profile"] for item in available} >= {"metadata_only", "processes_basic"}

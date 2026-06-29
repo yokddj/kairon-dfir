@@ -110,7 +110,6 @@ from app.services.memory.symbol_preparation import (
 )
 from app.services.memory.symbol_probe_controller import probe_evidence_symbol_requirement
 from app.services.memory.symbol_state import (
-    EC_SYMBOLS_REQUIRED,
     STATE_ACQUIRING,
     STATE_ACQUISITION_PENDING,
     STATE_ACQUISITION_REQUIRED,
@@ -543,35 +542,12 @@ def post_run_all_batch(
 
     _require_case(db, case_id)
     _require_evidence_for_case(db, case_id, evidence_id)
-    # v1 stabilization: Run all is enabled but is gated by the
-    # evidence preparation state.  Only "ready" evidences (i.e.
-    # the symbol preparation pipeline is complete) can start a
-    # batch.  For non-ready evidences the per-profile Run actions
-    # remain the only way to execute a memory profile.
     if not bool(getattr(get_settings(), "memory_run_all_enabled", False)):
         raise HTTPException(
             status_code=409,
             detail={
                 "error_code": "MEMORY_RUN_ALL_DISABLED",
                 "message": "Run all is temporarily unavailable while the memory execution pipeline is being stabilized.",
-            },
-        )
-    # The flag is on; gate the action on the per-evidence
-    # preparation state.  Only "ready" evidences can run a batch.
-    from app.services.memory.symbol_preparation import (
-        resolve_effective_memory_preparation_state,
-    )
-    preparation = resolve_effective_memory_preparation_state(
-        db, case_id=case_id, evidence_id=evidence_id,
-    )
-    if preparation.get("effective_state") != "ready":
-        raise HTTPException(
-            status_code=409,
-            detail={
-                "error_code": "MEMORY_PREPARATION_NOT_READY",
-                "message": "Run all requires the evidence to be ready. Complete the symbol preparation first.",
-                "effective_state": preparation.get("effective_state"),
-                "preparation_id": preparation.get("preparation_id"),
             },
         )
     payload = payload or {}
@@ -1837,34 +1813,9 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
                 ),
             },
         )
-    # Per-evidence symbol preflight.  Use the canonical readiness
-    # check so native-compatible evidence and prior successful
-    # metadata runs are treated as ready even when the exact symbol
-    # age does not match.  Profiling-only fallback: when no
-    # requirement has been recorded yet, allow metadata_only
-    # so the run probes the requirement itself.
-    from app.services.memory.symbol_preparation import can_execute_validated_memory_analysis
-    allowed, reason, blocker_message = can_execute_validated_memory_analysis(
-        db, evidence_id=evidence.id,
-    )
-    if not allowed:
-        # Allow metadata_only when no requirement exists yet; the
-        # run itself will probe and record the requirement.
-        if profile == "metadata_only" and not _any_requirement_for_evidence(db, evidence.id):
-            pass
-        else:
-            available, _gate_code, _ = acquisition_gate()
-            raise HTTPException(
-                status_code=409,
-                detail={
-                    "error_code": EC_SYMBOLS_REQUIRED,
-                    "message": blocker_message or "Windows symbols required for this evidence are not cached.",
-                    "evidence_id": evidence.id,
-                    "symbol_status": "missing",
-                    "can_acquire": bool(available),
-                    "blocker": blocker_message,
-                },
-            )
+    # Preparation and symbol discovery are advisory diagnostics.  The
+    # analysis run itself owns Volatility execution and lets Volatility
+    # identify layers and resolve/download symbols as needed.
     backend_overview = get_memory_backend_overview()
     volatility_status = next((item for item in backend_overview.get("backends", []) if item.get("backend") == "volatility3"), None)
     if not volatility_status or not volatility_status.get("ready"):

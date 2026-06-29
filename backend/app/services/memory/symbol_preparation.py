@@ -647,33 +647,18 @@ def can_execute_validated_memory_analysis(
     *,
     evidence_id: str,
 ) -> tuple[bool, str, str | None]:
-    """Canonical authorization for validated memory analysis.
+    """Return whether analysis may start for this evidence.
 
-    Returns ``(allowed, readiness_source, blocker)``.  Accepts
-    evidence when any supported validated path is ready:
-
-    1. Exact symbols present in the cache.
-    2. Volatility native compatibility confirmed.
-    3. Successful validated metadata preparation already established.
-
-    The caller may use ``readiness_source`` to tailor the UI message.
+    Preparation is no longer a hard prerequisite.  The actual analysis
+    run executes Volatility directly, allowing Volatility to identify
+    layers and resolve symbols during plugin execution.
     """
     from app.models.evidence import Evidence
 
     evidence = db.get(Evidence, evidence_id)
     if evidence is None:
         return False, "blocked", "Evidence not found."
-
-    readiness = compute_memory_readiness(db, evidence=evidence)
-    if readiness.can_analyze_metadata:
-        if readiness.native_compatible:
-            return True, "volatility_native_compatible", None
-        if readiness.exact_match:
-            return True, "exact_cache_hit", None
-        return True, "prior_metadata_preparation", None
-    if readiness.preparation_state == "blocked_symbols":
-        return False, "blocked_symbols", readiness.blocker or readiness.sanitized_message or "Windows symbols are not ready for this evidence."
-    return False, "blocked", readiness.blocker or readiness.sanitized_message or "Windows symbols are not ready."
+    return True, "direct_volatility_execution", None
 
 
 # -----------------------------------------------------------------------------
@@ -879,50 +864,14 @@ def compute_memory_readiness(
             sanitized = "The exact required Windows symbols are present in the cache."
         else:
             sanitized = "A successful metadata preparation already established readiness for this evidence."
-    elif preparation_state in {PREP_PROBING, PREP_QUEUED, PREP_IDENTIFIED, PREP_ACQUISITION_PENDING, PREP_ACQUIRING, PREP_ISF_CREATION}:
-        can_analyze = False
-        can_run_all = False
-        blocker = "Windows symbols are being prepared for this evidence."
-        sanitized = blocker
-    elif preparation_state == PREP_REQUIREMENT_UNKNOWN:
-        can_analyze = False
-        can_run_all = False
-        blocker = "Windows symbol requirement has not been identified yet."
-        sanitized = "Kairon can retry automatic probing; no manual symbol identifier is required."
-    elif preparation_state == PREP_NEGATIVE_CACHED:
-        can_analyze = False
-        can_run_all = False
-        blocker = "The required symbol is not available at the configured source."
-        sanitized = blocker
-    elif preparation_state == PREP_UNSUPPORTED:
-        can_analyze = False
-        can_run_all = False
-        blocker = "This image is not a supported Windows memory image."
-        sanitized = blocker
-    elif preparation_state == PREP_BLOCKED_SYMBOLS:
-        if native_compat:
-            can_analyze = True
-            can_run_all = True
-            blocker = None
-            sanitized = (
-                "Volatility successfully resolved and validated the Windows "
-                "symbols for this evidence."
-            )
-        else:
-            can_analyze = False
-            can_run_all = False
-            blocker = "Windows symbols are not ready yet."
-            sanitized = blocker
-    elif preparation_state in {PREP_ACQUISITION_FAILED, PREP_CANCELLED}:
-        can_analyze = False
-        can_run_all = False
-        blocker = "Symbol preparation failed."
-        sanitized = blocker
     else:
-        can_analyze = False
-        can_run_all = False
-        blocker = "Windows symbols are not ready yet."
-        sanitized = blocker
+        can_analyze = True
+        can_run_all = True
+        blocker = None
+        sanitized = (
+            "Memory evidence is ready for analysis. Volatility will identify "
+            "the image and resolve symbols when analysis starts."
+        )
     pending_intents = consume_pending_for_evidence(db, evidence_id=evidence.id)
     pending_kind = pending_intents[0].kind if pending_intents else None
     progress_label, progress_percent = progress_for_state(preparation_state)

@@ -114,35 +114,19 @@ export function MemoryEvidenceHeader({
     evidence.detection_confidence,
     evidence.operator_override,
   );
-  // Canonical analysis capability: when the preparation endpoint
-  // is available, trust its authoritative can_analyze_metadata field
-  // (which already accounts for native compatibility, metadata
-  // readiness, and symbol state).  Fall back to the legacy
-  // evidence.can_analyze field only when preparation data is absent.
-  const prepCanAnalyze = symbolPreparation?.can_analyze_metadata;
-  const canLaunchAnalysis = prepCanAnalyze ?? (evidence.can_analyze !== false);
-  const legacySymbolState = symbolReadiness?.state ?? "unknown";
-  const prepState = symbolPreparation?.effective_state || symbolPreparation?.ui_state;
-  const prepReady = prepState === "ready";
-  const prepNativeReady = prepReady && symbolPreparation?.native_compatible === true;
-  const symbolBlocksAnalysis =
-    !prepReady &&
-    !prepNativeReady &&
-    (
-      (legacySymbolState !== "unknown" && legacySymbolState !== "cached") ||
-      prepState === "preparing" ||
-      prepState === "blocked" ||
-      prepState === "blocked_symbols" ||
-      prepState === "failed"
-    );
-  const runDisabled = !canLaunchAnalysis || (symbolBlocksAnalysis && !prepCanAnalyze);
+  // Preparation and symbol readiness are diagnostics only.  The Run
+  // action is controlled by the evidence/worker/backend readiness
+  // reported by the memory overview; Volatility resolves symbols during
+  // the actual plugin run.
+  const canLaunchAnalysis = evidence.can_analyze !== false;
+  const runDisabled = !canLaunchAnalysis;
+  const prepState = symbolPreparation?.effective_state || symbolPreparation?.preparation_state || symbolPreparation?.ui_state;
+  const showPreparationInfo = Boolean(
+    symbolPreparation && prepState && prepState !== "ready",
+  );
   const runTitle = !canLaunchAnalysis
     ? "Confirm the evidence type before starting analysis."
-    : symbolBlocksAnalysis && !prepCanAnalyze
-      ? symbolPreparation?.sanitized_message ||
-        symbolReadiness?.sanitized_message ||
-        "Resolve the Windows symbol requirement before running analysis."
-      : "Run analysis";
+    : "Volatility will identify the image and resolve symbols when analysis starts.";
 
   return (
     <section
@@ -296,21 +280,20 @@ export function MemoryEvidenceHeader({
         </div>
       ) : null}
 
-      {symbolBlocksAnalysis ? (
+      {showPreparationInfo ? (
         <div
-          className="mt-3 rounded-xl border border-amber-400/30 bg-amber-500/10 p-3 text-xs text-amber-100"
-          data-testid="memory-symbol-blocker-banner"
-          data-state={prepState ?? legacySymbolState}
+          className="mt-3 rounded-xl border border-cyan-400/30 bg-cyan-500/10 p-3 text-xs text-cyan-100"
+          data-testid="memory-symbol-info-banner"
+          data-state={prepState}
         >
-          <p className="font-semibold text-ink">Analysis readiness</p>
-          <p className="mt-1" data-testid="memory-symbol-blocker-message">
-            {symbolReadiness?.sanitized_message ||
-              "Windows symbol requirement for this evidence is not satisfied."}
+          <p className="font-semibold text-ink">Memory evidence ready for analysis</p>
+          <p className="mt-1" data-testid="memory-symbol-info-message">
+            Volatility will identify the image and resolve symbols when analysis starts.
           </p>
           {symbolReadiness?.error_code ? (
             <p
               className="mt-1 font-mono text-[10px] uppercase tracking-wider"
-              data-testid="memory-symbol-blocker-code"
+              data-testid="memory-symbol-info-code"
             >
               {symbolReadiness.error_code}
             </p>
