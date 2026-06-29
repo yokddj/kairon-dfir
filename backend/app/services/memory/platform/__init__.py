@@ -374,6 +374,8 @@ def _run_volatility_plugin_bounded(
     """
     import subprocess
 
+    from app.core.config import get_settings
+
     settings = get_settings()
     timeout = min(30, int(getattr(settings, "memory_plugin_timeout_seconds", 120)))
 
