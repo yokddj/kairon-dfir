@@ -144,6 +144,19 @@ export default function MemoryEvidencePage() {
     },
   });
 
+  const startScanMutation = useMutation({
+    mutationFn: async () =>
+      api.startMemoryScan(caseId, evidenceId, "metadata_only", true),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
+      void queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId, evidenceId] });
+      void queryClient.invalidateQueries({ queryKey: ["memory-active-batch", caseId, evidenceId] });
+    },
+    onError: (_error: Error & { errorCode?: string }) => {
+      // Error surfaced by the mutation state.
+    },
+  });
+
   useEffect(() => {
     if (!overview) return;
     if (overview.evidences.length === 0) {
@@ -229,7 +242,6 @@ export default function MemoryEvidencePage() {
 
   const showExperimentalPanel =
     Boolean(symbolPreparation) && isBlockedSymbols;
-  const readinessReady: boolean | null = true;
 
   const handleReturnToLatest = useCallback(() => {
     setSearchParams((current) => {
@@ -276,12 +288,21 @@ export default function MemoryEvidencePage() {
         onReturnToLatest={handleReturnToLatest}
         catalogue={catalogueQuery.data ?? null}
         onOpenCatalogue={() => {
-          if (evidence.can_analyze === false) {
+          const ds = evidence.detection_status || "";
+          if (ds === "probable_disk" || (ds === "ambiguous_raw" && !evidence.operator_override)) {
             setConfirmationOpen(true);
             return;
           }
           setCatalogueOpen(true);
         }}
+        onAnalyzeMemory={() => {
+          if (!window.confirm(
+            "I am authorized and responsible for analyzing this memory evidence. " +
+            "I confirm this is a legitimate memory capture from an authorized source."
+          )) return;
+          startScanMutation.mutate();
+        }}
+        isAnalyzing={startScanMutation.isPending}
         symbolReadiness={symbolReadiness}
         symbolPreparation={symbolPreparation}
       />
@@ -293,12 +314,6 @@ export default function MemoryEvidencePage() {
           role="status"
         >
           {confirmationToast}
-        </div>
-      ) : null}
-
-      {tab === "overview" && evidence.can_analyze === false && readinessByEvidence.get(evidenceId)?.sanitized_message ? (
-        <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs text-rose-100">
-          {readinessByEvidence.get(evidenceId)?.sanitized_message}
         </div>
       ) : null}
 
@@ -370,7 +385,6 @@ export default function MemoryEvidencePage() {
           catalogue={catalogueQuery.data}
           volatilityBackend={volatilityBackend}
           canRun={canRun}
-          readinessReady={readinessReady}
           onClose={() => setCatalogueOpen(false)}
         />
       ) : null}

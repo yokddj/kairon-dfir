@@ -42,6 +42,8 @@ type Props = {
   onViewHistory: () => void;
   onReturnToLatest: () => void;
   onOpenCatalogue: () => void;
+  onAnalyzeMemory?: () => void;
+  isAnalyzing?: boolean;
   symbolReadiness?: MemorySymbolReadiness | null;
   symbolPreparation?: MemorySymbolPreparation | null;
   catalogue?: MemoryAnalysisCatalogue | null;
@@ -74,6 +76,8 @@ export function MemoryEvidenceHeader({
   onViewHistory,
   onReturnToLatest,
   onOpenCatalogue,
+  onAnalyzeMemory,
+  isAnalyzing = false,
   symbolReadiness,
   symbolPreparation,
   catalogue,
@@ -115,18 +119,23 @@ export function MemoryEvidenceHeader({
     evidence.operator_override,
   );
   // Preparation and symbol readiness are diagnostics only.  The Run
-  // action is controlled by the evidence/worker/backend readiness
-  // reported by the memory overview; Volatility resolves symbols during
-  // the actual plugin run.
-  const canLaunchAnalysis = evidence.can_analyze !== false;
-  const runDisabled = !canLaunchAnalysis;
+  // action is controlled by evidence type and upload completion.
+  // Volatility resolves symbols during the actual plugin run.
+  const detectionBlocked =
+    evidence.detection_status === "probable_disk" ||
+    (evidence.detection_status === "ambiguous_raw" && !evidence.operator_override) ||
+    evidence.detection_status === "unsupported" ||
+    evidence.detection_status === "invalid" ||
+    evidence.detection_status === "probe_failed";
+  const isFirstAnalysis = headerLabel === "Analyze memory";
+  const runDisabled = detectionBlocked || isAnalyzing;
+  const runTitle = detectionBlocked
+    ? "Confirm the evidence type before starting analysis."
+    : "Volatility will identify the image and resolve symbols when analysis starts.";
   const prepState = symbolPreparation?.effective_state || symbolPreparation?.preparation_state || symbolPreparation?.ui_state;
   const showPreparationInfo = Boolean(
     symbolPreparation && prepState && prepState !== "ready",
   );
-  const runTitle = !canLaunchAnalysis
-    ? "Confirm the evidence type before starting analysis."
-    : "Volatility will identify the image and resolve symbols when analysis starts.";
 
   return (
     <section
@@ -204,13 +213,13 @@ export function MemoryEvidenceHeader({
           <div className="flex flex-wrap gap-2">
             <button
               type="button"
-              onClick={onOpenCatalogue}
+              onClick={isFirstAnalysis && onAnalyzeMemory ? onAnalyzeMemory : onOpenCatalogue}
               disabled={runDisabled}
               title={runTitle}
               className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss disabled:opacity-60"
-              data-testid="memory-open-catalogue"
+              data-testid={isFirstAnalysis && onAnalyzeMemory ? "memory-analyze-direct" : "memory-open-catalogue"}
             >
-              {headerLabel}
+              {isAnalyzing ? "Starting analysis..." : headerLabel}
             </button>
             <button
               type="button"

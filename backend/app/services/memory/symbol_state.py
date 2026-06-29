@@ -342,8 +342,8 @@ def evidence_symbol_state(
     blocker: str | None = None
     error_code: str | None = None
     sanitized_message: str | None = "Windows symbol requirement for this evidence has not been recorded."
-    can_analyze_metadata = False
-    can_run_all = False
+    can_analyze_metadata = True
+    can_run_all = True
     if requirement is None:
         state = STATE_UNKNOWN
         blocker = "Windows symbol requirement for this evidence has not been recorded. Run a probe to identify the requirement."
@@ -352,10 +352,7 @@ def evidence_symbol_state(
     elif cache is not None and cache.exact_match:
         state = STATE_CACHED
         sanitized_message = "The exact required Windows symbols are present in the cache."
-        can_analyze_metadata = True
-        can_run_all = True
     else:
-        # We have a requirement but no exact cache hit.
         error_code = EC_SYMBOLS_REQUIRED
         blocker = "Windows symbols required for this evidence are not cached."
         sanitized_message = blocker
