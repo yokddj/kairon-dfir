@@ -121,7 +121,7 @@ ALLOWED_VOLATILITY_PLUGINS = {
 }
 
 
-def build_plugin_argv(executable: str | list[str], evidence_path: Path, plugin: str, *, offline: bool = True, cache_path: Path | None = None, symbol_path: Path | None = None) -> list[str]:
+def build_plugin_argv(executable: str | list[str], evidence_path: Path, plugin: str, *, offline: bool = False, cache_path: Path | None = None, symbol_path: Path | None = None) -> list[str]:
     if plugin not in ALLOWED_VOLATILITY_PLUGINS:
         raise VolatilityRunnerError("PLUGIN_NOT_ALLOWED", "Memory plugin is not allowed.")
     argv = [*executable] if isinstance(executable, list) else [executable]
@@ -138,13 +138,22 @@ def build_windows_info_argv(executable: str, evidence_path: Path) -> list[str]:
     return build_plugin_argv(executable, evidence_path, "windows.info")
 
 
-def _minimal_environment() -> dict[str, str]:
+def _offline_requested_from_environment() -> bool:
+    for key in ("KAIRON_VOLATILITY_OFFLINE", "VOLATILITY_OFFLINE"):
+        value = str(os.environ.get(key) or "").strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+    return False
+
+
+def _minimal_environment(*, offline: bool = False) -> dict[str, str]:
     env: dict[str, str] = {}
     for key in ("PATH", "SYSTEMROOT", "WINDIR", "HOME", "XDG_CACHE_HOME", "TMPDIR", "TEMP", "TMP"):
         value = os.environ.get(key)
         if value:
             env[key] = value
-    env["VOLATILITY_OFFLINE"] = "1"
+    if offline:
+        env["VOLATILITY_OFFLINE"] = "1"
     return env
 
 
@@ -155,24 +164,24 @@ def run_plugin(
     *,
     timeout_seconds: int | None = None,
     max_output_bytes: int | None = None,
-    offline: bool = True,
+    offline: bool | None = None,
     cache_path: Path | None = None,
     symbol_path: Path | None = None,
 ) -> VolatilityRunResult:
     settings = get_settings()
     argv_prefix, display = resolve_volatility_invocation()
-    # Normal memory analysis is always offline. Managed downloads belong only
-    # to the dedicated symbol-fetcher service.
+    if offline is None:
+        offline = _offline_requested_from_environment()
     xdg_cache = str(os.environ.get("XDG_CACHE_HOME") or "").strip()
     default_cache_path = Path(xdg_cache) / "volatility3" if xdg_cache else None
     default_symbol_path = default_cache_path / "symbols" if default_cache_path else None
-    cache_path = cache_path or default_cache_path
-    symbol_path = symbol_path or default_symbol_path
-    if cache_path is not None and symbol_path is not None:
+    effective_cache_path = cache_path or default_cache_path
+    effective_symbol_path = symbol_path or default_symbol_path
+    if effective_cache_path is not None and effective_symbol_path is not None:
         try:
-            cache_path.mkdir(parents=True, exist_ok=True, mode=0o750)
-            symbol_path.mkdir(parents=True, exist_ok=True, mode=0o750)
-            probe = cache_path / ".kairon-write-test"
+            effective_cache_path.mkdir(parents=True, exist_ok=True, mode=0o750)
+            effective_symbol_path.mkdir(parents=True, exist_ok=True, mode=0o750)
+            probe = effective_cache_path / ".kairon-write-test"
             probe.write_text("ok", encoding="utf-8")
             probe.unlink(missing_ok=True)
         except OSError as exc:
@@ -189,7 +198,7 @@ def run_plugin(
             argv,
             shell=False,
             cwd=str(work_dir),
-            env=_minimal_environment(),
+            env=_minimal_environment(offline=offline),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,
@@ -294,7 +303,7 @@ def _classify_failure(stderr: bytes) -> tuple[str, str]:
     if "read-only file system" in lower and ("symbol" in lower or "pdb" in lower):
         return "MEMORY_SYMBOL_CACHE_NOT_WRITABLE", "Volatility could not use its controlled symbol cache under the read-only worker filesystem."
     if "symbol_table_name" in lower or ("unable to validate" in lower and "symbol" in lower):
-        return "SYMBOLS_UNAVAILABLE", "windows.info could not resolve the required Windows symbols under offline-only mode."
+        return "SYMBOLS_UNAVAILABLE", "Volatility could not download required symbols."
     if "unable to validate" in lower and "layer" in lower:
         return "INVALID_MEMORY_LAYER", "Volatility could not construct a valid Windows memory layer for this image."
     if "no suitable" in lower and "layer" in lower:

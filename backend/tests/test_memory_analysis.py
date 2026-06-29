@@ -1901,14 +1901,24 @@ def test_preparation_validation_reports_unwritable_symbol_cache(monkeypatch: pyt
     assert "cannot write" in str(message)
 
 
-def test_volatility_minimal_environment_preserves_offline_writable_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_volatility_minimal_environment_preserves_writable_cache_without_forcing_offline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CACHE_HOME", "/volatility-cache")
+    monkeypatch.delenv("VOLATILITY_OFFLINE", raising=False)
 
     environment = volatility_runner._minimal_environment()
 
     assert environment["XDG_CACHE_HOME"] == "/volatility-cache"
-    assert environment["VOLATILITY_OFFLINE"] == "1"
+    assert "VOLATILITY_OFFLINE" not in environment
     assert "DATABASE_URL" not in environment
+
+
+def test_volatility_minimal_environment_supports_explicit_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("XDG_CACHE_HOME", "/volatility-cache")
+
+    environment = volatility_runner._minimal_environment(offline=True)
+
+    assert environment["XDG_CACHE_HOME"] == "/volatility-cache"
+    assert environment["VOLATILITY_OFFLINE"] == "1"
 
 
 def test_backend_readiness_cache_prevents_repeated_subprocess_calls(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2130,8 +2140,32 @@ def test_volatility_runner_uses_fixed_argv_and_shell_false(tmp_path: Path, monke
 
     result = volatility_runner.run_windows_info(evidence_path, tmp_path)
 
-    assert calls["args"] == ["/usr/bin/vol", "--offline", "-f", str(evidence_path), "-r", "json", "windows.info"]
+    assert calls["args"] == ["/usr/bin/vol", "-f", str(evidence_path), "-r", "json", "windows.info"]
     assert calls["kwargs"]["shell"] is False
+    assert result.argv_display == ["vol", "-f", "[evidence]", "-r", "json", "windows.info"]
+
+
+def test_volatility_runner_explicit_offline_adds_flag_and_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    evidence_path = tmp_path / "memory.mem"
+    evidence_path.write_bytes(b"synthetic")
+    calls: dict = {}
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+
+    class FakeProcess:
+        pid = 12345
+        returncode = 0
+
+        def communicate(self, timeout):
+            return b"{}", b""
+
+    monkeypatch.setattr(volatility_runner, "get_settings", lambda: SimpleNamespace(volatility3_command="vol", memory_plugin_timeout_seconds=5, memory_plugin_output_max_bytes=10_000))
+    monkeypatch.setattr(volatility_runner, "resolve_configured_executable", lambda _command: (True, "/usr/bin/vol", "vol", None))
+    monkeypatch.setattr(volatility_runner.subprocess, "Popen", lambda args, **kwargs: calls.update({"args": args, "kwargs": kwargs}) or FakeProcess())
+
+    result = volatility_runner.run_plugin("windows.info", evidence_path, tmp_path, offline=True)
+
+    assert calls["args"] == ["/usr/bin/vol", "--offline", "-f", str(evidence_path), "-r", "json", "windows.info"]
+    assert calls["kwargs"]["env"]["VOLATILITY_OFFLINE"] == "1"
     assert result.argv_display == ["vol", "--offline", "-f", "[evidence]", "-r", "json", "windows.info"]
 
 
@@ -2154,7 +2188,7 @@ def test_volatility_runner_uses_fixed_process_plugin_argv(tmp_path: Path, monkey
 
     volatility_runner.run_plugin("windows.pslist", evidence_path, tmp_path)
 
-    assert calls["args"] == ["/usr/bin/vol", "--offline", "-f", str(evidence_path), "-r", "json", "windows.pslist"]
+    assert calls["args"] == ["/usr/bin/vol", "-f", str(evidence_path), "-r", "json", "windows.pslist"]
     assert calls["kwargs"]["shell"] is False
 
 
@@ -2165,7 +2199,7 @@ def test_volatility_runner_rejects_unallowed_plugin(tmp_path: Path) -> None:
     assert exc_info.value.code == "PLUGIN_NOT_ALLOWED"
 
 
-def test_volatility_runner_uses_server_controlled_offline_symbol_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_volatility_runner_uses_server_controlled_online_symbol_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     evidence_path = tmp_path / "memory.mem"
     evidence_path.write_bytes(b"synthetic")
     cache_root = tmp_path / "cache"
@@ -2185,8 +2219,65 @@ def test_volatility_runner_uses_server_controlled_offline_symbol_paths(tmp_path:
 
     volatility_runner.run_windows_info(evidence_path, tmp_path / "work")
 
-    assert calls["args"][:6] == ["/usr/bin/vol", "--offline", "--cache-path", str(cache_root / "volatility3"), "--symbol-dirs", str(cache_root / "volatility3" / "symbols")]
+    assert calls["args"] == ["/usr/bin/vol", "-f", str(evidence_path), "-r", "json", "windows.info"]
+    assert "--offline" not in calls["args"]
     assert (cache_root / "volatility3" / "symbols").is_dir()
+
+
+def test_explicit_cache_paths_are_supported_without_forcing_offline(tmp_path: Path) -> None:
+    cache = tmp_path / "volatility3"
+    symbols = cache / "symbols"
+
+    argv = volatility_runner.build_plugin_argv("vol", tmp_path / "memory.raw", "windows.info", cache_path=cache, symbol_path=symbols)
+
+    assert argv == [
+        "vol",
+        "--cache-path",
+        str(cache),
+        "--symbol-dirs",
+        str(symbols),
+        "-f",
+        str(tmp_path / "memory.raw"),
+        "-r",
+        "json",
+        "windows.info",
+    ]
+    assert "--offline" not in argv
+
+
+def test_unknown_symbol_requirement_does_not_add_offline(tmp_path: Path) -> None:
+    argv = volatility_runner.build_plugin_argv("vol", tmp_path / "DC02-20240322-125906.dmp", "windows.info")
+
+    assert argv == ["vol", "-f", str(tmp_path / "DC02-20240322-125906.dmp"), "-r", "json", "windows.info"]
+    assert "--offline" not in argv
+
+
+def test_empty_cache_does_not_add_offline(tmp_path: Path) -> None:
+    cache = tmp_path / "volatility3"
+    symbols = cache / "symbols"
+
+    argv = volatility_runner.build_plugin_argv("vol", tmp_path / "memory.raw", "windows.info", cache_path=cache, symbol_path=symbols)
+
+    assert "--cache-path" in argv
+    assert "--symbol-dirs" in argv
+    assert "--offline" not in argv
+
+
+def test_historical_crash_dump_command_matches_working_direct_execution(tmp_path: Path) -> None:
+    baseline = {
+        "filename": "DC02-20240322-125906.dmp",
+        "pdb_name": "ntkrnlmp.pdb",
+        "pdb_guid": "D801A9AFC0FB7761380800F708633DEA",
+        "pdb_age": 1,
+        "architecture": "x64",
+    }
+
+    argv = volatility_runner.build_plugin_argv("vol", tmp_path / baseline["filename"], "windows.info")
+
+    assert baseline["pdb_name"] == "ntkrnlmp.pdb"
+    assert baseline["pdb_guid"] == "D801A9AFC0FB7761380800F708633DEA"
+    assert argv == ["vol", "-f", str(tmp_path / "DC02-20240322-125906.dmp"), "-r", "json", "windows.info"]
+    assert "--offline" not in argv
 
 
 @pytest.mark.parametrize(
