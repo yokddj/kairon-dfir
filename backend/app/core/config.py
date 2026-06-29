@@ -61,7 +61,9 @@ class Settings(BaseSettings):
     memory_max_upload_size: int = 2147483648
     memory_upload_enabled: bool = False
     memory_upload_max_bytes: int = 34359738368
-    memory_upload_chunk_size_bytes: int = 8388608
+    memory_upload_chunk_size_bytes: int = 67108864
+    memory_upload_chunk_size_min_bytes: int = 1048576
+    memory_upload_chunk_size_max_bytes: int = 268435456
     memory_upload_staging_root: str = ""
     memory_upload_cleanup_age_seconds: int = 86400
     memory_upload_request_timeout_seconds: int = 1800
@@ -525,8 +527,18 @@ class Settings(BaseSettings):
     def validate_memory_upload_settings(self) -> "Settings":
         if self.memory_upload_max_bytes < 10 * 1024 * 1024 * 1024:
             raise ValueError("MEMORY_UPLOAD_MAX_BYTES must be at least 10 GiB")
-        if self.memory_upload_chunk_size_bytes <= 0:
-            raise ValueError("MEMORY_UPLOAD_CHUNK_BYTES must be greater than zero")
+        if self.memory_upload_chunk_size_bytes < self.memory_upload_chunk_size_min_bytes:
+            raise ValueError(
+                f"MEMORY_UPLOAD_CHUNK_BYTES must be at least "
+                f"{self.memory_upload_chunk_size_min_bytes} bytes "
+                f"({self.memory_upload_chunk_size_min_bytes // 1048576} MiB)"
+            )
+        if self.memory_upload_chunk_size_bytes > self.memory_upload_chunk_size_max_bytes:
+            raise ValueError(
+                f"MEMORY_UPLOAD_CHUNK_BYTES must not exceed "
+                f"{self.memory_upload_chunk_size_max_bytes} bytes "
+                f"({self.memory_upload_chunk_size_max_bytes // 1048576} MiB)"
+            )
         if self.memory_upload_chunk_size_bytes > self.memory_upload_max_bytes:
             raise ValueError("MEMORY_UPLOAD_CHUNK_BYTES must not exceed MEMORY_UPLOAD_MAX_BYTES")
         if self.memory_upload_session_ttl_seconds <= 0:

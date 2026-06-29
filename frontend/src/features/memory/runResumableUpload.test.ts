@@ -4,6 +4,7 @@ import {
   runResumableUpload,
   CHUNK_UPLOAD_MAX_RETRIES,
   CHUNK_UPLOAD_RETRY_BASE_DELAY_MS,
+  DEFAULT_CHUNK_SIZE,
 } from "./runResumableUpload";
 
 function makeStatus(
@@ -54,6 +55,10 @@ function sleepImmediate() {
 }
 
 describe("runResumableUpload", () => {
+  it("uses a 64 MiB fallback chunk size for new sessions", () => {
+    expect(DEFAULT_CHUNK_SIZE).toBe(64 * 1024 * 1024);
+  });
+
   it("uploads chunks 2, 3, and 4 in order with one call and finalizes once", async () => {
     const uploadId = "resume-1";
     const file = makeFile(20);
@@ -1098,5 +1103,258 @@ describe("runResumableUpload", () => {
     expect(result.type).toBe("completed");
     expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([1]);
     expect(finalize).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses server-provided 64 MiB chunk_size_bytes when session returns it", async () => {
+    const uploadId = "server-64mib";
+    const file = makeFile(192 * 1024 * 1024);
+    const serverChunkSize = 64 * 1024 * 1024;
+    const callerChunkSize = 1; // deliberate mismatch to prove server wins
+
+    const chunkCount = 3;
+    const received: number[] = [];
+    const buildStatus = (overrides: Partial<MemoryUploadStatus> = {}) =>
+      makeStatus({
+        upload_id: uploadId,
+        expected_bytes: file.size,
+        chunk_size_bytes: serverChunkSize,
+        total_chunks: chunkCount,
+        received_chunk_count: received.length,
+        received_chunks: [...received],
+        bytes_received: received.reduce(
+          (total, i) => total + chunkBytes(file.size, serverChunkSize, i),
+          0,
+        ),
+        missing_chunks: Array.from({ length: chunkCount }, (_, i) => i).filter(
+          (i) => !received.includes(i),
+        ),
+        ...overrides,
+      });
+
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      received.push(chunkIndex);
+      return buildStatus();
+    });
+    const finalize = vi.fn(async () =>
+      makeStatus({
+        upload_id: uploadId,
+        status: "completed",
+        evidence_id: "ev-server-64",
+        bytes_received: file.size,
+        expected_bytes: file.size,
+        chunk_size_bytes: serverChunkSize,
+        total_chunks: chunkCount,
+        received_chunk_count: chunkCount,
+        received_chunks: [0, 1, 2],
+        missing_chunks: [],
+        progress_percent: 100,
+      }),
+    );
+
+    const result = await runResumableUpload({
+      uploadId,
+      file,
+      chunkSize: callerChunkSize, // should be overridden
+      getStatus,
+      uploadChunk,
+      finalize,
+      signal: new AbortController().signal,
+      sleep: sleepImmediate,
+    });
+
+    expect(result.type).toBe("completed");
+    expect(uploadChunk).toHaveBeenCalledTimes(chunkCount);
+    const blobs: Blob[] = uploadChunk.mock.calls.map((c) => c[2]);
+    expect(blobs[0].size).toBe(64 * 1024 * 1024);
+    expect(blobs[1].size).toBe(64 * 1024 * 1024);
+    expect(blobs[2].size).toBe(64 * 1024 * 1024);
+  });
+
+  it("resumed legacy session uses persisted 8 MiB from server and ignores passed chunkSize", async () => {
+    const uploadId = "legacy-8mib";
+    const file = makeFile(16 * 1024 * 1024);
+    const legacyChunkSize = 8 * 1024 * 1024;
+    const callerChunkSize = 64 * 1024 * 1024; // would ignore
+
+    const chunkCount = 2;
+    const received: number[] = [];
+    const buildStatus = (overrides: Partial<MemoryUploadStatus> = {}) =>
+      makeStatus({
+        upload_id: uploadId,
+        expected_bytes: file.size,
+        chunk_size_bytes: legacyChunkSize,
+        total_chunks: chunkCount,
+        received_chunk_count: received.length,
+        received_chunks: [...received],
+        bytes_received: received.reduce(
+          (total, i) => total + chunkBytes(file.size, legacyChunkSize, i),
+          0,
+        ),
+        missing_chunks: Array.from({ length: chunkCount }, (_, i) => i).filter(
+          (i) => !received.includes(i),
+        ),
+        ...overrides,
+      });
+
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      received.push(chunkIndex);
+      return buildStatus();
+    });
+    const finalize = vi.fn(async () =>
+      makeStatus({
+        upload_id: uploadId,
+        status: "completed",
+        evidence_id: "ev-legacy",
+        bytes_received: file.size,
+        expected_bytes: file.size,
+        chunk_size_bytes: legacyChunkSize,
+        total_chunks: chunkCount,
+        received_chunk_count: chunkCount,
+        received_chunks: [0, 1],
+        missing_chunks: [],
+        progress_percent: 100,
+      }),
+    );
+
+    const result = await runResumableUpload({
+      uploadId,
+      file,
+      chunkSize: callerChunkSize,
+      getStatus,
+      uploadChunk,
+      finalize,
+      signal: new AbortController().signal,
+      sleep: sleepImmediate,
+    });
+
+    expect(result.type).toBe("completed");
+    const blobs: Blob[] = uploadChunk.mock.calls.map((c) => c[2]);
+    expect(blobs[0].size).toBe(8 * 1024 * 1024);
+    expect(blobs[1].size).toBe(8 * 1024 * 1024);
+  });
+
+  it("computes 160 chunks for 10 GiB with 64 MiB server chunk size", () => {
+    const fileSize = 10 * 1024 * 1024 * 1024;
+    const chunkSize = 64 * 1024 * 1024;
+    const totalChunks = Math.ceil(fileSize / chunkSize);
+    expect(totalChunks).toBe(160);
+    const lastChunkSize = fileSize - ((totalChunks - 1) * chunkSize);
+    expect(lastChunkSize).toBe(64 * 1024 * 1024);
+  });
+
+  it("resume begins from first missing chunk from server status", async () => {
+    const uploadId = "resume-server";
+    const file = makeFile(256 * 1024 * 1024);
+    const serverChunkSize = 64 * 1024 * 1024;
+    const chunkCount = 4;
+    const alreadyReceived = [0, 1]; // server confirms 0,1
+
+    const received = [...alreadyReceived];
+    const buildStatus = (overrides: Partial<MemoryUploadStatus> = {}) =>
+      makeStatus({
+        upload_id: uploadId,
+        expected_bytes: file.size,
+        chunk_size_bytes: serverChunkSize,
+        total_chunks: chunkCount,
+        received_chunk_count: received.length,
+        received_chunks: [...received],
+        bytes_received: received.reduce(
+          (total, i) => total + chunkBytes(file.size, serverChunkSize, i),
+          0,
+        ),
+        missing_chunks: Array.from({ length: chunkCount }, (_, i) => i).filter(
+          (i) => !received.includes(i),
+        ),
+        ...overrides,
+      });
+
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      received.push(chunkIndex);
+      return buildStatus();
+    });
+    const finalize = vi.fn(async () =>
+      makeStatus({
+        upload_id: uploadId,
+        status: "completed",
+        evidence_id: "ev-resume",
+        bytes_received: file.size,
+        expected_bytes: file.size,
+        chunk_size_bytes: serverChunkSize,
+        total_chunks: chunkCount,
+        received_chunk_count: chunkCount,
+        received_chunks: [0, 1, 2, 3],
+        missing_chunks: [],
+        progress_percent: 100,
+      }),
+    );
+
+    const result = await runResumableUpload({
+      uploadId, file, getStatus, uploadChunk, finalize,
+      signal: new AbortController().signal,
+      sleep: sleepImmediate,
+    });
+
+    expect(result.type).toBe("completed");
+    const chunkIndices = uploadChunk.mock.calls.map((c) => c[1]);
+    expect(chunkIndices).toEqual([2, 3]);
+    expect(uploadChunk).toHaveBeenCalledTimes(2);
+  });
+
+  it("progress callback receives bytes from server, not just chunk count", async () => {
+    const uploadId = "progress-bytes";
+    const file = makeFile(128 * 1024 * 1024);
+    const chunkSize = 64 * 1024 * 1024;
+    const received: number[] = [];
+    const buildStatus = (overrides: Partial<MemoryUploadStatus> = {}) =>
+      makeStatus({
+        upload_id: uploadId,
+        expected_bytes: file.size,
+        chunk_size_bytes: chunkSize,
+        total_chunks: 2,
+        received_chunk_count: received.length,
+        received_chunks: [...received],
+        bytes_received: received.length * chunkSize,
+        missing_chunks: Array.from({ length: 2 }, (_, i) => i).filter(
+          (i) => !received.includes(i),
+        ),
+        ...overrides,
+      });
+
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      received.push(chunkIndex);
+      return buildStatus();
+    });
+    const finalize = vi.fn(async () =>
+      makeStatus({
+        upload_id: uploadId,
+        status: "completed",
+        evidence_id: "ev-progress",
+        bytes_received: file.size,
+        expected_bytes: file.size,
+        chunk_size_bytes: chunkSize,
+        total_chunks: 2,
+        received_chunk_count: 2,
+        received_chunks: [0, 1],
+        missing_chunks: [],
+        progress_percent: 100,
+      }),
+    );
+
+    const onProgress = vi.fn();
+    await runResumableUpload({
+      uploadId, file, getStatus, uploadChunk, finalize,
+      signal: new AbortController().signal,
+      onProgress, sleep: sleepImmediate,
+    });
+
+    const progressCalls = onProgress.mock.calls.map((c) => c[0]);
+    expect(progressCalls.length).toBe(4);
+    expect(progressCalls[0].loaded).toBe(64 * 1024 * 1024);
+    expect(progressCalls[0].total).toBe(128 * 1024 * 1024);
+    expect(progressCalls[3].loaded).toBe(128 * 1024 * 1024);
   });
 });

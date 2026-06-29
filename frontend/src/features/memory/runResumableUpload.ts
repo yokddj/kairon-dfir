@@ -2,7 +2,7 @@ import { ApiError, type MemoryUploadStatus } from "../../api/client";
 
 export const CHUNK_UPLOAD_MAX_RETRIES = 3;
 export const CHUNK_UPLOAD_RETRY_BASE_DELAY_MS = 500;
-export const DEFAULT_CHUNK_SIZE = 8 * 1024 * 1024;
+export const DEFAULT_CHUNK_SIZE = 64 * 1024 * 1024;
 
 export type RunResumableUploadArgs = {
   uploadId: string;

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import shutil
+import time
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, AsyncIterable, Iterable, Mapping
@@ -37,6 +39,8 @@ ACTIVE_UPLOAD_SESSION_STATUSES = {"created", "uploading", "verifying", "finalizi
 TERMINAL_UPLOAD_SESSION_STATUSES = {"completed", "cancelled", "expired", "failed", "inconsistent"}
 _CLEANUP_LOCK_KEY = "kairon:memory_uploads:cleanup_lock"
 _CLEANUP_INTERVAL_SECONDS = 300
+
+logger = logging.getLogger(__name__)
 
 
 class MemoryUploadSessionError(RuntimeError):
@@ -240,7 +244,13 @@ def create_memory_upload_session(
     if not bool(capacity["can_accept_selected_size"]):
         raise MemoryUploadSessionError("MEMORY_UPLOAD_INSUFFICIENT_SPACE", "Server storage capacity is below the safe threshold for this memory image.")
 
-    chunk_size = max(1024 * 1024, int(settings.memory_upload_chunk_size_bytes or 0))
+    chunk_size = max(
+        int(settings.memory_upload_chunk_size_min_bytes or 1048576),
+        min(
+            int(settings.memory_upload_chunk_size_max_bytes or 268435456),
+            int(settings.memory_upload_chunk_size_bytes or 67108864),
+        ),
+    )
     total_chunks = max(1, math.ceil(expected_size_bytes / chunk_size))
     upload = create_memory_upload(
         upload_id=str(uuid4()),
@@ -308,6 +318,7 @@ async def store_memory_upload_chunk_stream(
     headers: Mapping[str, str],
     content_length_is_payload: bool,
 ) -> MemoryUpload:
+    request_started = time.monotonic()
     item = get_memory_upload(db, case_id, upload_id)
     if item is None:
         raise MemoryUploadSessionError("MEMORY_UPLOAD_NOT_FOUND", "Memory upload session was not found.")
@@ -362,8 +373,12 @@ async def store_memory_upload_chunk_stream(
     final_path = _chunk_path(item, chunk_index)
     digest = hashlib.sha256()
     bytes_written = 0
+    receive_hash_write_ms = 0
+    file_fsync_ms = 0
+    dir_fsync_ms = 0
 
     with temp_path.open("xb") as handle:
+        phase_started = time.monotonic()
         async for chunk in chunks:
             if not chunk:
                 continue
@@ -374,8 +389,11 @@ async def store_memory_upload_chunk_stream(
                 raise MemoryUploadSessionError("MEMORY_UPLOAD_CHUNK_TOO_LARGE", "Chunk payload exceeds the configured chunk size.")
             digest.update(chunk)
             handle.write(chunk)
+        receive_hash_write_ms = int((time.monotonic() - phase_started) * 1000)
         handle.flush()
+        fsync_started = time.monotonic()
         os.fsync(handle.fileno())
+        file_fsync_ms = int((time.monotonic() - fsync_started) * 1000)
 
     computed_sha = digest.hexdigest()
     if bytes_written != expected_length:
@@ -396,7 +414,9 @@ async def store_memory_upload_chunk_stream(
     os.replace(temp_path, final_path)
     dir_fd = os.open(str(target_dir), os.O_DIRECTORY)
     try:
+        fsync_started = time.monotonic()
         os.fsync(dir_fd)
+        dir_fsync_ms = int((time.monotonic() - fsync_started) * 1000)
     finally:
         os.close(dir_fd)
 
@@ -409,8 +429,23 @@ async def store_memory_upload_chunk_stream(
     item.failure_message = None
     _touch_session(item)
     db.add(item)
+    db_started = time.monotonic()
     db.commit()
+    db_commit_ms = int((time.monotonic() - db_started) * 1000)
     db.refresh(item)
+    logger.info(
+        "memory upload chunk stored",
+        extra={
+            "upload_id": upload_id,
+            "chunk_index": chunk_index,
+            "chunk_size_bytes": bytes_written,
+            "receive_hash_write_ms": receive_hash_write_ms,
+            "file_fsync_ms": file_fsync_ms,
+            "dir_fsync_ms": dir_fsync_ms,
+            "db_commit_ms": db_commit_ms,
+            "total_ms": int((time.monotonic() - request_started) * 1000),
+        },
+    )
     return item
 
 
