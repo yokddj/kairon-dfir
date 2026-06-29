@@ -38,6 +38,7 @@ from app.services.memory import validation as memory_validation
 from app.services.memory import volatility_runner
 from app.services.memory import symbol_control
 from app.services.memory import worker_capability
+from app.services.memory.pids import normalize_pid
 from app.core import storage as core_storage
 from app.schemas.memory import MemoryStartScanRequest
 from app.schemas.memory import MemorySymbolAcquireRequest
@@ -1597,11 +1598,12 @@ def test_run_all_unknown_preparation_creates_one_existing_evidence_run(db_sessio
     settings = _backend_settings(
         memory_run_all_enabled=True,
         memory_process_profile_enabled=True,
-        allowed_memory_profiles=["metadata_only", "processes_basic"],
-        allowed_memory_plugins=["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"],
+        allowed_memory_profiles=["metadata_only", "processes_basic", "processes_extended", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"],
+        allowed_memory_plugins=["windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "windows.dlllist", "windows.ldrmodules", "windows.handles", "windows.modules", "windows.driverscan", "windows.malfind"],
     )
     monkeypatch.setattr(routes_memory, "get_settings", lambda: settings)
     monkeypatch.setattr("app.core.config.get_settings", lambda: SimpleNamespace(**settings.__dict__, backend_data_dir=tmp_path, memory_output_root=tmp_path / "out"))
+    monkeypatch.setattr(memory_execution.backend_readiness, "get_settings", lambda: settings)
     monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=ev))
     monkeypatch.setattr("app.workers.tasks.enqueue_memory_metadata_scan", lambda _run_id: "job-run-all")
 
@@ -1614,10 +1616,10 @@ def test_run_all_unknown_preparation_creates_one_existing_evidence_run(db_sessio
 
     assert result["status"] == "running"
     assert db_session.query(Evidence).count() == 1
-    assert db_session.query(MemoryScanRun).count() == 1
-    run = db_session.query(MemoryScanRun).one()
-    assert run.evidence_id == ev.id
-    assert run.profile == "metadata_only"
+    runs = db_session.query(MemoryScanRun).order_by(MemoryScanRun.profile).all()
+    assert len(runs) == 7
+    assert {run.profile for run in runs} == {"metadata_only", "processes_basic", "processes_extended", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"}
+    assert all(run.evidence_id == ev.id for run in runs)
 
 
 def test_memory_profiles_resolve_server_side(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2399,6 +2401,138 @@ def test_process_normalizer_invalid_pid_warns() -> None:
 
     assert normalized["processes"] == []
     assert "missing_or_invalid_pid" in normalized["warnings"]
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        (4, 4),
+        (" 1000 ", 1000),
+        ("", None),
+        ("N/A", None),
+        ("-", None),
+        (None, None),
+        (True, None),
+        (42.0, 42),
+        (42.5, None),
+        ({"pid": 4}, None),
+        ([4], None),
+        (2**31, None),
+    ],
+)
+def test_memory_pid_normalizer_strict_cases(value, expected) -> None:
+    assert normalize_pid(value) == expected
+
+
+def test_process_normalizer_ppid_and_raw_pid_values_preserved() -> None:
+    normalized = memory_normalizers.normalize_windows_pslist([
+        {"PID": "1000", "PPID": " 4 ", "ImageFileName": "example.exe", "Offset(V)": "0x2000"},
+    ])
+
+    process = normalized["processes"][0]
+    assert process["process"]["pid"] == 1000
+    assert process["process"]["ppid"] == 4
+    assert process["raw"]["process_pid"] == "1000"
+    assert process["raw"]["process_ppid"] == " 4 "
+
+
+def test_invalid_and_oversized_pid_do_not_raise_or_index() -> None:
+    normalized = memory_normalizers.normalize_windows_pslist([
+        {"PID": {"bad": "shape"}, "ImageFileName": "dict.exe"},
+        {"PID": str(2**31), "ImageFileName": "oversized.exe"},
+    ])
+
+    assert normalized["processes"] == []
+    assert normalized["warnings"].count("missing_or_invalid_pid") == 2
+
+
+def test_memory_process_indexing_sanitizes_malformed_pid_and_continues(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeIndices:
+        def __init__(self):
+            self.refreshed = False
+
+        def exists(self, index):
+            return True
+
+        def refresh(self, index):
+            self.refreshed = True
+
+    class FakeClient:
+        def __init__(self):
+            self.indices = FakeIndices()
+            self.bodies = []
+
+        def index(self, *, index, id, body, refresh):
+            self.bodies.append(body)
+            if id == "bad-record":
+                raise RuntimeError("simulated mapper_parsing_exception")
+            return {"result": "created"}
+
+    client = FakeClient()
+    monkeypatch.setattr(memory_indexing, "get_opensearch_client", lambda: client)
+    docs = [
+        {"document_id": "good-record", "memory_artifact_type": "memory_process", "process": {"pid": "123", "ppid": "4"}},
+        {"document_id": "bad-record", "memory_artifact_type": "memory_process", "process": {"pid": str(2**31), "ppid": ["bad"]}},
+    ]
+
+    result = memory_indexing.index_memory_documents(CASE_ID, docs)
+
+    assert result["indexed"] == 1
+    assert result["errors"] == 1
+    assert client.bodies[0]["process"]["pid"] == 123
+    assert client.bodies[0]["process"]["ppid"] == 4
+    assert client.bodies[1]["process"]["pid"] is None
+    assert client.bodies[1]["process"]["ppid"] is None
+    assert client.indices.refreshed is True
+
+
+def test_memory_process_document_ids_are_deterministic_for_reindex() -> None:
+    payload = [{"PID": "1000", "PPID": "4", "ImageFileName": "stable.exe", "Offset(V)": "0x2000"}]
+
+    first = memory_normalizers.merge_memory_process_results([memory_normalizers.normalize_windows_pslist(payload)], case_id=CASE_ID, evidence_id=MEMORY_EVIDENCE_ID, memory_run_id="run-stable")
+    second = memory_normalizers.merge_memory_process_results([memory_normalizers.normalize_windows_pslist(payload)], case_id=CASE_ID, evidence_id=MEMORY_EVIDENCE_ID, memory_run_id="run-stable")
+
+    assert [doc["document_id"] for doc in first["processes"]] == [doc["document_id"] for doc in second["processes"]]
+    assert first["processes"][0]["process"]["pid"] == 1000
+
+
+def test_memory_process_mapping_keeps_pid_fields_as_integers() -> None:
+    props = memory_indexing.MEMORY_SYSTEM_INFO_MAPPING["mappings"]["properties"]
+
+    assert props["process"]["properties"]["pid"]["type"] == "integer"
+    assert props["process"]["properties"]["ppid"]["type"] == "integer"
+    assert props["parent_pid"]["type"] == "integer"
+    assert props["child_pid"]["type"] == "integer"
+
+
+def test_reindex_completed_process_run_from_raw_without_rerunning_volatility(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    evidence = _evidence(db_session)
+    run = MemoryScanRun(case_id=CASE_ID, evidence_id=evidence.id, backend="volatility3", profile="processes_basic", status="completed_with_errors", requested_plugin_count=4, plugin_count=4, plugins_completed=4, plugins_failed=0, metadata_json={}, error_log={"code": "INDEXING_FAILED"})
+    db_session.add(run)
+    db_session.commit()
+    raw_path = tmp_path / "data" / "memory-output" / "windows.pslist.json"
+    raw_path.parent.mkdir(parents=True)
+    raw_path.write_text(json.dumps([{"PID": "1000", "PPID": "4", "ImageFileName": "raw.exe", "Offset(V)": "0x2000"}]), encoding="utf-8")
+    db_session.add(MemoryPluginRun(memory_scan_run_id=run.id, case_id=CASE_ID, evidence_id=evidence.id, plugin="windows.pslist", status="completed", output_relative_path="memory-output/windows.pslist.json"))
+    db_session.commit()
+    monkeypatch.setattr(memory_execution, "get_settings", lambda: _upload_session_settings(tmp_path))
+    indexed: dict = {}
+    def fake_index(_case_id, documents):
+        indexed["documents"] = documents
+        return {"index": "idx", "indexed": len(documents), "errors": 0}
+
+    monkeypatch.setattr(memory_execution, "index_memory_documents", fake_index)
+    monkeypatch.setattr(memory_execution, "_run_canonical_materialization", lambda *_args, **_kwargs: None)
+
+    result = memory_execution.reindex_completed_process_run_from_raw(db_session, run.id)
+
+    db_session.refresh(run)
+    assert result["reindexed"] is True
+    assert result["processes"] == 1
+    assert indexed["documents"][0]["process"]["pid"] == 1000
+    assert run.status == "completed"
+    assert run.metadata_json["reindexing"]["processes"]["errors"] == 0
 
 
 def test_execution_indexing_failure_retains_raw_output(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

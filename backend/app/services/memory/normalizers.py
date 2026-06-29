@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 import hashlib
 from typing import Any
 
+from app.services.memory.pids import normalize_pid
+
 
 MAX_RAW_FIELDS = 80
 MAX_RAW_VALUE_LENGTH = 512
@@ -74,12 +76,7 @@ def _rows(payload: Any) -> list[dict[str, Any]]:
 
 
 def _int_or_none(value: Any) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        return int(str(value), 0)
-    except (TypeError, ValueError):
-        return None
+    return normalize_pid(value)
 
 
 def _str_or_none(value: Any, limit: int = 512) -> str | None:
@@ -96,11 +93,13 @@ def _identity(pid: int | None, offset: str | None, create_time: str | None) -> s
 
 def _process_from_row(row: dict[str, Any], plugin: str, *, command_limit: int = 16384, raw_limit: int = 65536) -> tuple[dict[str, Any] | None, list[str]]:
     warnings: list[str] = []
-    pid = _int_or_none(_lookup(row, "PID", "Pid", "pid"))
+    raw_pid = _lookup(row, "PID", "Pid", "pid")
+    pid = _int_or_none(raw_pid)
     if pid is None:
         warnings.append("missing_or_invalid_pid")
         return None, warnings
-    ppid = _int_or_none(_lookup(row, "PPID", "PPid", "ParentPID", "Parent Pid", "InheritedFromUniqueProcessId"))
+    raw_ppid = _lookup(row, "PPID", "PPid", "ParentPID", "Parent Pid", "InheritedFromUniqueProcessId")
+    ppid = _int_or_none(raw_ppid)
     name = _str_or_none(_lookup(row, "ImageFileName", "Name", "Process", "Image"), 512)
     create_time = _str_or_none(_lookup(row, "CreateTime", "Create Time", "Created"), 128)
     exit_time = _str_or_none(_lookup(row, "ExitTime", "Exit Time", "Exited"), 128)
@@ -124,7 +123,7 @@ def _process_from_row(row: dict[str, Any], plugin: str, *, command_limit: int = 
         "visibility": {"pslist": plugin == "windows.pslist", "psscan": plugin == "windows.psscan", "pstree": plugin == "windows.pstree"},
         "state": {"active_candidate": exit_time is None, "terminated_candidate": exit_time is not None, "hidden_candidate": False},
         "warnings": warnings,
-        "raw": {"fields": _raw_subset_limited(row, raw_limit)},
+        "raw": {"fields": _raw_subset_limited(row, raw_limit), "process_pid": _bounded(raw_pid), "process_ppid": _bounded(raw_ppid)},
     }, warnings
 
 

@@ -67,6 +67,7 @@ from datetime import datetime, timezone
 from typing import Any, Iterable
 
 from app.core.opensearch import get_memory_index, get_opensearch_client
+from app.services.memory.pids import normalize_pid
 
 
 logger = logging.getLogger(__name__)
@@ -207,12 +208,7 @@ def _stable_hash(payload: str) -> str:
 
 
 def _to_int(value: Any) -> int | None:
-    if value is None or value == "":
-        return None
-    try:
-        return int(str(value), 0)
-    except (TypeError, ValueError):
-        return None
+    return normalize_pid(value)
 
 
 def _to_str(value: Any, limit: int = 512) -> str | None:
