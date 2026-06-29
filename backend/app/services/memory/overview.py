@@ -241,8 +241,11 @@ def _can_analyze(evidence, db: Session | None = None) -> bool:
     * probable_disk probe verdict
     * ambiguous_raw probe verdict without operator override
     * unsupported / invalid / probe_failed verdicts
-    * Windows symbol not cached (per-evidence) when the evidence
-      is a memory dump
+
+    Symbol readiness and preparation state are advisory diagnostics.
+    Volatility identifies layers and resolves/downloads symbols during
+    the actual plugin run.  A missing cached symbol never blocks
+    analysis eligibility.
     """
     status = (evidence.detection_status or "").strip()
     if status == "probable_disk":
@@ -251,7 +254,6 @@ def _can_analyze(evidence, db: Session | None = None) -> bool:
         return False
     if status in {"unsupported", "invalid", "probe_failed"}:
         return False
-    # Operator-overridden statuses are always analysable.
     if bool(evidence.operator_override) and status in {
         "ambiguous_raw_confirmed", "probable_disk_confirmed_as_memory",
     }:
@@ -259,35 +261,7 @@ def _can_analyze(evidence, db: Session | None = None) -> bool:
     if status and status not in {
         "not_required", "ambiguous_raw_confirmed", "confirmed_memory", "probable_memory",
     }:
-        # Any other non-empty status that is not explicitly usable blocks.
         return False
-    # Per-evidence Windows symbol readiness.  When the evidence is
-    # a memory dump and the exact required symbol is not cached,
-    # block analysis so the UI shows a structured blocker rather
-    # than a generic "server error" from a run that immediately
-    # failed.
-    if evidence.evidence_type and evidence.evidence_type.value == "memory_dump" and db is not None:
-        from app.models.memory import (
-            MemoryCachedSymbol,
-            MemorySymbolRequirement,
-        )
-        requirement = (
-            db.query(MemorySymbolRequirement)
-            .filter(MemorySymbolRequirement.evidence_id == evidence.id)
-            .order_by(MemorySymbolRequirement.created_at.desc())
-            .first()
-        )
-        if requirement is not None and requirement.symbol_key:
-            cached = (
-                db.query(MemoryCachedSymbol)
-                .filter(
-                    MemoryCachedSymbol.symbol_key == requirement.symbol_key,
-                    MemoryCachedSymbol.cache_classification == "exact",
-                )
-                .first()
-            )
-            if cached is None:
-                return False
     return True
 
 

@@ -1064,8 +1064,6 @@ def get_memory_symbol_preparation(
     elif effective["effective_state"] == "stale":
         payload["ui_state"] = "blocked"
         payload["preparation_state"] = "stale"
-        payload["can_analyze_metadata"] = False
-        payload["can_run_all"] = False
         payload["blocker"] = "Memory preparation was interrupted."
         payload["sanitized_message"] = (
             "Memory preparation was interrupted. You can retry the preparation."

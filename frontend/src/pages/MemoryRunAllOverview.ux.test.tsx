@@ -439,67 +439,101 @@ describe("Memory overview, profile catalogue and run-all", () => {
   });
 
   // 8. Network Run disabled
-  it("first-analysis modal hides per-profile Run buttons and shows the single Start button", async () => {
-    // Override the catalogue to a fresh-evidence fixture: 0
-    // profiles completed so the first-analysis view is shown.
-    getMemoryAnalysisCatalogueMock.mockImplementation(async () => ({
-      case_id: "case-1",
-      evidence_id: "ev-A",
-      items: [
-        { profile: "metadata_only", family: "system_info", title: "System metadata", description: "", cost_label: "Fast", est_duration_seconds: 20, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-        { profile: "processes_basic", family: "processes", title: "Standard process analysis", description: "", cost_label: "Medium", est_duration_seconds: 90, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-        { profile: "processes_extended", family: "processes", title: "Extended process analysis", description: "", cost_label: "Medium", est_duration_seconds: 240, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-        { profile: "network_basic", family: "network", title: "Network connections", description: "", cost_label: "Medium", est_duration_seconds: 90, available: false, availability_reason: "No compatible Windows network plugin is available in the installed Volatility runtime.", last_run: null, last_status: null, last_count: 0 },
-        { profile: "modules_basic", family: "modules", title: "Process modules (DLLs)", description: "", cost_label: "Medium", est_duration_seconds: 120, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-        { profile: "handles_basic", family: "handles", title: "Process handles", description: "", cost_label: "High volume", est_duration_seconds: 1800, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-        { profile: "kernel_basic", family: "kernel_modules", title: "Kernel modules & drivers", description: "", cost_label: "Medium", est_duration_seconds: 180, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-        { profile: "suspicious_memory", family: "suspicious_regions", title: "Suspicious memory regions", description: "", cost_label: "Slow", est_duration_seconds: 1800, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-      ],
-    }));
-    renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
-    const runBtn = await screen.findByTestId("memory-open-catalogue");
-    fireEvent.click(runBtn);
-    expect(await screen.findByTestId("memory-first-analysis")).toBeInTheDocument();
-    expect(screen.queryByTestId("memory-catalogue-run-network_basic")).toBeNull();
-    expect(screen.queryByTestId("memory-catalogue-run-all")).toBeNull();
-    expect(screen.getByTestId("memory-first-analysis-start")).toBeInTheDocument();
+  it("first analysis click dispatches single metadata_only scan", async () => {
+    const originalConfirm = window.confirm;
+    window.confirm = vi.fn(() => true);
+    try {
+      getMemoryAnalysisCatalogueMock.mockImplementation(async () => ({
+        case_id: "case-1",
+        evidence_id: "ev-A",
+        items: [
+          { profile: "metadata_only", family: "system_info", title: "System metadata", description: "", cost_label: "Fast", est_duration_seconds: 20, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+          { profile: "processes_basic", family: "processes", title: "Standard process analysis", description: "", cost_label: "Medium", est_duration_seconds: 90, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+          { profile: "processes_extended", family: "processes", title: "Extended process analysis", description: "", cost_label: "Medium", est_duration_seconds: 240, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+          { profile: "network_basic", family: "network", title: "Network connections", description: "", cost_label: "Medium", est_duration_seconds: 90, available: false, availability_reason: "No compatible Windows network plugin is available in the installed Volatility runtime.", last_run: null, last_status: null, last_count: 0 },
+          { profile: "modules_basic", family: "modules", title: "Process modules (DLLs)", description: "", cost_label: "Medium", est_duration_seconds: 120, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+          { profile: "handles_basic", family: "handles", title: "Process handles", description: "", cost_label: "High volume", est_duration_seconds: 1800, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+          { profile: "kernel_basic", family: "kernel_modules", title: "Kernel modules & drivers", description: "", cost_label: "Medium", est_duration_seconds: 180, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+          { profile: "suspicious_memory", family: "suspicious_regions", title: "Suspicious memory regions", description: "", cost_label: "Slow", est_duration_seconds: 1800, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        ],
+      }));
+      startMemoryScanMock.mockImplementation(() => ({
+        accepted: true, evidence_id: "ev-A", run_id: "run-1",
+        status: "queued", message: "Memory analysis queued",
+      }));
+      renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
+      const btn = await screen.findByTestId("memory-analyze-direct");
+      expect(btn).toBeInTheDocument();
+      expect(btn.textContent).toBe("Analyze memory");
+      fireEvent.click(btn);
+      await waitFor(() => {
+        expect(startMemoryScanMock).toHaveBeenCalledTimes(1);
+        expect(startMemoryScanMock).toHaveBeenCalledWith(
+          "case-1", "ev-A", "metadata_only", true,
+        );
+      });
+    } finally {
+      window.confirm = originalConfirm;
+    }
   });
 
-  it("first-analysis modal lists included profiles without showing estimated duration", async () => {
-    getMemoryAnalysisCatalogueMock.mockImplementation(async () => ({
-      case_id: "case-1",
-      evidence_id: "ev-A",
-      items: [
-        { profile: "metadata_only", family: "system_info", title: "System metadata", description: "", cost_label: "Fast", est_duration_seconds: 20, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-        { profile: "processes_basic", family: "processes", title: "Standard process analysis", description: "", cost_label: "Medium", est_duration_seconds: 90, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-        { profile: "processes_extended", family: "processes", title: "Extended process analysis", description: "", cost_label: "Medium", est_duration_seconds: 240, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-        { profile: "network_basic", family: "network", title: "Network connections", description: "", cost_label: "Medium", est_duration_seconds: 90, available: false, availability_reason: "No compatible Windows network plugin is available in the installed Volatility runtime.", last_run: null, last_status: null, last_count: 0 },
-        { profile: "modules_basic", family: "modules", title: "Process modules (DLLs)", description: "", cost_label: "Medium", est_duration_seconds: 120, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-      ],
-    }));
-    renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
-    const runBtn = await screen.findByTestId("memory-open-catalogue");
-    fireEvent.click(runBtn);
-    expect(await screen.findByTestId("memory-first-analysis")).toBeInTheDocument();
-    const body = document.body.textContent || "";
-    expect(body).toMatch(/Standard process analysis/);
-    expect(body).not.toMatch(/Estimated duration: ~0/);
+  it("first analysis button disabled while scan is in flight", async () => {
+    const originalConfirm = window.confirm;
+    window.confirm = vi.fn(() => true);
+    try {
+      getMemoryAnalysisCatalogueMock.mockImplementation(async () => ({
+        case_id: "case-1",
+        evidence_id: "ev-A",
+        items: [
+          { profile: "metadata_only", family: "system_info", title: "System metadata", description: "", cost_label: "Fast", est_duration_seconds: 20, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+          { profile: "processes_basic", family: "processes", title: "Standard process analysis", description: "", cost_label: "Medium", est_duration_seconds: 90, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+          { profile: "processes_extended", family: "processes", title: "Extended process analysis", description: "", cost_label: "Medium", est_duration_seconds: 240, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+          { profile: "network_basic", family: "network", title: "Network connections", description: "", cost_label: "Medium", est_duration_seconds: 90, available: false, availability_reason: "No compatible Windows network plugin is available in the installed Volatility runtime.", last_run: null, last_status: null, last_count: 0 },
+          { profile: "modules_basic", family: "modules", title: "Process modules (DLLs)", description: "", cost_label: "Medium", est_duration_seconds: 120, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        ],
+      }));
+      let resolveScan: (value: unknown) => void;
+      startMemoryScanMock.mockImplementation(() => new Promise((resolve) => { resolveScan = resolve; }));
+      renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
+      const btn = await screen.findByTestId("memory-analyze-direct");
+      fireEvent.click(btn);
+      await waitFor(() => {
+        expect(btn.textContent).toBe("Starting analysis...");
+      });
+      expect(startMemoryScanMock).toHaveBeenCalledTimes(1);
+    } finally {
+      window.confirm = originalConfirm;
+    }
   });
 
-  it("first-analysis modal exposes the Start full memory analysis button", async () => {
-    getMemoryAnalysisCatalogueMock.mockImplementation(async () => ({
-      case_id: "case-1",
-      evidence_id: "ev-A",
-      items: [
-        { profile: "metadata_only", family: "system_info", title: "System metadata", description: "", cost_label: "Fast", est_duration_seconds: 20, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-        { profile: "processes_extended", family: "processes", title: "Extended process analysis", description: "", cost_label: "Medium", est_duration_seconds: 240, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
-      ],
-    }));
-    renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
-    const runBtn = await screen.findByTestId("memory-open-catalogue");
-    fireEvent.click(runBtn);
-    const btn = await screen.findByTestId("memory-first-analysis-start");
-    expect(btn).toHaveTextContent("Start full memory analysis");
+  it("first analysis click enqueues exactly one metadata_only run", async () => {
+    const originalConfirm = window.confirm;
+    window.confirm = vi.fn(() => true);
+    try {
+      getMemoryAnalysisCatalogueMock.mockImplementation(async () => ({
+        case_id: "case-1",
+        evidence_id: "ev-A",
+        items: [
+          { profile: "metadata_only", family: "system_info", title: "System metadata", description: "", cost_label: "Fast", est_duration_seconds: 20, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+          { profile: "processes_extended", family: "processes", title: "Extended process analysis", description: "", cost_label: "Medium", est_duration_seconds: 240, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0 },
+        ],
+      }));
+      startMemoryScanMock.mockImplementation(() => ({
+        accepted: true, evidence_id: "ev-A", run_id: "run-1",
+        status: "queued", message: "Memory analysis queued",
+      }));
+      renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
+      const btn = await screen.findByTestId("memory-analyze-direct");
+      fireEvent.click(btn);
+      await waitFor(() => {
+        expect(startMemoryScanMock).toHaveBeenCalledTimes(1);
+        expect(startMemoryScanMock).toHaveBeenCalledWith(
+          "case-1", "ev-A", "metadata_only", true,
+        );
+      });
+    } finally {
+      window.confirm = originalConfirm;
+    }
   });
 
   // 11. Modal muestra evidencia

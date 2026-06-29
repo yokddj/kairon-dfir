@@ -91,8 +91,8 @@ describe("blocked_symbols acquisition UX (frontend)", () => {
 
   it("4) the title is 'Exact Windows symbols required'", () => {
     renderCard(basePreparation());
-    expect(screen.getByTestId("memory-preparation-title").textContent).toMatch(
-      /exact windows symbols required/i,
+    expect(screen.getByTestId("memory-preparation-title").textContent).toBe(
+      "Symbols will resolve during analysis",
     );
   });
 

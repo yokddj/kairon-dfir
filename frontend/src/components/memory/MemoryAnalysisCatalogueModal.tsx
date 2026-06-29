@@ -21,7 +21,6 @@ type Props = {
   catalogue: MemoryAnalysisCatalogue;
   volatilityBackend: MemoryBackendStatus | null;
   canRun: boolean;
-  readinessReady: boolean | null;
   onClose: () => void;
 };
 
@@ -277,7 +276,6 @@ function FirstAnalysisView({
   isStarting,
   error,
   canRun,
-  readinessReady,
 }: {
   caseId: string;
   evidenceId: string;
@@ -288,12 +286,11 @@ function FirstAnalysisView({
   isStarting: boolean;
   error: string | null;
   canRun: boolean;
-  readinessReady: boolean;
 }) {
   const supported = catalogue.items.filter((it) => it.available);
   const included = supported.filter((it) => it.profile !== "network_basic");
   const skipped = supported.filter((it) => it.profile === "network_basic");
-  const disabled = !canRun || !readinessReady || isStarting;
+  const disabled = !canRun || isStarting;
   return (
     <div className="space-y-3" data-testid="memory-first-analysis">
       <p className="text-sm text-muted">
@@ -360,7 +357,6 @@ function PartialAnalysisView({
   feedback,
   error,
   canRun,
-  readinessReady,
   isStarting,
   onClose,
   onStartMissing,
@@ -380,7 +376,6 @@ function PartialAnalysisView({
   feedback: string | null;
   error: string | null;
   canRun: boolean;
-  readinessReady: boolean;
   isStarting: boolean;
   onClose: () => void;
   onStartMissing: () => void;
@@ -390,7 +385,7 @@ function PartialAnalysisView({
   startMutation: { isPending: boolean };
   onRunItem: (item: MemoryAnalysisCatalogueItem) => void;
 }) {
-  const disabled = !canRun || !readinessReady || isStarting || hasActiveProfiles || partialAvailable.length === 0;
+  const disabled = !canRun || isStarting || hasActiveProfiles || partialAvailable.length === 0;
   return (
     <div className="space-y-3" data-testid="memory-partial-analysis">
       <p className="text-sm text-muted">
@@ -460,7 +455,6 @@ function CompletedAnalysisView({
   feedback,
   error,
   canRun,
-  readinessReady,
   isStarting,
   onClose,
   onRerun,
@@ -478,7 +472,6 @@ function CompletedAnalysisView({
   feedback: string | null;
   error: string | null;
   canRun: boolean;
-  readinessReady: boolean;
   isStarting: boolean;
   onClose: () => void;
   onRerun: () => void;
@@ -519,7 +512,7 @@ function CompletedAnalysisView({
         <button
           type="button"
           onClick={onRerun}
-          disabled={!canRun || !readinessReady || isStarting}
+          disabled={!canRun || isStarting}
           data-testid="memory-completed-rerun"
           className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
         >
@@ -606,7 +599,6 @@ export function MemoryAnalysisCatalogueModal({
   volatilityBackend,
   canRun,
   onClose,
-  readinessReady,
 }: Props) {
   const queryClient = useQueryClient();
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -740,7 +732,6 @@ export function MemoryAnalysisCatalogueModal({
             isStarting={startAllMissing.isPending}
             error={error}
             canRun={canRun}
-            readinessReady={readinessReady ?? true}
           />
         ) : stage === "partial" ? (
           <PartialAnalysisView
@@ -754,7 +745,6 @@ export function MemoryAnalysisCatalogueModal({
             feedback={feedback}
             error={error}
             canRun={canRun}
-            readinessReady={readinessReady ?? true}
             isStarting={startAllMissing.isPending}
             onClose={onClose}
             onStartMissing={() => startAllMissing.mutate()}
@@ -774,7 +764,6 @@ export function MemoryAnalysisCatalogueModal({
             feedback={feedback}
             error={error}
             canRun={canRun}
-            readinessReady={readinessReady ?? true}
             isStarting={startAllMissing.isPending}
             onClose={onClose}
             onRerun={() => setRunAllOpen(true)}
