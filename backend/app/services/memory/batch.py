@@ -53,24 +53,21 @@ from app.services.memory.volatility_runner import network_basic_available
 logger = logging.getLogger(__name__)
 
 
-#: Profiles executed by ``Run all supported profiles`` in the order
-#: they appear in the catalogue.  ``processes_basic`` is intentionally
-#: excluded: it is an alternative to ``processes_extended`` and would
-#: generate overlapping coverage.  ``network_basic`` is excluded by
-#: availability filtering below (network plugin is not shipped).
+#: Profiles executed by the first-click analysis path.  Keep this
+#: sequence intentionally small: restore direct Volatility execution
+#: before launching high-volume or expensive profiles.
 RUN_ALL_PROFILES: tuple[str, ...] = (
     "metadata_only",
-    "processes_extended",
-    "modules_basic",
-    "handles_basic",
-    "kernel_basic",
-    "suspicious_memory",
+    "processes_basic",
 )
 
-#: ``processes_basic`` is only used as a manual fallback, never as part
-#: of run-all.  Excluded profiles are surfaced to the operator.
+#: Expensive profiles remain manual until direct execution is verified.
 RUN_ALL_EXCLUDED_PROFILES: dict[str, str] = {
-    "processes_basic": "standard process analysis is replaced by the extended profile in run-all",
+    "processes_extended": "manual extended profile; first analysis uses the standard process baseline",
+    "modules_basic": "manual artifact profile; not part of the first direct execution baseline",
+    "handles_basic": "manual high-volume profile; not part of the first direct execution baseline",
+    "kernel_basic": "manual kernel profile; not part of the first direct execution baseline",
+    "suspicious_memory": "manual expensive profile; not part of the first direct execution baseline",
 }
 
 
@@ -284,90 +281,9 @@ def create_run_all_batch(
             "Confirm the evidence type before running the batch.",
             status_code=409,
         )
-    # Per-evidence symbol preflight using canonical readiness.
-    # Native-compatible or prior-metadata-prepared evidence is treated
-    # as ready regardless of exact age matching.  When no requirement
-    # has been recorded yet, metadata_only will probe it.
-    from app.services.memory.symbol_preparation import (
-        can_execute_validated_memory_analysis,
-        compute_memory_readiness,
-        record_pending_analysis,
-        UI_STATE_READY,
-        UI_STATE_PREPARING,
-    )
-    EC_SYMBOLS_REQUIRED = "MEMORY_SYMBOLS_REQUIRED"
-
-    prep = compute_memory_readiness(db, evidence=evidence)
-    allowed, reason, blocker_message = can_execute_validated_memory_analysis(
-        db, evidence_id=evidence_id,
-    )
-    if allowed:
-        pass
-    elif prep.ui_state == UI_STATE_PREPARING:
-        requested_profiles: list[str] = []
-        try:
-            plan = _plan_for_mode(
-                db,
-                case_id=case_id,
-                evidence_id=evidence_id,
-                mode=mode,
-            )
-            requested_profiles = list(plan.get("selected_profiles", []))
-        except Exception:  # noqa: BLE001
-            requested_profiles = list(RUN_ALL_PROFILES)
-        record_pending_analysis(
-            db,
-            case_id=case_id,
-            evidence_id=evidence_id,
-            kind="run_all",
-            mode=mode,
-            requested_profiles=requested_profiles,
-        )
-        db.commit()
-        raise MemoryBatchError(
-            "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS",
-            (
-                "Windows symbols are being prepared for this evidence. "
-                "The batch will start automatically once preparation is ready."
-            ),
-            status_code=409,
-            extra={
-                "evidence_id": evidence_id,
-                "preparation_state": prep.preparation_state,
-                "progress_label": prep.progress_label,
-                "progress_percent": prep.progress_percent,
-                "auto_start": True,
-            },
-        )
-    elif reason == "blocked_symbols":
-        from app.services.memory.symbol_control import acquisition_gate as _acq_gate
-        available, gate_code, _ = _acq_gate()
-        raise MemoryBatchError(
-            EC_SYMBOLS_REQUIRED,
-            blocker_message or prep.sanitized_message or "Windows symbols are not available for this evidence.",
-            status_code=409,
-            extra={
-                "evidence_id": evidence_id,
-                "preparation_state": prep.preparation_state,
-                "blocker": blocker_message or prep.sanitized_message,
-                "can_acquire": bool(available),
-                "auto_retry": True,
-            },
-        )
-    else:
-        from app.services.memory.symbol_control import acquisition_gate as _acq_gate
-        available, gate_code, _ = _acq_gate()
-        raise MemoryBatchError(
-            EC_SYMBOLS_REQUIRED,
-            blocker_message or "Windows symbols required for this evidence are not cached.",
-            status_code=409,
-            extra={
-                "evidence_id": evidence_id,
-                "symbol_status": "missing",
-                "can_acquire": bool(available),
-                "blocker": blocker_message,
-            },
-        )
+    # Symbol/platform preparation is advisory.  A completed, confirmed
+    # memory evidence can start analysis; the worker executes Volatility
+    # directly and lets Volatility identify layers and resolve symbols.
     try:
         validate_current_process_evidence_access(evidence, settings=get_settings())
     except MemoryStorageAccessError as exc:

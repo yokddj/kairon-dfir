@@ -592,7 +592,8 @@ def test_readiness_only_ready_when_cache_matches(db_session) -> None:
     )
     db_session.commit()
     readiness = compute_memory_readiness(db_session, evidence=evidence)
-    assert readiness.can_analyze_metadata is False
+    assert readiness.can_analyze_metadata is True
+    assert readiness.sanitized_message and "Volatility will identify" in readiness.sanitized_message
     # A requirement WITH cached symbol: ready.
     _cached_symbol(
         db_session,
@@ -705,7 +706,7 @@ def test_old_windows_evidence_with_no_cache_can_be_unsupported(db_session) -> No
     db_session.commit()
     readiness = compute_memory_readiness(db_session, evidence=evidence)
     assert readiness.preparation_state == PREP_NEGATIVE_CACHED
-    assert readiness.can_analyze_metadata is False
+    assert readiness.can_analyze_metadata is True
 
 
 # ---------------------------------------------------------------------------
@@ -799,11 +800,11 @@ def test_ui_state_for_documented_states() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 23. run-all waits for readiness (preparation in progress records intent)
+# 23. run-all does not wait for preparation diagnostics
 # ---------------------------------------------------------------------------
 
 
-def test_run_all_records_intent_when_preparation_in_progress(db_session, monkeypatch) -> None:
+def test_run_all_starts_when_preparation_in_progress(db_session, monkeypatch) -> None:
     from app.services.memory import batch as memory_batch
     from app.models.evidence import Evidence
     from app.models.case import Case
@@ -816,35 +817,40 @@ def test_run_all_records_intent_when_preparation_in_progress(db_session, monkeyp
 
     monkeypatch.setattr(
         "app.services.memory.batch.plan_run_all",
-        lambda *a, **k: {"selected_profiles": ["metadata_only"]},
+        lambda *a, **k: {"selected_profiles": ["metadata_only"], "skipped_profiles": [], "excluded_profiles": []},
     )
-    with pytest.raises(memory_batch.MemoryBatchError) as excinfo:
-        memory_batch.create_run_all_batch(
-            db_session,
-            case_id=CASE_ID,
-            evidence_id=EVIDENCE_A,
-            mode="missing_or_failed",
-            authorization_acknowledged=True,
-            enqueue_fn=lambda run_id: f"task-{run_id}",
-        )
-    assert excinfo.value.code == "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS"
-    # The intent is recorded.
+    def fake_create_run(db, evidence_id, profile):
+        run = MemoryScanRun(case_id=CASE_ID, evidence_id=evidence_id, backend="volatility3", profile=profile, status="pending")
+        db.add(run)
+        db.flush()
+        return run
+    monkeypatch.setattr(memory_batch, "create_memory_metadata_run", fake_create_run)
+
+    result = memory_batch.create_run_all_batch(
+        db_session,
+        case_id=CASE_ID,
+        evidence_id=EVIDENCE_A,
+        mode="missing_or_failed",
+        authorization_acknowledged=True,
+        enqueue_fn=lambda run_id: f"task-{run_id}",
+    )
+
+    assert result["batch"].status == "running"
+    assert db_session.query(MemoryScanRun).count() == 1
     pending = (
         db_session.query(MemorySymbolPendingAnalysis)
         .filter(MemorySymbolPendingAnalysis.evidence_id == EVIDENCE_A)
         .first()
     )
-    assert pending is not None
-    assert pending.kind == "run_all"
-    assert pending.status == "pending"
+    assert pending is None
 
 
 # ---------------------------------------------------------------------------
-# 24. no MemoryScanRun before ready
+# 24. one MemoryScanRun is created during in-progress preparation
 # ---------------------------------------------------------------------------
 
 
-def test_no_scan_run_created_during_in_progress_run_all(db_session, monkeypatch) -> None:
+def test_one_scan_run_created_during_in_progress_run_all(db_session, monkeypatch) -> None:
     from app.services.memory import batch as memory_batch
     from app.models.evidence import Evidence
     from app.models.case import Case
@@ -855,21 +861,26 @@ def test_no_scan_run_created_during_in_progress_run_all(db_session, monkeypatch)
     db_session.commit()
     monkeypatch.setattr(
         "app.services.memory.batch.plan_run_all",
-        lambda *a, **k: {"selected_profiles": ["metadata_only"]},
+        lambda *a, **k: {"selected_profiles": ["metadata_only"], "skipped_profiles": [], "excluded_profiles": []},
     )
+    def fake_create_run(db, evidence_id, profile):
+        run = MemoryScanRun(case_id=CASE_ID, evidence_id=evidence_id, backend="volatility3", profile=profile, status="pending")
+        db.add(run)
+        db.flush()
+        return run
+    monkeypatch.setattr(memory_batch, "create_memory_metadata_run", fake_create_run)
     initial_runs = db_session.query(MemoryScanRun).count()
     initial_batches = db_session.query(MemoryAnalysisBatch).count()
-    with pytest.raises(memory_batch.MemoryBatchError):
-        memory_batch.create_run_all_batch(
-            db_session,
-            case_id=CASE_ID,
-            evidence_id=EVIDENCE_A,
-            mode="missing_or_failed",
-            authorization_acknowledged=True,
-            enqueue_fn=lambda run_id: f"task-{run_id}",
-        )
-    assert db_session.query(MemoryScanRun).count() == initial_runs
-    assert db_session.query(MemoryAnalysisBatch).count() == initial_batches
+    memory_batch.create_run_all_batch(
+        db_session,
+        case_id=CASE_ID,
+        evidence_id=EVIDENCE_A,
+        mode="missing_or_failed",
+        authorization_acknowledged=True,
+        enqueue_fn=lambda run_id: f"task-{run_id}",
+    )
+    assert db_session.query(MemoryScanRun).count() == initial_runs + 1
+    assert db_session.query(MemoryAnalysisBatch).count() == initial_batches + 1
 
 
 # ---------------------------------------------------------------------------

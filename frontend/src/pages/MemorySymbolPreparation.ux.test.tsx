@@ -420,18 +420,18 @@ describe("Automatic Windows symbol preparation", () => {
     const card = await screen.findByTestId("memory-preparation-card");
     expect(card).toHaveAttribute("data-ui-state", "failed");
     expect(within(card).getByTestId("memory-preparation-title")).toHaveTextContent(
-      /Memory preparation failed/i,
+      /Preparation diagnostics failed/i,
     );
     const retry = within(card).getByTestId("memory-preparation-retry-button");
     expect(retry).toBeInTheDocument();
   });
 
-  it("5. Run analysis button is disabled while preparing", async () => {
-    const evidence = makeEvidence({ can_analyze: false });
-    const preparation = makePreparation({ ui_state: "preparing" });
+  it("5. Run analysis button stays enabled while preparation is diagnostic", async () => {
+    const evidence = makeEvidence({ can_analyze: true });
+    const preparation = makePreparation({ ui_state: "preparing", can_analyze_metadata: false });
     setup(buildApiMock(evidence, preparation, makeReadiness()));
     const run = await screen.findByTestId("memory-open-catalogue");
-    expect(run).toBeDisabled();
+    expect(run).toBeEnabled();
   });
 
   it("6. Run-all intent is preserved (cancellable)", async () => {

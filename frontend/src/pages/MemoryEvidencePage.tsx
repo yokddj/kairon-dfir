@@ -178,8 +178,8 @@ export default function MemoryEvidencePage() {
     (overview?.evidences || []).map((evidence, index) => [evidence.id, evidenceReadinessQueries[index]?.data]),
   );
 
-  // Per-evidence symbol readiness: drives the symbol resolution
-  // panel and gates the Run analysis / Run all buttons.
+  // Per-evidence symbol readiness is diagnostic only.  Volatility
+  // identifies layers and resolves symbols during the actual run.
   const symbolReadinessQuery = useQuery({
     queryKey: ["memory-symbol-readiness", caseId, evidenceId],
     queryFn: () => api.getMemorySymbolReadiness(caseId, evidenceId),
@@ -229,14 +229,7 @@ export default function MemoryEvidencePage() {
 
   const showExperimentalPanel =
     Boolean(symbolPreparation) && isBlockedSymbols;
-  // The catalogue modal needs to know whether preparation is
-  // "ready" (effective_state=ready) so it can show or hide the
-  // Run-all button.  When the symbol preparation query is still
-  // loading we treat readiness as unknown (null) and the modal
-  // falls back to a conservative state.
-  const readinessReady: boolean | null = symbolPreparation
-    ? isReadyState
-    : null;
+  const readinessReady: boolean | null = true;
 
   const handleReturnToLatest = useCallback(() => {
     setSearchParams((current) => {
@@ -283,10 +276,6 @@ export default function MemoryEvidencePage() {
         onReturnToLatest={handleReturnToLatest}
         catalogue={catalogueQuery.data ?? null}
         onOpenCatalogue={() => {
-          if (isReadyState && symbolPreparation?.can_analyze_metadata) {
-            setCatalogueOpen(true);
-            return;
-          }
           if (evidence.can_analyze === false) {
             setConfirmationOpen(true);
             return;
@@ -307,13 +296,13 @@ export default function MemoryEvidencePage() {
         </div>
       ) : null}
 
-      {tab === "overview" && !isReadyState && readinessByEvidence.get(evidenceId)?.sanitized_message ? (
+      {tab === "overview" && evidence.can_analyze === false && readinessByEvidence.get(evidenceId)?.sanitized_message ? (
         <div className="rounded-xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs text-rose-100">
           {readinessByEvidence.get(evidenceId)?.sanitized_message}
         </div>
       ) : null}
 
-      {evidence && symbolReadiness && !isReadyState ? (
+      {evidence && symbolReadiness && false ? (
         <MemorySymbolResolutionPanel
           caseId={caseId}
           evidenceId={evidenceId}

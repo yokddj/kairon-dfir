@@ -100,29 +100,25 @@ function cardCopy(prep: MemorySymbolPreparation) {
   }
   if (state === "failed" || prep.ui_state === "failed") {
     return {
-      title: "Memory preparation failed",
+      title: "Preparation diagnostics failed",
       subtitle:
         prep.sanitized_message ||
-        "Kairon could not obtain the required symbols for this evidence.",
-      tone: "bad" as const,
+        "This does not block analysis; Volatility will report the actual plugin error when a run starts.",
+      tone: "warn" as const,
     };
   }
   if (state === "requirement_unknown") {
     return {
-      title: "Identifying Windows symbols",
-      subtitle:
-        prep.sanitized_message ||
-        "Kairon can retry automatic probing; no manual symbol identifier is required.",
-      tone: "warn" as const,
+      title: "Memory evidence ready for analysis",
+      subtitle: "Volatility will identify the image and resolve symbols when analysis starts.",
+      tone: "good" as const,
     };
   }
   if (state === "platform_not_identified") {
     return {
-      title: "Platform not identified",
-      subtitle:
-        prep.sanitized_message ||
-        "The image does not match a known operating-system family.",
-      tone: "bad" as const,
+      title: "Memory evidence ready for analysis",
+      subtitle: "Volatility will identify the image and resolve symbols when analysis starts.",
+      tone: "good" as const,
     };
   }
   if (state === "blocked_symbols") {
@@ -140,20 +136,20 @@ function cardCopy(prep: MemorySymbolPreparation) {
       };
     }
     return {
-      title: "Exact Windows symbols required",
+      title: "Symbols will resolve during analysis",
       subtitle:
         prep.sanitized_message ||
-        "The exact kernel symbol required for this evidence is not in the offline cache.",
-      tone: "bad" as const,
+        "Volatility will resolve or download symbols when the plugin executes.",
+      tone: "warn" as const,
     };
   }
   if (state === "blocked") {
     return {
-      title: "Preparation blocked",
+      title: "Preparation diagnostic blocked",
       subtitle:
         prep.sanitized_message ||
-        "A required dependency is missing. You can retry the preparation.",
-      tone: "bad" as const,
+        "This diagnostic does not block analysis. Run analysis to get Volatility's native result.",
+      tone: "warn" as const,
     };
   }
   if (state === "cancelled") {
@@ -172,11 +168,11 @@ function cardCopy(prep: MemorySymbolPreparation) {
     };
   }
   return {
-    title: "Memory symbols unavailable",
+    title: "Memory evidence ready for analysis",
     subtitle:
       prep.sanitized_message ||
-      "Kairon could not obtain the required symbols for this evidence.",
-    tone: "bad" as const,
+      "Volatility will identify the image and resolve symbols when analysis starts.",
+    tone: "good" as const,
   };
 }
 

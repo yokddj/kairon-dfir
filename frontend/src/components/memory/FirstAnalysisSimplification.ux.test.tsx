@@ -210,4 +210,40 @@ describe("Header label v1", () => {
     );
     expect(await screen.findByText(/Re-run analysis/)).toBeInTheDocument();
   });
+
+  it("9) platform_not_identified preparation does not disable Run analysis", async () => {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
+    const onOpenCatalogue = vi.fn();
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={qc}>
+          <MemoryEvidenceHeader
+            caseId={CASE}
+            evidence={makeEvidence()}
+            activeResult={null}
+            family="processes"
+            historicalRunId={null}
+            onViewHistory={vi.fn()}
+            onReturnToLatest={vi.fn()}
+            onOpenCatalogue={onOpenCatalogue}
+            symbolReadiness={{ state: "unknown", sanitized_message: "MEMORY_SYMBOL_REQUIREMENT_UNKNOWN", error_code: "MEMORY_SYMBOL_REQUIREMENT_UNKNOWN" } as any}
+            symbolPreparation={{
+              effective_state: "platform_not_identified",
+              preparation_state: "platform_not_identified",
+              ui_state: "blocked",
+              can_analyze_metadata: false,
+              sanitized_message: "PLATFORM_NOT_IDENTIFIED",
+            } as any}
+            catalogue={freshCatalogue}
+          />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    const button = await screen.findByTestId("memory-open-catalogue");
+    expect(button).toBeEnabled();
+    expect(screen.getByTestId("memory-symbol-info-message")).toHaveTextContent(/Volatility will identify the image/i);
+    fireEvent.click(button);
+    expect(onOpenCatalogue).toHaveBeenCalledTimes(1);
+  });
 });

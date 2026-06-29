@@ -208,7 +208,7 @@ describe("OS-agnostic memory preparation v1 (frontend)", () => {
     expect(progress).toBeInTheDocument();
   });
 
-  it("9) unknown requirement shows automatic probing instead of terminal unavailable copy", () => {
+  it("9) unknown requirement is informational and does not show unavailable copy", () => {
     renderCard({
       id: "prep-unknown",
       case_id: CASE,
@@ -223,8 +223,8 @@ describe("OS-agnostic memory preparation v1 (frontend)", () => {
     });
 
     const card = screen.getByTestId("memory-preparation-card");
-    expect(card.textContent).toMatch(/Identifying Windows symbols/i);
-    expect(card.textContent).toMatch(/no manual symbol identifier/i);
+    expect(card.textContent).toMatch(/Memory evidence ready for analysis/i);
+    expect(card.textContent).toMatch(/Volatility will identify the image/i);
     expect(card.textContent).not.toMatch(/symbols unavailable/i);
   });
 });
