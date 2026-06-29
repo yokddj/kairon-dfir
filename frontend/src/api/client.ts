@@ -1,22 +1,13 @@
 import { strToU8, zipSync, type Zippable } from "fflate";
 
-// The frontend now uses a relative API base so the browser sees a
-// same-origin request through the Vite dev server proxy.  The
-// absolute fallback (window.location.hostname:8000) is retained
-// for environments where the proxy is not in front of the API
-// (e.g. some production deployments with a reverse proxy) — the
-// browser will hit a CORS preflight in that case, which is the
-// correct behaviour.
+// The frontend uses a relative API base so browsers stay on one
+// origin. Production serves /api through Nginx; local dev serves it
+// through the Vite proxy.
 const configuredApiBase = import.meta.env.VITE_API_BASE_URL;
 const fallbackApiBase = "/api";
-const absoluteApiBase =
-  typeof window !== "undefined"
-    ? `${window.location.protocol}//${window.location.hostname}:8000/api`
-    : null;
 const preferredApiBases = [
   configuredApiBase,
   fallbackApiBase,
-  absoluteApiBase,
 ];
 const API_BASE_URLS = Array.from(
   new Set(
@@ -801,7 +792,11 @@ export type MemorySymbolPreparationState =
   | "failed"
   | "cancelled"
   | "stale"
+  | "blocked"
   | "blocked_symbols"
+  | "dispatch_failed"
+  | "platform_not_identified"
+  | "platform_not_supported"
   // Legacy aliases kept for backwards compatibility with rows
   // written before the v1 reconciliation sprint.
   | "identified"
@@ -867,7 +862,6 @@ export type MemorySymbolPreparation = {
   content_reused_by_hash: boolean;
   native_compatible?: boolean;
   native_compatibility_reason?: string | null;
-  source_of_truth?: string | null;
   // Latest acquisition summary surfaced by the canonical preparation
   // endpoint.  The card uses the ``error_code`` to render the
   // structured failure panel and the ``identity_expected`` /

@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
-import { type MemoryActiveResult, type MemoryAnalysisCatalogue, type MemoryEvidenceLandingItem, type MemorySymbolReadiness } from "../../api/client";
+import { type MemoryActiveResult, type MemoryAnalysisCatalogue, type MemoryEvidenceLandingItem, type MemorySymbolPreparation, type MemorySymbolReadiness } from "../../api/client";
 
 type DetectionDisplay = {
   label: string;
@@ -43,7 +43,7 @@ type Props = {
   onReturnToLatest: () => void;
   onOpenCatalogue: () => void;
   symbolReadiness?: MemorySymbolReadiness | null;
-  symbolPreparation?: { ui_state?: string; sanitized_message?: string } | null;
+  symbolPreparation?: MemorySymbolPreparation | null;
   catalogue?: MemoryAnalysisCatalogue | null;
 };
 

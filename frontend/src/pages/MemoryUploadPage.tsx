@@ -857,16 +857,14 @@ export default function MemoryUploadPage() {
                       type="button"
                       data-testid="memory-conflict-confirm-restart"
                       onClick={() => void executeCancelAndRestart()}
-                      disabled={restartPhase === "executing"}
                       className="rounded-xl border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-100 disabled:opacity-50"
                     >
-                      {restartPhase === "executing" ? "Restarting…" : "Cancel and restart"}
+                      Cancel and restart
                     </button>
                     <button
                       type="button"
                       data-testid="memory-conflict-keep-existing"
                       onClick={() => setRestartPhase("idle")}
-                      disabled={restartPhase === "executing"}
                       className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50"
                     >
                       Keep existing upload
