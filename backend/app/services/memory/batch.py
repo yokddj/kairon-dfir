@@ -53,22 +53,24 @@ from app.services.memory.volatility_runner import network_basic_available
 logger = logging.getLogger(__name__)
 
 
-#: Profiles executed by the first-click analysis path.  Keep this
-#: sequence intentionally small: restore direct Volatility execution
-#: before launching high-volume or expensive profiles.
+#: Profiles executed by the run-all analysis path.  Network stays
+#: capability-gated by the catalogue/runtime probe; the remaining profiles
+#: are eligible when supported by server configuration.
 RUN_ALL_PROFILES: tuple[str, ...] = (
     "metadata_only",
     "processes_basic",
+    "processes_extended",
+    "modules_basic",
+    "handles_basic",
+    "kernel_basic",
+    "suspicious_memory",
 )
 
-#: Expensive profiles remain manual until direct execution is verified.
-RUN_ALL_EXCLUDED_PROFILES: dict[str, str] = {
-    "processes_extended": "manual extended profile; first analysis uses the standard process baseline",
-    "modules_basic": "manual artifact profile; not part of the first direct execution baseline",
-    "handles_basic": "manual high-volume profile; not part of the first direct execution baseline",
-    "kernel_basic": "manual kernel profile; not part of the first direct execution baseline",
-    "suspicious_memory": "manual expensive profile; not part of the first direct execution baseline",
-}
+RUN_ALL_EXCLUDED_PROFILES: dict[str, str] = {}
+
+ACTIVE_RUN_STATUSES = ("pending", "queued", "running")
+SUCCESS_RUN_STATUSES = ("completed", "completed_with_errors")
+FAILED_RUN_STATUSES = ("failed", "timed_out", "cancelled", "backend_unavailable", "invalid_evidence")
 
 
 class MemoryBatchError(RuntimeError):
@@ -105,7 +107,7 @@ def _profile_completed_successfully(db: Session, *, case_id: str, evidence_id: s
             MemoryScanRun.case_id == case_id,
             MemoryScanRun.evidence_id == evidence_id,
             MemoryScanRun.profile == profile,
-            MemoryScanRun.status.in_(("completed", "completed_with_errors")),
+            MemoryScanRun.status.in_(SUCCESS_RUN_STATUSES),
         )
         .first()
         is not None
@@ -124,6 +126,20 @@ def _profile_latest_status(db: Session, *, case_id: str, evidence_id: str, profi
         .first()
     )
     return row.status if row else None
+
+
+def _profile_has_active_run(db: Session, *, case_id: str, evidence_id: str, profile: str) -> bool:
+    return (
+        db.query(MemoryScanRun)
+        .filter(
+            MemoryScanRun.case_id == case_id,
+            MemoryScanRun.evidence_id == evidence_id,
+            MemoryScanRun.profile == profile,
+            MemoryScanRun.status.in_(ACTIVE_RUN_STATUSES),
+        )
+        .first()
+        is not None
+    )
 
 
 def plan_run_all(
@@ -156,11 +172,17 @@ def plan_run_all(
         if not ok:
             skipped.append({"profile": profile, "reason": reason or "unavailable"})
             continue
-        if mode == "missing_or_failed" and _profile_completed_successfully(
-            db, case_id=case_id, evidence_id=evidence_id, profile=profile,
-        ):
-            skipped.append({"profile": profile, "reason": "already_completed"})
-            continue
+        latest_status = _profile_latest_status(db, case_id=case_id, evidence_id=evidence_id, profile=profile)
+        if mode != "rerun_all":
+            if latest_status in SUCCESS_RUN_STATUSES or _profile_completed_successfully(db, case_id=case_id, evidence_id=evidence_id, profile=profile):
+                skipped.append({"profile": profile, "reason": "already_completed"})
+                continue
+            if latest_status in ACTIVE_RUN_STATUSES or _profile_has_active_run(db, case_id=case_id, evidence_id=evidence_id, profile=profile):
+                skipped.append({"profile": profile, "reason": "already_active"})
+                continue
+            if latest_status in FAILED_RUN_STATUSES:
+                skipped.append({"profile": profile, "reason": "failed_previous_run_skipped"})
+                continue
         selected.append(profile)
 
     excluded = [
@@ -321,23 +343,41 @@ def create_run_all_batch(
     db.add(batch)
     db.flush()
 
-    # Enqueue the first profile (if any).
+    # Enqueue every selected pending profile exactly once.  The batch then
+    # tracks terminal completion from worker callbacks; it does not create
+    # additional runs during advance.
     if batch.requested_profiles:
-        first = batch.requested_profiles[0]
-        batch.current_profile = first
+        first_run = None
+        runs: list[MemoryScanRun] = []
+        batch.current_profile = batch.requested_profiles[0]
         batch.status = "running"
         batch.started_at = utc_now_naive()
-        run = _enqueue_profile(db, batch=batch, profile=first, position=1, enqueue_fn=enqueue_fn)
+        try:
+            for index, profile in enumerate(batch.requested_profiles, start=1):
+                run = _enqueue_profile(db, batch=batch, profile=profile, position=index, enqueue_fn=enqueue_fn)
+                runs.append(run)
+                if first_run is None:
+                    first_run = run
+        except Exception as exc:  # noqa: BLE001
+            batch.status = "failed"
+            batch.failure_reason = f"Could not enqueue memory analysis run: {exc}"
+            batch.completed_at = utc_now_naive()
+            db.commit()
+            raise MemoryBatchError(
+                "MEMORY_WORKER_QUEUE_UNAVAILABLE",
+                "Memory analysis runs could not be enqueued. Check Redis and the memory worker queue.",
+                status_code=503,
+            ) from exc
         db.commit()
         db.refresh(batch)
-        return {"batch": batch, "first_run": run, "plan": plan}
+        return {"batch": batch, "first_run": first_run, "runs": runs, "plan": plan}
 
     # No profiles to run.
     batch.status = "completed"
     batch.completed_at = utc_now_naive()
     db.commit()
     db.refresh(batch)
-    return {"batch": batch, "first_run": None, "plan": plan}
+    return {"batch": batch, "first_run": None, "runs": [], "plan": plan}
 
 
 def _enqueue_profile(
@@ -436,7 +476,7 @@ def advance_batch(
     batch.last_advanced_run_id = run.id
     batch.last_advanced_at = utc_now_naive()
 
-    # Determine the next profile to enqueue.
+    # Determine whether any already-created profile run is still active.
     next_profile: str | None = None
     completed = set(batch.completed_profiles or [])
     failed = set(batch.failed_profiles or [])
@@ -468,13 +508,8 @@ def advance_batch(
         db.refresh(batch)
         return batch
 
-    # Enqueue the next profile.
-    position = (run.batch_position or 0) + 1
     batch.current_profile = next_profile
-    if not batch.started_at:
-        batch.started_at = utc_now_naive()
     batch.status = "running"
-    next_run = _enqueue_profile(db, batch=batch, profile=next_profile, position=position, enqueue_fn=enqueue_fn)
     db.commit()
     db.refresh(batch)
     return batch
@@ -588,19 +623,27 @@ def _reconcile_one_batch(
     summary: dict[str, Any],
 ) -> None:
     if batch.status == "queued":
-        # No first run was ever enqueued.
+        # No selected runs were ever enqueued.
         if not batch.requested_profiles:
             batch.status = "completed"
             batch.completed_at = utc_now_naive()
             summary["noop"] += 1
             return
-        first = batch.requested_profiles[0]
-        batch.current_profile = first
+        batch.current_profile = batch.requested_profiles[0]
         batch.status = "running"
         batch.started_at = utc_now_naive()
-        _enqueue_profile(db, batch=batch, profile=first, position=1, enqueue_fn=enqueue_fn)
+        existing_profiles = {
+            row.profile
+            for row in db.query(MemoryScanRun).filter(MemoryScanRun.batch_id == batch.id).all()
+        }
+        enqueued = 0
+        for index, profile in enumerate(batch.requested_profiles, start=1):
+            if profile in existing_profiles:
+                continue
+            _enqueue_profile(db, batch=batch, profile=profile, position=index, enqueue_fn=enqueue_fn)
+            enqueued += 1
         batch.reconciled_at = utc_now_naive()
-        summary["enqueued_first_profile"] += 1
+        summary["enqueued_first_profile"] += enqueued
         return
     if batch.status == "running":
         if batch.cancellation_requested and batch.current_profile is None:

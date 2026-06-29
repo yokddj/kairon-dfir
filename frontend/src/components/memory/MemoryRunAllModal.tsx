@@ -34,6 +34,7 @@ function formatBytes(bytes: number): string {
 
 const PROFILE_TITLE: Record<string, string> = {
   metadata_only: "System metadata",
+  processes_basic: "Standard process analysis",
   processes_extended: "Extended process analysis",
   modules_basic: "Modules and DLLs",
   handles_basic: "Handles",
@@ -78,13 +79,20 @@ export function MemoryRunAllModal({
         authorization_acknowledged: true,
         continue_on_failure: true,
       }),
-    onSuccess: () => {
+    onSuccess: (batch) => {
       setStarted(true);
+      const queuedCount = batch.requested_profiles?.length ?? 0;
+      if (queuedCount === 0) {
+        setError(batch.message || "All available profiles have already been run.");
+      }
       queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
       queryClient.invalidateQueries({ queryKey: ["memory-landing", caseId] });
       queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId, evidenceId] });
       queryClient.invalidateQueries({ queryKey: ["memory-runs", caseId, evidenceId] });
-      onCompleted();
+      queryClient.invalidateQueries({ queryKey: ["memory-active-batch", caseId, evidenceId] });
+      if (queuedCount > 0) {
+        onCompleted();
+      }
     },
     onError: (err: Error & { errorCode?: string; detail?: unknown }) => {
       // Surface the structured blocker when the backend refused
@@ -133,7 +141,7 @@ export function MemoryRunAllModal({
 
   // Disable the action button while the request is in flight (double
   // click protection).
-  const actionDisabled = !acknowledged || startMutation.isPending || !runnable;
+  const actionDisabled = !acknowledged || startMutation.isPending || started || !runnable;
 
   useEffect(() => {
     if (blockedReason && error === null) {
@@ -160,12 +168,6 @@ export function MemoryRunAllModal({
                 ? "Run missing or failed profiles only"
                 : "Re-run all supported profiles"}
             </h2>
-            <p
-              className="mt-2 rounded-xl border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-warning"
-              data-testid="memory-run-all-disabled-banner"
-            >
-              Run all is temporarily unavailable while the memory execution pipeline is being stabilized.
-            </p>
           </div>
           <button
             type="button"
@@ -229,6 +231,11 @@ export function MemoryRunAllModal({
           <p className="mt-2 text-[10px] text-muted" data-testid="memory-run-all-est-duration">
             Estimated total duration: ~{totalSeconds}s
           </p>
+          {plan && plan.selected_profiles.length === 0 ? (
+            <p className="mt-2 rounded-xl border border-mint/30 bg-mint/10 px-3 py-2 text-xs text-mint" data-testid="memory-run-all-noop">
+              All available profiles have already been run.
+            </p>
+          ) : null}
         </section>
 
         <section className="mt-4 space-y-2 rounded-2xl border border-line bg-abyss/40 p-4">
@@ -332,7 +339,9 @@ export function MemoryRunAllModal({
                 ? "Starting…"
                 : started
                   ? "Started"
-                  : "Run all supported profiles"}
+                  : runnable
+                    ? `Run ${plan?.selected_profiles.length ?? 0} remaining profile${(plan?.selected_profiles.length ?? 0) === 1 ? "" : "s"}`
+                    : "All profiles already run"}
             </button>
           ) : null}
         </div>

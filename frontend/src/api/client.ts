@@ -641,6 +641,8 @@ export type MemoryAnalysisBatch = {
   completed_at: string | null;
   plan?: MemoryRunAllPlan;
   first_run_id?: string;
+  run_ids?: string[];
+  message?: string;
 };
 
 export type MemoryEvidenceLandingItem = {

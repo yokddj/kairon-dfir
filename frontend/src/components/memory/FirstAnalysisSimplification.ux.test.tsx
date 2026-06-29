@@ -98,23 +98,22 @@ describe("First analysis simplification v1", () => {
     expect(startButton).toBeInTheDocument();
   });
 
-  it("2) the first-analysis view shows Included and Skipped lists", async () => {
+  it("2) the first-analysis view shows the Included list", async () => {
     renderModal(baseProps);
     expect(await screen.findByText(/Included/i)).toBeInTheDocument();
-    expect(await screen.findByText(/Skipped/i)).toBeInTheDocument();
     expect(await screen.findByText(/System metadata/i)).toBeInTheDocument();
     expect(await screen.findByText(/Standard process analysis/i)).toBeInTheDocument();
   });
 
-  it("3) the partial view shows a primary 'Run missing or failed profiles' button", async () => {
+  it("3) the partial view shows a primary remaining-profiles button", async () => {
     renderModal({ ...baseProps, catalogue: partialCatalogue });
-    const button = await screen.findByRole("button", { name: /Run missing or failed profiles/i });
+    const button = await screen.findByRole("button", { name: /Run \d+ remaining profile/i });
     expect(button).toBeInTheDocument();
   });
 
   it("4) the partial view calls startMemoryRunAll with mode missing_or_failed", async () => {
     renderModal({ ...baseProps, catalogue: partialCatalogue });
-    const button = await screen.findByRole("button", { name: /Run missing or failed profiles/i });
+    const button = await screen.findByRole("button", { name: /Run \d+ remaining profile/i });
     fireEvent.click(button);
     await waitFor(() => {
       expect(api.startMemoryRunAll).toHaveBeenCalledWith(

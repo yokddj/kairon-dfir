@@ -233,23 +233,16 @@ describe("Memory Golden Path Recovery v1", () => {
     expect(body).not.toMatch(/\b500\b/);
   });
 
-  it("6) Run all modal shows the stabilization banner text", () => {
-    // The MemoryRunAllModal has complex dependencies (catalogue
-    // queries, plan selectors).  We assert the banner presence
-    // structurally by reading the rendered text via a minimal
-    // render of just the banner region.
+  it("6) Run all modal no longer shows the stabilization banner text", () => {
     const bannerText = "Run all is temporarily unavailable while the memory execution pipeline is being stabilized.";
-    // The text must exist in the modal's source code.
-    // (We use the actual import to keep the test in sync with
-    // the production code.)
     const fs = require("fs");
     const path = require("path");
     const src = fs.readFileSync(
       path.join(__dirname, "..", "components", "memory", "MemoryRunAllModal.tsx"),
       "utf-8",
     );
-    expect(src).toContain(bannerText);
-    expect(src).toContain('data-testid="memory-run-all-disabled-banner"');
+    expect(src).not.toContain(bannerText);
+    expect(src).not.toContain('data-testid="memory-run-all-disabled-banner"');
   });
 
   it("7) individual metadata Run is available (not blocked by the flag)", async () => {

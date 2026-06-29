@@ -291,13 +291,13 @@ function FirstAnalysisView({
   readinessReady: boolean;
 }) {
   const supported = catalogue.items.filter((it) => it.available);
-  const included = supported.filter((it) => it.profile !== "processes_basic" && it.profile !== "network_basic");
-  const skipped = supported.filter((it) => it.profile === "processes_basic" || it.profile === "network_basic");
+  const included = supported.filter((it) => it.profile !== "network_basic");
+  const skipped = supported.filter((it) => it.profile === "network_basic");
   const disabled = !canRun || !readinessReady || isStarting;
   return (
     <div className="space-y-3" data-testid="memory-first-analysis">
       <p className="text-sm text-muted">
-        This will run the supported memory analysis profiles sequentially.
+        This will queue the supported memory analysis profiles for this evidence.
       </p>
       <div className="rounded-2xl border border-line bg-abyss/40 p-3 text-xs">
         <p className="font-mono uppercase tracking-[0.16em] text-mint">Included</p>
@@ -312,7 +312,7 @@ function FirstAnalysisView({
           <p className="font-mono uppercase tracking-[0.16em] text-muted">Skipped</p>
           <ul className="mt-1 list-disc pl-5 text-muted">
             {skipped.map((it) => (
-              <li key={it.profile}>{it.title} — {it.profile === "processes_basic" ? "covered by Extended process analysis" : "unavailable or not supported for this evidence"}</li>
+              <li key={it.profile}>{it.title} — unavailable or not supported for this evidence</li>
             ))}
           </ul>
         </div>
@@ -356,6 +356,7 @@ function PartialAnalysisView({
   supported,
   completed,
   partialAvailable,
+  hasActiveProfiles,
   feedback,
   error,
   canRun,
@@ -375,6 +376,7 @@ function PartialAnalysisView({
   supported: MemoryAnalysisCatalogueItem[];
   completed: MemoryAnalysisCatalogueItem[];
   partialAvailable: MemoryAnalysisCatalogueItem[];
+  hasActiveProfiles: boolean;
   feedback: string | null;
   error: string | null;
   canRun: boolean;
@@ -388,11 +390,11 @@ function PartialAnalysisView({
   startMutation: { isPending: boolean };
   onRunItem: (item: MemoryAnalysisCatalogueItem) => void;
 }) {
-  const disabled = !canRun || !readinessReady || isStarting;
+  const disabled = !canRun || !readinessReady || isStarting || hasActiveProfiles || partialAvailable.length === 0;
   return (
     <div className="space-y-3" data-testid="memory-partial-analysis">
       <p className="text-sm text-muted">
-        Runs only analyses that have not completed successfully.
+        Runs only analyses that have never completed and are not already queued or running. Historical failed attempts are skipped unless you choose a re-run.
       </p>
       <div className="grid gap-2 md:grid-cols-3 text-xs">
         <Stat label="Completed" value={completed.length} />
@@ -400,6 +402,12 @@ function PartialAnalysisView({
         <Stat label="Total supported" value={supported.length} />
       </div>
       {feedback ? <p className="text-xs text-emerald-200" data-testid="memory-partial-feedback">{feedback}</p> : null}
+      {partialAvailable.length === 0 && !hasActiveProfiles ? (
+        <p className="text-xs text-mint" data-testid="memory-partial-noop">All available profiles have already been run.</p>
+      ) : null}
+      {hasActiveProfiles ? (
+        <p className="text-xs text-amber-100" data-testid="memory-partial-active">A memory analysis profile is already queued or running.</p>
+      ) : null}
       {error ? <p className="text-xs text-rose-200" data-testid="memory-partial-error">{error}</p> : null}
       <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
         <button
@@ -425,7 +433,7 @@ function PartialAnalysisView({
           data-testid="memory-partial-start"
           className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
         >
-          {isStarting ? "Starting…" : "Run missing or failed profiles"}
+          {isStarting ? "Starting…" : `Run ${partialAvailable.length} remaining profile${partialAvailable.length === 1 ? "" : "s"}`}
         </button>
       </div>
       {showAdvanced ? (
@@ -628,13 +636,15 @@ export function MemoryAnalysisCatalogueModal({
       authorization_acknowledged: true,
       continue_on_failure: true,
     }),
-    onSuccess: () => {
-      setFeedback("Run-all batch started.");
+    onSuccess: (batch) => {
+      const queuedCount = batch.requested_profiles?.length ?? 0;
+      setFeedback(queuedCount > 0 ? `Queued ${queuedCount} memory analysis profile${queuedCount === 1 ? "" : "s"}.` : batch.message || "All available profiles have already been run.");
       setError(null);
       queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId, evidenceId] });
       queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
       queryClient.invalidateQueries({ queryKey: ["memory-landing", caseId] });
       queryClient.invalidateQueries({ queryKey: ["memory-runs", caseId, evidenceId] });
+      queryClient.invalidateQueries({ queryKey: ["memory-active-batch", caseId, evidenceId] });
     },
     onError: (err: Error) => {
       setError(err.message);
@@ -664,8 +674,11 @@ export function MemoryAnalysisCatalogueModal({
   const completed = supported.filter(
     (it) => it.last_status === "completed" || it.last_status === "completed_with_errors",
   );
+  const activeAvailable = supported.filter(
+    (it) => it.last_status === "pending" || it.last_status === "queued" || it.last_status === "running",
+  );
   const partialAvailable = supported.filter(
-    (it) => it.last_status !== "completed" && it.last_status !== "completed_with_errors",
+    (it) => !it.last_status,
   );
 
   return (
@@ -737,6 +750,7 @@ export function MemoryAnalysisCatalogueModal({
             supported={supported}
             completed={completed}
             partialAvailable={partialAvailable}
+            hasActiveProfiles={activeAvailable.length > 0}
             feedback={feedback}
             error={error}
             canRun={canRun}
