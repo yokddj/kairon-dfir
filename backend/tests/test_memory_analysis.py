@@ -1295,6 +1295,62 @@ def test_finalize_streams_sha256_and_registers_evidence(db_session, tmp_path: Pa
     assert db_session.query(Evidence).filter(Evidence.id == evidence.id).count() == 1
 
 
+def test_finalize_memory_upload_auto_dispatches_preparation_once(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _case(db_session)
+    settings = _upload_session_settings(tmp_path)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: settings)
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", lambda _db, expected_bytes, exclude_upload_id=None: {
+        "staging_available_bytes": 10_000,
+        "canonical_storage_available_bytes": 10_000,
+        "memory_output_available_bytes": 10_000,
+        "required_capacity_bytes": expected_bytes,
+        "finalization_strategy": "atomic_move",
+        "can_accept_selected_size": True,
+    })
+    monkeypatch.setattr(upload_sessions, "secure_uploaded_memory_permissions", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(upload_lifecycle, "get_settings", lambda: SimpleNamespace(
+        memory_auto_preparation=True,
+        memory_auto_symbol_probe=True,
+        backend_data_dir=settings.backend_data_dir,
+        memory_upload_session_ttl_seconds=settings.memory_upload_session_ttl_seconds,
+    ))
+    monkeypatch.setattr("app.services.memory.probe.probe_memory_image", lambda _path: SimpleNamespace(
+        detected_format="windows_memory",
+        status="confirmed_memory",
+        confidence="high",
+        reason="test",
+    ))
+    calls: list[str] = []
+
+    def fake_dispatch(_db, *, evidence, force=False):
+        calls.append(evidence.id)
+        assert db_session.get(Evidence, evidence.id) is not None
+        return {"preparation_id": "prep-1", "state": "queued", "task_active": True, "worker_task_id": "job-1"}
+
+    monkeypatch.setattr("app.services.memory.preparation_runtime.dispatch_memory_preparation", fake_dispatch)
+    session = upload_sessions.create_memory_upload_session(
+        db_session,
+        case_id=CASE_ID,
+        filename="memory.dmp",
+        expected_size_bytes=8,
+        provided_host="WS01",
+        authorization_acknowledged=True,
+    )
+    data = b"abcdefgh"
+    asyncio.run(upload_sessions.store_memory_upload_chunk(
+        db_session,
+        case_id=CASE_ID,
+        upload_id=session.id,
+        chunk_index=0,
+        request=_ChunkRequestStub(data, {"content-length": "8", "x-kairon-chunk-sha256": hashlib.sha256(data).hexdigest()}),
+    ))
+
+    _upload_state, evidence = upload_sessions.finalize_memory_upload_session(db_session, case_id=CASE_ID, upload_id=session.id)
+
+    assert evidence is not None
+    assert calls == [evidence.id]
+
+
 def test_get_memory_runs_filters_by_evidence(db_session) -> None:
     _case(db_session)
     _evidence(db_session, evidence_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1")
@@ -1618,6 +1674,108 @@ def test_backend_readiness_rejects_suspicious_configured_commands(command: str) 
     assert executable is None
     assert display is not None
     assert error == "invalid_command"
+
+
+def test_backend_readiness_accepts_python_module_invocation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backend_readiness.shutil, "which", lambda command: "/usr/bin/python3" if command == "python3" else None)
+
+    configured, argv, display, error = backend_readiness.resolve_configured_command("python3 -m volatility3")
+
+    assert configured is True
+    assert argv == ["/usr/bin/python3", "-m", "volatility3"]
+    assert display == "python3 -m volatility3"
+    assert error is None
+
+
+def test_missing_console_script_does_not_fail_when_module_invocation_works(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backend_readiness, "get_settings", lambda: _backend_settings(
+        volatility3_command="python3 -m volatility3",
+        memory_analysis_enabled=True,
+        memory_allow_external_tool_execution=True,
+    ))
+    monkeypatch.setattr(backend_readiness.shutil, "which", lambda command: "/usr/bin/python3" if command == "python3" else None)
+    seen = {}
+
+    def fake_run(args, **_kwargs):
+        seen["args"] = args
+        return _completed(stdout="Volatility 3 Framework 2.28.0")
+
+    monkeypatch.setattr(backend_readiness.subprocess, "run", fake_run)
+
+    status = backend_readiness.check_volatility3_backend()
+
+    assert status["status"] == "available"
+    assert status["command_display"] == "python3 -m volatility3"
+    assert seen["args"] == ["/usr/bin/python3", "-m", "volatility3", "--help"]
+
+
+def test_python_module_invocation_reports_missing_volatility_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(backend_readiness, "get_settings", lambda: _backend_settings(
+        volatility3_command="python3 -m volatility3",
+        memory_analysis_enabled=True,
+        memory_allow_external_tool_execution=True,
+    ))
+    monkeypatch.setattr(backend_readiness.shutil, "which", lambda command: "/usr/bin/python3" if command == "python3" else None)
+    monkeypatch.setattr(
+        backend_readiness.subprocess,
+        "run",
+        lambda *_args, **_kwargs: _completed(stderr="/usr/bin/python3: No module named volatility3", returncode=1),
+    )
+
+    status = backend_readiness.check_volatility3_backend()
+
+    assert status["status"] == "check_failed"
+    assert status["error_code"] == "module_missing"
+
+
+def test_build_plugin_argv_supports_python_module_invocation(tmp_path: Path) -> None:
+    argv = volatility_runner.build_plugin_argv(["/usr/bin/python3", "-m", "volatility3"], tmp_path / "memory.mem", "windows.info")
+
+    assert argv[:3] == ["/usr/bin/python3", "-m", "volatility3"]
+    assert "windows.info" in argv
+
+
+def test_preparation_validation_reports_missing_evidence_path(db_session) -> None:
+    from app.services.memory.preparation_runtime import _validate_worker_evidence_path
+
+    _case(db_session)
+    ev = _evidence(db_session, stored_path="/tmp/kairon-missing-memory-image.raw")
+
+    ok, reason, message = _validate_worker_evidence_path(ev)
+
+    assert ok is False
+    assert reason == "evidence_path_unavailable"
+    assert "cannot see" in str(message)
+
+
+def test_preparation_validation_reports_evidence_size_mismatch(db_session, tmp_path: Path) -> None:
+    from app.services.memory.preparation_runtime import _validate_worker_evidence_path
+
+    _case(db_session)
+    path = tmp_path / "memory.raw"
+    path.write_bytes(b"abc")
+    ev = _evidence(db_session, stored_path=str(path))
+    ev.size_bytes = 10
+    db_session.commit()
+
+    ok, reason, message = _validate_worker_evidence_path(ev)
+
+    assert ok is False
+    assert reason == "evidence_size_mismatch"
+    assert "different" in str(message)
+
+
+def test_preparation_validation_reports_unwritable_symbol_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from app.services.memory import preparation_runtime
+
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
+    monkeypatch.setattr(preparation_runtime.Path, "write_text", lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionError("denied")))
+
+    ok, reason, message = preparation_runtime._validate_symbol_cache_writable()
+
+    assert ok is False
+    assert reason == "symbol_cache_unwritable"
+    assert "cannot write" in str(message)
 
 
 def test_volatility_minimal_environment_preserves_offline_writable_cache(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -2455,6 +2613,7 @@ def test_native_volatility_probe_helper_works_on_mock_output(monkeypatch: pytest
         "stderr": "",
     })
     monkeypatch.setattr("subprocess.run", lambda *a, **kw: sp_run_result)
+    monkeypatch.setattr("app.services.memory.volatility_runner.resolve_volatility_invocation", lambda: (["/usr/bin/python3", "-m", "volatility3"], "python3 -m volatility3"))
     result = _run_native_volatility_probe(
         evidence=SimpleNamespace(id="test-id"),
         canonical_path=Path("/tmp/test.dmp"),
@@ -2472,6 +2631,7 @@ def test_native_volatility_probe_rejects_invalid_json(monkeypatch: pytest.Monkey
         "stderr": "",
     })
     monkeypatch.setattr("subprocess.run", lambda *a, **kw: sp_run_result)
+    monkeypatch.setattr("app.services.memory.volatility_runner.resolve_volatility_invocation", lambda: (["/usr/bin/python3", "-m", "volatility3"], "python3 -m volatility3"))
     result = _run_native_volatility_probe(
         evidence=SimpleNamespace(id="test-id"),
         canonical_path=Path("/tmp/test.dmp"),
@@ -2494,6 +2654,7 @@ def test_native_volatility_probe_rejects_missing_pid4(monkeypatch: pytest.Monkey
         "stderr": "",
     })
     monkeypatch.setattr("subprocess.run", lambda *a, **kw: sp_run_result)
+    monkeypatch.setattr("app.services.memory.volatility_runner.resolve_volatility_invocation", lambda: (["/usr/bin/python3", "-m", "volatility3"], "python3 -m volatility3"))
     result = _run_native_volatility_probe(
         evidence=SimpleNamespace(id="test-id"),
         canonical_path=Path("/tmp/test.dmp"),

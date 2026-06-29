@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.config import get_settings
-from app.services.memory.backend_readiness import resolve_configured_executable, sanitize_backend_error
+from app.services.memory.backend_readiness import resolve_configured_command, resolve_configured_executable, sanitize_backend_error
 
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,25 @@ def resolve_volatility_executable() -> tuple[str, str]:
     return executable, display or Path(executable).name
 
 
+def resolve_volatility_invocation() -> tuple[list[str], str]:
+    command = get_settings().volatility3_command
+    if " -m " not in str(command or ""):
+        configured, executable, display, error = resolve_configured_executable(command)
+        if not configured:
+            raise VolatilityRunnerError(error or "VOLATILITY_NOT_CONFIGURED", "Volatility 3 is not configured.")
+        if not executable:
+            raise VolatilityRunnerError("VOLATILITY_NOT_FOUND", "Volatility 3 executable was not found.")
+        return [executable], display or Path(executable).name
+    configured, argv_prefix, display, error = resolve_configured_command(command)
+    if not configured:
+        raise VolatilityRunnerError(error or "VOLATILITY_NOT_CONFIGURED", "Volatility 3 is not configured.")
+    if not argv_prefix:
+        code = "PYTHON_NOT_FOUND" if error == "python_missing" else "VOLATILITY_NOT_FOUND"
+        message = "Python executable for Volatility 3 was not found." if error == "python_missing" else "Volatility 3 executable was not found."
+        raise VolatilityRunnerError(code, message)
+    return argv_prefix, display or Path(argv_prefix[0]).name
+
+
 ALLOWED_VOLATILITY_PLUGINS = {
     "windows.info",
     "windows.pslist",
@@ -102,10 +121,10 @@ ALLOWED_VOLATILITY_PLUGINS = {
 }
 
 
-def build_plugin_argv(executable: str, evidence_path: Path, plugin: str, *, offline: bool = True, cache_path: Path | None = None, symbol_path: Path | None = None) -> list[str]:
+def build_plugin_argv(executable: str | list[str], evidence_path: Path, plugin: str, *, offline: bool = True, cache_path: Path | None = None, symbol_path: Path | None = None) -> list[str]:
     if plugin not in ALLOWED_VOLATILITY_PLUGINS:
         raise VolatilityRunnerError("PLUGIN_NOT_ALLOWED", "Memory plugin is not allowed.")
-    argv = [executable]
+    argv = [*executable] if isinstance(executable, list) else [executable]
     if offline:
         argv.append("--offline")
     if cache_path is not None:
@@ -141,7 +160,7 @@ def run_plugin(
     symbol_path: Path | None = None,
 ) -> VolatilityRunResult:
     settings = get_settings()
-    executable, display = resolve_volatility_executable()
+    argv_prefix, display = resolve_volatility_invocation()
     # Normal memory analysis is always offline. Managed downloads belong only
     # to the dedicated symbol-fetcher service.
     xdg_cache = str(os.environ.get("XDG_CACHE_HOME") or "").strip()
@@ -150,9 +169,15 @@ def run_plugin(
     cache_path = cache_path or default_cache_path
     symbol_path = symbol_path or default_symbol_path
     if cache_path is not None and symbol_path is not None:
-        cache_path.mkdir(parents=True, exist_ok=True, mode=0o750)
-        symbol_path.mkdir(parents=True, exist_ok=True, mode=0o750)
-    argv = build_plugin_argv(executable, evidence_path, plugin, offline=offline, cache_path=cache_path, symbol_path=symbol_path)
+        try:
+            cache_path.mkdir(parents=True, exist_ok=True, mode=0o750)
+            symbol_path.mkdir(parents=True, exist_ok=True, mode=0o750)
+            probe = cache_path / ".kairon-write-test"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+        except OSError as exc:
+            raise VolatilityRunnerError("MEMORY_SYMBOL_CACHE_NOT_WRITABLE", "Volatility symbol cache is not writable by the memory worker.") from exc
+    argv = build_plugin_argv(argv_prefix, evidence_path, plugin, offline=offline, cache_path=cache_path, symbol_path=symbol_path)
     timeout = max(1, int(timeout_seconds or settings.memory_plugin_timeout_seconds))
     max_bytes = max(1, int(max_output_bytes or settings.memory_plugin_output_max_bytes))
     work_dir.mkdir(parents=True, exist_ok=True)

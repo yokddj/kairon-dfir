@@ -10,6 +10,7 @@ function getEffectiveMemoryReadiness(prep: MemorySymbolPreparation): CanonicalRe
   const effective = prep.effective_state || prep.ui_state;
   if (effective === "ready") return "ready";
   if (effective === "blocked_symbols") return "blocked_symbols";
+  if (effective === "requirement_unknown" || prep.preparation_state === "requirement_unknown") return "preparing";
   if (effective === "preparing" || prep.ui_state === "preparing" || prep.task_alive) return "preparing";
   if (effective === "failed") return "failed";
   return "unknown";
@@ -104,6 +105,15 @@ function cardCopy(prep: MemorySymbolPreparation) {
         prep.sanitized_message ||
         "Kairon could not obtain the required symbols for this evidence.",
       tone: "bad" as const,
+    };
+  }
+  if (state === "requirement_unknown") {
+    return {
+      title: "Identifying Windows symbols",
+      subtitle:
+        prep.sanitized_message ||
+        "Kairon can retry automatic probing; no manual symbol identifier is required.",
+      tone: "warn" as const,
     };
   }
   if (state === "platform_not_identified") {

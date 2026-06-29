@@ -327,12 +327,12 @@ def _bounded_volatility_fallback(canonical_path: Path) -> MemoryProbeResult | No
     from app.core.config import get_settings
     from app.services.memory.volatility_runner import (
         VolatilityRunnerError,
-        resolve_volatility_executable,
+        resolve_volatility_invocation,
         run_plugin,
     )
 
     try:
-        executable, _ = resolve_volatility_executable()
+        argv_prefix, _ = resolve_volatility_invocation()
     except (VolatilityRunnerError, Exception):  # noqa: BLE001
         return None
 
@@ -343,14 +343,14 @@ def _bounded_volatility_fallback(canonical_path: Path) -> MemoryProbeResult | No
 
         # Attempt Windows probe first.
         win_result = _run_volatility_plugin_bounded(
-            "windows.info", executable, canonical_path, work_dir
+            "windows.info", argv_prefix, canonical_path, work_dir
         )
         if win_result is not None:
             return win_result
 
         # Fall back to Linux banner probe.
         linux_result = _run_volatility_plugin_bounded(
-            "linux.banners", executable, canonical_path, work_dir
+            "linux.banners", argv_prefix, canonical_path, work_dir
         )
         if linux_result is not None:
             return linux_result
@@ -363,7 +363,7 @@ def _bounded_volatility_fallback(canonical_path: Path) -> MemoryProbeResult | No
 
 def _run_volatility_plugin_bounded(
     plugin: str,
-    executable: str,
+    argv_prefix: list[str],
     evidence_path: Path,
     work_dir: Path,
 ) -> MemoryProbeResult | None:
@@ -379,7 +379,7 @@ def _run_volatility_plugin_bounded(
 
     env = dict(_minimal_volatility_env())
     argv = [
-        executable,
+        *argv_prefix,
         "--offline",
         "-f",
         str(evidence_path),

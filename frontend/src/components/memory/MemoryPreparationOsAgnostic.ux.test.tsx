@@ -207,4 +207,24 @@ describe("OS-agnostic memory preparation v1 (frontend)", () => {
     const progress = screen.getByTestId("memory-preparation-progress");
     expect(progress).toBeInTheDocument();
   });
+
+  it("9) unknown requirement shows automatic probing instead of terminal unavailable copy", () => {
+    renderCard({
+      id: "prep-unknown",
+      case_id: CASE,
+      evidence_id: EVIDENCE,
+      ui_state: "preparing",
+      preparation_state: "requirement_unknown",
+      effective_state: "requirement_unknown",
+      progress_percent: 0,
+      progress_label: "Identifying Windows kernel symbols",
+      sanitized_message: "Kairon can retry automatic probing; no manual symbol identifier is required.",
+      task_alive: false,
+    });
+
+    const card = screen.getByTestId("memory-preparation-card");
+    expect(card.textContent).toMatch(/Identifying Windows symbols/i);
+    expect(card.textContent).toMatch(/no manual symbol identifier/i);
+    expect(card.textContent).not.toMatch(/symbols unavailable/i);
+  });
 });
