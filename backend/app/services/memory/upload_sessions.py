@@ -7,10 +7,10 @@ import os
 import shutil
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, AsyncIterable, Iterable, Mapping
 from uuid import uuid4
 
-from fastapi import Request
+from fastapi import Request, UploadFile
 import redis
 from sqlalchemy.orm import Session
 
@@ -279,6 +279,35 @@ async def store_memory_upload_chunk(
     chunk_index: int,
     request: Request,
 ) -> MemoryUpload:
+    return await store_memory_upload_chunk_stream(
+        db,
+        case_id=case_id,
+        upload_id=upload_id,
+        chunk_index=chunk_index,
+        chunks=request.stream(),
+        headers=request.headers,
+        content_length_is_payload=True,
+    )
+
+
+async def iter_upload_file_chunks(upload_file: UploadFile, *, block_size: int = 1024 * 1024) -> AsyncIterable[bytes]:
+    while True:
+        chunk = await upload_file.read(block_size)
+        if not chunk:
+            break
+        yield chunk
+
+
+async def store_memory_upload_chunk_stream(
+    db: Session,
+    *,
+    case_id: str,
+    upload_id: str,
+    chunk_index: int,
+    chunks: AsyncIterable[bytes],
+    headers: Mapping[str, str],
+    content_length_is_payload: bool,
+) -> MemoryUpload:
     item = get_memory_upload(db, case_id, upload_id)
     if item is None:
         raise MemoryUploadSessionError("MEMORY_UPLOAD_NOT_FOUND", "Memory upload session was not found.")
@@ -312,13 +341,13 @@ async def store_memory_upload_chunk(
     expected_size = int(item.expected_bytes or 0)
     chunk_size = int(item.chunk_size_bytes or 0)
     expected_length = min(chunk_size, expected_size - (chunk_index * chunk_size))
-    content_length = request.headers.get("content-length")
+    content_length = headers.get("content-length") if content_length_is_payload else None
     if content_length is not None and int(content_length) != expected_length:
         raise MemoryUploadSessionError("MEMORY_UPLOAD_INVALID_CHUNK_LENGTH", "Chunk length does not match the expected byte range.")
 
-    declared_chunk_sha = _sanitize_sha256(request.headers.get("x-kairon-chunk-sha256"))
-    chunks = _received_chunks(item)
-    existing = chunks.get(str(chunk_index))
+    declared_chunk_sha = _sanitize_sha256(headers.get("x-kairon-chunk-sha256"))
+    received_chunks = _received_chunks(item)
+    existing = received_chunks.get(str(chunk_index))
     if existing is not None:
         existing_size = int(existing.get("size") or 0)
         existing_sha = str(existing.get("sha256") or "")
@@ -335,7 +364,7 @@ async def store_memory_upload_chunk(
     bytes_written = 0
 
     with temp_path.open("xb") as handle:
-        async for chunk in request.stream():
+        async for chunk in chunks:
             if not chunk:
                 continue
             bytes_written += len(chunk)
@@ -357,7 +386,7 @@ async def store_memory_upload_chunk(
         raise MemoryUploadSessionError("MEMORY_UPLOAD_CHUNK_HASH_MISMATCH", "Chunk integrity verification failed.")
 
     if final_path.exists():
-        existing_meta = chunks.get(str(chunk_index)) or {}
+        existing_meta = received_chunks.get(str(chunk_index)) or {}
         if int(existing_meta.get("size") or 0) == bytes_written and str(existing_meta.get("sha256") or "") == computed_sha:
             temp_path.unlink(missing_ok=True)
             return item
@@ -371,10 +400,10 @@ async def store_memory_upload_chunk(
     finally:
         os.close(dir_fd)
 
-    chunks[str(chunk_index)] = {"size": bytes_written, "sha256": computed_sha}
-    _set_received_chunks(item, chunks)
-    item.received_chunk_count = len(chunks)
-    item.bytes_received = sum(int(chunk.get("size") or 0) for chunk in chunks.values())
+    received_chunks[str(chunk_index)] = {"size": bytes_written, "sha256": computed_sha}
+    _set_received_chunks(item, received_chunks)
+    item.received_chunk_count = len(received_chunks)
+    item.bytes_received = sum(int(chunk.get("size") or 0) for chunk in received_chunks.values())
     item.status = "uploading"
     item.failure_code = None
     item.failure_message = None

@@ -103,6 +103,15 @@ function installMockXhr(scenarios: XhrScenario[]) {
   return instances;
 }
 
+function readBlobText(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read blob"));
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.readAsText(blob);
+  });
+}
+
 describe("apiFetch cache policy", () => {
   it("sends cache: no-store for GET requests", async () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
@@ -331,18 +340,30 @@ describe("uploadBlob XHR transport", () => {
 });
 
 describe("uploadMemoryUploadChunk integration", () => {
-  it("preserves chunk SHA-256 header through API", async () => {
+  it("uses XMLHttpRequest POST multipart FormData for memory chunks", async () => {
     const instances = installMockXhr([{ status: 204, responseText: "", contentType: "" }]);
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(mockResponse({ upload_id: "u-1", status: "uploading" } as MemoryUploadStatus));
 
     const { api } = await import("./client");
-    await api.uploadMemoryUploadChunk("case-1", "upload-1", 0, new Blob(["data"]), {
+    const blob = new Blob(["data"], { type: "application/octet-stream" });
+    await api.uploadMemoryUploadChunk("case-1", "upload-1", 0, blob, {
       chunkSha256: "deadbeef",
     });
 
-    expect(instances[0].headers["x-kairon-chunk-sha256"]).toBe("deadbeef");
+    expect(instances).toHaveLength(1);
+    expect(instances[0].method).toBe("POST");
+    expect(instances[0].body).toBeInstanceOf(FormData);
+    expect(instances[0].url).toContain("/cases/case-1/memory/uploads/upload-1/chunks/0");
     expect(instances[0].headers.accept).toBe("application/json");
-    expect(instances[0].headers["content-type"]).toBe("application/octet-stream");
+    expect(instances[0].headers["cache-control"]).toBe("no-store");
+    expect(instances[0].headers["x-kairon-chunk-sha256"]).toBe("deadbeef");
+    expect(instances[0].headers["content-type"]).toBeUndefined();
+
+    const form = instances[0].body as FormData;
+    const chunk = form.get("chunk") as File;
+    expect(chunk).toBeInstanceOf(Blob);
+    expect(chunk.name).toBe("chunk-0.bin");
+    await expect(readBlobText(chunk)).resolves.toBe(await readBlobText(blob));
   });
 
   it("returns MemoryUploadStatus on success", async () => {
@@ -356,7 +377,7 @@ describe("uploadMemoryUploadChunk integration", () => {
     expect(result).toEqual(status);
   });
 
-  it("accepts 204 successful PUT response and fetches authoritative status", async () => {
+  it("accepts 204 successful POST response and fetches authoritative status", async () => {
     const status = { upload_id: "u-1", status: "uploading", bytes_received: 4, expected_bytes: 8 } as MemoryUploadStatus;
     installMockXhr([{ status: 204, responseText: "", contentType: "" }]);
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(mockResponse(status));
@@ -367,5 +388,33 @@ describe("uploadMemoryUploadChunk integration", () => {
     expect(result).toEqual(status);
     expect(globalThis.fetch).toHaveBeenCalledTimes(1);
     expect(String((globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0])).toContain("/cases/case-1/memory/uploads/u-1");
+  });
+
+  it("timeout rejects and never fetches status", async () => {
+    installMockXhr([{ timeout: true }]);
+    const { api } = await import("./client");
+
+    await expect(api.uploadMemoryUploadChunk("case-1", "u-1", 0, new Blob(["data"]))).rejects.toThrow("Upload timed out");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("network failure rejects and never fetches status", async () => {
+    installMockXhr([{ error: true }]);
+    const { api } = await import("./client");
+
+    await expect(api.uploadMemoryUploadChunk("case-1", "u-1", 0, new Blob(["data"]))).rejects.toThrow("The backend could not be reached during upload");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
+  it("user abort rejects immediately and never fetches status", async () => {
+    installMockXhr([{ responseText: JSON.stringify({ ok: true }) }]);
+    const { api } = await import("./client");
+    const controller = new AbortController();
+
+    const promise = api.uploadMemoryUploadChunk("case-1", "u-1", 0, new Blob(["data"]), { signal: controller.signal });
+    controller.abort();
+
+    await expect(promise).rejects.toThrow("Upload aborted");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 });

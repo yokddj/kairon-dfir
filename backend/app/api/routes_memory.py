@@ -8,7 +8,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy.exc import DataError, IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -75,7 +75,9 @@ from app.services.memory.upload_sessions import (
     cancel_memory_upload_session,
     create_memory_upload_session,
     finalize_memory_upload_session,
+    iter_upload_file_chunks,
     store_memory_upload_chunk,
+    store_memory_upload_chunk_stream,
     upload_status_with_chunks,
 )
 from app.services.memory.active_result import resolve_active_memory_result, list_families as _list_artifact_families
@@ -1494,6 +1496,37 @@ async def upload_memory_upload_chunk_endpoint(
         )
     except MemoryUploadSessionError as exc:
         raise _raise_upload_session_error(exc) from exc
+    return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"Content-Length": "0"})
+
+
+@router.post(
+    "/cases/{case_id}/memory/uploads/{upload_id}/chunks/{chunk_index}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+)
+async def upload_memory_upload_chunk_multipart_endpoint(
+    case_id: str,
+    upload_id: str,
+    chunk_index: int,
+    request: Request,
+    chunk: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> Response:
+    _require_case(db, case_id)
+    try:
+        await store_memory_upload_chunk_stream(
+            db,
+            case_id=case_id,
+            upload_id=upload_id,
+            chunk_index=chunk_index,
+            chunks=iter_upload_file_chunks(chunk),
+            headers=request.headers,
+            content_length_is_payload=False,
+        )
+    except MemoryUploadSessionError as exc:
+        raise _raise_upload_session_error(exc) from exc
+    finally:
+        await chunk.close()
     return Response(status_code=status.HTTP_204_NO_CONTENT, headers={"Content-Length": "0"})
 
 

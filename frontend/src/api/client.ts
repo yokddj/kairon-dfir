@@ -92,6 +92,10 @@ type UploadBlobOptions = {
   headers?: Record<string, string>;
   signal?: AbortSignal;
   timeoutMs?: number;
+  multipart?: {
+    fieldName: string;
+    filename: string;
+  };
 };
 
 async function buildZipFromFolder(files: File[], archiveName = "raw-folder.zip"): Promise<File> {
@@ -257,10 +261,17 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
           options.signal.addEventListener("abort", onParentAbort, { once: true });
         }
 
+        const body = options?.multipart
+          ? (() => {
+              const form = new FormData();
+              form.append(options.multipart.fieldName, blob, options.multipart.filename);
+              return form;
+            })()
+          : blob;
         xhr.open(options?.method ?? "PUT", url, true);
         xhr.setRequestHeader("Accept", "application/json");
         xhr.setRequestHeader("Cache-Control", "no-store");
-        if (options?.contentType) {
+        if (options?.contentType && !options.multipart) {
           xhr.setRequestHeader("Content-Type", options.contentType);
         }
         for (const [key, value] of Object.entries(options?.headers ?? {})) {
@@ -322,7 +333,7 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
             reject(new Error(`Upload response parsing failed after successful HTTP ${xhr.status}. ${message}`));
           }
         });
-        xhr.send(blob);
+        xhr.send(body);
       });
     } catch (error) {
       lastError = error;
@@ -4576,8 +4587,8 @@ export const api = {
     options?: { chunkSha256?: string; signal?: AbortSignal },
   ) => {
     const status = await uploadBlob<MemoryUploadStatus | undefined>(`/cases/${caseId}/memory/uploads/${uploadId}/chunks/${chunkIndex}`, blob, {
-      method: "PUT",
-      contentType: "application/octet-stream",
+      method: "POST",
+      multipart: { fieldName: "chunk", filename: `chunk-${chunkIndex}.bin` },
       headers: options?.chunkSha256 ? { "X-Kairon-Chunk-SHA256": options.chunkSha256 } : undefined,
       signal: options?.signal,
     });
