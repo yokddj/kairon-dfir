@@ -47,7 +47,7 @@ export function MemoryTypeConfirmationModal({
   const [reason, setReason] = useState("");
   const [touched, setTouched] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
-  const firstButtonRef = useRef<HTMLButtonElement | null>(null);
+  const firstInputRef = useRef<HTMLInputElement | null>(null);
   const previousFocus = useRef<HTMLElement | null>(null);
 
   // Reset state when the modal opens.
@@ -58,7 +58,7 @@ export function MemoryTypeConfirmationModal({
       setTouched(false);
       previousFocus.current = document.activeElement as HTMLElement | null;
       // Focus the first interactive element after mount.
-      window.setTimeout(() => firstButtonRef.current?.focus(), 0);
+      window.setTimeout(() => firstInputRef.current?.focus(), 0);
     } else if (previousFocus.current) {
       previousFocus.current.focus();
       previousFocus.current = null;
@@ -153,7 +153,7 @@ export function MemoryTypeConfirmationModal({
 
         <label className="mt-4 flex items-start gap-2 text-xs">
           <input
-            ref={firstButtonRef}
+            ref={firstInputRef}
             type="checkbox"
             checked={acknowledged}
             onChange={(event) => setAcknowledged(event.target.checked)}

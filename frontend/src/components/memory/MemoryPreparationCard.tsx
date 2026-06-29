@@ -50,7 +50,7 @@ function NativeProbeStatusLabel({ status }: { status: Record<string, unknown> | 
 
 
 function cardCopy(prep: MemorySymbolPreparation) {
-  const state = prep.effective_state || prep.ui_state;
+  const state = prep.effective_state || prep.preparation_state;
   const canonical = getEffectiveMemoryReadiness(prep);
   const isReady = canonical === "ready";
   const nativeReady = isReady && (prep.native_compatible === true);
@@ -88,21 +88,21 @@ function cardCopy(prep: MemorySymbolPreparation) {
       tone: "bad" as const,
     };
   }
-  if (state === "failed" || (prep.ui_state === "failed" && state === "failed")) {
-    return {
-      title: "Memory preparation failed",
-      subtitle:
-        prep.sanitized_message ||
-        "Kairon could not obtain the required symbols for this evidence.",
-      tone: "bad" as const,
-    };
-  }
   if (state === "platform_not_supported") {
     return {
       title: "Platform not supported",
       subtitle:
         prep.sanitized_message ||
         "Kairon does not currently support this operating system.",
+      tone: "bad" as const,
+    };
+  }
+  if (state === "failed" || prep.ui_state === "failed") {
+    return {
+      title: "Memory preparation failed",
+      subtitle:
+        prep.sanitized_message ||
+        "Kairon could not obtain the required symbols for this evidence.",
       tone: "bad" as const,
     };
   }

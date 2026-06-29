@@ -303,13 +303,14 @@ describe("uploadBlob XHR transport", () => {
     });
   });
 
-  it("retries on network failure across base URLs", async () => {
+  it("rejects network failure when the same-origin API is unavailable", async () => {
     installMockXhr([{ error: true }, { responseText: JSON.stringify({ ok: true }) }]);
 
     const { uploadBlob } = await import("./client");
-    const result = await uploadBlob<{ ok: boolean }>("/upload", new Blob(["test"]));
 
-    expect(result).toEqual({ ok: true });
+    await expect(uploadBlob<{ ok: boolean }>("/upload", new Blob(["test"]))).rejects.toThrow(
+      "The backend could not be reached during upload. Tried the configured API endpoints.",
+    );
   });
 
   it("timeout rejects without treating upload as success", async () => {
