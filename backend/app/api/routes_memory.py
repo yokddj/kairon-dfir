@@ -1103,6 +1103,9 @@ def get_memory_symbol_preparation(
         "stale_reason": effective["stale_reason"],
         "task_alive": effective["task_alive"],
     })
+    if effective.get("error_code"):
+        payload["error_code"] = effective["error_code"]
+        payload["sanitized_message"] = effective.get("sanitized_message") or payload.get("sanitized_message")
     # Surface the latest acquisition status so the UI can render
     # the structured failure panel (e.g. SYMBOL_PDB_IDENTITY_MISMATCH)
     # without making a second round-trip to /symbols/acquisition.

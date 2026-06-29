@@ -42,15 +42,25 @@ def _installed_volatility_version() -> str | None:
 
 
 def build_memory_worker_capability() -> dict[str, Any]:
+    from app.services.memory.backend_readiness import resolve_configured_command
+
     settings = get_settings()
-    executable = shutil.which(settings.volatility3_command) if settings.volatility3_command else None
+    command = str(settings.volatility3_command or "").strip()
+    if " -m " in command:
+        configured, argv_prefix, display, config_error = resolve_configured_command(command)
+    else:
+        configured = bool(command)
+        executable = shutil.which(command) if command else None
+        argv_prefix = [executable] if executable else None
+        display = command if executable else None
+        config_error = None if executable else "not_found"
     healthy = False
     version = None
-    error_code = None
-    if executable:
+    error_code = None if configured else (config_error or "VOLATILITY_NOT_CONFIGURED")
+    if argv_prefix:
         try:
             result = subprocess.run(
-                [executable, "--help"],
+                [*argv_prefix, "--help"],
                 shell=False,
                 check=False,
                 capture_output=True,
@@ -67,13 +77,13 @@ def build_memory_worker_capability() -> dict[str, Any]:
         except OSError:
             error_code = "VOLATILITY_HELP_FAILED"
     else:
-        error_code = "VOLATILITY_NOT_FOUND"
+        error_code = "PYTHON_NOT_FOUND" if config_error == "python_missing" else "VOLATILITY_NOT_FOUND"
 
     return {
         "worker_type": "memory",
         "worker_identifier": os.environ.get("KAIRON_WORKER_ID") or socket.gethostname(),
         "application_commit": os.environ.get("KAIRON_COMMIT", "unknown"),
-        "volatility_executable": "vol" if executable else None,
+        "volatility_executable": display if argv_prefix else None,
         "volatility_version": version,
         "supported_profiles": settings.allowed_memory_profiles,
         "supported_plugins": settings.allowed_memory_plugins,

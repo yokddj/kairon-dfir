@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import logging
 from pathlib import Path
 import re
+import shlex
 import shutil
 import subprocess
 import time
@@ -184,24 +185,48 @@ def _command_display(command: str) -> str | None:
     value = str(command or "").strip()
     if not value:
         return None
-    return Path(value).name
+    try:
+        parts = shlex.split(value)
+    except ValueError:
+        return Path(value).name
+    if len(parts) >= 3 and parts[1] == "-m":
+        return f"{Path(parts[0]).name} -m {parts[2]}"
+    return Path(parts[0] if parts else value).name
 
 
-def resolve_configured_executable(command: str | None) -> tuple[bool, str | None, str | None, str | None]:
+def resolve_configured_command(command: str | None) -> tuple[bool, list[str] | None, str | None, str | None]:
     value = str(command or "").strip()
     if not value:
         return False, None, None, "not_configured"
-    if SHELL_TOKEN_PATTERN.search(value):
+    try:
+        parts = shlex.split(value)
+    except ValueError:
         return False, None, _command_display(value), "invalid_command"
-    candidate = Path(value)
+    if not parts:
+        return False, None, None, "not_configured"
+    if any(re.search(r"[;&|`$<>\n\r]", part) for part in parts):
+        return False, None, _command_display(value), "invalid_command"
+    if len(parts) > 1 and not (len(parts) == 3 and parts[1] == "-m" and parts[2] == "volatility3"):
+        return False, None, _command_display(value), "invalid_command"
+    executable_name = parts[0]
+    candidate = Path(executable_name)
     if candidate.is_absolute():
-        if candidate.is_file():
-            return True, str(candidate), candidate.name, None
-        return True, None, candidate.name, "not_found"
-    if "/" in value or "\\" in value:
-        return False, None, _command_display(value), "invalid_command"
-    resolved = shutil.which(value)
-    return True, resolved, value, None if resolved else "not_found"
+        if not candidate.is_file():
+            return True, None, _command_display(value), "python_missing" if len(parts) == 3 else "not_found"
+        executable = str(candidate)
+    else:
+        if "/" in executable_name or "\\" in executable_name:
+            return False, None, _command_display(value), "invalid_command"
+        resolved = shutil.which(executable_name)
+        if not resolved:
+            return True, None, _command_display(value), "python_missing" if len(parts) == 3 else "not_found"
+        executable = resolved
+    return True, [executable, *parts[1:]], _command_display(value), None
+
+
+def resolve_configured_executable(command: str | None) -> tuple[bool, str | None, str | None, str | None]:
+    configured, argv, display, error = resolve_configured_command(command)
+    return configured, (argv[0] if argv else None), display, error
 
 
 def _extract_version(output: str) -> str | None:
@@ -216,8 +241,8 @@ def _extract_version(output: str) -> str | None:
     return None
 
 
-def _harmless_help_check(backend: str, executable: str, timeout_seconds: int) -> tuple[bool, str | None, str | None]:
-    args = [executable, "--help"]
+def _harmless_help_check(backend: str, argv_prefix: list[str], timeout_seconds: int) -> tuple[bool, str | None, str | None]:
+    args = [*argv_prefix, "--help"]
     logger.info("memory backend harmless check started", extra={"backend": backend})
     try:
         result = subprocess.run(
@@ -238,6 +263,8 @@ def _harmless_help_check(backend: str, executable: str, timeout_seconds: int) ->
     output = f"{result.stdout or ''}\n{result.stderr or ''}"[:MAX_CAPTURE_BYTES]
     if result.returncode != 0:
         logger.warning("memory backend harmless check failed", extra={"backend": backend, "returncode": result.returncode})
+        if "No module named volatility3" in output or "No module named 'volatility3'" in output:
+            return False, None, "module_missing"
         return False, None, "check_failed"
     logger.info("memory backend harmless check succeeded", extra={"backend": backend})
     return True, _extract_version(output), None
@@ -252,7 +279,7 @@ def _check_backend(backend: str, command: str | None) -> dict:
         return _dedicated_worker_status(command)
     worker_extra = _memory_worker_observation(settings) if backend == "volatility3" else {}
 
-    configured, executable, command_display, config_error = resolve_configured_executable(command)
+    configured, argv_prefix, command_display, config_error = resolve_configured_command(command)
     if not configured:
         status = "not_configured" if config_error == "not_configured" else "blocked"
         message = (
@@ -276,8 +303,9 @@ def _check_backend(backend: str, command: str | None) -> dict:
         extra={"execution_mode": settings.memory_execution_mode, "queue": settings.memory_queue_name, **worker_extra},
         )
 
-    if not executable:
+    if not argv_prefix:
         logger.info("memory backend executable not found", extra={"backend": backend})
+        missing_code = "volatility_module_missing" if config_error == "module_missing" else "python_missing" if config_error == "python_missing" else "executable_not_found"
         return _status(
             backend=backend,
             configured=True,
@@ -289,12 +317,12 @@ def _check_backend(backend: str, command: str | None) -> dict:
             message=f"{BACKEND_DISPLAY_NAMES[backend]} is configured but was not found in the server environment.",
             checked_at=checked_at,
             command_display=command_display,
-            error_code="executable_not_found",
+            error_code=missing_code,
             extra={"execution_mode": settings.memory_execution_mode, "queue": settings.memory_queue_name, **worker_extra},
         )
 
     logger.info("memory backend executable found", extra={"backend": backend, "command": command_display})
-    ok, version, check_error = _harmless_help_check(backend, executable, settings.memory_backend_check_timeout_seconds)
+    ok, version, check_error = _harmless_help_check(backend, argv_prefix, settings.memory_backend_check_timeout_seconds)
     if not ok:
         return _status(
             backend=backend,

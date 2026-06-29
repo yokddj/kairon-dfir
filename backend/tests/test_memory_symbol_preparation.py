@@ -513,7 +513,7 @@ def test_progress_for_state_covers_documented_states() -> None:
         (PREP_IDENTIFIED, "Requirement identified", 45),
         (PREP_ACQUIRING, "Downloading", 70),
         (PREP_READY, "Ready", 100),
-        (PREP_REQUIREMENT_UNKNOWN, "Requirement not identified", 0),
+        (PREP_REQUIREMENT_UNKNOWN, "Identifying Windows kernel symbols", 0),
     ]:
         out_label, out_percent = progress_for_state(state)
         assert out_percent == percent, f"state={state} got {out_percent}"

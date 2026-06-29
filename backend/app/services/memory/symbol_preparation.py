@@ -145,7 +145,9 @@ UI_STATE_FAILED = "failed"
 def ui_state_for(prep_state: str) -> str:
     if prep_state == PREP_READY:
         return UI_STATE_READY
-    if prep_state in {PREP_REQUIREMENT_UNKNOWN, PREP_NEGATIVE_CACHED}:
+    if prep_state == PREP_REQUIREMENT_UNKNOWN:
+        return UI_STATE_PREPARING
+    if prep_state in {PREP_NEGATIVE_CACHED}:
         return UI_STATE_BLOCKED
     if prep_state in {PREP_BLOCKED, PREP_BLOCKED_SYMBOLS, PREP_PLATFORM_NOT_IDENTIFIED_STATE, PREP_PLATFORM_NOT_SUPPORTED_STATE}:
         return UI_STATE_BLOCKED
@@ -766,7 +768,7 @@ def progress_for_state(state: str) -> tuple[str, int]:
     if state == PREP_STALE:
         return ("Stale — re-dispatching", 0)
     if state == PREP_REQUIREMENT_UNKNOWN:
-        return ("Requirement not identified", 0)
+        return ("Identifying Windows kernel symbols", 0)
     if state == PREP_ACQUISITION_FAILED:
         return ("Acquisition failed", 0)
     if state == PREP_UNSUPPORTED:
@@ -885,8 +887,8 @@ def compute_memory_readiness(
     elif preparation_state == PREP_REQUIREMENT_UNKNOWN:
         can_analyze = False
         can_run_all = False
-        blocker = "Windows symbol requirement could not be identified."
-        sanitized = blocker
+        blocker = "Windows symbol requirement has not been identified yet."
+        sanitized = "Kairon can retry automatic probing; no manual symbol identifier is required."
     elif preparation_state == PREP_NEGATIVE_CACHED:
         can_analyze = False
         can_run_all = False
@@ -1278,6 +1280,8 @@ def resolve_effective_memory_preparation_state(
             "stale": False,
             "stale_reason": None,
             "task_alive": True,
+            "error_code": prep.error_code if prep is not None else None,
+            "sanitized_message": prep.sanitized_message if prep is not None else None,
         }
     elif (
         prep is not None
@@ -1309,6 +1313,8 @@ def resolve_effective_memory_preparation_state(
                 "stale": False,
                 "stale_reason": None,
                 "task_alive": False,
+                "error_code": prep.error_code if prep is not None else None,
+                "sanitized_message": prep.sanitized_message if prep is not None else None,
             }
     elif prep is None:
         # No row at all.  Try the cache hit fallback used by
@@ -1375,6 +1381,8 @@ def resolve_effective_memory_preparation_state(
         "stale": effective_state == PREP_STALE,
         "stale_reason": stale_reason,
         "task_alive": task_alive,
+        "error_code": prep.error_code if prep is not None else None,
+        "sanitized_message": prep.sanitized_message if prep is not None else None,
     }
 
 

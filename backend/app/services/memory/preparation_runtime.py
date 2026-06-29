@@ -47,6 +47,8 @@ PREP_BLOCKED_SYMBOLS_ERROR = "WINDOWS_EXACT_SYMBOLS_MISSING"
 PREP_REQUIREMENT_UNKNOWN_ERROR = "WINDOWS_REQUIREMENT_UNKNOWN"
 PREP_DISCOVERY_FAILED_ERROR = "WINDOWS_DISCOVERY_FAILED"
 PREP_STALE_TIMEOUT = "MEMORY_PREPARATION_STALE"
+PREP_EVIDENCE_PATH_UNAVAILABLE = "MEMORY_EVIDENCE_PATH_UNAVAILABLE"
+PREP_SYMBOL_CACHE_UNWRITABLE = "MEMORY_SYMBOL_CACHE_NOT_WRITABLE"
 
 
 def _get_active_preparation(db: Session, evidence_id: str):
@@ -87,6 +89,44 @@ def _evidence_canonical_path(evidence) -> Path:
     if not stored:
         raise ValueError("evidence is missing stored_path")
     return Path(stored)
+
+
+def _validate_worker_evidence_path(evidence) -> tuple[bool, str | None, str | None]:
+    try:
+        path = _evidence_canonical_path(evidence)
+    except ValueError as exc:
+        return False, "evidence_path_missing", str(exc)[:200]
+    try:
+        if not path.exists():
+            return False, "evidence_path_unavailable", "The memory worker cannot see the completed evidence path."
+        if not path.is_file():
+            return False, "evidence_path_not_file", "The completed evidence path is not a regular file."
+        expected = int(getattr(evidence, "size_bytes", 0) or 0)
+        actual = int(path.stat().st_size)
+        if expected > 0 and actual != expected:
+            return False, "evidence_size_mismatch", "The completed evidence size is different from the database record."
+        with path.open("rb") as handle:
+            handle.read(1)
+    except OSError as exc:
+        return False, "evidence_path_unreadable", f"The memory worker cannot read the completed evidence file: {exc}"[:200]
+    return True, None, None
+
+
+def _validate_symbol_cache_writable() -> tuple[bool, str | None, str | None]:
+    import os
+
+    xdg_cache = str(os.environ.get("XDG_CACHE_HOME") or "").strip()
+    if not xdg_cache:
+        return True, None, None
+    cache_path = Path(xdg_cache) / "volatility3"
+    try:
+        cache_path.mkdir(parents=True, exist_ok=True, mode=0o750)
+        probe = cache_path / ".kairon-write-test"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+    except OSError as exc:
+        return False, "symbol_cache_unwritable", f"The memory worker cannot write to the Volatility symbol cache: {exc}"[:200]
+    return True, None, None
 
 
 def _evidence_filename(evidence) -> str | None:
@@ -526,6 +566,30 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
         _persist_heartbeat(prep, current_step="probing_platform")
         db.commit()
 
+        ok, reason, message = _validate_worker_evidence_path(evidence)
+        if not ok:
+            _persist_terminal(
+                prep,
+                state=PREP_FAILED,
+                reason=reason or "evidence_path_unavailable",
+                error_code=PREP_EVIDENCE_PATH_UNAVAILABLE,
+                sanitized_message=message,
+            )
+            db.commit()
+            return {"state": "failed", "error_code": PREP_EVIDENCE_PATH_UNAVAILABLE, "reason": reason}
+
+        ok, reason, message = _validate_symbol_cache_writable()
+        if not ok:
+            _persist_terminal(
+                prep,
+                state=PREP_FAILED,
+                reason=reason or "symbol_cache_unwritable",
+                error_code=PREP_SYMBOL_CACHE_UNWRITABLE,
+                sanitized_message=message,
+            )
+            db.commit()
+            return {"state": "failed", "error_code": PREP_SYMBOL_CACHE_UNWRITABLE, "reason": reason}
+
         # 2. Run the bounded probe.
         probe_summary = _probe_evidence(evidence)
 
@@ -726,20 +790,33 @@ def _run_native_volatility_probe(
     from app.core.config import get_settings
 
     settings = get_settings()
-    vol_exe = os.environ.get("VOLATILITY3_EXECUTABLE", "vol")
+    from app.services.memory.volatility_runner import VolatilityRunnerError, resolve_volatility_invocation
+
+    try:
+        argv_prefix, display = resolve_volatility_invocation()
+    except VolatilityRunnerError as exc:
+        return {
+            "compatible": False,
+            "reason": exc.message,
+            "plugin": "windows.pslist.PsList",
+            "vol_exe": getattr(settings, "volatility3_command", ""),
+            "exit_code": None,
+            "row_count": 0,
+            "error_code": exc.code,
+        }
     plugin = "windows.pslist.PsList"
 
     result: dict[str, Any] = {
         "compatible": False,
         "reason": None,
         "plugin": plugin,
-        "vol_exe": vol_exe,
+        "vol_exe": display,
         "exit_code": None,
         "row_count": 0,
     }
     try:
         proc = subprocess.run(
-            [vol_exe, "-f", str(canonical_path), "-r", "json", plugin],
+            [*argv_prefix, "-f", str(canonical_path), "-r", "json", plugin],
             capture_output=True,
             text=True,
             timeout=getattr(settings, "memory_native_probe_timeout_seconds", 60),
@@ -749,7 +826,7 @@ def _run_native_volatility_probe(
         result["reason"] = f"Volatility timed out after {getattr(settings, 'memory_native_probe_timeout_seconds', 60)}s."
         return result
     except FileNotFoundError:
-        result["reason"] = f"Volatility executable {vol_exe!r} not found."
+        result["reason"] = f"Volatility executable {display!r} not found."
         return result
     except Exception as exc:
         result["reason"] = f"Volatility subprocess error: {exc}"
