@@ -78,6 +78,8 @@ def db(tmp_path, monkeypatch) -> Session:
     def _patched_get_settings() -> Settings:
         base = Settings()
         object.__setattr__(base, "memory_process_profile_enabled", True)
+        object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,modules_basic,handles_basic,kernel_basic,suspicious_memory")
+        object.__setattr__(base, "memory_allowed_plugins", "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind")
         return base
 
     monkeypatch.setattr(config_module, "get_settings", _patched_get_settings)
@@ -371,6 +373,144 @@ def test_list_family_counts_returns_all_families(db: Session) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_run_all_skips_completed_and_enqueues_pending_profiles(db: Session) -> None:
+    case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
+    _make_run(db, case_id=case.id, evidence_id=ev.id, profile="metadata_only", status="completed")
+    enqueued: list[str] = []
+
+    result = create_run_all_batch(
+        db,
+        case_id=case.id,
+        evidence_id=ev.id,
+        mode="missing_or_failed",
+        authorization_acknowledged=True,
+        continue_on_failure=True,
+        enqueue_fn=lambda run_id: enqueued.append(run_id) or f"job-{run_id}",
+    )
+
+    requested = result["batch"].requested_profiles
+    assert "metadata_only" not in requested
+    assert requested == ["processes_basic", "processes_extended", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"]
+    assert len(enqueued) == len(requested)
+    runs = db.query(MemoryScanRun).filter(MemoryScanRun.batch_id == result["batch"].id).all()
+    assert {run.profile for run in runs} == set(requested)
+    assert all(run.status == "queued" for run in runs)
+
+
+def test_run_all_skips_active_and_failed_profiles_by_default(db: Session) -> None:
+    case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
+    _make_run(db, case_id=case.id, evidence_id=ev.id, profile="metadata_only", status="completed")
+    _make_run(db, case_id=case.id, evidence_id=ev.id, profile="processes_basic", status="queued")
+    _make_run(db, case_id=case.id, evidence_id=ev.id, profile="modules_basic", status="failed")
+
+    plan = plan_run_all(db, case_id=case.id, evidence_id=ev.id, mode="missing_or_failed")
+
+    assert "metadata_only" not in plan["selected_profiles"]
+    assert "processes_basic" not in plan["selected_profiles"]
+    assert "modules_basic" not in plan["selected_profiles"]
+    reasons = {item["profile"]: item["reason"] for item in plan["skipped_profiles"]}
+    assert reasons["metadata_only"] == "already_completed"
+    assert reasons["processes_basic"] == "already_active"
+    assert reasons["modules_basic"] == "failed_previous_run_skipped"
+
+
+def test_run_all_no_pending_profiles_creates_completed_noop_batch(db: Session) -> None:
+    case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
+    for profile in RUN_ALL_PROFILES:
+        _make_run(db, case_id=case.id, evidence_id=ev.id, profile=profile, status="completed")
+    enqueued: list[str] = []
+
+    result = create_run_all_batch(
+        db,
+        case_id=case.id,
+        evidence_id=ev.id,
+        mode="missing_or_failed",
+        authorization_acknowledged=True,
+        continue_on_failure=True,
+        enqueue_fn=lambda run_id: enqueued.append(run_id) or f"job-{run_id}",
+    )
+
+    assert result["batch"].status == "completed"
+    assert result["batch"].requested_profiles == []
+    assert result["runs"] == []
+    assert enqueued == []
+
+
+def test_run_all_repeated_request_is_conflict_safe(db: Session) -> None:
+    case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
+    create_run_all_batch(
+        db,
+        case_id=case.id,
+        evidence_id=ev.id,
+        mode="missing_or_failed",
+        authorization_acknowledged=True,
+        continue_on_failure=True,
+        enqueue_fn=lambda run_id: f"job-{run_id}",
+    )
+
+    with pytest.raises(MemoryBatchError) as exc_info:
+        create_run_all_batch(
+            db,
+            case_id=case.id,
+            evidence_id=ev.id,
+            mode="missing_or_failed",
+            authorization_acknowledged=True,
+            continue_on_failure=True,
+            enqueue_fn=lambda run_id: f"job-{run_id}",
+        )
+
+    assert exc_info.value.code == "MEMORY_BATCH_ALREADY_ACTIVE"
+
+
+def test_run_all_worker_enqueue_failure_is_actionable(db: Session) -> None:
+    case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
+
+    with pytest.raises(MemoryBatchError) as exc_info:
+        create_run_all_batch(
+            db,
+            case_id=case.id,
+            evidence_id=ev.id,
+            mode="missing_or_failed",
+            authorization_acknowledged=True,
+            continue_on_failure=True,
+            enqueue_fn=lambda _run_id: (_ for _ in ()).throw(RuntimeError("redis unavailable")),
+        )
+
+    assert exc_info.value.code == "MEMORY_WORKER_QUEUE_UNAVAILABLE"
+    assert exc_info.value.status_code == 503
+
+
+def test_batch_advance_tracks_parallel_enqueued_runs_without_duplicates(db: Session) -> None:
+    case, ev = _make_case_and_evidence(db)
+    _make_preparation_ready(db, ev)
+    result = create_run_all_batch(
+        db,
+        case_id=case.id,
+        evidence_id=ev.id,
+        mode="missing_or_failed",
+        authorization_acknowledged=True,
+        continue_on_failure=True,
+        enqueue_fn=lambda run_id: f"job-{run_id}",
+    )
+    batch = result["batch"]
+    initial_run_count = db.query(MemoryScanRun).filter(MemoryScanRun.batch_id == batch.id).count()
+    first = db.query(MemoryScanRun).filter(MemoryScanRun.batch_id == batch.id, MemoryScanRun.profile == batch.requested_profiles[0]).first()
+    first.status = "completed"
+    db.commit()
+
+    advance_batch(db, run=first, enqueue_fn=lambda run_id: f"job-{run_id}")
+
+    assert db.query(MemoryScanRun).filter(MemoryScanRun.batch_id == batch.id).count() == initial_run_count
+    db.refresh(batch)
+    assert first.profile in batch.completed_profiles
+    assert batch.status == "running"
+
+
 def test_duplicate_callback_does_not_create_second_run(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
     _make_preparation_ready(db, ev)
@@ -394,8 +534,7 @@ def test_duplicate_callback_does_not_create_second_run(db: Session) -> None:
     # Duplicate callback: same run, completed.
     advanced_again = advance_batch(db, run=first, enqueue_fn=fake_enqueue)
     assert advanced_again.last_advanced_run_id == first.id
-    # Only two runs were ever enqueued (first profile + second).
-    assert len(enqueued) == 2
+    assert len(enqueued) == len(RUN_ALL_PROFILES)
 
 
 def test_two_concurrent_advances_create_a_single_next_run(db: Session) -> None:
@@ -417,12 +556,13 @@ def test_two_concurrent_advances_create_a_single_next_run(db: Session) -> None:
     first = db.query(MemoryScanRun).filter(MemoryScanRun.batch_id == batch.id).first()
     first.status = "completed"
     db.commit()
-    # Simulate a race: two concurrent advance() calls.  Only the
-    # first should enqueue the next profile; the second is a no-op.
+    # Simulate a race: duplicate advance() calls must not create any
+    # additional profile runs because all requested profiles were queued
+    # at batch creation.
     advance_batch(db, run=first, enqueue_fn=fake_enqueue)
     advance_batch(db, run=first, enqueue_fn=fake_enqueue)
     advance_batch(db, run=first, enqueue_fn=fake_enqueue)
-    # After all the duplicates, only one next run was enqueued.
+    # After all the duplicates, the existing second run was not duplicated.
     second_runs = db.query(MemoryScanRun).filter(
         MemoryScanRun.batch_id == batch.id,
         MemoryScanRun.profile == RUN_ALL_PROFILES[1],
@@ -481,7 +621,7 @@ def test_only_one_active_batch_per_evidence(db: Session) -> None:
     assert excinfo.value.code == "MEMORY_BATCH_ALREADY_ACTIVE"
 
 
-def test_only_one_active_run_per_batch(db: Session) -> None:
+def test_one_active_run_per_pending_profile_in_batch(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
     _make_preparation_ready(db, ev)
     enqueued: list[str] = []
@@ -497,28 +637,23 @@ def test_only_one_active_run_per_batch(db: Session) -> None:
     )
     batch = result["batch"]
     db.refresh(batch)
-    # The "one active run per batch" invariant is enforced by the
-    # advance() logic: the next profile is only enqueued after the
-    # current run has reached a terminal state and the advance has
-    # been committed.  We assert that at any point in time there is
-    # at most one run with status in (pending, queued, running)
-    # for the batch.
-    from sqlalchemy import text as sql_text
-    running = db.execute(sql_text(
-        "SELECT count(*) FROM memory_scan_runs "
-        "WHERE batch_id = :bid AND status IN ('pending', 'queued', 'running')"
-    ), {"bid": batch.id}).scalar() or 0
-    assert running <= 1
+    # The run-all invariant is now one active run per requested profile,
+    # all created by the initial click.
+    running = db.query(MemoryScanRun).filter(
+        MemoryScanRun.batch_id == batch.id,
+        MemoryScanRun.status.in_(("pending", "queued", "running")),
+    ).count()
+    assert running == len(RUN_ALL_PROFILES)
     # Complete the first run and advance.
     first = db.query(MemoryScanRun).filter(MemoryScanRun.batch_id == batch.id).first()
     first.status = "completed"
     db.commit()
     advance_batch(db, run=first, enqueue_fn=fake_enqueue)
-    running = db.execute(sql_text(
-        "SELECT count(*) FROM memory_scan_runs "
-        "WHERE batch_id = :bid AND status IN ('pending', 'queued', 'running')"
-    ), {"bid": batch.id}).scalar() or 0
-    assert running <= 1
+    running = db.query(MemoryScanRun).filter(
+        MemoryScanRun.batch_id == batch.id,
+        MemoryScanRun.status.in_(("pending", "queued", "running")),
+    ).count()
+    assert running == len(RUN_ALL_PROFILES) - 1
 
 
 def test_finalised_batch_cannot_be_reopened(db: Session) -> None:
@@ -541,17 +676,8 @@ def test_finalised_batch_cannot_be_reopened(db: Session) -> None:
     first.status = "completed"
     db.commit()
     advance_batch(db, run=first, enqueue_fn=fake_enqueue)
-    # The batch is now "running" with the second profile queued.
-    # Mark it completed by closing the rest.
-    second = db.query(MemoryScanRun).filter(
-        MemoryScanRun.batch_id == batch.id, MemoryScanRun.profile == RUN_ALL_PROFILES[1],
-    ).first()
-    if second is not None:
-        second.status = "completed"
-        db.commit()
-        advance_batch(db, run=second, enqueue_fn=fake_enqueue)
     # Continue to advance through every remaining profile.
-    for profile in RUN_ALL_PROFILES[2:]:
+    for profile in RUN_ALL_PROFILES[1:]:
         run = db.query(MemoryScanRun).filter(
             MemoryScanRun.batch_id == batch.id, MemoryScanRun.profile == profile,
         ).first()
@@ -588,8 +714,9 @@ def test_cancel_prevents_next_profile(db: Session) -> None:
     first.status = "completed"
     db.commit()
     advance_batch(db, run=first, enqueue_fn=fake_enqueue)
-    # After cancellation, advance() must not enqueue the next profile.
-    assert len(enqueued) == 1
+    # All profiles were already enqueued by the initial click; cancellation
+    # prevents reopening or further queueing.
+    assert len(enqueued) == len(RUN_ALL_PROFILES)
     db.refresh(batch)
     assert batch.cancellation_requested is True
 
@@ -616,12 +743,11 @@ def test_reconcile_advances_a_pending_terminal_run(db: Session) -> None:
     first.status = "completed"
     db.commit()
     enqueued.clear()  # Forget about the original enqueue
-    # Reconcile: should detect the terminal first run and enqueue
-    # the second profile.
+    # Reconcile: should detect the terminal first run and only mark progress.
     reconcile_memory_batches(db, enqueue_fn=fake_enqueue)
     db.refresh(batch)
     assert batch.last_advanced_run_id == first.id
-    assert len(enqueued) == 1
+    assert len(enqueued) == 0
 
 
 def test_reconcile_does_not_duplicate_active_run(db: Session) -> None:
@@ -638,8 +764,7 @@ def test_reconcile_does_not_duplicate_active_run(db: Session) -> None:
         authorization_acknowledged=True, continue_on_failure=True,
         enqueue_fn=fake_enqueue,
     )
-    # First profile is still pending.  Reconcile should not enqueue
-    # another run.
+    # Profiles are still pending.  Reconcile should not enqueue duplicates.
     enqueued.clear()
     summary = reconcile_memory_batches(db, enqueue_fn=fake_enqueue)
     assert summary["enqueued_first_profile"] == 0
@@ -676,8 +801,8 @@ def test_reconcile_re_enqueues_first_profile_when_batch_was_queued(db: Session) 
     db.add(batch)
     db.commit()
     summary = reconcile_memory_batches(db, enqueue_fn=fake_enqueue)
-    assert summary["enqueued_first_profile"] == 1
-    assert len(enqueued) == 1
+    assert summary["enqueued_first_profile"] == len(RUN_ALL_PROFILES)
+    assert len(enqueued) == len(RUN_ALL_PROFILES)
 
 
 # ---------------------------------------------------------------------------
@@ -742,6 +867,7 @@ def test_active_result_changes_only_after_successful_completion(db: Session) -> 
 def test_runtime_validation_allowlist_is_fixed() -> None:
     assert tuple(RUN_ALL_PROFILES) == (
         "metadata_only",
+        "processes_basic",
         "processes_extended",
         "modules_basic",
         "handles_basic",
@@ -978,6 +1104,6 @@ def test_create_batch_does_not_extract_files(db: Session) -> None:
         authorization_acknowledged=True, continue_on_failure=True,
         enqueue_fn=fake_enqueue,
     )
-    # No read of the evidence file: the only side effect is a DB
-    # row and an enqueue call.
-    assert enqueued == [] or len(enqueued) == 1
+    # No extraction side effects: the only effects are DB rows and one
+    # enqueue per selected profile.
+    assert len(enqueued) == len(RUN_ALL_PROFILES)

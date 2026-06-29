@@ -91,6 +91,7 @@ const planMissing = {
   selected_profiles: [],
   skipped_profiles: [
     { profile: "metadata_only", reason: "already_completed" },
+    { profile: "processes_basic", reason: "already_completed" },
     { profile: "processes_extended", reason: "already_completed" },
     { profile: "modules_basic", reason: "already_completed" },
     { profile: "handles_basic", reason: "already_completed" },
@@ -98,7 +99,6 @@ const planMissing = {
     { profile: "suspicious_memory", reason: "already_completed" },
   ],
   excluded_profiles: [
-    { profile: "processes_basic", reason: "standard process analysis is replaced by the extended profile in run-all" },
     { profile: "network_basic", reason: "No compatible Windows network plugin is available in the installed Volatility runtime." },
   ],
 };
@@ -107,10 +107,9 @@ const planRerun = {
   case_id: "case-1",
   evidence_id: "ev-A",
   mode: "rerun_all",
-  selected_profiles: ["metadata_only", "processes_extended", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"],
+  selected_profiles: ["metadata_only", "processes_basic", "processes_extended", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"],
   skipped_profiles: [],
   excluded_profiles: [
-    { profile: "processes_basic", reason: "standard process analysis is replaced by the extended profile in run-all" },
     { profile: "network_basic", reason: "No compatible Windows network plugin is available in the installed Volatility runtime." },
   ],
 };
@@ -355,7 +354,7 @@ beforeEach(() => {
     evidence_id: "ev-A",
     mode: "missing_or_failed",
     status: "queued",
-    requested_profiles: [],
+    requested_profiles: ["metadata_only", "processes_basic", "processes_extended", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"],
     skipped_profiles: [],
     current_profile: null,
     completed_profiles: [],
@@ -466,7 +465,7 @@ describe("Memory overview, profile catalogue and run-all", () => {
     expect(screen.getByTestId("memory-first-analysis-start")).toBeInTheDocument();
   });
 
-  it("first-analysis modal lists Network in Skipped without showing estimated duration", async () => {
+  it("first-analysis modal lists included profiles without showing estimated duration", async () => {
     getMemoryAnalysisCatalogueMock.mockImplementation(async () => ({
       case_id: "case-1",
       evidence_id: "ev-A",
@@ -483,7 +482,6 @@ describe("Memory overview, profile catalogue and run-all", () => {
     fireEvent.click(runBtn);
     expect(await screen.findByTestId("memory-first-analysis")).toBeInTheDocument();
     const body = document.body.textContent || "";
-    expect(body).toMatch(/Skipped/);
     expect(body).toMatch(/Standard process analysis/);
     expect(body).not.toMatch(/Estimated duration: ~0/);
   });
@@ -517,9 +515,9 @@ describe("Memory overview, profile catalogue and run-all", () => {
     renderRunAllModal();
     const order = await screen.findByTestId("memory-run-all-order");
     const items = Array.from(order.querySelectorAll("li")).map((li) => li.textContent ?? "");
-    expect(items.length).toBe(6);
+    expect(items.length).toBe(7);
     expect(items[0]).toMatch(/System metadata/);
-    expect(items[1]).toMatch(/Extended process analysis/);
+    expect(items[1]).toMatch(/Standard process analysis/);
   });
 
   // 13. Modal muestra perfiles omitidos
@@ -528,7 +526,7 @@ describe("Memory overview, profile catalogue and run-all", () => {
     renderRunAllModal();
     const skipped = await screen.findByTestId("memory-run-all-skipped");
     expect(skipped.textContent).toMatch(/network_basic/);
-    expect(skipped.textContent).toMatch(/processes_basic/);
+    expect(skipped.textContent).not.toMatch(/processes_basic/);
   });
 
   // 14. Checkbox autorización requerido
@@ -568,8 +566,8 @@ describe("Memory overview, profile catalogue and run-all", () => {
     fireEvent.click(screen.getByTestId("memory-run-all-ack-checkbox"));
     fireEvent.click(confirm);
     await waitFor(() => expect(confirm).toBeDisabled());
-    if (resolveStart) resolveStart({});
-    await waitFor(() => expect(confirm).not.toBeDisabled());
+    if (resolveStart) resolveStart({ requested_profiles: ["metadata_only"] });
+    await waitFor(() => expect(startMemoryRunAllMock).toHaveBeenCalledTimes(1));
   });
 
   // 18-21 are tested via DOM presence; we keep the suite focused
@@ -581,7 +579,7 @@ describe("Memory overview, profile catalogue and run-all", () => {
       evidence_id: "ev-A",
       mode: "missing_or_failed",
       status: "running",
-      requested_profiles: ["metadata_only", "processes_extended", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"],
+      requested_profiles: ["metadata_only", "processes_basic", "processes_extended", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"],
       skipped_profiles: [],
       current_profile: "metadata_only",
       completed_profiles: ["metadata_only"],
@@ -597,7 +595,7 @@ describe("Memory overview, profile catalogue and run-all", () => {
     const progress = await screen.findByTestId("memory-batch-progress");
     expect(progress.textContent).toMatch(/Running all supported profiles/);
     const summary = screen.getByTestId("memory-batch-progress-summary");
-    expect(summary.textContent).toMatch(/1 of 6 completed/);
+    expect(summary.textContent).toMatch(/1 of 7 completed/);
     expect(summary.textContent).toMatch(/metadata_only/);
   });
 

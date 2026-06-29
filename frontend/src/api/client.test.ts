@@ -184,6 +184,31 @@ describe("apiFetch cache policy", () => {
     expect(init).toHaveProperty("method", "POST");
     expect(init).toHaveProperty("cache", "no-store");
   });
+
+  it("posts Complete analysis to the evidence run-all endpoint", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response(JSON.stringify({ id: "batch-1", requested_profiles: ["processes_basic"], run_ids: ["run-1"] }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const { api } = await import("./client");
+    await api.startMemoryRunAll("case-1", "ev-1", {
+      mode: "missing_or_failed",
+      authorization_acknowledged: true,
+      continue_on_failure: true,
+    });
+
+    const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
+    expect(String(url)).toContain("/cases/case-1/memory/evidences/ev-1/run-all");
+    expect(init).toHaveProperty("method", "POST");
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({
+      mode: "missing_or_failed",
+      authorization_acknowledged: true,
+      continue_on_failure: true,
+    });
+  });
 });
 
 describe("uploadBlob XHR transport", () => {

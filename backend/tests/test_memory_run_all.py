@@ -95,6 +95,8 @@ def db(tmp_path, monkeypatch) -> Session:
     def _patched_get_settings() -> Settings:
         base = Settings()
         object.__setattr__(base, "memory_process_profile_enabled", True)
+        object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,modules_basic,handles_basic,kernel_basic,suspicious_memory")
+        object.__setattr__(base, "memory_allowed_plugins", "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind")
         return base
 
     monkeypatch.setattr(config_module, "get_settings", _patched_get_settings)
@@ -422,16 +424,14 @@ def test_network_never_included_in_run_all(db: Session) -> None:
     assert "network_basic" not in RUN_ALL_PROFILES
 
 
-# ---------- 8. processes_basic omitted when processes_extended is selected ----------
+# ---------- 8. processes_basic included as its own pending profile ----------
 
 
-def test_processes_basic_omitted_in_run_all(db: Session) -> None:
+def test_processes_basic_included_in_run_all(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
     plan = plan_run_all(db, case_id=case.id, evidence_id=ev.id, mode="rerun_all")
     assert "processes_extended" in plan["selected_profiles"]
-    assert "processes_basic" not in plan["selected_profiles"]
-    excluded = {e["profile"] for e in plan["excluded_profiles"]}
-    assert "processes_basic" in excluded
+    assert "processes_basic" in plan["selected_profiles"]
 
 
 # ---------- 9. run-all uses a fixed order ----------
@@ -443,10 +443,10 @@ def test_run_all_uses_fixed_order(db: Session) -> None:
     assert plan["selected_profiles"] == list(RUN_ALL_PROFILES)
 
 
-# ---------- 10 + 11. Sequential execution, never two profiles active in same batch ----------
+# ---------- 10 + 11. One click queues one run per selected profile ----------
 
 
-def test_sequential_execution_and_no_overlap(db: Session) -> None:
+def test_one_click_queues_all_selected_profiles_once(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
     _make_exact_readiness(db, evidence=ev)
     enqueued: list[str] = []
@@ -465,20 +465,18 @@ def test_sequential_execution_and_no_overlap(db: Session) -> None:
         enqueue_fn=fake_enqueue,
     )
     batch = result["batch"]
-    assert len(enqueued) == 1
-    # At this point only one run is enqueued; the batch tracks the rest.
+    assert len(enqueued) == len(RUN_ALL_PROFILES)
     assert batch.current_profile == RUN_ALL_PROFILES[0]
-    # Simulate the first run completing.
     db.refresh(batch)
     runs = db.query(MemoryScanRun).filter(MemoryScanRun.batch_id == batch.id).all()
-    assert len(runs) == 1
+    assert len(runs) == len(RUN_ALL_PROFILES)
+    assert {run.profile for run in runs} == set(RUN_ALL_PROFILES)
+    # Simulate the first run completing; advance must not create duplicates.
     runs[0].status = "completed"
     db.commit()
     advanced = advance_batch(db, run=runs[0], enqueue_fn=fake_enqueue)
     assert advanced is not None
-    assert advanced.current_profile == RUN_ALL_PROFILES[1]
-    # After advance, a second run was enqueued, but still not parallel.
-    assert len(enqueued) == 2
+    assert len(enqueued) == len(RUN_ALL_PROFILES)
 
 
 # ---------- 12. missing_or_failed skips completed profiles ----------
@@ -591,8 +589,7 @@ def test_metadata_only_failure_stops_batch(db: Session) -> None:
     advanced = advance_batch(db, run=first, enqueue_fn=fake_enqueue)
     assert advanced.status == "failed"
     assert advanced.current_profile is None
-    # No second enqueue.
-    assert len(enqueued) == 1
+    assert len(enqueued) == len(RUN_ALL_PROFILES)
 
 
 # ---------- 17. Cancel prevents the next profile from being enqueued ----------
@@ -623,8 +620,7 @@ def test_cancel_prevents_next_profile(db: Session) -> None:
     first.status = "completed"
     db.commit()
     advanced = advance_batch(db, run=first, enqueue_fn=fake_enqueue)
-    # No second enqueue because the batch was cancelled.
-    assert len(enqueued) == 1
+    assert len(enqueued) == len(RUN_ALL_PROFILES)
     assert advanced.status in {"cancelled", "completed_with_errors", "completed"}
 
 
@@ -715,7 +711,7 @@ def test_batch_scoped_by_evidence_id(db: Session) -> None:
         continue_on_failure=True,
         enqueue_fn=fake_enqueue,
     )
-    assert len(enqueued) == 2
+    assert len(enqueued) == 2 * len(RUN_ALL_PROFILES)
 
 
 # ---------- 20. Evidence from another case is rejected ----------
@@ -766,37 +762,35 @@ def test_authorization_required(db: Session) -> None:
     assert excinfo.value.code == "MEMORY_BATCH_AUTHORIZATION_REQUIRED"
 
 
-def test_missing_preparation_blocks_run_all(db: Session) -> None:
+def test_missing_preparation_does_not_block_run_all(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
 
-    with pytest.raises(MemoryBatchError) as excinfo:
-        create_run_all_batch(
-            db,
-            case_id=case.id,
-            evidence_id=ev.id,
-            mode="rerun_all",
-            authorization_acknowledged=True,
-            continue_on_failure=True,
-            enqueue_fn=lambda run_id: f"rq-{run_id}",
-        )
-    assert excinfo.value.code == "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS"
+    result = create_run_all_batch(
+        db,
+        case_id=case.id,
+        evidence_id=ev.id,
+        mode="rerun_all",
+        authorization_acknowledged=True,
+        continue_on_failure=True,
+        enqueue_fn=lambda run_id: f"rq-{run_id}",
+    )
+    assert result["batch"].status == "running"
 
 
-def test_queued_preparation_blocks_run_all(db: Session) -> None:
+def test_queued_preparation_does_not_block_run_all(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
     _make_exact_readiness(db, evidence=ev, state="queued", create_cache=False)
 
-    with pytest.raises(MemoryBatchError) as excinfo:
-        create_run_all_batch(
-            db,
-            case_id=case.id,
-            evidence_id=ev.id,
-            mode="rerun_all",
-            authorization_acknowledged=True,
-            continue_on_failure=True,
-            enqueue_fn=lambda run_id: f"rq-{run_id}",
-        )
-    assert excinfo.value.code == "MEMORY_SYMBOL_PREPARATION_IN_PROGRESS"
+    result = create_run_all_batch(
+        db,
+        case_id=case.id,
+        evidence_id=ev.id,
+        mode="rerun_all",
+        authorization_acknowledged=True,
+        continue_on_failure=True,
+        enqueue_fn=lambda run_id: f"rq-{run_id}",
+    )
+    assert result["batch"].status == "running"
 
 
 def test_ready_exact_preparation_permits_run_all(db: Session) -> None:
@@ -815,24 +809,23 @@ def test_ready_exact_preparation_permits_run_all(db: Session) -> None:
     assert result["batch"].status == "running"
 
 
-def test_blocked_symbols_prevents_validated_run_all(db: Session) -> None:
+def test_blocked_symbols_do_not_prevent_validated_run_all(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
     _make_exact_readiness(db, evidence=ev, state="blocked_symbols", create_cache=False)
 
-    with pytest.raises(MemoryBatchError) as excinfo:
-        create_run_all_batch(
-            db,
-            case_id=case.id,
-            evidence_id=ev.id,
-            mode="rerun_all",
-            authorization_acknowledged=True,
-            continue_on_failure=True,
-            enqueue_fn=lambda run_id: f"rq-{run_id}",
-        )
-    assert excinfo.value.code == "MEMORY_SYMBOLS_REQUIRED"
+    result = create_run_all_batch(
+        db,
+        case_id=case.id,
+        evidence_id=ev.id,
+        mode="rerun_all",
+        authorization_acknowledged=True,
+        continue_on_failure=True,
+        enqueue_fn=lambda run_id: f"rq-{run_id}",
+    )
+    assert result["batch"].status == "running"
 
 
-def test_experimental_candidate_does_not_make_validated_preparation_ready(db: Session) -> None:
+def test_experimental_candidate_does_not_block_validated_run_all(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
     _make_exact_readiness(
         db,
@@ -842,17 +835,16 @@ def test_experimental_candidate_does_not_make_validated_preparation_ready(db: Se
         cache_classification="experimental_candidate",
     )
 
-    with pytest.raises(MemoryBatchError) as excinfo:
-        create_run_all_batch(
-            db,
-            case_id=case.id,
-            evidence_id=ev.id,
-            mode="rerun_all",
-            authorization_acknowledged=True,
-            continue_on_failure=True,
-            enqueue_fn=lambda run_id: f"rq-{run_id}",
-        )
-    assert excinfo.value.code == "MEMORY_SYMBOLS_REQUIRED"
+    result = create_run_all_batch(
+        db,
+        case_id=case.id,
+        evidence_id=ev.id,
+        mode="rerun_all",
+        authorization_acknowledged=True,
+        continue_on_failure=True,
+        enqueue_fn=lambda run_id: f"rq-{run_id}",
+    )
+    assert result["batch"].status == "running"
 
 
 # ---------- 23. No disk index writes happen during planning ----------

@@ -591,11 +591,15 @@ def post_run_all_batch(
 
     batch = result["batch"]
     first_run = result["first_run"]
+    runs = result.get("runs") or []
     plan = result["plan"]
     payload_out = serialize_batch(batch)
     payload_out["plan"] = plan
+    payload_out["run_ids"] = [run.id for run in runs]
     if first_run is not None:
         payload_out["first_run_id"] = first_run.id
+    if not runs:
+        payload_out["message"] = "All available profiles have already been run."
     return payload_out
 
 
