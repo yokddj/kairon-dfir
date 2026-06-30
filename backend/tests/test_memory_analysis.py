@@ -3056,7 +3056,7 @@ def test_memory_enqueue_uses_dedicated_queue(monkeypatch: pytest.MonkeyPatch) ->
     job_id = worker_tasks.enqueue_memory_metadata_scan("run-1")
 
     assert job_id == "memory-job"
-    assert calls == [("memory", "app.workers.tasks.run_memory_metadata_scan", "run-1", 900)]
+    assert calls == [("memory", "app.workers.tasks.run_memory_metadata_scan", "run-1", 4200)]
 
 
 def test_memory_output_dir_relative_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

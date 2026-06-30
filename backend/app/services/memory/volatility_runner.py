@@ -8,6 +8,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from app.core.config import get_settings
 from app.services.memory.backend_readiness import resolve_configured_command, resolve_configured_executable, sanitize_backend_error
@@ -172,6 +173,7 @@ def run_plugin(
     offline: bool | None = None,
     cache_path: Path | None = None,
     symbol_path: Path | None = None,
+    cancellation_check: Callable[[], bool] | None = None,
 ) -> VolatilityRunResult:
     settings = get_settings()
     argv_prefix, display = resolve_volatility_invocation()
@@ -194,6 +196,7 @@ def run_plugin(
     argv = build_plugin_argv(argv_prefix, evidence_path, plugin, offline=offline, cache_path=cache_path, symbol_path=symbol_path)
     timeout = max(1, int(timeout_seconds or settings.memory_plugin_timeout_seconds))
     max_bytes = max(1, int(max_output_bytes or settings.memory_plugin_output_max_bytes))
+    termination_grace = max(1, int(getattr(settings, "memory_plugin_termination_grace_seconds", 15)))
     work_dir.mkdir(parents=True, exist_ok=True)
     logger.info("memory volatility plugin started", extra={"plugin": plugin, "executable": display})
     started = time.monotonic()
@@ -208,18 +211,36 @@ def run_plugin(
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
-        stdout, stderr = process.communicate(timeout=timeout)
+        if cancellation_check is None:
+            stdout, stderr = process.communicate(timeout=timeout)
+        else:
+            deadline = started + timeout
+            while True:
+                if cancellation_check():
+                    stdout, stderr = _terminate_process_group(process, timeout=termination_grace)
+                    raise VolatilityRunnerError(
+                        "PLUGIN_CANCELLED",
+                        f"Volatility {plugin} was cancelled by the operator.",
+                        stdout=(stdout or b"")[:max_bytes],
+                        stderr=(stderr or b"")[:65536],
+                        stdout_length=len(stdout or b""),
+                        stderr_length=len(stderr or b""),
+                    )
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, timeout)
+                try:
+                    stdout, stderr = process.communicate(timeout=min(1.0, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    if time.monotonic() >= deadline:
+                        raise
     except subprocess.TimeoutExpired as exc:
         if process is not None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-                process.wait(timeout=5)
-            except Exception:  # noqa: BLE001
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except Exception:  # noqa: BLE001
-                    process.kill()
-        raise VolatilityRunnerError("PLUGIN_TIMEOUT", f"Volatility {plugin} timed out.", stdout=(exc.output or b"")[:max_bytes], stderr=(exc.stderr or b"")[:65536], stdout_length=len(exc.output or b""), stderr_length=len(exc.stderr or b"")) from exc
+            stdout, stderr = _terminate_process_group(process, timeout=termination_grace)
+        else:
+            stdout, stderr = exc.output or b"", exc.stderr or b""
+        raise VolatilityRunnerError("PLUGIN_TIMEOUT", f"{plugin} exceeded its {timeout}-second timeout.", stdout=(stdout or b"")[:max_bytes], stderr=(stderr or b"")[:65536], stdout_length=len(stdout or b""), stderr_length=len(stderr or b"")) from exc
     except OSError as exc:
         raise VolatilityRunnerError("BACKEND_START_FAILED", sanitize_backend_error(exc)) from exc
 
@@ -239,6 +260,30 @@ def run_plugin(
     if cache_path is not None:
         display_argv.extend(["--cache-path", "[cache]", "--symbol-dirs", "[symbols]"])
     return VolatilityRunResult(argv_display=[*display_argv, "-f", "[evidence]", "-r", "json", plugin], stdout=stdout or b"", stderr=stderr or b"", duration_ms=duration_ms)
+
+
+def _terminate_process_group(process: subprocess.Popen[bytes], *, timeout: int) -> tuple[bytes, bytes]:
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except Exception:  # noqa: BLE001
+        try:
+            process.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        return process.communicate(timeout=timeout)
+    except Exception:  # noqa: BLE001
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except Exception:  # noqa: BLE001
+            try:
+                process.kill()
+            except Exception:  # noqa: BLE001
+                pass
+    try:
+        return process.communicate(timeout=1)
+    except Exception:  # noqa: BLE001
+        return b"", b""
 
 
 def run_windows_info(evidence_path: Path, work_dir: Path) -> VolatilityRunResult:

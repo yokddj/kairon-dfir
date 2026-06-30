@@ -63,7 +63,7 @@ from app.services.memory.artifact_indexing import (
     search_artifact_documents,
 )
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
-from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, mark_run_queued, resolve_profile_plugins
+from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, derive_memory_timeout_plan, mark_run_queued, resolve_profile_plugins
 from app.services.memory.evidence_access import evidence_readiness
 from app.services.memory.indexing import ensure_memory_index, get_memory_document, get_opensearch_client, search_memory_edges, search_memory_processes
 from app.services.memory.normalizers import normalize_windows_info
@@ -1841,11 +1841,15 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
         raise HTTPException(status_code=409, detail=f"An active metadata analysis run already exists for this memory evidence: {existing.id}")
 
     run = create_memory_metadata_run(db, evidence.id, profile)
+    plugin_states = {item["plugin"]: item["state"] for item in profile_plan.get("plugins", []) if isinstance(item, dict) and item.get("plugin")}
+    timeout_plan = derive_memory_timeout_plan(profile, resolved_plugins, plugin_states=plugin_states)
     run.metadata_json = {
         **(run.metadata_json or {}),
         "authorization_acknowledged": True,
         "authorization_acknowledged_at": datetime.now(UTC).isoformat(),
+        "timeout_policy": timeout_plan,
     }
+    db.commit()
     try:
         worker_task_id = enqueue_memory_metadata_scan(run.id)
     except Exception as exc:  # noqa: BLE001

@@ -800,6 +800,73 @@ describe("Memory overview, profile catalogue and run-all", () => {
     expect(screen.queryByText(/memory_runs/i)).not.toBeInTheDocument();
   });
 
+  it("shows memory plugin timeout progress in the Runs tab", async () => {
+    listMemoryRunsMock.mockResolvedValue([
+      {
+        id: "r-timeout-progress",
+        case_id: "case-1",
+        evidence_id: "ev-A",
+        profile: "suspicious_memory",
+        status: "running",
+        started_at: "2026-06-15T00:00:00Z",
+        completed_at: null,
+        created_at: "2026-06-15T00:00:00Z",
+        duration_ms: null,
+        requested_plugin_count: 2,
+        plugin_count: 2,
+        plugins_completed: 1,
+        plugins_failed: 0,
+        plugins_skipped: 0,
+        output_dir: null,
+        backend: "volatility3",
+        backend_version: "2.28.0",
+        worker_task_id: "job-1",
+        cancellation_requested: false,
+        metadata_json: {
+          progress: {
+            current_plugin: "windows.vadinfo",
+            plugin_index: 2,
+            plugin_total: 2,
+            plugin_timeout_seconds: 1800,
+          },
+          timeout_policy: {
+            profile_timeout_seconds: 3900,
+            job_timeout_seconds: 4200,
+          },
+        },
+        error_log: {},
+      },
+      {
+        id: "r-profile-timeout",
+        case_id: "case-1",
+        evidence_id: "ev-A",
+        profile: "suspicious_memory",
+        status: "completed_with_errors",
+        started_at: "2026-06-15T00:00:00Z",
+        completed_at: "2026-06-15T01:05:00Z",
+        created_at: "2026-06-15T00:00:00Z",
+        duration_ms: 3900000,
+        requested_plugin_count: 2,
+        plugin_count: 2,
+        plugins_completed: 1,
+        plugins_failed: 0,
+        plugins_skipped: 1,
+        output_dir: null,
+        backend: "volatility3",
+        backend_version: "2.28.0",
+        worker_task_id: "job-2",
+        cancellation_requested: false,
+        metadata_json: { terminal_reason: "PROFILE_TIMEOUT" },
+        error_log: { code: "PROFILE_TIMEOUT", message: "The profile exceeded its derived 3900-second timeout while windows.vadinfo was running." },
+      },
+    ]);
+    renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=runs");
+    await screen.findByTestId("memory-runs-tab");
+
+    expect(screen.getByText(/Running windows\.vadinfo · Plugin 2 of 2 · Timeout 30m/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/derived 3900-second timeout while windows\.vadinfo was running/i).length).toBeGreaterThan(0);
+  });
+
   // 25. responsive
   it("renders the overview section without horizontal overflow", async () => {
     renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");

@@ -27,6 +27,32 @@ function memoryRunError(run: MemoryScanRun): string {
   return typeof run.error_log?.message === "string" ? run.error_log.message : "None";
 }
 
+function formatSeconds(value: unknown): string | null {
+  const seconds = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(seconds) || seconds <= 0) return null;
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  return `${Math.round(seconds / 60)}m`;
+}
+
+function memoryRunProgress(run: MemoryScanRun): string {
+  const progress = (run.metadata_json?.progress ?? {}) as Record<string, unknown>;
+  const policy = (run.metadata_json?.timeout_policy ?? {}) as Record<string, unknown>;
+  const currentPlugin = typeof progress.current_plugin === "string" ? progress.current_plugin : null;
+  const pluginIndex = typeof progress.plugin_index === "number" ? progress.plugin_index : null;
+  const pluginTotal = typeof progress.plugin_total === "number" ? progress.plugin_total : run.plugin_count;
+  const pluginTimeout = formatSeconds(progress.plugin_timeout_seconds);
+  const profileTimeout = formatSeconds(policy.profile_timeout_seconds);
+  if (currentPlugin) {
+    const count = pluginIndex ? `Plugin ${pluginIndex} of ${pluginTotal}` : `Plugin ${run.plugins_completed + 1} of ${pluginTotal}`;
+    return `Running ${currentPlugin} · ${count}${pluginTimeout ? ` · Timeout ${pluginTimeout}` : ""}`;
+  }
+  if (run.status === "running") return `Running · ${run.plugins_completed}/${run.plugin_count}${profileTimeout ? ` · Profile timeout ${profileTimeout}` : ""}`;
+  if (run.error_log?.code === "PROFILE_TIMEOUT" && typeof run.error_log.message === "string") return run.error_log.message;
+  const terminalReason = typeof run.metadata_json?.terminal_reason === "string" ? run.metadata_json.terminal_reason : null;
+  if (terminalReason === "PROFILE_TIMEOUT") return "Profile timeout reached before all plugins started.";
+  return "—";
+}
+
 function StatusBadge({ status }: { status: string }) {
   if (["completed", "completed_with_errors"].includes(status)) {
     return <span className="rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-100">{status}</span>;
@@ -149,6 +175,7 @@ export function MemoryRunsTab({ evidenceId, runs, landingItems }: Props) {
                 <th className="px-3 py-2">Duration</th>
                 <th className="px-3 py-2">Backend</th>
                 <th className="px-3 py-2">Plugins</th>
+                <th className="px-3 py-2">Progress</th>
                 <th className="px-3 py-2">Failed</th>
                 <th className="px-3 py-2">Error</th>
               </tr>
@@ -164,6 +191,7 @@ export function MemoryRunsTab({ evidenceId, runs, landingItems }: Props) {
                   <td className="px-3 py-2 text-muted">{durationLabel(run.duration_ms)}</td>
                   <td className="px-3 py-2 text-muted">{run.backend || "—"}</td>
                   <td className="px-3 py-2 text-muted">{run.plugins_completed}/{run.plugin_count}</td>
+                  <td className="px-3 py-2 text-muted">{memoryRunProgress(run)}</td>
                   <td className="px-3 py-2 text-muted">{run.plugins_failed}</td>
                   <td className="px-3 py-2 text-muted">{memoryRunError(run)}</td>
                 </tr>

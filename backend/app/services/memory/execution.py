@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -92,6 +93,69 @@ ARTIFACT_PLUGIN_LIMITS = {
     "windows.vadinfo": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 50000, "max_preview_bytes": 256},
 }
 
+TIMEOUT_POLICY_VERSION = "memory_timeout_hierarchy_v1"
+
+
+def plugin_execution_timeout_seconds(plugin: str) -> int:
+    overrides = ARTIFACT_PLUGIN_LIMITS.get(plugin, {})
+    return max(1, int(overrides.get("timeout_seconds") or get_settings().memory_plugin_timeout_seconds))
+
+
+def plugin_max_output_bytes(plugin: str) -> int:
+    overrides = ARTIFACT_PLUGIN_LIMITS.get(plugin, {})
+    return max(1, int(overrides.get("max_output_bytes") or get_settings().memory_plugin_output_max_bytes))
+
+
+def derive_memory_timeout_plan(profile: str, plugins: list[str] | None = None, *, plugin_states: dict[str, str] | None = None) -> dict[str, Any]:
+    """Return the effective plugin/profile/job timeout hierarchy.
+
+    Unknown capability is included conservatively. Disabled and known
+    unavailable plugins are excluded when the caller has that state before
+    enqueue. Runtime-only skips remain represented by plugin metadata.
+    """
+    settings = get_settings()
+    plugin_names = list(plugins or PROFILE_PLUGINS.get(profile, []))
+    allowed = set(settings.allowed_memory_plugins)
+    included: list[dict[str, Any]] = []
+    excluded: list[dict[str, str]] = []
+    states = plugin_states or {}
+    for plugin in plugin_names:
+        state = str(states.get(plugin) or "unknown").strip().lower()
+        if plugin not in allowed:
+            excluded.append({"plugin": plugin, "state": "disabled", "reason": "disabled_by_configuration"})
+            continue
+        if state in {"unavailable", "unsupported", "unsupported_by_installed_volatility"}:
+            excluded.append({"plugin": plugin, "state": "unavailable", "reason": "known_unavailable"})
+            continue
+        included.append(
+            {
+                "plugin": plugin,
+                "state": state if state in {"available", "unknown"} else "unknown",
+                "timeout_seconds": plugin_execution_timeout_seconds(plugin),
+                "max_output_bytes": plugin_max_output_bytes(plugin),
+            }
+        )
+    plugin_total = sum(int(item["timeout_seconds"]) for item in included)
+    overhead = max(1, int(settings.memory_profile_timeout_overhead_seconds))
+    cleanup = max(1, int(settings.memory_job_timeout_cleanup_margin_seconds))
+    profile_timeout = plugin_total + overhead
+    job_timeout = profile_timeout + cleanup
+    return {
+        "version": TIMEOUT_POLICY_VERSION,
+        "profile": profile,
+        "included_plugins": included,
+        "excluded_plugins": excluded,
+        "plugin_timeout_total_seconds": plugin_total,
+        "profile_overhead_margin_seconds": overhead,
+        "job_cleanup_margin_seconds": cleanup,
+        "profile_timeout_seconds": profile_timeout,
+        "job_timeout_seconds": job_timeout,
+    }
+
+
+def derive_memory_job_timeout_seconds(profile: str, plugins: list[str] | None = None, *, plugin_states: dict[str, str] | None = None) -> int:
+    return int(derive_memory_timeout_plan(profile, plugins, plugin_states=plugin_states)["job_timeout_seconds"])
+
 
 def utc_iso(value: datetime | None = None) -> str:
     dt = value or datetime.now(timezone.utc)
@@ -143,6 +207,7 @@ def resolve_profile_plugins(profile: str) -> list[str]:
 def create_memory_metadata_run(db: Session, evidence_id: str, profile: str = "metadata_only") -> MemoryScanRun:
     validated = validate_memory_execution_request(db, evidence_id)
     plugins = resolve_profile_plugins(profile)
+    timeout_plan = derive_memory_timeout_plan(profile, plugins)
     run = MemoryScanRun(
         case_id=validated.evidence.case_id,
         evidence_id=validated.evidence.id,
@@ -153,7 +218,12 @@ def create_memory_metadata_run(db: Session, evidence_id: str, profile: str = "me
         plugin_count=len(plugins),
         plugins_completed=0,
         plugins_failed=0,
-        metadata_json={"plugins": plugins, "source_layer": "memory", "profile": profile},
+        metadata_json={
+            "plugins": plugins,
+            "source_layer": "memory",
+            "profile": profile,
+            "timeout_policy": timeout_plan,
+        },
         error_log={},
     )
     db.add(run)
@@ -179,6 +249,9 @@ def mark_run_queued(db: Session, run_id: str, worker_task_id: str | None) -> Mem
         return None
     run.status = "queued"
     run.worker_task_id = worker_task_id
+    plugins = list((run.metadata_json or {}).get("plugins") or PROFILE_PLUGINS.get(run.profile, []))
+    timeout_plan = (run.metadata_json or {}).get("timeout_policy") or derive_memory_timeout_plan(run.profile, plugins)
+    run.metadata_json = {**(run.metadata_json or {}), "timeout_policy": timeout_plan}
     db.commit()
     db.refresh(run)
     return run
@@ -210,6 +283,21 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             run.output_dir = relative_to_data_dir(output_dir)
             db.commit()
             plugins = list((run.metadata_json or {}).get("plugins") or PROFILE_PLUGINS.get(run.profile, ["windows.info"]))
+            timeout_plan = (run.metadata_json or {}).get("timeout_policy") or derive_memory_timeout_plan(run.profile, plugins)
+            profile_timeout_seconds = max(1, int(timeout_plan.get("profile_timeout_seconds") or 0))
+            profile_deadline = time.monotonic() + profile_timeout_seconds
+            run.metadata_json = {
+                **(run.metadata_json or {}),
+                "timeout_policy": timeout_plan,
+                "progress": {
+                    "current_plugin": None,
+                    "plugin_index": 0,
+                    "plugin_total": len(plugins),
+                    "profile_started_at": utc_iso(run.started_at),
+                    "last_heartbeat": utc_iso(),
+                },
+            }
+            db.commit()
             system_info = None
             raw_outputs = {}
             process_results = []
@@ -218,8 +306,11 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             manifest_plugins = []
             fatal = False
             blocking_error: VolatilityRunnerError | None = None
-            for plugin in plugins:
+            for plugin_index, plugin in enumerate(plugins, start=1):
                 plugin_run = _plugin_run_for(db, run, plugin)
+                if time.monotonic() >= profile_deadline:
+                    _mark_profile_timeout_pending(db, run, plugins, active_plugin=None, profile_timeout_seconds=profile_timeout_seconds)
+                    break
                 if plugin not in set(backend_readiness.get_settings().allowed_memory_plugins):
                     plugin_run.status = "skipped_disabled"
                     plugin_run.completed_at = utc_now_naive()
@@ -253,6 +344,21 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     db.commit()
                     continue
                 try:
+                    plugin_timeout = plugin_execution_timeout_seconds(plugin)
+                    run.metadata_json = {
+                        **(run.metadata_json or {}),
+                        "progress": {
+                            **((run.metadata_json or {}).get("progress") or {}),
+                            "current_plugin": plugin,
+                            "plugin_index": plugin_index,
+                            "plugin_total": len(plugins),
+                            "plugin_started_at": utc_iso(),
+                            "plugin_timeout_seconds": plugin_timeout,
+                            "profile_timeout_seconds": profile_timeout_seconds,
+                            "last_heartbeat": utc_iso(),
+                        },
+                    }
+                    db.commit()
                     payload, raw_info, duration_ms, argv_display = _execute_plugin(db, run, plugin_run, plugin, validated.path, output_dir)
                     raw_outputs[plugin] = raw_info
                     manifest_plugins.append({"plugin": plugin, "argv": argv_display, "raw_output": raw_info, "duration_ms": duration_ms})
@@ -315,7 +421,12 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     db.commit()
                 except VolatilityRunnerError as exc:
                     _write_plugin_error(run, plugin_run, exc)
-                    plugin_run.status = "timed_out" if exc.code == "PLUGIN_TIMEOUT" else "failed"
+                    if exc.code == "PLUGIN_TIMEOUT":
+                        plugin_run.status = "timed_out"
+                    elif exc.code == "PLUGIN_CANCELLED":
+                        plugin_run.status = "cancelled"
+                    else:
+                        plugin_run.status = "failed"
                     plugin_run.completed_at = utc_now_naive()
                     plugin_run.error_code = exc.code
                     plugin_run.error_message = _sanitize_message(exc.message)
@@ -326,12 +437,23 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                         requirement = probe_windows_symbol_identity(validated.path, output_dir)
                         if requirement:
                             record_symbol_requirement(db, run, plugin_run.id, requirement)
-                    if plugin == "windows.info":
+                    if plugin == "windows.info" or exc.code == "PLUGIN_CANCELLED":
                         fatal = True
                         break
                     continue
             write_atomic_json(output_dir / "run_manifest.json", {"run_id": run.id, "evidence_id": run.evidence_id, "backend": "volatility3", "profile": run.profile, "plugins": manifest_plugins, "completed_at": utc_iso()})
-            run.metadata_json = {"system_info": system_info, "plugins": plugins, "raw_output": raw_outputs, "profile": run.profile}
+            run.metadata_json = {
+                **(run.metadata_json or {}),
+                "system_info": system_info,
+                "plugins": plugins,
+                "raw_output": raw_outputs,
+                "profile": run.profile,
+                "progress": {
+                    **((run.metadata_json or {}).get("progress") or {}),
+                    "current_plugin": None,
+                    "last_heartbeat": utc_iso(),
+                },
+            }
             if fatal:
                 _mark_dependency_skipped(db, run, blocking_plugin="windows.info")
                 raise blocking_error or VolatilityRunnerError("PLUGIN_FAILED", "windows.info failed; remaining memory plugins were not executed.")
@@ -372,6 +494,7 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                 if artifact_results:
                     artifact_indexing = _index_artifact_results(run.case_id, artifact_results, db, run)
                     indexing["artifacts"] = artifact_indexing
+                _recount_plugin_states(run)
                 skipped_count = sum(1 for item in run.plugin_runs if str(item.status or "").startswith("skipped_"))
                 run.status = "completed" if run.plugins_failed == 0 and skipped_count == 0 else "completed_with_errors"
                 run.metadata_json = {**(run.metadata_json or {}), "indexing": indexing}
@@ -391,14 +514,19 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                 status = "failed"
             else:
                 status = "invalid_evidence" if exc.code.startswith(("EVIDENCE", "INVALID", "UNSAFE", "EMPTY")) else "backend_unavailable"
-            _fail_run(db, run, None, status, exc.code, exc.message)
+            _fail_run(db, run, None, status, exc.code, exc.message, mark_plugins=False)
             _advance_owning_batch = run
         except VolatilityRunnerError as exc:
-            status = "timed_out" if exc.code == "PLUGIN_TIMEOUT" else "failed"
-            _fail_run(db, run, None, status, exc.code, exc.message)
+            if exc.code == "PLUGIN_TIMEOUT":
+                status = "timed_out"
+            elif exc.code == "PLUGIN_CANCELLED":
+                status = "cancelled"
+            else:
+                status = "failed"
+            _fail_run(db, run, None, status, exc.code, exc.message, mark_plugins=True)
             _advance_owning_batch = run
         except Exception as exc:  # noqa: BLE001
-            _fail_run(db, run, None, "failed", "MEMORY_SCAN_FAILED", _sanitize_message(exc))
+            _fail_run(db, run, None, "failed", "MEMORY_SCAN_FAILED", _sanitize_message(exc), mark_plugins=True)
             _advance_owning_batch = run
 
     if _advance_owning_batch is not None:
@@ -417,6 +545,47 @@ def _plugin_run_for(db: Session, run: MemoryScanRun, plugin: str) -> MemoryPlugi
         db.add(plugin_run)
         db.commit()
     return plugin_run
+
+
+def _recount_plugin_states(run: MemoryScanRun) -> None:
+    run.plugins_completed = sum(1 for item in run.plugin_runs if item.status == "completed")
+    run.plugins_failed = sum(1 for item in run.plugin_runs if item.status in {"failed", "timed_out", "cancelled"})
+
+
+def _mark_profile_timeout_pending(db: Session, run: MemoryScanRun, plugins: list[str], *, active_plugin: str | None, profile_timeout_seconds: int) -> None:
+    now = utc_now_naive()
+    for plugin in plugins:
+        plugin_run = _plugin_run_for(db, run, plugin)
+        if plugin_run.status in {"completed", "failed", "timed_out", "cancelled", "skipped_dependency", "skipped_unsupported", "skipped_disabled"}:
+            continue
+        plugin_run.completed_at = now
+        if plugin_run.status == "running" or plugin == active_plugin:
+            plugin_run.status = "timed_out"
+            plugin_run.error_code = "PROFILE_TIMEOUT_ACTIVE_PLUGIN"
+            plugin_run.error_message = f"The profile exceeded its derived {profile_timeout_seconds}-second timeout while {plugin} was running."
+        else:
+            plugin_run.status = "skipped_dependency"
+            plugin_run.error_code = "not_started_due_to_profile_timeout"
+            plugin_run.error_message = f"{plugin} was not started because the profile timeout was reached."
+        plugin_run.metadata_json = {
+            **(plugin_run.metadata_json or {}),
+            "terminal_reason": plugin_run.error_code,
+            "profile_timeout_seconds": profile_timeout_seconds,
+        }
+    _recount_plugin_states(run)
+    run.status = "completed_with_errors" if run.plugins_completed else "timed_out"
+    run.error_log = {
+        "code": "PROFILE_TIMEOUT",
+        "message": f"The profile exceeded its derived {profile_timeout_seconds}-second timeout.",
+        "active_plugin": active_plugin,
+    }
+    run.metadata_json = {
+        **(run.metadata_json or {}),
+        "terminal_reason": "PROFILE_TIMEOUT",
+        "profile_timeout_seconds": profile_timeout_seconds,
+        "active_plugin_at_termination": active_plugin,
+    }
+    db.commit()
 
 
 def _plugin_filename(plugin: str) -> str:
@@ -604,21 +773,31 @@ def _index_artifact_results(
 def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun, plugin: str, evidence_path, output_dir) -> tuple[Any, dict, int, list[str]]:
     plugin_run.status = "running"
     plugin_run.started_at = utc_now_naive()
+    timeout_seconds = plugin_execution_timeout_seconds(plugin)
+    max_output_bytes = plugin_max_output_bytes(plugin)
+    plugin_run.metadata_json = {
+        **(plugin_run.metadata_json or {}),
+        "configured_timeout_seconds": timeout_seconds,
+        "max_output_bytes": max_output_bytes,
+        "started_at": utc_iso(plugin_run.started_at),
+    }
     db.commit()
-    # Per-plugin guard-rails (timeout, output size) for the new artifact
-    # plugins.  Falls back to the global default for process plugins.
-    overrides = ARTIFACT_PLUGIN_LIMITS.get(plugin, {})
-    max_output_bytes = int(overrides.get("max_output_bytes") or 0) or None
-    timeout_seconds = int(overrides.get("timeout_seconds") or 0) or None
-    if timeout_seconds or max_output_bytes:
+    def cancellation_requested() -> bool:
+        db.refresh(run)
+        return bool(run.cancellation_requested)
+
+    try:
         result = run_plugin(
             plugin,
             evidence_path,
             output_dir,
             timeout_seconds=timeout_seconds,
             max_output_bytes=max_output_bytes,
+            cancellation_check=cancellation_requested,
         )
-    else:
+    except TypeError as exc:
+        if "unexpected keyword" not in str(exc):
+            raise
         result = run_plugin(plugin, evidence_path, output_dir)
     try:
         raw_info = write_atomic_bytes(output_dir / _plugin_filename(plugin), result.stdout, max_bytes=max_output_bytes)
@@ -869,20 +1048,44 @@ def _run_canonical_materialization(
         logger.exception("memory canonical materialization traceback")
 
 
-def _fail_run(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun | None, status: str, code: str, message: str) -> None:
+def _fail_run(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun | None, status: str, code: str, message: str, *, mark_plugins: bool = False) -> None:
     completed_at = utc_now_naive()
     run.status = status
     run.completed_at = completed_at
     run.duration_ms = _duration_ms(run.started_at, completed_at)
-    if plugin_run:
-        run.plugins_failed = 1
+    terminal_reason = code
     run.error_log = {"code": code, "message": _sanitize_message(message)}
+    run.metadata_json = {
+        **(run.metadata_json or {}),
+        "terminal_reason": terminal_reason,
+        "active_plugin_at_termination": ((run.metadata_json or {}).get("progress") or {}).get("current_plugin"),
+    }
     if plugin_run:
-        plugin_run.status = "timed_out" if status == "timed_out" else "failed"
+        if status == "timed_out":
+            plugin_run.status = "timed_out"
+        elif status == "cancelled":
+            plugin_run.status = "cancelled"
+        else:
+            plugin_run.status = "failed"
         plugin_run.completed_at = completed_at
         plugin_run.duration_ms = _duration_ms(plugin_run.started_at, completed_at)
         plugin_run.error_code = code
         plugin_run.error_message = _sanitize_message(message)
+    if mark_plugins:
+        active_plugin = ((run.metadata_json or {}).get("progress") or {}).get("current_plugin")
+        for item in run.plugin_runs:
+            if item.status in {"completed", "failed", "timed_out", "cancelled", "skipped_dependency", "skipped_unsupported", "skipped_disabled"}:
+                continue
+            if item.status == "running" or item.plugin == active_plugin:
+                item.status = "timed_out" if status == "timed_out" else status
+                item.error_code = code
+                item.error_message = _sanitize_message(message)
+            else:
+                item.status = "skipped_dependency"
+                item.error_code = "not_started_due_to_profile_termination"
+                item.error_message = "Not started because the profile reached a terminal state."
+            item.completed_at = completed_at
+        _recount_plugin_states(run)
     db.commit()
     logger.warning("memory scan failed", extra={"run_id": run.id, "status": run.status, "error_code": code})
 

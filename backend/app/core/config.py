@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     memory_job_timeout_seconds: int = 900
     memory_plugin_timeout_seconds: int = 600
     memory_plugin_output_max_bytes: int = 10485760
+    memory_profile_timeout_overhead_seconds: int = 300
+    memory_job_timeout_cleanup_margin_seconds: int = 300
+    memory_plugin_termination_grace_seconds: int = 15
     memory_output_dir: str = ""
     memory_worker_mode: str = "external_command"
     memory_task_queue: str = "memory"
@@ -557,6 +560,12 @@ class Settings(BaseSettings):
             raise ValueError("MEMORY_UPLOAD_CASE_QUOTA_BYTES must be greater than zero")
         if self.memory_upload_max_parallel_chunks <= 0:
             raise ValueError("MEMORY_UPLOAD_MAX_PARALLEL_CHUNKS must be greater than zero")
+        if self.memory_profile_timeout_overhead_seconds <= 0:
+            raise ValueError("MEMORY_PROFILE_TIMEOUT_OVERHEAD_SECONDS must be greater than zero")
+        if self.memory_job_timeout_cleanup_margin_seconds <= 0:
+            raise ValueError("MEMORY_JOB_TIMEOUT_CLEANUP_MARGIN_SECONDS must be greater than zero")
+        if self.memory_plugin_termination_grace_seconds <= 0:
+            raise ValueError("MEMORY_PLUGIN_TERMINATION_GRACE_SECONDS must be greater than zero")
         return self
 
     @property
