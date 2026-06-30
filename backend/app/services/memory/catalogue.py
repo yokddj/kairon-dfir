@@ -11,9 +11,6 @@ catalogue modal in the UI.
 """
 from __future__ import annotations
 
-import ast
-import subprocess
-from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -21,6 +18,8 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.models.memory import MemoryScanRun
 from app.services.memory.execution import PROFILE_PLUGINS
+from app.services.memory.profile_planning import plan_profile_capability
+from app.services.memory import profile_planning
 
 
 # 8 profiles in stable order.  ``family`` maps to the active-result
@@ -127,57 +126,37 @@ NETWORK_REQUIRES_VALIDATION_REASON = (
 )
 
 
-def _probe_plugins_via_worker(plugins: list[str]) -> dict[str, bool] | None:
-    """Ask the memory-worker process for its network capability.
-
-    The API process does not install volatility3.  Calling
-    :func:`network_basic_available` from the API process would
-    always return ``absent_in_runtime`` regardless of what the
-    worker can actually do.  Instead we shell out to the worker
-    container (or fall back to the in-process probe when the
-    worker is unreachable).
-
-    The probe is read-only and bounded.
-    """
-    settings = get_settings()
-    try:
-        # Re-use the same Docker invocation the backend uses to
-        # reach the worker.  ``docker exec`` is the contract the
-        # backend already has with the worker; no new channels.
-        result = subprocess.run(
-            [
-                "docker", "exec",
-                settings.memory_worker_container_name or "dfir_app-memory-worker-1",
-                "python3", "-c",
-                "from app.services.memory.volatility_runner import probe_volatility_plugin; "
-                f"import sys; plugins={plugins!r}; r={{p: probe_volatility_plugin(p) for p in plugins}}; sys.stdout.write(repr(r))",
-            ],
-            capture_output=True, text=True, timeout=20,
-        )
-    except Exception as exc:  # noqa: BLE001
-        return None
-    if result.returncode != 0:
-        return None
-    try:
-        payload = ast.literal_eval(result.stdout.strip())
-    except Exception as exc:  # noqa: BLE001
-        return None
-    if not isinstance(payload, dict):
-        return None
-    return {str(key): bool(value) for key, value in payload.items()}
-
-
 def _probe_network_via_worker() -> tuple[bool, str]:
     """Compatibility wrapper for older tests and callers.
 
     New catalogue rendering uses per-plugin capability records, but the
     network profile is still summarized here for existing monkeypatches.
     """
-    payload = _probe_plugins_via_worker(["windows.netscan", "windows.netstat"])
-    if payload is None:
+    plan = plan_profile_capability("network_basic")
+    if plan["unknown_plugins"]:
         return True, "Availability will be validated in the memory-worker at execution time."
-    available = any(payload.values())
+    available = bool(plan["available_plugins"])
     return available, "importable" if available else NETWORK_UNAVAILABLE_REASON
+
+
+def _probe_plugins_via_worker(plugins: list[str]) -> dict[str, bool] | None:
+    """Compatibility wrapper over the worker capability heartbeat.
+
+    Older tests monkeypatch this seam.  The default implementation no
+    longer shells out from the API process; it only reads the same worker
+    capability state used by direct scan and run-all planning.
+    """
+    capability = profile_planning._current_worker_capability()
+    if not capability or not isinstance(capability.get("plugins"), dict):
+        return None
+    result: dict[str, bool] = {}
+    for plugin in plugins:
+        entry = capability["plugins"].get(plugin)
+        if isinstance(entry, dict) and str(entry.get("state") or "").lower() == "available":
+            result[plugin] = True
+        elif isinstance(entry, dict) and str(entry.get("state") or "").lower() in {"unavailable", "unsupported", "unsupported_by_installed_volatility"}:
+            result[plugin] = False
+    return result if result else None
 
 
 def build_analysis_catalogue(
@@ -213,6 +192,14 @@ def build_analysis_catalogue(
 
     all_plugins = sorted({plugin for plugins in PROFILE_PLUGINS.values() for plugin in plugins})
     worker_probe = _probe_plugins_via_worker(all_plugins)
+    worker_capability = None
+    if worker_probe is not None:
+        worker_capability = {
+            "plugins": {
+                plugin: {"state": "available" if available else "unavailable"}
+                for plugin, available in worker_probe.items()
+            }
+        }
 
     from app.services.memory.symbol_state import GATE_TYPE_AVAILABLE, GATE_TYPE_UNAVAILABLE
 
@@ -242,9 +229,10 @@ def build_analysis_catalogue(
         available = True
         availability_reason: str | None = None
         plugin_names = list(PROFILE_PLUGINS.get(profile, []))
-        plugin_capabilities = _profile_plugin_capabilities(plugin_names, worker_probe)
-        available_plugin_count = sum(1 for item in plugin_capabilities if item["state"] == "available")
-        unavailable_plugins = [item for item in plugin_capabilities if item["state"] != "available"]
+        plan = plan_profile_capability(profile, worker_capability=worker_capability)
+        plugin_capabilities = _profile_plugin_capabilities(plugin_names, plan)
+        available_plugin_count = int(plan["available_plugin_count"])
+        unavailable_plugins = [item for item in plugin_capabilities if item["state"] in {"disabled", "unavailable"}]
         if plugin_names and available_plugin_count == 0:
             gate_type = GATE_TYPE_UNAVAILABLE
             available = False
@@ -281,30 +269,9 @@ def build_analysis_catalogue(
     return items
 
 
-def _profile_plugin_capabilities(plugin_names: list[str], worker_probe: dict[str, bool] | None) -> list[dict[str, str]]:
-    settings = get_settings()
-    allowed = set(settings.allowed_memory_plugins)
-    result: list[dict[str, str]] = []
-    for plugin in plugin_names:
-        if plugin not in allowed:
-            result.append({
-                "plugin": plugin,
-                "state": "disabled_by_configuration",
-                "reason": f"{plugin} is disabled by memory plugin configuration.",
-            })
-            continue
-        if worker_probe is not None and worker_probe.get(plugin) is False:
-            result.append({
-                "plugin": plugin,
-                "state": "unsupported_by_installed_volatility",
-                "reason": f"{plugin} is not exposed by the installed Volatility runtime.",
-            })
-            continue
-        # If the worker cannot be probed from the API process, keep the
-        # profile eligible. The worker performs the authoritative check
-        # and records skipped plugin runs with explicit reasons.
-        result.append({"plugin": plugin, "state": "available", "reason": "Available in configured profile."})
-    return result
+def _profile_plugin_capabilities(plugin_names: list[str], plan: dict[str, Any]) -> list[dict[str, str]]:
+    by_plugin = {item["plugin"]: item for item in plan.get("plugins", [])}
+    return [by_plugin[plugin] for plugin in plugin_names if plugin in by_plugin]
 
 
 def _serialize(run: MemoryScanRun) -> dict[str, Any]:

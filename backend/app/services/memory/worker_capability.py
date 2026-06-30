@@ -43,6 +43,7 @@ def _installed_volatility_version() -> str | None:
 
 def build_memory_worker_capability() -> dict[str, Any]:
     from app.services.memory.backend_readiness import resolve_configured_command
+    from app.services.memory.volatility_runner import probe_volatility_plugin
 
     settings = get_settings()
     command = str(settings.volatility3_command or "").strip()
@@ -79,6 +80,20 @@ def build_memory_worker_capability() -> dict[str, Any]:
     else:
         error_code = "PYTHON_NOT_FOUND" if config_error == "python_missing" else "VOLATILITY_NOT_FOUND"
 
+    plugin_capabilities: dict[str, dict[str, str]] = {}
+    for plugin in settings.allowed_memory_plugins:
+        if not healthy:
+            plugin_capabilities[plugin] = {
+                "state": "unknown",
+                "reason": "Volatility command health check did not pass; plugin capability will be retried by the worker.",
+            }
+            continue
+        available = probe_volatility_plugin(plugin)
+        plugin_capabilities[plugin] = {
+            "state": "available" if available else "unavailable",
+            "reason": "Available in the memory worker runtime." if available else f"{plugin} is not exposed by the installed Volatility runtime.",
+        }
+
     return {
         "worker_type": "memory",
         "worker_identifier": os.environ.get("KAIRON_WORKER_ID") or socket.gethostname(),
@@ -87,6 +102,7 @@ def build_memory_worker_capability() -> dict[str, Any]:
         "volatility_version": version,
         "supported_profiles": settings.allowed_memory_profiles,
         "supported_plugins": settings.allowed_memory_plugins,
+        "plugins": plugin_capabilities,
         "queue": settings.memory_queue_name,
         "healthy": healthy,
         "execution_enabled": bool(settings.memory_analysis_enabled and settings.memory_allow_external_tool_execution),

@@ -409,8 +409,8 @@ def _probe_plugin_listed(plugin: str) -> bool:
         )
     except Exception:  # noqa: BLE001
         return False
-    output = (result.stdout or b"") + (result.stderr or b"")
-    decoded = output.decode("utf-8", errors="replace")
+    output = f"{result.stdout or ''}\n{result.stderr or ''}" if isinstance(result.stdout, str) or isinstance(result.stderr, str) else (result.stdout or b"") + (result.stderr or b"")
+    decoded = output if isinstance(output, str) else output.decode("utf-8", errors="replace")
     needle = plugin.replace("windows.", "")
     return f" {needle} " in decoded or f" {needle}," in decoded
 

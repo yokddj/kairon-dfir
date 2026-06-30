@@ -449,6 +449,41 @@ describe("Memory overview, profile catalogue and run-all", () => {
     expect(screen.getByText(/windows.netstat is not exposed/)).toBeInTheDocument();
   });
 
+  it("keeps network_basic direct run enabled when capability is unknown but worker is healthy", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const catalogue = {
+      case_id: "case-1",
+      evidence_id: "ev-A",
+      items: [
+        { profile: "metadata_only", family: "system_info", title: "System metadata", description: "", cost_label: "Fast", est_duration_seconds: 20, available: true, availability_reason: null, last_run: { id: "r-meta" }, last_status: "completed", last_count: 1, plugins: ["windows.info"], plugin_count: 1, available_plugin_count: 1, unavailable_plugins: [] },
+        { profile: "network_basic", family: "network", title: "Network Connections", description: "Active and historical network endpoints found in memory.", cost_label: "Medium", est_duration_seconds: 90, available: true, availability_reason: "Plugin capability is unknown; the memory worker will validate it at execution time.", last_run: null, last_status: null, last_count: 0, plugins: ["windows.netscan", "windows.netstat"], plugin_count: 2, available_plugin_count: 2, unavailable_plugins: [] },
+      ],
+    };
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <MemoryAnalysisCatalogueModal
+            caseId="case-1"
+            evidenceId="ev-A"
+            evidenceFilename="ws01.dmp"
+            evidenceHost="WS01"
+            evidenceSizeBytes={1024}
+            catalogue={catalogue}
+            volatilityBackend={{ backend: "volatility3", display_name: "Volatility 3", configured: true, executable_found: true, execution_allowed: true, available: true, ready: true, status: "available", message: "ready", checked_at: "2026-06-15T00:00:00Z", error_code: null, execution_mode: "dedicated_worker", dedicated_worker_required: true, dedicated_worker_online: true, queue: "memory", queue_reachable: true, backend_available: true, backend_version: "2.28.0", supported_profiles: [], supported_plugins: [], symbol_network_enabled: true }}
+            canRun={true}
+            onClose={() => {}}
+          />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByTestId("memory-partial-advanced"));
+    const run = await screen.findByTestId("memory-catalogue-run-network_basic");
+    expect(run).not.toBeDisabled();
+    expect(screen.getByTestId("catalogue-plugin-availability-network_basic").textContent).toContain("2/2 plugins available");
+    fireEvent.click(run);
+    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("case-1", "ev-A", "network_basic", true));
+  });
+
   // 5. Overview muestra familias
   it("renders one row per family in the analysis status table", async () => {
     renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
