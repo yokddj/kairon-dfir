@@ -95,10 +95,14 @@ export function MemoryEvidenceHeader({
     const completed = supported.filter(
       (it) => it.last_status === "completed" || it.last_status === "completed_with_errors",
     );
-    if (completed.length === 0) return "Analyze memory";
+    const active = supported.filter(
+      (it) => it.last_status === "queued" || it.last_status === "running" || it.last_status === "pending",
+    );
+    if (completed.length === 0 && active.length === 0) return "Analyze memory";
+    if (completed.length === 0 && active.length > 0) return isAnalyzing ? "Starting analysis..." : "Analysis in progress...";
     if (completed.length >= supported.length) return "Re-run analysis";
     return "Complete analysis";
-  }, [catalogue]);
+  }, [catalogue, isAnalyzing]);
 
   function copyId() {
     if (typeof navigator === "undefined" || !navigator.clipboard) return;
@@ -128,10 +132,13 @@ export function MemoryEvidenceHeader({
     evidence.detection_status === "invalid" ||
     evidence.detection_status === "probe_failed";
   const isFirstAnalysis = headerLabel === "Analyze memory";
-  const runDisabled = detectionBlocked || isAnalyzing;
+  const isInProgress = headerLabel === "Analysis in progress..." || isAnalyzing;
+  const runDisabled = detectionBlocked || isAnalyzing || isInProgress;
   const runTitle = detectionBlocked
     ? "Confirm the evidence type before starting analysis."
-    : "Volatility will identify the image and resolve symbols when analysis starts.";
+    : isInProgress
+      ? "Analysis is running. Returns will refresh automatically."
+      : "Volatility will identify the image and resolve symbols when analysis starts.";
   const prepState = symbolPreparation?.effective_state || symbolPreparation?.preparation_state || symbolPreparation?.ui_state;
   const showPreparationInfo = Boolean(
     symbolPreparation && prepState && prepState !== "ready",

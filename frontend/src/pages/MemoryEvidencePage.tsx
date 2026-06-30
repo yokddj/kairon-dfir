@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
@@ -13,6 +13,8 @@ import { MemorySymbolResolutionPanel } from "../components/memory/MemorySymbolRe
 import { MemoryExperimentalResultsPanel } from "../components/memory/MemoryExperimentalResultsPanel";
 import { MemoryPreparationCard } from "../components/memory/MemoryPreparationCard";
 import { MEMORY_TABS, isMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
+import { memoryQueryKeys } from "../lib/memoryQueryKeys";
+import type { MemoryScanRun } from "../api/client";
 
 const ARTIFACT_FAMILY_FROM_TAB: Record<string, string> = {
   processes: "processes",
@@ -45,6 +47,7 @@ export default function MemoryEvidencePage() {
   const [confirmationError, setConfirmationError] = useState<string | null>(null);
   const [confirmationToast, setConfirmationToast] = useState<string | null>(null);
   const queryClient = useQueryClient();
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     setActiveCaseId(caseId);
@@ -67,11 +70,29 @@ export default function MemoryEvidencePage() {
     refetchOnWindowFocus: false,
   });
 
+  const evidenceRunsQuery = useQuery({
+    queryKey: memoryQueryKeys.runs(caseId, evidenceId),
+    queryFn: () => api.listMemoryRuns(caseId, evidenceId),
+    enabled: Boolean(caseId && evidenceId),
+    refetchOnWindowFocus: false,
+    refetchInterval: (query) => {
+      const runs = (query.state.data ?? []) as MemoryScanRun[];
+      return runs.some((run) => ["pending", "queued", "running"].includes(run.status)) ? 3000 : false;
+    },
+  });
+  const hasActiveRuns = useMemo(
+    () => (evidenceRunsQuery.data ?? []).some(
+      (run: MemoryScanRun) => ["pending", "queued", "running"].includes(run.status),
+    ),
+    [evidenceRunsQuery.data],
+  );
+
   const landingQuery = useQuery({
-    queryKey: ["memory-landing", caseId],
+    queryKey: memoryQueryKeys.landing(caseId),
     queryFn: () => api.getMemoryEvidenceLanding(caseId),
     enabled: Boolean(caseId),
     refetchOnWindowFocus: false,
+    refetchInterval: hasActiveRuns ? 3000 : false,
   });
 
   const activeResultQuery = useQuery({
@@ -82,10 +103,11 @@ export default function MemoryEvidencePage() {
   });
 
   const catalogueQuery = useQuery({
-    queryKey: ["memory-catalogue", caseId, evidenceId],
+    queryKey: memoryQueryKeys.catalogue(caseId, evidenceId),
     queryFn: () => api.getMemoryAnalysisCatalogue(caseId, evidenceId),
     enabled: Boolean(caseId && evidenceId),
     refetchOnWindowFocus: false,
+    refetchInterval: hasActiveRuns ? 3000 : false,
   });
 
   const backendQuery = useQuery({
@@ -133,9 +155,10 @@ export default function MemoryEvidencePage() {
       setConfirmationOpen(false);
       setConfirmationError(null);
       setConfirmationToast("Memory evidence type confirmed. Analysis is now available.");
-      // Invalidate every query that depends on the evidence status.
-      void queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
-      void queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId, evidenceId] });
+      const keys = memoryQueryKeys.invalidateAfterMutation(caseId, evidenceId);
+      for (const key of keys) {
+        void queryClient.invalidateQueries({ queryKey: key });
+      }
       void queryClient.invalidateQueries({ queryKey: ["memory-readiness", caseId, evidenceId] });
       window.setTimeout(() => setConfirmationToast(null), 5000);
     },
@@ -148,12 +171,15 @@ export default function MemoryEvidencePage() {
     mutationFn: async () =>
       api.startMemoryScan(caseId, evidenceId, "metadata_only", true),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
-      void queryClient.invalidateQueries({ queryKey: ["memory-catalogue", caseId, evidenceId] });
-      void queryClient.invalidateQueries({ queryKey: ["memory-active-batch", caseId, evidenceId] });
+      const keys = memoryQueryKeys.invalidateAfterMutation(caseId, evidenceId);
+      for (const key of keys) {
+        void queryClient.invalidateQueries({ queryKey: key });
+      }
     },
     onError: (_error: Error & { errorCode?: string }) => {
-      // Error surfaced by the mutation state.
+    },
+    onSettled: () => {
+      submittingRef.current = false;
     },
   });
 
@@ -296,10 +322,12 @@ export default function MemoryEvidencePage() {
           setCatalogueOpen(true);
         }}
         onAnalyzeMemory={() => {
+          if (submittingRef.current) return;
           if (!window.confirm(
             "I am authorized and responsible for analyzing this memory evidence. " +
             "I confirm this is a legitimate memory capture from an authorized source."
           )) return;
+          submittingRef.current = true;
           startScanMutation.mutate();
         }}
         isAnalyzing={startScanMutation.isPending}
