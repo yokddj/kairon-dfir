@@ -7,6 +7,7 @@ import MemoryAnalysisPage from "./MemoryAnalysisPage";
 import MemoryEvidencePage from "./MemoryEvidencePage";
 import CaseMemoryLanding from "./CaseMemoryLanding";
 import { MemoryRunAllModal } from "../components/memory/MemoryRunAllModal";
+import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysisCatalogueModal";
 
 const getMemoryOverviewMock = vi.fn();
 const getMemoryBackendOverviewMock = vi.fn();
@@ -408,6 +409,44 @@ describe("Memory overview, profile catalogue and run-all", () => {
     // header label is "Re-run analysis" (per the v1 stabilization
     // spec).
     expect(btn.textContent).toMatch(/Re-run analysis|Run analysis|Analyze memory|Complete analysis/);
+  });
+
+  it("shows expanded profile labels and plugin availability counts in the catalogue", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const catalogue = {
+      case_id: "case-1",
+      evidence_id: "ev-A",
+      items: [
+        { profile: "metadata_only", family: "system_info", title: "System metadata", description: "", cost_label: "Fast", est_duration_seconds: 20, available: true, availability_reason: null, last_run: { id: "r-meta" }, last_status: "completed", last_count: 1, plugins: ["windows.info"], plugin_count: 1, available_plugin_count: 1, unavailable_plugins: [] },
+        { profile: "processes_extended", family: "processes", title: "Extended Processes", description: "Scanned processes, environment variables, SIDs and privileges.", cost_label: "Medium", est_duration_seconds: 240, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0, plugins: ["windows.psscan", "windows.envars", "windows.getsids", "windows.privileges"], plugin_count: 4, available_plugin_count: 4, unavailable_plugins: [] },
+        { profile: "network_basic", family: "network", title: "Network Connections", description: "Active and historical network endpoints found in memory.", cost_label: "Medium", est_duration_seconds: 90, available: true, availability_reason: "1/2 plugins available; unavailable plugins will be skipped.", last_run: null, last_status: null, last_count: 0, plugins: ["windows.netscan", "windows.netstat"], plugin_count: 2, available_plugin_count: 1, unavailable_plugins: [{ plugin: "windows.netstat", state: "unsupported_by_installed_volatility", reason: "windows.netstat is not exposed by the installed Volatility runtime." }] },
+        { profile: "suspicious_memory", family: "suspicious_regions", title: "Suspicious Memory", description: "Suspicious executable regions and VAD metadata.", cost_label: "Slow", est_duration_seconds: 1800, available: true, availability_reason: null, last_run: null, last_status: null, last_count: 0, plugins: ["windows.malfind", "windows.vadinfo"], plugin_count: 2, available_plugin_count: 2, unavailable_plugins: [] },
+      ],
+    };
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={queryClient}>
+          <MemoryAnalysisCatalogueModal
+            caseId="case-1"
+            evidenceId="ev-A"
+            evidenceFilename="ws01.dmp"
+            evidenceHost="WS01"
+            evidenceSizeBytes={1024}
+            catalogue={catalogue}
+            volatilityBackend={{ backend: "volatility3", display_name: "Volatility 3", configured: true, executable_found: true, execution_allowed: true, available: true, ready: true, status: "available", message: "ready", checked_at: "2026-06-15T00:00:00Z", error_code: null, execution_mode: "dedicated_worker", dedicated_worker_required: true, dedicated_worker_online: true, queue: "memory", queue_reachable: true, backend_available: true, backend_version: "2.28.0", supported_profiles: [], supported_plugins: [], symbol_network_enabled: true }}
+            canRun={true}
+            onClose={() => {}}
+          />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByTestId("memory-partial-advanced"));
+    expect(await screen.findByText("Extended Processes")).toBeInTheDocument();
+    expect(screen.getByText("Network Connections")).toBeInTheDocument();
+    expect(screen.getByText("Suspicious Memory")).toBeInTheDocument();
+    expect(screen.getByTestId("catalogue-plugin-availability-processes_extended").textContent).toContain("4/4 plugins available");
+    expect(screen.getByTestId("catalogue-plugin-availability-network_basic").textContent).toContain("1/2 plugins available");
+    expect(screen.getByText(/windows.netstat is not exposed/)).toBeInTheDocument();
   });
 
   // 5. Overview muestra familias

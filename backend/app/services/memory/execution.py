@@ -31,6 +31,7 @@ from app.services.memory.artifact_normalizers import (
 )
 from app.services.memory.indexing import index_memory_documents, index_memory_system_info
 from app.services.memory.normalizers import merge_memory_process_results, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
+from app.services.memory.pids import normalize_pid
 from app.services.memory.process_entities import renormalize_documents
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, write_atomic_bytes, write_atomic_json
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
@@ -46,14 +47,16 @@ TERMINAL_STATUSES = {"completed", "completed_with_errors", "failed", "timed_out"
 PROFILE_PLUGINS = {
     "metadata_only": ["windows.info"],
     "processes_basic": ["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"],
-    "processes_extended": ["windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"],
-    "network_basic": ["windows.netscan", "windows.info"],
+    "processes_extended": ["windows.psscan", "windows.envars", "windows.getsids", "windows.privileges"],
+    "network_basic": ["windows.netscan", "windows.netstat"],
     "modules_basic": ["windows.dlllist", "windows.ldrmodules", "windows.info"],
     "handles_basic": ["windows.handles", "windows.info"],
     "kernel_basic": ["windows.modules", "windows.driverscan", "windows.info"],
-    "suspicious_memory": ["windows.malfind", "windows.info"],
+    "suspicious_memory": ["windows.malfind", "windows.vadinfo"],
 }
 PROCESS_PLUGINS = {"windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"}
+PROCESS_OBSERVATION_PLUGINS = {"windows.envars", "windows.getsids", "windows.privileges"}
+OPTIONAL_RUNTIME_PROBED_PLUGINS = PROCESS_OBSERVATION_PLUGINS | {"windows.netscan", "windows.netstat", "windows.vadinfo"}
 ARTIFACT_PROFILES = {
     "network_basic",
     "modules_basic",
@@ -63,22 +66,30 @@ ARTIFACT_PROFILES = {
 }
 ARTIFACT_PLUGIN_NORMALIZER = {
     "windows.netscan": "memory_network_connection",
+    "windows.netstat": "memory_network_connection",
     "windows.dlllist": "memory_process_module",
     "windows.ldrmodules": "memory_process_module",
     "windows.handles": "memory_handle",
     "windows.modules": "memory_kernel_module",
     "windows.driverscan": "memory_driver",
     "windows.malfind": "memory_suspicious_region",
+    "windows.vadinfo": "memory_suspicious_region",
 }
 ARTIFACT_PLUGIN_LIMITS = {
     # Per-plugin guard-rails to keep offline execution bounded.
     "windows.netscan": {"timeout_seconds": 300, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "windows.netstat": {"timeout_seconds": 1200, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "windows.psscan": {"timeout_seconds": 900, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "windows.envars": {"timeout_seconds": 900, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "windows.getsids": {"timeout_seconds": 900, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    "windows.privileges": {"timeout_seconds": 900, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "windows.dlllist": {"timeout_seconds": 300, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "windows.ldrmodules": {"timeout_seconds": 300, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "windows.handles": {"timeout_seconds": 600, "max_output_bytes": 64 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "windows.modules": {"timeout_seconds": 300, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "windows.driverscan": {"timeout_seconds": 300, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "windows.malfind": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 50000, "max_preview_bytes": 256},
+    "windows.vadinfo": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 50000, "max_preview_bytes": 256},
 }
 
 
@@ -125,19 +136,7 @@ def resolve_profile_plugins(profile: str) -> list[str]:
         raise MemoryExecutionValidationError("UNKNOWN_PROFILE", "Unknown memory analysis profile.")
     if profile != "metadata_only" and not settings.memory_process_profile_enabled:
         raise MemoryExecutionValidationError("PROCESS_PROFILE_DISABLED", "Memory process profiles are disabled by server configuration.")
-    # Runtime check: the network_basic profile requires a Windows
-    # network plugin that is not present in the installed Volatility
-    # 3.28.0 build.  Reject the start before any MemoryScanRun is
-    # created and before any Redis task is enqueued.
-    if profile == "network_basic":
-        available, explanation = volatility_runner.network_basic_available()
-        if not available:
-            raise MemoryExecutionValidationError("MEMORY_PROFILE_UNAVAILABLE", explanation)
     plugins = PROFILE_PLUGINS[profile]
-    allowed_plugins = set(settings.allowed_memory_plugins)
-    required = set(plugins)
-    if not required.issubset(allowed_plugins):
-        raise MemoryExecutionValidationError("PLUGIN_NOT_ALLOWED", "Configured memory plugin allowlist does not permit the requested profile.")
     return plugins
 
 
@@ -215,11 +214,44 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
             raw_outputs = {}
             process_results = []
             artifact_results: dict[str, dict[str, Any]] = {}
+            process_observation_docs: list[dict[str, Any]] = []
             manifest_plugins = []
             fatal = False
             blocking_error: VolatilityRunnerError | None = None
             for plugin in plugins:
                 plugin_run = _plugin_run_for(db, run, plugin)
+                if plugin not in set(backend_readiness.get_settings().allowed_memory_plugins):
+                    plugin_run.status = "skipped_disabled"
+                    plugin_run.completed_at = utc_now_naive()
+                    plugin_run.error_code = "disabled_by_configuration"
+                    plugin_run.error_message = f"{plugin} is disabled by memory plugin configuration."
+                    plugin_run.metadata_json = {
+                        **(plugin_run.metadata_json or {}),
+                        "capability_state": "disabled_by_configuration",
+                        "raw_output_retained": False,
+                    }
+                    db.commit()
+                    continue
+                if run.cancellation_requested:
+                    plugin_run.status = "cancelled"
+                    plugin_run.completed_at = utc_now_naive()
+                    plugin_run.error_code = "cancelled"
+                    plugin_run.error_message = "Cancelled before plugin execution."
+                    run.plugins_failed += 1
+                    db.commit()
+                    continue
+                if plugin in OPTIONAL_RUNTIME_PROBED_PLUGINS and not volatility_runner.probe_volatility_plugin(plugin):
+                    plugin_run.status = "skipped_unsupported"
+                    plugin_run.completed_at = utc_now_naive()
+                    plugin_run.error_code = "plugin_not_available"
+                    plugin_run.error_message = f"{plugin} is not available in the installed Volatility runtime."
+                    plugin_run.metadata_json = {
+                        **(plugin_run.metadata_json or {}),
+                        "capability_state": "unsupported_by_installed_volatility",
+                        "raw_output_retained": False,
+                    }
+                    db.commit()
+                    continue
                 try:
                     payload, raw_info, duration_ms, argv_display = _execute_plugin(db, run, plugin_run, plugin, validated.path, output_dir)
                     raw_outputs[plugin] = raw_info
@@ -231,6 +263,21 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                         elif plugin in PROCESS_PLUGINS:
                             process_results.append(_normalize_process_payload(plugin, payload))
                             plugin_run.metadata_json = {"normalized_type": "memory_process", "raw_output_retained": True}
+                        elif plugin in PROCESS_OBSERVATION_PLUGINS:
+                            docs = _normalize_process_observation_payload(
+                                plugin,
+                                payload,
+                                case_id=run.case_id,
+                                evidence_id=run.evidence_id,
+                                scan_run_id=run.id,
+                                plugin_run_id=plugin_run.id,
+                            )
+                            process_observation_docs.extend(docs)
+                            plugin_run.metadata_json = {
+                                "normalized_type": "memory_process_observation",
+                                "raw_output_retained": True,
+                                "accepted_count": len(docs),
+                            }
                         elif plugin in ARTIFACT_PLUGIN_NORMALIZER:
                             artifact_results[plugin] = _normalize_artifact_payload(
                                 plugin,
@@ -258,6 +305,12 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     plugin_run.output_relative_path = raw_info["path"]
                     plugin_run.output_sha256 = raw_info["sha256"]
                     plugin_run.output_size = raw_info["size"]
+                    plugin_run.metadata_json = {
+                        **(plugin_run.metadata_json or {}),
+                        "argv": argv_display,
+                        "stderr_preview": raw_info.get("stderr_preview"),
+                        "capability_state": "available",
+                    }
                     run.plugins_completed += 1
                     db.commit()
                 except VolatilityRunnerError as exc:
@@ -307,10 +360,20 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                     _run_canonical_materialization(
                         db, run, documents=merged["processes"],
                     )
+                if process_observation_docs:
+                    indexing["raw_observations"] = index_memory_documents(run.case_id, process_observation_docs)
+                    _upsert_summary(
+                        db,
+                        run,
+                        "memory_process_observation",
+                        len(process_observation_docs),
+                        {"profile": run.profile, "sources": sorted({doc.get("plugin_name") for doc in process_observation_docs})},
+                    )
                 if artifact_results:
                     artifact_indexing = _index_artifact_results(run.case_id, artifact_results, db, run)
                     indexing["artifacts"] = artifact_indexing
-                run.status = "completed" if run.plugins_failed == 0 else "completed_with_errors"
+                skipped_count = sum(1 for item in run.plugin_runs if str(item.status or "").startswith("skipped_"))
+                run.status = "completed" if run.plugins_failed == 0 and skipped_count == 0 else "completed_with_errors"
                 run.metadata_json = {**(run.metadata_json or {}), "indexing": indexing}
             except Exception as exc:  # noqa: BLE001
                 run.status = "completed_with_errors"
@@ -382,6 +445,8 @@ def _normalize_artifact_payload(
     }
     if plugin == "windows.netscan":
         return normalize_windows_netscan(payload, source_plugin=plugin, **common)
+    if plugin == "windows.netstat":
+        return normalize_windows_netscan(payload, source_plugin=plugin, **common)
     if plugin == "windows.dlllist":
         return normalize_windows_dlllist(payload, source_plugin=plugin, **common)
     if plugin == "windows.ldrmodules":
@@ -393,6 +458,8 @@ def _normalize_artifact_payload(
     if plugin == "windows.driverscan":
         return normalize_windows_driverscan(payload, source_plugin=plugin, **common)
     if plugin == "windows.malfind":
+        return normalize_windows_malfind(payload, source_plugin=plugin, **common)
+    if plugin == "windows.vadinfo":
         return normalize_windows_malfind(payload, source_plugin=plugin, **common)
     return {
         "items": [],
@@ -555,6 +622,7 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
         result = run_plugin(plugin, evidence_path, output_dir)
     try:
         raw_info = write_atomic_bytes(output_dir / _plugin_filename(plugin), result.stdout, max_bytes=max_output_bytes)
+        raw_info["stderr_preview"] = _sanitize_message(result.stderr.decode("utf-8", errors="replace"))[:4096] if result.stderr else None
     except ValueError as exc:
         if str(exc) == "output_too_large":
             raise VolatilityRunnerError("OUTPUT_TOO_LARGE", f"Volatility {plugin} output exceeded the configured size limit.", stdout=result.stdout[:max_output_bytes or 0], stderr=result.stderr[:4096]) from exc
@@ -564,6 +632,81 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
     except Exception as exc:  # noqa: BLE001
         raise VolatilityRunnerError("VOLATILITY_OUTPUT_INVALID", f"Volatility {plugin} executed, but its output could not be parsed.", stdout=result.stdout, stderr=result.stderr, return_code=0) from exc
     return payload, raw_info, result.duration_ms, result.argv_display
+
+
+def _payload_rows(payload: Any) -> list[dict[str, Any]]:
+    if isinstance(payload, list):
+        return [item for item in payload if isinstance(item, dict)]
+    if isinstance(payload, dict):
+        for key in ("rows", "data"):
+            if isinstance(payload.get(key), list):
+                return [item for item in payload[key] if isinstance(item, dict)]
+        if isinstance(payload.get("treegrid"), dict):
+            columns = payload["treegrid"].get("columns") or []
+            rows = payload["treegrid"].get("rows") or []
+            result = []
+            for row in rows:
+                values = row.get("values") if isinstance(row, dict) else row
+                if isinstance(values, list):
+                    result.append({str(columns[index].get("name") if isinstance(columns[index], dict) else columns[index]): values[index] for index in range(min(len(columns), len(values)))})
+            return result
+        return [payload]
+    return []
+
+
+def _row_lookup(row: dict[str, Any], *names: str) -> Any:
+    normalized = {str(key).lower().replace(" ", "_").replace("-", "_"): value for key, value in row.items()}
+    for name in names:
+        key = name.lower().replace(" ", "_").replace("-", "_")
+        if key in normalized:
+            return normalized[key]
+    return None
+
+
+def _raw_limited(row: dict[str, Any], limit: int = 80) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for index, (key, value) in enumerate(row.items()):
+        if index >= limit:
+            break
+        result[str(key)[:128]] = value if isinstance(value, (bool, int, float)) or value is None else str(value)[:1024]
+    return result
+
+
+def _normalize_process_observation_payload(
+    plugin: str,
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+) -> list[dict[str, Any]]:
+    docs: list[dict[str, Any]] = []
+    for index, row in enumerate(_payload_rows(payload)):
+        pid = normalize_pid(_row_lookup(row, "PID", "Pid", "ProcessId", "Process ID"))
+        ppid = normalize_pid(_row_lookup(row, "PPID", "ParentPID", "Parent Pid"))
+        name = _row_lookup(row, "Process", "Name", "ImageFileName", "Image")
+        docs.append({
+            "document_id": f"{scan_run_id}:memory_process_observation:{plugin_run_id}:{index}",
+            "document_type": "memory_process_observation",
+            "memory_artifact_type": "memory_process_observation",
+            "case_id": case_id,
+            "evidence_id": evidence_id,
+            "scan_run_id": scan_run_id,
+            "memory_run_id": scan_run_id,
+            "plugin_run_id": plugin_run_id,
+            "memory_plugin_run_id": plugin_run_id,
+            "plugin_name": plugin,
+            "plugin": plugin,
+            "source_record_id": str(index),
+            "process": {"pid": pid, "ppid": ppid, "name": str(name)[:512] if name is not None else None},
+            "observed": {"pid": pid, "ppid": ppid, "name": str(name)[:512] if name is not None else None},
+            "raw_status": "reported_by_plugin",
+            "source_fields": _raw_limited(row),
+            "confidence": "reported_by_plugin",
+            "parsed_at": utc_iso(),
+        })
+    return docs
 
 
 def _normalize_process_payload(plugin: str, payload: Any) -> dict[str, Any]:
@@ -618,7 +761,8 @@ def _write_plugin_error(run: MemoryScanRun, plugin_run: MemoryPluginRun, exc: Vo
         return
     try:
         output_dir = memory_run_dir(run.case_id, run.evidence_id, run.id)
-        write_atomic_json(output_dir / "plugin_error.json", {"code": exc.code, "message": _sanitize_message(exc.message), "stderr": _sanitize_message(exc.stderr.decode("utf-8", errors="replace"))})
+        safe_plugin = plugin_run.plugin.replace(".", "_")
+        write_atomic_json(output_dir / f"{safe_plugin}.error.json", {"plugin": plugin_run.plugin, "code": exc.code, "message": _sanitize_message(exc.message), "stderr": _sanitize_message(exc.stderr.decode("utf-8", errors="replace"))})
     except Exception:  # noqa: BLE001
         logger.warning("memory plugin error file could not be written", extra={"run_id": run.id, "plugin_run_id": plugin_run.id})
 

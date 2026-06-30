@@ -111,13 +111,18 @@ ALLOWED_VOLATILITY_PLUGINS = {
     "windows.pstree",
     "windows.psscan",
     "windows.cmdline",
+    "windows.envars",
+    "windows.getsids",
+    "windows.privileges",
     "windows.netscan",
+    "windows.netstat",
     "windows.dlllist",
     "windows.ldrmodules",
     "windows.handles",
     "windows.modules",
     "windows.driverscan",
     "windows.malfind",
+    "windows.vadinfo",
 }
 
 
@@ -321,10 +326,10 @@ def _classify_failure(stderr: bytes) -> tuple[str, str]:
     return "PLUGIN_FAILED", text or "Volatility windows.info failed."
 
 
-# Plugins that are required for the network_basic profile but are
-# missing from the installed Volatility 3.28.0 build (no
-# windows.netscan / windows.netstat).  Kept in one place so the API
-# layer can reject the start before any MemoryScanRun is created.
+# Plugins that make up the network_basic profile. Kept in one place for
+# compatibility with older capability helpers; profile execution now handles
+# individual plugin absence as skipped plugin runs rather than rejecting the
+# entire profile up front.
 NETWORK_BASIC_REQUIRED_PLUGINS = (
     "windows.netscan",
     "windows.netstat",
@@ -334,6 +339,17 @@ NETWORK_BASIC_REQUIRED_PLUGINS = (
 NETWORK_PLUGIN_CLASSES = {
     "windows.netscan": ("volatility3.plugins.windows.netscan", "NetScan"),
     "windows.netstat": ("volatility3.plugins.windows.netstat", "NetStat"),
+}
+
+VOLATILITY_PLUGIN_CLASSES = {
+    "windows.psscan": ("volatility3.plugins.windows.psscan", "PsScan"),
+    "windows.envars": ("volatility3.plugins.windows.envars", "Envars"),
+    "windows.getsids": ("volatility3.plugins.windows.getsids", "GetSIDs"),
+    "windows.privileges": ("volatility3.plugins.windows.privileges", "Privs"),
+    "windows.netscan": ("volatility3.plugins.windows.netscan", "NetScan"),
+    "windows.netstat": ("volatility3.plugins.windows.netstat", "NetStat"),
+    "windows.malfind": ("volatility3.plugins.windows.malfind", "Malfind"),
+    "windows.vadinfo": ("volatility3.plugins.windows.vadinfo", "VadInfo"),
 }
 
 
@@ -367,7 +383,7 @@ def probe_volatility_plugin(plugin: str) -> bool:
 
 def _probe_plugin_importable(plugin: str) -> bool:
     """Try to import the module that hosts the plugin class."""
-    target = NETWORK_PLUGIN_CLASSES.get(plugin)
+    target = VOLATILITY_PLUGIN_CLASSES.get(plugin)
     if target is None:
         return False
     module_name, class_name = target

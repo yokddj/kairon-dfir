@@ -1821,8 +1821,8 @@ def test_run_all_unknown_preparation_creates_one_existing_evidence_run(db_sessio
     settings = _backend_settings(
         memory_run_all_enabled=True,
         memory_process_profile_enabled=True,
-        allowed_memory_profiles=["metadata_only", "processes_basic", "processes_extended", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"],
-        allowed_memory_plugins=["windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "windows.dlllist", "windows.ldrmodules", "windows.handles", "windows.modules", "windows.driverscan", "windows.malfind"],
+        allowed_memory_profiles=["metadata_only", "processes_basic", "processes_extended", "network_basic", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"],
+        allowed_memory_plugins=["windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "windows.envars", "windows.getsids", "windows.privileges", "windows.netscan", "windows.netstat", "windows.dlllist", "windows.ldrmodules", "windows.handles", "windows.modules", "windows.driverscan", "windows.malfind", "windows.vadinfo"],
     )
     monkeypatch.setattr(routes_memory, "get_settings", lambda: settings)
     monkeypatch.setattr("app.core.config.get_settings", lambda: SimpleNamespace(**settings.__dict__, backend_data_dir=tmp_path, memory_output_root=tmp_path / "out"))
@@ -1840,17 +1840,23 @@ def test_run_all_unknown_preparation_creates_one_existing_evidence_run(db_sessio
     assert result["status"] == "running"
     assert db_session.query(Evidence).count() == 1
     runs = db_session.query(MemoryScanRun).order_by(MemoryScanRun.profile).all()
-    assert len(runs) == 7
-    assert {run.profile for run in runs} == {"metadata_only", "processes_basic", "processes_extended", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"}
+    assert len(runs) == 8
+    assert {run.profile for run in runs} == {"metadata_only", "processes_basic", "processes_extended", "network_basic", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"}
     assert all(run.evidence_id == ev.id for run in runs)
 
 
 def test_memory_profiles_resolve_server_side(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(memory_execution.backend_readiness, "get_settings", lambda: _backend_settings(memory_process_profile_enabled=True))
+    monkeypatch.setattr(memory_execution.backend_readiness, "get_settings", lambda: _backend_settings(
+        memory_process_profile_enabled=True,
+        allowed_memory_profiles=["metadata_only", "processes_basic", "processes_extended", "network_basic", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"],
+        allowed_memory_plugins=["windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "windows.envars", "windows.getsids", "windows.privileges", "windows.netscan", "windows.netstat", "windows.dlllist", "windows.ldrmodules", "windows.handles", "windows.modules", "windows.driverscan", "windows.malfind", "windows.vadinfo"],
+    ))
 
     assert memory_execution.resolve_profile_plugins("metadata_only") == ["windows.info"]
     assert memory_execution.resolve_profile_plugins("processes_basic") == ["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"]
-    assert memory_execution.resolve_profile_plugins("processes_extended") == ["windows.info", "windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"]
+    assert memory_execution.resolve_profile_plugins("processes_extended") == ["windows.psscan", "windows.envars", "windows.getsids", "windows.privileges"]
+    assert memory_execution.resolve_profile_plugins("network_basic") == ["windows.netscan", "windows.netstat"]
+    assert memory_execution.resolve_profile_plugins("suspicious_memory") == ["windows.malfind", "windows.vadinfo"]
 
 
 def test_process_profile_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:

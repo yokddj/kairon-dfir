@@ -200,6 +200,29 @@ def test_netscan_preserves_ports_and_state() -> None:
     assert udp and udp[0]["local_port"] == 5353
 
 
+def test_netscan_malformed_or_out_of_range_ports_do_not_break_row() -> None:
+    result = normalize_windows_netscan(
+        [
+            {
+                "Proto": "TCPv4",
+                "LocalAddress": "10.0.0.5",
+                "LocalPort": "not-a-port",
+                "ForeignAddress": "10.0.0.10",
+                "ForeignPort": 70000,
+                "State": "ESTABLISHED",
+                "PID": 4,
+            }
+        ],
+        case_id=CASE,
+        evidence_id=EVIDENCE,
+        scan_run_id=RUN,
+        plugin_run_id=f"{RUN}:windows.netscan",
+    )
+    assert result["accepted_count"] == 1
+    assert result["items"][0]["local_port"] is None
+    assert result["items"][0]["remote_port"] is None
+
+
 # ---------------------------------------------------------------------------
 # 4. netscan PID resolves to a single canonical process entity
 # ---------------------------------------------------------------------------
@@ -416,7 +439,7 @@ def test_malfind_does_not_flag_malware() -> None:
     # No "malware_confirmed" anywhere; review_status is needs_review.
     assert "malware_confirmed" not in item["findings"]
     assert item["review_status"] == "needs_review"
-    assert item["confidence"] == "indicator"
+    assert item["confidence"] == "reported_by_plugin"
 
 
 # ---------------------------------------------------------------------------
@@ -431,13 +454,18 @@ def test_profiles_use_allowlisted_plugins() -> None:
         "windows.pstree",
         "windows.psscan",
         "windows.cmdline",
+        "windows.envars",
+        "windows.getsids",
+        "windows.privileges",
         "windows.netscan",
+        "windows.netstat",
         "windows.dlllist",
         "windows.ldrmodules",
         "windows.handles",
         "windows.modules",
         "windows.driverscan",
         "windows.malfind",
+        "windows.vadinfo",
     }
     for profile, plugins in PROFILE_PLUGINS.items():
         for plugin in plugins:

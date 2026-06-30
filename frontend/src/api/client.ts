@@ -603,6 +603,10 @@ export type MemoryAnalysisCatalogueItem = {
   requires_windows_symbols?: boolean;
   can_run_without_symbols?: boolean;
   supported_os_families?: string[];
+  plugins?: string[];
+  plugin_count?: number;
+  available_plugin_count?: number;
+  unavailable_plugins?: Array<{ plugin: string; state: string; reason: string }>;
 };
 
 export type MemoryAnalysisCatalogue = {

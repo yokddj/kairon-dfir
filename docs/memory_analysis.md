@@ -19,8 +19,15 @@ This version includes isolated Volatility 3 profiles:
 - `windows.pstree`
 - `windows.psscan`
 - `windows.cmdline`
+- `windows.envars`
+- `windows.getsids`
+- `windows.privileges`
+- `windows.netscan`
+- `windows.netstat`
+- `windows.malfind`
+- `windows.vadinfo`
 
-It does not extract network connections, DLLs, handles, services, drivers, registry data, injected memory, credentials, files, strings, YARA results, or malware findings. MemProcFS remains readiness-only.
+It does not run YARA, dump memory regions, dump processes, dump DLLs, extract credentials, run registry plugins, perform timeline integration, or create malware findings from memory plugins. MemProcFS remains readiness-only.
 
 Memory Analysis is disabled by default:
 
@@ -83,7 +90,9 @@ Supported profiles:
 
 - `metadata_only`: `windows.info`
 - `processes_basic`: `windows.info`, `windows.pslist`, `windows.pstree`, `windows.cmdline`
-- `processes_extended`: `windows.info`, `windows.pslist`, `windows.pstree`, `windows.psscan`, `windows.cmdline`
+- `processes_extended`: `windows.psscan`, `windows.envars`, `windows.getsids`, `windows.privileges`
+- `network_basic`: `windows.netscan`, `windows.netstat`
+- `suspicious_memory`: `windows.malfind`, `windows.vadinfo`
 
 Process profiles are disabled by default with `MEMORY_PROCESS_PROFILE_ENABLED=false`.
 
@@ -105,7 +114,13 @@ The runner validates:
 - evidence resolves to a regular file under trusted storage roots
 - no active run already exists for the same evidence/profile
 
-The runner writes bounded raw JSON and a manifest under the evidence storage tree, stores run metadata in PostgreSQL, and indexes normalized `memory_system_info`, `memory_process`, and `memory_process_edge` only into `dfir-memory-{case_id}`. It never writes to the existing disk events index.
+The runner writes bounded raw JSON per plugin and a manifest under the evidence storage tree, stores run and plugin metadata in PostgreSQL, and indexes normalized `memory_system_info`, `memory_process`, `memory_process_edge`, selected memory artifacts, and raw-first process observations only into memory-scoped indices. It never writes to the existing disk events index.
+
+Each profile plugin executes independently. If one optional plugin fails or is unavailable, Kairon records the plugin terminal state and continues with later plugins where safe. The profile is marked `completed_with_errors`; successful plugin output remains available for normalization and reindexing. A valid empty JSON result is successful with zero observations. Invalid or partial JSON is a plugin failure.
+
+Plugin availability states are `available`, `unsupported_by_installed_volatility`, `unsupported_for_platform`, and `disabled_by_configuration`. The catalogue shows plugin counts and unavailable-plugin reasons. Missing optional plugins do not make the whole memory backend unavailable.
+
+Suspicious memory output is neutral forensic telemetry. `windows.malfind` and `windows.vadinfo` rows are described as suspicious memory regions reported by Volatility; Kairon does not automatically classify a region as malware and does not create Findings from these rows.
 
 Process differences are presented neutrally. A `psscan`-only process is shown as “Not present in pslist result” and “Requires analyst review”; Kairon does not label it as malware, rootkit activity, or compromise.
 
@@ -129,8 +144,8 @@ Configuration:
 - `MEMORY_PLUGIN_TIMEOUT_SECONDS=600`
 - `MEMORY_PLUGIN_OUTPUT_MAX_BYTES=10485760`
 - `MEMORY_WORKER_CONCURRENCY=1`
-- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline`
-- `MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended`
+- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo`
+- `MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory`
 - `MEMORY_DEFAULT_PROFILE=metadata_only`
 - `MEMORY_PROCESS_PROFILE_ENABLED=false`
 - `MEMORY_MAX_PROCESS_ROWS=100000`
@@ -149,4 +164,4 @@ Command settings are administrator-controlled and require trusted server access 
 
 ## Sprint boundary
 
-The current runner scope is isolated metadata and process inventory only. It does not add MemProcFS execution, malfind, netscan, DLL/handle/service/driver extraction, credential extraction, file extraction, malware detection, hybrid correlation, or global Search/Timeline integration.
+The current runner scope is isolated memory analysis only. It does not add MemProcFS execution, credential extraction, file extraction, memory dumping, process dumping, DLL dumping, malware verdicts, hybrid correlation, or global Search/Timeline integration.
