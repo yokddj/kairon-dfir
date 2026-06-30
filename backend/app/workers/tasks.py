@@ -555,10 +555,36 @@ def enqueue_semi_auto_analysis(job_run_id: str) -> str:
 
 
 def enqueue_memory_metadata_scan(memory_scan_run_id: str) -> str:
-    timeout = max(60, int(settings.memory_job_timeout_seconds))
+    timeout = _memory_scan_job_timeout(memory_scan_run_id)
     queue = memory_queue if settings.memory_execution_mode == "dedicated_worker" else analysis_queue
     job = queue.enqueue("app.workers.tasks.run_memory_metadata_scan", memory_scan_run_id, job_timeout=timeout)
     return job.id
+
+
+def _memory_scan_job_timeout(memory_scan_run_id: str) -> int:
+    try:
+        from app.services.memory.execution import PROFILE_PLUGINS, derive_memory_timeout_plan
+        from app.models.memory import MemoryScanRun
+
+        with SessionLocal() as db:
+            run = db.get(MemoryScanRun, memory_scan_run_id)
+            if run is None:
+                return _memory_scan_safe_fallback_job_timeout()
+            plugins = list((run.metadata_json or {}).get("plugins") or PROFILE_PLUGINS.get(run.profile, []))
+            timeout_plan = (run.metadata_json or {}).get("timeout_policy") or derive_memory_timeout_plan(run.profile, plugins)
+            run.metadata_json = {**(run.metadata_json or {}), "timeout_policy": timeout_plan}
+            db.commit()
+            return max(60, int(timeout_plan["job_timeout_seconds"]))
+    except Exception:  # noqa: BLE001
+        logger.warning("memory scan dynamic timeout calculation failed; using safe derived fallback", extra={"run_id": memory_scan_run_id})
+        return _memory_scan_safe_fallback_job_timeout()
+
+
+def _memory_scan_safe_fallback_job_timeout() -> int:
+    from app.services.memory.execution import PROFILE_PLUGINS, derive_memory_timeout_plan
+
+    derived = [int(derive_memory_timeout_plan(profile, plugins)["job_timeout_seconds"]) for profile, plugins in PROFILE_PLUGINS.items()]
+    return max([60, int(getattr(settings, "memory_job_timeout_seconds", 0) or 0), *derived])
 
 
 def enqueue_memory_preparation(evidence_id: str) -> str:
