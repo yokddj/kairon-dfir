@@ -62,7 +62,6 @@ from app.services.memory.artifact_indexing import (
     link_process_entities,
     search_artifact_documents,
 )
-from app.services.memory.volatility_runner import network_basic_available
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, mark_run_queued, resolve_profile_plugins
 from app.services.memory.evidence_access import evidence_readiness
@@ -82,6 +81,7 @@ from app.services.memory.upload_sessions import (
 )
 from app.services.memory.active_result import resolve_active_memory_result, list_families as _list_artifact_families
 from app.services.memory.catalogue import build_analysis_catalogue, MemoryProfileUnavailableError
+from app.services.memory.profile_planning import plan_profile_capability
 from app.services.memory.symbol_control import SymbolControlError, acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure, queue_symbol_acquisition, request_status_dict, request_symbol_acquisition_awaiting_approval
 from app.services.memory.symbol_blocked_acquisition import (
     BlockedAcquisitionError,
@@ -1826,13 +1826,16 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
         validate_memory_execution_request(db, evidence.id)
     except MemoryExecutionValidationError as exc:
         raise HTTPException(status_code=400, detail=exc.message) from exc
-    if profile == "network_basic":
-        available, reason = network_basic_available()
-        if not available:
-            raise HTTPException(
-                status_code=400,
-                detail={"error_code": "MEMORY_PROFILE_UNAVAILABLE", "message": reason},
-            )
+    profile_plan = plan_profile_capability(profile)
+    if resolved_plugins and not profile_plan["has_enabled_plugins"]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "MEMORY_PROFILE_NO_ENABLED_PLUGINS",
+                "message": "No plugins for this profile are enabled by memory plugin configuration.",
+                "plugins": profile_plan["plugins"],
+            },
+        )
     existing = active_run_for_evidence(db, evidence.id, profile)
     if existing:
         raise HTTPException(status_code=409, detail=f"An active metadata analysis run already exists for this memory evidence: {existing.id}")

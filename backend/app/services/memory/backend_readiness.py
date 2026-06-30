@@ -104,6 +104,7 @@ def _dedicated_worker_status(command: str | None) -> dict:
     process_enabled = bool(settings.memory_process_profile_enabled)
     supported_profiles = [str(item) for item in selected.get("supported_profiles") or []]
     supported_plugins = [str(item) for item in selected.get("supported_plugins") or []]
+    plugins = selected.get("plugins") if isinstance(selected.get("plugins"), dict) else {}
     backend_version = selected.get("volatility_version")
     available = worker_online and queue_reachable
     ready = bool(feature_enabled and execution_allowed and available)
@@ -146,6 +147,7 @@ def _dedicated_worker_status(command: str | None) -> dict:
             "backend_version": backend_version,
             "supported_profiles": supported_profiles or settings.allowed_memory_profiles,
             "supported_plugins": supported_plugins or settings.allowed_memory_plugins,
+            "plugins": plugins,
             "symbol_network_enabled": bool(selected.get("symbol_network_enabled", settings.memory_symbol_network_access_enabled)),
             "process_profiles_enabled": process_enabled,
         },
@@ -177,6 +179,7 @@ def _memory_worker_observation(settings) -> dict:
         "backend_version": selected.get("volatility_version"),
         "supported_profiles": [str(item) for item in selected.get("supported_profiles") or []],
         "supported_plugins": [str(item) for item in selected.get("supported_plugins") or []],
+        "plugins": selected.get("plugins") if isinstance(selected.get("plugins"), dict) else {},
         "symbol_network_enabled": selected.get("symbol_network_enabled") if selected else None,
     }
 

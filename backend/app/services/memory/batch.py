@@ -48,6 +48,7 @@ from app.services.memory.execution import (
     create_memory_metadata_run,
     mark_run_queued,
 )
+from app.services.memory.profile_planning import profile_has_enabled_plugins
 
 
 logger = logging.getLogger(__name__)
@@ -93,14 +94,7 @@ def _family_for_profile(profile: str) -> str | None:
 
 
 def _profile_available(profile: str) -> tuple[bool, str | None]:
-    from app.core.config import get_settings
-
-    plugins = PROFILE_PLUGINS.get(profile, [])
-    if plugins:
-        allowed = set(get_settings().allowed_memory_plugins)
-        if not any(plugin in allowed for plugin in plugins):
-            return False, "No plugins for this profile are enabled by memory plugin configuration."
-    return True, None
+    return profile_has_enabled_plugins(profile)
 
 
 def _profile_completed_successfully(db: Session, *, case_id: str, evidence_id: str, profile: str) -> bool:
