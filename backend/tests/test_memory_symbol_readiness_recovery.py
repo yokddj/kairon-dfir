@@ -505,10 +505,7 @@ def test_historical_result_preserved_when_readiness_missing(db_session) -> None:
 
 
 def test_catalogue_uses_blocked_not_unavailable_for_symbol_probe_required(db_session, monkeypatch) -> None:
-    """Profiles that require Windows symbols must be ``Blocked`` when
-    the symbol requirement is not recorded.  ``Unavailable`` is
-    reserved for plugin absence / runtime issues.
-    """
+    """Missing symbol probe state must not make profiles unavailable."""
     _case(db_session)
     _evidence(db_session, FRESH_EVIDENCE_ID, filename="fresh.dmp")
     # Mark the network plugin as available in the test env so the
@@ -525,16 +522,7 @@ def test_catalogue_uses_blocked_not_unavailable_for_symbol_probe_required(db_ses
         evidence_id=FRESH_EVIDENCE_ID,
     )
     for item in items:
-        # Plugin available, symbol requirement missing -> either
-        # Blocked (legacy) or "preparing" (new automatic pipeline).
-        # Both are valid; "Unavailable" would be wrong.
-        assert item["gate_type"] in {
-            GATE_TYPE_BLOCKED_SYMBOL_PROBE,
-            GATE_TYPE_BLOCKED_SYMBOLS_MISSING,
-            GATE_TYPE_BLOCKED_ACQUISITION_PENDING,
-            "preparing",
-            "blocked",
-        }, f"profile {item['profile']} got {item['gate_type']!r}"
+        assert item["gate_type"] != GATE_TYPE_UNAVAILABLE, f"profile {item['profile']} got unavailable"
 
 
 # ---------------------------------------------------------------------------
@@ -549,11 +537,7 @@ def test_catalogue_uses_unavailable_for_plugin_absence(db_session, monkeypatch) 
     """
     _case(db_session)
     _evidence(db_session, FRESH_EVIDENCE_ID)
-    monkeypatch.setattr(
-        memory_catalogue,
-        "_probe_network_via_worker",
-        lambda: (False, memory_catalogue.NETWORK_UNAVAILABLE_REASON),
-    )
+    monkeypatch.setattr(memory_catalogue, "_probe_plugins_via_worker", lambda plugins: {plugin: False for plugin in plugins})
     items = memory_catalogue.build_analysis_catalogue(
         db_session,
         case_id=CASE_ID,

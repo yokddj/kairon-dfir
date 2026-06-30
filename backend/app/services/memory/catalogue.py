@@ -1,11 +1,10 @@
 """Analysis catalogue for memory images.
 
 Returns the list of all 8 analysis profiles the analyst can run on
-an evidence, with availability, est. duration, last status, count
-and a cost label (Fast / Medium / Slow / High volume).  The network
-profile is always rendered as Unavailable in the current runtime
-(volatility 3.28.0 is missing ``windows.netscan`` /
-``windows.netstat``).
+an evidence, with availability, est. duration, last status, count,
+cost label, and per-plugin capability details. Profiles with partial
+plugin availability stay runnable; unavailable plugins are skipped at
+execution time with explicit reasons.
 
 This is the single source of truth used by the "Run analysis"
 catalogue modal in the UI.
@@ -21,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.models.memory import MemoryScanRun
-from app.services.memory.volatility_runner import network_basic_available
+from app.services.memory.execution import PROFILE_PLUGINS
 
 
 # 8 profiles in stable order.  ``family`` maps to the active-result
@@ -52,8 +51,8 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
     {
         "profile": "processes_extended",
         "family": "processes",
-        "title": "Extended process analysis",
-        "description": "Adds memory scanning for terminated or unlinked processes. Builds on the standard analysis.",
+        "title": "Extended Processes",
+        "description": "Scanned processes, environment variables, SIDs and privileges.",
         "cost_label": "Medium",
         "est_duration_seconds": 240,
         "requires_windows_symbols": True,
@@ -63,8 +62,8 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
     {
         "profile": "network_basic",
         "family": "network",
-        "title": "Network connections",
-        "description": "Active and recent TCP/UDP endpoints.",
+        "title": "Network Connections",
+        "description": "Active and historical network endpoints found in memory.",
         "cost_label": "Medium",
         "est_duration_seconds": 90,
         "requires_windows_symbols": True,
@@ -107,8 +106,8 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
     {
         "profile": "suspicious_memory",
         "family": "suspicious_regions",
-        "title": "Suspicious memory regions",
-        "description": "RX/RWX memory regions with no mapped file (windows.malfind).",
+        "title": "Suspicious Memory",
+        "description": "Suspicious executable regions and VAD metadata.",
         "cost_label": "Slow",
         "est_duration_seconds": 1800,
         "requires_windows_symbols": True,
@@ -128,7 +127,7 @@ NETWORK_REQUIRES_VALIDATION_REASON = (
 )
 
 
-def _probe_network_via_worker() -> tuple[bool, str]:
+def _probe_plugins_via_worker(plugins: list[str]) -> dict[str, bool] | None:
     """Ask the memory-worker process for its network capability.
 
     The API process does not install volatility3.  Calling
@@ -150,22 +149,35 @@ def _probe_network_via_worker() -> tuple[bool, str]:
                 "docker", "exec",
                 settings.memory_worker_container_name or "dfir_app-memory-worker-1",
                 "python3", "-c",
-                "from app.services.memory.volatility_runner import network_basic_available; "
-                "import sys; r = network_basic_available(); sys.stdout.write(repr(r))",
+                "from app.services.memory.volatility_runner import probe_volatility_plugin; "
+                f"import sys; plugins={plugins!r}; r={{p: probe_volatility_plugin(p) for p in plugins}}; sys.stdout.write(repr(r))",
             ],
             capture_output=True, text=True, timeout=20,
         )
     except Exception as exc:  # noqa: BLE001
-        return False, f"Could not probe memory-worker: {exc}"
+        return None
     if result.returncode != 0:
-        return False, (
-            f"Memory-worker probe failed: {result.stderr.strip()[:200] or 'unknown error'}"
-        )
+        return None
     try:
-        available, explanation = ast.literal_eval(result.stdout.strip())
+        payload = ast.literal_eval(result.stdout.strip())
     except Exception as exc:  # noqa: BLE001
-        return False, f"Could not parse worker probe output: {exc}"
-    return bool(available), str(explanation)
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return {str(key): bool(value) for key, value in payload.items()}
+
+
+def _probe_network_via_worker() -> tuple[bool, str]:
+    """Compatibility wrapper for older tests and callers.
+
+    New catalogue rendering uses per-plugin capability records, but the
+    network profile is still summarized here for existing monkeypatches.
+    """
+    payload = _probe_plugins_via_worker(["windows.netscan", "windows.netstat"])
+    if payload is None:
+        return True, "Availability will be validated in the memory-worker at execution time."
+    available = any(payload.values())
+    return available, "importable" if available else NETWORK_UNAVAILABLE_REASON
 
 
 def build_analysis_catalogue(
@@ -199,11 +211,8 @@ def build_analysis_catalogue(
         )
         runs_by_profile[profile_def["profile"]] = run
 
-    # The API process does not install volatility3.  Probe the
-    # memory-worker instead so the catalogue reflects the actual
-    # worker runtime, not the API's own import graph.
-    network_available, network_explanation = _probe_network_via_worker()
-    network_state = "available" if network_available else "unavailable"
+    all_plugins = sorted({plugin for plugins in PROFILE_PLUGINS.values() for plugin in plugins})
+    worker_probe = _probe_plugins_via_worker(all_plugins)
 
     from app.services.memory.symbol_state import GATE_TYPE_AVAILABLE, GATE_TYPE_UNAVAILABLE
 
@@ -226,29 +235,23 @@ def build_analysis_catalogue(
             last_count = 0
         last_status = last_run.status if last_run else None
 
-        is_network = profile == "network_basic"
         # The gate_type is the single source of truth for the UI:
         # "available" | "blocked_*" | "unavailable".  It is computed
         # only after every per-profile branch has been considered.
         gate_type = GATE_TYPE_AVAILABLE
         available = True
         availability_reason: str | None = None
-        # Network gate: a profile that requires a missing network
-        # plugin is truly unavailable; this wins over the symbol gate
-        # because the symbol gate would otherwise be misleading
-        # (the symbol work is moot without the plugin).
-        if is_network and network_state == "unavailable":
+        plugin_names = list(PROFILE_PLUGINS.get(profile, []))
+        plugin_capabilities = _profile_plugin_capabilities(plugin_names, worker_probe)
+        available_plugin_count = sum(1 for item in plugin_capabilities if item["state"] == "available")
+        unavailable_plugins = [item for item in plugin_capabilities if item["state"] != "available"]
+        if plugin_names and available_plugin_count == 0:
             gate_type = GATE_TYPE_UNAVAILABLE
             available = False
-            availability_reason = NETWORK_UNAVAILABLE_REASON
-        elif is_network and network_available:
-            # Plugin is importable in the memory-worker runtime.  The
-            # backend process itself does not probe the plugin; the
-            # frontend should display "Available · Not analyzed"
-            # until the first analysis actually runs.
-            gate_type = GATE_TYPE_AVAILABLE
+            availability_reason = "; ".join(item["reason"] for item in unavailable_plugins[:3]) or "No profile plugins are available."
+        elif unavailable_plugins:
             available = True
-            availability_reason = "Available · Requirements not yet validated"
+            availability_reason = f"{available_plugin_count}/{len(plugin_names)} plugins available; unavailable plugins will be skipped."
         # Do not pre-block on symbols or preparation state.  Volatility
         # resolves symbols at plugin execution time and reports the real
         # plugin stderr if resolution fails.
@@ -269,9 +272,39 @@ def build_analysis_catalogue(
                 "requires_windows_symbols": bool(profile_def.get("requires_windows_symbols", False)),
                 "can_run_without_symbols": bool(profile_def.get("can_run_without_symbols", False)),
                 "supported_os_families": list(profile_def.get("supported_os_families", [])),
+                "plugins": plugin_names,
+                "plugin_count": len(plugin_names),
+                "available_plugin_count": available_plugin_count,
+                "unavailable_plugins": unavailable_plugins,
             }
         )
     return items
+
+
+def _profile_plugin_capabilities(plugin_names: list[str], worker_probe: dict[str, bool] | None) -> list[dict[str, str]]:
+    settings = get_settings()
+    allowed = set(settings.allowed_memory_plugins)
+    result: list[dict[str, str]] = []
+    for plugin in plugin_names:
+        if plugin not in allowed:
+            result.append({
+                "plugin": plugin,
+                "state": "disabled_by_configuration",
+                "reason": f"{plugin} is disabled by memory plugin configuration.",
+            })
+            continue
+        if worker_probe is not None and worker_probe.get(plugin) is False:
+            result.append({
+                "plugin": plugin,
+                "state": "unsupported_by_installed_volatility",
+                "reason": f"{plugin} is not exposed by the installed Volatility runtime.",
+            })
+            continue
+        # If the worker cannot be probed from the API process, keep the
+        # profile eligible. The worker performs the authoritative check
+        # and records skipped plugin runs with explicit reasons.
+        result.append({"plugin": plugin, "state": "available", "reason": "Available in configured profile."})
+    return result
 
 
 def _serialize(run: MemoryScanRun) -> dict[str, Any]:

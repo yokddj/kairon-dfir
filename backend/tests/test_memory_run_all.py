@@ -95,8 +95,8 @@ def db(tmp_path, monkeypatch) -> Session:
     def _patched_get_settings() -> Settings:
         base = Settings()
         object.__setattr__(base, "memory_process_profile_enabled", True)
-        object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,modules_basic,handles_basic,kernel_basic,suspicious_memory")
-        object.__setattr__(base, "memory_allowed_plugins", "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind")
+        object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
+        object.__setattr__(base, "memory_allowed_plugins", "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo")
         return base
 
     monkeypatch.setattr(config_module, "get_settings", _patched_get_settings)
@@ -394,34 +394,52 @@ def test_unavailable_distinct_from_not_analyzed(db: Session) -> None:
     assert modules_result["selection_reason"] == "not_analyzed"
 
 
-# ---------- 6. network_basic rejected before any run is created ----------
+# ---------- 6. network_basic resolves supported plugin list ----------
 
 
-def test_network_basic_rejected_before_run_created(db: Session) -> None:
+def test_network_basic_resolves_profile_plugins(db: Session) -> None:
     from app.services.memory.execution import resolve_profile_plugins
-    from app.services.memory.validation import MemoryExecutionValidationError
 
-    # Calling resolve_profile_plugins("network_basic") raises a
-    # validation error before any MemoryScanRun is created and before
-    # any Redis task is enqueued.  In the test environment process
-    # profiles are disabled so the process-profile gate triggers
-    # first; the network-availability gate (MEMORY_PROFILE_UNAVAILABLE)
-    # is exercised in the production runtime where the plugin is
-    # absent.  Both paths satisfy the spec: no run, no enqueue.
-    with pytest.raises(MemoryExecutionValidationError):
-        resolve_profile_plugins("network_basic")
+    assert resolve_profile_plugins("network_basic") == ["windows.netscan", "windows.netstat"]
     assert db.query(MemoryScanRun).count() == 0
 
 
-# ---------- 7. network never included in run-all ----------
+# ---------- 7. network included in run-all ----------
 
 
-def test_network_never_included_in_run_all(db: Session) -> None:
+def test_network_included_in_run_all(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
     plan = plan_run_all(db, case_id=case.id, evidence_id=ev.id, mode="rerun_all")
-    assert "network_basic" not in plan["selected_profiles"]
-    # network_basic is excluded from the run-all allowlist itself.
-    assert "network_basic" not in RUN_ALL_PROFILES
+    assert "network_basic" in plan["selected_profiles"]
+    assert "network_basic" in RUN_ALL_PROFILES
+
+
+def test_profile_with_no_enabled_plugins_is_skipped_without_empty_job(db: Session, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core import config as config_module
+    from app.core.config import Settings
+
+    def _settings() -> Settings:
+        base = Settings()
+        object.__setattr__(base, "memory_process_profile_enabled", True)
+        object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
+        object.__setattr__(base, "memory_allowed_plugins", "windows.info,windows.pslist,windows.pstree,windows.cmdline,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo")
+        return base
+
+    monkeypatch.setattr(config_module, "get_settings", _settings)
+    case, ev = _make_case_and_evidence(db)
+    _make_exact_readiness(db, evidence=ev)
+    result = create_run_all_batch(
+        db,
+        case_id=case.id,
+        evidence_id=ev.id,
+        mode="missing_or_failed",
+        authorization_acknowledged=True,
+        enqueue_fn=lambda run_id: f"job-{run_id}",
+    )
+    skipped = {item["profile"]: item["reason"] for item in result["plan"]["skipped_profiles"]}
+    assert "network_basic" in skipped
+    assert "network_basic" not in result["batch"].requested_profiles
+    assert not db.query(MemoryScanRun).filter(MemoryScanRun.batch_id == result["batch"].id, MemoryScanRun.profile == "network_basic").first()
 
 
 # ---------- 8. processes_basic included as its own pending profile ----------
@@ -871,10 +889,10 @@ def test_planning_does_not_create_normalized_event(db: Session) -> None:
     assert before == after
 
 
-# ---------- 25. Network rejection does not enqueue a job ----------
+# ---------- 25. Network profile is enqueued with the batch ----------
 
 
-def test_network_rejection_does_not_enqueue(db: Session) -> None:
+def test_network_profile_enqueued_with_batch(db: Session) -> None:
     case, ev = _make_case_and_evidence(db)
     _make_exact_readiness(db, evidence=ev)
     enqueued: list[str] = []
@@ -883,11 +901,8 @@ def test_network_rejection_does_not_enqueue(db: Session) -> None:
         enqueued.append(run_id)
         return f"rq-{run_id}"
 
-    # network_basic is not in the run-all allowlist, so the plan never
-    # enqueues it.  We also assert plan_run_all does not enqueue.
     plan = plan_run_all(db, case_id=case.id, evidence_id=ev.id, mode="rerun_all")
-    assert "network_basic" not in plan["selected_profiles"]
-    # And create_run_all_batch never references network_basic.
+    assert "network_basic" in plan["selected_profiles"]
     result = create_run_all_batch(
         db,
         case_id=case.id,
@@ -901,7 +916,7 @@ def test_network_rejection_does_not_enqueue(db: Session) -> None:
         run.profile
         for run in db.query(MemoryScanRun).filter(MemoryScanRun.batch_id == result["batch"].id)
     }
-    assert "network_basic" not in enqueued_profiles
+    assert "network_basic" in enqueued_profiles
 
 
 # ---------- 26. Active result preserved during a running batch ----------

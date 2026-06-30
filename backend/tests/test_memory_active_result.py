@@ -283,9 +283,7 @@ def test_get_evidence_landing_returns_per_family_status(db: Session) -> None:
     assert a_done != b_done  # one of them is completed and the other is not
 
 
-def test_catalogue_returns_eight_profiles_with_network_unavailable(db: Session) -> None:
-    from app.services.memory.catalogue import NETWORK_UNAVAILABLE_REASON
-
+def test_catalogue_returns_eight_profiles_with_network_plugin_availability(db: Session) -> None:
     case = _make_case(db)
     ev = _make_evidence(db, case.id, "a.dmp")
     _make_run(db, case.id, ev.id, "metadata_only", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
@@ -297,10 +295,10 @@ def test_catalogue_returns_eight_profiles_with_network_unavailable(db: Session) 
     assert "processes_extended" in profiles
     assert "network_basic" in profiles
     network = next(item for item in catalogue if item["profile"] == "network_basic")
-    # In the unit test runtime the network plugin is not installed,
-    # so the catalogue must mark it as Unavailable with a reason.
-    assert network["available"] is False
-    assert network["availability_reason"] == NETWORK_UNAVAILABLE_REASON
+    assert network["available"] is True
+    assert network["plugins"] == ["windows.netscan", "windows.netstat"]
+    assert network["plugin_count"] == 2
+    assert network["available_plugin_count"] >= 1
 
 
 def test_catalogue_returns_count_from_artifact_summaries(db: Session) -> None:

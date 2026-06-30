@@ -21,7 +21,7 @@ MEMORY_SCAN_STATUSES = {
     "invalid_evidence",
     "cancelled",
 }
-MEMORY_PLUGIN_STATUSES = {"pending", "running", "completed", "failed", "timed_out"}
+MEMORY_PLUGIN_STATUSES = {"pending", "running", "completed", "failed", "timed_out", "cancelled", "skipped_dependency", "skipped_unsupported", "skipped_disabled"}
 
 
 class MemoryUpload(UUIDMixin, Base):
@@ -142,7 +142,7 @@ class MemoryScanRun(UUIDMixin, Base):
 
     @property
     def plugins_skipped(self) -> int:
-        return sum(1 for item in self.plugin_runs if item.status == "skipped_dependency")
+        return sum(1 for item in self.plugin_runs if str(item.status or "").startswith("skipped_"))
 
 
 class MemoryPluginRun(UUIDMixin, Base):

@@ -116,6 +116,13 @@ def _int_or_none(value: Any) -> int | None:
     return normalize_pid(value)
 
 
+def _port_or_none(value: Any) -> int | None:
+    port = normalize_pid(value)
+    if port is None or port < 0 or port > 65535:
+        return None
+    return port
+
+
 def _str_or_none(value: Any, limit: int = MAX_NAME_LENGTH) -> str | None:
     if value is None:
         return None
@@ -149,9 +156,9 @@ def normalize_windows_netscan(
     for row in rows:
         proto = _str_or_none(_lookup(row, "Proto", "Protocol"))
         local_address = _str_or_none(_lookup(row, "LocalAddress", "Local Address"), 128)
-        local_port = _int_or_none(_lookup(row, "LocalPort", "Local Port"))
+        local_port = _port_or_none(_lookup(row, "LocalPort", "Local Port"))
         remote_address = _str_or_none(_lookup(row, "ForeignAddress", "RemoteAddress", "Remote Address"), 128)
-        remote_port = _int_or_none(_lookup(row, "ForeignPort", "RemotePort", "Remote Port"))
+        remote_port = _port_or_none(_lookup(row, "ForeignPort", "RemotePort", "Remote Port"))
         state = _str_or_none(_lookup(row, "State", "ConnectionState"), 32)
         pid = _int_or_none(_lookup(row, "PID", "Pid", "pid"))
         owner = _str_or_none(_lookup(row, "Owner", "Process", "CreatedBy"), MAX_NAME_LENGTH)
@@ -744,7 +751,6 @@ def normalize_windows_malfind(
             warnings.append("malfind_row_missing_identity")
             continue
         identity = _identity_pid_offset(pid, start_address or "noaddr", end_address or "noaddr", tag or "notag", protection or "noprot")
-        findings = ["needs_review"]
         doc = {
             "document_id": _document_id(prefix="memory_suspicious_region", case_id=case_id, run_id=scan_run_id, identity=identity),
             "document_type": "memory_suspicious_region",
@@ -764,9 +770,10 @@ def normalize_windows_malfind(
             "hexdump_preview_bounded": hexdump_preview,
             "disassembly_preview_bounded": disasm_preview,
             "source_plugin": source_plugin,
-            "confidence": "indicator",
+            "confidence": "reported_by_plugin",
             "review_status": "needs_review",
-            "findings": findings,
+            "findings": [],
+            "summary": "Suspicious memory region reported by Volatility.",
             "provenance": _provenance(
                 case_id=case_id,
                 evidence_id=evidence_id,

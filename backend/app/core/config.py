@@ -89,8 +89,9 @@ class Settings(BaseSettings):
     memory_evidence_shared_gid: int = 10001
     memory_allowed_plugins: str = (
         "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,"
-        "windows.netscan,windows.dlllist,windows.ldrmodules,windows.handles,"
-        "windows.modules,windows.driverscan,windows.malfind"
+        "windows.envars,windows.getsids,windows.privileges,"
+        "windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,"
+        "windows.modules,windows.driverscan,windows.malfind,windows.vadinfo"
     )
     memory_allowed_profiles: str = (
         "metadata_only,processes_basic,processes_extended,"
@@ -404,13 +405,18 @@ class Settings(BaseSettings):
             "windows.pstree",
             "windows.psscan",
             "windows.cmdline",
+            "windows.envars",
+            "windows.getsids",
+            "windows.privileges",
             "windows.netscan",
+            "windows.netstat",
             "windows.dlllist",
             "windows.ldrmodules",
             "windows.handles",
             "windows.modules",
             "windows.driverscan",
             "windows.malfind",
+            "windows.vadinfo",
         }
         values = self.memory_allowed_plugins
         if isinstance(values, str):

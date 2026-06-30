@@ -36,7 +36,7 @@ const PROFILE_SECTION: Record<string, Section> = {
   metadata_only: "quick",
   processes_basic: "quick",
   processes_extended: "quick",
-  network_basic: "unavailable",
+  network_basic: "artifacts",
   modules_basic: "artifacts",
   handles_basic: "artifacts",
   kernel_basic: "artifacts",
@@ -94,13 +94,21 @@ function StatusBadge({
   }
   switch (status) {
     case "completed":
-    case "completed_with_errors":
       return (
         <span
           className="rounded-md border border-emerald-400/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] text-emerald-100"
           data-testid="catalogue-completed"
         >
           Completed
+        </span>
+      );
+    case "completed_with_errors":
+      return (
+        <span
+          className="rounded-md border border-amber-400/30 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-100"
+          data-testid="catalogue-completed-with-errors"
+        >
+          Completed with errors
         </span>
       );
     case "failed":
@@ -143,6 +151,23 @@ function PluginsLine({ plugins }: { plugins: string[] }) {
   );
 }
 
+function PluginAvailabilityLine({ item }: { item: MemoryAnalysisCatalogueItem }) {
+  const total = item.plugin_count ?? item.plugins?.length ?? 0;
+  if (!total) return null;
+  const available = item.available_plugin_count ?? total;
+  return (
+    <div className="mt-1 space-y-1 text-[10px] text-muted" data-testid={`catalogue-plugin-availability-${item.profile}`}>
+      <p>{available}/{total} plugins available</p>
+      <PluginsLine plugins={item.plugins ?? []} />
+      {(item.unavailable_plugins ?? []).map((plugin) => (
+        <p key={plugin.plugin} className="text-amber-100" data-testid="catalogue-plugin-unavailable-reason">
+          {plugin.plugin}: {plugin.reason}
+        </p>
+      ))}
+    </div>
+  );
+}
+
 function CatalogueCard({
   caseId,
   evidenceId,
@@ -176,6 +201,7 @@ function CatalogueCard({
               <StatusBadge status={item.last_status} available={item.available} gateType={item.gate_type} />
             </div>
             <p className="mt-1 text-xs text-muted">{item.description}</p>
+            <PluginAvailabilityLine item={item} />
             <p className="mt-2 text-[11px] text-rose-100" data-testid="catalogue-unavailable-reason">
               {item.availability_reason ?? "No compatible runtime is available for this profile."}
             </p>
@@ -221,6 +247,7 @@ function CatalogueCard({
             <StatusBadge status={item.last_status} available={item.available} gateType={item.gate_type} />
           </div>
           <p className="mt-1 text-xs text-muted">{item.description}</p>
+          <PluginAvailabilityLine item={item} />
           <p className="mt-1 text-[10px] text-muted" data-testid={`catalogue-est-duration-${item.profile}`}>
             Estimated duration: ~{item.est_duration_seconds}s
             {item.last_run ? (
@@ -288,8 +315,8 @@ function FirstAnalysisView({
   canRun: boolean;
 }) {
   const supported = catalogue.items.filter((it) => it.available);
-  const included = supported.filter((it) => it.profile !== "network_basic");
-  const skipped = supported.filter((it) => it.profile === "network_basic");
+  const included = supported;
+  const skipped = catalogue.items.filter((it) => !it.available);
   const disabled = !canRun || isStarting;
   return (
     <div className="space-y-3" data-testid="memory-first-analysis">

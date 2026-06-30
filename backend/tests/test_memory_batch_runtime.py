@@ -78,8 +78,8 @@ def db(tmp_path, monkeypatch) -> Session:
     def _patched_get_settings() -> Settings:
         base = Settings()
         object.__setattr__(base, "memory_process_profile_enabled", True)
-        object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,modules_basic,handles_basic,kernel_basic,suspicious_memory")
-        object.__setattr__(base, "memory_allowed_plugins", "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind")
+        object.__setattr__(base, "memory_allowed_profiles", "metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory")
+        object.__setattr__(base, "memory_allowed_plugins", "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo")
         return base
 
     monkeypatch.setattr(config_module, "get_settings", _patched_get_settings)
@@ -391,7 +391,7 @@ def test_run_all_skips_completed_and_enqueues_pending_profiles(db: Session) -> N
 
     requested = result["batch"].requested_profiles
     assert "metadata_only" not in requested
-    assert requested == ["processes_basic", "processes_extended", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"]
+    assert requested == ["processes_basic", "processes_extended", "network_basic", "modules_basic", "handles_basic", "kernel_basic", "suspicious_memory"]
     assert len(enqueued) == len(requested)
     runs = db.query(MemoryScanRun).filter(MemoryScanRun.batch_id == result["batch"].id).all()
     assert {run.profile for run in runs} == set(requested)
@@ -869,6 +869,7 @@ def test_runtime_validation_allowlist_is_fixed() -> None:
         "metadata_only",
         "processes_basic",
         "processes_extended",
+        "network_basic",
         "modules_basic",
         "handles_basic",
         "kernel_basic",

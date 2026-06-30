@@ -44,10 +44,10 @@ from app.services.memory.catalogue import (
 )
 from app.services.memory.execution import (
     MemoryExecutionValidationError,
+    PROFILE_PLUGINS,
     create_memory_metadata_run,
     mark_run_queued,
 )
-from app.services.memory.volatility_runner import network_basic_available
 
 
 logger = logging.getLogger(__name__)
@@ -60,6 +60,7 @@ RUN_ALL_PROFILES: tuple[str, ...] = (
     "metadata_only",
     "processes_basic",
     "processes_extended",
+    "network_basic",
     "modules_basic",
     "handles_basic",
     "kernel_basic",
@@ -92,10 +93,13 @@ def _family_for_profile(profile: str) -> str | None:
 
 
 def _profile_available(profile: str) -> tuple[bool, str | None]:
-    if profile == "network_basic":
-        ok, reason = network_basic_available()
-        if not ok:
-            return False, reason or NETWORK_UNAVAILABLE_REASON
+    from app.core.config import get_settings
+
+    plugins = PROFILE_PLUGINS.get(profile, [])
+    if plugins:
+        allowed = set(get_settings().allowed_memory_plugins)
+        if not any(plugin in allowed for plugin in plugins):
+            return False, "No plugins for this profile are enabled by memory plugin configuration."
     return True, None
 
 
@@ -188,18 +192,6 @@ def plan_run_all(
     excluded = [
         {"profile": p, "reason": r} for p, r in RUN_ALL_EXCLUDED_PROFILES.items()
     ]
-    # network_basic is never part of run-all; surface it under
-    # ``excluded_profiles`` so the UI can show the operator why it is
-    # absent.
-    network_ok, network_reason = _profile_available("network_basic")
-    if not network_ok:
-        excluded.append(
-            {
-                "profile": "network_basic",
-                "reason": network_reason or NETWORK_UNAVAILABLE_REASON,
-            }
-        )
-
     return {
         "selected_profiles": selected,
         "skipped_profiles": skipped,
