@@ -1033,7 +1033,8 @@ def fetch_legacy_process_documents(case_id: str, *, run_id: str) -> list[dict[st
 def fetch_canonical_entities(
     case_id: str,
     *,
-    run_id: str,
+    run_id: str | None = None,
+    run_ids: list[str] | None = None,
     evidence_id: str | None = None,
     visibility: str | None = None,
     source_plugin: str | None = None,
@@ -1049,8 +1050,11 @@ def fetch_canonical_entities(
     page = max(int(page), 1)
     filters: list[dict[str, Any]] = [
         {"term": {"document_type.keyword": "memory_process_entity"}},
-        {"term": {"scan_run_id.keyword": run_id}},
     ]
+    if run_ids and len(run_ids) > 0:
+        filters.append({"terms": {"scan_run_id.keyword": run_ids}})
+    elif run_id:
+        filters.append({"term": {"scan_run_id.keyword": run_id}})
     if evidence_id:
         filters.append({"term": {"evidence_id.keyword": evidence_id}})
     if visibility:
