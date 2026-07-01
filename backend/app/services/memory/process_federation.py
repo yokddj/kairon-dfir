@@ -132,7 +132,7 @@ def fetch_federated_process_entities(
 
     if basic_run_id:
         basic_result = fetch_canonical_entities(
-            case_id, run_id=basic_run_id, evidence_id=evidence_id,
+            case_id, run_id=basic_run_id,
             pid=pid, process_name=process_name,
             page=1, page_size=50000,
         )
@@ -142,7 +142,7 @@ def fetch_federated_process_entities(
 
     if extended_run_id:
         extended_result = fetch_canonical_entities(
-            case_id, run_id=extended_run_id, evidence_id=evidence_id,
+            case_id, run_id=extended_run_id,
             pid=pid, process_name=process_name,
             page=1, page_size=50000,
         )
