@@ -127,7 +127,6 @@ export function MemoryEvidenceHeader({
   // Volatility resolves symbols during the actual plugin run.
   const detectionBlocked =
     evidence.detection_status === "probable_disk" ||
-    (evidence.detection_status === "ambiguous_raw" && !evidence.operator_override) ||
     evidence.detection_status === "unsupported" ||
     evidence.detection_status === "invalid" ||
     evidence.detection_status === "probe_failed";

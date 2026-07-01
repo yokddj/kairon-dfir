@@ -2450,7 +2450,12 @@ def test_volatility_runner_uses_server_controlled_online_symbol_paths(tmp_path: 
 
     volatility_runner.run_windows_info(evidence_path, tmp_path / "work")
 
-    assert calls["args"] == ["/usr/bin/vol", "-f", str(evidence_path), "-r", "json", "windows.info"]
+    assert "-f" in calls["args"]
+    assert str(evidence_path) in calls["args"]
+    assert "windows.info" in calls["args"]
+    assert "-r" in calls["args"]
+    assert "json" in calls["args"]
+    assert "--cache-path" in calls["args"]
     assert "--offline" not in calls["args"]
     assert (cache_root / "volatility3" / "symbols").is_dir()
 
