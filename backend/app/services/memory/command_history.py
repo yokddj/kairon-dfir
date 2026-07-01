@@ -33,13 +33,12 @@ def build_command_line_history(
 ) -> dict[str, Any]:
     db = SessionLocal()
     try:
-        from app.services.memory.active_result import resolve_active_memory_result
+        from app.services.memory.process_federation import resolve_federated_process_context
 
         effective_run_id = run_id
         if not effective_run_id:
-            active = resolve_active_memory_result(db, case_id=case_id, evidence_id=evidence_id, family="processes")
-            if active and active.get("active_run"):
-                effective_run_id = active["active_run"].get("id")
+            ctx = resolve_federated_process_context(db, case_id=case_id, evidence_id=evidence_id)
+            effective_run_id = ctx.get("basic_run_id") or ctx.get("primary_run_id")
 
         if not effective_run_id:
             return {

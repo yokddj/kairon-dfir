@@ -79,7 +79,7 @@ from app.services.memory.upload_sessions import (
     store_memory_upload_chunk_stream,
     upload_status_with_chunks,
 )
-from app.services.memory.active_result import resolve_active_memory_result, list_families as _list_artifact_families
+from app.services.memory.active_result import FAMILY_RESOLUTION, _is_canonical_usable, list_families as _list_artifact_families, resolve_active_memory_result
 from app.services.memory.catalogue import build_analysis_catalogue, MemoryProfileUnavailableError
 from app.services.memory.profile_planning import plan_profile_capability
 from app.services.memory.symbol_control import SymbolControlError, acquisition_gate, cache_status, evidence_symbol_readiness, latest_symbols_failure, queue_symbol_acquisition, request_status_dict, request_symbol_acquisition_awaiting_approval
