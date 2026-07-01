@@ -799,6 +799,77 @@ def normalize_windows_malfind(
     }
 
 
+# ---------------------------------------------------------------------------
+# suspicious_memory -> memory_vad (VAD-specific fields)
+# ---------------------------------------------------------------------------
+
+
+def normalize_windows_vadinfo(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "windows.vadinfo",
+    process_name_resolver: Any | None = None,
+    max_records: int = 50000,
+) -> dict[str, Any]:
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    raw_count = len(rows)
+    dropped = 0
+    accepted = 0
+    for index, row in enumerate(rows):
+        if accepted >= max_records:
+            warnings.append("Max records limit reached; some vadinfo rows dropped.")
+            dropped += len(rows) - index
+            break
+        pid = _int_or_none(_lookup(row, "PID", "Pid", "pid"))
+        process_name = _str_or_none(_lookup(row, "Process", "Name"), MAX_NAME_LENGTH) or _resolve_process_name(process_name_resolver, pid)
+        start_addr = _str_or_none(_lookup(row, "Start", "StartAddress", "Start VPN"), 64)
+        end_addr = _str_or_none(_lookup(row, "End", "EndAddress", "End VPN"), 64)
+        protection = _str_or_none(_lookup(row, "Protection"), 32)
+        tag = _str_or_none(_lookup(row, "Tag"), 32)
+        commit_charge = _int_or_none(_lookup(row, "CommitCharge"))
+        private_memory = _bool_or_none(_lookup(row, "PrivateMemory"))
+        file_object = _str_or_none(_lookup(row, "FileObject", "File"), 1024)
+        parent_id = _int_or_none(_lookup(row, "Parent", "ParentPID"))
+        if pid is None and not (start_addr or end_addr):
+            dropped += 1
+            continue
+        items.append({
+            "document_type": "memory_vad",
+            "memory_artifact_type": "memory_vad",
+            "document_id": _doc_id(scan_run_id, plugin_run_id, index),
+            "pid": pid,
+            "process_name": process_name,
+            "start_address": start_addr,
+            "end_address": end_addr,
+            "protection": protection,
+            "tag": tag,
+            "commit_charge": commit_charge,
+            "private_memory": private_memory,
+            "file_object": file_object,
+            "parent_pid": parent_id,
+            "source_plugin": source_plugin,
+            "source_record_index": index,
+            "normalization_version": NORMALIZATION_VERSION,
+            "review_status": "needs_review",
+        })
+        accepted += 1
+    return {
+        "items": items,
+        "warnings": warnings,
+        "raw_count": raw_count,
+        "accepted_count": accepted,
+        "dropped_count": dropped,
+        "conflicts": 0,
+        "normalization_version": NORMALIZATION_VERSION,
+    }
+
+
 def _bounded_preview(value: Any, limit: int) -> str | None:
     if value is None or limit <= 0:
         return None

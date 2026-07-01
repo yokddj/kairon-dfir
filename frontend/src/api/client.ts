@@ -5230,6 +5230,56 @@ export const api = {
       page_size?: number;
     },
   ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/suspicious-regions`, params)),
+  getMemoryVads: (
+    caseId: string,
+    params?: {
+      evidence_id: string;
+      run_id?: string;
+      pid?: number;
+      process_name?: string;
+      protection?: string;
+      tag?: string;
+      page?: number;
+      page_size?: number;
+    },
+  ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/vads`, params)),
+  getMemoryEnvVariables: (
+    caseId: string,
+    params?: {
+      evidence_id: string;
+      run_id?: string;
+      pid?: number;
+      process_name?: string;
+      variable?: string;
+      page?: number;
+      page_size?: number;
+    },
+  ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/environment-variables`, params)),
+  getMemorySids: (
+    caseId: string,
+    params?: {
+      evidence_id: string;
+      run_id?: string;
+      pid?: number;
+      process_name?: string;
+      sid?: string;
+      page?: number;
+      page_size?: number;
+    },
+  ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/sids`, params)),
+  getMemoryPrivileges: (
+    caseId: string,
+    params?: {
+      evidence_id: string;
+      run_id?: string;
+      pid?: number;
+      process_name?: string;
+      privilege?: string;
+      enabled?: boolean;
+      page?: number;
+      page_size?: number;
+    },
+  ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/privileges`, params)),
   getMemoryArtifactDetail: (caseId: string, documentType: string, documentId: string) =>
     request<MemoryArtifactDetail>(`/cases/${caseId}/memory/artifacts/${documentType}/${documentId}`),
   getEvidence: (evidenceId: string) => request<Evidence>(`/evidences/${evidenceId}`),

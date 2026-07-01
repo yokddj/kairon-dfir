@@ -28,6 +28,7 @@ from app.services.memory.artifact_normalizers import (
     normalize_windows_malfind,
     normalize_windows_netscan,
     normalize_windows_privileges,
+    normalize_windows_vadinfo,
 )
 from app.services.memory.artifact_indexing import index_artifact_documents
 
@@ -112,7 +113,7 @@ _RENORMALIZABLE_PLUGINS = {
     "windows.netscan": normalize_windows_netscan,
     "windows.netstat": normalize_windows_netscan,
     "windows.malfind": normalize_windows_malfind,
-    "windows.vadinfo": normalize_windows_malfind,
+    "windows.vadinfo": normalize_windows_vadinfo,
 }
 
 
