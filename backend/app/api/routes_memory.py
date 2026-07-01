@@ -3548,3 +3548,22 @@ def get_command_line_history(
         page=page,
         page_size=page_size,
     )
+
+@router.get("/cases/{case_id}/memory/process-context")
+def get_federated_process_context(
+    case_id: str,
+    evidence_id: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    _require_evidence_for_case(db, case_id, evidence_id)
+    from app.services.memory.process_federation import resolve_federated_process_context, fetch_federated_process_entities
+
+    context = resolve_federated_process_context(db, case_id=case_id, evidence_id=evidence_id)
+    entities = fetch_federated_process_entities(
+        case_id,
+        basic_run_id=context.get("basic_run_id"),
+        extended_run_id=context.get("extended_run_id"),
+        evidence_id=evidence_id,
+        page=1, page_size=50,
+    )
+    return {"context": context, "entities": entities}

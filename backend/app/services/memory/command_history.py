@@ -41,12 +41,19 @@ def build_command_line_history(
             if active and active.get("active_run"):
                 effective_run_id = active["active_run"].get("id")
 
+        if not effective_run_id:
+            return {
+                "items": [], "total": 0, "page": page, "page_size": page_size,
+                "sort_order": sort_order, "selected_run": None,
+                "contributing_runs": [], "coverage": {"entities_with_command_lines": 0, "total_entities": 0, "unknown_timestamps": 0},
+            }
+
         result = fetch_canonical_entities(
             case_id,
             run_id=effective_run_id,
+            evidence_id=evidence_id,
             process_name=process_name,
             pid=pid,
-            version="memory_process_canonical_v1",
             page=1,
             page_size=50000,
         )
