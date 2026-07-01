@@ -68,6 +68,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
   const [processName, setProcessName] = useState("");
   const [pidFilter, setPidFilter] = useState("");
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [processMode, setProcessMode] = useState<"auto" | "basic" | "extended">("auto");
 
   useEffect(() => {
     setActiveCaseId(caseId);
@@ -163,6 +164,24 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
 
   const effectiveRunId = selectedRunId || runOptionsQuery.data?.default_run_id || null;
 
+  // Process context query for automatic federation mode
+  const processContextQuery = useQuery({
+    queryKey: ["memory-process-context", caseId, effectiveEvidenceId ?? ""],
+    queryFn: () => api.getProcessContext(caseId, effectiveEvidenceId as string),
+    enabled: Boolean(caseId && effectiveEvidenceId),
+    refetchOnWindowFocus: false,
+  });
+  const processContext = processContextQuery.data as any;
+  const federatedBasicRunId = processContext?.context?.basic_run_id || null;
+  const federatedExtendedRunId = processContext?.context?.extended_run_id || null;
+
+  // Effective process run based on mode
+  const processEffectiveRunId =
+    processMode === "auto" ? (federatedBasicRunId || effectiveRunId) :
+    processMode === "basic" ? federatedBasicRunId || effectiveRunId :
+    processMode === "extended" ? federatedExtendedRunId || effectiveRunId :
+    effectiveRunId;
+
   const onTabChange = useCallback(
     (next: MemoryTab) => {
       setTab(next);
@@ -257,7 +276,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
           <MemoryProcessesTab
             caseId={caseId}
             evidenceId={effectiveEvidenceId}
-            runId={effectiveRunId}
+            runId={processEffectiveRunId}
             runOptions={runOptionsQuery.data ?? null}
             selectedRunId={selectedRunId}
             onSelectRunId={setSelectedRunId}
@@ -278,7 +297,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
           <MemoryCommandLineHistoryTab
             caseId={caseId}
             evidenceId={effectiveEvidenceId || ""}
-            runId={effectiveRunId}
+            runId={processEffectiveRunId}
             runOptions={runOptionsQuery.data ?? null}
             selectedRunId={selectedRunId}
             onSelectRunId={setSelectedRunId}
@@ -290,7 +309,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
         {tab === "graph" ? (
           <MemoryGraphTab
             caseId={caseId}
-            runId={effectiveRunId}
+            runId={processEffectiveRunId}
             runOptions={runOptionsQuery.data ?? null}
             selectedRunId={selectedRunId}
             onSelectRunId={setSelectedRunId}
