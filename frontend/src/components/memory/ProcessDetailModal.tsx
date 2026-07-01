@@ -1,5 +1,8 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
+  api,
+  type MemoryArtifactList,
   type MemoryProcessEntity,
   type MemoryProcessEntityDetail,
 } from "../../api/client";
@@ -13,6 +16,18 @@ import {
   ShieldAlert,
   Sparkles,
   XCircle,
+  Loader2,
+  ExternalLink,
+  Cpu,
+  Database,
+  HardDrive,
+  KeyRound,
+  Shield,
+  Globe,
+  Box,
+  MousePointer,
+  Zap,
+  FileCode,
 } from "lucide-react";
 
 type Props = {
@@ -20,16 +35,28 @@ type Props = {
   detail: MemoryProcessEntityDetail | null;
   isLoading: boolean;
   error: Error | null;
+  caseId: string;
+  evidenceId: string;
+  runId: string | null;
   onClose: () => void;
   onSelectEntityId?: (entityId: string) => void;
   onOpenInGraph?: (entityId: string) => void;
   onShowInTree?: (entityId: string) => void;
 };
 
-type TabKey = "overview" | "relationships" | "observations" | "raw";
+type TabKey = "overview" | "relationships" | "observations" | "raw" | "command_line" | "environment" | "sids" | "privileges" | "network" | "modules" | "handles" | "suspicious" | "vads";
 
-const TABS: { key: TabKey; label: string }[] = [
+const TABS: { key: TabKey; label: string; icon?: React.ReactNode }[] = [
   { key: "overview", label: "Overview" },
+  { key: "command_line", label: "Command line" },
+  { key: "environment", label: "Environment" },
+  { key: "sids", label: "SIDs" },
+  { key: "privileges", label: "Privileges" },
+  { key: "network", label: "Network" },
+  { key: "modules", label: "Modules" },
+  { key: "handles", label: "Handles" },
+  { key: "suspicious", label: "Suspicious" },
+  { key: "vads", label: "VADs" },
   { key: "relationships", label: "Relationships" },
   { key: "observations", label: "Observations" },
   { key: "raw", label: "Raw references" },
@@ -162,11 +189,246 @@ function buildTreePathWithNames(
   return out;
 }
 
+function tabPanelId(key: TabKey) { return `process-detail-modal-tabpanel-${key}`; }
+function tabButtonId(key: TabKey) { return `process-detail-modal-tab-${key}`; }
+
+function SectionPanel({ tab, title, children, testId }: { tab: TabKey; title: string; children: React.ReactNode; testId: string }) {
+  return (
+    <section role="tabpanel" id={tabPanelId(tab)} aria-labelledby={tabButtonId(tab)} className="space-y-3" data-testid={testId}>
+      <p className="text-[10px] uppercase tracking-[0.18em] text-muted">{title}</p>
+      {children}
+    </section>
+  );
+}
+
+const PAGE_SIZE = 30;
+
+function SectionInfo({ total, source }: { total: number; source?: string }) {
+  return (
+    <div className="flex items-center gap-2 text-[10px] text-muted">
+      <span>{total} result{total !== 1 ? "s" : ""}</span>
+      {source ? <span className="rounded border border-line px-1.5 py-0.5">Source: {source}</span> : null}
+    </div>
+  );
+}
+
+function CommandLineSection({ entity }: { entity: MemoryProcessEntity | null | undefined }) {
+  if (!entity) return <SectionPanel tab="command_line" title="Command line" testId="process-detail-modal-tabpanel-command-line"><p className="text-xs text-muted">No process selected.</p></SectionPanel>;
+  const cmd = entity.process?.command_line;
+  const alts = entity.findings || [];
+  return (
+    <SectionPanel tab="command_line" title="Command line" testId="process-detail-modal-tabpanel-command-line">
+      <div className="rounded-2xl border border-line bg-abyss/40 p-4">
+        <p className="text-[10px] uppercase tracking-[0.18em] text-muted mb-2">Canonical command line</p>
+        {cmd ? (
+          <pre className="whitespace-pre-wrap break-all font-mono text-xs text-ink max-h-48 overflow-y-auto">{cmd}</pre>
+        ) : (
+          <p className="text-xs text-muted">No command-line observation recorded for this process. windows.cmdline may not have been run or produced zero rows.</p>
+        )}
+      </div>
+      {alts.length > 0 && (
+        <div className="mt-2 text-[10px] text-muted">
+          {alts.length} additional observation{alts.length !== 1 ? "s" : ""} available in the Observations tab.
+        </div>
+      )}
+    </SectionPanel>
+  );
+}
+
+function EnvironmentSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
+  const [page, setPage] = useState(1);
+  const qt = useQuery<MemoryArtifactList>({
+    queryKey: ["memory-env-vars-detail", caseId, evidenceId, runId, pid, page],
+    queryFn: () => api.getMemoryEnvVariables(caseId, { evidence_id: evidenceId, run_id: runId ?? undefined, pid: pid ?? undefined, page, page_size: PAGE_SIZE } as never),
+    enabled: pid != null,
+    refetchOnWindowFocus: false,
+  });
+  const data = qt.data;
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  return <SectionPanel tab="environment" title="Environment variables" testId="process-detail-modal-tabpanel-environment">
+    {qt.isLoading ? <p className="text-xs text-muted"><Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Loading…</p> : qt.isError ? <p className="text-xs text-rose-300">Failed to load environment variables.</p> : items.length === 0 ? <p className="text-xs text-muted">{pid != null ? "windows.envars completed but returned no rows for this process." : "No process selected."}</p> : (
+      <>
+        <SectionInfo total={total} source={typeof items[0] === "object" && items[0] ? (items[0] as Record<string, unknown>).source_plugin as string : undefined} />
+        <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
+          <table className="min-w-[500px] w-full divide-y divide-line text-xs">
+            <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted"><tr><th className="px-3 py-2">Variable</th><th className="px-3 py-2">Value</th></tr></thead>
+            <tbody className="divide-y divide-line/60">
+              {items.map((it) => { const r = it as Record<string, unknown>; return <tr key={r.document_id as string} className="hover:bg-abyss/30"><td className="px-3 py-1.5 font-mono whitespace-nowrap text-ink">{String(r.variable ?? "—")}</td><td className="px-3 py-1.5 text-muted max-w-md truncate" title={String(r.value ?? "")}>{String(r.value ?? "—")}</td></tr>; })}
+            </tbody>
+          </table>
+        </div>
+        {totalPages > 1 && (
+          <div className="flex items-center justify-between text-xs"><button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40">Previous</button><span className="text-muted">Page {page} of {totalPages}</span><button disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40">Next</button></div>
+        )}
+      </>
+    )}
+  </SectionPanel>;
+}
+
+function SidsSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
+  const [page, setPage] = useState(1);
+  const qt = useQuery<MemoryArtifactList>({
+    queryKey: ["memory-sids-detail", caseId, evidenceId, runId, pid, page],
+    queryFn: () => api.getMemorySids(caseId, { evidence_id: evidenceId, run_id: runId ?? undefined, pid: pid ?? undefined, page, page_size: PAGE_SIZE } as never),
+    enabled: pid != null,
+    refetchOnWindowFocus: false,
+  });
+  const data = qt.data;
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  return <SectionPanel tab="sids" title="Security Identifiers (SIDs)" testId="process-detail-modal-tabpanel-sids">
+    {qt.isLoading ? <p className="text-xs text-muted"><Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Loading…</p> : qt.isError ? <p className="text-xs text-rose-300">Failed to load SIDs.</p> : items.length === 0 ? <p className="text-xs text-muted">{pid != null ? "windows.getsids completed but returned no rows for this process." : "No process selected."}</p> : (
+      <>
+        <SectionInfo total={total} />
+        <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
+          <table className="min-w-[400px] w-full divide-y divide-line text-xs">
+            <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted"><tr><th className="px-3 py-2">SID</th><th className="px-3 py-2">Resolved name</th></tr></thead>
+            <tbody className="divide-y divide-line/60">
+              {items.map((it) => { const r = it as Record<string, unknown>; return <tr key={r.document_id as string} className="hover:bg-abyss/30"><td className="px-3 py-1.5 font-mono text-ink">{String(r.sid ?? "—")}</td><td className="px-3 py-1.5 text-muted">{String(r.resolved_name ?? "—")}</td></tr>; })}
+            </tbody>
+          </table>
+        </div>
+        {totalPages > 1 && <div className="flex items-center justify-between text-xs"><button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40">Previous</button><span className="text-muted">Page {page} of {totalPages}</span><button disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40">Next</button></div>}
+      </>
+    )}
+  </SectionPanel>;
+}
+
+function PrivilegesSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
+  const [page, setPage] = useState(1);
+  const [enabledOnly, setEnabledOnly] = useState(false);
+  const qt = useQuery<MemoryArtifactList>({
+    queryKey: ["memory-privs-detail", caseId, evidenceId, runId, pid, page, enabledOnly],
+    queryFn: () => api.getMemoryPrivileges(caseId, { evidence_id: evidenceId, run_id: runId ?? undefined, pid: pid ?? undefined, enabled: enabledOnly || undefined, page, page_size: PAGE_SIZE } as never),
+    enabled: pid != null,
+    refetchOnWindowFocus: false,
+  });
+  const data = qt.data;
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  return <SectionPanel tab="privileges" title="Process privileges" testId="process-detail-modal-tabpanel-privileges">
+    {qt.isLoading ? <p className="text-xs text-muted"><Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Loading…</p> : qt.isError ? <p className="text-xs text-rose-300">Failed to load privileges.</p> : items.length === 0 ? <p className="text-xs text-muted">{pid != null ? "windows.privileges completed but returned no rows for this process." : "No process selected."}</p> : (
+      <>
+        <div className="flex items-center justify-between gap-2">
+          <SectionInfo total={total} />
+          <label className="flex items-center gap-1.5 text-[11px] text-muted"><input type="checkbox" checked={enabledOnly} onChange={(e) => { setEnabledOnly(e.target.checked); setPage(1); }} className="rounded" /> Enabled only</label>
+        </div>
+        <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
+          <table className="min-w-[500px] w-full divide-y divide-line text-xs">
+            <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted"><tr><th className="px-3 py-2">Privilege</th><th className="px-3 py-2">State</th><th className="px-3 py-2">Description</th></tr></thead>
+            <tbody className="divide-y divide-line/60">
+              {items.map((it) => { const r = it as Record<string, unknown>; const en = r.enabled; return <tr key={r.document_id as string} className="hover:bg-abyss/30"><td className="px-3 py-1.5 font-mono text-ink">{String(r.privilege ?? "—")}</td><td className="px-3 py-1.5"><span className={`rounded px-1.5 py-0.5 text-[10px] ${en ? "bg-emerald-500/20 text-emerald-200" : "bg-abyss/70 text-muted"}`}>{en ? "Enabled" : "Disabled"}</span></td><td className="px-3 py-1.5 text-muted max-w-xs truncate">{String(r.description ?? "—")}</td></tr>; })}
+            </tbody>
+          </table>
+        </div>
+        {totalPages > 1 && <div className="flex items-center justify-between text-xs"><button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40">Previous</button><span className="text-muted">Page {page} of {totalPages}</span><button disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40">Next</button></div>}
+      </>
+    )}
+  </SectionPanel>;
+}
+
+function ArtifactLazySection({ tab, title, testId, caseId, evidenceId, runId, pid, queryKey, fetcher, columns, emptyMsg }: {
+  tab: TabKey; title: string; testId: string; caseId: string; evidenceId: string; runId: string | null; pid: number | null;
+  queryKey: string; fetcher: (caseId: string, params: Record<string, unknown>) => Promise<MemoryArtifactList>;
+  columns: { label: string; key: string; render?: (r: Record<string, unknown>) => React.ReactNode }[]; emptyMsg: string;
+}) {
+  const [page, setPage] = useState(1);
+  const qt = useQuery<MemoryArtifactList>({
+    queryKey: [queryKey, caseId, evidenceId, runId, pid, page],
+    queryFn: () => fetcher(caseId, { evidence_id: evidenceId, run_id: runId ?? undefined, pid: pid ?? undefined, page, page_size: PAGE_SIZE }),
+    enabled: pid != null,
+    refetchOnWindowFocus: false,
+  });
+  const data = qt.data;
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  return <SectionPanel tab={tab} title={title} testId={testId}>
+    {qt.isLoading ? <p className="text-xs text-muted"><Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Loading…</p> :
+     qt.isError ? <p className="text-xs text-rose-300">Failed to load {title.toLowerCase()}.</p> :
+     items.length === 0 ? <p className="text-xs text-muted">{pid != null ? emptyMsg : "No process selected."}</p> : (
+      <>
+        <SectionInfo total={total} />
+        <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
+          <table className="min-w-[500px] w-full divide-y divide-line text-xs">
+            <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted"><tr>{columns.map((c) => <th key={c.key} className="px-3 py-2">{c.label}</th>)}</tr></thead>
+            <tbody className="divide-y divide-line/60">
+              {items.map((it) => { const r = it as Record<string, unknown>; return <tr key={r.document_id as string} className="hover:bg-abyss/30">{columns.map((c) => <td key={c.key} className="px-3 py-1.5 text-muted whitespace-nowrap">{c.render ? c.render(r) : String(r[c.key] ?? "—")}</td>)}</tr>; })}
+            </tbody>
+          </table>
+        </div>
+        {totalPages > 1 && <div className="flex items-center justify-between text-xs"><button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40">Previous</button><span className="text-muted">Page {page} of {totalPages}</span><button disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40">Next</button></div>}
+      </>
+    )}
+  </SectionPanel>;
+}
+
+function NetworkSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
+  return <ArtifactLazySection tab="network" title="Network connections" testId="process-detail-modal-tabpanel-network" caseId={caseId} evidenceId={evidenceId} runId={runId} pid={pid} queryKey="modal-network" fetcher={api.getMemoryNetworkConnections as (cid: string, p: Record<string, unknown>) => Promise<MemoryArtifactList>}
+    columns={[{ label: "Protocol", key: "protocol" }, { label: "Local", key: "local_address", render: (r: Record<string, unknown>) => <span>{String(r.local_address ?? "—")}:{String(r.local_port ?? "")}</span> }, { label: "Remote", key: "remote_address", render: (r: Record<string, unknown>) => <span>{String(r.remote_address ?? "—")}:{String(r.remote_port ?? "")}</span> }, { label: "State", key: "state" }, { label: "Source", key: "source_plugin", render: (r: Record<string, unknown>) => String(r.source_plugin ?? "").replace("windows.", "") }]}
+    emptyMsg="No network connections found for this process." />;
+}
+
+function ModulesSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
+  return <ArtifactLazySection tab="modules" title="Modules and DLLs" testId="process-detail-modal-tabpanel-modules" caseId={caseId} evidenceId={evidenceId} runId={runId} pid={pid} queryKey="modal-modules" fetcher={api.getMemoryProcessModules as (cid: string, p: Record<string, unknown>) => Promise<MemoryArtifactList>}
+    columns={[{ label: "Module", key: "module_name" }, { label: "Path", key: "path", render: (r: Record<string, unknown>) => <span className="max-w-[200px] truncate inline-block" title={String(r.path ?? "")}>{String(r.path ?? "—")}</span> }, { label: "Base", key: "base_address" }, { label: "Size", key: "size" }, { label: "Load", key: "load_state" }, { label: "Source", key: "source_plugin", render: (r: Record<string, unknown>) => String(r.source_plugin ?? "").replace("windows.", "") }]}
+    emptyMsg="No modules found for this process." />;
+}
+
+function HandlesSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
+  return <ArtifactLazySection tab="handles" title="Handles" testId="process-detail-modal-tabpanel-handles" caseId={caseId} evidenceId={evidenceId} runId={runId} pid={pid} queryKey="modal-handles" fetcher={api.getMemoryHandles as (cid: string, p: Record<string, unknown>) => Promise<MemoryArtifactList>}
+    columns={[{ label: "Handle", key: "handle_value" }, { label: "Type", key: "object_type" }, { label: "Name", key: "object_name", render: (r: Record<string, unknown>) => <span className="max-w-[250px] truncate inline-block" title={String(r.object_name ?? "")}>{String(r.object_name ?? "—")}</span> }, { label: "Access", key: "granted_access" }]}
+    emptyMsg="No handles found for this process." />;
+}
+
+function SuspiciousSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
+  return <ArtifactLazySection tab="suspicious" title="Suspicious memory regions" testId="process-detail-modal-tabpanel-suspicious" caseId={caseId} evidenceId={evidenceId} runId={runId} pid={pid} queryKey="modal-suspicious" fetcher={api.getMemorySuspiciousRegions as (cid: string, p: Record<string, unknown>) => Promise<MemoryArtifactList>}
+    columns={[{ label: "Start", key: "start_address" }, { label: "End", key: "end_address" }, { label: "Protection", key: "protection" }, { label: "Tag", key: "tag" }, { label: "Source", key: "source_plugin", render: (r: Record<string, unknown>) => String(r.source_plugin ?? "").replace("windows.", "") }]}
+    emptyMsg="No suspicious memory regions found for this process." />;
+}
+
+function VadsSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
+  const [page, setPage] = useState(1);
+  const qt = useQuery<MemoryArtifactList>({
+    queryKey: ["modal-vads", caseId, evidenceId, runId, pid, page],
+    queryFn: () => api.getMemoryVads(caseId, { evidence_id: evidenceId, run_id: runId ?? undefined, pid: pid ?? undefined, page, page_size: PAGE_SIZE } as never),
+    enabled: pid != null,
+    refetchOnWindowFocus: false,
+  });
+  const data = qt.data;
+  const items = data?.items ?? [];
+  const total = data?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  return <SectionPanel tab="vads" title="Virtual Address Descriptors (VADs)" testId="process-detail-modal-tabpanel-vads">
+    {qt.isLoading ? <p className="text-xs text-muted"><Loader2 className="mr-1 inline h-3 w-3 animate-spin" /> Loading…</p> : qt.isError ? <p className="text-xs text-rose-300">Failed to load VADs.</p> : items.length === 0 ? <p className="text-xs text-muted">{pid != null ? "No VAD regions found for this process." : "No process selected."}</p> : (
+      <>
+        <SectionInfo total={total} />
+        <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
+          <table className="min-w-[700px] w-full divide-y divide-line text-xs">
+            <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted"><tr><th className="px-3 py-2">Start</th><th className="px-3 py-2">End</th><th className="px-3 py-2">Protection</th><th className="px-3 py-2">Tag</th><th className="px-3 py-2">Commit</th><th className="px-3 py-2">Private</th><th className="px-3 py-2">File</th></tr></thead>
+            <tbody className="divide-y divide-line/60">
+              {items.map((it) => { const r = it as Record<string, unknown>; return <tr key={r.document_id as string} className="hover:bg-abyss/30"><td className="px-3 py-1.5 font-mono text-ink">{String(r.start_address ?? "—")}</td><td className="px-3 py-1.5 font-mono text-ink">{String(r.end_address ?? "—")}</td><td className="px-3 py-1.5 text-muted">{String(r.protection ?? "—")}</td><td className="px-3 py-1.5 text-muted">{String(r.tag ?? "—")}</td><td className="px-3 py-1.5 text-muted">{r.commit_charge ?? "—"}</td><td className="px-3 py-1.5"><span className={`rounded px-1.5 py-0.5 text-[10px] ${r.private_memory ? "bg-emerald-500/20 text-emerald-200" : "bg-abyss/70 text-muted"}`}>{r.private_memory ? "Private" : "Shared"}</span></td><td className="px-3 py-1.5 text-muted max-w-[200px] truncate" title={String(r.file_object ?? "")}>{String(r.file_object ?? "—")}</td></tr>; })}
+            </tbody>
+          </table>
+        </div>
+        {totalPages > 1 && <div className="flex items-center justify-between text-xs"><button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40">Previous</button><span className="text-muted">Page {page} of {totalPages}</span><button disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40">Next</button></div>}
+      </>
+    )}
+  </SectionPanel>;
+}
+
 export function ProcessDetailModal({
   open,
   detail,
   isLoading,
   error,
+  caseId,
+  evidenceId,
+  runId,
   onClose,
   onSelectEntityId,
   onOpenInGraph,
@@ -594,4 +856,32 @@ function TabsContent({
       </ul>
     </section>
   );
+  if (tab === "command_line") {
+    return <CommandLineSection entity={entity} />;
+  }
+  if (tab === "environment") {
+    return <EnvironmentSection caseId={caseId} evidenceId={evidenceId} runId={runId} pid={entity?.process?.pid ?? null} />;
+  }
+  if (tab === "sids") {
+    return <SidsSection caseId={caseId} evidenceId={evidenceId} runId={runId} pid={entity?.process?.pid ?? null} />;
+  }
+  if (tab === "privileges") {
+    return <PrivilegesSection caseId={caseId} evidenceId={evidenceId} runId={runId} pid={entity?.process?.pid ?? null} />;
+  }
+  if (tab === "network") {
+    return <NetworkSection caseId={caseId} evidenceId={evidenceId} runId={runId} pid={entity?.process?.pid ?? null} />;
+  }
+  if (tab === "modules") {
+    return <ModulesSection caseId={caseId} evidenceId={evidenceId} runId={runId} pid={entity?.process?.pid ?? null} />;
+  }
+  if (tab === "handles") {
+    return <HandlesSection caseId={caseId} evidenceId={evidenceId} runId={runId} pid={entity?.process?.pid ?? null} />;
+  }
+  if (tab === "suspicious") {
+    return <SuspiciousSection caseId={caseId} evidenceId={evidenceId} runId={runId} pid={entity?.process?.pid ?? null} />;
+  }
+  if (tab === "vads") {
+    return <VadsSection caseId={caseId} evidenceId={evidenceId} runId={runId} pid={entity?.process?.pid ?? null} />;
+  }
+  return null;
 }

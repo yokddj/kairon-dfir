@@ -32,6 +32,7 @@ from app.services.memory.artifact_normalizers import (
     normalize_windows_modules,
     normalize_windows_netscan,
     normalize_windows_privileges,
+    normalize_windows_vadinfo,
 )
 from app.services.memory.indexing import index_memory_documents, index_memory_system_info
 from app.services.memory.normalizers import merge_memory_process_results, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
@@ -77,7 +78,7 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "windows.modules": "memory_kernel_module",
     "windows.driverscan": "memory_driver",
     "windows.malfind": "memory_suspicious_region",
-    "windows.vadinfo": "memory_suspicious_region",
+    "windows.vadinfo": "memory_vad",
     "windows.envars": "memory_environment_variable",
     "windows.getsids": "memory_sid",
     "windows.privileges": "memory_privilege",
@@ -648,7 +649,7 @@ def _normalize_artifact_payload(
     if plugin == "windows.malfind":
         return normalize_windows_malfind(payload, source_plugin=plugin, **common)
     if plugin == "windows.vadinfo":
-        return normalize_windows_malfind(payload, source_plugin=plugin, **common)
+        return normalize_windows_vadinfo(payload, source_plugin=plugin, **common)
     if plugin == "windows.envars":
         return normalize_windows_envars(payload, source_plugin=plugin, **common)
     if plugin == "windows.getsids":

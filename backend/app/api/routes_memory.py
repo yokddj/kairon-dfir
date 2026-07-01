@@ -2640,6 +2640,7 @@ _ARTIFACT_DOC_TYPES = {
     "memory_kernel_module",
     "memory_driver",
     "memory_suspicious_region",
+    "memory_vad",
     "memory_environment_variable",
     "memory_sid",
     "memory_privilege",
@@ -3070,6 +3071,38 @@ def list_memory_suspicious_regions(
     return _artifact_list(
         case_id,
         document_type="memory_suspicious_region",
+        run_id=run_id,
+        evidence_id=evidence_id,
+        page=page,
+        page_size=page_size,
+        filters=filters,
+    )
+
+
+@router.get("/cases/{case_id}/memory/vads", response_model=MemoryArtifactListRead)
+def list_memory_vads(
+    case_id: str,
+    evidence_id: str = Query(...),
+    run_id: str | None = Query(default=None),
+    pid: int | None = Query(default=None),
+    process_name: str | None = Query(default=None),
+    protection: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    _require_evidence_for_case(db, case_id, evidence_id)
+    _require_run_or_any(db, case_id, run_id)
+    filters: dict[str, Any] = {
+        "pid": pid,
+        "process_name": process_name,
+        "protection": protection,
+        "tag": tag,
+    }
+    return _artifact_list(
+        case_id,
+        document_type="memory_vad",
         run_id=run_id,
         evidence_id=evidence_id,
         page=page,

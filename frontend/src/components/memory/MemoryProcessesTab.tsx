@@ -70,6 +70,9 @@ export function MemoryProcessesTab({
         detail={detailQuery.data ?? null}
         isLoading={detailQuery.isLoading}
         error={detailQuery.error instanceof Error ? detailQuery.error : null}
+        caseId={caseId}
+        evidenceId={evidenceId || ""}
+        runId={effectiveRunId}
         onClose={() => onSelectEntityId(null)}
         onSelectEntityId={onSelectEntityId}
       />
