@@ -35,6 +35,12 @@ def get_memory_upload_readiness(case_id: str, selected_size_bytes: int | None = 
     backend_overview = get_memory_backend_overview()
     volatility = next((item for item in backend_overview.get("backends", []) if item.get("backend") == "volatility3"), {})
     max_upload = int(settings.memory_upload_max_bytes or settings.memory_max_upload_size)
+    direct_threshold = int(getattr(settings, "memory_upload_direct_threshold_bytes", 1073741824) or 1073741824)
+    default_concurrency = min(
+        int(getattr(settings, "memory_upload_default_concurrency", 2) or 2),
+        int(getattr(settings, "memory_upload_max_concurrency", 4) or 4),
+    )
+    max_concurrency = int(getattr(settings, "memory_upload_max_concurrency", 4) or 4)
     case_quota = int(getattr(settings, "memory_upload_case_quota_bytes", 0) or (max_upload * 10))
     db = SessionLocal()
     try:
@@ -61,8 +67,11 @@ def get_memory_upload_readiness(case_id: str, selected_size_bytes: int | None = 
             "max_upload_bytes": max_upload,
             "max_upload_display": _format_gib(max_upload),
             "recommended_chunk_size_bytes": int(getattr(settings, "memory_upload_chunk_size_bytes", 0) or 0),
+            "direct_threshold_bytes": direct_threshold,
+            "selected_upload_mode": "direct" if selected_size_bytes is not None and selected_size_bytes <= direct_threshold else "resumable",
+            "default_concurrency": default_concurrency,
             "resumable": True,
-            "max_parallel_chunks": int(getattr(settings, "memory_upload_max_parallel_chunks", 1) or 1),
+            "max_parallel_chunks": max_concurrency,
             "case_quota_bytes": case_quota,
             "case_quota_remaining_bytes": 0,
             "allowed_extensions": sorted(settings.memory_upload_extensions),
@@ -104,8 +113,11 @@ def get_memory_upload_readiness(case_id: str, selected_size_bytes: int | None = 
         "max_upload_bytes": max_upload,
         "max_upload_display": _format_gib(max_upload),
         "recommended_chunk_size_bytes": int(getattr(settings, "memory_upload_chunk_size_bytes", 0) or 0),
+        "direct_threshold_bytes": direct_threshold,
+        "selected_upload_mode": "direct" if selected_size_bytes is not None and selected_size_bytes <= direct_threshold else "resumable",
+        "default_concurrency": default_concurrency,
         "resumable": True,
-        "max_parallel_chunks": int(getattr(settings, "memory_upload_max_parallel_chunks", 1) or 1),
+        "max_parallel_chunks": max_concurrency,
         "case_quota_bytes": case_quota,
         "case_quota_remaining_bytes": case_remaining,
         "allowed_extensions": sorted(settings.memory_upload_extensions),
