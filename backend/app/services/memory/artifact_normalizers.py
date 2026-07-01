@@ -810,3 +810,189 @@ def _bounded_preview(value: Any, limit: int) -> str | None:
     if len(text) > limit:
         return text[:limit]
     return text
+
+
+# ---------------------------------------------------------------------------
+# processes_extended observation normalizers
+#   windows.envars  -> memory_environment_variable
+#   windows.getsids -> memory_sid
+#   windows.privileges -> memory_privilege
+# ---------------------------------------------------------------------------
+
+
+def _doc_id(run_id: str, plugin_run_id: str, index: int) -> str:
+    return f"{run_id}:{plugin_run_id}:{index}"
+
+
+def _resolve_process_name(resolver: Any | None, pid: int | None) -> str | None:
+    if resolver is None or pid is None:
+        return None
+    try:
+        return resolver(pid)
+    except Exception:
+        return None
+
+
+def normalize_windows_envars(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "windows.envars",
+    process_name_resolver: Any | None = None,
+    max_records: int = 200000,
+) -> dict[str, Any]:
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    raw_count = len(rows)
+    dropped = 0
+    accepted = 0
+    for index, row in enumerate(rows):
+        if accepted >= max_records:
+            warnings.append("Max records limit reached; some envars rows dropped.")
+            dropped += len(rows) - index
+            break
+        pid = _int_or_none(_lookup(row, "PID", "Pid", "ProcessId"))
+        process_name = _str_or_none(_lookup(row, "Process", "Name"), MAX_NAME_LENGTH) or _resolve_process_name(process_name_resolver, pid)
+        variable = _str_or_none(_lookup(row, "Variable", "Key", "Name"), 512)
+        value = _str_or_none(_lookup(row, "Value", "Data"), 4096)
+        if variable is None:
+            dropped += 1
+            continue
+        items.append({
+            "document_type": "memory_environment_variable",
+            "memory_artifact_type": "memory_environment_variable",
+            "document_id": _doc_id(scan_run_id, plugin_run_id, index),
+            "pid": pid,
+            "process_name": process_name,
+            "variable": variable,
+            "value": value,
+            "source_plugin": source_plugin,
+            "source_record_index": index,
+            "normalization_version": NORMALIZATION_VERSION,
+        })
+        accepted += 1
+    return {
+        "items": items,
+        "warnings": warnings,
+        "raw_count": raw_count,
+        "accepted_count": accepted,
+        "dropped_count": dropped,
+        "conflicts": 0,
+        "normalization_version": NORMALIZATION_VERSION,
+    }
+
+
+def normalize_windows_getsids(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "windows.getsids",
+    process_name_resolver: Any | None = None,
+    max_records: int = 100000,
+) -> dict[str, Any]:
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    raw_count = len(rows)
+    dropped = 0
+    accepted = 0
+    for index, row in enumerate(rows):
+        if accepted >= max_records:
+            warnings.append("Max records limit reached; some getsids rows dropped.")
+            dropped += len(rows) - index
+            break
+        pid = _int_or_none(_lookup(row, "PID", "Pid", "ProcessId"))
+        process_name = _str_or_none(_lookup(row, "Process", "Name"), MAX_NAME_LENGTH) or _resolve_process_name(process_name_resolver, pid)
+        sid = _str_or_none(_lookup(row, "SID", "Sid"), 256)
+        resolved_name = _str_or_none(_lookup(row, "Name", "Account", "Username"), 512)
+        if sid is None:
+            dropped += 1
+            continue
+        items.append({
+            "document_type": "memory_sid",
+            "memory_artifact_type": "memory_sid",
+            "document_id": _doc_id(scan_run_id, plugin_run_id, index),
+            "pid": pid,
+            "process_name": process_name,
+            "sid": sid,
+            "resolved_name": resolved_name,
+            "source_plugin": source_plugin,
+            "source_record_index": index,
+            "normalization_version": NORMALIZATION_VERSION,
+        })
+        accepted += 1
+    return {
+        "items": items,
+        "warnings": warnings,
+        "raw_count": raw_count,
+        "accepted_count": accepted,
+        "dropped_count": dropped,
+        "conflicts": 0,
+        "normalization_version": NORMALIZATION_VERSION,
+    }
+
+
+def normalize_windows_privileges(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "windows.privileges",
+    process_name_resolver: Any | None = None,
+    max_records: int = 100000,
+) -> dict[str, Any]:
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    raw_count = len(rows)
+    dropped = 0
+    accepted = 0
+    for index, row in enumerate(rows):
+        if accepted >= max_records:
+            warnings.append("Max records limit reached; some privileges rows dropped.")
+            dropped += len(rows) - index
+            break
+        pid = _int_or_none(_lookup(row, "PID", "Pid", "ProcessId"))
+        process_name = _str_or_none(_lookup(row, "Process", "Name"), MAX_NAME_LENGTH) or _resolve_process_name(process_name_resolver, pid)
+        privilege_name = _str_or_none(_lookup(row, "Privilege", "Value", "Name"), 256)
+        present = _bool_or_none(_lookup(row, "Present"))
+        enabled = _bool_or_none(_lookup(row, "Enabled"))
+        default_enabled = _bool_or_none(_lookup(row, "Default", "DefaultEnabled"))
+        description = _str_or_none(_lookup(row, "Description"), 1024)
+        if privilege_name is None:
+            dropped += 1
+            continue
+        items.append({
+            "document_type": "memory_privilege",
+            "memory_artifact_type": "memory_privilege",
+            "document_id": _doc_id(scan_run_id, plugin_run_id, index),
+            "pid": pid,
+            "process_name": process_name,
+            "privilege": privilege_name,
+            "present": present,
+            "enabled": enabled,
+            "default_enabled": default_enabled,
+            "description": description,
+            "source_plugin": source_plugin,
+            "source_record_index": index,
+            "normalization_version": NORMALIZATION_VERSION,
+        })
+        accepted += 1
+    return {
+        "items": items,
+        "warnings": warnings,
+        "raw_count": raw_count,
+        "accepted_count": accepted,
+        "dropped_count": dropped,
+        "conflicts": 0,
+        "normalization_version": NORMALIZATION_VERSION,
+    }

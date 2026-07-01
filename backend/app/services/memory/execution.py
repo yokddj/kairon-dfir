@@ -24,11 +24,14 @@ from app.services.memory.artifact_normalizers import (
     merge_module_documents,
     normalize_windows_dlllist,
     normalize_windows_driverscan,
+    normalize_windows_envars,
+    normalize_windows_getsids,
     normalize_windows_handles,
     normalize_windows_ldrmodules,
     normalize_windows_malfind,
     normalize_windows_modules,
     normalize_windows_netscan,
+    normalize_windows_privileges,
 )
 from app.services.memory.indexing import index_memory_documents, index_memory_system_info
 from app.services.memory.normalizers import merge_memory_process_results, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
@@ -75,6 +78,9 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "windows.driverscan": "memory_driver",
     "windows.malfind": "memory_suspicious_region",
     "windows.vadinfo": "memory_suspicious_region",
+    "windows.envars": "memory_environment_variable",
+    "windows.getsids": "memory_sid",
+    "windows.privileges": "memory_privilege",
 }
 ARTIFACT_PLUGIN_LIMITS = {
     # Per-plugin guard-rails to keep offline execution bounded.
@@ -370,6 +376,24 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                             process_results.append(_normalize_process_payload(plugin, payload))
                             plugin_run.metadata_json = {"normalized_type": "memory_process", "raw_output_retained": True}
                         elif plugin in PROCESS_OBSERVATION_PLUGINS:
+                            artifact_results[plugin] = _normalize_artifact_payload(
+                                plugin,
+                                payload,
+                                case_id=run.case_id,
+                                evidence_id=run.evidence_id,
+                                scan_run_id=run.id,
+                                plugin_run_id=plugin_run.id,
+                            )
+                            result = artifact_results[plugin]
+                            plugin_run.metadata_json = {
+                                "normalized_type": ARTIFACT_PLUGIN_NORMALIZER.get(plugin, "memory_process_observation"),
+                                "raw_output_retained": True,
+                                "raw_count": result.get("raw_count", 0),
+                                "accepted_count": result.get("accepted_count", 0),
+                                "dropped_count": result.get("dropped_count", 0),
+                                "warnings": result.get("warnings", [])[:20],
+                                "normalization_version": result.get("normalization_version", NORMALIZATION_VERSION),
+                            }
                             docs = _normalize_process_observation_payload(
                                 plugin,
                                 payload,
@@ -379,11 +403,6 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                                 plugin_run_id=plugin_run.id,
                             )
                             process_observation_docs.extend(docs)
-                            plugin_run.metadata_json = {
-                                "normalized_type": "memory_process_observation",
-                                "raw_output_retained": True,
-                                "accepted_count": len(docs),
-                            }
                         elif plugin in ARTIFACT_PLUGIN_NORMALIZER:
                             artifact_results[plugin] = _normalize_artifact_payload(
                                 plugin,
@@ -630,6 +649,12 @@ def _normalize_artifact_payload(
         return normalize_windows_malfind(payload, source_plugin=plugin, **common)
     if plugin == "windows.vadinfo":
         return normalize_windows_malfind(payload, source_plugin=plugin, **common)
+    if plugin == "windows.envars":
+        return normalize_windows_envars(payload, source_plugin=plugin, **common)
+    if plugin == "windows.getsids":
+        return normalize_windows_getsids(payload, source_plugin=plugin, **common)
+    if plugin == "windows.privileges":
+        return normalize_windows_privileges(payload, source_plugin=plugin, **common)
     return {
         "items": [],
         "warnings": [f"unsupported_artifact_plugin:{plugin}"],

@@ -1450,7 +1450,7 @@ def test_chunk_upload_rejects_mismatched_retransmission(db_session, tmp_path: Pa
             request=_ChunkRequestStub(second, {"content-length": "8", "x-kairon-chunk-sha256": hashlib.sha256(second).hexdigest()}),
         ))
 
-    assert exc_info.value.code == "MEMORY_UPLOAD_CHUNK_CONFLICT"
+    assert exc_info.value.code == "MEMORY_UPLOAD_CHUNK_CONTENT_MISMATCH"
 
 
 def test_finalize_fails_when_chunks_missing(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
