@@ -1217,14 +1217,17 @@ def fetch_canonical_tree(
         needle = str(search).strip().lower()
         if needle:
             matches: list[dict[str, Any]] = []
+            exact_match_ids: list[str] = []
             for e in all_entities:
                 pid = e.get("process", {}).get("pid")
                 name = (e.get("process", {}).get("name") or "").lower()
                 cmdline = (e.get("process", {}).get("command_line") or "").lower()
                 if needle.isdigit() and pid is not None and str(pid) == needle:
                     matches.append(e)
-                elif needle in name or needle in cmdline:
+                    exact_match_ids.append(e["process_entity_id"])
+                elif not needle.isdigit() and (needle in name or needle in cmdline):
                     matches.append(e)
+            search_result_ids = [m["process_entity_id"] for m in matches]
             if not matches:
                 empty_metrics = dict(metrics)
                 empty_metrics.update(
@@ -1286,6 +1289,7 @@ def fetch_canonical_tree(
                 depth=depth,
                 max_nodes=max_nodes,
                 search_results=search_result_ids,
+                exact_match_ids=exact_match_ids,
             )
 
     if orphans_only:
@@ -1313,6 +1317,7 @@ def _build_tree_response(
     root_entity_id: str | None = None,
     include_ancestors: bool = False,
     search_results: list[str] | None = None,
+    exact_match_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     by_id = {e["process_entity_id"]: e for e in all_entities}
     children_map: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -1461,6 +1466,7 @@ def _build_tree_response(
         "omitted_count": omitted_count,
         "truncation_reason": truncation_reason,
         "search_results": search_results or [],
+        "exact_match_ids": exact_match_ids or [],
     }
 
 

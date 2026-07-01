@@ -205,8 +205,12 @@ export function MemoryProcessGraph({
     () => (Array.isArray((tree as any)?.search_results) ? (tree as any).search_results as string[] : []),
     [tree],
   );
+  const exactMatchIds: string[] = useMemo(
+    () => (Array.isArray((tree as any)?.exact_match_ids) ? (tree as any).exact_match_ids as string[] : []),
+    [tree],
+  );
   const searchResultSet = useMemo(() => new Set(searchResultIds), [searchResultIds]);
-  const focusedSearchId = searchResultIds[0] ?? null;
+  const focusedSearchId = exactMatchIds[0] || searchResultIds[0] || null;
 
   // When the user types a search and the API returns a match,
   // auto-focus on the first matched entity so the canvas pans to
@@ -456,7 +460,8 @@ export function MemoryProcessGraph({
 
       {focusedSearchId && searchResultIds.length > 0 ? (
         <SearchSummary
-          exactMatch={searchResultIds.length}
+          exactMatch={exactMatchIds.length}
+          secondaryMatch={searchResultIds.length - exactMatchIds.length}
           contextCount={visibleNodeCount - searchResultIds.length}
           childCount={(() => {
             let child = 0;
@@ -681,11 +686,13 @@ function Stat({ label, value }: { label: string; value: number }) {
 
 function SearchSummary({
   exactMatch,
+  secondaryMatch,
   contextCount,
   childCount,
   searchTerm,
 }: {
   exactMatch: number;
+  secondaryMatch?: number;
   contextCount: number;
   childCount: number;
   searchTerm: string;
@@ -698,7 +705,8 @@ function SearchSummary({
       aria-live="polite"
     >
       <p className="font-mono">
-        <span className="text-mint">{exactMatch} exact match{exactMatch === 1 ? "" : "es"}</span>
+        <span className="text-mint">{exactMatch} exact PID match{exactMatch === 1 ? "" : "es"}</span>
+        {secondaryMatch != null && secondaryMatch > 0 ? <> · <span className="text-muted">{secondaryMatch} secondary match{secondaryMatch === 1 ? "" : "es"}</span></> : null}
         {contextCount > 0 ? <> · {contextCount} context ancestor{contextCount === 1 ? "" : "s"}</> : null}
         {childCount > 0 ? <> · {childCount} children</> : null}
       </p>

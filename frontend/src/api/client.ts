@@ -4292,6 +4292,38 @@ export type MemoryArtifactList = {
   normalization_version: string;
 };
 
+export type CommandLineHistoryItem = {
+  process_entity_id: string;
+  pid: number | null;
+  ppid: number | null;
+  process_name: string | null;
+  command_line: string;
+  create_time: string | null;
+  exit_time: string | null;
+  timestamp_source: string | null;
+  visibility: { listed?: boolean; scan_only?: boolean; terminated?: boolean };
+  source_plugins: string[];
+  source_observations: string[];
+  parent_entity_id: string | null;
+  findings: string[];
+  record_refs: string[];
+};
+
+export type CommandLineHistoryResponse = {
+  items: CommandLineHistoryItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  sort_order: string;
+  selected_run: { id: string; profile: string; status: string } | null;
+  contributing_runs: { id: string; profile: string }[];
+  coverage: {
+    entities_with_command_lines: number;
+    total_entities: number;
+    unknown_timestamps: number;
+  };
+};
+
 export type MemoryArtifactOverview = {
   case_id: string;
   selected_run: string | null;
@@ -5280,6 +5312,25 @@ export const api = {
       page_size?: number;
     },
   ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/privileges`, params)),
+  getCommandLineHistory: (
+    caseId: string,
+    params?: {
+      evidence_id: string;
+      run_id?: string;
+      pid?: number;
+      ppid?: number;
+      process_name?: string;
+      command_contains?: string;
+      source_plugin?: string;
+      visibility?: string;
+      time_from?: string;
+      time_to?: string;
+      profile?: string;
+      sort_order?: string;
+      page?: number;
+      page_size?: number;
+    },
+  ) => request<CommandLineHistoryResponse>(buildArtifactQuery(`/cases/${caseId}/memory/command-line-history`, params)),
   getMemoryArtifactDetail: (caseId: string, documentType: string, documentId: string) =>
     request<MemoryArtifactDetail>(`/cases/${caseId}/memory/artifacts/${documentType}/${documentId}`),
   getEvidence: (evidenceId: string) => request<Evidence>(`/evidences/${evidenceId}`),

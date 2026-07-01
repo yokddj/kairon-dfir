@@ -11,6 +11,7 @@ import { MEMORY_TABS, useMemoryTab, type MemoryTab } from "../lib/memoryWorkspac
 import { MemoryOverviewTab } from "./memory/MemoryOverviewTab";
 import { MemoryProcessesTab } from "./memory/MemoryProcessesTab";
 import { MemoryGraphTab } from "./memory/MemoryGraphTab";
+import { MemoryCommandLineHistoryTab } from "./memory/MemoryCommandLineHistoryTab";
 import { MemoryArtifactsTab } from "./memory/MemoryArtifactsTab";
 import { MemorySystemTab } from "./memory/MemorySystemTab";
 import { MemoryRunsTab } from "./memory/MemoryRunsTab";
@@ -270,6 +271,19 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
             onPidFilter={setPidFilter}
             selectedEntityId={selectedEntityId}
             onSelectEntityId={setSelectedEntityId}
+          />
+        ) : null}
+
+        {tab === "history" ? (
+          <MemoryCommandLineHistoryTab
+            caseId={caseId}
+            evidenceId={effectiveEvidenceId || ""}
+            runId={effectiveRunId}
+            runOptions={runOptionsQuery.data ?? null}
+            selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
+            onFocusGraph={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            onInspectProcess={(entityId) => { setSelectedEntityId(entityId); onTabChange("processes"); }}
           />
         ) : null}
 

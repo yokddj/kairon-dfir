@@ -3508,3 +3508,43 @@ def get_native_probe_status(
             result["compatible"] = True
             result["compatibility_details"] = compat
     return result
+
+@router.get("/cases/{case_id}/memory/command-line-history", response_model=None)
+def get_command_line_history(
+    case_id: str,
+    evidence_id: str = Query(...),
+    run_id: str | None = Query(default=None),
+    pid: int | None = Query(default=None),
+    ppid: int | None = Query(default=None),
+    process_name: str | None = Query(default=None),
+    command_contains: str | None = Query(default=None),
+    source_plugin: str | None = Query(default=None),
+    visibility: str | None = Query(default=None),
+    time_from: str | None = Query(default=None),
+    time_to: str | None = Query(default=None),
+    profile: str | None = Query(default=None),
+    sort_order: str = Query(default="oldest_first"),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    _require_evidence_for_case(db, case_id, evidence_id)
+    from app.services.memory.command_history import build_command_line_history
+
+    return build_command_line_history(
+        case_id=case_id,
+        evidence_id=evidence_id,
+        run_id=run_id,
+        pid=pid,
+        ppid=ppid,
+        process_name=process_name,
+        command_contains=command_contains,
+        source_plugin=source_plugin,
+        visibility=visibility,
+        time_from=time_from,
+        time_to=time_to,
+        profile=profile,
+        sort_order=sort_order,
+        page=page,
+        page_size=page_size,
+    )
