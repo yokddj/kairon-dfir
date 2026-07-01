@@ -128,7 +128,7 @@ export function MemoryCanonicalView({
         run_id: effectiveRunId || undefined,
         visibility: (visibility || undefined) as any,
         interesting_only: interestingOnly ? true : undefined,
-        depth: 4,
+        depth: 8,
       }),
     enabled: Boolean(caseId && effectiveRunId),
     refetchOnWindowFocus: false,
