@@ -5,6 +5,8 @@ import { ProcessDetailModal } from "./ProcessDetailModal";
 
 type Props = {
   caseId: string;
+  evidenceId: string;
+  runId: string | null;
   runOptions: MemoryRunSelector | null;
   selectedRunId: string | null;
   onSelectRunId: (next: string | null) => void;
@@ -21,7 +23,7 @@ function sourceBadge(plugin: string): string {
   return plugin.replace("windows.", "");
 }
 
-export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId }: Props) {
+export function MemoryRawTab({ caseId, evidenceId, runId, runOptions, selectedRunId, onSelectRunId }: Props) {
   const effectiveRunId = selectedRunId || runOptions?.default_run_id || null;
   const queryClient = useQueryClient();
   const [plugin, setPlugin] = useState<PluginFilter>("all");
@@ -279,6 +281,9 @@ export function MemoryRawTab({ caseId, runOptions, selectedRunId, onSelectRunId 
         detail={inspectDetailQuery.data ?? null}
         isLoading={inspectDetailQuery.isLoading}
         error={inspectDetailQuery.error instanceof Error ? inspectDetailQuery.error : null}
+        caseId={caseId}
+        evidenceId={evidenceId}
+        runId={runId || effectiveRunId}
         onClose={() => setInspectEntityId(null)}
       />
     </div>

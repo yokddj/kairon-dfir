@@ -126,6 +126,9 @@ export function MemoryGraphTab({
         detail={inspectEntityDetail.data ?? null}
         isLoading={inspectEntityDetail.isLoading}
         error={inspectEntityDetail.error instanceof Error ? inspectEntityDetail.error : null}
+        caseId={caseId}
+        evidenceId={"mem"}
+        runId={selectedRunId}
         onClose={() => setInspectEntityId(null)}
         onSelectEntityId={(next) => {
           setInspectEntityId(next);
