@@ -1513,6 +1513,7 @@ export type MemoryUploadSessionCreateRequest = {
   authorization_acknowledged: boolean;
   expected_sha256?: string;
   upload_mode?: "direct" | "resumable";
+  file_fingerprint?: string;
 };
 
 export type ProblematicArtifact = {

@@ -308,6 +308,7 @@ class MemoryUploadSessionCreateRequest(BaseModel):
     authorization_acknowledged: bool = False
     expected_sha256: str | None = None
     upload_mode: str | None = None
+    file_fingerprint: str | None = None
 
     model_config = {"extra": "forbid"}
 

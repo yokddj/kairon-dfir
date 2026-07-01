@@ -1450,6 +1450,7 @@ def create_memory_upload_session_endpoint(
             authorization_acknowledged=payload.authorization_acknowledged,
             expected_sha256=payload.expected_sha256,
             upload_mode=payload.upload_mode,
+            file_fingerprint=payload.file_fingerprint,
         )
     except MemoryUploadSessionError as exc:
         raise _raise_upload_session_error(exc) from exc

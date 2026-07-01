@@ -248,6 +248,7 @@ def create_memory_upload_session(
     authorization_acknowledged: bool,
     expected_sha256: str | None = None,
     upload_mode: str | None = None,
+    file_fingerprint: str | None = None,
 ) -> MemoryUpload:
     settings = get_settings()
     if not bool(settings.memory_upload_enabled):
@@ -278,6 +279,7 @@ def create_memory_upload_session(
     )
     if conflicting is not None:
         received = sorted(int(index) for index in _received_chunks(conflicting).keys())
+        conflicting_fingerprint = (_session_metadata(conflicting).get("file_fingerprint") or None)
         raise MemoryUploadSessionError(
             "MEMORY_UPLOAD_ACTIVE_SESSION_EXISTS",
             "Another upload session for this memory image is already active.",
@@ -292,6 +294,7 @@ def create_memory_upload_session(
                 "resumable": True,
                 "expires_at": conflicting.expires_at.isoformat() if conflicting.expires_at else None,
                 "cancellable": conflicting.status in {"created", "validating", "uploading", "verifying", "finalizing"},
+                "file_fingerprint": conflicting_fingerprint,
             },
         )
 
@@ -321,6 +324,7 @@ def create_memory_upload_session(
             ),
         )
     total_chunks = max(1, math.ceil(expected_size_bytes / chunk_size))
+    sampled_fingerprint = _sanitize_sha256(file_fingerprint)
     upload = create_memory_upload(
         upload_id=str(uuid4()),
         case_id=case_id,
@@ -335,6 +339,7 @@ def create_memory_upload_session(
             "resumable": selected_mode == "resumable",
             "provided_host": provided_host,
             "direct_threshold_bytes": threshold,
+            "file_fingerprint": sampled_fingerprint,
             "default_concurrency": min(
                 int(getattr(settings, "memory_upload_default_concurrency", 2) or 2),
                 int(getattr(settings, "memory_upload_max_concurrency", 4) or 4),
@@ -507,11 +512,62 @@ async def store_memory_upload_chunk_stream(
 
             if final_path.exists():
                 existing_meta = received_chunks.get(str(chunk_index)) or {}
-                if int(existing_meta.get("size") or 0) == bytes_written and str(existing_meta.get("sha256") or "") == computed_sha:
+                existing_db_size = int(existing_meta.get("size") or 0)
+                existing_db_sha = str(existing_meta.get("sha256") or "")
+                if existing_db_size == bytes_written and existing_db_sha == computed_sha:
                     temp_path.unlink(missing_ok=True)
                     return item
+                if not existing_meta:
+                    try:
+                        disk_size = final_path.stat().st_size
+                        if disk_size != bytes_written:
+                            temp_path.unlink(missing_ok=True)
+                            raise MemoryUploadSessionError(
+                                "MEMORY_UPLOAD_CHUNK_SIZE_MISMATCH",
+                                "Existing chunk file size does not match the uploaded chunk size.",
+                                detail={
+                                    "upload_id": upload_id,
+                                    "chunk_index": chunk_index,
+                                    "expected_size": bytes_written,
+                                    "existing_size": disk_size,
+                                    "action": "verify_session_identity",
+                                },
+                            )
+                        file_digest = hashlib.sha256()
+                        with final_path.open("rb") as fh:
+                            while True:
+                                data = fh.read(1 << 22)
+                                if not data:
+                                    break
+                                file_digest.update(data)
+                        if file_digest.hexdigest() == computed_sha:
+                            temp_path.unlink(missing_ok=True)
+                            received_chunks[str(chunk_index)] = {"size": bytes_written, "sha256": computed_sha}
+                            _set_received_chunks(item, received_chunks)
+                            item.received_chunk_count = len(received_chunks)
+                            item.bytes_received = sum(int(c.get("size") or 0) for c in received_chunks.values())
+                            item.failure_code = None
+                            item.failure_message = None
+                            _touch_session(item)
+                            db.add(item)
+                            db.commit()
+                            db.refresh(item)
+                            return item
+                    except OSError:
+                        pass
                 temp_path.unlink(missing_ok=True)
-                raise MemoryUploadSessionError("MEMORY_UPLOAD_CHUNK_CONFLICT", "Chunk data conflicts with bytes already stored for this upload session.")
+                raise MemoryUploadSessionError(
+                    "MEMORY_UPLOAD_CHUNK_CONTENT_MISMATCH",
+                    "Chunk data does not match previously stored bytes for this chunk index.",
+                    detail={
+                        "upload_id": upload_id,
+                        "chunk_index": chunk_index,
+                        "expected_start": chunk_index * chunk_size,
+                        "expected_size": expected_length,
+                        "existing_db_size": existing_db_size,
+                        "action": "verify_session_identity",
+                    },
+                )
 
             os.replace(temp_path, final_path)
             dir_fd = os.open(str(target_dir), os.O_DIRECTORY)
@@ -1087,7 +1143,12 @@ def run_periodic_cleanup() -> str:
 
 def upload_status_with_chunks(item: MemoryUpload, *, db: Session | None = None) -> dict[str, Any]:
     integrity = check_memory_upload_staging_integrity(item)
-    corrupted = integrity["integrity_status"] != _STAGING_INTEGRITY_HEALTHY
+    meta = _session_metadata(item)
+    is_completed_with_evidence = item.status == "completed" and bool(item.evidence_id)
+    corrupted = (
+        integrity["integrity_status"] != _STAGING_INTEGRITY_HEALTHY
+        and not (is_completed_with_evidence and integrity["integrity_status"] == _STAGING_INTEGRITY_STAGING_MISSING)
+    )
     payload = public_memory_upload_status(
         item,
         db=db,
@@ -1107,10 +1168,11 @@ def upload_status_with_chunks(item: MemoryUpload, *, db: Session | None = None) 
             "missing_chunks": missing,
             "progress_percent": int((int(item.bytes_received or 0) * 100) / max(1, int(item.expected_bytes or 1))),
             "upload_mode": _session_upload_mode(item),
-            "default_concurrency": int(_session_metadata(item).get("default_concurrency") or get_settings().memory_upload_default_concurrency or 1),
-            "max_concurrency": int(_session_metadata(item).get("max_concurrency") or get_settings().memory_upload_max_concurrency or 1),
+            "default_concurrency": int(meta.get("default_concurrency") or get_settings().memory_upload_default_concurrency or 1),
+            "max_concurrency": int(meta.get("max_concurrency") or get_settings().memory_upload_max_concurrency or 1),
             "active_chunks": _active_chunk_indices(item),
-            "fallback_to_sequential": bool(_session_metadata(item).get("fallback_to_sequential")),
+            "fallback_to_sequential": bool(meta.get("fallback_to_sequential")),
+            "file_fingerprint": meta.get("file_fingerprint") or None,
             "created_at": item.created_at,
             "expires_at": item.expires_at,
             "finalized_at": item.finalized_at,

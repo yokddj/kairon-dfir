@@ -26,6 +26,7 @@ type StoredUploadSession = {
   filename: string;
   expectedBytes: number;
   providedHost: string;
+  fileFingerprint?: string;
 };
 
 type ActiveSessionConflict = {
@@ -39,6 +40,7 @@ type ActiveSessionConflict = {
   resumable: boolean;
   expiresAt: string;
   cancellable: boolean;
+  fileFingerprint?: string;
 };
 
 const SPEED_STALE_AFTER_MS = 3000;
@@ -102,6 +104,29 @@ async function sha256Hex(blob: Blob): Promise<string | undefined> {
   }
 }
 
+const FINGERPRINT_SAMPLE_SIZE = 1 << 20; // 1 MiB per sample
+
+async function computeFileFingerprint(file: File): Promise<string | undefined> {
+  try {
+    if (typeof globalThis.crypto?.subtle?.digest !== "function") return undefined;
+    if (file.size <= 0) return undefined;
+    const samples: Blob[] = [new Blob([`size:${file.size}`])];
+    samples.push(file.slice(0, Math.min(FINGERPRINT_SAMPLE_SIZE, file.size)));
+    if (file.size > FINGERPRINT_SAMPLE_SIZE * 2) {
+      const midStart = Math.floor(file.size / 2);
+      samples.push(file.slice(midStart, midStart + FINGERPRINT_SAMPLE_SIZE));
+    }
+    if (file.size > FINGERPRINT_SAMPLE_SIZE) {
+      samples.push(file.slice(Math.max(0, file.size - FINGERPRINT_SAMPLE_SIZE)));
+    }
+    const combined = new Blob(samples);
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", await combined.arrayBuffer());
+    return Array.from(new Uint8Array(digest), (v) => v.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return undefined;
+  }
+}
+
 function readinessLabel(readiness?: MemoryUploadReadiness) {
   if (!readiness) return "Checking";
   if (!readiness.upload_enabled) return "Upload disabled";
@@ -145,6 +170,7 @@ export default function MemoryUploadPage() {
   const [browserTransferRunning, setBrowserTransferRunning] = useState(false);
   const [browserTransferError, setBrowserTransferError] = useState<string | null>(null);
   const [checkingStatus, setCheckingStatus] = useState(false);
+  const [fileFingerprint, setFileFingerprint] = useState<string | undefined>(storedUpload?.fileFingerprint);
 
   const readinessQuery = useQuery({
     queryKey: ["memory-upload-readiness", caseId, file?.size || 0],
@@ -182,7 +208,8 @@ export default function MemoryUploadPage() {
     storedUpload?.uploadId
       && file
       && (!storedUpload.filename || storedUpload.filename === file.name)
-      && (!storedUpload.expectedBytes || storedUpload.expectedBytes === file.size),
+      && (!storedUpload.expectedBytes || storedUpload.expectedBytes === file.size)
+      && (!storedUpload.fileFingerprint || !fileFingerprint || storedUpload.fileFingerprint === fileFingerprint),
   );
   const uploadBlockingReason = useMemo(() => {
     if (activeSessionConflict) return "An upload session already exists for this memory image. Choose Resume, Cancel and restart, or Select another file.";
@@ -386,6 +413,7 @@ export default function MemoryUploadPage() {
       resumable: Boolean(detail.resumable),
       expiresAt: String(detail.expires_at || ""),
       cancellable: Boolean(detail.cancellable),
+      fileFingerprint: typeof detail.file_fingerprint === "string" ? detail.file_fingerprint as string : undefined,
     });
     setStage("idle");
     setStatus("");
@@ -492,12 +520,14 @@ export default function MemoryUploadPage() {
             provided_host: providedHost.trim(),
             authorization_acknowledged: true,
             upload_mode: "resumable",
+            file_fingerprint: fileFingerprint,
           });
       writeStoredUpload(caseId, {
         uploadId: remoteStatus.upload_id,
         filename: selectedFile.name,
         expectedBytes: selectedFile.size,
         providedHost: providedHost.trim(),
+        fileFingerprint,
       });
       setActiveUploadIdTracked(remoteStatus.upload_id);
 
@@ -637,12 +667,18 @@ export default function MemoryUploadPage() {
       setActiveSessionConflict(null);
       return;
     }
+    if (activeSessionConflict.fileFingerprint && fileFingerprint && activeSessionConflict.fileFingerprint !== fileFingerprint) {
+      setStatus("The selected file has the same name and size but different content than the existing upload session. Select the original file or start a new upload.");
+      setActiveSessionConflict(null);
+      return;
+    }
     const uploadId = activeSessionConflict.existingUploadId;
     writeStoredUpload(caseId, {
       uploadId,
       filename: file.name,
       expectedBytes: file.size,
       providedHost: providedHost.trim(),
+      fileFingerprint: activeSessionConflict.fileFingerprint || fileFingerprint,
     });
     setActiveUploadIdTracked(uploadId);
     setActiveSessionConflict(null);
@@ -845,6 +881,10 @@ export default function MemoryUploadPage() {
           setStage("idle");
           setStatus(next ? `Selected ${next.name}` : "");
           setProgress({ loaded: 0, total: next?.size || 0 });
+          setFileFingerprint(undefined);
+          if (next && next.size > 0) {
+            void computeFileFingerprint(next).then((fp) => setFileFingerprint(fp));
+          }
         }} />
         {file ? <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm"><p className="truncate font-medium text-ink" title={file.name}>{file.name}</p><p className="mt-1 text-muted">Extension: {extension || "none"} · Size: {formatBytes(file.size)} · Detected type: {extensionAllowed ? "Memory image" : "Unsupported"}</p><p className={`mt-2 ${extensionAllowed && fileWithinLimit && readiness?.can_accept_selected_size ? "text-mint" : "text-warning"}`}>{summary}</p></div> : null}
       </section>
