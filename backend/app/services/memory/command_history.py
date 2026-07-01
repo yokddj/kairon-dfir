@@ -50,7 +50,6 @@ def build_command_line_history(
         result = fetch_canonical_entities(
             case_id,
             run_id=effective_run_id,
-            evidence_id=evidence_id,
             process_name=process_name,
             pid=pid,
             page=1,
