@@ -139,25 +139,86 @@ merges two observations with conflicting `create_time`s.
 ## Basic vs Extended runs
 
 * `processes_basic` produces entities from `pslist` + `pstree` +
-  `cmdline`.  No `psscan`.  A basic run can run without symbols.
-* `processes_extended` runs the basic profile plus `psscan` and uses
-  the same canonical reconciliation.  Extended does **not** create a
-  second process list — it enriches the same model with `scan_only`
-  and `hidden_candidate` classifications.
+  `cmdline`. Provides process topology, identities, and command lines.
+  A basic run can run without symbols.
+* `processes_extended` runs `psscan` + `envars` + `getsids` + `privileges`.
+  Provides enrichment: scan-only detection, environment variables,
+  security identifiers, and privilege tokens. Does **not** create a
+  second process list — it enriches the same model.
+* `windows.info` runs as part of both profiles and provides system-layer
+  metadata (kernel version, DTB, etc.).
+* `network_basic`, `modules_basic`, `handles_basic`, `kernel_basic`,
+  and `suspicious_memory` run as separate profiles and provide
+  independent artifact families.
 
-The renormalization endpoint accepts either profile but only writes
-entities for runs that have the matching plugins.
+### Federated process context
+
+Since `processes_basic` and `processes_extended` are separate profiles,
+a federated process context automatically merges observations from both
+runs into one coherent workspace:
+
+```text
+latest completed processes_basic
++ latest completed processes_extended
+= one federated process context
+```
+
+The federation service (`app.services.memory.process_federation`)
+resolves the best compatible basic and extended runs for one Evidence
+and returns:
+
+* `basic_run_id` — the basic run providing topology (pstree), identity
+  (pslist), and command lines (cmdline).
+* `extended_run_id` — the extended run providing enrichment (psscan,
+  envars, getsids, privileges).
+* `contributing_runs` — both run IDs with metadata.
+* `compatibility` — `both_successful`, `basic_only`, `extended_only`,
+  or `unavailable`.
+
+The merge uses PID as the primary identity key. Entities from basic
+and extended runs with the same PID are merged with basic precedence
+for identity fields (name, PPID, create_time) and extended enrichment
+for visibility (scan_only, hidden_candidate).
+
+### Automatic mode
+
+In the UI, the default process context mode is **Automatic**.  The
+analyst does not need to know whether a specific observation comes from
+`processes_basic` or `processes_extended`.
+
+The automatic context feeds:
+* Processes table
+* Embedded process graph
+* Top-level Graph
+* Indented tree
+* Command Line History
+* ProcessDetailModal
 
 ## Run selection
 
-The Memory Analysis UI displays an explicit run selector.  By default
-the latest successful `processes_basic`/`processes_extended` run is
-chosen.  The view never silently mixes results from different runs.
-If multiple runs are present, a "Combined historical observations"
-view is offered as opt-in; it is never the default.
+The Memory Analysis UI defaults to **Automatic** process context.
+The legacy single-run selector is available under **Advanced** mode
+for historical or single-profile inspection.
 
-If the latest run is failed, the selector still lists the most recent
-successful run and the analyst can pick it explicitly.
+In Automatic mode:
+* Process topology comes from `processes_basic` (windows.pstree).
+* Command lines come from `processes_basic` (windows.cmdline).
+* Visibility enrichment comes from `processes_extended` (windows.psscan).
+* Extended observations (envars, SIDs, privileges) are available in
+  the ProcessDetailModal.
+* Results from different Evidences are never mixed.
+* If both profiles completed, the federation auto-selects both.
+* If only one completed, the available data is shown with a note
+  about the missing profile.
+
+### PID reuse in federation
+
+Within the federated context, PID reuse is handled by merging entities
+with the same PID from basic and extended runs. If two genuinely
+different process incarnations share the same PID, the federation
+preserves the basic-run entity and notes the discrepancy. Full
+disambiguation (by creation time) remains available in historical
+single-run inspection.
 
 ## Why Memory Analysis does not auto-create NormalizedEvents
 
