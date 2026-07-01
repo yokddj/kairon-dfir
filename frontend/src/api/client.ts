@@ -5312,6 +5312,10 @@ export const api = {
       page_size?: number;
     },
   ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/privileges`, params)),
+  getProcessContext: (
+    caseId: string,
+    evidenceId: string,
+  ) => request<any>(`/cases/${caseId}/memory/process-context?evidence_id=${encodeURIComponent(evidenceId)}`),
   getCommandLineHistory: (
     caseId: string,
     params?: {
