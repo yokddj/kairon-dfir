@@ -188,3 +188,135 @@ def test_fallback_state_is_reported(db_session, tmp_path, monkeypatch):
     item.metadata_json = metadata
     db_session.commit()
     assert upload_sessions.upload_status_with_chunks(item, db=db_session)["fallback_to_sequential"] is True
+
+
+def test_orphaned_chunk_file_with_matching_content_reconciles_db(db_session, tmp_path, monkeypatch):
+    settings = _settings(tmp_path, memory_upload_chunk_size_bytes=8, memory_upload_chunk_size_min_bytes=8)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: settings)
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", _capacity)
+    item = _create(db_session, expected_size_bytes=8, upload_mode="resumable")
+    chunk_data = b"\x01" * 8
+    headers = {"content-length": "8"}
+
+    async def _run_store():
+        return await upload_sessions.store_memory_upload_chunk_stream(
+            db_session,
+            case_id=CASE_ID,
+            upload_id=item.id,
+            chunk_index=0,
+            chunks=_chunks(chunk_data),
+            headers=headers,
+            content_length_is_payload=True,
+            expected_mode="resumable",
+        )
+
+    result = asyncio.run(_run_store())
+    assert result.received_chunk_count == 1
+    assert result.bytes_received == 8
+
+    received_before = upload_sessions._received_chunks(result)
+    upload_sessions._set_received_chunks(result, {})
+    result.received_chunk_count = 0
+    result.bytes_received = 0
+    db_session.commit()
+
+    chunk_path = upload_sessions._chunk_path(item, 0)
+    assert chunk_path.exists()
+
+    result2 = asyncio.run(_run_store())
+    assert result2.received_chunk_count == 1
+    assert result2.bytes_received == 8
+    received_after = upload_sessions._received_chunks(result2)
+    assert "0" in received_after, "orphaned chunk file should be reconciled into DB"
+
+
+def test_orphaned_chunk_file_with_mismatched_content_raises_409(db_session, tmp_path, monkeypatch):
+    settings = _settings(tmp_path, memory_upload_chunk_size_bytes=8, memory_upload_chunk_size_min_bytes=8)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: settings)
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", _capacity)
+    item = _create(db_session, expected_size_bytes=8, upload_mode="resumable")
+    headers = {"content-length": "8"}
+
+    async def _run_store(data: bytes):
+        return await upload_sessions.store_memory_upload_chunk_stream(
+            db_session,
+            case_id=CASE_ID,
+            upload_id=item.id,
+            chunk_index=0,
+            chunks=_chunks(data),
+            headers=headers,
+            content_length_is_payload=True,
+            expected_mode="resumable",
+        )
+
+    result = asyncio.run(_run_store(b"\x01" * 8))
+    received_before = upload_sessions._received_chunks(result)
+    upload_sessions._set_received_chunks(result, {})
+    result.received_chunk_count = 0
+    result.bytes_received = 0
+    db_session.commit()
+
+    with pytest.raises(upload_sessions.MemoryUploadSessionError) as exc:
+        asyncio.run(_run_store(b"\x02" * 8))
+    assert exc.value.code == "MEMORY_UPLOAD_CHUNK_CONTENT_MISMATCH"
+    detail = exc.value.detail or {}
+    assert detail.get("chunk_index") == 0
+    assert detail.get("expected_size") == 8
+
+
+def test_completed_upload_with_removed_staging_is_healthy(db_session, tmp_path, monkeypatch):
+    settings = _settings(tmp_path)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: settings)
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", _capacity)
+    item = _create(db_session, expected_size_bytes=8, upload_mode="resumable")
+    item.status = "completed"
+    item.evidence_id = "evidence-abc-123"
+    db_session.commit()
+    import shutil
+    session_root = upload_sessions._session_root(item)
+    if session_root.exists():
+        shutil.rmtree(session_root)
+    payload = upload_sessions.upload_status_with_chunks(item, db=db_session)
+    assert payload.get("failure_code") is None
+    assert payload.get("failure_message") is None
+    assert payload.get("integrity_status") is None
+
+
+def test_file_fingerprint_stored_in_status_response(db_session, tmp_path, monkeypatch):
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _settings(tmp_path))
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", _capacity)
+    fp = "a" * 64
+    item = _create(
+        db_session,
+        expected_size_bytes=8,
+        upload_mode="resumable",
+        file_fingerprint=fp,
+    )
+    payload = upload_sessions.upload_status_with_chunks(item, db=db_session)
+    assert payload.get("file_fingerprint") == fp
+
+
+def test_conflicting_session_includes_fingerprint(db_session, tmp_path, monkeypatch):
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: _settings(tmp_path))
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", _capacity)
+    existing_fp = "b" * 64
+    item = _create(
+        db_session,
+        expected_size_bytes=8,
+        upload_mode="resumable",
+        file_fingerprint=existing_fp,
+    )
+    with pytest.raises(upload_sessions.MemoryUploadSessionError) as exc:
+        upload_sessions.create_memory_upload_session(
+            db_session,
+            case_id=CASE_ID,
+            filename=item.display_name,
+            expected_size_bytes=int(item.expected_bytes),
+            provided_host="other-host",
+            authorization_acknowledged=True,
+            upload_mode="resumable",
+            file_fingerprint="c" * 64,
+        )
+    assert exc.value.code == "MEMORY_UPLOAD_ACTIVE_SESSION_EXISTS"
+    detail = exc.value.detail or {}
+    assert detail.get("file_fingerprint") == existing_fp
