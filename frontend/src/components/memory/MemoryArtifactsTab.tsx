@@ -152,6 +152,15 @@ function FamilyCountCard({
   const count = familyValue?.count ?? 0;
   const showZero = state === "analyzed_empty" || state === "analyzed_with_results" || state === "partial";
   const display = showZero ? count : null;
+  const labelText = state === "pending" || state === "queued" ? "Profile pending" :
+    state === "running" ? "Profile running" :
+    state === "analyzed_empty" ? "Completed — empty" :
+    state === "analyzed_with_results" ? String(count) :
+    state === "partial" ? String(count) + " (partial)" :
+    state === "failed" ? "Failed" :
+    state === "cancelled" ? "Cancelled" :
+    state === "unavailable" ? "Unavailable" :
+    display === null ? "Not analyzed" : String(display);
   return (
     <div
       className="rounded-xl border border-line bg-abyss/40 px-3 py-2"
@@ -160,7 +169,7 @@ function FamilyCountCard({
     >
       <p className="text-[10px] uppercase tracking-[0.18em] text-muted">{label}</p>
       <p className="mt-1 text-base font-semibold text-ink" data-testid={`memory-artifacts-${testId}-value`}>
-        {display === null ? "Not analyzed" : display}
+        {labelText}
       </p>
     </div>
   );

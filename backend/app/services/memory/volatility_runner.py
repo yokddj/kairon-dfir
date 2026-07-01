@@ -193,7 +193,7 @@ def run_plugin(
             probe.unlink(missing_ok=True)
         except OSError as exc:
             raise VolatilityRunnerError("MEMORY_SYMBOL_CACHE_NOT_WRITABLE", "Volatility symbol cache is not writable by the memory worker.") from exc
-    argv = build_plugin_argv(argv_prefix, evidence_path, plugin, offline=offline, cache_path=cache_path, symbol_path=symbol_path)
+    argv = build_plugin_argv(argv_prefix, evidence_path, plugin, offline=offline, cache_path=effective_cache_path, symbol_path=effective_symbol_path)
     timeout = max(1, int(timeout_seconds or settings.memory_plugin_timeout_seconds))
     max_bytes = max(1, int(max_output_bytes or settings.memory_plugin_output_max_bytes))
     termination_grace = max(1, int(getattr(settings, "memory_plugin_termination_grace_seconds", 15)))
