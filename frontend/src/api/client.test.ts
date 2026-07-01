@@ -470,3 +470,73 @@ describe("uploadMemoryUploadChunk integration", () => {
     expect(form.get("file")).toBeInstanceOf(Blob);
   });
 });
+
+describe("memory artifact observation endpoints", () => {
+  it("hits the correct environment-variables URL", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response(JSON.stringify({ items: [], total: 0, page: 1, page_size: 30, document_type: "memory_environment_variable" }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const { api } = await import("./client");
+    await api.getMemoryEnvVariables("case-1", { evidence_id: "ev-1", pid: 4, run_id: "run-a", page: 2, page_size: 30 });
+    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
+    expect(String(url)).toContain("/cases/case-1/memory/environment-variables");
+    expect(String(url)).toContain("evidence_id=ev-1");
+    expect(String(url)).toContain("pid=4");
+    expect(String(url)).toContain("run_id=run-a");
+    expect(String(url)).toContain("page=2");
+  });
+
+  it("hits the correct sids URL with filter", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response(JSON.stringify({ items: [], total: 0, page: 1, page_size: 30 }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const { api } = await import("./client");
+    await api.getMemorySids("case-1", { evidence_id: "ev-1", pid: 100, sid: "S-1-5-18" });
+    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
+    expect(String(url)).toContain("/cases/case-1/memory/sids");
+    expect(String(url)).toContain("sid=S-1-5-18");
+  });
+
+  it("hits the correct privileges URL with enabled filter", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response(JSON.stringify({ items: [], total: 0, page: 1, page_size: 30 }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const { api } = await import("./client");
+    await api.getMemoryPrivileges("case-1", { evidence_id: "ev-1", pid: 4, enabled: true });
+    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
+    expect(String(url)).toContain("/cases/case-1/memory/privileges");
+    expect(String(url)).toContain("enabled=true");
+  });
+
+  it("hits the correct vads URL with protection filter", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response(JSON.stringify({ items: [], total: 0, page: 1, page_size: 30 }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const { api } = await import("./client");
+    await api.getMemoryVads("case-1", { evidence_id: "ev-1", pid: 4, protection: "PAGE_EXECUTE_READWRITE", tag: "VadS" });
+    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
+    expect(String(url)).toContain("/cases/case-1/memory/vads");
+    expect(String(url)).toContain("protection=PAGE_EXECUTE_READWRITE");
+    expect(String(url)).toContain("tag=VadS");
+  });
+
+  it("omits undefined params from URL", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response(JSON.stringify({ items: [], total: 0, page: 1, page_size: 30 }), { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const { api } = await import("./client");
+    await api.getMemoryEnvVariables("case-2", { evidence_id: "ev-2" });
+    const [url] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
+    expect(String(url)).not.toContain("pid=");
+    expect(String(url)).not.toContain("run_id=");
+    expect(String(url)).toContain("evidence_id=ev-2");
+  });
+
+  it("rejects with structured error from backend", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response(JSON.stringify({ detail: { error_code: "CASE_NOT_FOUND", message: "Case not found" } }), { status: 404, headers: { "content-type": "application/json" } }),
+    );
+    const { api, ApiError } = await import("./client");
+    await expect(api.getMemoryEnvVariables("bad-case", { evidence_id: "ev-1" })).rejects.toThrow();
+  });
+});

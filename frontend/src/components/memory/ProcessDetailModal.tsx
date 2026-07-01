@@ -411,7 +411,7 @@ function VadsSection({ caseId, evidenceId, runId, pid }: { caseId: string; evide
           <table className="min-w-[700px] w-full divide-y divide-line text-xs">
             <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted"><tr><th className="px-3 py-2">Start</th><th className="px-3 py-2">End</th><th className="px-3 py-2">Protection</th><th className="px-3 py-2">Tag</th><th className="px-3 py-2">Commit</th><th className="px-3 py-2">Private</th><th className="px-3 py-2">File</th></tr></thead>
             <tbody className="divide-y divide-line/60">
-              {items.map((it) => { const r = it as Record<string, unknown>; return <tr key={r.document_id as string} className="hover:bg-abyss/30"><td className="px-3 py-1.5 font-mono text-ink">{String(r.start_address ?? "—")}</td><td className="px-3 py-1.5 font-mono text-ink">{String(r.end_address ?? "—")}</td><td className="px-3 py-1.5 text-muted">{String(r.protection ?? "—")}</td><td className="px-3 py-1.5 text-muted">{String(r.tag ?? "—")}</td><td className="px-3 py-1.5 text-muted">{r.commit_charge ?? "—"}</td><td className="px-3 py-1.5"><span className={`rounded px-1.5 py-0.5 text-[10px] ${r.private_memory ? "bg-emerald-500/20 text-emerald-200" : "bg-abyss/70 text-muted"}`}>{r.private_memory ? "Private" : "Shared"}</span></td><td className="px-3 py-1.5 text-muted max-w-[200px] truncate" title={String(r.file_object ?? "")}>{String(r.file_object ?? "—")}</td></tr>; })}
+              {items.map((it) => { const r = it as Record<string, unknown>; return <tr key={r.document_id as string} className="hover:bg-abyss/30"><td className="px-3 py-1.5 font-mono text-ink">{String(r.start_address ?? "—")}</td><td className="px-3 py-1.5 font-mono text-ink">{String(r.end_address ?? "—")}</td><td className="px-3 py-1.5 text-muted">{String(r.protection ?? "—")}</td><td className="px-3 py-1.5 text-muted">{String(r.tag ?? "—")}</td><td className="px-3 py-1.5 text-muted">                {String(r.commit_charge ?? "—")}</td><td className="px-3 py-1.5"><span className={`rounded px-1.5 py-0.5 text-[10px] ${r.private_memory ? "bg-emerald-500/20 text-emerald-200" : "bg-abyss/70 text-muted"}`}>{r.private_memory ? "Private" : "Shared"}</span></td><td className="px-3 py-1.5 text-muted max-w-[200px] truncate" title={String(r.file_object ?? "")}>{String(r.file_object ?? "—")}</td></tr>; })}
             </tbody>
           </table>
         </div>
@@ -623,6 +623,9 @@ export function ProcessDetailModal({
               onOpenInGraph={onOpenInGraph}
               onShowInTree={onShowInTree}
               handleCopyCommandLine={handleCopyCommandLine}
+              caseId={caseId}
+              evidenceId={evidenceId}
+              runId={runId}
             />
           )}
           {copyMessage ? (
@@ -644,6 +647,9 @@ function TabsContent({
   onOpenInGraph,
   onShowInTree,
   handleCopyCommandLine,
+  caseId,
+  evidenceId,
+  runId,
 }: {
   tab: TabKey;
   detail: MemoryProcessEntityDetail;
@@ -652,6 +658,9 @@ function TabsContent({
   onOpenInGraph?: (entityId: string) => void;
   onShowInTree?: (entityId: string) => void;
   handleCopyCommandLine: () => void;
+  caseId: string;
+  evidenceId: string;
+  runId: string | null;
 }) {
   const entity = detail.entity;
   if (tab === "overview") {
@@ -830,32 +839,6 @@ function TabsContent({
       </section>
     );
   }
-  return (
-    <section
-      role="tabpanel"
-      id="process-detail-modal-tabpanel-raw"
-      aria-labelledby="process-detail-modal-tab-raw"
-      className="space-y-3"
-      data-testid="process-detail-modal-tabpanel-raw"
-    >
-      <p className="text-xs text-muted">
-        Only safe provenance references are listed. Paths, raw RAM and symbol cache locations
-        are never displayed.
-      </p>
-      <ul className="space-y-2" data-testid="modal-raw-references">
-        {(detail.source_record_refs || []).map((ref) => (
-          <li key={ref} className="rounded-md border border-line bg-abyss/60 p-2 text-xs">
-            <span className="font-mono text-ink">{ref}</span>
-          </li>
-        ))}
-        {!detail.source_record_refs?.length ? (
-          <li className="rounded-md border border-line bg-abyss/40 p-2 text-xs text-muted">
-            No raw references recorded for this entity.
-          </li>
-        ) : null}
-      </ul>
-    </section>
-  );
   if (tab === "command_line") {
     return <CommandLineSection entity={entity} />;
   }
@@ -883,5 +866,30 @@ function TabsContent({
   if (tab === "vads") {
     return <VadsSection caseId={caseId} evidenceId={evidenceId} runId={runId} pid={entity?.process?.pid ?? null} />;
   }
-  return null;
+  return (
+    <section
+      role="tabpanel"
+      id="process-detail-modal-tabpanel-raw"
+      aria-labelledby="process-detail-modal-tab-raw"
+      className="space-y-3"
+      data-testid="process-detail-modal-tabpanel-raw"
+    >
+      <p className="text-xs text-muted">
+        Only safe provenance references are listed. Paths, raw RAM and symbol cache locations
+        are never displayed.
+      </p>
+      <ul className="space-y-2" data-testid="modal-raw-references">
+        {(detail.source_record_refs || []).map((ref) => (
+          <li key={ref} className="rounded-md border border-line bg-abyss/60 p-2 text-xs">
+            <span className="font-mono text-ink">{ref}</span>
+          </li>
+        ))}
+        {!detail.source_record_refs?.length ? (
+          <li className="rounded-md border border-line bg-abyss/40 p-2 text-xs text-muted">
+            No raw references recorded for this entity.
+          </li>
+        ) : null}
+      </ul>
+    </section>
+  );
 }

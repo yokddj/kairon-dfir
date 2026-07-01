@@ -337,6 +337,8 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
         {tab === "raw" ? (
           <MemoryRawTab
             caseId={caseId}
+            evidenceId={effectiveEvidenceId || ""}
+            runId={effectiveRunId}
             runOptions={runOptionsQuery.data ?? null}
             selectedRunId={selectedRunId}
             onSelectRunId={setSelectedRunId}
