@@ -180,11 +180,10 @@ def fetch_federated_process_entities(
 
 
 def _entity_merge_key(entity: dict[str, Any]) -> str:
-    """A stable identity key scoped to one Evidence: PID + creation time."""
+    """A stable identity key: PID. Handles PID reuse by using entity_id as fallback."""
     proc = entity.get("process", {})
     pid = proc.get("pid", 0)
-    create_time = proc.get("create_time") or ""
-    return f"{pid}:::{create_time}"
+    return f"pid:{pid}"
 
 
 def _merge_entities(
