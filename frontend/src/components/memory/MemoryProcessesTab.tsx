@@ -41,7 +41,7 @@ export function MemoryProcessesTab({
   selectedEntityId,
   onSelectEntityId,
 }: Props) {
-  const effectiveRunId = selectedRunId || runOptions?.default_run_id || null;
+  const effectiveRunId = runId || selectedRunId || runOptions?.default_run_id || null;
   const detailQuery = useQuery({
     queryKey: ["memory-process-entity-detail", caseId, selectedEntityId, effectiveRunId],
     queryFn: () =>
