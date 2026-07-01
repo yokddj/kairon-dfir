@@ -1352,9 +1352,172 @@ describe("runResumableUpload", () => {
     });
 
     const progressCalls = onProgress.mock.calls.map((c) => c[0]);
-    expect(progressCalls.length).toBe(4);
-    expect(progressCalls[0].loaded).toBe(64 * 1024 * 1024);
+    expect(progressCalls.some((call) => call.loaded === 64 * 1024 * 1024)).toBe(true);
     expect(progressCalls[0].total).toBe(128 * 1024 * 1024);
-    expect(progressCalls[3].loaded).toBe(128 * 1024 * 1024);
+    expect(progressCalls.at(-1)?.loaded).toBe(128 * 1024 * 1024);
+  });
+
+  it("aggregates in-flight progress for two active chunks without double-counting acknowledged bytes", async () => {
+    const uploadId = "aggregate-1";
+    const file = makeFile(16);
+    const received: number[] = [];
+    const buildStatus = () => makeStatus({ upload_id: uploadId, expected_bytes: file.size, chunk_size_bytes: 8, total_chunks: 2, received_chunks: [...received], received_chunk_count: received.length, bytes_received: received.length * 8, missing_chunks: [0, 1].filter((index) => !received.includes(index)) });
+    const getStatus = vi.fn(async () => buildStatus());
+    let resolve0!: () => void;
+    let resolve1!: () => void;
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number, _blob: Blob, _signal: AbortSignal, onProgress?: (info: { loaded: number; total: number }) => void) => {
+      onProgress?.({ loaded: 4, total: 8 });
+      if (chunkIndex === 0) await new Promise<void>((resolve) => { resolve0 = resolve; });
+      if (chunkIndex === 1) await new Promise<void>((resolve) => { resolve1 = resolve; });
+      received.push(chunkIndex);
+      return buildStatus();
+    });
+    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev", expected_bytes: file.size, bytes_received: file.size, missing_chunks: [] }));
+    const onProgress = vi.fn();
+    const promise = runResumableUpload({ uploadId, file, getStatus, uploadChunk, finalize, signal: new AbortController().signal, concurrency: 2, onProgress, sleep: sleepImmediate });
+    await Promise.resolve();
+    await Promise.resolve();
+    const loadedValues = onProgress.mock.calls.map((call) => call[0].loaded);
+    expect(loadedValues).toContain(4);
+    expect(loadedValues).toContain(8);
+    resolve1();
+    resolve0();
+    await promise;
+    expect(Math.max(...onProgress.mock.calls.map((call) => call[0].loaded))).toBeLessThanOrEqual(file.size);
+    expect(onProgress.mock.calls.at(-1)?.[0].loaded).toBe(file.size);
+  });
+
+  it("resets only the failed chunk transient progress on retry", async () => {
+    const uploadId = "aggregate-2";
+    const file = makeFile(8);
+    let failed = false;
+    const received: number[] = [];
+    const buildStatus = () => makeStatus({ upload_id: uploadId, expected_bytes: file.size, chunk_size_bytes: 4, total_chunks: 2, received_chunks: [...received], received_chunk_count: received.length, bytes_received: received.length * 4, missing_chunks: [0, 1].filter((index) => !received.includes(index)) });
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number, _blob: Blob, _signal: AbortSignal, onProgress?: (info: { loaded: number; total: number }) => void) => {
+      onProgress?.({ loaded: 2, total: 4 });
+      if (chunkIndex === 0 && !failed) {
+        failed = true;
+        throw new Error("Network error while uploading");
+      }
+      if (!received.includes(chunkIndex)) received.push(chunkIndex);
+      return buildStatus();
+    });
+    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev", expected_bytes: file.size, bytes_received: file.size, missing_chunks: [] }));
+    const onProgress = vi.fn();
+    const result = await runResumableUpload({ uploadId, file, getStatus, uploadChunk, finalize, signal: new AbortController().signal, concurrency: 2, onProgress, sleep: sleepImmediate });
+    expect(result.type).toBe("completed");
+    expect(onProgress.mock.calls.every((call) => call[0].loaded <= file.size)).toBe(true);
+  });
+
+  it("clears transient progress on pause and resumes from authoritative server bytes", async () => {
+    const uploadId = "aggregate-3";
+    const file = makeFile(8);
+    const controller = new AbortController();
+    const getStatus = vi.fn(async () => makeStatus({ upload_id: uploadId, expected_bytes: file.size, chunk_size_bytes: 4, total_chunks: 2, received_chunks: [], received_chunk_count: 0, bytes_received: 0, missing_chunks: [0, 1] }));
+    const uploadChunk = vi.fn(async (_uid: string, _chunkIndex: number, _blob: Blob, _signal: AbortSignal, onProgress?: (info: { loaded: number; total: number }) => void) => {
+      onProgress?.({ loaded: 3, total: 4 });
+      controller.abort();
+      throw new Error("Upload aborted");
+    });
+    const onProgress = vi.fn();
+    const result = await runResumableUpload({ uploadId, file, getStatus, uploadChunk, finalize: vi.fn(), signal: controller.signal, concurrency: 2, onProgress, sleep: sleepImmediate });
+    expect(result.type).toBe("aborted");
+    expect(onProgress.mock.calls.at(-1)?.[0].loaded).toBe(0);
+  });
+
+  it("keeps aggregate progress accurate for final partial chunk", async () => {
+    const uploadId = "aggregate-4";
+    const file = makeFile(10);
+    const received: number[] = [];
+    const buildStatus = () => makeStatus({ upload_id: uploadId, expected_bytes: file.size, chunk_size_bytes: 4, total_chunks: 3, received_chunks: [...received], received_chunk_count: received.length, bytes_received: received.includes(0) && received.includes(1) ? 8 : 0, missing_chunks: [0, 1, 2].filter((index) => !received.includes(index)) });
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number, blob: Blob, _signal: AbortSignal, onProgress?: (info: { loaded: number; total: number }) => void) => {
+      onProgress?.({ loaded: blob.size, total: blob.size });
+      received.push(chunkIndex);
+      return buildStatus();
+    });
+    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev", expected_bytes: file.size, bytes_received: file.size, missing_chunks: [] }));
+    const onProgress = vi.fn();
+    await runResumableUpload({ uploadId, file, getStatus, uploadChunk, finalize, signal: new AbortController().signal, concurrency: 2, onProgress, sleep: sleepImmediate });
+    expect(Math.max(...onProgress.mock.calls.map((call) => call[0].loaded))).toBe(file.size);
+  });
+
+  it("starts two chunks concurrently and does not start a third when concurrency is 2", async () => {
+    const uploadId = "parallel-1";
+    const file = makeFile(12);
+    const chunkSize = 4;
+    const received: number[] = [];
+    const buildStatus = () => makeStatus({
+      upload_id: uploadId,
+      expected_bytes: file.size,
+      chunk_size_bytes: chunkSize,
+      total_chunks: 3,
+      received_chunk_count: received.length,
+      received_chunks: [...received],
+      bytes_received: received.length * chunkSize,
+      missing_chunks: [0, 1, 2].filter((index) => !received.includes(index)),
+    });
+    const getStatus = vi.fn(async () => buildStatus());
+    let resolve0!: () => void;
+    let resolve1!: () => void;
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      if (chunkIndex === 0) await new Promise<void>((resolve) => { resolve0 = resolve; });
+      if (chunkIndex === 1) await new Promise<void>((resolve) => { resolve1 = resolve; });
+      if (!received.includes(chunkIndex)) received.push(chunkIndex);
+      return buildStatus();
+    });
+    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev", expected_bytes: file.size, bytes_received: file.size, missing_chunks: [] }));
+    const promise = runResumableUpload({ uploadId, file, getStatus, uploadChunk, finalize, signal: new AbortController().signal, concurrency: 2, maxConcurrency: 4, sleep: sleepImmediate });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(uploadChunk.mock.calls.map((call) => call[1])).toEqual([0, 1]);
+    resolve1();
+    await Promise.resolve();
+    expect(uploadChunk.mock.calls.map((call) => call[1])).toEqual([0, 1]);
+    resolve0();
+    await promise;
+    expect(uploadChunk.mock.calls.map((call) => call[1])).toEqual([0, 1, 2]);
+  });
+
+  it("handles out-of-order parallel success from server-authoritative status", async () => {
+    const uploadId = "parallel-2";
+    const file = makeFile(8);
+    const received: number[] = [];
+    const buildStatus = () => makeStatus({ upload_id: uploadId, expected_bytes: file.size, chunk_size_bytes: 4, total_chunks: 2, received_chunks: [...received], received_chunk_count: received.length, bytes_received: received.length * 4, missing_chunks: [0, 1].filter((index) => !received.includes(index)) });
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      if (chunkIndex === 1) received.push(1);
+      if (chunkIndex === 0) received.push(0);
+      return buildStatus();
+    });
+    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev", expected_bytes: file.size, bytes_received: file.size, missing_chunks: [] }));
+    const result = await runResumableUpload({ uploadId, file, getStatus, uploadChunk, finalize, signal: new AbortController().signal, concurrency: 2, sleep: sleepImmediate });
+    expect(result.type).toBe("completed");
+    expect(finalize).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to sequential after repeated parallel transport failure", async () => {
+    const uploadId = "parallel-3";
+    const file = makeFile(12);
+    const received: number[] = [];
+    let failedChunk0Attempts = 0;
+    const states: Array<{ concurrency: number; activeChunks: number[]; fallbackToSequential: boolean }> = [];
+    const buildStatus = () => makeStatus({ upload_id: uploadId, expected_bytes: file.size, chunk_size_bytes: 4, total_chunks: 3, received_chunks: [...received], received_chunk_count: received.length, bytes_received: received.length * 4, missing_chunks: [0, 1, 2].filter((index) => !received.includes(index)) });
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      if (chunkIndex === 0 && failedChunk0Attempts <= CHUNK_UPLOAD_MAX_RETRIES) {
+        failedChunk0Attempts += 1;
+        throw new Error("Network error while uploading");
+      }
+      if (!received.includes(chunkIndex)) received.push(chunkIndex);
+      received.sort((a, b) => a - b);
+      return buildStatus();
+    });
+    const finalize = vi.fn(async () => makeStatus({ upload_id: uploadId, status: "completed", evidence_id: "ev", expected_bytes: file.size, bytes_received: file.size, missing_chunks: [] }));
+    const result = await runResumableUpload({ uploadId, file, getStatus, uploadChunk, finalize, signal: new AbortController().signal, concurrency: 2, sleep: sleepImmediate, onSchedulerState: (info) => states.push(info) });
+    expect(result.type).toBe("completed");
+    expect(states.some((state) => state.fallbackToSequential && state.concurrency === 1)).toBe(true);
+    expect(received).toEqual([0, 1, 2]);
   });
 });

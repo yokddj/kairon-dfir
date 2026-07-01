@@ -63,6 +63,38 @@ The previous implementation counted two complete input images against a single f
 
 ## Streaming Behavior
 
+Hybrid upload mode is server-authoritative. `GET /api/cases/{case_id}/memory/upload-readiness?selected_size_bytes=...` returns `selected_upload_mode`, `direct_threshold_bytes`, `recommended_chunk_size_bytes`, `default_concurrency`, and `max_parallel_chunks`; the browser follows that policy instead of choosing silently.
+
+Defaults for new sessions:
+
+- `MEMORY_UPLOAD_DIRECT_THRESHOLD_BYTES=1073741824` (1 GiB)
+- `MEMORY_UPLOAD_CHUNK_SIZE_BYTES=67108864` (64 MiB)
+- `MEMORY_UPLOAD_DEFAULT_CONCURRENCY=2`
+- `MEMORY_UPLOAD_MAX_CONCURRENCY=4`
+- `MEMORY_UPLOAD_SESSION_TTL_HOURS=24`
+
+Files at or below the direct threshold use one Safari-compatible `XMLHttpRequest` multipart `POST` to `/api/cases/{case_id}/memory/uploads/direct`. The request streams the `UploadFile`; failure before finalization leaves no completed Evidence and cleans direct staging.
+
+Files above the direct threshold use resumable upload sessions. Existing sessions keep their persisted `chunk_size_bytes`; changing defaults affects only newly created sessions. New large sessions use 64 MiB chunks and default to two active chunk requests, bounding browser bytes in flight to roughly 128 MiB plus multipart overhead. The transport remains Safari-compatible: `XMLHttpRequest`, `multipart/form-data`, `FormData` field `chunk`, and HTTP 204 for successful chunk persistence.
+
+The frontend scheduler is server-authoritative:
+
+- fetch current session state before resume
+- use `File.slice(start, end)` per missing chunk
+- start at most `MEMORY_UPLOAD_DEFAULT_CONCURRENCY` chunks, capped by `MEMORY_UPLOAD_MAX_CONCURRENCY`
+- retry failed chunk indices independently with bounded exponential backoff
+- fall back to sequential for the current session after repeated transport failure
+- never advance offset or progress for unacknowledged chunks
+- abort active XHRs on pause/cancel
+
+Progress for resumable uploads is aggregate and bounded:
+
+```text
+confirmed server bytes + sum(active unconfirmed chunk uploaded bytes) / total file size
+```
+
+Transient bytes are tracked per chunk index, reset for only the failed retrying chunk, and removed when the server acknowledges that chunk. Confirmed bytes always come from the server status, so pause/resume and page reload discard stale browser assumptions. Progress is clamped to 100% and does not count multipart framing overhead as evidence bytes. Direct upload progress remains the browser XHR progress for the single multipart request.
+
 The backend streams memory uploads to disk in bounded chunks:
 
 - configured by `MEMORY_UPLOAD_CHUNK_SIZE_BYTES`
@@ -73,9 +105,28 @@ The backend streams memory uploads to disk in bounded chunks:
 - cross-filesystem files are copied to a controlled destination temporary, size/hash verified, then atomically renamed on the destination filesystem
 - failed or oversized uploads remove only the known temporary partial file
 - one Redis-backed upload slot serializes large memory uploads across backend replicas and expires safely if an uploader disappears
+- Redis-backed per-session/chunk/finalize locks guard same-index writes, chunk/finalize races, duplicate finalization, cancellation, and cleanup. Different chunk indices can write concurrently; same-index requests serialize or return a clear conflict. Lock ownership is token-based so one request cannot release another request's lock, locks have bounded expiry for stale recovery, and production fails closed if Redis locking is unavailable. The in-process fallback is isolated to tests.
 - verification and finalization have separate configurable warning/hard limits
 
 The database evidence row is created only after storage finalization succeeds. Incomplete uploads are not valid scannable evidence.
+
+Administrative helpers classify orphan states without destructive ambiguity: active sessions are skipped by cleanup; dry-run reports inspected sessions, orphan directories, reclaimable bytes, skipped active sessions, and errors before `apply` removes eligible terminal/orphan staging.
+
+## Maintenance CLI
+
+Run maintenance from the backend container or an equivalent backend environment:
+
+```bash
+python -m app.cli.memory_upload_maintenance cleanup --dry-run --json
+python -m app.cli.memory_upload_maintenance cleanup --apply --case-id <case-uuid> --older-than-hours 24 --json
+python -m app.cli.memory_upload_maintenance reconcile --dry-run --json
+```
+
+`cleanup` defaults to dry-run. `--apply` must be explicit. Supported filters include `--case-id`, `--upload-id`, `--older-than-hours`, and `--batch-size`. Output includes `sessions_inspected`, `active_sessions_skipped`, `expired_sessions`, `orphan_directories`, `missing_staging`, `completed_with_staging`, `bytes_reclaimable`, `bytes_removed`, `reconciliation_findings`, and `errors`. Non-empty operational errors return a non-zero exit code.
+
+Cleanup never deletes completed Evidence. It may remove leftover staging for completed uploads after the canonical Evidence exists, and it skips active or locked uploads. Reconciliation is read-only and reports classifications such as DB session with missing staging, staging without DB row, completed upload missing Evidence, and chunk metadata/filesystem drift. Ambiguous repair is never automatic.
+
+Production validation should run `cleanup --dry-run --json` and `reconcile --dry-run --json` only during first deployment validation. Do not apply cleanup to real data until dry-run output has been reviewed.
 
 `Evidence.size_bytes` is stored as PostgreSQL `BIGINT`; browser memory uploads up to the configured 5 GiB limit must not be written to a 32-bit `INTEGER` column.
 

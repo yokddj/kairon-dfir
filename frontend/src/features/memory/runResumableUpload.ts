@@ -14,10 +14,14 @@ export type RunResumableUploadArgs = {
     chunkIndex: number,
     blob: Blob,
     signal: AbortSignal,
+    onProgress?: (info: { loaded: number; total: number }) => void,
   ) => Promise<MemoryUploadStatus>;
   finalize: (uploadId: string) => Promise<MemoryUploadStatus>;
   signal: AbortSignal;
   onProgress?: (info: { loaded: number; total: number }) => void;
+  concurrency?: number;
+  maxConcurrency?: number;
+  onSchedulerState?: (info: { concurrency: number; activeChunks: number[]; fallbackToSequential: boolean }) => void;
   sleep?: (ms: number) => Promise<void>;
 };
 
@@ -134,13 +138,19 @@ async function uploadChunkWithRetry(
   signal: AbortSignal,
   uploadChunk: RunResumableUploadArgs["uploadChunk"],
   onProgress: ((info: { loaded: number; total: number }) => void) | undefined,
+  onChunkProgress: ((chunkIndex: number, loaded: number, chunkBytes: number) => void) | undefined,
   sleep: (ms: number) => Promise<void>,
 ): Promise<MemoryUploadStatus> {
   const blob = sliceChunk(file, chunkIndex, chunkSize);
   for (let attempt = 0; attempt <= CHUNK_UPLOAD_MAX_RETRIES; attempt += 1) {
     if (signal.aborted) throw new Error("Upload aborted");
+    onChunkProgress?.(chunkIndex, 0, blob.size);
     try {
-      const status = await uploadChunk(uploadId, chunkIndex, blob, signal);
+      const status = await uploadChunk(uploadId, chunkIndex, blob, signal, (info) => {
+        const loaded = info.total > 0 ? Math.floor((Math.min(info.loaded, info.total) / info.total) * blob.size) : Math.min(info.loaded, blob.size);
+        onChunkProgress?.(chunkIndex, Math.min(blob.size, loaded), blob.size);
+      });
+      onChunkProgress?.(chunkIndex, 0, blob.size);
       if (onProgress) {
         onProgress({
           loaded: status.bytes_received,
@@ -153,6 +163,7 @@ async function uploadChunkWithRetry(
         throw new Error("Upload aborted");
       }
       if (!shouldRetryChunkUpload(error) || attempt >= CHUNK_UPLOAD_MAX_RETRIES) {
+        onChunkProgress?.(chunkIndex, 0, blob.size);
         throw error;
       }
       await abortableSleep(
@@ -179,17 +190,37 @@ export async function runResumableUpload(
     uploadId,
     file,
     chunkSize = DEFAULT_CHUNK_SIZE,
+    concurrency: requestedConcurrency = 1,
+    maxConcurrency = 4,
     getStatus,
     uploadChunk,
     finalize,
     signal,
     onProgress,
+    onSchedulerState,
     sleep: injectedSleep,
   } = args;
 
   const sleep = injectedSleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
 
   let currentStatus = await getStatus(uploadId);
+  let effectiveConcurrency = Math.max(1, Math.min(requestedConcurrency || 1, maxConcurrency || 1, 4));
+  let fallbackToSequential = false;
+  let confirmedBytes = currentStatus.bytes_received || 0;
+  const activeProgress = new Map<number, number>();
+  const emitAggregateProgress = () => {
+    if (!onProgress) return;
+    const transientBytes = Array.from(activeProgress.values()).reduce((sum, value) => sum + value, 0);
+    onProgress({ loaded: Math.max(0, Math.min(file.size, confirmedBytes + transientBytes)), total: file.size });
+  };
+  const updateChunkProgress = (chunkIndex: number, loaded: number, _chunkBytes: number) => {
+    if (loaded <= 0) {
+      activeProgress.delete(chunkIndex);
+    } else {
+      activeProgress.set(chunkIndex, loaded);
+    }
+    emitAggregateProgress();
+  };
 
   if (currentStatus.status === "completed" && currentStatus.evidence_id) {
     return { type: "terminal", status: currentStatus };
@@ -235,30 +266,61 @@ export async function runResumableUpload(
       continue;
     }
 
-    const chunkIndex = missingChunks[0];
+    const selectedChunks = missingChunks.slice(0, effectiveConcurrency);
     const previousMissingCount = missingChunks.length;
+    onSchedulerState?.({ concurrency: effectiveConcurrency, activeChunks: selectedChunks, fallbackToSequential });
 
     try {
-      await uploadChunkWithRetry(
-        uploadId,
-        file,
-        chunkIndex,
-        effectiveChunkSize,
-        totalChunks,
-        signal,
-        uploadChunk,
-        onProgress,
-        sleep,
+      const results = await Promise.allSettled(
+        selectedChunks.map((chunkIndex) =>
+          uploadChunkWithRetry(
+            uploadId,
+            file,
+            chunkIndex,
+            effectiveChunkSize,
+            totalChunks,
+            signal,
+            uploadChunk,
+            onProgress,
+            updateChunkProgress,
+            sleep,
+          ),
+        ),
       );
+      const rejected = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+      if (rejected) {
+        activeProgress.clear();
+        if (signal.aborted) {
+          emitAggregateProgress();
+          return { type: "aborted" };
+        }
+        if (!fallbackToSequential && effectiveConcurrency > 1) {
+          fallbackToSequential = true;
+          effectiveConcurrency = 1;
+          currentStatus = await getStatus(uploadId);
+          confirmedBytes = currentStatus.bytes_received || 0;
+          emitAggregateProgress();
+          continue;
+        }
+        const reason = rejected.reason;
+        if (reason instanceof Error) throw reason;
+        throw new Error("Chunk upload failed.");
+      }
       currentStatus = await getStatus(uploadId);
+      confirmedBytes = currentStatus.bytes_received || confirmedBytes;
+      activeProgress.clear();
     } catch (error) {
+      activeProgress.clear();
       if (error instanceof Error && error.message === "Upload aborted") {
+        emitAggregateProgress();
         return { type: "aborted" };
       }
       if (error instanceof Error) {
         return { type: "failed", message: error.message };
       }
       return { type: "failed", message: "Chunk upload failed." };
+    } finally {
+      onSchedulerState?.({ concurrency: effectiveConcurrency, activeChunks: [], fallbackToSequential });
     }
 
     if (onProgress) {
@@ -282,7 +344,7 @@ export async function runResumableUpload(
       return {
         type: "stalled",
         uploadId,
-        attemptedChunk: chunkIndex,
+        attemptedChunk: selectedChunks[0] ?? -1,
         previousMissingCount,
         nextMissingCount,
       };

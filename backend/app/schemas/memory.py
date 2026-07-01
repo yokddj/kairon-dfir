@@ -251,6 +251,9 @@ class MemoryUploadReadinessRead(BaseModel):
     max_upload_bytes: int
     max_upload_display: str
     recommended_chunk_size_bytes: int
+    direct_threshold_bytes: int
+    selected_upload_mode: str | None = None
+    default_concurrency: int
     resumable: bool
     max_parallel_chunks: int
     case_quota_bytes: int
@@ -282,6 +285,11 @@ class MemoryUploadStatusRead(BaseModel):
     received_chunks: list[int] = []
     missing_chunks: list[int] = []
     progress_percent: int = 0
+    upload_mode: str = "resumable"
+    default_concurrency: int = 1
+    max_concurrency: int = 1
+    active_chunks: list[int] = []
+    fallback_to_sequential: bool = False
     evidence_id: str | None = None
     failure_code: str | None = None
     failure_message: str | None = None
@@ -299,12 +307,17 @@ class MemoryUploadSessionCreateRequest(BaseModel):
     provided_host: str
     authorization_acknowledged: bool = False
     expected_sha256: str | None = None
+    upload_mode: str | None = None
 
     model_config = {"extra": "forbid"}
 
 
 class MemoryUploadSessionCreateResponse(MemoryUploadStatusRead):
     resumable: bool = True
+
+
+class MemoryUploadDirectResponse(MemoryUploadStatusRead):
+    resumable: bool = False
 
 
 class MemoryUploadFinalizeRequest(BaseModel):

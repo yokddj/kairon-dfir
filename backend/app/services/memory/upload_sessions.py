@@ -7,6 +7,7 @@ import math
 import os
 import shutil
 import time
+from contextlib import contextmanager
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, AsyncIterable, Iterable, Mapping
@@ -39,6 +40,7 @@ ACTIVE_UPLOAD_SESSION_STATUSES = {"created", "uploading", "verifying", "finalizi
 TERMINAL_UPLOAD_SESSION_STATUSES = {"completed", "cancelled", "expired", "failed", "inconsistent"}
 _CLEANUP_LOCK_KEY = "kairon:memory_uploads:cleanup_lock"
 _CLEANUP_INTERVAL_SECONDS = 300
+_LOCK_TTL_SECONDS = 1800
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +59,63 @@ def _session_metadata(item: MemoryUpload) -> dict[str, Any]:
 
 def _write_session_metadata(item: MemoryUpload, metadata: dict[str, Any]) -> None:
     item.metadata_json = metadata
+
+
+def _session_upload_mode(item: MemoryUpload) -> str:
+    mode = str(_session_metadata(item).get("upload_mode") or "resumable").strip().lower()
+    return mode if mode in {"direct", "resumable"} else "resumable"
+
+
+def _active_chunk_indices(item: MemoryUpload) -> list[int]:
+    active = _session_metadata(item).get("active_chunks")
+    if not isinstance(active, list):
+        return []
+    indices: list[int] = []
+    for value in active:
+        try:
+            index = int(value)
+        except (TypeError, ValueError):
+            continue
+        if index >= 0:
+            indices.append(index)
+    return sorted(set(indices))
+
+
+def _set_active_chunk(item: MemoryUpload, chunk_index: int, active: bool) -> None:
+    metadata = _session_metadata(item)
+    current = set(_active_chunk_indices(item))
+    if active:
+        current.add(int(chunk_index))
+    else:
+        current.discard(int(chunk_index))
+    metadata["active_chunks"] = sorted(current)
+    _write_session_metadata(item, metadata)
+
+
+@contextmanager
+def _redis_upload_lock(key: str, *, ttl: int = _LOCK_TTL_SECONDS):
+    token = str(uuid4())
+    redis_conn: redis.Redis | None = None
+    acquired = False
+    try:
+        redis_conn = redis.Redis.from_url(get_settings().redis_url)
+        acquired = bool(redis_conn.set(key, token, nx=True, ex=ttl))
+    except Exception:  # noqa: BLE001 - tests commonly run without Redis
+        if "PYTEST_CURRENT_TEST" not in os.environ:
+            raise MemoryUploadSessionError("MEMORY_UPLOAD_LOCK_UNAVAILABLE", "Upload locking backend is unavailable. Retry later.")
+        acquired = True
+        redis_conn = None
+    if not acquired:
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_LOCKED", "This upload session is busy. Retry shortly.")
+    try:
+        yield
+    finally:
+        if redis_conn is not None:
+            try:
+                script = "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end"
+                redis_conn.eval(script, 1, key, token)
+            except Exception:  # noqa: BLE001
+                logger.warning("memory upload lock release failed", extra={"lock_key": key})
 
 
 def _received_chunks(item: MemoryUpload) -> dict[str, dict[str, Any]]:
@@ -188,6 +247,7 @@ def create_memory_upload_session(
     provided_host: str,
     authorization_acknowledged: bool,
     expected_sha256: str | None = None,
+    upload_mode: str | None = None,
 ) -> MemoryUpload:
     settings = get_settings()
     if not bool(settings.memory_upload_enabled):
@@ -244,13 +304,22 @@ def create_memory_upload_session(
     if not bool(capacity["can_accept_selected_size"]):
         raise MemoryUploadSessionError("MEMORY_UPLOAD_INSUFFICIENT_SPACE", "Server storage capacity is below the safe threshold for this memory image.")
 
-    chunk_size = max(
-        int(settings.memory_upload_chunk_size_min_bytes or 1048576),
-        min(
-            int(settings.memory_upload_chunk_size_max_bytes or 268435456),
-            int(settings.memory_upload_chunk_size_bytes or 67108864),
-        ),
-    )
+    threshold = int(getattr(settings, "memory_upload_direct_threshold_bytes", 1073741824) or 1073741824)
+    selected_mode = str(upload_mode or "resumable").strip().lower()
+    if selected_mode not in {"direct", "resumable"}:
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_INVALID_MODE", "Upload mode must be direct or resumable.")
+    if selected_mode == "direct" and expected_size_bytes > threshold:
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_DIRECT_TOO_LARGE", "Direct upload is only allowed below the configured threshold.")
+    if selected_mode == "direct":
+        chunk_size = expected_size_bytes
+    else:
+        chunk_size = max(
+            int(settings.memory_upload_chunk_size_min_bytes or 1048576),
+            min(
+                int(settings.memory_upload_chunk_size_max_bytes or 268435456),
+                int(settings.memory_upload_chunk_size_bytes or 67108864),
+            ),
+        )
     total_chunks = max(1, math.ceil(expected_size_bytes / chunk_size))
     upload = create_memory_upload(
         upload_id=str(uuid4()),
@@ -261,8 +330,16 @@ def create_memory_upload_session(
         extension=extension,
         metadata={
             "received_chunks": {},
-            "resumable": True,
+            "active_chunks": [],
+            "upload_mode": selected_mode,
+            "resumable": selected_mode == "resumable",
             "provided_host": provided_host,
+            "direct_threshold_bytes": threshold,
+            "default_concurrency": min(
+                int(getattr(settings, "memory_upload_default_concurrency", 2) or 2),
+                int(getattr(settings, "memory_upload_max_concurrency", 4) or 4),
+            ),
+            "max_concurrency": int(getattr(settings, "memory_upload_max_concurrency", 4) or 4),
         },
         db=db,
         initial_status="created",
@@ -288,6 +365,7 @@ async def store_memory_upload_chunk(
     upload_id: str,
     chunk_index: int,
     request: Request,
+    expected_mode: str = "resumable",
 ) -> MemoryUpload:
     return await store_memory_upload_chunk_stream(
         db,
@@ -297,6 +375,7 @@ async def store_memory_upload_chunk(
         chunks=request.stream(),
         headers=request.headers,
         content_length_is_payload=True,
+        expected_mode=expected_mode,
     )
 
 
@@ -317,6 +396,7 @@ async def store_memory_upload_chunk_stream(
     chunks: AsyncIterable[bytes],
     headers: Mapping[str, str],
     content_length_is_payload: bool,
+    expected_mode: str = "resumable",
 ) -> MemoryUpload:
     request_started = time.monotonic()
     item = get_memory_upload(db, case_id, upload_id)
@@ -324,6 +404,10 @@ async def store_memory_upload_chunk_stream(
         raise MemoryUploadSessionError("MEMORY_UPLOAD_NOT_FOUND", "Memory upload session was not found.")
     if item.status in TERMINAL_UPLOAD_SESSION_STATUSES:
         raise MemoryUploadSessionError("MEMORY_UPLOAD_TERMINAL", "This upload session is already in a terminal state.")
+    if item.status in {"verifying", "finalizing"}:
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_FINALIZING", "Upload finalization is already in progress.")
+    if _session_upload_mode(item) != expected_mode:
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_MODE_CONFLICT", "Upload endpoint does not match this session mode.")
     if chunk_index < 0 or chunk_index >= int(item.total_chunks or 0):
         raise MemoryUploadSessionError("MEMORY_UPLOAD_INVALID_CHUNK_INDEX", "Chunk index is outside the upload session range.")
     if item.expires_at and item.expires_at < utc_now_naive():
@@ -367,72 +451,99 @@ async def store_memory_upload_chunk_stream(
         if existing_size == expected_length and file_exists and (not declared_chunk_sha or existing_sha == declared_chunk_sha):
             return item
 
-    target_dir = _chunk_dir(item)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    temp_path = target_dir / f"{chunk_index:08d}.{uuid4()}.part"
-    final_path = _chunk_path(item, chunk_index)
-    digest = hashlib.sha256()
-    bytes_written = 0
-    receive_hash_write_ms = 0
-    file_fsync_ms = 0
-    dir_fsync_ms = 0
+    with _redis_upload_lock(f"kairon:memory_upload:{upload_id}:chunk:{chunk_index}"):
+        db.refresh(item)
+        if item.status in TERMINAL_UPLOAD_SESSION_STATUSES or item.status in {"verifying", "finalizing"}:
+            raise MemoryUploadSessionError("MEMORY_UPLOAD_FINALIZING", "Upload finalization or cancellation is already in progress.")
+        received_chunks = _received_chunks(item)
+        existing = received_chunks.get(str(chunk_index))
+        if existing is not None:
+            existing_size = int(existing.get("size") or 0)
+            existing_sha = str(existing.get("sha256") or "")
+            chunk_path = _chunk_path(item, chunk_index)
+            file_exists = chunk_path.exists() and chunk_path.is_file() and not chunk_path.is_symlink()
+            if existing_size == expected_length and file_exists and (not declared_chunk_sha or existing_sha == declared_chunk_sha):
+                return item
+        _set_active_chunk(item, chunk_index, True)
+        db.add(item)
+        db.commit()
 
-    with temp_path.open("xb") as handle:
-        phase_started = time.monotonic()
-        async for chunk in chunks:
-            if not chunk:
-                continue
-            bytes_written += len(chunk)
-            if bytes_written > expected_length:
-                handle.close()
+        try:
+            target_dir = _chunk_dir(item)
+            target_dir.mkdir(parents=True, exist_ok=True)
+            temp_path = target_dir / f"{chunk_index:08d}.{uuid4()}.part"
+            final_path = _chunk_path(item, chunk_index)
+            digest = hashlib.sha256()
+            bytes_written = 0
+            receive_hash_write_ms = 0
+            file_fsync_ms = 0
+            dir_fsync_ms = 0
+
+            with temp_path.open("xb") as handle:
+                phase_started = time.monotonic()
+                async for chunk in chunks:
+                    if not chunk:
+                        continue
+                    bytes_written += len(chunk)
+                    if bytes_written > expected_length:
+                        handle.close()
+                        temp_path.unlink(missing_ok=True)
+                        raise MemoryUploadSessionError("MEMORY_UPLOAD_CHUNK_TOO_LARGE", "Chunk payload exceeds the configured chunk size.")
+                    digest.update(chunk)
+                    handle.write(chunk)
+                receive_hash_write_ms = int((time.monotonic() - phase_started) * 1000)
+                handle.flush()
+                fsync_started = time.monotonic()
+                os.fsync(handle.fileno())
+                file_fsync_ms = int((time.monotonic() - fsync_started) * 1000)
+
+            computed_sha = digest.hexdigest()
+            if bytes_written != expected_length:
                 temp_path.unlink(missing_ok=True)
-                raise MemoryUploadSessionError("MEMORY_UPLOAD_CHUNK_TOO_LARGE", "Chunk payload exceeds the configured chunk size.")
-            digest.update(chunk)
-            handle.write(chunk)
-        receive_hash_write_ms = int((time.monotonic() - phase_started) * 1000)
-        handle.flush()
-        fsync_started = time.monotonic()
-        os.fsync(handle.fileno())
-        file_fsync_ms = int((time.monotonic() - fsync_started) * 1000)
+                raise MemoryUploadSessionError("MEMORY_UPLOAD_INVALID_CHUNK_LENGTH", "Chunk payload is incomplete.")
+            if declared_chunk_sha and declared_chunk_sha != computed_sha:
+                temp_path.unlink(missing_ok=True)
+                raise MemoryUploadSessionError("MEMORY_UPLOAD_CHUNK_HASH_MISMATCH", "Chunk integrity verification failed.")
 
-    computed_sha = digest.hexdigest()
-    if bytes_written != expected_length:
-        temp_path.unlink(missing_ok=True)
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_INVALID_CHUNK_LENGTH", "Chunk payload is incomplete.")
-    if declared_chunk_sha and declared_chunk_sha != computed_sha:
-        temp_path.unlink(missing_ok=True)
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_CHUNK_HASH_MISMATCH", "Chunk integrity verification failed.")
+            if final_path.exists():
+                existing_meta = received_chunks.get(str(chunk_index)) or {}
+                if int(existing_meta.get("size") or 0) == bytes_written and str(existing_meta.get("sha256") or "") == computed_sha:
+                    temp_path.unlink(missing_ok=True)
+                    return item
+                temp_path.unlink(missing_ok=True)
+                raise MemoryUploadSessionError("MEMORY_UPLOAD_CHUNK_CONFLICT", "Chunk data conflicts with bytes already stored for this upload session.")
 
-    if final_path.exists():
-        existing_meta = received_chunks.get(str(chunk_index)) or {}
-        if int(existing_meta.get("size") or 0) == bytes_written and str(existing_meta.get("sha256") or "") == computed_sha:
-            temp_path.unlink(missing_ok=True)
-            return item
-        temp_path.unlink(missing_ok=True)
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_CHUNK_CONFLICT", "Chunk data conflicts with bytes already stored for this upload session.")
+            os.replace(temp_path, final_path)
+            dir_fd = os.open(str(target_dir), os.O_DIRECTORY)
+            try:
+                fsync_started = time.monotonic()
+                os.fsync(dir_fd)
+                dir_fsync_ms = int((time.monotonic() - fsync_started) * 1000)
+            finally:
+                os.close(dir_fd)
 
-    os.replace(temp_path, final_path)
-    dir_fd = os.open(str(target_dir), os.O_DIRECTORY)
-    try:
-        fsync_started = time.monotonic()
-        os.fsync(dir_fd)
-        dir_fsync_ms = int((time.monotonic() - fsync_started) * 1000)
-    finally:
-        os.close(dir_fd)
-
-    received_chunks[str(chunk_index)] = {"size": bytes_written, "sha256": computed_sha}
-    _set_received_chunks(item, received_chunks)
-    item.received_chunk_count = len(received_chunks)
-    item.bytes_received = sum(int(chunk.get("size") or 0) for chunk in received_chunks.values())
-    item.status = "uploading"
-    item.failure_code = None
-    item.failure_message = None
-    _touch_session(item)
-    db.add(item)
-    db_started = time.monotonic()
-    db.commit()
-    db_commit_ms = int((time.monotonic() - db_started) * 1000)
-    db.refresh(item)
+            received_chunks[str(chunk_index)] = {"size": bytes_written, "sha256": computed_sha}
+            _set_received_chunks(item, received_chunks)
+            item.received_chunk_count = len(received_chunks)
+            item.bytes_received = sum(int(chunk.get("size") or 0) for chunk in received_chunks.values())
+            item.status = "uploading"
+            item.failure_code = None
+            item.failure_message = None
+            _touch_session(item)
+            db.add(item)
+            db_started = time.monotonic()
+            db.commit()
+            db_commit_ms = int((time.monotonic() - db_started) * 1000)
+            db.refresh(item)
+        finally:
+            try:
+                db.refresh(item)
+                _set_active_chunk(item, chunk_index, False)
+                db.add(item)
+                db.commit()
+                db.refresh(item)
+            except Exception:  # noqa: BLE001
+                logger.warning("memory upload active chunk cleanup failed", extra={"upload_id": upload_id, "chunk_index": chunk_index})
     logger.info(
         "memory upload chunk stored",
         extra={
@@ -592,134 +703,138 @@ def finalize_memory_upload_session(
     upload_id: str,
     expected_sha256: str | None = None,
 ) -> tuple[MemoryUpload, Evidence | None]:
-    item = get_memory_upload(db, case_id, upload_id)
-    if item is None:
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_NOT_FOUND", "Memory upload session was not found.")
-    if item.status in {"completed", "cancelled", "expired", "inconsistent"}:
-        return item, db.get(Evidence, item.evidence_id) if item.status == "completed" else None
+    with _redis_upload_lock(f"kairon:memory_upload:{upload_id}:finalize"):
+        item = get_memory_upload(db, case_id, upload_id)
+        if item is None:
+            raise MemoryUploadSessionError("MEMORY_UPLOAD_NOT_FOUND", "Memory upload session was not found.")
+        if item.status in {"completed", "cancelled", "expired", "inconsistent"}:
+            return item, db.get(Evidence, item.evidence_id) if item.status == "completed" else None
+        active_chunks = _active_chunk_indices(item)
+        if active_chunks:
+            raise MemoryUploadSessionError("MEMORY_UPLOAD_CHUNKS_ACTIVE", "Cannot finalize while chunk uploads are still active.", detail={"active_chunks": active_chunks})
 
-    integrity = check_memory_upload_staging_integrity(item, verify_hashes=True)
-    integrity_status = integrity["integrity_status"]
-    if integrity_status != _STAGING_INTEGRITY_HEALTHY:
-        item.status = "failed"
-        item.failure_code = "MEMORY_UPLOAD_STAGING_INCONSISTENT"
-        item.failure_message = f"Cannot finalize: staging integrity is {integrity_status}."
-        item.retryable = True
-        db.add(item)
-        db.commit()
-        raise MemoryUploadSessionError(
-            "MEMORY_UPLOAD_STAGING_INCONSISTENT",
-            item.failure_message,
-            detail={"integrity_status": integrity_status, "missing_chunks": integrity.get("missing_db_chunks_on_disk", []), "size_mismatches": integrity.get("size_mismatches", []), "hash_mismatches": integrity.get("hash_mismatches", [])},
-        )
-
-    expected_client_sha = _sanitize_sha256(expected_sha256 or item.expected_sha256)
-    chunks = _received_chunks(item)
-    missing_chunks = [index for index in range(int(item.total_chunks or 0)) if str(index) not in chunks]
-    if missing_chunks:
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_CHUNKS_MISSING", "Upload session is missing one or more chunks.", detail={"missing_chunks": missing_chunks})
-
-    capacity = _capacity_snapshot(db, expected_bytes=int(item.expected_bytes or 0), exclude_upload_id=item.id)
-    if not bool(capacity["can_accept_selected_size"]):
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_INSUFFICIENT_SPACE", "Server storage capacity is below the safe threshold for finalization.")
-
-    final_path = _canonical_path(item)
-    final_path.parent.mkdir(parents=True, exist_ok=True)
-    assembly_path = _assembly_temp_path(item)
-    digest = hashlib.sha256()
-    total_bytes = 0
-    item.status = "verifying"
-    item.failure_code = None
-    item.failure_message = None
-    _touch_session(item)
-    db.add(item)
-    db.commit()
-
-    try:
-        with assembly_path.open("xb") as target:
-            for index in range(int(item.total_chunks or 0)):
-                chunk_path = _chunk_path(item, index)
-                with chunk_path.open("rb") as source:
-                    for blob in iter(lambda: source.read(1024 * 1024), b""):
-                        total_bytes += len(blob)
-                        digest.update(blob)
-                        target.write(blob)
-            target.flush()
-            os.fsync(target.fileno())
-
-        computed_sha = digest.hexdigest()
-        if total_bytes != int(item.expected_bytes or 0):
-            raise MemoryUploadSessionError("MEMORY_UPLOAD_FINAL_SIZE_MISMATCH", "Finalized byte count does not match the declared upload size.")
-        if expected_client_sha and computed_sha != expected_client_sha:
-            raise MemoryUploadSessionError("MEMORY_UPLOAD_SHA256_MISMATCH", "Finalized SHA-256 does not match the client integrity hint.")
-
-        item.sha256 = computed_sha
-        duplicate = _find_duplicate_memory_evidence(db, item)
-        if duplicate is not None:
-            _cleanup_session_storage(item)
-            final_root = final_path.parent.parent
-            if final_root.exists() and not final_root.is_symlink():
-                shutil.rmtree(final_root, ignore_errors=True)
+        integrity = check_memory_upload_staging_integrity(item, verify_hashes=True)
+        integrity_status = integrity["integrity_status"]
+        if integrity_status != _STAGING_INTEGRITY_HEALTHY:
             item.status = "failed"
-            item.failure_code = ERR_REGISTRATION_DUPLICATE
-            item.failure_message = "This memory image is already registered in this case."
-            item.retryable = False
-            _touch_session(item)
-            metadata = _session_metadata(item)
-            metadata["duplicate"] = {
-                "existing_evidence_id": duplicate.id,
-                "existing_filename": duplicate.original_filename,
-            }
-            _write_session_metadata(item, metadata)
+            item.failure_code = "MEMORY_UPLOAD_STAGING_INCONSISTENT"
+            item.failure_message = f"Cannot finalize: staging integrity is {integrity_status}."
+            item.retryable = True
             db.add(item)
             db.commit()
             raise MemoryUploadSessionError(
-                ERR_REGISTRATION_DUPLICATE,
+                "MEMORY_UPLOAD_STAGING_INCONSISTENT",
                 item.failure_message,
-                detail={
-                    "existing_evidence_id": duplicate.id,
-                    "existing_filename": duplicate.original_filename,
-                    "duplicate": True,
-                },
+                detail={"integrity_status": integrity_status, "missing_chunks": integrity.get("missing_db_chunks_on_disk", []), "size_mismatches": integrity.get("size_mismatches", []), "hash_mismatches": integrity.get("hash_mismatches", [])},
             )
 
-        item.status = "finalizing"
-        item.finalized_at = utc_now_naive()
-        item.bytes_received = total_bytes
-        item.received_chunk_count = int(item.total_chunks or 0)
+        expected_client_sha = _sanitize_sha256(expected_sha256 or item.expected_sha256)
+        chunks = _received_chunks(item)
+        missing_chunks = [index for index in range(int(item.total_chunks or 0)) if str(index) not in chunks]
+        if missing_chunks:
+            raise MemoryUploadSessionError("MEMORY_UPLOAD_CHUNKS_MISSING", "Upload session is missing one or more chunks.", detail={"missing_chunks": missing_chunks})
+
+        capacity = _capacity_snapshot(db, expected_bytes=int(item.expected_bytes or 0), exclude_upload_id=item.id)
+        if not bool(capacity["can_accept_selected_size"]):
+            raise MemoryUploadSessionError("MEMORY_UPLOAD_INSUFFICIENT_SPACE", "Server storage capacity is below the safe threshold for finalization.")
+
+        final_path = _canonical_path(item)
+        final_path.parent.mkdir(parents=True, exist_ok=True)
+        assembly_path = _assembly_temp_path(item)
+        digest = hashlib.sha256()
+        total_bytes = 0
+        item.status = "verifying"
+        item.failure_code = None
+        item.failure_message = None
         _touch_session(item)
         db.add(item)
         db.commit()
 
-        os.replace(assembly_path, final_path)
-        secure_uploaded_memory_permissions(final_path, settings=get_settings())
-        dir_fd = os.open(str(final_path.parent), os.O_DIRECTORY)
         try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+            with assembly_path.open("xb") as target:
+                for index in range(int(item.total_chunks or 0)):
+                    chunk_path = _chunk_path(item, index)
+                    with chunk_path.open("rb") as source:
+                        for blob in iter(lambda: source.read(1024 * 1024), b""):
+                            total_bytes += len(blob)
+                            digest.update(blob)
+                            target.write(blob)
+                target.flush()
+                os.fsync(target.fileno())
 
-        evidence = register_memory_evidence(item.id, db=db)
-        _cleanup_session_storage(item)
-        db.refresh(item)
-        return item, evidence
-    except MemoryUploadRegistrationError as exc:
-        raise MemoryUploadSessionError(exc.code, exc.message, detail={
-            "duplicate": exc.code == ERR_REGISTRATION_DUPLICATE,
-            "existing_evidence_id": exc.existing_evidence_id,
-            "existing_filename": exc.existing_filename,
-        }) from exc
-    except Exception as exc:
-        if assembly_path.exists() and not assembly_path.is_symlink():
-            assembly_path.unlink(missing_ok=True)
-        item.status = "failed"
-        item.failure_code = getattr(exc, "code", None) or "MEMORY_UPLOAD_FINALIZATION_FAILED"
-        item.failure_message = str(exc)[:512]
-        item.retryable = True
-        _touch_session(item)
-        db.add(item)
-        db.commit()
-        raise
+            computed_sha = digest.hexdigest()
+            if total_bytes != int(item.expected_bytes or 0):
+                raise MemoryUploadSessionError("MEMORY_UPLOAD_FINAL_SIZE_MISMATCH", "Finalized byte count does not match the declared upload size.")
+            if expected_client_sha and computed_sha != expected_client_sha:
+                raise MemoryUploadSessionError("MEMORY_UPLOAD_SHA256_MISMATCH", "Finalized SHA-256 does not match the client integrity hint.")
+
+            item.sha256 = computed_sha
+            duplicate = _find_duplicate_memory_evidence(db, item)
+            if duplicate is not None:
+                _cleanup_session_storage(item)
+                final_root = final_path.parent.parent
+                if final_root.exists() and not final_root.is_symlink():
+                    shutil.rmtree(final_root, ignore_errors=True)
+                item.status = "failed"
+                item.failure_code = ERR_REGISTRATION_DUPLICATE
+                item.failure_message = "This memory image is already registered in this case."
+                item.retryable = False
+                _touch_session(item)
+                metadata = _session_metadata(item)
+                metadata["duplicate"] = {
+                    "existing_evidence_id": duplicate.id,
+                    "existing_filename": duplicate.original_filename,
+                }
+                _write_session_metadata(item, metadata)
+                db.add(item)
+                db.commit()
+                raise MemoryUploadSessionError(
+                    ERR_REGISTRATION_DUPLICATE,
+                    item.failure_message,
+                    detail={
+                        "existing_evidence_id": duplicate.id,
+                        "existing_filename": duplicate.original_filename,
+                        "duplicate": True,
+                    },
+                )
+
+            item.status = "finalizing"
+            item.finalized_at = utc_now_naive()
+            item.bytes_received = total_bytes
+            item.received_chunk_count = int(item.total_chunks or 0)
+            _touch_session(item)
+            db.add(item)
+            db.commit()
+
+            os.replace(assembly_path, final_path)
+            secure_uploaded_memory_permissions(final_path, settings=get_settings())
+            dir_fd = os.open(str(final_path.parent), os.O_DIRECTORY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+
+            evidence = register_memory_evidence(item.id, db=db)
+            _cleanup_session_storage(item)
+            db.refresh(item)
+            return item, evidence
+        except MemoryUploadRegistrationError as exc:
+            raise MemoryUploadSessionError(exc.code, exc.message, detail={
+                "duplicate": exc.code == ERR_REGISTRATION_DUPLICATE,
+                "existing_evidence_id": exc.existing_evidence_id,
+                "existing_filename": exc.existing_filename,
+            }) from exc
+        except Exception as exc:
+            if assembly_path.exists() and not assembly_path.is_symlink():
+                assembly_path.unlink(missing_ok=True)
+            item.status = "failed"
+            item.failure_code = getattr(exc, "code", None) or "MEMORY_UPLOAD_FINALIZATION_FAILED"
+            item.failure_message = str(exc)[:512]
+            item.retryable = True
+            _touch_session(item)
+            db.add(item)
+            db.commit()
+            raise
 
 
 def cancel_memory_upload_session(db: Session, *, case_id: str, upload_id: str, reason: str | None = None) -> MemoryUpload:
@@ -791,6 +906,156 @@ def cleanup_expired_memory_upload_sessions(db: Session, *, limit: int = 50) -> d
     return {"expired": removed, "purged": purged}
 
 
+def reconcile_memory_upload_storage(
+    db: Session,
+    *,
+    case_id: str | None = None,
+    upload_id: str | None = None,
+    older_than_hours: int | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Classify DB/filesystem drift without mutating data."""
+    settings = get_settings()
+    staging_root = settings.memory_upload_staging_path.resolve()
+    staging_root.mkdir(parents=True, exist_ok=True)
+    query = db.query(MemoryUpload)
+    if case_id:
+        query = query.filter(MemoryUpload.case_id == case_id)
+    if upload_id:
+        query = query.filter(MemoryUpload.id == upload_id)
+    if older_than_hours is not None:
+        query = query.filter(MemoryUpload.updated_at < utc_now_naive() - timedelta(hours=max(0, int(older_than_hours))))
+    if limit is not None:
+        query = query.limit(max(1, int(limit)))
+    uploads = query.all()
+    by_staging = {item.staging_name: item for item in uploads}
+    findings: list[dict[str, Any]] = []
+    for item in uploads:
+        root = _session_root(item)
+        integrity = check_memory_upload_staging_integrity(item) if item.status != "completed" else {"integrity_status": "completed"}
+        if item.status != "completed" and not root.exists():
+            findings.append({"upload_id": item.id, "classification": "db_session_staging_missing", "status": item.status})
+        if item.status == "completed" and not db.get(Evidence, item.evidence_id):
+            findings.append({"upload_id": item.id, "classification": "completed_session_evidence_missing", "status": item.status})
+        if item.status != "completed" and integrity.get("integrity_status") not in {"healthy", "completed"}:
+            findings.append({"upload_id": item.id, "classification": "chunk_metadata_differs_from_filesystem", "integrity_status": integrity.get("integrity_status")})
+    if not upload_id:
+        for entry in staging_root.iterdir() if staging_root.exists() else []:
+            if not entry.is_dir() or entry.is_symlink():
+                continue
+            if entry.name not in by_staging:
+                findings.append({"staging_name": entry.name, "classification": "staging_exists_db_session_missing"})
+    return {"uploads_inspected": len(uploads), "reconciliation_findings": findings, "findings": findings, "repair_actions": ["cancel_upload", "retry_registration", "manual_review"]}
+
+
+def cleanup_memory_upload_staging(
+    db: Session,
+    *,
+    dry_run: bool = True,
+    case_id: str | None = None,
+    upload_id: str | None = None,
+    older_than_hours: int | None = None,
+    limit: int | None = None,
+) -> dict[str, Any]:
+    """Administrative cleanup for terminal/orphan staging.
+
+    Active sessions are skipped.  ``dry_run`` reports reclaimable bytes;
+    ``apply`` removes only orphan or non-completed terminal session staging.
+    """
+    settings = get_settings()
+    staging_root = settings.memory_upload_staging_path.resolve()
+    staging_root.mkdir(parents=True, exist_ok=True)
+    cutoff = utc_now_naive() - timedelta(hours=max(0, int(older_than_hours))) if older_than_hours is not None else None
+    query = db.query(MemoryUpload)
+    if case_id:
+        query = query.filter(MemoryUpload.case_id == case_id)
+    if upload_id:
+        query = query.filter(MemoryUpload.id == upload_id)
+    if cutoff is not None:
+        query = query.filter(MemoryUpload.updated_at < cutoff)
+    if limit is not None:
+        query = query.limit(max(1, int(limit)))
+    uploads = query.all()
+    by_staging = {item.staging_name: item for item in uploads}
+    inspected = len(uploads)
+    active_skipped = 0
+    expired_sessions = 0
+    orphan_dirs = 0
+    missing_staging = 0
+    completed_with_staging = 0
+    errors: list[str] = []
+    bytes_reclaimable = 0
+    bytes_removed = 0
+
+    def dir_size(path: Path) -> int:
+        total = 0
+        for child in path.rglob("*"):
+            if child.is_file() and not child.is_symlink():
+                total += child.stat().st_size
+        return total
+
+    candidates: list[Path] = []
+    now = utc_now_naive()
+    for item in uploads:
+        root = _session_root(item)
+        if item.status in ACTIVE_UPLOAD_SESSION_STATUSES or _active_chunk_indices(item):
+            if root.exists():
+                active_skipped += 1
+            continue
+        if item.expires_at and item.expires_at < now and item.status != "completed":
+            expired_sessions += 1
+        if not root.exists():
+            if item.status != "completed":
+                missing_staging += 1
+            continue
+        if item.status == "completed":
+            completed_with_staging += 1
+            size = dir_size(root)
+            bytes_reclaimable += size
+            candidates.append(root)
+            continue
+        if item.status in TERMINAL_UPLOAD_SESSION_STATUSES:
+            size = dir_size(root)
+            bytes_reclaimable += size
+            candidates.append(root)
+
+    if not upload_id:
+        for entry in staging_root.iterdir() if staging_root.exists() else []:
+            if not entry.is_dir() or entry.is_symlink():
+                continue
+            if entry.name in by_staging:
+                continue
+            if cutoff is not None and entry.stat().st_mtime > cutoff.timestamp():
+                continue
+            orphan_dirs += 1
+            size = dir_size(entry)
+            bytes_reclaimable += size
+            candidates.append(entry)
+
+    candidates = candidates[: max(1, int(limit))] if limit is not None else candidates
+    if not dry_run:
+        for entry in candidates:
+            try:
+                size = dir_size(entry)
+                shutil.rmtree(entry, ignore_errors=False)
+                bytes_removed += size
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{entry.name}: {exc}")
+
+    return {
+        "dry_run": dry_run,
+        "sessions_inspected": inspected,
+        "active_sessions_skipped": active_skipped,
+        "skipped_active_sessions": active_skipped,
+        "expired_sessions": expired_sessions,
+        "orphan_directories": orphan_dirs,
+        "missing_staging": missing_staging,
+        "completed_with_staging": completed_with_staging,
+        "bytes_reclaimable": bytes_reclaimable,
+        "bytes_removed": bytes_removed,
+        "reconciliation_findings": [],
+        "errors": errors,
+    }
 def schedule_periodic_cleanup_if_needed() -> bool:
     try:
         redis_conn = redis.Redis.from_url(get_settings().redis_url)
@@ -841,6 +1106,11 @@ def upload_status_with_chunks(item: MemoryUpload, *, db: Session | None = None) 
             "received_chunks": received,
             "missing_chunks": missing,
             "progress_percent": int((int(item.bytes_received or 0) * 100) / max(1, int(item.expected_bytes or 1))),
+            "upload_mode": _session_upload_mode(item),
+            "default_concurrency": int(_session_metadata(item).get("default_concurrency") or get_settings().memory_upload_default_concurrency or 1),
+            "max_concurrency": int(_session_metadata(item).get("max_concurrency") or get_settings().memory_upload_max_concurrency or 1),
+            "active_chunks": _active_chunk_indices(item),
+            "fallback_to_sequential": bool(_session_metadata(item).get("fallback_to_sequential")),
             "created_at": item.created_at,
             "expires_at": item.expires_at,
             "finalized_at": item.finalized_at,

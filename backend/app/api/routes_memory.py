@@ -8,7 +8,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from sqlalchemy.exc import DataError, IntegrityError, ProgrammingError
 from sqlalchemy.orm import Session
 
@@ -56,7 +56,7 @@ from app.core.database import get_db
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryArtifactSummary, MemoryNativeProbe, MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition, MemorySymbolRequirement
-from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolBlockedAcquireRequest, MemorySymbolBlockedAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadFinalizeRequest, MemoryUploadReadinessRead, MemoryUploadSessionCreateRequest, MemoryUploadSessionCreateResponse, MemoryUploadStatusRead
+from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolBlockedAcquireRequest, MemorySymbolBlockedAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadDirectResponse, MemoryUploadFinalizeRequest, MemoryUploadReadinessRead, MemoryUploadSessionCreateRequest, MemoryUploadSessionCreateResponse, MemoryUploadStatusRead
 from app.services.memory.artifact_indexing import (
     get_artifact_document,
     link_process_entities,
@@ -1407,9 +1407,12 @@ def _raise_upload_session_error(exc: MemoryUploadSessionError) -> HTTPException:
         "MEMORY_UPLOAD_CHUNKS_MISSING",
         "MEMORY_UPLOAD_SHA256_MISMATCH",
         "MEMORY_UPLOAD_FINAL_SIZE_MISMATCH",
+        "MEMORY_UPLOAD_DIRECT_TOO_LARGE",
+        "MEMORY_UPLOAD_INVALID_MODE",
+        "MEMORY_UPLOAD_MODE_CONFLICT",
     }:
         return HTTPException(status_code=409, detail=detail)
-    if exc.code == "MEMORY_UPLOAD_TERMINAL":
+    if exc.code in {"MEMORY_UPLOAD_TERMINAL", "MEMORY_UPLOAD_FINALIZING", "MEMORY_UPLOAD_CHUNKS_ACTIVE", "MEMORY_UPLOAD_LOCKED", "MEMORY_UPLOAD_LOCK_UNAVAILABLE"}:
         return HTTPException(status_code=409, detail=detail)
     if exc.code == "MEMORY_UPLOAD_CHUNK_CONFLICT":
         return HTTPException(status_code=409, detail=detail)
@@ -1446,12 +1449,68 @@ def create_memory_upload_session_endpoint(
             provided_host=payload.provided_host,
             authorization_acknowledged=payload.authorization_acknowledged,
             expected_sha256=payload.expected_sha256,
+            upload_mode=payload.upload_mode,
         )
     except MemoryUploadSessionError as exc:
         raise _raise_upload_session_error(exc) from exc
     payload_dict = upload_status_with_chunks(item, db=db)
     payload_dict["resumable"] = True
     return payload_dict
+
+
+@router.post("/cases/{case_id}/memory/uploads/direct", response_model=MemoryUploadDirectResponse, status_code=status.HTTP_201_CREATED)
+async def direct_memory_upload_endpoint(
+    case_id: str,
+    request: Request,
+    filename: str = Form(...),
+    expected_size_bytes: int = Form(...),
+    provided_host: str = Form(...),
+    authorization_acknowledged: bool = Form(False),
+    expected_sha256: str | None = Form(None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    _require_case(db, case_id)
+    item = None
+    try:
+        item = create_memory_upload_session(
+            db,
+            case_id=case_id,
+            filename=filename,
+            expected_size_bytes=expected_size_bytes,
+            provided_host=provided_host,
+            authorization_acknowledged=authorization_acknowledged,
+            expected_sha256=expected_sha256,
+            upload_mode="direct",
+        )
+        await store_memory_upload_chunk_stream(
+            db,
+            case_id=case_id,
+            upload_id=item.id,
+            chunk_index=0,
+            chunks=iter_upload_file_chunks(file),
+            headers=request.headers,
+            content_length_is_payload=False,
+            expected_mode="direct",
+        )
+        finalized, _evidence = finalize_memory_upload_session(
+            db,
+            case_id=case_id,
+            upload_id=item.id,
+            expected_sha256=expected_sha256,
+        )
+    except MemoryUploadSessionError as exc:
+        if item is not None:
+            try:
+                cancel_memory_upload_session(db, case_id=case_id, upload_id=item.id, reason="direct upload failed before finalization")
+            except Exception:
+                pass
+        raise _raise_upload_session_error(exc) from exc
+    finally:
+        await file.close()
+    payload = upload_status_with_chunks(finalized, db=db)
+    payload["resumable"] = False
+    return payload
 
 
 @router.put(
@@ -1474,6 +1533,7 @@ async def upload_memory_upload_chunk_endpoint(
             upload_id=upload_id,
             chunk_index=chunk_index,
             request=request,
+            expected_mode="resumable",
         )
     except MemoryUploadSessionError as exc:
         raise _raise_upload_session_error(exc) from exc
@@ -1503,6 +1563,7 @@ async def upload_memory_upload_chunk_multipart_endpoint(
             chunks=iter_upload_file_chunks(chunk),
             headers=request.headers,
             content_length_is_payload=False,
+            expected_mode="resumable",
         )
     except MemoryUploadSessionError as exc:
         raise _raise_upload_session_error(exc) from exc

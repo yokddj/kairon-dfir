@@ -71,8 +71,12 @@ class Settings(BaseSettings):
     memory_upload_finalization_timeout_seconds: int = 1800
     memory_upload_stale_timeout_seconds: int = 900
     memory_upload_session_ttl_seconds: int = 86400
+    memory_upload_session_ttl_hours: int = 24
     memory_upload_min_free_space_bytes: int = 53687091200
     memory_upload_case_quota_bytes: int = 107374182400
+    memory_upload_direct_threshold_bytes: int = 1073741824
+    memory_upload_default_concurrency: int = 2
+    memory_upload_max_concurrency: int = 4
     memory_upload_max_parallel_chunks: int = 2
     memory_upload_allowed_extensions: str = ".raw,.mem,.dmp,.dump,.bin,.img,.vmem,.lime"
     memory_job_timeout_seconds: int = 900
@@ -552,6 +556,10 @@ class Settings(BaseSettings):
             raise ValueError("MEMORY_UPLOAD_CHUNK_BYTES must not exceed MEMORY_UPLOAD_MAX_BYTES")
         if self.memory_upload_session_ttl_seconds <= 0:
             raise ValueError("MEMORY_UPLOAD_SESSION_TTL_SECONDS must be greater than zero")
+        if self.memory_upload_session_ttl_hours <= 0:
+            raise ValueError("MEMORY_UPLOAD_SESSION_TTL_HOURS must be greater than zero")
+        if self.memory_upload_direct_threshold_bytes <= 0:
+            raise ValueError("MEMORY_UPLOAD_DIRECT_THRESHOLD_BYTES must be greater than zero")
         if self.memory_upload_request_timeout_seconds <= 0:
             raise ValueError("MEMORY_UPLOAD_REQUEST_TIMEOUT_SECONDS must be greater than zero")
         if self.memory_upload_min_free_space_bytes < 0:
@@ -560,6 +568,12 @@ class Settings(BaseSettings):
             raise ValueError("MEMORY_UPLOAD_CASE_QUOTA_BYTES must be greater than zero")
         if self.memory_upload_max_parallel_chunks <= 0:
             raise ValueError("MEMORY_UPLOAD_MAX_PARALLEL_CHUNKS must be greater than zero")
+        if self.memory_upload_default_concurrency <= 0:
+            raise ValueError("MEMORY_UPLOAD_DEFAULT_CONCURRENCY must be greater than zero")
+        if self.memory_upload_max_concurrency < self.memory_upload_default_concurrency:
+            raise ValueError("MEMORY_UPLOAD_MAX_CONCURRENCY must be greater than or equal to MEMORY_UPLOAD_DEFAULT_CONCURRENCY")
+        if self.memory_upload_max_concurrency > 4:
+            raise ValueError("MEMORY_UPLOAD_MAX_CONCURRENCY must not exceed 4")
         if self.memory_profile_timeout_overhead_seconds <= 0:
             raise ValueError("MEMORY_PROFILE_TIMEOUT_OVERHEAD_SECONDS must be greater than zero")
         if self.memory_job_timeout_cleanup_margin_seconds <= 0:

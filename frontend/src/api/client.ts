@@ -95,7 +95,9 @@ type UploadBlobOptions = {
   multipart?: {
     fieldName: string;
     filename: string;
+    fields?: Record<string, string | number | boolean | null | undefined>;
   };
+  onProgress?: (info: { loaded: number; total: number }) => void;
 };
 
 async function buildZipFromFolder(files: File[], archiveName = "raw-folder.zip"): Promise<File> {
@@ -264,6 +266,9 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
         const body = options?.multipart
           ? (() => {
               const form = new FormData();
+              for (const [key, value] of Object.entries(options.multipart.fields ?? {})) {
+                if (value != null) form.append(key, String(value));
+              }
               form.append(options.multipart.fieldName, blob, options.multipart.filename);
               return form;
             })()
@@ -279,6 +284,13 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
         }
         xhr.timeout = options?.timeoutMs ?? UPLOAD_BLOB_DEFAULT_TIMEOUT_MS;
         xhr.onabort = () => finish(() => reject(new Error("Upload aborted")));
+        if (xhr.upload) {
+          xhr.upload.onprogress = (event) => {
+            if (options?.onProgress && event.lengthComputable) {
+              options.onProgress({ loaded: event.loaded, total: event.total });
+            }
+          };
+        }
         xhr.onerror = () => finish(() => reject(new Error(`Network error while uploading to ${url}`)));
         xhr.ontimeout = () => finish(() => {
           const error = new Error("Upload timed out. Your network may be unavailable. Check your connection and try again.");
@@ -1427,6 +1439,9 @@ export type MemoryUploadReadiness = {
   max_upload_bytes: number;
   max_upload_display: string;
   recommended_chunk_size_bytes: number;
+  direct_threshold_bytes: number;
+  selected_upload_mode: "direct" | "resumable" | null;
+  default_concurrency: number;
   resumable: boolean;
   max_parallel_chunks: number;
   case_quota_bytes: number;
@@ -1463,6 +1478,11 @@ export type MemoryUploadStatus = {
   received_chunks?: number[];
   missing_chunks?: number[];
   progress_percent?: number;
+  upload_mode?: "direct" | "resumable";
+  default_concurrency?: number;
+  max_concurrency?: number;
+  active_chunks?: number[];
+  fallback_to_sequential?: boolean;
   filename?: string;
   extension?: string;
   created_at?: string;
@@ -1492,6 +1512,7 @@ export type MemoryUploadSessionCreateRequest = {
   provided_host: string;
   authorization_acknowledged: boolean;
   expected_sha256?: string;
+  upload_mode?: "direct" | "resumable";
 };
 
 export type ProblematicArtifact = {
@@ -4585,18 +4606,40 @@ export const api = {
   getMemoryUploadStatus: (caseId: string, uploadId: string) => request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}`),
   createMemoryUploadSession: (caseId: string, payload: MemoryUploadSessionCreateRequest) =>
     request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads`, { method: "POST", body: JSON.stringify(payload) }),
+  directMemoryUpload: (
+    caseId: string,
+    file: File,
+    payload: MemoryUploadSessionCreateRequest,
+    options?: { signal?: AbortSignal; onProgress?: (info: { loaded: number; total: number }) => void },
+  ) => uploadBlob<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/direct`, file, {
+    method: "POST",
+    multipart: {
+      fieldName: "file",
+      filename: file.name,
+      fields: {
+        filename: payload.filename,
+        expected_size_bytes: payload.expected_size_bytes,
+        provided_host: payload.provided_host,
+        authorization_acknowledged: payload.authorization_acknowledged,
+        expected_sha256: payload.expected_sha256,
+      },
+    },
+    signal: options?.signal,
+    onProgress: options?.onProgress,
+  }),
   uploadMemoryUploadChunk: async (
     caseId: string,
     uploadId: string,
     chunkIndex: number,
     blob: Blob,
-    options?: { chunkSha256?: string; signal?: AbortSignal },
+    options?: { chunkSha256?: string; signal?: AbortSignal; onProgress?: (info: { loaded: number; total: number }) => void },
   ) => {
     const status = await uploadBlob<MemoryUploadStatus | undefined>(`/cases/${caseId}/memory/uploads/${uploadId}/chunks/${chunkIndex}`, blob, {
       method: "POST",
       multipart: { fieldName: "chunk", filename: `chunk-${chunkIndex}.bin` },
       headers: options?.chunkSha256 ? { "X-Kairon-Chunk-SHA256": options.chunkSha256 } : undefined,
       signal: options?.signal,
+      onProgress: options?.onProgress,
     });
     return status ?? request<MemoryUploadStatus>(`/cases/${caseId}/memory/uploads/${uploadId}`);
   },

@@ -442,4 +442,31 @@ describe("uploadMemoryUploadChunk integration", () => {
     await expect(promise).rejects.toThrow("Upload aborted");
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
+
+  it("uses XMLHttpRequest POST multipart FormData for direct memory uploads", async () => {
+    const status = { upload_id: "direct-1", status: "completed", evidence_id: "ev-1" } as MemoryUploadStatus;
+    const instances = installMockXhr([{ status: 201, responseText: JSON.stringify(status), contentType: "application/json" }]);
+
+    const { api } = await import("./client");
+    const file = new File(["small"], "small.dmp", { type: "application/octet-stream" });
+    const result = await api.directMemoryUpload("case-1", file, {
+      filename: file.name,
+      expected_size_bytes: file.size,
+      provided_host: "WS01",
+      authorization_acknowledged: true,
+      upload_mode: "direct",
+    });
+
+    expect(result).toEqual(status);
+    expect(instances).toHaveLength(1);
+    expect(instances[0].method).toBe("POST");
+    expect(instances[0].url).toContain("/cases/case-1/memory/uploads/direct");
+    expect(instances[0].headers["content-type"]).toBeUndefined();
+    const form = instances[0].body as FormData;
+    expect(form.get("filename")).toBe("small.dmp");
+    expect(form.get("expected_size_bytes")).toBe(String(file.size));
+    expect(form.get("provided_host")).toBe("WS01");
+    expect(form.get("authorization_acknowledged")).toBe("true");
+    expect(form.get("file")).toBeInstanceOf(Blob);
+  });
 });

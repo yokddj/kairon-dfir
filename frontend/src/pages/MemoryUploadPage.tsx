@@ -460,7 +460,30 @@ export default function MemoryUploadPage() {
         throw new Error(currentReadiness.message || "Memory upload readiness could not be confirmed.");
       }
       setAcceptedReadiness(currentReadiness);
+      const selectedMode = currentReadiness.selected_upload_mode || (selectedFile.size <= currentReadiness.direct_threshold_bytes ? "direct" : "resumable");
       const effectiveUploadId = uploadIdOverride || activeUploadIdRef.current;
+      if (!effectiveUploadId && selectedMode === "direct") {
+        const transferController = new AbortController();
+        browserTransferAbortControllerRef.current = transferController;
+        browserTransferStartedAtRef.current = Date.now();
+        setBrowserTransferError(null);
+        setStage("uploading");
+        setStatus("Uploading memory image directly");
+        const directStatus = await api.directMemoryUpload(caseId, selectedFile, {
+          filename: selectedFile.name,
+          expected_size_bytes: selectedFile.size,
+          provided_host: providedHost.trim(),
+          authorization_acknowledged: true,
+          upload_mode: "direct",
+        }, {
+          signal: transferController.signal,
+          onProgress: (info) => syncAcknowledgedProgress(Math.min(info.loaded, selectedFile.size), selectedFile.size),
+        });
+        setActiveUploadIdTracked(directStatus.upload_id);
+        writeStoredUpload(caseId, null);
+        await finalizeCompletedUpload(directStatus, selectedFile);
+        return;
+      }
       const remoteStatus = effectiveUploadId
         ? await api.getMemoryUploadStatus(caseId, effectiveUploadId)
         : await api.createMemoryUploadSession(caseId, {
@@ -468,6 +491,7 @@ export default function MemoryUploadPage() {
             expected_size_bytes: selectedFile.size,
             provided_host: providedHost.trim(),
             authorization_acknowledged: true,
+            upload_mode: "resumable",
           });
       writeStoredUpload(caseId, {
         uploadId: remoteStatus.upload_id,
@@ -496,13 +520,13 @@ export default function MemoryUploadPage() {
         uploadId: remoteStatus.upload_id,
         file: selectedFile,
         getStatus: (uploadId) => api.getMemoryUploadStatus(caseId, uploadId),
-        uploadChunk: async (uploadId, chunkIndex, blob, signal) => {
+        uploadChunk: async (uploadId, chunkIndex, blob, signal, onChunkProgress) => {
           const chunkSha256 = await sha256Hex(blob);
           const effectiveChunkSize = remoteStatus.chunk_size_bytes || acceptedReadiness?.recommended_chunk_size_bytes || DEFAULT_CHUNK_SIZE;
           const totalChunks = remoteStatus.total_chunks || Math.ceil(selectedFile.size / effectiveChunkSize);
           setStage("uploading");
           setStatus(`Uploading chunk ${chunkIndex + 1} of ${totalChunks}`);
-          return api.uploadMemoryUploadChunk(caseId, uploadId, chunkIndex, blob, { chunkSha256, signal });
+          return api.uploadMemoryUploadChunk(caseId, uploadId, chunkIndex, blob, { chunkSha256, signal, onProgress: onChunkProgress });
         },
         finalize: (uploadId) => {
           setStage("verifying");
@@ -513,6 +537,15 @@ export default function MemoryUploadPage() {
         },
         signal: transferController.signal,
         onProgress: (info) => syncAcknowledgedProgress(info.loaded, info.total),
+        concurrency: remoteStatus.default_concurrency || currentReadiness.default_concurrency || 2,
+        maxConcurrency: remoteStatus.max_concurrency || currentReadiness.max_parallel_chunks || 4,
+        onSchedulerState: (info) => {
+          if (info.fallbackToSequential) {
+            setStatus(`Uploading sequentially after transport fallback${info.activeChunks.length ? ` · chunk ${info.activeChunks[0] + 1}` : ""}`);
+          } else if (info.activeChunks.length > 1) {
+            setStatus(`Uploading ${info.activeChunks.length} chunks in parallel`);
+          }
+        },
       });
 
       if (result.type === "completed" || result.type === "terminal") {
