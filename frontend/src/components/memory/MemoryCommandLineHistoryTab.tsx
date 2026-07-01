@@ -33,7 +33,7 @@ export function MemoryCommandLineHistoryTab({
   const [cmdFilter, setCmdFilter] = useState("");
   const [sortOrder, setSortOrder] = useState("oldest_first");
 
-  const effectiveRunId = selectedRunId || runOptions?.default_run_id || null;
+  const effectiveRunId = _runId || selectedRunId || runOptions?.default_run_id || null;
   const params = {
     evidence_id: evidenceId,
     run_id: effectiveRunId ?? undefined,

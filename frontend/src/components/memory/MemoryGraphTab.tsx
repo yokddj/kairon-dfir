@@ -33,7 +33,7 @@ export function MemoryGraphTab({
   const [subView, setSubView] = useState<SubView>("graph");
   const [inspectEntityId, setInspectEntityId] = useState<string | null>(null);
 
-  const effectiveRunId = selectedRunId || runId || runOptions?.default_run_id || null;
+  const effectiveRunId = runId || selectedRunId || runOptions?.default_run_id || null;
   const { metrics, isLoading, isFetching, hasLoaded } = useMemoryTreeMetrics(caseId, {
     run_id: effectiveRunId,
     depth: 10,
