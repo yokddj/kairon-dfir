@@ -33,6 +33,7 @@ from app.services.memory.artifact_normalizers import (
 )
 from app.services.memory.artifact_indexing import count_artifact_documents, index_artifact_documents, link_process_entities
 from app.services.memory.execution import ARTIFACT_PLUGIN_NORMALIZER
+from app.services.memory.timeline import get_memory_correlations, materialize_timeline
 
 
 def _load_raw_plugin_output(run: MemoryScanRun, plugin_name: str, output_relative_path: str | None = None) -> Any:
@@ -305,6 +306,65 @@ def coverage_command(db, args: argparse.Namespace) -> int:
     return 0
 
 
+def timeline_build_command(db, args: argparse.Namespace) -> int:
+    report = materialize_timeline(
+        db,
+        case_id=args.case_id,
+        evidence_id=args.evidence_id,
+        memory_run_id=args.memory_run_id,
+        apply=bool(args.apply),
+        batch_size=args.batch_size,
+        confidence_min=args.confidence_min,
+    )
+    if args.json:
+        print(json.dumps(report, indent=2, default=str))
+    else:
+        print(f"Dry run: {report['dry_run']}")
+        print(f"Timeline events: {report['timeline_events']}")
+        print(f"Correlations: {report['correlations']}")
+        print(f"Would create/update: {report['would_create_or_update']}")
+        print(f"Created/updated: {report['created_or_updated']}")
+        print(f"Rejected candidates: {report['rejected']}")
+    return 0
+
+
+def correlate_command(db, args: argparse.Namespace) -> int:
+    payload = get_memory_correlations(
+        db,
+        case_id=args.case_id,
+        evidence_id=args.evidence_id,
+        process_entity_id=args.process_entity_id,
+        correlation_type=args.correlation_type,
+        confidence=args.confidence_min,
+        artifact_type=args.artifact_family,
+        page=1,
+        page_size=args.batch_size,
+    )
+    report = {
+        "dry_run": not args.apply,
+        "case_id": args.case_id,
+        "evidence_id": args.evidence_id,
+        "correlations": payload.get("total", 0),
+        "returned": len(payload.get("items", [])),
+        "created_or_updated": 0,
+        "would_create_or_update": payload.get("total", 0),
+        "rejected": payload.get("coverage", {}).get("rejected_correlation_candidates", 0),
+        "rule_versions": payload.get("coverage", {}).get("correlation_rule_versions", []),
+    }
+    if args.apply:
+        materialized = materialize_timeline(db, case_id=args.case_id, evidence_id=args.evidence_id, memory_run_id=args.memory_run_id, apply=True, batch_size=args.batch_size, confidence_min=args.confidence_min)
+        report["created_or_updated"] = materialized.get("created_or_updated", 0)
+    if args.json:
+        print(json.dumps(report, indent=2, default=str))
+    else:
+        print(f"Dry run: {report['dry_run']}")
+        print(f"Correlations: {report['correlations']}")
+        print(f"Would create/update: {report['would_create_or_update']}")
+        print(f"Created/updated: {report['created_or_updated']}")
+        print(f"Rejected candidates: {report['rejected']}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Memory results maintenance")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -323,6 +383,30 @@ def main(argv: list[str] | None = None) -> None:
     cov.add_argument("--run-id", required=True)
     cov.add_argument("--json", action="store_true")
 
+    tl = sub.add_parser("timeline-build", help="Build scoped derived memory timeline/correlation documents")
+    tl.add_argument("--case-id", required=True)
+    tl.add_argument("--evidence-id", required=True)
+    tl.add_argument("--memory-run-id")
+    tl.add_argument("--artifact-family")
+    tl.add_argument("--confidence-min")
+    tl.add_argument("--dry-run", action="store_true", default=True)
+    tl.add_argument("--apply", action="store_true")
+    tl.add_argument("--json", action="store_true")
+    tl.add_argument("--batch-size", type=int, default=500)
+
+    corr = sub.add_parser("correlate", help="Report or materialize scoped deterministic correlations")
+    corr.add_argument("--case-id", required=True)
+    corr.add_argument("--evidence-id", required=True)
+    corr.add_argument("--memory-run-id")
+    corr.add_argument("--process-entity-id")
+    corr.add_argument("--correlation-type")
+    corr.add_argument("--artifact-family")
+    corr.add_argument("--confidence-min")
+    corr.add_argument("--dry-run", action="store_true", default=True)
+    corr.add_argument("--apply", action="store_true")
+    corr.add_argument("--json", action="store_true")
+    corr.add_argument("--batch-size", type=int, default=500)
+
     args = parser.parse_args(argv)
     db = SessionLocal()
     try:
@@ -330,6 +414,10 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(renormalize_command(db, args))
         elif args.command == "coverage":
             sys.exit(coverage_command(db, args))
+        elif args.command == "timeline-build":
+            sys.exit(timeline_build_command(db, args))
+        elif args.command == "correlate":
+            sys.exit(correlate_command(db, args))
     finally:
         db.close()
 

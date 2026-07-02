@@ -10,6 +10,7 @@ import { useActiveCase } from "../context/ActiveCaseContext";
 import { MEMORY_TABS, useMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 import { MemoryOverviewTab } from "./memory/MemoryOverviewTab";
 import { MemorySearchTab } from "./memory/MemorySearchTab";
+import { MemoryTimelineTab } from "./memory/MemoryTimelineTab";
 import { MemoryProcessesTab } from "./memory/MemoryProcessesTab";
 import { MemoryGraphTab } from "./memory/MemoryGraphTab";
 import { MemoryCommandLineHistoryTab } from "./memory/MemoryCommandLineHistoryTab";
@@ -278,6 +279,18 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
             caseId={caseId}
             evidenceId={effectiveEvidenceId}
             selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
+            onSelectEntityId={setSelectedEntityId}
+            onJumpToTab={onTabChange}
+          />
+        ) : null}
+
+        {tab === "timeline" ? (
+          <MemoryTimelineTab
+            caseId={caseId}
+            evidenceId={effectiveEvidenceId}
+            selectedRunId={selectedRunId}
+            selectedEntityId={selectedEntityId}
             onSelectRunId={setSelectedRunId}
             onSelectEntityId={setSelectedEntityId}
             onJumpToTab={onTabChange}

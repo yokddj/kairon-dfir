@@ -70,6 +70,7 @@ from app.services.memory.normalizers import normalize_windows_info
 from app.services.memory.storage import memory_run_dir
 from app.services.memory.overview import get_case_memory_overview, get_evidence_landing, list_memory_evidences
 from app.services.memory.search import search_memory_artifacts
+from app.services.memory.timeline import get_memory_correlation_detail, get_memory_correlations, get_memory_timeline
 from app.services.memory.upload_sessions import (
     MemoryUploadSessionError,
     cancel_memory_upload_session,
@@ -2714,6 +2715,100 @@ def search_case_memory_artifacts(
         warnings_only=warnings_only,
         mixed_run=mixed_run,
     )
+
+
+@router.get("/cases/{case_id}/memory/timeline", response_model=None)
+def get_case_memory_timeline(
+    case_id: str,
+    evidence_id: str = Query(...),
+    memory_run_id: str | None = Query(default=None),
+    time_from: str | None = Query(default=None),
+    time_to: str | None = Query(default=None),
+    artifact_families: list[str] | None = Query(default=None),
+    event_kinds: list[str] | None = Query(default=None),
+    process_entity_id: str | None = Query(default=None),
+    pid: int | None = Query(default=None),
+    process_name: str | None = Query(default=None),
+    source_plugin: str | None = Query(default=None),
+    source_parser: str | None = Query(default=None),
+    has_correlations: bool | None = Query(default=None),
+    correlation_confidence: str | None = Query(default=None),
+    include_undated: bool = Query(default=False),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100),
+    sort_order: str = Query(default="asc"),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    _require_run_or_any(db, case_id, memory_run_id)
+    return get_memory_timeline(
+        db,
+        case_id=case_id,
+        evidence_id=evidence_id,
+        memory_run_id=memory_run_id,
+        time_from=time_from,
+        time_to=time_to,
+        artifact_families=artifact_families,
+        event_kinds=event_kinds,
+        process_entity_id=process_entity_id,
+        pid=pid,
+        process_name=process_name,
+        source_plugin=source_plugin,
+        source_parser=source_parser,
+        has_correlations=has_correlations,
+        correlation_confidence=correlation_confidence,
+        include_undated=include_undated,
+        page=page,
+        page_size=page_size,
+        sort_order=sort_order,
+    )
+
+
+@router.get("/cases/{case_id}/memory/correlations", response_model=None)
+def get_case_memory_correlations(
+    case_id: str,
+    evidence_id: str = Query(...),
+    process_entity_id: str | None = Query(default=None),
+    correlation_type: str | None = Query(default=None),
+    confidence: str | None = Query(default=None),
+    artifact_type: str | None = Query(default=None),
+    time_from: str | None = Query(default=None),
+    time_to: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    return get_memory_correlations(db, case_id=case_id, evidence_id=evidence_id, process_entity_id=process_entity_id, correlation_type=correlation_type, confidence=confidence, artifact_type=artifact_type, time_from=time_from, time_to=time_to, page=page, page_size=page_size)
+
+
+@router.get("/cases/{case_id}/memory/processes/{process_entity_id}/correlations", response_model=None)
+def get_process_memory_correlations(
+    case_id: str,
+    process_entity_id: str,
+    evidence_id: str = Query(...),
+    confidence: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    return get_memory_correlations(db, case_id=case_id, evidence_id=evidence_id, process_entity_id=process_entity_id, confidence=confidence, page=page, page_size=page_size)
+
+
+@router.get("/cases/{case_id}/memory/correlations/{correlation_id}", response_model=None)
+def get_case_memory_correlation_detail(
+    case_id: str,
+    correlation_id: str,
+    evidence_id: str = Query(...),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    return get_memory_correlation_detail(db, case_id=case_id, evidence_id=evidence_id, correlation_id=correlation_id)
 
 
 _ARTIFACT_DOC_TYPES = {
