@@ -155,23 +155,22 @@ def normalize_windows_netscan(
     accepted = 0
     for row in rows:
         proto = _str_or_none(_lookup(row, "Proto", "Protocol"))
-        local_address = _str_or_none(_lookup(row, "LocalAddress", "Local Address"), 128)
+        local_address = _str_or_none(_lookup(row, "LocalAddress", "Local Address", "LocalAddr", "Local Addr"), 128)
         local_port = _port_or_none(_lookup(row, "LocalPort", "Local Port"))
-        remote_address = _str_or_none(_lookup(row, "ForeignAddress", "RemoteAddress", "Remote Address"), 128)
+        remote_address = _str_or_none(_lookup(row, "ForeignAddress", "Foreign Address", "ForeignAddr", "Foreign Addr", "RemoteAddress", "Remote Address", "RemoteAddr", "Remote Addr"), 128)
         remote_port = _port_or_none(_lookup(row, "ForeignPort", "RemotePort", "Remote Port"))
         state = _str_or_none(_lookup(row, "State", "ConnectionState"), 32)
         pid = _int_or_none(_lookup(row, "PID", "Pid", "pid"))
         owner = _str_or_none(_lookup(row, "Owner", "Process", "CreatedBy"), MAX_NAME_LENGTH)
         create_time = _str_or_none(_lookup(row, "Created", "CreateTime", "Create Time"), 64)
-        if pid is None:
-            dropped += 1
-            warnings.append("netscan_row_missing_pid")
-            continue
+        offset = _str_or_none(_lookup(row, "Offset", "Offset(V)", "Offset(P)", "VirtualOffset", "PhysicalOffset"), 64)
         if not local_address and not remote_address:
             dropped += 1
             warnings.append("netscan_row_missing_endpoints")
             continue
-        identity = _identity_pid_offset(local_address, local_port, remote_address, remote_port, state, pid, proto, create_time or "nopeer")
+        if pid is None:
+            warnings.append("netscan_row_missing_pid")
+        identity = _identity_pid_offset(local_address, local_port, remote_address, remote_port, state, pid, proto, create_time, offset or "nooffset")
         doc = {
             "document_id": _document_id(prefix="memory_network_connection", case_id=case_id, run_id=scan_run_id, identity=identity),
             "document_type": "memory_network_connection",
@@ -189,6 +188,7 @@ def normalize_windows_netscan(
             "process_entity_id": None,
             "process_name": owner or _resolve_process_name(process_name_resolver, pid),
             "create_time": create_time,
+            "offset": offset,
             "source_plugin": source_plugin,
             "confidence": "reported_by_plugin",
             "provenance": _provenance(
@@ -199,7 +199,7 @@ def normalize_windows_netscan(
                 source_plugin=source_plugin,
             ),
             "normalization_version": NORMALIZATION_VERSION,
-            "unresolved_process_reference": False,
+            "unresolved_process_reference": pid is None,
         }
         items.append(doc)
         accepted += 1

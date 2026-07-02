@@ -948,6 +948,25 @@ class TestEvidenceIdFieldQuery:
         run_filter = run_filters[0]
         assert "scan_run_id.keyword" in run_filter["term"]
 
+    def test_search_artifact_documents_uses_exact_network_filter_fields(self) -> None:
+        from app.services.memory.artifact_indexing import search_artifact_documents
+
+        fake = _CaptureSearchClient(items=[], total=0)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            search_artifact_documents(
+                case_id="case-1",
+                document_type="memory_network_connection",
+                run_id="run-1",
+                evidence_id="ev-1",
+                filters={"protocol": "TCPv4", "local_address": "192.168.20.41", "process_name": "svchost.exe"},
+            )
+        assert fake.last_body is not None
+        filters = fake.last_body["query"]["bool"]["filter"]
+        assert {"term": {"protocol": "TCPv4"}} in filters
+        assert {"term": {"local_address": "192.168.20.41"}} in filters
+        assert {"term": {"process_name": "svchost.exe"}} in filters
+
     # ------------------------------------------------------------------
     # Integration: full active-result pipeline returns items
     # ------------------------------------------------------------------
