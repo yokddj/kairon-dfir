@@ -31,6 +31,7 @@ function familyForTab(tab: MemoryTab, artifact?: string | null): string {
     if (artifact === "drivers") return "drivers";
     if (artifact === "kernel_modules" || artifact === "kernel-modules") return "kernel_modules";
     if (artifact === "suspicious_regions" || artifact === "suspicious-regions") return "suspicious_regions";
+    if (artifact === "vads") return "suspicious_regions";
     return "modules";
   }
   return ARTIFACT_FAMILY_FROM_TAB[tab] || "processes";
@@ -52,6 +53,23 @@ export default function MemoryEvidencePage() {
   useEffect(() => {
     setActiveCaseId(caseId);
   }, [caseId, setActiveCaseId]);
+
+  useEffect(() => {
+    const legacyTab = searchParams.get("tab");
+    if (!caseId || !evidenceId || !legacyTab) return;
+    const params = new URLSearchParams();
+    params.set("source_category", "Memory");
+    params.set("evidence_id", evidenceId);
+    const runId = searchParams.get("run_id");
+    const processEntityId = searchParams.get("process_entity_id");
+    const pid = searchParams.get("pid");
+    if (runId) params.set("run_id", runId);
+    if (processEntityId) params.set("process_entity_id", processEntityId);
+    if (pid) params.set("pid", pid);
+    if (legacyTab === "search") navigate(`/cases/${caseId}/search?${params.toString()}`, { replace: true });
+    if (legacyTab === "timeline") navigate(`/cases/${caseId}/timeline?${params.toString()}`, { replace: true });
+    if (legacyTab === "history") navigate(`/cases/${caseId}/command-history?${params.toString()}`, { replace: true });
+  }, [caseId, evidenceId, navigate, searchParams]);
 
   const tab = useMemo<MemoryTab>(() => {
     const raw = searchParams.get("tab");

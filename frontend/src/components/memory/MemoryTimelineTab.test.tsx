@@ -112,8 +112,10 @@ beforeEach(() => {
 });
 
 describe("MemoryTimelineTab", () => {
-  it("timeline tab appears after search", () => {
-    expect(MEMORY_TABS.map((tab) => tab.key).slice(0, 3)).toEqual(["overview", "search", "timeline"]);
+  it("memory tabs are specialist sections after overview", () => {
+    expect(MEMORY_TABS.map((tab) => tab.key).slice(0, 3)).toEqual(["overview", "processes", "graph"]);
+    expect(MEMORY_TABS.map((tab) => tab.key)).not.toContain("search");
+    expect(MEMORY_TABS.map((tab) => tab.key)).not.toContain("timeline");
   });
 
   it("loads current Evidence and renders timeline controls and events", async () => {
@@ -192,7 +194,7 @@ describe("MemoryTimelineTab", () => {
     fireEvent.click(screen.getAllByText("Open raw")[0]);
     expect(onJumpToTab).toHaveBeenCalledWith("raw");
     fireEvent.click(screen.getAllByText("Open Search result")[0]);
-    expect(onJumpToTab).toHaveBeenCalledWith("search");
+    expect(onJumpToTab).toHaveBeenLastCalledWith("processes");
   });
 
   it("distinguishes empty timestamped state", async () => {

@@ -20,6 +20,13 @@ from app.models.evidence import Evidence
 from app.models.finding import Finding, FindingSeverity, FindingStatus
 from app.services.event_markings import event_marking_filter_ids, marking_map_for_events, serialize_marking
 from app.services.host_identity import expand_host_filter, is_invalid_host_value, normalize_host_alias, resolve_canonical_host
+from app.services.investigation_memory import (
+    add_event_source_provenance,
+    memory_search_results,
+    normalize_source_category,
+    wants_memory_source,
+    wants_non_memory_source,
+)
 from app.search.query_syntax import QuerySyntaxError, SEARCH_SYNTAX_EXAMPLES, analyze_query_syntax, evaluate_query_syntax
 
 
@@ -1298,7 +1305,7 @@ def search_events_v2(case_id: str, params: dict[str, Any], *, db: Session | None
                 "examples": SEARCH_SYNTAX_EXAMPLES,
             },
         ) from exc
-    page_size_limit = int(params.get("_page_size_limit") or 200)
+    page_size_limit = int(params.get("_page_size_limit") or 500)
     page_size = max(1, min(int(params.get("page_size") or 50), page_size_limit, OPENSEARCH_RESULT_WINDOW_LIMIT))
     offset = _decode_cursor(params.get("cursor")) if params.get("cursor") else max(0, (int(params.get("page") or 1) - 1) * page_size)
     if offset + page_size > OPENSEARCH_RESULT_WINDOW_LIMIT:
@@ -1389,7 +1396,7 @@ def search_findings_v2(db: Session, case_id: str, params: dict[str, Any], *, lim
         matched.sort(key=lambda item: (-item[1], -(item[0].risk_score or 0), str(item[0].time_start or item[0].created_at or "")))
     else:
         matched.sort(key=lambda item: str(item[0].time_start or item[0].created_at or ""), reverse=True)
-    page_size_limit = int(params.get("_page_size_limit") or 200)
+    page_size_limit = int(params.get("_page_size_limit") or 500)
     page_size = max(1, min(int(params.get("page_size") or 50), page_size_limit, OPENSEARCH_RESULT_WINDOW_LIMIT))
     offset = _decode_cursor(params.get("cursor")) if params.get("cursor") else max(0, (int(params.get("page") or 1) - 1) * page_size)
     limit = limit_override if limit_override is not None else page_size
@@ -1399,12 +1406,23 @@ def search_findings_v2(db: Session, case_id: str, params: dict[str, Any], *, lim
 
 def search_case_v2(db: Session, case_id: str, params: dict[str, Any]) -> dict[str, Any]:
     scope = str(params.get("scope") or "all")
-    page_size = max(1, min(int(params.get("page_size") or 50), 200))
+    page_size = max(1, min(int(params.get("page_size") or 100), 500))
     offset = _decode_cursor(params.get("cursor")) if params.get("cursor") else max(0, (int(params.get("page") or 1) - 1) * page_size)
     warnings: list[str] = []
+    if wants_memory_source(params):
+        memory = memory_search_results(db, case_id, {**params, "page_size": page_size})
+        memory.setdefault("query_syntax", _query_syntax_metadata(params.get("_query_syntax") or {}))
+        memory.setdefault("has_previous", offset > 0)
+        memory.setdefault("pagination_mode", "offset")
+        memory.setdefault("debug_pagination", {"from": offset, "size": page_size, "sort": str(params.get("sort") or "timestamp_desc"), "search_after_used": False})
+        return memory
     if scope == "events":
         total, results, event_warnings, facets = search_events_v2(case_id, params, db=db)
         warnings.extend(event_warnings)
+        results = [add_event_source_provenance(row) for row in results]
+        results = _filter_source_category(results, params)
+        if wants_non_memory_source(params):
+            total = len(results)
         next_cursor = _encode_cursor(offset + page_size) if offset + page_size < total else None
         return {
             "query": _public_query_params(params),
@@ -1448,12 +1466,23 @@ def search_case_v2(db: Session, case_id: str, params: dict[str, Any]) -> dict[st
             detail=f"Search pagination is limited to the first {OPENSEARCH_RESULT_WINDOW_LIMIT} matching items for stable sorting. Narrow the query or time range.",
         )
     fetch_limit = min(offset + page_size, OPENSEARCH_RESULT_WINDOW_LIMIT)
+    if wants_non_memory_source(params):
+        params = {**params}
     event_total, event_rows, event_warnings, _ = search_events_v2(case_id, {**params, "page": 1, "cursor": None, "page_size": fetch_limit, "_page_size_limit": fetch_limit}, db=db)
     finding_total, finding_rows, finding_full_rows, finding_warnings = search_findings_v2(db, case_id, {**params, "page": 1, "cursor": None, "page_size": fetch_limit, "_page_size_limit": fetch_limit}, limit_override=fetch_limit)
     warnings.extend(event_warnings)
     warnings.extend(finding_warnings)
-    merged = _sort_mixed_items([*event_rows, *finding_rows], str(params.get("sort") or "timestamp_desc"))
-    total = event_total + finding_total
+    event_rows = [add_event_source_provenance(row) for row in event_rows]
+    event_rows = _filter_source_category(event_rows, params)
+    disk_rows = [*event_rows, *finding_rows]
+    if not wants_non_memory_source(params):
+        memory = memory_search_results(db, case_id, {**params, "page": 1, "page_size": fetch_limit})
+        memory_rows = memory.get("results") or []
+        warnings.extend(memory.get("warnings") or [])
+    else:
+        memory_rows = []
+    merged = _sort_mixed_items([*disk_rows, *memory_rows], str(params.get("sort") or "timestamp_desc"))
+    total = (len(disk_rows) if wants_non_memory_source(params) else event_total + finding_total) + len(memory_rows)
     page_results = merged[offset : offset + page_size]
     next_cursor = _encode_cursor(offset + page_size) if offset + page_size < total else None
     return {
@@ -1469,9 +1498,31 @@ def search_case_v2(db: Session, case_id: str, params: dict[str, Any]) -> dict[st
         "debug_pagination": {"from": offset, "size": page_size, "sort": str(params.get("sort") or "timestamp_desc"), "search_after_used": False},
         "next_cursor": next_cursor,
         "results": page_results,
-        "facets": _facet_counts(merged, finding_rows=finding_full_rows) if params.get("include_facets", True) else {},
-        "warnings": warnings,
-    }
+            "facets": _merged_facets(_facet_counts(merged, finding_rows=finding_full_rows), memory_rows) if params.get("include_facets", True) else {},
+            "warnings": warnings,
+        }
+
+
+def _merged_facets(facets: dict[str, dict[str, int]], rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    merged = {key: dict(value) for key, value in facets.items()}
+    for row in rows:
+        for key in ("source_category", "artifact_family", "artifact_type"):
+            value = row.get(key) or (row.get("raw") or {}).get(key)
+            if value:
+                bucket = merged.setdefault(key, {})
+                bucket[str(value)] = int(bucket.get(str(value), 0)) + 1
+        parser = row.get("source_plugin_or_parser") or row.get("parser")
+        if parser:
+            bucket = merged.setdefault("source_plugin_or_parser", {})
+            bucket[str(parser)] = int(bucket.get(str(parser), 0)) + 1
+    return merged
+
+
+def _filter_source_category(rows: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+    category = normalize_source_category(params.get("source_category") or params.get("source"))
+    if not category or category == "Memory":
+        return rows
+    return [row for row in rows if str(row.get("source_category") or (row.get("raw") or {}).get("source_category") or "") == category]
 
 
 def search_around_event(case_id: str, event_id: str, *, window: str = "30m", page_size: int = 100) -> dict[str, Any]:

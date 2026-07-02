@@ -258,6 +258,29 @@ describe("Search page", () => {
     expect(within(chips).getByText(/source: History/i)).toBeInTheDocument();
   });
 
+  it("renders memory source badges and sends source category filters", async () => {
+    searchCaseMock.mockResolvedValueOnce({
+      ...baseResponse,
+      total: 1,
+      facets: { ...baseResponse.facets, source_category: { Memory: 1 } },
+      results: [
+        {
+          ...baseResponse.results[0],
+          id: "memory:proc-6996",
+          title: "Process started: powershell.exe",
+          artifact_type: "memory_process_entity",
+          parser: "windows.pslist",
+          source_category: "Memory",
+          source_plugin_or_parser: "windows.pslist",
+          raw: { evidence_id: "mem-1", source_category: "Memory", source_plugin_or_parser: "windows.pslist" },
+        },
+      ],
+    });
+    renderPage(["/search?source_category=Memory&evidence_id=mem-1&q=6996"]);
+    expect(await screen.findByText(/Memory: windows\.pslist/i)).toBeInTheDocument();
+    await waitFor(() => expect(searchCaseMock).toHaveBeenCalledWith("case-1", expect.objectContaining({ source_category: "Memory", evidence_id: "mem-1", q: "6996" })));
+  });
+
   it("passes negative filters from the url and shows NOT chips", async () => {
     renderPage(["/search?exclude_q=defender&exclude_artifact_type=mft&exclude_parser=evtx_raw&exclude_source_file=Security.evtx&exclude_host=noise-host&exclude_user=svc"]);
     await screen.findByTestId("results-table");
@@ -452,12 +475,12 @@ describe("Search page", () => {
     expect(within(help).getByText(/process\.name:powershell\.exe EncodedCommand/i)).toBeInTheDocument();
   });
 
-  it("does not offer 250 page size and clamps oversized page_size from URL", async () => {
+  it("supports unified investigation page sizes from URL", async () => {
     renderPage(["/search?page_size=250"]);
     await screen.findByTestId("results-table");
     const pageSize = screen.getByLabelText(/Page size top/i) as HTMLSelectElement;
-    expect(pageSize.value).toBe("200");
-    expect(within(pageSize).queryByRole("option", { name: "250" })).not.toBeInTheDocument();
+    expect(pageSize.value).toBe("250");
+    expect(within(pageSize).getByRole("option", { name: "500" })).toBeInTheDocument();
   });
 
   it("renders backend query syntax chips for valid advanced query", async () => {

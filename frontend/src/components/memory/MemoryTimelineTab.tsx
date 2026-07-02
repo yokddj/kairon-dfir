@@ -66,7 +66,7 @@ export function MemoryTimelineTab({ caseId, evidenceId, selectedRunId, selectedE
   const query = useQuery({ queryKey: ["memory-timeline", caseId, params], queryFn: () => api.getMemoryTimeline(caseId, params), enabled: Boolean(caseId && evidenceId), refetchOnWindowFocus: false });
   const reset = (fn: () => void) => { fn(); setPage(1); };
   const clear = () => { setPid(""); setProcessName(""); setTimeFrom(""); setTimeTo(""); setKind(""); setFamily(""); setConfidence(""); setCorrelatedOnly(false); setIncludeUndated(false); setPage(1); };
-  const onOpen = (event: MemoryTimelineEvent, mode: "process" | "graph" | "source" | "raw" | "search") => { const target = event.navigation_target as any; if (target.run_id) onSelectRunId(target.run_id); if (event.process_entity_id) onSelectEntityId(event.process_entity_id); if (mode === "graph") onJumpToTab("graph"); else if (mode === "process") onJumpToTab("processes"); else if (mode === "raw") onJumpToTab("raw"); else if (mode === "search") onJumpToTab("search"); else onJumpToTab((target.tab as MemoryTab) || "artifacts"); };
+  const onOpen = (event: MemoryTimelineEvent, mode: "process" | "graph" | "source" | "raw" | "search") => { const target = event.navigation_target as any; if (target.run_id) onSelectRunId(target.run_id); if (event.process_entity_id) onSelectEntityId(event.process_entity_id); if (mode === "graph") onJumpToTab("graph"); else if (mode === "process") onJumpToTab("processes"); else if (mode === "raw") onJumpToTab("raw"); else onJumpToTab((target.tab as MemoryTab) || "artifacts"); };
 
   if (!evidenceId) return <section className="rounded-2xl border border-line bg-panel/60 p-5 text-sm text-muted">Select one memory Evidence to build a timeline.</section>;
   const data = query.data;
