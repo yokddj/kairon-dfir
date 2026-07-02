@@ -69,6 +69,7 @@ from app.services.memory.indexing import ensure_memory_index, get_memory_documen
 from app.services.memory.normalizers import normalize_windows_info
 from app.services.memory.storage import memory_run_dir
 from app.services.memory.overview import get_case_memory_overview, get_evidence_landing, list_memory_evidences
+from app.services.memory.search import search_memory_artifacts
 from app.services.memory.upload_sessions import (
     MemoryUploadSessionError,
     cancel_memory_upload_session,
@@ -2655,6 +2656,64 @@ def recompute_canonical_tree(
 # ---------------------------------------------------------------------------
 # Core memory artifact endpoints
 # ---------------------------------------------------------------------------
+
+
+@router.get("/cases/{case_id}/memory/search", response_model=None)
+def search_case_memory_artifacts(
+    case_id: str,
+    evidence_id: str = Query(...),
+    query: str | None = Query(default=None),
+    artifact_types: list[str] | None = Query(default=None),
+    run_id: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100),
+    sort: str = Query(default="relevance"),
+    pid: int | None = Query(default=None),
+    ppid: int | None = Query(default=None),
+    process_name: str | None = Query(default=None),
+    source_plugin: str | None = Query(default=None),
+    protocol: str | None = Query(default=None),
+    state: str | None = Query(default=None),
+    local_address: str | None = Query(default=None),
+    local_port: int | None = Query(default=None),
+    remote_address: str | None = Query(default=None),
+    remote_port: int | None = Query(default=None),
+    time_from: str | None = Query(default=None),
+    time_to: str | None = Query(default=None),
+    has_process: bool | None = Query(default=None),
+    warnings_only: bool = Query(default=False),
+    mixed_run: bool = Query(default=False),
+    db: Session = Depends(get_db),
+) -> dict[str, Any]:
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    _require_run_or_any(db, case_id, run_id)
+    return search_memory_artifacts(
+        db,
+        case_id=case_id,
+        evidence_id=evidence_id,
+        query=query,
+        artifact_types=artifact_types,
+        run_id=run_id,
+        page=page,
+        page_size=page_size,
+        sort=sort,
+        pid=pid,
+        ppid=ppid,
+        process_name=process_name,
+        source_plugin=source_plugin,
+        protocol=protocol,
+        state=state,
+        local_address=local_address,
+        local_port=local_port,
+        remote_address=remote_address,
+        remote_port=remote_port,
+        time_from=time_from,
+        time_to=time_to,
+        has_process=has_process,
+        warnings_only=warnings_only,
+        mixed_run=mixed_run,
+    )
 
 
 _ARTIFACT_DOC_TYPES = {

@@ -9,6 +9,7 @@ import {
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { MEMORY_TABS, useMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 import { MemoryOverviewTab } from "./memory/MemoryOverviewTab";
+import { MemorySearchTab } from "./memory/MemorySearchTab";
 import { MemoryProcessesTab } from "./memory/MemoryProcessesTab";
 import { MemoryGraphTab } from "./memory/MemoryGraphTab";
 import { MemoryCommandLineHistoryTab } from "./memory/MemoryCommandLineHistoryTab";
@@ -268,6 +269,17 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
             backend={volatilityBackend ?? null}
             symbolCache={symbolCacheQuery.data ?? null}
             readinessByEvidence={readinessByEvidence}
+            onJumpToTab={onTabChange}
+          />
+        ) : null}
+
+        {tab === "search" ? (
+          <MemorySearchTab
+            caseId={caseId}
+            evidenceId={effectiveEvidenceId}
+            selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
+            onSelectEntityId={setSelectedEntityId}
             onJumpToTab={onTabChange}
           />
         ) : null}
