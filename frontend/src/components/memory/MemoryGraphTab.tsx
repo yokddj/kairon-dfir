@@ -33,7 +33,10 @@ export function MemoryGraphTab({
   const [subView, setSubView] = useState<SubView>("graph");
   const [inspectEntityId, setInspectEntityId] = useState<string | null>(null);
 
-  const effectiveRunId = runId || selectedRunId || runOptions?.default_run_id || null;
+  const topologyRunId = runOptions?.runs.find(
+    (run) => run.profile === "processes_basic" && (run.status === "completed" || run.status === "completed_with_errors"),
+  )?.run_id ?? null;
+  const effectiveRunId = runId || selectedRunId || topologyRunId || runOptions?.default_run_id || null;
   const { metrics, isLoading, isFetching, hasLoaded } = useMemoryTreeMetrics(caseId, {
     run_id: effectiveRunId,
     depth: 10,
