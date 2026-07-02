@@ -4296,6 +4296,93 @@ export type MemoryArtifactList = {
   normalization_version: string;
 };
 
+export type MemorySearchResult = {
+  result_id: string;
+  artifact_type: string;
+  artifact_family: string;
+  case_id: string;
+  evidence_id: string;
+  evidence_name?: string | null;
+  memory_run_id?: string | null;
+  plugin_run_id?: string | null;
+  profile_id?: string | null;
+  source_plugin?: string | null;
+  process_entity_id?: string | null;
+  pid?: number | null;
+  ppid?: number | null;
+  process_name?: string | null;
+  timestamp?: string | null;
+  timestamp_source?: string | null;
+  title: string;
+  summary?: string | null;
+  matched_fields: string[];
+  matched_terms: string[];
+  provenance: Record<string, unknown>;
+  raw_reference: Record<string, unknown>;
+  navigation_target: {
+    tab: string;
+    target_tab: string;
+    artifact_family?: string | null;
+    artifact_type?: string | null;
+    artifact_id?: string | null;
+    run_id?: string | null;
+    evidence_id?: string | null;
+    process_entity_id?: string | null;
+    pid?: number | null;
+  };
+  normalization_warning?: string | null;
+  raw?: Record<string, unknown>;
+};
+
+export type MemorySearchResponse = {
+  case_id: string;
+  evidence_id: string;
+  evidence_name?: string | null;
+  query: string;
+  query_interpretation: string;
+  selected_run_context: Record<string, unknown>;
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  sort: string;
+  results: MemorySearchResult[];
+  facets: Record<string, Record<string, number>>;
+  coverage: {
+    artifact_families_available: string[];
+    families_not_run: string[];
+    completed_empty: string[];
+    raw_only_fallback: boolean;
+    normalization_warnings: string[];
+    raw_only_families: string[];
+    rejected_row_counts: Record<string, number>;
+  };
+  warnings: string[];
+};
+
+export type MemorySearchParams = {
+  evidence_id: string;
+  query?: string;
+  artifact_types?: string[];
+  run_id?: string;
+  page?: number;
+  page_size?: number;
+  sort?: string;
+  pid?: number;
+  ppid?: number;
+  process_name?: string;
+  source_plugin?: string;
+  protocol?: string;
+  state?: string;
+  local_address?: string;
+  local_port?: number;
+  remote_address?: string;
+  remote_port?: number;
+  has_process?: boolean;
+  warnings_only?: boolean;
+  mixed_run?: boolean;
+};
+
 export type CommandLineHistoryItem = {
   process_entity_id: string;
   pid: number | null;
@@ -5216,6 +5303,15 @@ export const api = {
       body: JSON.stringify({ run_id: runId, dry_run: dryRun }),
     }),
   // Core memory artifact endpoints
+  searchMemoryArtifacts: (caseId: string, params: MemorySearchParams) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      if (Array.isArray(value)) value.forEach((item) => query.append(key, String(item)));
+      else query.set(key, String(value));
+    });
+    return request<MemorySearchResponse>(`/cases/${caseId}/memory/search?${query.toString()}`);
+  },
   getMemoryArtifactOverview: (caseId: string, params?: { run_id?: string | null; evidence_id?: string }) => {
     const query = new URLSearchParams();
     if (params?.run_id) query.set("run_id", params.run_id);
