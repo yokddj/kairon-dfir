@@ -175,7 +175,7 @@ def _scope_filter(run_context: dict[str, Any]) -> dict[str, Any] | None:
         run_id = run.get("id") if isinstance(run, dict) else None
         if not run_id:
             continue
-        should.append({"bool": {"filter": [{"term": {"document_type": FAMILY_SPECS[family].document_type}}, {"term": {"scan_run_id.keyword": run_id}}]}})
+        should.append({"bool": {"filter": [_any_term(["document_type"], FAMILY_SPECS[family].document_type), {"term": {"scan_run_id.keyword": run_id}}]}})
     if not should:
         return {"terms": {"document_type": []}}
     return {"bool": {"should": should, "minimum_should_match": 1}}
@@ -193,7 +193,7 @@ def _explicit_filters(**kwargs: Any) -> list[dict[str, Any]]:
         filters.append(_any_term(["source_plugin", "source_plugins", "plugin_name"], kwargs["source_plugin"]))
     for field in ("protocol", "local_address", "local_port", "remote_address", "remote_port"):
         if kwargs.get(field) is not None:
-            filters.append({"term": {field: kwargs[field]}})
+            filters.append(_any_term([field], kwargs[field]))
     if kwargs.get("state"):
         filters.append(_any_term(["connection_state", "state"], kwargs["state"]))
     if kwargs.get("has_process") is True:
@@ -217,7 +217,7 @@ def _query_clauses(query: str | None, families: list[str]) -> tuple[list[dict[st
     if not text:
         return [], "none"
     if SID_RE.match(text):
-        return [{"term": {"sid": text}}], "sid"
+        return [_any_term(["sid"], text)], "sid"
     try:
         ip_address(text.strip("[]"))
         return [_any_term(["local_address", "remote_address"], text.strip("[]"))], "ip_address"
@@ -233,7 +233,12 @@ def _query_clauses(query: str | None, families: list[str]) -> tuple[list[dict[st
 
 
 def _any_term(fields: list[str], value: Any) -> dict[str, Any]:
-    return {"bool": {"should": [{"term": {field: value}} for field in fields], "minimum_should_match": 1}}
+    expanded: list[str] = []
+    for field in fields:
+        expanded.append(field)
+        if isinstance(value, str) and not field.endswith(".keyword"):
+            expanded.append(f"{field}.keyword")
+    return {"bool": {"should": [{"term": {field: value}} for field in expanded], "minimum_should_match": 1}}
 
 
 def _sort(sort: str) -> list[dict[str, Any]]:
@@ -242,22 +247,22 @@ def _sort(sort: str) -> list[dict[str, Any]]:
     if sort == "oldest":
         return [{"create_time": {"order": "asc", "missing": "_last", "unmapped_type": "date"}}, {"process.create_time": {"order": "asc", "missing": "_last", "unmapped_type": "date"}}, {"document_id": {"order": "asc"}}]
     if sort == "artifact_type":
-        return [{"document_type": {"order": "asc"}}, {"document_id": {"order": "asc"}}]
+        return [{"document_type.keyword": {"order": "asc", "unmapped_type": "keyword"}}, {"document_id": {"order": "asc"}}]
     if sort == "pid":
         return [{"pid": {"order": "asc", "missing": "_last", "unmapped_type": "long"}}, {"process.pid": {"order": "asc", "missing": "_last", "unmapped_type": "long"}}, {"document_id": {"order": "asc"}}]
     if sort == "process_name":
-        return [{"process_name": {"order": "asc", "missing": "_last", "unmapped_type": "keyword"}}, {"process.name": {"order": "asc", "missing": "_last", "unmapped_type": "keyword"}}, {"document_id": {"order": "asc"}}]
+        return [{"process_name.keyword": {"order": "asc", "missing": "_last", "unmapped_type": "keyword"}}, {"process.name": {"order": "asc", "missing": "_last", "unmapped_type": "keyword"}}, {"document_id": {"order": "asc"}}]
     return ["_score", {"document_id": {"order": "asc"}}]
 
 
 def _aggs() -> dict[str, Any]:
     return {
-        "artifact_type": {"terms": {"field": "document_type", "size": 20}},
-        "source_plugin": {"terms": {"field": "source_plugin", "size": 20}},
-        "plugin_name": {"terms": {"field": "plugin_name", "size": 20}},
-        "process_name": {"terms": {"field": "process_name", "size": 20}},
-        "protocol": {"terms": {"field": "protocol", "size": 20}},
-        "network_state": {"terms": {"field": "connection_state", "size": 20}},
+        "artifact_type": {"terms": {"field": "document_type.keyword", "size": 20}},
+        "source_plugin": {"terms": {"field": "source_plugin.keyword", "size": 20}},
+        "plugin_name": {"terms": {"field": "plugin_name.keyword", "size": 20}},
+        "process_name": {"terms": {"field": "process_name.keyword", "size": 20}},
+        "protocol": {"terms": {"field": "protocol.keyword", "size": 20}},
+        "network_state": {"terms": {"field": "connection_state.keyword", "size": 20}},
         "has_process": {"filters": {"filters": {"linked": {"exists": {"field": "process_entity_id"}}, "unlinked": {"bool": {"must_not": [{"exists": {"field": "process_entity_id"}}]}}}}},
     }
 

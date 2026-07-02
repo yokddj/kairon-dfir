@@ -115,7 +115,7 @@ def test_port_exact_search(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_sid_exact_search(monkeypatch: pytest.MonkeyPatch) -> None:
     result, client = _search(monkeypatch, query="S-1-5-18", artifact_types=["sids"])
     assert result["query_interpretation"] == "sid"
-    assert {"term": {"sid": "S-1-5-18"}} in _must(client.last_body)
+    assert _must(client.last_body) == [{"bool": {"should": [{"term": {"sid": "S-1-5-18"}}, {"term": {"sid.keyword": "S-1-5-18"}}], "minimum_should_match": 1}}]
 
 
 @pytest.mark.parametrize(
