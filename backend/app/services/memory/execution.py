@@ -16,6 +16,7 @@ from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScan
 from app.services.memory import backend_readiness
 from app.services.memory.evidence_access import MemoryStorageAccessError, validate_current_process_output_access
 from app.services.memory.artifact_indexing import (
+    count_artifact_documents,
     index_artifact_documents,
     link_process_entities,
 )
@@ -790,6 +791,10 @@ def _index_artifact_results(
         summary_plugins.setdefault(doc_type, []).append(plugin)
         summary_warnings.setdefault(doc_type, []).extend(payload.get("warnings", [])[:20])
     for doc_type, count in summary_counts.items():
+        try:
+            count = count_artifact_documents(case_id, document_type=doc_type, run_id=run.id)
+        except Exception:  # noqa: BLE001
+            pass
         _upsert_summary(
             db,
             run,
@@ -938,17 +943,18 @@ def _normalize_process_payload(plugin: str, payload: Any) -> dict[str, Any]:
 
 
 def _upsert_summary(db: Session, run: MemoryScanRun, artifact_type: str, count: int, metadata: dict[str, Any]) -> None:
-    summary = (
+    summaries = (
         db.query(MemoryArtifactSummary)
         .filter(MemoryArtifactSummary.memory_run_id == run.id, MemoryArtifactSummary.memory_artifact_type == artifact_type)
-        .first()
+        .all()
     )
-    if summary is None:
+    if not summaries:
         summary = MemoryArtifactSummary(case_id=run.case_id, evidence_id=run.evidence_id, memory_run_id=run.id, memory_artifact_type=artifact_type, count=count, metadata_json=metadata)
         db.add(summary)
     else:
-        summary.count = count
-        summary.metadata_json = metadata
+        for summary in summaries:
+            summary.count = count
+            summary.metadata_json = metadata
 
 
 def _row_count(payload: Any) -> int:

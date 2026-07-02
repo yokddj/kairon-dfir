@@ -223,7 +223,13 @@ def search_artifact_documents(
             elif isinstance(value, (int, float)):
                 query_filters.append({"term": {f"{key}": value}})
             elif isinstance(value, str) and value.strip():
-                query_key = "connection_state" if document_type == "memory_network_connection" and key == "state" else key
+                if document_type == "memory_network_connection" and key == "state":
+                    query_filters.append({"bool": {"should": [
+                        {"term": {"connection_state": value}},
+                        {"term": {"connection_state.keyword": value}},
+                    ], "minimum_should_match": 1}})
+                    continue
+                query_key = key
                 field = query_key if query_key in _EXACT_TERM_FIELDS else f"{query_key}.keyword"
                 query_filters.append({"term": {field: value}})
     body = {
