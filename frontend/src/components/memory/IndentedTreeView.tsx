@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { type MemoryProcessTreeEntity, api } from "../../api/client";
 import {
@@ -162,9 +162,9 @@ function NodeRow({
   connector: "root" | "child" | "last" | "leaf";
 }) {
   const hasChildren = node.children.length > 0 || (node.child_count && node.child_count > 0);
-  const isExpanded = expanded.has(node.process_entity_id);
   const isSelected = selectedEntityId === node.process_entity_id;
   const isAncestor = ancestors.has(node.process_entity_id);
+  const isExpanded = expanded.has(node.process_entity_id) || isAncestor || isSelected;
   const tone = visibilityTone(node);
   const isGroup = node.is_group;
   const groupKey = isGroup ? `group:${node.process_entity_id}` : "";
@@ -397,17 +397,33 @@ export function IndentedTreeView({
   const [orphansExpanded, setOrphansExpanded] = useState<boolean>(false);
 
   const effectiveRunId = selectedRunId || runId || runOptions?.default_run_id || null;
+  const numericSearchPid = /^\d+$/.test(search.trim()) ? Number(search.trim()) : null;
   const treeQuery = useQuery<MemoryProcessTreeEntity>({
-    queryKey: ["indented-tree", caseId, effectiveRunId],
-    queryFn: () => api.getCanonicalProcessTree(caseId, { run_id: effectiveRunId || undefined, depth: 10, max_nodes: 500 }),
+    queryKey: ["indented-tree", caseId, effectiveRunId, selectedEntityId, numericSearchPid],
+    queryFn: () => selectedEntityId || numericSearchPid !== null
+      ? api.getCanonicalProcessLineage(caseId, {
+        run_id: effectiveRunId || undefined,
+        entity_id: selectedEntityId || undefined,
+        pid: selectedEntityId ? undefined : numericSearchPid ?? undefined,
+        descendant_depth: 3,
+        max_nodes: 200,
+      })
+      : api.getCanonicalProcessTree(caseId, { run_id: effectiveRunId || undefined, depth: 3, max_nodes: 200 }),
     enabled: Boolean(caseId && effectiveRunId),
     refetchOnWindowFocus: false,
     placeholderData: (previous) => previous,
   });
 
   const tree = treeQuery.data;
-  const rootNodes: TreeNode[] = useMemo(() => (tree?.roots ?? []).map((n) => toTreeNode({ ...n, children: (tree?.nodes ?? []).find((tn) => tn.process_entity_id === n.process_entity_id)?.children ?? [] })), [tree?.roots, tree?.nodes]);
-  const orphanNodes: TreeNode[] = useMemo(() => (tree?.orphans ?? []).map(toTreeNode), [tree?.orphans]);
+  const rootNodes: TreeNode[] = useMemo(() => (tree?.nodes ?? []).map(toTreeNode), [tree?.nodes]);
+  const orphanNodes: TreeNode[] = useMemo(() => selectedEntityId || numericSearchPid !== null ? [] : (tree?.orphans ?? []).map(toTreeNode), [tree?.orphans, selectedEntityId, numericSearchPid]);
+
+  useEffect(() => {
+    const nextSelected = (tree as any)?.selected_entity_id;
+    if (numericSearchPid !== null && tree && nextSelected !== selectedEntityId) {
+      onSelectEntityId(nextSelected ?? null);
+    }
+  }, [tree, numericSearchPid, selectedEntityId, onSelectEntityId]);
 
   const ancestors = useMemo(() => {
     if (!selectedEntityId) return new Set<string>();
@@ -466,39 +482,6 @@ export function IndentedTreeView({
     });
   }
 
-  function expandBranch(entityId: string) {
-    const byId = new Map<string, TreeNode>();
-    const visit = (n: TreeNode) => {
-      byId.set(n.process_entity_id, n);
-      n.children.forEach(visit);
-    };
-    [...rootNodes, ...orphanNodes].forEach(visit);
-    const newExpanded = new Set(expanded);
-    let cur: string | undefined = entityId;
-    while (cur) {
-      newExpanded.add(cur);
-      const node = byId.get(cur);
-      if (!node) break;
-      cur = node.ppid != null
-        ? [...byId.values()].find((n) => n.pid === node.ppid && !newExpanded.has(n.process_entity_id))?.process_entity_id
-        : undefined;
-    }
-    setExpanded(newExpanded);
-  }
-
-  function collapseBranch(entityId: string) {
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      next.delete(entityId);
-      return next;
-    });
-  }
-
-  function focusSelected() {
-    if (!selectedEntityId) return;
-    expandBranch(selectedEntityId);
-  }
-
   function copyPid(pid: number) {
     if (typeof navigator !== "undefined" && navigator.clipboard) {
       navigator.clipboard.writeText(String(pid)).catch(() => undefined);
@@ -539,33 +522,6 @@ export function IndentedTreeView({
             data-testid="indented-tree-search"
           />
         </div>
-        <button
-          type="button"
-          onClick={focusSelected}
-          disabled={!selectedEntityId}
-          data-testid="indented-tree-focus"
-          className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs disabled:opacity-50"
-        >
-          Focus selected
-        </button>
-        <button
-          type="button"
-          onClick={() => selectedEntityId && expandBranch(selectedEntityId)}
-          disabled={!selectedEntityId}
-          data-testid="indented-tree-expand-branch"
-          className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs disabled:opacity-50"
-        >
-          Expand branch
-        </button>
-        <button
-          type="button"
-          onClick={() => selectedEntityId && collapseBranch(selectedEntityId)}
-          disabled={!selectedEntityId}
-          data-testid="indented-tree-collapse-branch"
-          className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs disabled:opacity-50"
-        >
-          Collapse branch
-        </button>
       </header>
       <p className="text-xs text-muted" data-testid="indented-tree-summary">
         Main tree · {rootNodes.length} root{rootNodes.length === 1 ? "" : "s"}

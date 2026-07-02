@@ -100,7 +100,7 @@ export function MemoryGraphTab({
           <div className="mt-4">
             <MemoryProcessGraph
               caseId={caseId}
-              runId={runId}
+              runId={effectiveRunId}
               onOpenDetail={(entityId) => setInspectEntityId(entityId)}
               selectedEntityId={selectedEntityId}
               onSelectEntityId={onSelectEntityId}
@@ -110,7 +110,7 @@ export function MemoryGraphTab({
           <div className="mt-4">
             <IndentedTreeView
               caseId={caseId}
-              runId={runId}
+              runId={effectiveRunId}
               runOptions={runOptions}
               selectedRunId={selectedRunId}
               onSelectRunId={onSelectRunId}
@@ -128,7 +128,7 @@ export function MemoryGraphTab({
         error={inspectEntityDetail.error instanceof Error ? inspectEntityDetail.error : null}
         caseId={caseId}
         evidenceId={"mem"}
-        runId={selectedRunId}
+        runId={effectiveRunId}
         onClose={() => setInspectEntityId(null)}
         onSelectEntityId={(next) => {
           setInspectEntityId(next);

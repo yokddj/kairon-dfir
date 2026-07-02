@@ -504,6 +504,10 @@ class MemoryProcessTreeEntityRead(BaseModel):
     omitted_count: int = 0
     truncation_reason: str | None = None
     search_results: list[str] = []
+    exact_match_ids: list[str] = []
+    selected_entity_id: str | None = None
+    topology_source: str | None = None
+    truncation: dict = {}
 
 
 class MemoryRenormalizeSummaryRead(BaseModel):

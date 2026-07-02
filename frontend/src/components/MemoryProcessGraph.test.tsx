@@ -5,11 +5,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryProcessGraph } from "./MemoryProcessGraph";
 
 const getCanonicalProcessTreeMock = vi.fn();
+const getCanonicalProcessLineageMock = vi.fn();
 const getCanonicalProcessEntityDetailMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
     getCanonicalProcessTree: (...args: unknown[]) => getCanonicalProcessTreeMock(...args),
+    getCanonicalProcessLineage: (...args: unknown[]) => getCanonicalProcessLineageMock(...args),
     getCanonicalProcessEntityDetail: (...args: unknown[]) => getCanonicalProcessEntityDetailMock(...args),
   },
 }));
@@ -127,6 +129,7 @@ describe("MemoryProcessGraph", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getCanonicalProcessTreeMock.mockResolvedValue(systemTree());
+    getCanonicalProcessLineageMock.mockResolvedValue(systemTree({ selected_entity_id: "ent-system", exact_match_ids: ["ent-system"] }));
     getCanonicalProcessEntityDetailMock.mockResolvedValue(null);
   });
 
@@ -202,6 +205,7 @@ describe("MemoryProcessGraph", () => {
     );
     renderGraph();
     await screen.findByTestId("memory-process-canvas");
+    fireEvent.click(screen.getByTestId("memory-graph-advanced-toggle"));
     const scopeSelect = screen.getByLabelText("Scope") as HTMLSelectElement;
     fireEvent.change(scopeSelect, { target: { value: "orphans" } });
     await waitFor(() => {
@@ -211,16 +215,16 @@ describe("MemoryProcessGraph", () => {
     });
   });
 
-  // 9. Search by PID forwards to API
-  it("forwards the search to the API", async () => {
+  // 9. Numeric PID search uses exact lineage API
+  it("forwards numeric PID search to the lineage API", async () => {
     renderGraph();
     await screen.findByTestId("memory-process-canvas");
     const searchInput = screen.getByTestId("memory-graph-search");
     fireEvent.change(searchInput, { target: { value: "1116" } });
     await waitFor(() => {
-      const calls = getCanonicalProcessTreeMock.mock.calls;
+      const calls = getCanonicalProcessLineageMock.mock.calls;
       const last = calls[calls.length - 1]?.[1] as { search?: string } | undefined;
-      expect(last?.search).toBe("1116");
+      expect((last as { pid?: number })?.pid).toBe(1116);
     });
   });
 
@@ -237,24 +241,17 @@ describe("MemoryProcessGraph", () => {
     });
   });
 
-  // 11. Show ancestors
-  it("triggers a second request for ancestors when requested", async () => {
+  // 11. Selecting a node uses lineage instead of a manual ancestor request
+  it("requests authoritative lineage when a node is selected", async () => {
     getCanonicalProcessEntityDetailMock.mockResolvedValueOnce(cmdEntityDetail());
     renderGraph();
     const nodes = await screen.findAllByTestId("memory-graph-node");
     fireEvent.click(nodes[0]);
-    const detail = await screen.findByTestId("memory-graph-detail");
-    const buttons = detail.querySelectorAll("button");
-    // The Show ancestors button
-    const showAncestorsBtn = Array.from(buttons).find((b) => b.textContent?.includes("Show ancestors"));
-    expect(showAncestorsBtn).toBeDefined();
-    if (showAncestorsBtn) fireEvent.click(showAncestorsBtn);
-    // The ancestors query is enabled only after the focused entity is set
-    // and the user clicks "Show ancestors". It will fire and we should see
-    // a second tree request that includes include_ancestors.
+    await screen.findByTestId("memory-graph-detail");
     await waitFor(() => {
-      const calls = getCanonicalProcessTreeMock.mock.calls;
-      expect(calls.length).toBeGreaterThan(1);
+      const calls = getCanonicalProcessLineageMock.mock.calls;
+      const last = calls[calls.length - 1]?.[1] as { entity_id?: string } | undefined;
+      expect(last?.entity_id).toBe("ent-system");
     });
   });
 

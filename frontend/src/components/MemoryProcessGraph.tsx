@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import {
-  ChevronDown,
-  ChevronRight,
   Copy,
-  Eye,
   GitBranch,
   Layers,
   Network,
@@ -124,13 +121,13 @@ export function MemoryProcessGraph({
   selectedEntityId: externalSelectedEntityId,
   onSelectEntityId: externalOnSelectEntityId,
 }: MemoryProcessGraphProps) {
-  const queryClient = useQueryClient();
   const [viewMode, setViewMode] = useState<ViewMode>("graph");
   const [scope, setScope] = useState<Scope>("main");
   const [visibility, setVisibility] = useState<VisibilityFilter>("all");
   const [depth, setDepth] = useState(2);
   const [maxNodes, setMaxNodes] = useState(60);
   const [search, setSearch] = useState("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [internalSelectedEntityId, setInternalSelectedEntityId] = useState<string | null>(null);
   const [focusedEntityId, setFocusedEntityId] = useState<string | null>(null);
   const selectedEntityId =
@@ -140,7 +137,6 @@ export function MemoryProcessGraph({
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [dragStart, setDragStart] = useState<{ x: number; y: number; pan: { x: number; y: number } } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
-  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const containerRef = useRef<HTMLDivElement | null>(null);
 
   const treeParams = useMemo(() => {
@@ -165,14 +161,21 @@ export function MemoryProcessGraph({
   const treeQuery = useQuery({
     queryKey: ["memory-process-graph", caseId, runId, treeParams],
     queryFn: () => api.getCanonicalProcessTree(caseId, treeParams),
-    enabled: Boolean(caseId && runId),
+    enabled: Boolean(caseId && runId && !selectedEntityId && !/^\d+$/.test(search.trim())),
     refetchOnWindowFocus: false,
   });
 
-  const ancestorsQuery = useQuery({
-    queryKey: ["memory-process-ancestors", caseId, runId, focusedEntityId],
-    queryFn: () => api.getCanonicalProcessTree(caseId, { run_id: runId || undefined, root_entity_id: focusedEntityId || undefined, depth: 8, max_nodes: 30, include_ancestors: true }),
-    enabled: false,
+  const numericSearchPid = /^\d+$/.test(search.trim()) ? Number(search.trim()) : null;
+  const lineageQuery = useQuery({
+    queryKey: ["memory-process-lineage", caseId, runId, selectedEntityId, numericSearchPid],
+    queryFn: () => api.getCanonicalProcessLineage(caseId, {
+      run_id: runId || undefined,
+      entity_id: selectedEntityId || undefined,
+      pid: selectedEntityId ? undefined : numericSearchPid ?? undefined,
+      descendant_depth: 3,
+      max_nodes: 200,
+    }),
+    enabled: Boolean(caseId && runId && (selectedEntityId || numericSearchPid !== null)),
     refetchOnWindowFocus: false,
   });
 
@@ -183,7 +186,7 @@ export function MemoryProcessGraph({
     refetchOnWindowFocus: false,
   });
 
-  const tree = treeQuery.data;
+  const tree = lineageQuery.data ?? treeQuery.data;
   const shape: NodeShape[] = useMemo(() => (tree?.nodes ?? []).map(toNodeShape), [tree?.nodes]);
 
   // Layout
@@ -210,20 +213,23 @@ export function MemoryProcessGraph({
     [tree],
   );
   const searchResultSet = useMemo(() => new Set(searchResultIds), [searchResultIds]);
-  const focusedSearchId = exactMatchIds[0] || searchResultIds[0] || null;
+  const focusedSearchId = exactMatchIds[0] || null;
 
   // When the user types a search and the API returns a match,
   // auto-focus on the first exact-matched entity.  Search overrides
   // a previously selected entity because the user is actively searching.
   useEffect(() => {
-    if (!focusedSearchId) return;
+    if (numericSearchPid === null || lineageQuery.isFetching) return;
+    const next = (lineageQuery.data as any)?.selected_entity_id ?? null;
+    setSelectedEntityId(next);
+    setFocusedEntityId(next);
+  }, [numericSearchPid, lineageQuery.data, lineageQuery.isFetching]);
+  useEffect(() => {
+    if (numericSearchPid !== null || !focusedSearchId) return;
     if (focusedEntityId === focusedSearchId && selectedEntityId === focusedSearchId) return;
     setFocusedEntityId(focusedSearchId);
-  }, [focusedSearchId]);
-  useEffect(() => {
-    if (!focusedSearchId) return;
     setSelectedEntityId(focusedSearchId);
-  }, [focusedSearchId]);
+  }, [focusedSearchId, numericSearchPid]);
   useEffect(() => {
     if (!selectedEntityId) return;
     if (focusedEntityId === selectedEntityId) return;
@@ -267,23 +273,6 @@ export function MemoryProcessGraph({
 
   function focusNode(entityId: string) {
     setFocusedEntityId(entityId);
-  }
-
-  function showAncestors() {
-    if (!focusedEntityId) return;
-    ancestorsQuery.refetch();
-  }
-
-  function expandBranch(entityId: string) {
-    setExpandedIds((prev) => new Set(prev).add(entityId));
-  }
-
-  function collapseBranch(entityId: string) {
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      next.delete(entityId);
-      return next;
-    });
   }
 
   function copyPid(pid: number) {
@@ -364,7 +353,23 @@ export function MemoryProcessGraph({
 
       {message ? <p className="rounded-2xl border border-sky-400/30 bg-sky-500/10 p-3 text-xs text-sky-100" role="status">{message}</p> : null}
 
-      <div className="grid gap-3 md:grid-cols-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-line bg-abyss/40 p-3 text-xs">
+        <div>
+          <span className="font-semibold text-ink">Lineage mode</span>
+          <span className="ml-2 text-muted">Search/select reveals ancestors and direct children automatically.</span>
+          {(tree as any)?.topology_source ? <span className="ml-2 rounded border border-line bg-abyss/70 px-2 py-0.5 text-muted">Topology: {(tree as any).topology_source}</span> : null}
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowAdvanced((next) => !next)}
+          className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs text-muted"
+          data-testid="memory-graph-advanced-toggle"
+        >
+          {showAdvanced ? "Hide advanced" : "Advanced"}
+        </button>
+      </div>
+
+      {showAdvanced ? <div className="grid gap-3 md:grid-cols-4">
         <div className="rounded-2xl border border-line bg-abyss/60 p-3">
           <label className="text-[10px] uppercase tracking-[0.18em] text-muted" htmlFor="graph-scope">Scope</label>
           <select
@@ -418,7 +423,7 @@ export function MemoryProcessGraph({
             className="mt-1 w-full rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm"
           />
         </div>
-      </div>
+      </div> : null}
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex flex-1 items-center gap-2 rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-sm">
@@ -482,11 +487,11 @@ export function MemoryProcessGraph({
         />
       ) : null}
 
-      {treeQuery.isLoading ? (
+      {(treeQuery.isLoading || lineageQuery.isLoading) ? (
         <p className="text-sm text-muted" role="status">Loading memory process graph…</p>
-      ) : treeQuery.error instanceof Error ? (
+      ) : (treeQuery.error instanceof Error || lineageQuery.error instanceof Error) ? (
         <p className="rounded-2xl border border-rose-400/30 bg-rose-500/10 p-4 text-sm text-rose-100">
-          {treeQuery.error.message}
+          {(lineageQuery.error instanceof Error ? lineageQuery.error : treeQuery.error as Error).message}
         </p>
       ) : viewMode === "table" ? (
         <ProcessTableView nodes={shape} runId={runId} onFocus={focusNode} />
@@ -626,40 +631,27 @@ export function MemoryProcessGraph({
       <DetailPanel
         detail={detailQuery.data ?? null}
         onClose={() => setFocusedEntityId(null)}
-        onShowAncestors={showAncestors}
         onCopyPid={copyPid}
         onOpenDetail={onOpenDetail}
-        ancestorsData={ancestorsQuery.data ?? null}
       />
       <SelectedActions
         selectedNode={selectedEntityId ? lookupNode(shape, selectedEntityId) : null}
-        onExpand={expandBranch}
-        onCollapse={collapseBranch}
         onCopyPid={copyPid}
         onOpenDetail={onOpenDetail}
-        onShowAncestors={showAncestors}
       />
     </section>
   );
 }
 
 function buildEdges(layout: ReturnType<typeof buildProcessGraphLayout>, shape: NodeShape[]): GraphEdgeLike[] {
-  const byId = new Map<string, NodeShape>();
+  const edges: GraphEdgeLike[] = [];
   const visit = (n: NodeShape) => {
-    byId.set(n.process_entity_id, n);
-    n.children.forEach(visit);
+    for (const child of n.children) {
+      edges.push({ source: n.process_entity_id, target: child.process_entity_id });
+      visit(child);
+    }
   };
   shape.forEach(visit);
-  const edges: GraphEdgeLike[] = [];
-  for (const [id, node] of byId) {
-    if (!node.ppid) continue;
-    for (const candidate of byId.values()) {
-      if (candidate.pid === node.ppid && candidate.process_entity_id !== id) {
-        edges.push({ source: candidate.process_entity_id, target: id });
-        break;
-      }
-    }
-  }
   return edges;
 }
 
@@ -774,17 +766,13 @@ function Legend() {
 function DetailPanel({
   detail,
   onClose,
-  onShowAncestors,
   onCopyPid,
   onOpenDetail,
-  ancestorsData,
 }: {
   detail: MemoryProcessEntityDetail | null;
   onClose: () => void;
-  onShowAncestors: () => void;
   onCopyPid: (pid: number) => void;
   onOpenDetail: (entityId: string) => void;
-  ancestorsData: TreeResponse | null | undefined;
 }) {
   if (!detail) return null;
   const entity = detail.entity;
@@ -802,9 +790,6 @@ function DetailPanel({
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={() => onCopyPid(entity.process?.pid ?? 0)} className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs">
             <Copy className="mr-1 inline h-3.5 w-3.5" /> Copy PID
-          </button>
-          <button type="button" onClick={onShowAncestors} className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs">
-            <Eye className="mr-1 inline h-3.5 w-3.5" /> Show ancestors
           </button>
           <button type="button" onClick={() => onOpenDetail(entity.process_entity_id)} className="rounded-xl border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent">
             Open details
@@ -845,11 +830,6 @@ function DetailPanel({
           </tbody>
         </table>
       </section>
-      {ancestorsData && (ancestorsData.nodes ?? []).length > 0 ? (
-        <p className="text-xs text-muted" data-testid="ancestors-loaded">
-          Ancestors loaded: {ancestorsData.nodes.length} top-level nodes ({ancestorsData.total_entities} entities in scope).
-        </p>
-      ) : null}
     </article>
   );
 }
@@ -865,32 +845,17 @@ function Row({ label, value }: { label: string; value: string }) {
 
 function SelectedActions({
   selectedNode,
-  onExpand,
-  onCollapse,
   onCopyPid,
   onOpenDetail,
-  onShowAncestors,
 }: {
   selectedNode: NodeShape | null;
-  onExpand: (id: string) => void;
-  onCollapse: (id: string) => void;
   onCopyPid: (pid: number) => void;
   onOpenDetail: (id: string) => void;
-  onShowAncestors: () => void;
 }) {
   if (!selectedNode) return null;
   return (
     <div className="flex flex-wrap gap-2 rounded-2xl border border-line bg-abyss/40 p-3 text-xs" data-testid="selected-actions">
       <span className="self-center text-muted">Selected: PID {selectedNode.pid} · {selectedNode.name || "—"}</span>
-      <button type="button" onClick={() => onExpand(selectedNode.process_entity_id)} className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs">
-        <ChevronDown className="mr-1 inline h-3.5 w-3.5" /> Expand branch
-      </button>
-      <button type="button" onClick={() => onCollapse(selectedNode.process_entity_id)} className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs">
-        <ChevronRight className="mr-1 inline h-3.5 w-3.5" /> Collapse branch
-      </button>
-      <button type="button" onClick={onShowAncestors} className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs">
-        <Eye className="mr-1 inline h-3.5 w-3.5" /> Show ancestors
-      </button>
       <button type="button" onClick={() => onCopyPid(selectedNode.pid)} className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs">
         <Copy className="mr-1 inline h-3.5 w-3.5" /> Copy PID
       </button>
