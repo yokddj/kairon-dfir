@@ -1328,6 +1328,10 @@ export type MemoryProcessTreeEntity = {
   omitted_count: number;
   truncation_reason: string | null;
   search_results?: string[];
+  exact_match_ids?: string[];
+  selected_entity_id?: string | null;
+  topology_source?: string | null;
+  truncation?: Record<string, unknown>;
 };
 
 export type MemoryRenormalizeSummary = {
@@ -5182,6 +5186,28 @@ export const api = {
     if (params?.orphans_only !== undefined) query.set("orphans_only", String(params.orphans_only));
     if (params?.search) query.set("search", params.search);
     return request<MemoryProcessTreeEntity>(`/cases/${caseId}/memory/process-tree-canonical${query.size ? `?${query.toString()}` : ""}`);
+  },
+  getCanonicalProcessLineage: (
+    caseId: string,
+    params?: {
+      run_id?: string;
+      profile?: "processes_basic" | "processes_extended";
+      evidence_id?: string;
+      entity_id?: string;
+      pid?: number;
+      descendant_depth?: number;
+      max_nodes?: number;
+    },
+  ) => {
+    const query = new URLSearchParams();
+    if (params?.run_id) query.set("run_id", params.run_id);
+    if (params?.profile) query.set("profile", params.profile);
+    if (params?.evidence_id) query.set("evidence_id", params.evidence_id);
+    if (params?.entity_id) query.set("entity_id", params.entity_id);
+    if (params?.pid !== undefined) query.set("pid", String(params.pid));
+    if (params?.descendant_depth !== undefined) query.set("descendant_depth", String(params.descendant_depth));
+    if (params?.max_nodes !== undefined) query.set("max_nodes", String(params.max_nodes));
+    return request<MemoryProcessTreeEntity>(`/cases/${caseId}/memory/process-lineage-canonical${query.size ? `?${query.toString()}` : ""}`);
   },
   renormalizeProcessEntities: (caseId: string, evidenceId: string, runId: string, dryRun = true) =>
     request<MemoryRenormalizeSummary>(`/cases/${caseId}/memory/evidences/${evidenceId}/process-entities/renormalize`, {

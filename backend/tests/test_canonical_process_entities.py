@@ -564,3 +564,41 @@ def test_alternate_command_lines_recorded() -> None:
     assert "x.exe --first" in entity["process"]["command_line"] or "x.exe --second" in entity["process"]["command_line"]
     sources = entity["sources"]
     assert sources.count("windows.cmdline") == 1
+
+
+def test_lineage_exact_pid_selects_process_and_reveals_parent_children(monkeypatch: pytest.MonkeyPatch) -> None:
+    docs = [
+        _legacy_doc(pid=9132, plugin="windows.pstree", name="explorer.exe", ppid=4, create_time="2024-03-22T11:00:00Z"),
+        _legacy_doc(pid=6996, plugin="windows.pstree", name="powershell.exe", ppid=9132, create_time="2024-03-22T11:01:00Z"),
+        _legacy_doc(pid=5528, plugin="windows.pstree", name="powershell.exe", ppid=6996, create_time="2024-03-22T11:02:00Z"),
+        _legacy_doc(pid=5788, plugin="windows.pstree", name="conhost.exe", ppid=6996, create_time="2024-03-22T11:01:01Z"),
+    ]
+    entities = _renormalize(docs)["entities"]
+    monkeypatch.setattr(canonical, "fetch_canonical_entities", lambda *args, **kwargs: {"items": entities, "page": 1, "page_size": 200, "total": len(entities)})
+
+    lineage = canonical.fetch_canonical_lineage("case-x", run_id="run-1", pid=6996)
+
+    assert lineage["selected_entity_id"] is not None
+    root = lineage["nodes"][0]
+    assert root["pid"] == 9132
+    selected = root["children"][0]
+    assert selected["pid"] == 6996
+    assert [child["pid"] for child in selected["children"]] == [5528, 5788]
+    assert selected["child_count"] == 2
+    assert lineage["topology_source"] == "pstree"
+
+
+def test_lineage_ambiguous_pid_selects_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    docs = [
+        _legacy_doc(pid=1234, plugin="windows.pslist", name="cmd.exe", ppid=1, create_time="2024-03-22T08:00:00Z"),
+        _legacy_doc(pid=1234, plugin="windows.pslist", name="powershell.exe", ppid=1, create_time="2024-03-22T18:00:00Z"),
+    ]
+    entities = _renormalize(docs)["entities"]
+    monkeypatch.setattr(canonical, "fetch_canonical_entities", lambda *args, **kwargs: {"items": entities, "page": 1, "page_size": 200, "total": len(entities)})
+
+    lineage = canonical.fetch_canonical_lineage("case-x", run_id="run-1", pid=1234)
+
+    assert lineage["selected_entity_id"] is None
+    assert lineage["nodes"] == []
+    assert len(lineage["exact_match_ids"]) == 2
+    assert lineage["truncation_reason"] == "pid_ambiguous"

@@ -1062,9 +1062,15 @@ def fetch_canonical_entities(
     if source_plugin:
         filters.append({"term": {"source_plugins.keyword": source_plugin}})
     if pid is not None:
-        filters.append({"term": {"process.pid": pid}})
+        filters.append({"bool": {"should": [
+            {"term": {"process.pid": pid}},
+            {"term": {"process.pid.keyword": str(pid)}},
+        ], "minimum_should_match": 1}})
     if ppid is not None:
-        filters.append({"term": {"process.ppid": ppid}})
+        filters.append({"bool": {"should": [
+            {"term": {"process.ppid": ppid}},
+            {"term": {"process.ppid.keyword": str(ppid)}},
+        ], "minimum_should_match": 1}})
     if has_command_line is True:
         filters.append({"exists": {"field": "process.command_line"}})
     elif has_command_line is False:
@@ -1309,6 +1315,226 @@ def fetch_canonical_tree(
         root_entity_id=root_entity_id,
         include_ancestors=include_ancestors,
     )
+
+
+def fetch_canonical_lineage(
+    case_id: str,
+    *,
+    run_id: str,
+    entity_id: str | None = None,
+    pid: int | None = None,
+    descendant_depth: int = 2,
+    max_nodes: int = 200,
+) -> dict[str, Any]:
+    """Return one bounded lineage topology for graph and tree views.
+
+    The selected process is authoritative. Numeric PID resolution is exact:
+    zero matches select nothing, one match selects it, multiple matches are
+    returned as disambiguation candidates without selecting a fallback.
+    """
+    all_entities = _fetch_all_canonical_entities(case_id, run_id=run_id)
+    by_id = {e["process_entity_id"]: e for e in all_entities}
+    children_map = _children_map(all_entities)
+
+    selected: dict[str, Any] | None = None
+    matches: list[dict[str, Any]] = []
+    if entity_id:
+        selected = by_id.get(entity_id)
+        matches = [selected] if selected else []
+    elif pid is not None:
+        matches = [e for e in all_entities if e.get("process", {}).get("pid") == pid]
+        if len(matches) == 1:
+            selected = matches[0]
+
+    match_ids = [m["process_entity_id"] for m in matches]
+    base_metrics = build_tree_metrics(all_entities)
+    if selected is None:
+        return {
+            "run_id": run_id,
+            "roots": [],
+            "orphans": [],
+            "top_level_nodes": [],
+            "nodes": [],
+            "edges": [],
+            "metrics": {
+                **base_metrics,
+                "case_roots": base_metrics["roots"],
+                "current_view_roots": 0,
+                "visible_processes": 0,
+                "context_ancestors": 0,
+                "collapsed_branches": 0,
+                "processes_not_loaded": len(all_entities),
+                "search_results": match_ids,
+            },
+            "total_entities": len(all_entities),
+            "omitted_count": len(all_entities),
+            "truncation_reason": "pid_ambiguous" if len(matches) > 1 else "pid_no_match",
+            "search_results": match_ids,
+            "exact_match_ids": match_ids,
+            "selected_entity_id": None,
+            "topology_source": _topology_source_for_entities(matches),
+            "truncation": {"truncated": False, "reason": "pid_ambiguous" if len(matches) > 1 else "pid_no_match"},
+        }
+
+    ancestor_ids: list[str] = []
+    cursor = selected.get("parent_entity_id")
+    seen: set[str] = {selected["process_entity_id"]}
+    while cursor and cursor in by_id and cursor not in seen:
+        ancestor_ids.append(cursor)
+        seen.add(cursor)
+        cursor = by_id[cursor].get("parent_entity_id")
+    ancestor_ids.reverse()
+
+    remaining = [max(1, max_nodes)]
+
+    def _node(ent: dict[str, Any], level: int, path: set[str]) -> dict[str, Any]:
+        eid = ent["process_entity_id"]
+        if eid in path or level > descendant_depth or remaining[0] <= 0:
+            return _lineage_node(ent, truncated=True, children=[])
+        remaining[0] -= 1
+        child_nodes = []
+        if level < descendant_depth:
+            for child in sorted(children_map.get(eid, []), key=lambda c: (c["process"].get("pid") or -1, c["process_entity_id"])):
+                child_nodes.append(_node(child, level + 1, path | {eid}))
+        return _lineage_node(ent, children=child_nodes)
+
+    selected_node = _node(selected, 0, set())
+    root_node = selected_node
+    for ancestor_id in reversed(ancestor_ids):
+        ancestor = by_id[ancestor_id]
+        root_node = _lineage_node(ancestor, children=[root_node])
+
+    visible_ids: set[str] = set()
+    def _collect_ids(node: dict[str, Any]) -> None:
+        visible_ids.add(node["process_entity_id"])
+        for child in node.get("children", []) or []:
+            _collect_ids(child)
+    _collect_ids(root_node)
+    collapsed = sum(1 for vid in visible_ids if by_id.get(vid, {}).get("child_count", 0) > len([c for c in _find_lineage_node(root_node, vid).get("children", [])]) if _find_lineage_node(root_node, vid))
+    truncated = remaining[0] <= 0
+    selected_id = selected["process_entity_id"]
+    return {
+        "run_id": run_id,
+        "roots": [_root_summary(by_id[ancestor_ids[0]])] if ancestor_ids else [_root_summary(selected)],
+        "orphans": [],
+        "top_level_nodes": [root_node],
+        "nodes": [root_node],
+        "edges": _lineage_edges(root_node, by_id),
+        "metrics": {
+            **base_metrics,
+            "case_roots": base_metrics["roots"],
+            "current_view_roots": 1,
+            "visible_processes": len(visible_ids),
+            "context_ancestors": len(ancestor_ids),
+            "collapsed_branches": collapsed,
+            "processes_not_loaded": max(0, len(all_entities) - len(visible_ids)),
+            "search_results": [selected_id],
+        },
+        "total_entities": len(all_entities),
+        "omitted_count": max(0, len(all_entities) - len(visible_ids)),
+        "truncation_reason": "max_nodes_reached" if truncated else None,
+        "search_results": [selected_id],
+        "exact_match_ids": match_ids or [selected_id],
+        "selected_entity_id": selected_id,
+        "topology_source": _topology_source_for_entities([selected]),
+        "truncation": {
+            "truncated": truncated,
+            "max_nodes": max_nodes,
+            "descendant_depth": descendant_depth,
+            "visible_nodes": len(visible_ids),
+            "omitted_count": max(0, len(all_entities) - len(visible_ids)),
+        },
+    }
+
+
+def _fetch_all_canonical_entities(case_id: str, *, run_id: str) -> list[dict[str, Any]]:
+    page_size = 200
+    page = 1
+    entities: list[dict[str, Any]] = []
+    while True:
+        result = fetch_canonical_entities(case_id, run_id=run_id, page=page, page_size=page_size)
+        items = result["items"]
+        entities.extend(items)
+        if len(items) < page_size:
+            return entities
+        page += 1
+
+
+def _children_map(entities: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    by_id = {e["process_entity_id"]: e for e in entities}
+    children: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for ent in entities:
+        parent_id = ent.get("parent_entity_id")
+        if parent_id and parent_id in by_id:
+            children[parent_id].append(ent)
+    return children
+
+
+def _lineage_node(ent: dict[str, Any], *, children: list[dict[str, Any]], truncated: bool = False) -> dict[str, Any]:
+    child_count = int(ent.get("child_count") or 0)
+    return {
+        "process_entity_id": ent["process_entity_id"],
+        "pid": ent["process"].get("pid"),
+        "ppid": ent["process"].get("ppid"),
+        "name": ent["process"].get("name"),
+        "command_line": ent["process"].get("command_line"),
+        "sources": ent.get("sources", []),
+        "visibility": ent.get("visibility", {}),
+        "findings": ent.get("findings", []),
+        "child_count": child_count,
+        "confidence": ent.get("confidence", "low"),
+        "create_time": ent.get("process", {}).get("create_time"),
+        "exit_time": ent.get("process", {}).get("exit_time"),
+        "tree": ent.get("tree", {}),
+        "children": children,
+        "truncated": truncated,
+        "omitted_children": max(0, child_count - len(children)),
+    }
+
+
+def _find_lineage_node(node: dict[str, Any], entity_id: str) -> dict[str, Any] | None:
+    if node.get("process_entity_id") == entity_id:
+        return node
+    for child in node.get("children", []) or []:
+        found = _find_lineage_node(child, entity_id)
+        if found:
+            return found
+    return None
+
+
+def _lineage_edges(node: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    edges: list[dict[str, Any]] = []
+    parent_id = node["process_entity_id"]
+    for child in node.get("children", []) or []:
+        child_ent = by_id.get(child["process_entity_id"], {})
+        source = "windows.pstree" if PSTREE_PLUGIN in child_ent.get("sources", []) else "windows.pslist"
+        edges.append({
+            "document_id": f"lineage:{parent_id}:{child['process_entity_id']}",
+            "document_type": "memory_process_edge",
+            "case_id": child_ent.get("case_id", ""),
+            "evidence_id": child_ent.get("evidence_id", ""),
+            "scan_run_id": child_ent.get("scan_run_id", ""),
+            "parent_entity_id": parent_id,
+            "child_entity_id": child["process_entity_id"],
+            "edge_type": "parent_child",
+            "source_plugin": source,
+            "confidence": "high" if source == "windows.pstree" else "medium",
+            "parent_pid": child.get("ppid"),
+            "child_pid": child.get("pid"),
+        })
+        edges.extend(_lineage_edges(child, by_id))
+    return edges
+
+
+def _topology_source_for_entities(entities: list[dict[str, Any] | None]) -> str:
+    present = [e for e in entities if e]
+    if not present:
+        return "pstree"
+    if any(PSTREE_PLUGIN in e.get("sources", []) for e in present):
+        return "pstree"
+    if any(PSLIST_PLUGIN in e.get("sources", []) for e in present):
+        return "pslist_ppid"
+    return "psscan_ppid_low_confidence"
 
 
 def _build_tree_response(

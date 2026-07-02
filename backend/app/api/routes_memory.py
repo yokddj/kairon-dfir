@@ -2439,6 +2439,30 @@ def get_canonical_process_tree(
     )
 
 
+@router.get("/cases/{case_id}/memory/process-lineage-canonical", response_model=MemoryProcessTreeEntityRead)
+def get_canonical_process_lineage(
+    case_id: str,
+    run_id: str | None = Query(default=None),
+    profile: str | None = Query(default=None, pattern="^(processes_basic|processes_extended)$"),
+    evidence_id: str | None = Query(default=None),
+    entity_id: str | None = Query(default=None, max_length=128),
+    pid: int | None = Query(default=None, ge=0),
+    descendant_depth: int = Query(default=2, ge=0, le=8),
+    max_nodes: int = Query(default=200, ge=1, le=2000),
+    db: Session = Depends(get_db),
+) -> dict:
+    _require_case(db, case_id)
+    run = _resolve_run(db, case_id, run_id, profile, evidence_id=evidence_id)
+    return canonical_entities.fetch_canonical_lineage(
+        case_id,
+        run_id=run.id,
+        entity_id=entity_id,
+        pid=pid,
+        descendant_depth=descendant_depth,
+        max_nodes=max_nodes,
+    )
+
+
 @router.post(
     "/cases/{case_id}/memory/evidences/{evidence_id}/process-entities/renormalize",
     response_model=MemoryRenormalizeSummaryRead,
