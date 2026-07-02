@@ -6,6 +6,7 @@ output.  No OpenSearch or Volatility execution is required.
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -161,6 +162,35 @@ def test_artifact_bulk_partial_failures_are_counted(monkeypatch: pytest.MonkeyPa
     assert client.indices.refresh.called
 
 
+def test_network_summary_aggregates_netscan_and_netstat(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.memory import execution
+
+    summaries: list[tuple[str, int, dict[str, Any]]] = []
+    monkeypatch.setattr(execution, "index_artifact_documents", lambda case_id, items: {"indexed": len(items), "errors": 0})
+    monkeypatch.setattr(execution, "link_process_entities", lambda *args, **kwargs: 0)
+    monkeypatch.setattr(execution, "_upsert_summary", lambda db, run, artifact_type, count, metadata: summaries.append((artifact_type, count, metadata)))
+
+    run = SimpleNamespace(id=RUN, case_id=CASE, evidence_id=EVIDENCE, profile="network_basic")
+    result = execution._index_artifact_results(
+        CASE,
+        {
+            "windows.netscan": {"items": [{"document_id": "n1"}], "accepted_count": 2, "warnings": [], "normalization_version": NORMALIZATION_VERSION},
+            "windows.netstat": {"items": [{"document_id": "n2"}], "accepted_count": 3, "warnings": [], "normalization_version": NORMALIZATION_VERSION},
+        },
+        db=object(),
+        run=run,
+    )
+
+    assert result["memory_network_connection"] == {"indexed": 1, "errors": 0}
+    assert summaries == [
+        (
+            "memory_network_connection",
+            5,
+            {"profile": "network_basic", "plugins": ["windows.netscan", "windows.netstat"], "warnings": [], "normalization_version": NORMALIZATION_VERSION},
+        )
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 2. netscan IPv6
 # ---------------------------------------------------------------------------
@@ -198,6 +228,39 @@ def test_netscan_preserves_ports_and_state() -> None:
     assert listening and listening[0]["local_port"] == 135
     udp = [item for item in result["items"] if item["protocol"] == "UDPv4"]
     assert udp and udp[0]["local_port"] == 5353
+
+
+def test_netscan_accepts_volatility_addr_aliases_and_missing_pid() -> None:
+    result = normalize_windows_netscan(
+        [
+            {
+                "Proto": "TCPv4",
+                "LocalAddr": "192.168.20.41",
+                "LocalPort": 49915,
+                "ForeignAddr": "104.90.205.80",
+                "ForeignPort": 443,
+                "State": "CLOSE_WAIT",
+                "PID": None,
+                "Owner": None,
+                "Offset": 146247931824800,
+            }
+        ],
+        case_id=CASE,
+        evidence_id=EVIDENCE,
+        scan_run_id=RUN,
+        plugin_run_id=f"{RUN}:windows.netscan",
+    )
+
+    assert result["raw_count"] == 1
+    assert result["accepted_count"] == 1
+    assert result["dropped_count"] == 0
+    assert result["warnings"] == ["netscan_row_missing_pid"]
+    item = result["items"][0]
+    assert item["local_address"] == "192.168.20.41"
+    assert item["remote_address"] == "104.90.205.80"
+    assert item["pid"] is None
+    assert item["offset"] == "146247931824800"
+    assert item["unresolved_process_reference"] is True
 
 
 def test_netscan_malformed_or_out_of_range_ports_do_not_break_row() -> None:

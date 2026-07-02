@@ -776,21 +776,30 @@ def _index_artifact_results(
         except Exception as exc:  # noqa: BLE001
             logger.warning("artifact process linking failed: %s", _sanitize_message(exc))
     # Persist a summary row per artifact type so the Runs view can show
-    # the counts without re-querying OpenSearch.
+    # the counts without re-querying OpenSearch.  Multiple plugins can
+    # feed one artifact type (network_basic: netscan + netstat), so the
+    # summary must aggregate instead of letting the last plugin win.
+    summary_counts: dict[str, int] = {}
+    summary_plugins: dict[str, list[str]] = {}
+    summary_warnings: dict[str, list[str]] = {}
     for plugin, payload in artifact_results.items():
         doc_type = ARTIFACT_PLUGIN_NORMALIZER.get(plugin)
         if not doc_type:
             continue
+        summary_counts[doc_type] = summary_counts.get(doc_type, 0) + int(payload.get("accepted_count", 0))
+        summary_plugins.setdefault(doc_type, []).append(plugin)
+        summary_warnings.setdefault(doc_type, []).extend(payload.get("warnings", [])[:20])
+    for doc_type, count in summary_counts.items():
         _upsert_summary(
             db,
             run,
             doc_type,
-            int(payload.get("accepted_count", 0)),
+            count,
             {
                 "profile": profile,
-                "plugin": plugin,
-                "warnings": payload.get("warnings", [])[:20],
-                "normalization_version": payload.get("normalization_version", NORMALIZATION_VERSION),
+                "plugins": summary_plugins.get(doc_type, []),
+                "warnings": summary_warnings.get(doc_type, [])[:20],
+                "normalization_version": NORMALIZATION_VERSION,
             },
         )
     return result

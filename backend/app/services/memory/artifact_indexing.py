@@ -25,6 +25,23 @@ from app.core.opensearch import get_memory_index, get_opensearch_client
 logger = logging.getLogger(__name__)
 
 
+_EXACT_TERM_FIELDS = {
+    "confidence",
+    "document_id",
+    "document_type",
+    "evidence_id",
+    "local_address",
+    "normalization_version",
+    "process_entity_id",
+    "process_name",
+    "protocol",
+    "remote_address",
+    "review_status",
+    "source_plugin",
+    "state",
+}
+
+
 # Extra fields that are NOT in the base mapping but are commonly added
 # by the canonical entity normalizer; we keep the mapping permissive
 # with ``dynamic: true`` but declare the most common fields.
@@ -190,9 +207,8 @@ def search_artifact_documents(
             elif isinstance(value, (int, float)):
                 query_filters.append({"term": {f"{key}": value}})
             elif isinstance(value, str) and value.strip():
-                # IP-shaped values use the exact field; everything else
-                # is a keyword/text match.
-                query_filters.append({"term": {f"{key}.keyword": value}})
+                field = key if key in _EXACT_TERM_FIELDS else f"{key}.keyword"
+                query_filters.append({"term": {field: value}})
     body = {
         "query": {"bool": {"filter": query_filters}},
         "from": (page - 1) * page_size,
@@ -344,7 +360,7 @@ def link_process_entities(
         ],
         "_source": ["process_entity_id", "process.pid", "process.create_time", "scan_run_id"],
     }
-    response = client.search(index=index, body=body, params={"ignore_unavailable": "true"})
+    response = client.search(index=index, body=ent_body, params={"ignore_unavailable": "true"})
     hits = response.get("hits", {}).get("hits", [])
     if not hits:
         return 0

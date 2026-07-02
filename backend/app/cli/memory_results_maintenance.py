@@ -20,7 +20,7 @@ from typing import Any
 
 from app.core.config import get_settings
 from app.core.database import SessionLocal
-from app.models.memory import MemoryPluginRun, MemoryScanRun
+from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
 from app.services.memory.artifact_normalizers import (
     NORMALIZATION_VERSION,
     normalize_windows_envars,
@@ -30,7 +30,8 @@ from app.services.memory.artifact_normalizers import (
     normalize_windows_privileges,
     normalize_windows_vadinfo,
 )
-from app.services.memory.artifact_indexing import index_artifact_documents
+from app.services.memory.artifact_indexing import index_artifact_documents, link_process_entities
+from app.services.memory.execution import ARTIFACT_PLUGIN_NORMALIZER
 
 
 def _load_raw_plugin_output(run: MemoryScanRun, plugin_name: str) -> Any:
@@ -128,6 +129,9 @@ def _renormalize_run(db, run: MemoryScanRun, dry_run: bool) -> dict[str, Any]:
         "error": None,
     }
     try:
+        summary_counts: dict[str, int] = {}
+        summary_plugins: dict[str, list[str]] = {}
+        summary_warnings: dict[str, list[str]] = {}
         plugin_runs = db.query(MemoryPluginRun).filter(
             MemoryPluginRun.memory_scan_run_id == run.id,
             MemoryPluginRun.status == "completed",
@@ -153,8 +157,12 @@ def _renormalize_run(db, run: MemoryScanRun, dry_run: bool) -> dict[str, Any]:
             report["rows_accepted"] += result.get("accepted_count", 0)
             report["rows_dropped"] += result.get("dropped_count", 0)
             report["artifacts_renormalized"] += 1
+            doc_type = ARTIFACT_PLUGIN_NORMALIZER.get(source_plugin)
+            if doc_type:
+                summary_counts[doc_type] = summary_counts.get(doc_type, 0) + int(result.get("accepted_count", 0))
+                summary_plugins.setdefault(doc_type, []).append(source_plugin)
+                summary_warnings.setdefault(doc_type, []).extend(result.get("warnings", [])[:20])
             if not dry_run and result.get("items"):
-                normalized_type = result.get("memory_artifact_type") or source_plugin
                 try:
                     index_artifact_documents(run.case_id, result["items"])
                 except Exception as exc:
@@ -168,10 +176,45 @@ def _renormalize_run(db, run: MemoryScanRun, dry_run: bool) -> dict[str, Any]:
                 }
                 db.add(plugin_run)
                 db.commit()
+        if not dry_run:
+            for doc_type, count in summary_counts.items():
+                _upsert_summary(
+                    db,
+                    run,
+                    doc_type,
+                    count,
+                    {
+                        "profile": run.profile,
+                        "plugins": summary_plugins.get(doc_type, []),
+                        "warnings": summary_warnings.get(doc_type, [])[:20],
+                        "normalization_version": NORMALIZATION_VERSION,
+                        "renormalized": True,
+                    },
+                )
+                try:
+                    link_process_entities(run.case_id, scan_run_id=run.id, document_type=doc_type)
+                except Exception as exc:  # noqa: BLE001
+                    report["error"] = f"Process linking failed for {doc_type}: {exc}"
+                    return report
+            db.commit()
     except Exception as exc:
         db.rollback()
         report["error"] = str(exc)
     return report
+
+
+def _upsert_summary(db, run: MemoryScanRun, artifact_type: str, count: int, metadata: dict[str, Any]) -> None:
+    summary = (
+        db.query(MemoryArtifactSummary)
+        .filter(MemoryArtifactSummary.memory_run_id == run.id, MemoryArtifactSummary.memory_artifact_type == artifact_type)
+        .first()
+    )
+    if summary is None:
+        summary = MemoryArtifactSummary(case_id=run.case_id, evidence_id=run.evidence_id, memory_run_id=run.id, memory_artifact_type=artifact_type, count=count, metadata_json=metadata)
+        db.add(summary)
+    else:
+        summary.count = count
+        summary.metadata_json = metadata
 
 
 def coverage_command(db, args: argparse.Namespace) -> int:
