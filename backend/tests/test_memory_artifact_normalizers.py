@@ -191,6 +191,25 @@ def test_network_summary_aggregates_netscan_and_netstat(monkeypatch: pytest.Monk
     ]
 
 
+def test_maintenance_loader_uses_stored_output_relative_path(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.cli import memory_results_maintenance
+
+    output = tmp_path / "memory-output" / "case" / "run" / "windows.netscan.json"
+    output.parent.mkdir(parents=True)
+    output.write_text(json.dumps([{"PID": 4, "LocalAddr": "127.0.0.1"}]), encoding="utf-8")
+    settings = SimpleNamespace(backend_data_dir=tmp_path, memory_output_root=None)
+    run = SimpleNamespace(case_id=CASE, evidence_id=EVIDENCE, id=RUN)
+    monkeypatch.setattr(memory_results_maintenance, "get_settings", lambda: settings)
+
+    payload = memory_results_maintenance._load_raw_plugin_output(
+        run,
+        "windows.netscan",
+        "memory-output/case/run/windows.netscan.json",
+    )
+
+    assert payload == [{"PID": 4, "LocalAddr": "127.0.0.1"}]
+
+
 # ---------------------------------------------------------------------------
 # 2. netscan IPv6
 # ---------------------------------------------------------------------------

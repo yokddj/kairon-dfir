@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
@@ -34,14 +35,27 @@ from app.services.memory.artifact_indexing import index_artifact_documents, link
 from app.services.memory.execution import ARTIFACT_PLUGIN_NORMALIZER
 
 
-def _load_raw_plugin_output(run: MemoryScanRun, plugin_name: str) -> Any:
+def _load_raw_plugin_output(run: MemoryScanRun, plugin_name: str, output_relative_path: str | None = None) -> Any:
     from app.services.memory.storage import memory_run_dir
 
-    run_dir = memory_run_dir(run.case_id, run.evidence_id, run.id)
-    output_path = run_dir / f"{plugin_name}.json"
-    if not output_path.exists():
+    candidates: list[Path] = []
+    settings = get_settings()
+    if output_relative_path:
+        stored = Path(output_relative_path)
+        if stored.is_absolute():
+            candidates.append(stored)
+        else:
+            candidates.append(settings.backend_data_dir / stored)
+            if str(stored).startswith("memory-output/") and settings.memory_output_root:
+                candidates.append(settings.memory_output_root / Path(str(stored)[len("memory-output/"):]))
+    output_path = next((path for path in candidates if path.exists()), None)
+    if output_path is None:
+        fallback = memory_run_dir(run.case_id, run.evidence_id, run.id) / f"{plugin_name}.json"
+        if fallback.exists():
+            output_path = fallback
+    if output_path is None:
         return None
-    with open(output_path, "r") as fh:
+    with open(output_path, "r", encoding="utf-8") as fh:
         return json.load(fh)
 
 
@@ -140,7 +154,7 @@ def _renormalize_run(db, run: MemoryScanRun, dry_run: bool) -> dict[str, Any]:
             if plugin_run.plugin not in _RENORMALIZABLE_PLUGINS:
                 report["artifacts_skipped"] += 1
                 continue
-            raw = _load_raw_plugin_output(run, plugin_run.plugin)
+            raw = _load_raw_plugin_output(run, plugin_run.plugin, plugin_run.output_relative_path)
             if raw is None:
                 report["artifacts_skipped"] += 1
                 continue
