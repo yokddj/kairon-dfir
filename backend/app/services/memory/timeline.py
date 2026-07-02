@@ -80,9 +80,12 @@ def get_memory_timeline(
     sort_order: str = "asc",
 ) -> dict[str, Any]:
     page, page_size = _bounded_page(page, page_size)
-    run_id = memory_run_id or _active_run_id(db, case_id, evidence_id)
-    memory_docs = _fetch_memory_docs(case_id, evidence_id, run_id=run_id, process_entity_id=process_entity_id, pid=pid, process_name=process_name, source_plugin=source_plugin)
-    events, undated = _memory_events(case_id, evidence_id, run_id, memory_docs)
+    active_run_id = _active_run_id(db, case_id, evidence_id)
+    # Default timeline scope is the selected Evidence across compatible
+    # active materialized families. Explicit memory_run_id remains a hard
+    # single-run filter for historical inspection.
+    memory_docs = _fetch_memory_docs(case_id, evidence_id, run_id=memory_run_id, process_entity_id=process_entity_id, pid=pid, process_name=process_name, source_plugin=source_plugin)
+    events, undated = _memory_events(case_id, evidence_id, memory_run_id or active_run_id, memory_docs)
     disk_docs = _fetch_disk_docs(case_id, source_parser=source_parser)
     disk_events = _disk_events(case_id, disk_docs)
     correlations = _build_correlations(events, disk_events, include_low=correlation_confidence == LOW_CONFIDENCE)
@@ -106,7 +109,7 @@ def get_memory_timeline(
         "total_pages": math.ceil(total / page_size) if total else 0,
         "time_range": {"from": time_from, "to": time_to, "sort_order": sort_order},
         "selected_evidence": _evidence_payload(db, evidence_id),
-        "selected_memory_context": {"mode": "run" if run_id else "active_or_unavailable", "memory_run_id": run_id},
+        "selected_memory_context": {"mode": "historical_run" if memory_run_id else "evidence_active_families", "memory_run_id": memory_run_id, "default_process_run_id": active_run_id},
         "event_kind_counts": _counts(filtered, "event_kind"),
         "artifact_family_counts": _counts(filtered, "artifact_family"),
         "timestamp_quality_summary": _timestamp_quality(events, undated),
