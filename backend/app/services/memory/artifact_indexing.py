@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 _EXACT_TERM_FIELDS = {
     "confidence",
+    "connection_state",
     "document_id",
     "document_type",
     "evidence_id",
@@ -76,6 +77,7 @@ ARTIFACT_MAPPING = {
             "remote_address": {"type": "ip", "ignore_malformed": True},
             "remote_port": {"type": "integer"},
             "state": {"type": "keyword"},
+            "connection_state": {"type": "keyword"},
             "pid": {"type": "integer"},
             "process_name": {"type": "keyword", "fields": {"text": {"type": "text"}}},
             "process_entity_id": {"type": "keyword"},
@@ -148,6 +150,7 @@ def index_artifact_documents(case_id: str, documents: list[dict[str, Any]], *, b
         chunk = documents[start:start + batch_size]
         body: list[dict[str, Any]] = []
         for doc in chunk:
+            doc = _prepare_artifact_document_for_index(doc)
             doc_id = doc.get("document_id")
             if not doc_id:
                 continue
@@ -170,6 +173,19 @@ def index_artifact_documents(case_id: str, documents: list[dict[str, Any]], *, b
         total_errors += sum(1 for item in response.get("items", []) if item.get("index", {}).get("error"))
     client.indices.refresh(index=index)
     return {"indexed": total_indexed, "errors": total_errors}
+
+
+def _prepare_artifact_document_for_index(doc: dict[str, Any]) -> dict[str, Any]:
+    if doc.get("document_type") != "memory_network_connection":
+        return doc
+    prepared = dict(doc)
+    if prepared.get("state") is not None and prepared.get("connection_state") is None:
+        prepared["connection_state"] = prepared.get("state")
+    # Some historical case indexes already mapped ``state`` as an object.
+    # Store network state in ``connection_state`` and hydrate the API field
+    # after search so old indexes do not reject scalar network states.
+    prepared["state"] = None
+    return prepared
 
 
 # ---------------------------------------------------------------------------
@@ -207,7 +223,8 @@ def search_artifact_documents(
             elif isinstance(value, (int, float)):
                 query_filters.append({"term": {f"{key}": value}})
             elif isinstance(value, str) and value.strip():
-                field = key if key in _EXACT_TERM_FIELDS else f"{key}.keyword"
+                query_key = "connection_state" if document_type == "memory_network_connection" and key == "state" else key
+                field = query_key if query_key in _EXACT_TERM_FIELDS else f"{query_key}.keyword"
                 query_filters.append({"term": {field: value}})
     body = {
         "query": {"bool": {"filter": query_filters}},
@@ -242,7 +259,7 @@ def search_artifact_documents(
     hits = response.get("hits", {})
     total = hits.get("total", {})
     total_value = total.get("value", 0) if isinstance(total, dict) else int(total or 0)
-    items = [hit.get("_source", {}) | {"document_id": hit.get("_id")} for hit in hits.get("hits", [])]
+    items = [_prepare_artifact_document_for_response(hit.get("_source", {}) | {"document_id": hit.get("_id")}) for hit in hits.get("hits", [])]
     return {
         "items": items,
         "total": total_value,
@@ -252,6 +269,13 @@ def search_artifact_documents(
         "normalization_version": "memory_artifact_canonical_v1",
         "document_type": document_type,
     }
+
+
+def _prepare_artifact_document_for_response(doc: dict[str, Any]) -> dict[str, Any]:
+    if doc.get("document_type") == "memory_network_connection" and doc.get("state") is None and doc.get("connection_state") is not None:
+        doc = dict(doc)
+        doc["state"] = doc.get("connection_state")
+    return doc
 
 
 def count_artifact_documents(
