@@ -4383,6 +4383,99 @@ export type MemorySearchParams = {
   mixed_run?: boolean;
 };
 
+export type MemoryTimelineCorrelation = {
+  correlation_id: string;
+  left_artifact_id: string;
+  right_artifact_id: string;
+  left_artifact_type: string;
+  right_artifact_type: string;
+  process_entity_id?: string | null;
+  correlation_type: string;
+  confidence: "exact" | "high" | "medium" | "low" | string;
+  confidence_score?: number;
+  reasons: string[];
+  matched_fields: string[];
+  time_delta_seconds?: number | null;
+  contradictory_fields: string[];
+  source_provenance: Record<string, unknown>;
+  created_by_rule_version: string;
+  navigation_targets: Record<string, unknown>;
+};
+
+export type MemoryTimelineEvent = {
+  event_id: string;
+  case_id: string;
+  evidence_id?: string | null;
+  memory_context_id?: string | null;
+  memory_run_id?: string | null;
+  artifact_type: string;
+  artifact_family: string;
+  event_kind: string;
+  occurred_at?: string | null;
+  occurred_at_end?: string | null;
+  timestamp_source?: string | null;
+  timestamp_semantics: string;
+  timestamp_precision: string;
+  timestamp_confidence: string;
+  timestamp_timezone?: string | null;
+  is_undated: boolean;
+  process_entity_id?: string | null;
+  pid?: number | null;
+  ppid?: number | null;
+  process_name?: string | null;
+  executable_path?: string | null;
+  command_line_summary?: string | null;
+  local_endpoint?: { address?: string | null; port?: number | null } | null;
+  remote_endpoint?: { address?: string | null; port?: number | null } | null;
+  source_plugin?: string | null;
+  source_parser?: string | null;
+  title: string;
+  summary?: string | null;
+  provenance: Record<string, unknown>;
+  raw_reference: Record<string, unknown>;
+  navigation_target: Record<string, unknown>;
+  normalization_warnings: string[];
+  correlations: MemoryTimelineCorrelation[];
+};
+
+export type MemoryTimelineResponse = {
+  items: MemoryTimelineEvent[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+  time_range: Record<string, unknown>;
+  selected_evidence: Record<string, unknown> | null;
+  selected_memory_context: Record<string, unknown>;
+  event_kind_counts: Record<string, number>;
+  artifact_family_counts: Record<string, number>;
+  timestamp_quality_summary: Record<string, number>;
+  correlated_event_count: number;
+  undated_count: number;
+  warnings: string[];
+  coverage: Record<string, unknown>;
+};
+
+export type MemoryTimelineParams = {
+  evidence_id: string;
+  memory_run_id?: string;
+  time_from?: string;
+  time_to?: string;
+  artifact_families?: string[];
+  event_kinds?: string[];
+  process_entity_id?: string;
+  pid?: number;
+  process_name?: string;
+  source_plugin?: string;
+  source_parser?: string;
+  has_correlations?: boolean;
+  correlation_confidence?: string;
+  include_undated?: boolean;
+  page?: number;
+  page_size?: number;
+  sort_order?: string;
+};
+
 export type CommandLineHistoryItem = {
   process_entity_id: string;
   pid: number | null;
@@ -5311,6 +5404,15 @@ export const api = {
       else query.set(key, String(value));
     });
     return request<MemorySearchResponse>(`/cases/${caseId}/memory/search?${query.toString()}`);
+  },
+  getMemoryTimeline: (caseId: string, params: MemoryTimelineParams) => {
+    const query = new URLSearchParams();
+    Object.entries(params).forEach(([key, value]) => {
+      if (value === undefined || value === null || value === "") return;
+      if (Array.isArray(value)) value.forEach((item) => query.append(key, String(item)));
+      else query.set(key, String(value));
+    });
+    return request<MemoryTimelineResponse>(`/cases/${caseId}/memory/timeline?${query.toString()}`);
   },
   getMemoryArtifactOverview: (caseId: string, params?: { run_id?: string | null; evidence_id?: string }) => {
     const query = new URLSearchParams();
