@@ -25,6 +25,9 @@ class FakeClient:
     def search(self, index: str, body: dict[str, Any], params: dict[str, Any] | None = None) -> dict[str, Any]:
         self.search_bodies.append(body)
         docs = self.disk_docs if index == "events" else self.memory_docs
+        if index != "events":
+            text = str(body)
+            docs = [doc for doc in docs if doc.get("document_type") in text]
         return {"hits": {"total": {"value": len(docs)}, "hits": [{"_id": doc.get("document_id") or doc.get("stable_event_id") or str(i), "_source": doc} for i, doc in enumerate(docs)]}}
 
     def bulk(self, body: list[dict[str, Any]], refresh: bool = False) -> dict[str, Any]:
