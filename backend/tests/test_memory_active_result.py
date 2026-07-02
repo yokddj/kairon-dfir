@@ -966,7 +966,7 @@ class TestEvidenceIdFieldQuery:
         assert {"term": {"protocol": "TCPv4"}} in filters
         assert {"term": {"local_address": "192.168.20.41"}} in filters
         assert {"term": {"process_name": "svchost.exe"}} in filters
-        assert {"term": {"connection_state": "ESTABLISHED"}} in filters
+        assert {"bool": {"should": [{"term": {"connection_state": "ESTABLISHED"}}, {"term": {"connection_state.keyword": "ESTABLISHED"}}], "minimum_should_match": 1}} in filters
 
     # ------------------------------------------------------------------
     # Integration: full active-result pipeline returns items

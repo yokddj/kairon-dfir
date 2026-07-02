@@ -31,7 +31,7 @@ from app.services.memory.artifact_normalizers import (
     normalize_windows_privileges,
     normalize_windows_vadinfo,
 )
-from app.services.memory.artifact_indexing import index_artifact_documents, link_process_entities
+from app.services.memory.artifact_indexing import count_artifact_documents, index_artifact_documents, link_process_entities
 from app.services.memory.execution import ARTIFACT_PLUGIN_NORMALIZER
 
 
@@ -195,6 +195,10 @@ def _renormalize_run(db, run: MemoryScanRun, dry_run: bool) -> dict[str, Any]:
                 db.commit()
         if not dry_run:
             for doc_type, count in summary_counts.items():
+                try:
+                    count = count_artifact_documents(run.case_id, document_type=doc_type, run_id=run.id)
+                except Exception:  # noqa: BLE001
+                    pass
                 _upsert_summary(
                     db,
                     run,
@@ -221,17 +225,18 @@ def _renormalize_run(db, run: MemoryScanRun, dry_run: bool) -> dict[str, Any]:
 
 
 def _upsert_summary(db, run: MemoryScanRun, artifact_type: str, count: int, metadata: dict[str, Any]) -> None:
-    summary = (
+    summaries = (
         db.query(MemoryArtifactSummary)
         .filter(MemoryArtifactSummary.memory_run_id == run.id, MemoryArtifactSummary.memory_artifact_type == artifact_type)
-        .first()
+        .all()
     )
-    if summary is None:
+    if not summaries:
         summary = MemoryArtifactSummary(case_id=run.case_id, evidence_id=run.evidence_id, memory_run_id=run.id, memory_artifact_type=artifact_type, count=count, metadata_json=metadata)
         db.add(summary)
     else:
-        summary.count = count
-        summary.metadata_json = metadata
+        for summary in summaries:
+            summary.count = count
+            summary.metadata_json = metadata
 
 
 def coverage_command(db, args: argparse.Namespace) -> int:
