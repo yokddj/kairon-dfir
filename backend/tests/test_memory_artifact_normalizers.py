@@ -162,6 +162,30 @@ def test_artifact_bulk_partial_failures_are_counted(monkeypatch: pytest.MonkeyPa
     assert client.indices.refresh.called
 
 
+def test_network_state_indexes_as_connection_state(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.memory import artifact_indexing
+
+    client = MagicMock()
+    client.indices.exists.return_value = True
+    client.bulk.return_value = {"errors": False, "items": [{"index": {"_id": "net-1"}}]}
+    monkeypatch.setattr(artifact_indexing, "get_opensearch_client", lambda: client)
+
+    index_artifact_documents(
+        CASE,
+        [
+            {
+                "document_id": "net-1",
+                "document_type": "memory_network_connection",
+                "state": "ESTABLISHED",
+            }
+        ],
+    )
+
+    indexed_doc = client.bulk.call_args.kwargs["body"][1]
+    assert indexed_doc["state"] is None
+    assert indexed_doc["connection_state"] == "ESTABLISHED"
+
+
 def test_network_summary_aggregates_netscan_and_netstat(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.memory import execution
 

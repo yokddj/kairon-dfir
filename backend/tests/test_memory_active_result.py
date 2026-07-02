@@ -959,13 +959,14 @@ class TestEvidenceIdFieldQuery:
                 document_type="memory_network_connection",
                 run_id="run-1",
                 evidence_id="ev-1",
-                filters={"protocol": "TCPv4", "local_address": "192.168.20.41", "process_name": "svchost.exe"},
+                filters={"protocol": "TCPv4", "local_address": "192.168.20.41", "process_name": "svchost.exe", "state": "ESTABLISHED"},
             )
         assert fake.last_body is not None
         filters = fake.last_body["query"]["bool"]["filter"]
         assert {"term": {"protocol": "TCPv4"}} in filters
         assert {"term": {"local_address": "192.168.20.41"}} in filters
         assert {"term": {"process_name": "svchost.exe"}} in filters
+        assert {"term": {"connection_state": "ESTABLISHED"}} in filters
 
     # ------------------------------------------------------------------
     # Integration: full active-result pipeline returns items

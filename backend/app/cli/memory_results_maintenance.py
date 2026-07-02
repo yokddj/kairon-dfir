@@ -178,9 +178,12 @@ def _renormalize_run(db, run: MemoryScanRun, dry_run: bool) -> dict[str, Any]:
                 summary_warnings.setdefault(doc_type, []).extend(result.get("warnings", [])[:20])
             if not dry_run and result.get("items"):
                 try:
-                    index_artifact_documents(run.case_id, result["items"])
+                    indexing = index_artifact_documents(run.case_id, result["items"])
                 except Exception as exc:
                     report["error"] = f"Indexing failed for {plugin_run.plugin}: {exc}"
+                    return report
+                if int(indexing.get("errors", 0) or 0) > 0:
+                    report["error"] = f"Indexing failed for {plugin_run.plugin}: {indexing.get('errors')} document errors"
                     return report
                 plugin_run.metadata_json = {
                     **(plugin_run.metadata_json or {}),
