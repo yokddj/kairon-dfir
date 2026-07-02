@@ -14,7 +14,7 @@ type Props = {
   onInspectProcess?: (entityId: string) => void;
 };
 
-const PAGE_SIZE = 50;
+
 
 export function MemoryCommandLineHistoryTab({
   caseId,
@@ -32,6 +32,9 @@ export function MemoryCommandLineHistoryTab({
   const [nameFilter, setNameFilter] = useState("");
   const [cmdFilter, setCmdFilter] = useState("");
   const [sortOrder, setSortOrder] = useState("oldest_first");
+  const [pageSize, setPageSize] = useState(100);
+
+  const PAGE_SIZES = [50, 100, 250, 500];
 
   const effectiveRunId = _runId || selectedRunId || runOptions?.default_run_id || null;
   const params = {
@@ -43,11 +46,11 @@ export function MemoryCommandLineHistoryTab({
     command_contains: cmdFilter || undefined,
     sort_order: sortOrder,
     page,
-    page_size: PAGE_SIZE,
+    page_size: pageSize,
   };
 
   const query = useQuery<CommandLineHistoryResponse>({
-    queryKey: ["memory-command-line-history", caseId, evidenceId, effectiveRunId, page, pidFilter, ppidFilter, nameFilter, cmdFilter, sortOrder],
+    queryKey: ["memory-command-line-history", caseId, evidenceId, effectiveRunId, page, pageSize, pidFilter, ppidFilter, nameFilter, cmdFilter, sortOrder],
     queryFn: () => api.getCommandLineHistory(caseId, params as never),
     enabled: Boolean(caseId && evidenceId),
     refetchOnWindowFocus: false,
@@ -56,7 +59,7 @@ export function MemoryCommandLineHistoryTab({
   const data = query.data;
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
-  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const unknownTimestamps = data?.coverage?.unknown_timestamps ?? 0;
 
   function resetFilters() {
@@ -127,6 +130,14 @@ export function MemoryCommandLineHistoryTab({
               <X className="h-3 w-3" /> Reset
             </button>
           ) : null}
+          <select
+            value={pageSize}
+            onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }}
+            className="ml-auto rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted outline-none"
+            data-testid="history-page-size"
+          >
+            {PAGE_SIZES.map((s) => <option key={s} value={s}>{s} per page</option>)}
+          </select>
         </div>
 
         {/* Content */}
@@ -150,6 +161,7 @@ export function MemoryCommandLineHistoryTab({
                 {unknownTimestamps > 0 ? ` · ${unknownTimestamps} with unknown timestamp` : ""}
                 {data?.selected_run ? ` · Run: ${data.selected_run.profile}` : ""}
               </div>
+              <PaginationTop page={page} totalPages={totalPages} total={total} pageSize={pageSize} setPage={setPage} />
               <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
                 <table className="min-w-[900px] w-full divide-y divide-line text-xs">
                   <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted">
@@ -193,19 +205,43 @@ export function MemoryCommandLineHistoryTab({
                         </td>
                       </tr>
                     ))}
-                  </tbody>
-                </table>
-              </div>
-              {totalPages > 1 ? (
-                <div className="mt-3 flex items-center justify-between text-xs">
-                  <button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40" data-testid="history-prev">Previous</button>
-                  <span className="text-muted">Page {page} of {totalPages}</span>
-                  <button disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40" data-testid="history-next">Next</button>
-                </div>
-              ) : null}
+            </tbody>
+          </table>
+        </div>
+        <PaginationBottom page={page} totalPages={totalPages} total={total} pageSize={pageSize} setPage={setPage} />
             </>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function PaginationTop({ page, totalPages, total, pageSize, setPage }: { page: number; totalPages: number; total: number; pageSize: number; setPage: (p: number) => void }) {
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+  return (
+    <div className="flex items-center justify-between text-[10px] text-muted mb-2" data-testid="history-pagination-top">
+      <span>{start}&ndash;{end} of {total}</span>
+      <div className="flex items-center gap-1">
+        <button disabled={page <= 1} onClick={() => setPage(Math.max(1, page - 1))} className="rounded border border-line bg-abyss/70 px-2 py-0.5 disabled:opacity-40" data-testid="history-prev-top">Previous</button>
+        <span>Page {page} of {totalPages}</span>
+        <button disabled={page >= totalPages} onClick={() => setPage(page + 1)} className="rounded border border-line bg-abyss/70 px-2 py-0.5 disabled:opacity-40" data-testid="history-next-top">Next</button>
+      </div>
+    </div>
+  );
+}
+
+function PaginationBottom({ page, totalPages, total, pageSize, setPage }: { page: number; totalPages: number; total: number; pageSize: number; setPage: (p: number) => void }) {
+  const start = (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+  return (
+    <div className="mt-3 flex items-center justify-between text-xs" data-testid="history-pagination-bottom">
+      <span className="text-muted">{start}&ndash;{end} of {total}</span>
+      <div className="flex items-center gap-2">
+        <button disabled={page <= 1} onClick={() => setPage(Math.max(1, page - 1))} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40" data-testid="history-prev">Previous</button>
+        <span className="text-muted">Page {page} of {totalPages}</span>
+        <button disabled={page >= totalPages} onClick={() => setPage(page + 1)} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 disabled:opacity-40" data-testid="history-next">Next</button>
       </div>
     </div>
   );

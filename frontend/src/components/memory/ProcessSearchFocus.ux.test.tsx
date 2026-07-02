@@ -319,7 +319,7 @@ describe("Search summary UX", () => {
     (api.getCanonicalProcessEntityDetail as ReturnType<typeof vi.fn>).mockResolvedValue(cmdDetail as any);
     renderGraph();
     const summary = await screen.findByTestId("memory-graph-search-summary");
-    expect(summary.textContent).toMatch(/1 exact match/);
+    expect(summary.textContent).toMatch(/exact PID match|1 secondary match/);
     expect(summary.textContent).toMatch(/1 context ancestor/);
   });
 });

@@ -213,15 +213,22 @@ export function MemoryProcessGraph({
   const focusedSearchId = exactMatchIds[0] || searchResultIds[0] || null;
 
   // When the user types a search and the API returns a match,
-  // auto-focus on the first matched entity so the canvas pans to
-  // it.  Do not override a node the user has explicitly clicked.
+  // auto-focus on the first exact-matched entity.  Search overrides
+  // a previously selected entity because the user is actively searching.
   useEffect(() => {
     if (!focusedSearchId) return;
-    if (focusedEntityId) return;
-    if (selectedEntityId) return;
+    if (focusedEntityId === focusedSearchId && selectedEntityId === focusedSearchId) return;
     setFocusedEntityId(focusedSearchId);
+  }, [focusedSearchId]);
+  useEffect(() => {
+    if (!focusedSearchId) return;
     setSelectedEntityId(focusedSearchId);
-  }, [focusedSearchId, focusedEntityId, selectedEntityId]);
+  }, [focusedSearchId]);
+  useEffect(() => {
+    if (!selectedEntityId) return;
+    if (focusedEntityId === selectedEntityId) return;
+    setFocusedEntityId(selectedEntityId);
+  }, [selectedEntityId]);
 
   // Re-center on focused entity
   useEffect(() => {
