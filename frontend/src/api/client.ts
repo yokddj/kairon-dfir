@@ -963,6 +963,13 @@ export type MemoryRecoverySourceUpdate = {
 export type MemoryRecoveryAttempt = {
   id: string;
   source_type: string;
+  source_category?: string | null;
+  source_plugin_or_parser?: string | null;
+  evidence_name?: string | null;
+  run_id?: string | null;
+  process_entity_id?: string | null;
+  navigation_target?: Record<string, unknown> | null;
+  raw_reference?: Record<string, unknown> | null;
   source_label: string;
   status: string;
   error_code: string | null;
@@ -2153,6 +2160,8 @@ export type SearchV2Result = {
   summary?: string | null;
   artifact_type?: string | null;
   parser?: string | null;
+  source_category?: string | null;
+  source_plugin_or_parser?: string | null;
   event_type?: string | null;
   severity?: string | null;
   risk_score?: number | null;
@@ -2453,6 +2462,8 @@ export type IncidentTimelineItem = {
   summary?: string | null;
   source: string;
   source_type?: string | null;
+  source_category?: string | null;
+  source_plugin_or_parser?: string | null;
   status?: "candidate" | "accepted" | "dismissed" | "needs_review" | string;
   provenance_badge?: string | null;
   artifact_type?: string | null;
@@ -2472,6 +2483,7 @@ export type IncidentTimelineItem = {
   story_target_confidence?: string | null;
   story_target_reason?: string | null;
   story_primary_action?: string | null;
+  raw?: Record<string, unknown>;
 };
 
 export type IncidentTimelineStoryBundle = {
@@ -3529,7 +3541,7 @@ export type CommandHistoryItem = {
   evidence_id?: string | null;
   host?: string | null;
   timestamp?: string | null;
-  timestamp_status: "forensic" | "derived" | "missing" | "suspicious";
+  timestamp_status: "forensic" | "derived" | "missing" | "suspicious" | "undated" | "process_creation_time";
   command: string;
   command_normalized?: string;
   shell: string;
@@ -3540,6 +3552,13 @@ export type CommandHistoryItem = {
   parent_shell?: string | null;
   parent_context?: string | null;
   source_type: string;
+  source_category?: string | null;
+  source_plugin_or_parser?: string | null;
+  evidence_name?: string | null;
+  run_id?: string | null;
+  process_entity_id?: string | null;
+  navigation_target?: Record<string, unknown> | null;
+  raw_reference?: Record<string, unknown> | null;
   artifact_type?: string | null;
   source_event_id?: string | null;
   windows_event_id?: string | number | null;
@@ -5299,6 +5318,8 @@ export const api = {
     params?: {
       run_id?: string;
       evidence_id?: string;
+      source_category?: string;
+      source?: string;
       profile?: "processes_basic" | "processes_extended";
       visibility?: "listed" | "scan_only" | "terminated" | "unknown" | "hidden_candidate";
       source_plugin?: "windows.pslist" | "windows.psscan" | "windows.pstree" | "windows.cmdline";
@@ -5373,6 +5394,8 @@ export const api = {
       run_id?: string;
       profile?: "processes_basic" | "processes_extended";
       evidence_id?: string;
+      source_category?: string;
+      source?: string;
       entity_id?: string;
       pid?: number;
       descendant_depth?: number;
@@ -5815,6 +5838,8 @@ export const api = {
     params: {
       scope?: "case" | "evidence";
       evidence_id?: string;
+      source_category?: string;
+      source?: string;
       host?: string;
       node_id?: string;
       process_guid?: string;
@@ -5939,6 +5964,14 @@ export const api = {
       launcher?: string;
       classification_confidence?: string;
       source_type?: string;
+      source_category?: string;
+      source?: string;
+      run_id?: string;
+      memory_run_id?: string;
+      pid?: number;
+      ppid?: number;
+      process_name?: string;
+      source_plugin?: string;
       q?: string;
       time_from?: string;
       time_to?: string;
@@ -6054,6 +6087,8 @@ export const api = {
       filters?: string;
       scope?: "events" | "findings" | "all";
       evidence_id?: string;
+      source_category?: string;
+      source?: string;
       artifact_type?: string[];
       parser?: string[];
       backend_variant?: string[];
@@ -6163,6 +6198,16 @@ export const api = {
     params?: {
       host?: string;
       evidence_id?: string;
+      source_category?: string;
+      source?: string;
+      run_id?: string;
+      memory_run_id?: string;
+      process_entity_id?: string;
+      pid?: number;
+      event_kind?: string[];
+      artifact_family?: string[];
+      include_undated?: boolean;
+      has_correlations?: boolean;
       mode?: TimelineMode;
       q?: string;
       artifact_type?: string[];

@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type CommandHistoryItem } from "../api/client";
 
 const PAGE_SIZE = 100;
+const SOURCE_OPTIONS = ["", "Memory", "Disk", "Event Log", "Registry", "Browser", "Other"];
 
 function valueOrDash(value: unknown): string {
   const text = String(value ?? "").trim();
@@ -25,8 +26,14 @@ function riskLabel(score: number): string {
 
 function sourceLabel(item: CommandHistoryItem): string {
   const sources = item.supporting_events?.map((event) => event.source_type).filter(Boolean) ?? [];
-  const unique = Array.from(new Set([item.source_type, ...sources].filter(Boolean)));
+  const unique = Array.from(new Set([item.source_category, item.source_plugin_or_parser, item.source_type, ...sources].filter(Boolean)));
   return unique.join(", ");
+}
+
+function SourceBadge({ item }: { item: CommandHistoryItem }) {
+  const category = item.source_category || (item.source_type === "memory" ? "Memory" : "Disk");
+  const producer = item.source_plugin_or_parser || item.source_type;
+  return <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200">{producer ? `${category}: ${producer}` : category}</span>;
 }
 
 function familyLabel(item: CommandHistoryItem): string {
@@ -42,6 +49,14 @@ function commandRowSourceEventId(item: CommandHistoryItem): string {
 }
 
 function processGraphUrl(caseId: string, item: CommandHistoryItem): string {
+  if (item.source_category === "Memory" || item.source_type === "memory") {
+    const params = new URLSearchParams();
+    params.set("tab", "graph");
+    if (item.run_id) params.set("run_id", item.run_id);
+    if (item.process_entity_id || item.process?.guid) params.set("process_entity_id", item.process_entity_id || item.process?.guid || "");
+    if (item.process?.pid !== undefined && item.process?.pid !== null) params.set("pid", String(item.process.pid));
+    return item.evidence_id ? `/cases/${caseId}/memory/${item.evidence_id}?${params.toString()}` : `/cases/${caseId}/memory?${params.toString()}`;
+  }
   const params = new URLSearchParams();
   const sourceEventId = commandRowSourceEventId(item);
   params.set("mode", "execution_story");
@@ -76,6 +91,9 @@ function buildParams(searchParams: URLSearchParams) {
     family: searchParams.get("family") || searchParams.get("shell") || undefined,
     launcher: searchParams.get("launcher") || undefined,
     source_type: searchParams.get("source_type") || undefined,
+    source_category: searchParams.get("source_category") || searchParams.get("source") || undefined,
+    pid: searchParams.get("pid") ? Number(searchParams.get("pid")) : undefined,
+    process_name: searchParams.get("process_name") || undefined,
     q: searchParams.get("q") || undefined,
     risk_min: searchParams.get("risk_min") ? Number(searchParams.get("risk_min")) : undefined,
     risk_max: searchParams.get("risk_max") ? Number(searchParams.get("risk_max")) : undefined,
@@ -259,6 +277,12 @@ export default function CommandHistoryPage() {
             </select>
           </label>
           <label className="text-xs text-zinc-400">
+            Source category
+            <select className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100" value={params.source_category ?? ""} onChange={(event) => update({ source_category: event.target.value, source: undefined })} data-testid="command-source-category-filter">
+              {SOURCE_OPTIONS.map((value) => <option key={value || "all"} value={value}>{value || "All sources"}</option>)}
+            </select>
+          </label>
+          <label className="text-xs text-zinc-400">
             Launcher
             <input className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100" value={params.launcher ?? ""} onChange={(event) => update({ launcher: event.target.value })} placeholder="remote-admin.exe" />
           </label>
@@ -325,6 +349,7 @@ export default function CommandHistoryPage() {
               <th className="px-3 py-2">Command</th>
               <th className="w-[150px] px-3 py-2">User</th>
               <th className="w-[130px] px-3 py-2">Host</th>
+              <th className="w-[170px] px-3 py-2">Source</th>
               <th className="w-[96px] px-3 py-2">Risk</th>
               <th className="w-[210px] px-3 py-2">Actions</th>
             </tr>
@@ -332,13 +357,13 @@ export default function CommandHistoryPage() {
           <tbody className="divide-y divide-zinc-900">
             {loading ? (
               <tr>
-                <td className="px-3 py-5 text-zinc-400" colSpan={8}>
+                <td className="px-3 py-5 text-zinc-400" colSpan={9}>
                   Loading command history...
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td className="px-3 py-5 text-zinc-400" colSpan={8}>
+                <td className="px-3 py-5 text-zinc-400" colSpan={9}>
                   No command executions matched the current filters.
                 </td>
               </tr>
@@ -382,6 +407,9 @@ export default function CommandHistoryPage() {
                     <td className="px-3 py-3 text-zinc-300" title={item.host ?? ""}>
                       <div className="truncate">{valueOrDash(item.host)}</div>
                     </td>
+                    <td className="px-3 py-3 text-zinc-300" title={sourceLabel(item)}>
+                      <SourceBadge item={item} />
+                    </td>
                     <td className="px-3 py-3">
                       <span className="rounded-full border border-zinc-700 px-2 py-1 text-xs text-zinc-200" title={item.risk_reasons.join("; ")}>
                         {riskLabel(item.risk_score)} {item.risk_score}
@@ -406,7 +434,7 @@ export default function CommandHistoryPage() {
                   </tr>
                   {expandedId === item.id ? (
                     <tr className="bg-zinc-950/90">
-                      <td colSpan={8} className="px-3 pb-4">
+                      <td colSpan={9} className="px-3 pb-4">
                         <div className="grid gap-4 rounded-lg border border-zinc-800 bg-zinc-950 p-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.6fr)]">
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -426,7 +454,7 @@ export default function CommandHistoryPage() {
                           <div className="space-y-3 text-sm text-zinc-300">
                             <div><span className="text-zinc-500">User:</span> {valueOrDash(item.user)}</div>
                             <div><span className="text-zinc-500">Host:</span> {valueOrDash(item.host)}</div>
-                            <div><span className="text-zinc-500">Source:</span> {sourceLabel(item)} · {item.supporting_events.length} event(s)</div>
+                            <div><span className="text-zinc-500">Source:</span> <SourceBadge item={item} /> <span className="ml-1">{sourceLabel(item)} · {item.supporting_events.length} event(s)</span></div>
                             <div><span className="text-zinc-500">Source event:</span> {valueOrDash(item.source_event_id)}</div>
                             <div><span className="text-zinc-500">Parent:</span> {valueOrDash(item.parent_process?.name || item.parent_process?.executable)}</div>
                             <div><span className="text-zinc-500">Parent command:</span> <span className="break-words font-mono text-xs">{valueOrDash(item.parent_process?.command_line)}</span></div>

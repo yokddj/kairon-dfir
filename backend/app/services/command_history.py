@@ -11,6 +11,7 @@ from dateutil import parser as date_parser
 from app.core.opensearch import get_events_index, search_documents
 from app.ingest.normalization.registry_modifications import correlate_registry_commands, detect_registry_command
 from app.services.host_identity import normalize_host_alias
+from app.services.investigation_memory import memory_command_history, wants_memory_source, wants_non_memory_source
 
 
 COMMAND_SOURCE_EVENT_IDS = {1, 4688, 4103, 4104, 400, 403, 600, 4698, 4702, 4700, 4701}
@@ -79,11 +80,19 @@ INSTALLER_LAUNCHERS = {"setup.exe", "installer.exe", "msiexec.exe", "msiexec"}
 def get_command_history(case_id: str, params: dict[str, Any]) -> dict[str, Any]:
     page = max(1, _to_int(params.get("page"), 1) or 1)
     page_size = min(max(_to_int(params.get("page_size"), 100) or 100, 1), 500)
-    events = _fetch_candidate_events(case_id, params)
-    commands = _dedupe_commands([item for event in events for item in _commands_from_event(case_id, event)])
-    registry_events = [event for event in events if str(_obj(event.get("artifact")).get("type") or "").lower() == "registry_event" or _to_int(_obj(event.get("windows")).get("event_id") or event.get("event_id"), None) in {12, 13, 14, 4657}]
-    commands = correlate_registry_commands(commands, registry_events)
-    commands = _apply_filters(commands, params)
+    if wants_memory_source(params):
+        return memory_command_history(None, case_id, {**params, "page": page, "page_size": page_size})
+    commands: list[dict[str, Any]] = []
+    if not wants_memory_source(params):
+        events = _fetch_candidate_events(case_id, params)
+        commands = _dedupe_commands([item for event in events for item in _commands_from_event(case_id, event)])
+        registry_events = [event for event in events if str(_obj(event.get("artifact")).get("type") or "").lower() == "registry_event" or _to_int(_obj(event.get("windows")).get("event_id") or event.get("event_id"), None) in {12, 13, 14, 4657}]
+        commands = correlate_registry_commands(commands, registry_events)
+        commands = _apply_filters(commands, params)
+        commands = [_add_command_source_provenance(item) for item in commands]
+    if not wants_non_memory_source(params):
+        memory_payload = memory_command_history(None, case_id, {**params, "page": 1, "page_size": 500})
+        commands.extend(memory_payload.get("items") or [])
     sort = _resolve_sort(params)
     reverse = sort == "timestamp_desc"
     dated = [item for item in commands if item.get("timestamp")]
@@ -110,6 +119,21 @@ def get_command_history(case_id: str, params: dict[str, Any]) -> dict[str, Any]:
             "with_supporting_events": sum(1 for item in commands if len(item.get("supporting_events") or []) > 1),
         },
     }
+
+
+def _add_command_source_provenance(item: dict[str, Any]) -> dict[str, Any]:
+    source_type = str(item.get("source_type") or "")
+    if source_type in {"sysmon_1", "security_4688", "powershell_operational"}:
+        category = "Event Log"
+    elif source_type in {"prefetch", "scheduled_task"}:
+        category = "Disk"
+    elif source_type == "registry_command":
+        category = "Registry"
+    else:
+        category = "Other"
+    item.setdefault("source_category", category)
+    item.setdefault("source_plugin_or_parser", item.get("source_type") or item.get("source_file"))
+    return item
 
 
 def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> list[dict[str, Any]]:

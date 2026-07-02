@@ -9,6 +9,7 @@ import { copyToClipboard, formatTimestamp } from "../lib/time";
 
 type Scope = "events" | "findings" | "all";
 type SortValue = "timestamp_desc" | "timestamp_asc" | "risk_desc" | "risk_asc" | "relevance";
+type SourceCategory = "" | "Memory" | "Disk" | "Event Log" | "Registry" | "Browser" | "Other";
 type SearchTab = "results" | "timeline" | "findings" | "artifact_views";
 type ArtifactViewMode = "auto" | "process" | "dns" | "downloads" | "defender" | "persistence" | "files" | "cloud_usb" | "generic";
 type TableDensity = "compact" | "comfortable" | "expanded";
@@ -52,8 +53,17 @@ const sortOptions: SortValue[] = ["timestamp_desc", "timestamp_asc", "risk_desc"
 const severityOptions = ["critical", "high", "medium", "low", "info"];
 const findingStatusOptions = ["new", "reviewed", "confirmed", "dismissed"];
 const eventMarkingStatusOptions: EventMarkingStatus[] = ["suspicious", "important", "reviewed", "false_positive"];
-const SEARCH_UI_MAX_PAGE_SIZE = 200;
-const pageSizeOptions = [50, 100, 200];
+const SEARCH_UI_MAX_PAGE_SIZE = 500;
+const pageSizeOptions = [50, 100, 250, 500];
+const sourceCategoryOptions: Array<{ value: SourceCategory; label: string }> = [
+  { value: "", label: "All sources" },
+  { value: "Memory", label: "Memory" },
+  { value: "Disk", label: "Disk" },
+  { value: "Event Log", label: "Event Log" },
+  { value: "Registry", label: "Registry" },
+  { value: "Browser", label: "Browser" },
+  { value: "Other", label: "Other" },
+];
 const riskPresets = [
   { label: "Low", min: "0", max: "29" },
   { label: "Medium", min: "30", max: "49" },
@@ -219,6 +229,7 @@ function buildState(searchParams: URLSearchParams) {
     marked_in_finding: searchParams.get("marked_in_finding") ?? "",
     include_filesystem_timeline: searchParams.get("include_filesystem_timeline") ?? "",
     evidence_id: searchParams.get("evidence_id") ?? "",
+    source_category: (searchParams.get("source_category") ?? searchParams.get("source") ?? "") as SourceCategory,
     time_from: searchParams.get("time_from") ?? "",
     time_to: searchParams.get("time_to") ?? "",
   };
@@ -238,6 +249,22 @@ function ResultBadge({ children, tone = "default" }: { children: string; tone?: 
               ? "border-emerald-400/50 bg-emerald-400/10 text-emerald-200"
               : "border-accent/40 bg-accent/10 text-accent";
   return <span className={`rounded-full border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${classes}`}>{children}</span>;
+}
+
+function resultSourceCategory(result: SearchV2Result): string {
+  const raw = asRecord(result.raw);
+  return asString(result.source_category) || asString(raw.source_category) || (result.kind === "finding" ? "Other" : "Disk");
+}
+
+function resultSourceProducer(result: SearchV2Result): string {
+  const raw = asRecord(result.raw);
+  return asString(result.source_plugin_or_parser) || asString(raw.source_plugin_or_parser) || asString(result.parser) || asString(asRecord(raw.artifact).parser) || "unknown";
+}
+
+function SourceBadge({ result }: { result: SearchV2Result }) {
+  const category = resultSourceCategory(result);
+  const producer = resultSourceProducer(result);
+  return <ResultBadge tone={category === "Memory" ? "success" : "muted"}>{producer && producer !== "unknown" ? `${category}: ${producer}` : category}</ResultBadge>;
 }
 
 function InfoCard({ label, value, children }: { label: string; value?: string; children?: ReactNode }) {
@@ -693,6 +720,7 @@ function genericColumns(): ColumnDef[] {
   return [
     { key: "timestamp", label: "Timestamp", defaultWidth: 180, minWidth: 140, render: (result, _summary, _pivot, density) => <TruncatedCell value={formatTimestamp(result.timestamp, "UTC")} density={density} /> },
     { key: "artifact", label: "Artifact", defaultWidth: 135, minWidth: 110, render: (result, _summary, pivot, density) => pivot({ label: "artifact type", field: "artifact.type", value: result.artifact_type, display: artifactLabel(result.artifact_type), className: cellTextClass(density) }) },
+    { key: "source", label: "Source", defaultWidth: 190, minWidth: 130, render: (result) => <SourceBadge result={result} /> },
     { key: "parser", label: "Parser", defaultWidth: 170, minWidth: 120, render: (result, _summary, pivot, density) => pivot({ label: "parser", field: "artifact.parser", value: applyCellFallbacks(result.parser, asString(asRecord(result.raw).artifact && asRecord(asRecord(result.raw).artifact).parser)), className: cellTextClass(density) }) },
     { key: "source_file", label: "Source file", defaultWidth: 260, minWidth: 150, render: (result, _summary, pivot, density) => pivot({ label: "source file", field: "source_file", value: fullSourceFile(result), operator: "contains", className: cellTextClass(density) }) },
     { key: "type", label: "Event Type / Finding Type", defaultWidth: 180, minWidth: 130, render: (result, _summary, pivot, density) => pivot({ label: "event type", field: "event.type", value: result.event_type, display: applyCellFallbacks(result.event_type), className: cellTextClass(density) }) },
@@ -1388,6 +1416,7 @@ export default function Search() {
       marked_in_finding: state.marked_in_finding,
       include_filesystem_timeline: state.include_filesystem_timeline,
       evidence_id: state.evidence_id || selectedEvidenceId,
+      source_category: state.source_category,
       time_from: state.time_from,
       time_to: state.time_to,
       sort: state.sort,
@@ -1407,6 +1436,7 @@ export default function Search() {
         filters: serializeBuilderFilters(searchRequestState.filters) || undefined,
         scope: searchRequestState.scope,
         evidence_id: searchRequestState.evidence_id || undefined,
+        source_category: searchRequestState.source_category || undefined,
         artifact_type: searchRequestState.artifact_type,
         parser: searchRequestState.parser,
         backend_variant: searchRequestState.backend_variant,
@@ -1575,6 +1605,7 @@ export default function Search() {
     if (state.file_path) chips.push({ key: "file_path", label: `path: ${state.file_path}`, clear: { file_path: null } });
     if (state.file_name) chips.push({ key: "file_name", label: `file: ${state.file_name}`, clear: { file_name: null } });
     if (searchRequestState.evidence_id) chips.push({ key: "evidence_id", label: `evidence: ${searchRequestState.evidence_id.slice(0, 8)}`, clear: { evidence_id: null } });
+    if (searchRequestState.source_category) chips.push({ key: "source_category", label: `source: ${searchRequestState.source_category}`, clear: { source_category: null, source: null } });
     if (state.artifact_type.length) chips.push({ key: "artifact_type", label: `artifact: ${state.artifact_type.join(", ")}`, clear: { artifact_type: null } });
     if (state.exclude_artifact_type.length) chips.push({ key: "exclude_artifact_type", label: `NOT artifact: ${state.exclude_artifact_type.join(", ")}`, clear: { exclude_artifact_type: null } });
     if (state.event_type.length) chips.push({ key: "event_type", label: `type: ${state.event_type.join(", ")}`, clear: { event_type: null } });
@@ -1582,7 +1613,7 @@ export default function Search() {
     if (state.status.length) chips.push({ key: "status", label: `status: ${state.status.join(", ")}`, clear: { status: null } });
     if (state.time_from || state.time_to) chips.push({ key: "time", label: `time: ${state.time_from || "…"} → ${state.time_to || "…"}`, clear: { time_from: null, time_to: null } });
     return chips;
-  }, [searchRequestState.evidence_id, searchRequestState.host, state]);
+  }, [searchRequestState.evidence_id, searchRequestState.host, searchRequestState.source_category, state]);
   const querySyntaxChips = useMemo(
     () =>
       (response?.query_syntax?.applied_filters ?? []).map((item, index) => ({
@@ -2092,6 +2123,14 @@ export default function Search() {
         </div>
 
         <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source</span>
+            <select aria-label="Source category" value={state.source_category} onChange={(event) => updateParams({ source_category: event.target.value, source: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-source-category-filter">
+              {sourceCategoryOptions.map((option) => (
+                <option key={option.label} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
           <label className="block">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact type</span>
             <select aria-label="Artifact type" value={state.artifact_type[0] ?? ""} onChange={(event) => updateParams({ artifact_type: event.target.value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50">

@@ -14,6 +14,7 @@ const BASE_SOURCE_OPTIONS = [
   { id: "findings", label: "Findings" },
   { id: "command_history", label: "Command History" },
   { id: "defender", label: "Defender" },
+  { id: "memory", label: "Memory" },
 ];
 const GROUND_TRUTH_SOURCE_OPTION = { id: "ground_truth", label: "Validation seeds" };
 
@@ -54,6 +55,22 @@ function sourceLabel(value: string | null | undefined) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function sourceCategoryLabel(item: IncidentTimelineItem): string {
+  const raw = item.raw && typeof item.raw === "object" ? item.raw as Record<string, unknown> : {};
+  return String((item as unknown as Record<string, unknown>).source_category || raw.source_category || (item.source_type === "memory" || item.source === "memory" ? "Memory" : "Disk"));
+}
+
+function sourceProducerLabel(item: IncidentTimelineItem): string {
+  const raw = item.raw && typeof item.raw === "object" ? item.raw as Record<string, unknown> : {};
+  return String((item as unknown as Record<string, unknown>).source_plugin_or_parser || raw.source_plugin_or_parser || item.source_type || item.source || "unknown");
+}
+
+function SourceBadge({ item }: { item: IncidentTimelineItem }) {
+  const category = sourceCategoryLabel(item);
+  const producer = sourceProducerLabel(item);
+  return <span className="rounded-full border border-line bg-abyss/70 px-2 py-1 text-xs text-muted">{producer && producer !== "unknown" ? `${category}: ${producer}` : category}</span>;
 }
 
 function pivotTooltip(value: string) {
@@ -503,7 +520,7 @@ export default function IncidentTimelinePage() {
                             <td className="min-w-[280px] max-w-[460px] py-3 pr-4">
                               <div className="flex flex-wrap items-center gap-2">
                                 <p className="font-medium text-ink">{item.title}</p>
-                                <span className="rounded-full border border-line bg-abyss/70 px-2 py-0.5 text-[11px] text-muted">{item.provenance_badge || sourceLabel(item.source_type || item.source)}</span>
+                                <SourceBadge item={item} />
                                 <span className="rounded-full border border-line bg-abyss/70 px-2 py-0.5 text-[11px] text-muted">{sourceLabel(item.status)}</span>
                                 <span className="rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 text-[11px] text-accent">{targetLabel(item.story_target_type)}</span>
                               </div>
@@ -519,7 +536,7 @@ export default function IncidentTimelinePage() {
                               />
                             </td>
                             <td className="py-3 pr-4 text-muted">
-                              <p>{sourceLabel(item.source_type || item.source)}</p>
+                              <SourceBadge item={item} />
                               {item.artifact_type ? <p className="text-xs">{sourceLabel(item.artifact_type)}</p> : null}
                               {item.confidence ? <p className="text-xs">Confidence: {sourceLabel(item.confidence)}</p> : null}
                             </td>

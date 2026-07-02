@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { MemoryWorkspace } from "../components/MemoryWorkspace";
 import CaseMemoryLanding from "./CaseMemoryLanding";
 import { useQuery } from "@tanstack/react-query";
@@ -8,6 +8,7 @@ import { api } from "../api/client";
 export default function MemoryAnalysisPage() {
   const { caseId = "" } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const overviewQuery = useQuery({
     queryKey: ["memory-overview", caseId],
@@ -21,9 +22,9 @@ export default function MemoryAnalysisPage() {
     if (!overview) return;
     if (overview.evidences.length === 1) {
       const onlyEvidenceId = overview.evidences[0].id;
-      navigate(`/cases/${caseId}/memory/${onlyEvidenceId}`, { replace: true });
+      navigate(`/cases/${caseId}/memory/${onlyEvidenceId}${location.search || ""}`, { replace: true });
     }
-  }, [overviewQuery.data, caseId, navigate]);
+  }, [overviewQuery.data, caseId, location.search, navigate]);
 
   if (!caseId) {
     return <div className="rounded-[28px] border border-line bg-panel/70 p-8 text-sm text-muted shadow-panel">Select a case first.</div>;

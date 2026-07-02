@@ -10,10 +10,7 @@ import { useSearchParams } from "react-router-dom";
 
 export type MemoryTab =
   | "overview"
-  | "search"
-  | "timeline"
   | "processes"
-  | "history"
   | "graph"
   | "artifacts"
   | "system"
@@ -22,10 +19,7 @@ export type MemoryTab =
 
 export const MEMORY_TABS: ReadonlyArray<{ key: MemoryTab; label: string; testId: string }> = [
   { key: "overview", label: "Overview", testId: "memory-tab-overview" },
-  { key: "search", label: "Search", testId: "memory-tab-search" },
-  { key: "timeline", label: "Timeline", testId: "memory-tab-timeline" },
   { key: "processes", label: "Processes", testId: "memory-tab-processes" },
-  { key: "history", label: "Command Line History", testId: "memory-tab-history" },
   { key: "graph", label: "Graph", testId: "memory-tab-graph" },
   { key: "artifacts", label: "Artifacts", testId: "memory-tab-artifacts" },
   { key: "system", label: "System", testId: "memory-tab-system" },

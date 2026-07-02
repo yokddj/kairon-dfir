@@ -27,6 +27,13 @@ from app.models.incident_timeline_draft import IncidentTimelineDraft
 from app.models.timeline_bookmark import TimelineBookmark, TimelineBookmarkCategory, TimelineBookmarkImportance
 from app.services.command_history import get_command_history
 from app.services.host_identity import normalize_host_alias, resolve_canonical_host
+from app.services.investigation_memory import (
+    add_event_source_provenance,
+    memory_timeline_items,
+    normalize_source_category,
+    wants_memory_source,
+    wants_non_memory_source,
+)
 from app.services.indicator_resolution import extract_and_resolve_indicators
 from app.services.search_service import (
     _dedupe,
@@ -67,6 +74,7 @@ DEFAULT_INCIDENT_TIMELINE_SOURCES = [
     "findings",
     "command_history",
     "defender",
+    "memory",
 ]
 VALIDATION_SEED_QUERIES: list[dict[str, Any]] = []
 TIMELINE_QUICK_FILTERS = [
@@ -1163,6 +1171,37 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"Defender source could not be loaded: {exc}")
 
+    if "memory" in source_set:
+        try:
+            memory_payload = memory_timeline_items(db, case_id, {"page": 1, "page_size": min(max_items, 100), "sort": "timestamp_asc"})
+            for row in memory_payload.get("items") or []:
+                raw = row.get("raw") if isinstance(row.get("raw"), dict) else {}
+                phase = "execution" if row.get("event_type") in {"process_start", "process_exit"} else "discovery"
+                item = _incident_item(
+                    case_id,
+                    source="memory",
+                    title=str(row.get("title") or "Memory event"),
+                    summary=str(row.get("summary") or ""),
+                    timestamp=row.get("timestamp"),
+                    host=row.get("host"),
+                    phase=phase,
+                    phase_confidence="medium",
+                    artifact_type=str(row.get("artifact_type") or "memory_timeline_event"),
+                    severity="info",
+                    risk_score=int(row.get("risk_score") or 0),
+                    event_id=str(row.get("id") or ""),
+                    evidence_id=row.get("evidence_id") or raw.get("evidence_id"),
+                )
+                item["source_type"] = "memory"
+                item["source_category"] = "Memory"
+                item["source_plugin_or_parser"] = row.get("source_plugin_or_parser")
+                item["search_url"] = f"/cases/{case_id}/search?source_category=Memory&evidence_id={row.get('evidence_id') or raw.get('evidence_id') or ''}"
+                item["timeline_url"] = f"/cases/{case_id}/timeline?source_category=Memory&evidence_id={row.get('evidence_id') or raw.get('evidence_id') or ''}"
+                item["raw"] = raw
+                items.append(item)
+        except Exception as exc:  # noqa: BLE001
+            warnings.append(f"Memory source could not be loaded: {exc}")
+
     ground_truth_enabled = should_show_validation_matrix(case_id, case_mode, validation_mode_enabled=get_settings().validation_features_enabled)
     if "ground_truth" in source_set and ground_truth_enabled:
         for seed in VALIDATION_SEED_QUERIES:
@@ -1670,6 +1709,8 @@ def build_timeline_response(db: Session, case_id: str, params: dict[str, Any]) -
     params["page_size"] = fetch_limit
 
     warnings: list[str] = []
+    if wants_memory_source(params):
+        return memory_timeline_items(db, case_id, {**params, "page_size": page_size})
     event_params = dict(params)
     if mode == "investigation" and event_params.get("risk_min") is None:
         event_params["risk_min"] = 40
@@ -1711,14 +1752,18 @@ def build_timeline_response(db: Session, case_id: str, params: dict[str, Any]) -
     bookmarks = _bookmark_query(db, case_id, params) if include_bookmarks else []
     bookmark_map = {bookmark.event_id: bookmark for bookmark in bookmarks}
 
-    compact_items = [_compact_event_row(row, related_finding_ids=related_finding_map.get(str(row.get("id")), []), bookmark=bookmark_map.get(str(row.get("id")))) for row in event_rows]
+    compact_items = [add_event_source_provenance(_compact_event_row(row, related_finding_ids=related_finding_map.get(str(row.get("id")), []), bookmark=bookmark_map.get(str(row.get("id"))))) for row in event_rows]
     compact_findings = [_compact_finding_row(row) for row in finding_rows]
     compact_bookmarks = []
     if include_bookmarks:
         event_map = _event_map_for_ids(case_id, [bookmark.event_id for bookmark in bookmarks])
         compact_bookmarks = [_compact_bookmark_row(bookmark, event=event_map.get(bookmark.event_id), case_id=case_id, db=db) for bookmark in bookmarks]
 
-    merged = [item for item in [*compact_items, *compact_findings, *compact_bookmarks] if _matches_timeline_filters(item, params)]
+    memory_payload = None if wants_non_memory_source(params) else memory_timeline_items(db, case_id, {**params, "page": 1, "page_size": fetch_limit})
+    memory_items = (memory_payload or {}).get("items") or []
+    warnings.extend((memory_payload or {}).get("warnings") or [])
+    merged = [item for item in [*compact_items, *compact_findings, *compact_bookmarks, *memory_items] if _matches_timeline_filters(item, params)]
+    merged = _filter_timeline_source_category(merged, params)
     merged = _sort_mixed_items(merged, sort)
 
     if params.get("finding_id"):
@@ -1744,8 +1789,16 @@ def build_timeline_response(db: Session, case_id: str, params: dict[str, Any]) -
         "items": page_items,
         "groups": groups,
         "facets": _timeline_facets(merged) if params.get("include_facets", False) else {},
+        "undated_count": int((memory_payload or {}).get("undated_count") or 0),
         "warnings": warnings,
     }
+
+
+def _filter_timeline_source_category(rows: list[dict[str, Any]], params: dict[str, Any]) -> list[dict[str, Any]]:
+    category = normalize_source_category(params.get("source_category") or params.get("source"))
+    if not category:
+        return rows
+    return [row for row in rows if str(row.get("source_category") or (row.get("raw") or {}).get("source_category") or "") == category]
 
 
 def build_lightweight_timeline_response(db: Session, case_id: str, params: dict[str, Any]) -> dict[str, Any]:

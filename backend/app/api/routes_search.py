@@ -1320,6 +1320,8 @@ def search_case_events_and_findings(
     exclude_user: str | None = Query(default=None),
     process_name: str | None = Query(default=None),
     source_file: str | None = Query(default=None),
+    source_category: str | None = Query(default=None),
+    source: str | None = Query(default=None),
     exclude_source_file: str | None = Query(default=None),
     file_name: str | None = Query(default=None),
     file_path: str | None = Query(default=None),
@@ -1337,7 +1339,7 @@ def search_case_events_and_findings(
     time_to: str | None = Query(default=None),
     sort: str = Query(default="timestamp_desc"),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=200),
+    page_size: int = Query(default=100, ge=1, le=500),
     cursor: str | None = Query(default=None),
     include_highlights: bool = Query(default=True),
     include_facets: bool = Query(default=True),
@@ -1391,6 +1393,7 @@ def search_case_events_and_findings(
         include_facets=include_facets,
         include_filesystem_timeline=include_filesystem_timeline,
     )
+    params["source_category"] = source_category or source
     return search_case_v2(db, case_id, params)
 
 

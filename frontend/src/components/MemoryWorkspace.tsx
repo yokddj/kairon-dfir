@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   type MemoryBackendStatus,
   type MemoryOverview,
@@ -9,11 +9,8 @@ import {
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { MEMORY_TABS, useMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 import { MemoryOverviewTab } from "./memory/MemoryOverviewTab";
-import { MemorySearchTab } from "./memory/MemorySearchTab";
-import { MemoryTimelineTab } from "./memory/MemoryTimelineTab";
 import { MemoryProcessesTab } from "./memory/MemoryProcessesTab";
 import { MemoryGraphTab } from "./memory/MemoryGraphTab";
-import { MemoryCommandLineHistoryTab } from "./memory/MemoryCommandLineHistoryTab";
 import { MemoryArtifactsTab } from "./memory/MemoryArtifactsTab";
 import { MemorySystemTab } from "./memory/MemorySystemTab";
 import { MemoryRunsTab } from "./memory/MemoryRunsTab";
@@ -63,6 +60,7 @@ function modeLabel(mode: MemoryOverview["mode"]): string {
 
 export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWorkspaceProps) {
   const { setActiveCaseId } = useActiveCase();
+  const [searchParams] = useSearchParams();
   const [tab, setTab] = useMemoryTab();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [profile, setProfile] = useState<RunProfile | null>(null);
@@ -80,8 +78,16 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
     setSelectedRunId(null);
     setProfile(null);
     setSearch("");
-    setSelectedEntityId(null);
-  }, [evidenceIdProp]);
+    setSelectedEntityId(searchParams.get("process_entity_id"));
+    setPidFilter(searchParams.get("pid") || "");
+  }, [evidenceIdProp, searchParams]);
+
+  useEffect(() => {
+    const entityId = searchParams.get("process_entity_id");
+    const pid = searchParams.get("pid") || "";
+    if (entityId) setSelectedEntityId(entityId);
+    if (pid) setPidFilter(pid);
+  }, [searchParams]);
 
   const overviewQuery = useQuery({
     queryKey: ["memory-overview", caseId],
@@ -274,29 +280,6 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
           />
         ) : null}
 
-        {tab === "search" ? (
-          <MemorySearchTab
-            caseId={caseId}
-            evidenceId={effectiveEvidenceId}
-            selectedRunId={selectedRunId}
-            onSelectRunId={setSelectedRunId}
-            onSelectEntityId={setSelectedEntityId}
-            onJumpToTab={onTabChange}
-          />
-        ) : null}
-
-        {tab === "timeline" ? (
-          <MemoryTimelineTab
-            caseId={caseId}
-            evidenceId={effectiveEvidenceId}
-            selectedRunId={selectedRunId}
-            selectedEntityId={selectedEntityId}
-            onSelectRunId={setSelectedRunId}
-            onSelectEntityId={setSelectedEntityId}
-            onJumpToTab={onTabChange}
-          />
-        ) : null}
-
         {tab === "processes" ? (
           <MemoryProcessesTab
             caseId={caseId}
@@ -315,19 +298,6 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
             onPidFilter={setPidFilter}
             selectedEntityId={selectedEntityId}
             onSelectEntityId={setSelectedEntityId}
-          />
-        ) : null}
-
-        {tab === "history" ? (
-          <MemoryCommandLineHistoryTab
-            caseId={caseId}
-            evidenceId={effectiveEvidenceId || ""}
-            runId={processEffectiveRunId}
-            runOptions={runOptionsQuery.data ?? null}
-            selectedRunId={selectedRunId}
-            onSelectRunId={setSelectedRunId}
-            onFocusGraph={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
-            onInspectProcess={(entityId) => { setSelectedEntityId(entityId); onTabChange("processes"); }}
           />
         ) : null}
 
