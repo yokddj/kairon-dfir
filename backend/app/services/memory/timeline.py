@@ -162,20 +162,25 @@ def materialize_timeline(db: Session, *, case_id: str, evidence_id: str, memory_
 
 
 def _fetch_memory_docs(case_id: str, evidence_id: str, *, run_id: str | None, process_entity_id: str | None, pid: int | None, process_name: str | None, source_plugin: str | None) -> list[dict[str, Any]]:
-    filters: list[dict[str, Any]] = [{"term": {"evidence_id": evidence_id}}, {"terms": {"document_type.keyword": list(MEMORY_TIMESTAMP_MATRIX)}}]
+    base_filters: list[dict[str, Any]] = [{"term": {"evidence_id": evidence_id}}]
     if run_id:
-        filters.append({"term": {"scan_run_id.keyword": run_id}})
+        base_filters.append({"term": {"scan_run_id.keyword": run_id}})
     if process_entity_id:
-        filters.append(_any_term(["process_entity_id", "process_entity_id.keyword"], process_entity_id))
+        base_filters.append(_any_term(["process_entity_id", "process_entity_id.keyword"], process_entity_id))
     if pid is not None:
-        filters.append(_any_term(["pid", "process.pid", "observed.pid"], pid))
+        base_filters.append(_any_term(["pid", "process.pid", "observed.pid"], pid))
     if process_name:
-        filters.append(_any_term(["process_name", "process.name", "observed.name"], process_name))
+        base_filters.append(_any_term(["process_name", "process.name", "observed.name"], process_name))
     if source_plugin:
-        filters.append(_any_term(["source_plugin", "source_plugins", "plugin_name"], source_plugin))
-    body = {"query": {"bool": {"filter": filters}}, "size": 10000, "track_total_hits": True, "sort": [{"scan_run_id.keyword": {"order": "desc", "unmapped_type": "keyword"}}, {"document_id": {"order": "asc"}}]}
-    response = get_opensearch_client().search(index=get_memory_index(case_id), body=body, params={"ignore_unavailable": "true"})
-    return [_prepare_artifact_document_for_response(h.get("_source", {}) | {"document_id": h.get("_id")}) for h in response.get("hits", {}).get("hits", [])]
+        base_filters.append(_any_term(["source_plugin", "source_plugins", "plugin_name"], source_plugin))
+    client = get_opensearch_client()
+    docs: list[dict[str, Any]] = []
+    for doc_type in MEMORY_TIMESTAMP_MATRIX:
+        filters = [*base_filters, _any_term(["document_type"], doc_type)]
+        body = {"query": {"bool": {"filter": filters}}, "size": 10000, "track_total_hits": True, "sort": [{"scan_run_id.keyword": {"order": "desc", "unmapped_type": "keyword"}}, {"document_id": {"order": "asc"}}]}
+        response = client.search(index=get_memory_index(case_id), body=body, params={"ignore_unavailable": "true"})
+        docs.extend(_prepare_artifact_document_for_response(h.get("_source", {}) | {"document_id": h.get("_id")}) for h in response.get("hits", {}).get("hits", []))
+    return docs
 
 
 def _fetch_disk_docs(case_id: str, *, source_parser: str | None = None) -> list[dict[str, Any]]:
