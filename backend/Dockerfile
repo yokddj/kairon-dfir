@@ -1,5 +1,11 @@
 FROM python:3.12-slim
 
+ARG KAIRON_COMMIT=unknown
+ARG BUILD_DATE=unknown
+ARG DOTNET_VERSION=9.0
+
+ENV KAIRON_COMMIT=${KAIRON_COMMIT}
+ENV BUILD_DATE=${BUILD_DATE}
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV DOTNET_ROOT=/opt/dotnet
@@ -14,8 +20,10 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN curl -fsSL --retry 3 --retry-delay 5 https://dot.net/v1/dotnet-install.sh -o /tmp/dotnet-install.sh \
+    && echo "Verifying .NET installer checksum" \
+    && (echo "18589195cd0e1b22d8c25caff78d2c3bb741edf83ae86a7f31f812c142ee3f89  /tmp/dotnet-install.sh" | sha256sum -c -) \
     && chmod +x /tmp/dotnet-install.sh \
-    && /tmp/dotnet-install.sh --channel 9.0 --runtime dotnet --install-dir /opt/dotnet \
+    && /tmp/dotnet-install.sh --channel ${DOTNET_VERSION} --runtime dotnet --install-dir /opt/dotnet \
     && mkdir -p /opt/evtxecmd \
     && curl -fsSL --retry 3 --retry-delay 5 https://download.ericzimmermanstools.com/net9/EvtxECmd.zip -o /tmp/EvtxECmd.zip \
     && python -m zipfile -e /tmp/EvtxECmd.zip /opt/evtxecmd \
