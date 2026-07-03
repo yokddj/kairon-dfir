@@ -12,6 +12,22 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.opensearch import get_opensearch_client, get_opensearch_ingest_preflight
 from app.core.performance import (
+
+settings = get_settings()
+router = APIRouter(tags=["system"])
+
+
+@router.get("/api/system/version")
+def system_version() -> dict:
+    import os
+    return {
+        "version": settings.app_version,
+        "git_commit": os.environ.get("KAIRON_COMMIT", "unknown"),
+        "build_date": os.environ.get("BUILD_DATE", "unknown"),
+        "profile": settings.app_build_channel,
+        "backend": settings.app_version,
+        "frontend": settings.app_version,
+    }
     DISK_CRITICAL_PERCENT,
     DISK_DEGRADED_PERCENT,
     apply_recommended_profile,
