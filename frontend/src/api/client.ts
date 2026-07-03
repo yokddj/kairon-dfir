@@ -7098,6 +7098,12 @@ export const api = {
 export type FindingIndicatorSummary = {
   total: number;
   active: number;
+  unreviewed: number;
+  investigating: number;
+  confirmed: number;
+  terminal: number;
+  suppressed: number;
+  visible: number;
   highest_severity: string | null;
   highest_confidence: string | null;
   statuses: Record<string, number>;
@@ -7117,6 +7123,11 @@ export type FindingIndicatorResolveRequest = {
     evidence_id?: string | null;
     pid?: number | null;
   }>;
+  visibility?: {
+    statuses?: string[];
+    include_rule_generated?: boolean;
+    include_suppressed?: boolean;
+  } | null;
 };
 
 export type FindingIndicatorResolveResponse = {
