@@ -901,15 +901,19 @@ def eval_persistence_observed_process(rule: HuntingRule, artifacts: list[Hunting
 
 def eval_command_network_temporal_proximity(rule: HuntingRule, artifacts: list[HuntingArtifact]) -> list[FindingCandidate]:
     commands = [a for a in artifacts if a.command_line and a.timestamp and (_powershell_signals(a.command_line) or _shell_signals(a.command_line))]
-    networks = [a for a in artifacts if a.family == "network" and a.timestamp]
+    networks = [a for a in artifacts if a.family == "network" and a.timestamp and (a.fields.get("remote_address") or a.fields.get("remote_port"))]
     out = []
     max_delta = int(rule.threshold.get("max_delta_seconds") or 300)
     for command in commands:
         ct = _parse_time(command.timestamp)
-        if not ct:
+        command_key = _strong_process_key(command)
+        if not ct or not command_key:
             continue
         for network in networks:
-            if _process_key(command) != _process_key(network):
+            if command.artifact_id == network.artifact_id:
+                continue
+            network_key = _strong_process_key(network)
+            if not network_key or command_key != network_key:
                 continue
             nt = _parse_time(network.timestamp)
             if not nt:
@@ -1038,6 +1042,14 @@ def _by_process(artifacts: list[HuntingArtifact]) -> dict[str, list[HuntingArtif
 
 def _process_key(artifact: HuntingArtifact) -> str:
     return artifact.process_entity_id or f"{artifact.evidence_id}:pid:{artifact.pid}" if artifact.pid is not None else artifact.artifact_id
+
+
+def _strong_process_key(artifact: HuntingArtifact) -> str | None:
+    if artifact.process_entity_id:
+        return artifact.process_entity_id
+    if artifact.pid is not None:
+        return f"{artifact.evidence_id}:pid:{artifact.pid}"
+    return None
 
 
 def _severity(value: str) -> FindingSeverity:
