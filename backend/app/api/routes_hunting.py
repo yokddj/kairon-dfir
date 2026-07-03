@@ -70,6 +70,10 @@ class FindingAssignRequest(BaseModel):
     assigned_by: str = "analyst"
 
 
+class FindingIndicatorResolveRequest(BaseModel):
+    entities: list[dict] = Field(default_factory=list, max_length=500)
+
+
 def _case_or_404(db: Session, case_id: str) -> Case:
     case = db.get(Case, case_id)
     if not case:
@@ -333,6 +337,17 @@ def hunting_cancel_detection_run(case_id: str, run_id: str, db: Session = Depend
     result["job_id"] = (run.metadata_json or {}).get("hunting_job_id")
     result["cancelled"] = True
     return result
+
+
+@router.post("/api/cases/{case_id}/finding-indicators/resolve")
+def hunting_resolve_finding_indicators(case_id: str, payload: FindingIndicatorResolveRequest, db: Session = Depends(get_db)) -> dict:
+    _case_or_404(db, case_id)
+    from app.services.finding_indicators import resolve_finding_indicators
+    entities = payload.entities[:500]
+    for entity in entities:
+        if str(entity.get("evidence_id") or "").startswith(case_id):
+            entity["evidence_id"] = None
+    return resolve_finding_indicators(db, case_id=case_id, entities=entities)
 
 
 def _safe_status(value: str) -> FindingStatus:
