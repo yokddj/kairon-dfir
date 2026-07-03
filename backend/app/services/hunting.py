@@ -683,7 +683,8 @@ def _artifact_from_memory_row(row: dict[str, Any]) -> HuntingArtifact:
 
 def _collect_disk_event_artifacts(*, case_id: str, evidence_id: str | None, process_entity_id: str | None) -> list[HuntingArtifact]:
     index = get_events_index(case_id)
-    if not index_exists(index):
+    client = get_opensearch_client()
+    if not index_exists(client, index):
         return []
     filters: list[dict[str, Any]] = []
     if evidence_id:
@@ -691,7 +692,7 @@ def _collect_disk_event_artifacts(*, case_id: str, evidence_id: str | None, proc
     if process_entity_id:
         filters.append({"bool": {"should": [{"term": {"process.entity_id": process_entity_id}}, {"term": {"process.guid": process_entity_id}}], "minimum_should_match": 1}})
     body = {"size": 500, "query": {"bool": {"filter": filters or [{"match_all": {}}]}}, "sort": [{"@timestamp": {"order": "asc", "unmapped_type": "date"}}]}
-    hits = get_opensearch_client().search(index=index, body=body).get("hits", {}).get("hits", [])
+    hits = client.search(index=index, body=body).get("hits", {}).get("hits", [])
     return [_artifact_from_event_hit(case_id, hit) for hit in hits]
 
 
