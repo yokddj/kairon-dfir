@@ -39,12 +39,12 @@ type OverviewFamily = {
 const FAMILIES: Array<{ family: string; title: string; tab: MemoryTab; artifact?: string }> = [
   { family: "system_info", title: "System information", tab: "system" },
   { family: "processes", title: "Processes", tab: "processes" },
-  { family: "modules", title: "Modules and DLLs", tab: "artifacts", artifact: "modules" },
-  { family: "handles", title: "Handles", tab: "artifacts", artifact: "handles" },
-  { family: "kernel_modules", title: "Kernel modules", tab: "artifacts", artifact: "kernel_modules" },
-  { family: "drivers", title: "Drivers", tab: "artifacts", artifact: "drivers" },
-  { family: "suspicious_regions", title: "Suspicious memory regions", tab: "artifacts", artifact: "suspicious_regions" },
-  { family: "network", title: "Network connections", tab: "artifacts", artifact: "network" },
+  { family: "modules", title: "Modules and DLLs", tab: "modules" },
+  { family: "handles", title: "Handles", tab: "handles" },
+  { family: "kernel_modules", title: "Kernel modules", tab: "modules" },
+  { family: "drivers", title: "Drivers", tab: "modules" },
+  { family: "suspicious_regions", title: "Suspicious memory regions", tab: "suspicious" },
+  { family: "network", title: "Network connections", tab: "network" },
 ];
 
 function stateLabel(state: MemoryFamilyState | string | undefined): { label: string; tone: "ok" | "warn" | "muted" | "danger" | "info" } {
@@ -388,7 +388,7 @@ export function MemoryOverviewTab({
                 <div className="mt-2 flex flex-wrap gap-2">
                   <button
                     type="button"
-                    onClick={() => onJumpToTab("artifacts", FAMILIES.find((f) => f.family === row.family)?.artifact)}
+                    onClick={() => onJumpToTab(FAMILIES.find((f) => f.family === row.family)?.tab ?? "overview")}
                     className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-[10px] text-muted"
                     data-testid={`memory-artifact-card-open-${row.family}`}
                   >

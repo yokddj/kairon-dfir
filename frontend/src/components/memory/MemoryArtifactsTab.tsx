@@ -31,6 +31,7 @@ type Props = {
   onJumpToGraph: (entityId: string) => void;
   onJumpToTree: (entityId: string) => void;
   evidenceId?: string;
+  initialSubView?: SubView;
 };
 
 type SubView =
@@ -619,8 +620,9 @@ export function MemoryArtifactsTab({
   onJumpToProcesses,
   onJumpToGraph,
   onJumpToTree,
+  initialSubView,
 }: Props) {
-  const [subView, setSubView] = useState<SubView>("network");
+  const [subView, setSubView] = useState<SubView>(initialSubView ?? "network");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [filter, setFilter] = useState("");
