@@ -1,0 +1,90 @@
+# Kairon Tooling Lock Manifest
+# All external tools must have version, source, and SHA-256.
+# If a SHA-256 is not available (mutable upstream), it is documented as "mutable".
+# Do not change hashes without reviewing the new artifact.
+
+schema_version: 1
+
+dotnet:
+  version: "9.0"
+  channel: "9.0"
+  runtime_resolved: "9.0.17"
+  installer: "https://dot.net/v1/dotnet-install.sh"
+  installer_sha256: "mutable-per-channel"
+  limitation: "Microsoft installer script changes per .NET channel. Channel 9.0 is pinned. Full artifact pinning requires using official Docker image mcr.microsoft.com/dotnet/runtime:9.0.17@sha256:<digest>."
+  install_path: "/opt/dotnet"
+  license: "MIT"
+  note: "For full reproducibility, migrate to official .NET runtime Docker image instead of installer."
+
+tools:
+  EvtxECmd:
+    version: "net9-latest"
+    artifact: "EvtxECmd.zip"
+    source: "https://download.ericzimmermanstools.com/net9/EvtxECmd.zip"
+    sha256: "mutable-latest-net9"
+    install_path: "/opt/evtxecmd"
+    license: "MIT"
+    redistribution: "not-redistributed"
+    limitation: "Eric Zimmerman tools are distributed as latest net9 builds without stable versioned URLs. For full reproducibility, mirror approved artifacts internally."
+  LECmd:
+    source: "https://download.ericzimmermanstools.com/net9/LECmd.zip"
+    sha256: "mutable-latest-net9"
+    install_path: "/opt/eztools/LECmd"
+    license: "MIT"
+    redistribution: "not-redistributed"
+  JLECmd:
+    source: "https://download.ericzimmermanstools.com/net9/JLECmd.zip"
+    sha256: "mutable-latest-net9"
+    install_path: "/opt/eztools/JLECmd"
+    license: "MIT"
+    redistribution: "not-redistributed"
+  PECmd:
+    source: "https://download.ericzimmermanstools.com/net9/PECmd.zip"
+    sha256: "mutable-latest-net9"
+    install_path: "/opt/eztools/PECmd"
+    license: "MIT"
+    redistribution: "not-redistributed"
+  AmcacheParser:
+    source: "https://download.ericzimmermanstools.com/net9/AmcacheParser.zip"
+    sha256: "mutable-latest-net9"
+    install_path: "/opt/eztools/AmcacheParser"
+    license: "MIT"
+    redistribution: "not-redistributed"
+  AppCompatCacheParser:
+    source: "https://download.ericzimmermanstools.com/net9/AppCompatCacheParser.zip"
+    sha256: "mutable-latest-net9"
+    install_path: "/opt/eztools/AppCompatCacheParser"
+    license: "MIT"
+    redistribution: "not-redistributed"
+  RECmd:
+    source: "https://download.ericzimmermanstools.com/net9/RECmd.zip"
+    sha256: "mutable-latest-net9"
+    install_path: "/opt/eztools/RECmd"
+    license: "MIT"
+    redistribution: "not-redistributed"
+  MFTECmd:
+    source: "https://download.ericzimmermanstools.com/net9/MFTECmd.zip"
+    sha256: "mutable-latest-net9"
+    install_path: "/opt/eztools/MFTECmd"
+    license: "MIT"
+    redistribution: "not-redistributed"
+  SrumECmd:
+    source: "https://download.ericzimmermanstools.com/net9/SrumECmd.zip"
+    sha256: "mutable-latest-net9"
+    install_path: "/opt/eztools/SrumECmd"
+    license: "MIT"
+    redistribution: "not-redistributed"
+
+python:
+  runtime: "3.12"
+  lockfile: "requirements.lock"
+  method: "pip freeze with hashes"
+  limitation: "Python dependencies use >= constraints without hashed lock. A pip-tools or uv lock workflow should be implemented for full reproducibility."
+  note: "volatility3==2.28.0 and pefile==2024.8.26 are already hash-pinned in docker/memory-worker/requirements.lock"
+
+frontend:
+  runtime: "node:20"
+  package_manager: "npm"
+  lockfile: "package-lock.json"
+  install: "npm install (not npm ci)"
+  note: "package-lock.json provides deterministic install. Consider npm ci for release builds."
