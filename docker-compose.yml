@@ -80,6 +80,8 @@ services:
     environment:
       MEMORY_SYMBOL_CACHE_ROOT: /volatility-cache/volatility3
       KAIRON_CLI_OPERATOR_ROOTS: /operator-symbol-import
+      KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
+      BUILD_DATE: ${BUILD_DATE:-unknown}
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "${BACKEND_UVICORN_WORKERS:-1}"]
     group_add:
       - "${MEMORY_EVIDENCE_SHARED_GID:-10001}"
