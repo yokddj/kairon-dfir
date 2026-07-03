@@ -581,7 +581,7 @@ def run_to_dict(run: RuleRun) -> dict[str, Any]:
         "updated_at": run.updated_at.isoformat() if run.updated_at else None,
         "started_at": run.started_at,
         "finished_at": run.finished_at,
-        "job_id": getattr(run, "hunting_job_id", None),
+        "job_id": (run.metadata_json or {}).get("hunting_job_id"),
     }
 
 
