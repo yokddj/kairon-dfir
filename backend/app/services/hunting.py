@@ -102,11 +102,12 @@ class HuntingRule(BaseModel):
     created_at: str | None = None
     updated_at: str | None = None
     checksum: str | None = None
+    quality: dict[str, Any] = Field(default_factory=dict)
 
     @field_validator("status")
     @classmethod
     def valid_status(cls, value: str) -> str:
-        if value not in {"experimental", "stable", "deprecated", "disabled"}:
+        if value not in {"experimental", "candidate", "stable", "deprecated", "disabled"}:
             raise ValueError("Invalid hunting rule status")
         return value
 
@@ -251,6 +252,7 @@ def rule_to_response(rule: HuntingRule, *, findings_count: int = 0, last_evaluat
         "enabled": rule.status != "disabled",
         "findings_count": findings_count,
         "last_evaluated": last_evaluated,
+        "quality": rule.quality,
     }
 
 

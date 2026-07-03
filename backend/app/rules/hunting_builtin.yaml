@@ -4,7 +4,7 @@ rules:
     title: Suspicious PowerShell Command Line
     description: Detects combinations of PowerShell flags and payload patterns that are stronger together than any single flag alone.
     version: 1.0.0
-    status: stable
+    status: experimental
     category: command_line
     artifact_families: [command_line, process]
     supported_source_categories: [Memory, Event Log, Disk]
@@ -25,7 +25,7 @@ rules:
     title: Suspicious Shell Command Line
     description: Detects shell commands with combined reconnaissance, download, execution, obfuscation, or suspicious redirection behavior.
     version: 1.0.0
-    status: stable
+    status: experimental
     category: command_line
     artifact_families: [command_line, process]
     supported_source_categories: [Memory, Event Log, Disk]
@@ -46,7 +46,7 @@ rules:
     title: Process Visible Only In Scan-Oriented Sources
     description: Detects a process observed in scan-oriented memory sources but absent from listing-oriented process sources.
     version: 1.0.0
-    status: stable
+    status: experimental
     category: process
     artifact_families: [process]
     supported_source_categories: [Memory]
@@ -67,7 +67,7 @@ rules:
     title: Anomalous Parent Child Relationship
     description: Detects high-value unusual process parent-child combinations using canonical lineage context.
     version: 1.0.0
-    status: stable
+    status: experimental
     category: parent_child
     artifact_families: [process]
     supported_source_categories: [Memory, Event Log, Disk]
@@ -88,7 +88,7 @@ rules:
     title: Suspicious Executable Location
     description: Detects process execution from user-writable or unusual locations with process context.
     version: 1.0.0
-    status: stable
+    status: experimental
     category: execution
     artifact_families: [process, command_line]
     supported_source_categories: [Memory, Event Log, Disk]
@@ -109,7 +109,7 @@ rules:
     title: Sensitive Privilege With Suspicious Context
     description: Detects sensitive Windows privileges on non-expected process contexts or combined with other suspicious process traits.
     version: 1.0.0
-    status: stable
+    status: experimental
     category: privilege
     artifact_families: [privilege, process]
     supported_source_categories: [Memory, Event Log, Disk]
@@ -130,7 +130,7 @@ rules:
     title: Suspicious Network Combination
     description: Detects outbound network activity combined with suspicious process, command-line, path, or scan-only context.
     version: 1.0.0
-    status: stable
+    status: experimental
     category: network
     artifact_families: [network, process, command_line]
     supported_source_categories: [Memory, Network Log, Event Log, Disk]
@@ -151,7 +151,7 @@ rules:
     title: Suspicious Memory Region
     description: Detects already-normalized suspicious memory region or VAD indicators without malware-family attribution.
     version: 1.0.0
-    status: stable
+    status: experimental
     category: suspicious_memory
     artifact_families: [suspicious_memory, vad]
     supported_source_categories: [Memory]
@@ -172,7 +172,7 @@ rules:
     title: Module Discrepancy Or Writable Module Path
     description: Detects module source discrepancies or modules loaded from writable/unusual paths.
     version: 1.0.0
-    status: stable
+    status: experimental
     category: module
     artifact_families: [module]
     supported_source_categories: [Memory]
@@ -193,7 +193,7 @@ rules:
     title: Persistence Configuration With Observed Process
     description: Correlates persistence configuration with observed process or command evidence while distinguishing configuration from proven execution.
     version: 1.0.0
-    status: stable
+    status: experimental
     category: persistence
     artifact_families: [persistence, process, command_line]
     supported_source_categories: [Registry, Event Log, Disk, Memory]
@@ -214,7 +214,7 @@ rules:
     title: Suspicious Command And Network Temporal Proximity
     description: Detects suspicious command-line evidence followed by outbound network activity from the same process within a bounded real timestamp window.
     version: 1.0.0
-    status: stable
+    status: experimental
     category: cross_artifact
     artifact_families: [command_line, network, timeline]
     supported_source_categories: [Memory, Event Log, Network Log, Disk]
@@ -235,7 +235,7 @@ rules:
     title: Evidence Inconsistency
     description: Detects useful process evidence inconsistencies such as name/path/parent conflicts or PID reuse ambiguity.
     version: 1.0.0
-    status: stable
+    status: experimental
     category: cross_artifact
     artifact_families: [process]
     supported_source_categories: [Memory, Event Log, Disk]
