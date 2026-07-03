@@ -6629,6 +6629,20 @@ export const api = {
     return request<HuntingRuleListResponse>(`/cases/${caseId}/rules${query.size ? `?${query.toString()}` : ""}`);
   },
   getHuntingRule: (caseId: string, ruleId: string) => request<{ rule: HuntingRule }>(`/cases/${caseId}/rules/${encodeURIComponent(ruleId)}`),
+  getCaseRuleQuality: (caseId: string, params?: Record<string, string>) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (value) query.set(key, value);
+    }
+    return request<RuleQualityResponse>(`/cases/${caseId}/rules/quality${query.size ? "?" + query.toString() : ""}`);
+  },
+  getGlobalRuleQuality: (params?: Record<string, string>) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (value) query.set(key, value);
+    }
+    return request<RuleQualityResponse>(`/rules/hunting/quality${query.size ? "?" + query.toString() : ""}`);
+  },
   evaluateHuntingRule: (caseId: string, ruleId: string, payload?: { evidence_id?: string | null; process_entity_id?: string | null; artifact_family?: string | null; dry_run?: boolean; apply?: boolean; include_disabled?: boolean }) =>
     request<HuntingEvaluationEnqueueResponse | HuntingEvaluationResult>(`/cases/${caseId}/rules/${encodeURIComponent(ruleId)}/evaluate`, { method: "POST", body: JSON.stringify(payload ?? { dry_run: true }) }),
   evaluateHuntingRules: (caseId: string, payload?: { rule_id?: string | null; evidence_id?: string | null; process_entity_id?: string | null; artifact_family?: string | null; dry_run?: boolean; apply?: boolean; include_disabled?: boolean }) =>
@@ -7132,4 +7146,31 @@ export type FindingIndicatorResolveRequest = {
 
 export type FindingIndicatorResolveResponse = {
   results: Record<string, FindingIndicatorSummary>;
+};
+
+export type RuleQualityMetric = {
+  rule_id: string;
+  version: string;
+  total_findings: number;
+  unreviewed_findings: number;
+  reviewed_findings: number;
+  triaged_findings: number;
+  investigating_findings: number;
+  confirmed_findings: number;
+  false_positive_findings: number;
+  suppressed_findings: number;
+  accepted_risk_findings: number;
+  resolved_findings: number;
+  review_coverage: number | null;
+  observed_confirmation_rate: number | null;
+  observed_false_positive_rate: number | null;
+  sample_size: number;
+  minimum_sample: number;
+  sufficient_sample: boolean;
+  quality_status: string;
+};
+
+export type RuleQualityResponse = {
+  items: RuleQualityMetric[];
+  total: number;
 };

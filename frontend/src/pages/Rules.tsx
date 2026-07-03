@@ -479,6 +479,19 @@ export default function Rules() {
     queryFn: () => ("listHuntingRules" in api ? api.listHuntingRules(scopeCaseId as string) : Promise.resolve({ items: [], total: 0 })),
     enabled: Boolean(scopeCaseId),
   });
+  const ruleQualityQuery = useQuery({
+    queryKey: ["rule-quality", scopeCaseId],
+    queryFn: () => ("getCaseRuleQuality" in api ? api.getCaseRuleQuality(scopeCaseId as string) : Promise.resolve({ items: [], total: 0 })),
+    enabled: Boolean(scopeCaseId),
+    staleTime: 30_000,
+  });
+  const qualityByRule = useMemo(() => {
+    const map: Record<string, import("../api/client").RuleQualityMetric> = {};
+    for (const item of ruleQualityQuery.data?.items ?? []) {
+      map[item.rule_id] = item;
+    }
+    return map;
+  }, [ruleQualityQuery.data]);
   const huntingRunsQuery = useQuery({
     queryKey: ["hunting-detection-runs", scopeCaseId],
     queryFn: () => ("listDetectionRuns" in api ? api.listDetectionRuns(scopeCaseId as string) : Promise.resolve({ items: [], total: 0 })),
@@ -1540,6 +1553,7 @@ export default function Rules() {
                   <th className="px-4 py-3">Confidence</th>
                   <th className="px-4 py-3">Prerequisites</th>
                   <th className="px-4 py-3">Findings</th>
+                  <th className="px-4 py-3">Quality</th>
                 </tr>
               </thead>
               <tbody>
@@ -1553,6 +1567,20 @@ export default function Rules() {
                     <td className="px-4 py-3">{rule.confidence}</td>
                     <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{rule.prerequisites.map((item) => <span key={`${rule.rule_id}-${item}`} className="rounded-full border border-line px-2 py-0.5 font-mono text-[10px] text-muted">{item}</span>)}</div></td>
                     <td className="px-4 py-3">{rule.findings_count ?? 0}</td>
+                    <td className="px-4 py-3">
+                      {qualityByRule[rule.rule_id] ? (
+                        <div className="flex flex-col gap-1">
+                          <span className="rounded-full border border-line px-1.5 py-0.5 font-mono text-[10px] text-muted">
+                            {qualityByRule[rule.rule_id].reviewed_findings}r/{qualityByRule[rule.rule_id].confirmed_findings}c
+                          </span>
+                          {!qualityByRule[rule.rule_id].sufficient_sample ? (
+                            <span className="text-[10px] text-warning">small sample</span>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <span className="text-[10px] text-muted">no data</span>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

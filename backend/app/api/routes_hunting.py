@@ -351,6 +351,30 @@ def hunting_resolve_finding_indicators(case_id: str, payload: FindingIndicatorRe
     return resolve_finding_indicators(db, case_id=case_id, entities=entities, visibility=payload.visibility)
 
 
+@router.get("/api/cases/{case_id}/rules/quality")
+def hunting_rules_quality(
+    case_id: str,
+    rule_id: str | None = None,
+    rule_version: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    _case_or_404(db, case_id)
+    from app.services.rule_quality import compute_rule_quality_metrics
+    metrics = compute_rule_quality_metrics(db, case_id=case_id, rule_id=rule_id, rule_version=rule_version)
+    return {"items": metrics, "total": len(metrics)}
+
+
+@router.get("/api/rules/hunting/quality")
+def hunting_rules_global_quality(
+    rule_id: str | None = None,
+    rule_version: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.rule_quality import compute_rule_quality_metrics
+    metrics = compute_rule_quality_metrics(db, case_id=None, rule_id=rule_id, rule_version=rule_version)
+    return {"items": metrics, "total": len(metrics)}
+
+
 def _safe_status(value: str) -> FindingStatus:
     try:
         return FindingStatus(value)
