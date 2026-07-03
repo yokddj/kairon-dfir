@@ -46,17 +46,21 @@ function confidenceTone(confidence: string | null | undefined) {
 }
 
 function statusTone(status: string) {
-  if (status === "dismissed" || status === "false_positive" || status === "closed") return "border-line bg-white/5 text-muted";
+  if (status === "suppressed" || status === "false_positive") return "border-line bg-white/5 text-muted";
   if (status === "confirmed") return "border-emerald-400/40 bg-emerald-400/10 text-emerald-200";
-  if (status === "reviewed") return "border-accent/40 bg-accent/10 text-accent";
-  return "border-warning/40 bg-warning/10 text-warning";
+  if (status === "resolved") return "border-sky-400/40 bg-sky-400/10 text-sky-200";
+  if (status === "investigating") return "border-amber-400/40 bg-amber-400/10 text-amber-200";
+  if (status === "triaged") return "border-accent/40 bg-accent/10 text-accent";
+  if (status === "accepted_risk") return "border-muted/40 bg-white/5 text-muted";
+  if (status === "new") return "border-warning/40 bg-warning/10 text-warning";
+  return "border-line bg-white/5 text-muted";
 }
 
-function normalizeStatus(status: string | null | undefined): "new" | "reviewed" | "confirmed" | "dismissed" {
-  if (status === "confirmed") return "confirmed";
-  if (status === "reviewed" || status === "triaged" || status === "investigating" || status === "accepted_risk") return "reviewed";
-  if (status === "dismissed" || status === "false_positive" || status === "closed" || status === "resolved" || status === "suppressed") return "dismissed";
-  return "new";
+function lifecycleLabel(status: string | null | undefined): string {
+  if (!status) return "new";
+  if (status === "false_positive") return "False positive";
+  if (status === "accepted_risk") return "Accepted risk";
+  return status.charAt(0).toUpperCase() + status.slice(1).replace(/_/g, " ");
 }
 
 function sourceLabel(finding: Finding) {
@@ -72,9 +76,9 @@ function uniqueSorted(values: Array<string | null | undefined>) {
 
 function sortFindings(items: Finding[]) {
   return [...items].sort((left, right) => {
-    const leftDismissed = normalizeStatus(left.status) === "dismissed" ? 1 : 0;
-    const rightDismissed = normalizeStatus(right.status) === "dismissed" ? 1 : 0;
-    if (leftDismissed !== rightDismissed) return leftDismissed - rightDismissed;
+    const leftTerminal = left.status === "suppressed" || left.status === "false_positive" ? 1 : 0;
+    const rightTerminal = right.status === "suppressed" || right.status === "false_positive" ? 1 : 0;
+    if (leftTerminal !== rightTerminal) return leftTerminal - rightTerminal;
     const severityRank = { critical: 5, high: 4, medium: 3, low: 2, info: 1 } as const;
     const leftSeverity = severityRank[left.severity] ?? 0;
     const rightSeverity = severityRank[right.severity] ?? 0;
@@ -224,7 +228,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
   });
 
   const suppressMutation = useMutation({
-    mutationFn: ({ findingId, reason }: { findingId: string; reason?: string }) => (typeof apiCompat.suppressFinding === "function" ? apiCompat.suppressFinding(caseId, findingId, { reason }) : api.updateFinding(caseId, findingId, { status: "dismissed" as FindingStatus, data_quality: [reason || "suppressed"] })),
+    mutationFn: ({ findingId, reason }: { findingId: string; reason?: string }) => (typeof apiCompat.suppressFinding === "function" ? apiCompat.suppressFinding(caseId, findingId, { reason }) : api.updateFinding(caseId, findingId, { status: "suppressed" as FindingStatus, data_quality: [reason || "suppressed"] })),
     onSuccess: () => {
       notify({ title: "Finding suppressed", description: "Suppression history was preserved.", tone: "success" });
       void queryClient.invalidateQueries({ queryKey: ["findings", caseId] });
@@ -246,7 +250,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     return sortedFindings.filter((finding) => {
       if (filters.severity && finding.severity !== filters.severity) return false;
       if (filters.confidence && (finding.confidence ?? "") !== filters.confidence) return false;
-      if (filters.status && normalizeStatus(finding.status) !== filters.status) return false;
+      if (filters.status && (finding.status ?? "") !== filters.status) return false;
       if (filters.findingType && (finding.finding_type ?? "") !== filters.findingType) return false;
       if (filters.source && !(finding.source_categories ?? finding.source?.split(",") ?? []).includes(filters.source)) return false;
       if (filters.evidenceId && (finding.evidence_id ?? "") !== filters.evidenceId) return false;
@@ -364,13 +368,14 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
   });
 
   const overview = useMemo(() => {
-    const counts = { total: filteredFindings.length, critical: 0, high: 0, medium: 0, new: 0, reviewed: 0, confirmed: 0, dismissed: 0 };
-    for (const finding of filteredFindings) {
-      if (finding.severity === "critical") counts.critical += 1;
-      if (finding.severity === "high") counts.high += 1;
-      if (finding.severity === "medium") counts.medium += 1;
-      counts[normalizeStatus(finding.status)] += 1;
-    }
+    const counts = { total: filteredFindings.length, critical: 0, high: 0, medium: 0, new: 0, triaged: 0, investigating: 0, confirmed: 0, resolved: 0, suppressed: 0, false_positive: 0, accepted_risk: 0 };
+      for (const finding of filteredFindings) {
+        if (finding.severity === "critical") counts.critical += 1;
+        if (finding.severity === "high") counts.high += 1;
+        if (finding.severity === "medium") counts.medium += 1;
+        const statusKey = (finding.status || "new") as string;
+        if (statusKey in counts) (counts as Record<string, number>)[statusKey] += 1;
+      }
     return counts;
   }, [filteredFindings]);
 
@@ -388,7 +393,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
           <div className="mt-3 flex flex-wrap gap-2">
             <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${severityTone(selectedFinding.severity)}`}>{selectedFinding.severity}</span>
             <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${confidenceTone(selectedFinding.confidence)}`}>{selectedFinding.confidence ?? "low"}</span>
-            <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${statusTone(normalizeStatus(selectedFinding.status))}`}>{normalizeStatus(selectedFinding.status)}</span>
+            <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${statusTone(selectedFinding.status ?? "new")}`}>{lifecycleLabel(selectedFinding.status)}</span>
             {selectedFinding.finding_type ? <Chip>{selectedFinding.finding_type}</Chip> : null}
           </div>
         </div>
@@ -402,11 +407,11 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
           </div>
           <select
             aria-label="Finding status"
-            value={normalizeStatus(selectedFinding.status)}
+            value={selectedFinding.status ?? "new"}
             onChange={(event) => updateStatusMutation.mutate({ findingId: selectedFinding.id, status: event.target.value as FindingStatus })}
             className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm"
           >
-            {["new", "reviewed", "confirmed", "dismissed", "false_positive", "accepted_risk", "resolved", "suppressed"].map((value) => <option key={value} value={value}>{value}</option>)}
+            {["new", "triaged", "investigating", "confirmed", "false_positive", "accepted_risk", "resolved", "suppressed"].map((value) => <option key={value} value={value}>{lifecycleLabel(value)}</option>)}
           </select>
           <button type="button" onClick={() => suppressMutation.mutate({ findingId: selectedFinding.id, reason: "Suppressed from finding detail" })} className="w-full rounded-2xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning">
             Suppress finding
@@ -658,13 +663,12 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-4 xl:grid-cols-8">
             <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Total</p><p className="mt-2 text-lg font-semibold">{overview.total}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Critical</p><p className="mt-2 text-lg font-semibold">{overview.critical}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">High</p><p className="mt-2 text-lg font-semibold">{overview.high}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Medium</p><p className="mt-2 text-lg font-semibold">{overview.medium}</p></div>
             <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">New</p><p className="mt-2 text-lg font-semibold">{overview.new}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Reviewed</p><p className="mt-2 text-lg font-semibold">{overview.reviewed}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Triaged</p><p className="mt-2 text-lg font-semibold">{overview.triaged}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Investigating</p><p className="mt-2 text-lg font-semibold">{overview.investigating}</p></div>
             <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Confirmed</p><p className="mt-2 text-lg font-semibold">{overview.confirmed}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Dismissed</p><p className="mt-2 text-lg font-semibold">{overview.dismissed}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Suppressed</p><p className="mt-2 text-lg font-semibold">{overview.suppressed}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">False positive</p><p className="mt-2 text-lg font-semibold">{overview.false_positive}</p></div>
           </div>
           {correlationReport ? (
             <div className="mt-4 rounded-3xl border border-line bg-abyss/60 p-4">
@@ -725,7 +729,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Status</span>
             <select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
               <option value="">All</option>
-              {["new", "reviewed", "confirmed", "dismissed"].map((value) => <option key={value} value={value}>{value}</option>)}
+              {["new", "triaged", "investigating", "confirmed", "false_positive", "accepted_risk", "resolved", "suppressed"].map((value) => <option key={value} value={value}>{lifecycleLabel(value)}</option>)}
             </select>
           </label>
           <label className="block">
@@ -789,14 +793,14 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
           <div className="space-y-3">
             {filteredFindings.map((finding) => {
               const isSelected = selectedFinding?.id === finding.id;
-              const normalizedStatus = normalizeStatus(finding.status);
+              const isTerminal = finding.status === "suppressed" || finding.status === "false_positive";
               return (
                 <button
                   key={finding.id}
                   type="button"
                   data-testid={`finding-card-${finding.id}`}
                   onClick={() => setSelectedFindingId(finding.id)}
-                  className={`w-full rounded-3xl border p-5 text-left shadow-panel transition ${isSelected ? "border-accent bg-accent/10" : normalizedStatus === "dismissed" ? "border-line bg-panel/30 opacity-70" : "border-line bg-panel/70 hover:bg-panel/80"}`}
+                  className={`w-full rounded-3xl border p-5 text-left shadow-panel transition ${isSelected ? "border-accent bg-accent/10" : isTerminal ? "border-line bg-panel/30 opacity-70" : "border-line bg-panel/70 hover:bg-panel/80"}`}
                 >
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
@@ -804,7 +808,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
                         <span className="break-words text-base font-semibold">{finding.title}</span>
                         <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${severityTone(finding.severity)}`}>{finding.severity}</span>
                         <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${confidenceTone(finding.confidence)}`}>{finding.confidence ?? "low"}</span>
-                        <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${statusTone(normalizedStatus)}`}>{normalizedStatus}</span>
+                        <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${statusTone(finding.status ?? "new")}`}>{lifecycleLabel(finding.status)}</span>
                         <Chip>{sourceLabel(finding)}</Chip>
                       </div>
                       <p className="mt-3 line-clamp-2 text-sm text-muted">{finding.summary || finding.description || "No summary."}</p>

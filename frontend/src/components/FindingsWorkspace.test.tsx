@@ -173,7 +173,7 @@ describe("FindingsWorkspace", () => {
     findingStore = [
       baseFinding({ id: "low-1", title: "Low finding", severity: "low", confidence: "low", risk_score: 10 }),
       baseFinding({ id: "high-1", title: "High finding", severity: "high", confidence: "high", risk_score: 80 }),
-      baseFinding({ id: "dismissed-1", title: "Dismissed finding", severity: "high", status: "dismissed", risk_score: 99 }),
+      baseFinding({ id: "suppressed-1", title: "Suppressed finding", severity: "high", status: "suppressed", risk_score: 99 }),
     ];
 
     renderWorkspace();
@@ -181,21 +181,20 @@ describe("FindingsWorkspace", () => {
     const cards = screen.getAllByTestId(/finding-card-/);
     const findingTitles = cards.map((node) => node.textContent ?? "");
     expect(findingTitles[0]).toContain("High finding");
-    expect(screen.getAllByText("dismissed").length).toBeGreaterThan(0);
   });
 
   it("filters findings by severity and status", async () => {
     findingStore = [
       baseFinding({ id: "high-new", title: "High new", severity: "high", status: "new", finding_type: "download_execute_detect" }),
-      baseFinding({ id: "high-dismissed", title: "High dismissed", severity: "high", status: "dismissed", finding_type: "download_execute_detect" }),
+      baseFinding({ id: "high-suppressed", title: "High suppressed", severity: "high", status: "suppressed", finding_type: "download_execute_detect" }),
       baseFinding({ id: "medium-confirmed", title: "Medium confirmed", severity: "medium", status: "confirmed", finding_type: "cloud_exfil_candidate" }),
     ];
 
     renderWorkspace();
     await waitFor(() => expect(screen.getAllByText("High new").length).toBeGreaterThan(0));
     await userEvent.selectOptions(screen.getByLabelText("Severity"), "high");
-    await userEvent.selectOptions(screen.getByLabelText("Status"), "dismissed");
-    expect(screen.getAllByText("High dismissed").length).toBeGreaterThan(0);
+    await userEvent.selectOptions(screen.getByLabelText("Status"), "suppressed");
+    expect(screen.getAllByText("High suppressed").length).toBeGreaterThan(0);
     expect(screen.queryByText("High new")).not.toBeInTheDocument();
     expect(screen.queryByText("Medium confirmed")).not.toBeInTheDocument();
   });
@@ -222,9 +221,9 @@ describe("FindingsWorkspace", () => {
     renderWorkspace();
     await waitFor(() => expect(screen.getAllByText("Status target").length).toBeGreaterThan(0));
     await userEvent.click(screen.getByTestId("finding-card-status-1"));
-    await userEvent.selectOptions(screen.getByLabelText("Finding status"), "dismissed");
+    await userEvent.selectOptions(screen.getByLabelText("Finding status"), "suppressed");
     await waitFor(() => expect(updateFindingMock).toHaveBeenCalled());
-    await waitFor(() => expect(screen.getAllByText("dismissed").length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText("Suppressed").length).toBeGreaterThan(0));
   });
 
   it("runs correlation and refreshes findings", async () => {
