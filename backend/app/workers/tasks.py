@@ -10018,6 +10018,11 @@ def run_hunting_evaluation(run_id: str) -> dict:
             severity="info", case_id=run.case_id, evidence_id=run.evidence_id,
             actor="system", metadata={"run_id": run_id},
         )
+
+        saved_case_id = run.case_id
+        saved_evidence_id = run.evidence_id
+        saved_process_entity_id = (run.metadata_json or {}).get("process_entity_id")
+        saved_artifact_family = (run.metadata_json or {}).get("artifact_family")
         db.close()
         db = None
 
@@ -10063,11 +10068,11 @@ def run_hunting_evaluation(run_id: str) -> dict:
 
         result = evaluate_hunting_rules(
             db_getter=lambda: SL_local(),
-            case_id=run.case_id,
+            case_id=saved_case_id,
             rule_id=rule_id,
-            evidence_id=evidence_id,
-            process_entity_id=(run.metadata_json or {}).get("process_entity_id"),
-            artifact_family=(run.metadata_json or {}).get("artifact_family"),
+            evidence_id=saved_evidence_id,
+            process_entity_id=saved_process_entity_id,
+            artifact_family=saved_artifact_family,
             apply=apply,
             include_disabled=False,
             existing_run_id=run_id,
@@ -10081,7 +10086,7 @@ def run_hunting_evaluation(run_id: str) -> dict:
             if final_run:
                 if final_run.cancel_requested:
                     _update_rule_run(final_db, final_run, status=RuleRunStatus.cancelled, current_phase="cancelled", finished_at=utc_now().isoformat(), last_error="Cancelled during evaluation.")
-                    log_activity(final_db, activity_type="hunting_evaluation_cancelled", title="Hunting evaluation cancelled", message="Cancelled during evaluation.", severity="info", case_id=run.case_id, evidence_id=run.evidence_id, actor="system", metadata={"run_id": run_id})
+                    log_activity(final_db, activity_type="hunting_evaluation_cancelled", title="Hunting evaluation cancelled", message="Cancelled during evaluation.", severity="info", case_id=saved_case_id, evidence_id=saved_evidence_id, actor="system", metadata={"run_id": run_id})
                 else:
                     _update_rule_run(
                         final_db, final_run,
@@ -10105,7 +10110,7 @@ def run_hunting_evaluation(run_id: str) -> dict:
                 })
                 final_run.metadata_json = fin_meta
                 final_db.commit()
-                log_activity(final_db, activity_type="hunting_evaluation_completed", title="Hunting evaluation completed", message=f"Created {result.get('findings_created',0)}, updated {result.get('findings_updated',0)}", severity="info", case_id=run.case_id, evidence_id=run.evidence_id, actor="system", metadata={"run_id": run_id, "result": {"status": result.get("status")}})
+                log_activity(final_db, activity_type="hunting_evaluation_completed", title="Hunting evaluation completed", message=f"Created {result.get('findings_created',0)}, updated {result.get('findings_updated',0)}", severity="info", case_id=saved_case_id, evidence_id=saved_evidence_id, actor="system", metadata={"run_id": run_id, "result": {"status": result.get("status")}})
         finally:
             final_db.close()
 
