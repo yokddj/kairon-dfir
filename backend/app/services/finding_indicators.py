@@ -14,12 +14,16 @@ def resolve_finding_indicators(
     *,
     case_id: str,
     entities: list[dict[str, Any]],
+    visibility: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not entities:
         return {"results": {}}
+    visibility = visibility or {}
+    visible_statuses = set(visibility.get("statuses") or []) or {"confirmed"}
+    include_rule_generated = visibility.get("include_rule_generated", True)
+    include_suppressed = visibility.get("include_suppressed", False)
 
     finding_ids_by_key: dict[str, set[str]] = defaultdict(set)
-    all_finding_ids: set[str] = set()
 
     finding_rows = db.query(Finding).filter(Finding.case_id == case_id).all()
     if not finding_rows:
@@ -29,7 +33,6 @@ def resolve_finding_indicators(
         key = entity.get("key", entity.get("entity_type", ""))
         matched = _match_findings(finding_rows, case_id, entity)
         finding_ids_by_key[key] = matched
-        all_finding_ids.update(matched)
 
     finding_map: dict[str, Finding] = {f.id: f for f in finding_rows}
 
@@ -37,7 +40,7 @@ def resolve_finding_indicators(
     for entity in entities:
         key = entity.get("key", entity.get("entity_type", ""))
         ids = finding_ids_by_key.get(key, set())
-        results[key] = _build_indicator(entity, ids, finding_map, case_id)
+        results[key] = _build_indicator(entity, ids, finding_map, case_id, visible_statuses, include_suppressed)
 
     return {"results": results}
 
@@ -102,23 +105,30 @@ def _finding_matches_entity(
     return False
 
 
-def _build_indicator(entity: dict[str, Any], finding_ids: set[str], finding_map: dict[str, Finding], case_id: str) -> dict[str, Any]:
+
+def _build_indicator(entity: dict[str, Any], finding_ids: set[str], finding_map: dict[str, Finding], case_id: str, visible_statuses: set[str], include_suppressed: bool) -> dict[str, Any]:
     if not finding_ids:
         return _empty_indicator(entity)
 
     findings = [finding_map[fid] for fid in finding_ids if fid in finding_map]
     active = [f for f in findings if (f.status.value if hasattr(f.status, "value") else str(f.status)) in ACTIVE_STATUSES]
-    terminal = [f for f in findings if f not in active]
 
-    severities = [f.severity.value if hasattr(f.severity, "value") else str(f.severity) for f in findings]
-    confidences = [f.confidence for f in findings if f.confidence]
+    def _s(finding: Finding) -> str:
+        return finding.status.value if hasattr(finding.status, "value") else str(finding.status)
+
+    unreviewed = [f for f in findings if _s(f) == "new"]
+    investigating = [f for f in findings if _s(f) in ("investigating", "triaged")]
+    confirmed_list = [f for f in findings if _s(f) == "confirmed"]
+    terminal_list = [f for f in findings if _s(f) in ("false_positive", "accepted_risk", "resolved")]
+    suppressed_list = [f for f in findings if _s(f) == "suppressed"]
+
+    visible = [f for f in findings if _s(f) in visible_statuses or (include_suppressed and _s(f) == "suppressed")]
+    severities = [f.severity.value if hasattr(f.severity, "value") else str(f.severity) for f in visible]
+    confidences = [f.confidence for f in visible if f.confidence]
     statuses: dict[str, int] = {}
     for f in findings:
-        s = f.status.value if hasattr(f.status, "value") else str(f.status)
+        s = _s(f)
         statuses[s] = statuses.get(s, 0) + 1
-
-    highest_severity = _max_severity(severities)
-    suppressed_count = sum(1 for f in findings if (f.status.value if hasattr(f.status, "value") else str(f.status)) == "suppressed")
 
     has_process = entity.get("process_entity_id")
     has_artifact = entity.get("artifact_id")
@@ -137,11 +147,17 @@ def _build_indicator(entity: dict[str, Any], finding_ids: set[str], finding_map:
     return {
         "total": len(findings),
         "active": len(active),
-        "highest_severity": highest_severity,
+        "unreviewed": len(unreviewed),
+        "investigating": len(investigating),
+        "confirmed": len(confirmed_list),
+        "terminal": len(terminal_list),
+        "suppressed": len(suppressed_list),
+        "visible": len(visible),
+        "highest_severity": _max_severity(severities),
         "highest_confidence": _max_confidence(confidences),
         "statuses": statuses,
         "finding_ids": sorted(finding_ids),
-        "suppressed_count": suppressed_count,
+        "suppressed_count": len(suppressed_list),
         "association_basis": basis,
         "partial": False,
     }
@@ -160,6 +176,12 @@ def _empty_indicator(entity: dict[str, Any]) -> dict[str, Any]:
     return {
         "total": 0,
         "active": 0,
+        "unreviewed": 0,
+        "investigating": 0,
+        "confirmed": 0,
+        "terminal": 0,
+        "suppressed": 0,
+        "visible": 0,
         "highest_severity": None,
         "highest_confidence": None,
         "statuses": {},

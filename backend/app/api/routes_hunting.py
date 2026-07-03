@@ -72,6 +72,7 @@ class FindingAssignRequest(BaseModel):
 
 class FindingIndicatorResolveRequest(BaseModel):
     entities: list[dict] = Field(default_factory=list, max_length=500)
+    visibility: dict | None = None
 
 
 def _case_or_404(db: Session, case_id: str) -> Case:
@@ -347,7 +348,7 @@ def hunting_resolve_finding_indicators(case_id: str, payload: FindingIndicatorRe
     for entity in entities:
         if str(entity.get("evidence_id") or "").startswith(case_id):
             entity["evidence_id"] = None
-    return resolve_finding_indicators(db, case_id=case_id, entities=entities)
+    return resolve_finding_indicators(db, case_id=case_id, entities=entities, visibility=payload.visibility)
 
 
 def _safe_status(value: str) -> FindingStatus:
