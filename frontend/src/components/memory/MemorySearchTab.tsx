@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, type MemorySearchParams, type MemorySearchResult } from "../../api/client";
 import type { MemoryTab } from "../../lib/memoryWorkspaceState";
+import { isMemoryTab } from "../../lib/memoryWorkspaceState";
 
 const FAMILIES = [
   ["processes", "Processes"],
@@ -109,8 +110,14 @@ export function MemorySearchTab({ caseId, evidenceId, selectedRunId, onSelectRun
     if (target.run_id) onSelectRunId(target.run_id);
     if (target.process_entity_id) onSelectEntityId(target.process_entity_id);
     if (mode === "graph") onJumpToTab("graph");
-    else if (mode === "raw") onJumpToTab("raw");
-    else onJumpToTab((target.tab as any) || "artifacts");
+    else if (mode === "raw") onJumpToTab("overview");
+    else {
+      const targetTab = target.tab as string || "";
+      const artifactFamily = (target as any).artifact_family as string || "";
+      const map: Record<string, string> = { processes: "processes", network: "network", modules: "modules", handles: "handles", suspicious_regions: "suspicious", suspicious: "suspicious", vads: "vads", drivers: "modules", kernel_modules: "modules", kernel: "modules" };
+      const resolved = isMemoryTab(targetTab) ? targetTab : map[targetTab] || map[artifactFamily] || "network";
+      onJumpToTab(resolved);
+    }
   };
 
   if (!evidenceId) {

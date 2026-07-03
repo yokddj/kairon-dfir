@@ -12,19 +12,25 @@ export type MemoryTab =
   | "overview"
   | "processes"
   | "graph"
-  | "artifacts"
+  | "network"
+  | "modules"
+  | "handles"
+  | "suspicious"
+  | "vads"
   | "system"
-  | "runs"
-  | "raw";
+  | "runs";
 
 export const MEMORY_TABS: ReadonlyArray<{ key: MemoryTab; label: string; testId: string }> = [
   { key: "overview", label: "Overview", testId: "memory-tab-overview" },
   { key: "processes", label: "Processes", testId: "memory-tab-processes" },
   { key: "graph", label: "Graph", testId: "memory-tab-graph" },
-  { key: "artifacts", label: "Artifacts", testId: "memory-tab-artifacts" },
+  { key: "network", label: "Network", testId: "memory-tab-network" },
+  { key: "modules", label: "Modules & DLLs", testId: "memory-tab-modules" },
+  { key: "handles", label: "Handles", testId: "memory-tab-handles" },
+  { key: "suspicious", label: "Suspicious Memory", testId: "memory-tab-suspicious" },
+  { key: "vads", label: "VADs", testId: "memory-tab-vads" },
   { key: "system", label: "System", testId: "memory-tab-system" },
   { key: "runs", label: "Runs", testId: "memory-tab-runs" },
-  { key: "raw", label: "Raw observations", testId: "memory-tab-raw" },
 ];
 
 const TAB_KEYS: ReadonlyArray<string> = MEMORY_TABS.map((tab) => tab.key);

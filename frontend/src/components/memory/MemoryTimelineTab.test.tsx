@@ -192,7 +192,7 @@ describe("MemoryTimelineTab", () => {
     fireEvent.click(screen.getAllByText("Focus graph")[0]);
     expect(onJumpToTab).toHaveBeenCalledWith("graph");
     fireEvent.click(screen.getAllByText("Open raw")[0]);
-    expect(onJumpToTab).toHaveBeenCalledWith("raw");
+    expect(onJumpToTab).toHaveBeenCalledWith("overview");
     fireEvent.click(screen.getAllByText("Open Search result")[0]);
     expect(onJumpToTab).toHaveBeenLastCalledWith("processes");
   });

@@ -16,7 +16,7 @@ import {
   Terminal,
   Waypoints,
 } from "lucide-react";
-import { NavLink } from "react-router-dom";
+import { NavLink, useLocation } from "react-router-dom";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
 type NavItem = {
@@ -35,6 +35,18 @@ function SidebarLink({ item, activeCaseId }: { item: NavItem; activeCaseId: stri
   const target = item.requiresCase && activeCaseId ? item.to.replace(":caseId", activeCaseId) : item.to;
   const disabled = Boolean(item.requiresCase && !activeCaseId);
   const Icon = item.icon;
+  const location = useLocation();
+
+  const isActive = (() => {
+    if (disabled) return false;
+    const targetPath = target.split("?")[0];
+    if (location.pathname !== targetPath) return false;
+    if (!location.pathname.includes("/memory") || !item.to.includes("tab=")) return true;
+    const targetParams = new URLSearchParams(item.to.split("?")[1] || "");
+    const targetTab = targetParams.get("tab");
+    const currentTab = new URLSearchParams(location.search).get("tab");
+    return targetTab === currentTab;
+  })();
 
   if (disabled) {
     return (
@@ -56,11 +68,9 @@ function SidebarLink({ item, activeCaseId }: { item: NavItem; activeCaseId: stri
   return (
     <NavLink
       to={target}
-      className={({ isActive }) =>
-        `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
-          isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
-        }`
-      }
+      className={`flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
+        isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
+      }`}
     >
       <Icon size={16} />
       {item.label}
@@ -109,14 +119,13 @@ export default function Sidebar() {
         { to: "/cases/:caseId/memory?tab=overview", label: "Memory Overview", icon: MemoryStick, requiresCase: true },
         { to: "/cases/:caseId/memory?tab=processes", label: "Processes", icon: Terminal, requiresCase: true },
         { to: "/cases/:caseId/memory?tab=graph", label: "Process Graph", icon: Waypoints, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=artifacts&artifact=network", label: "Network", icon: Network, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=artifacts&artifact=modules", label: "Modules & DLLs", icon: HardDrive, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=artifacts&artifact=handles", label: "Handles", icon: HardDrive, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=artifacts&artifact=suspicious_regions", label: "Suspicious Memory", icon: ShieldAlert, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=artifacts&artifact=vads", label: "VADs", icon: HardDrive, requiresCase: true },
+        { to: "/cases/:caseId/memory?tab=network", label: "Network", icon: Network, requiresCase: true },
+        { to: "/cases/:caseId/memory?tab=modules", label: "Modules & DLLs", icon: HardDrive, requiresCase: true },
+        { to: "/cases/:caseId/memory?tab=handles", label: "Handles", icon: HardDrive, requiresCase: true },
+        { to: "/cases/:caseId/memory?tab=suspicious", label: "Suspicious Memory", icon: ShieldAlert, requiresCase: true },
+        { to: "/cases/:caseId/memory?tab=vads", label: "VADs", icon: HardDrive, requiresCase: true },
         { to: "/cases/:caseId/memory?tab=system", label: "System", icon: Gauge, requiresCase: true },
         { to: "/cases/:caseId/memory?tab=runs", label: "Runs", icon: ListChecks, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=raw", label: "Raw Observations", icon: Database, requiresCase: true },
       ],
     },
     {

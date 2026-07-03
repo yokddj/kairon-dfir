@@ -239,30 +239,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
         <section className="rounded-2xl border border-rose-400/30 bg-rose-500/10 p-5 text-sm text-rose-100">{overviewQuery.error.message}</section>
       ) : null}
 
-      <div className="flex flex-wrap gap-2" {...tabsAriaProps} data-testid="memory-tablist">
-        {MEMORY_TABS.map((entry) => {
-          const isActive = entry.key === tab;
-          return (
-            <button
-              key={entry.key}
-              type="button"
-              role="tab"
-              id={`memory-tab-${entry.key}`}
-              aria-selected={isActive}
-              aria-controls={`memory-tabpanel-${entry.key}`}
-              tabIndex={isActive ? 0 : -1}
-              onClick={() => onTabChange(entry.key)}
-              data-testid={entry.testId}
-              className={`rounded-xl px-3 py-2 text-sm ${isActive ? "bg-accent text-abyss" : "border border-line bg-abyss/70 text-muted"}`}
-            >
-              {entry.label}
-            </button>
-          );
-        })}
-      </div>
-
-      <div
-        role="tabpanel"
+      <div role="tabpanel"
         id={`memory-tabpanel-${tab}`}
         aria-labelledby={`memory-tab-${tab}`}
         data-testid={`memory-tabpanel-${tab}`}
@@ -317,28 +294,74 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
           />
         ) : null}
 
-        {tab === "artifacts" ? (
+        {tab === "network" ? (
           <MemoryArtifactsTab
             caseId={caseId}
             runOptions={runOptionsQuery.data ?? null}
             selectedRunId={selectedRunId}
             onSelectRunId={setSelectedRunId}
-            onSelectEntity={(entityId) => {
-              setSelectedEntityId(entityId);
-            }}
-            onJumpToProcesses={(entityId) => {
-              setSelectedEntityId(entityId);
-              onTabChange("processes");
-            }}
-            onJumpToGraph={(entityId) => {
-              setSelectedEntityId(entityId);
-              onTabChange("graph");
-            }}
-            onJumpToTree={(entityId) => {
-              setSelectedEntityId(entityId);
-              onTabChange("graph");
-            }}
+            onSelectEntity={(entityId) => { setSelectedEntityId(entityId); }}
+            onJumpToProcesses={(entityId) => { setSelectedEntityId(entityId); onTabChange("processes"); }}
+            onJumpToGraph={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            onJumpToTree={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
             evidenceId={effectiveEvidenceId}
+            initialSubView="network"
+          />
+        ) : null}
+        {tab === "modules" ? (
+          <MemoryArtifactsTab
+            caseId={caseId}
+            runOptions={runOptionsQuery.data ?? null}
+            selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
+            onSelectEntity={(entityId) => { setSelectedEntityId(entityId); }}
+            onJumpToProcesses={(entityId) => { setSelectedEntityId(entityId); onTabChange("processes"); }}
+            onJumpToGraph={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            onJumpToTree={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            evidenceId={effectiveEvidenceId}
+            initialSubView="modules"
+          />
+        ) : null}
+        {tab === "handles" ? (
+          <MemoryArtifactsTab
+            caseId={caseId}
+            runOptions={runOptionsQuery.data ?? null}
+            selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
+            onSelectEntity={(entityId) => { setSelectedEntityId(entityId); }}
+            onJumpToProcesses={(entityId) => { setSelectedEntityId(entityId); onTabChange("processes"); }}
+            onJumpToGraph={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            onJumpToTree={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            evidenceId={effectiveEvidenceId}
+            initialSubView="handles"
+          />
+        ) : null}
+        {tab === "suspicious" ? (
+          <MemoryArtifactsTab
+            caseId={caseId}
+            runOptions={runOptionsQuery.data ?? null}
+            selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
+            onSelectEntity={(entityId) => { setSelectedEntityId(entityId); }}
+            onJumpToProcesses={(entityId) => { setSelectedEntityId(entityId); onTabChange("processes"); }}
+            onJumpToGraph={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            onJumpToTree={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            evidenceId={effectiveEvidenceId}
+            initialSubView="suspicious"
+          />
+        ) : null}
+        {tab === "vads" ? (
+          <MemoryArtifactsTab
+            caseId={caseId}
+            runOptions={runOptionsQuery.data ?? null}
+            selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
+            onSelectEntity={(entityId) => { setSelectedEntityId(entityId); }}
+            onJumpToProcesses={(entityId) => { setSelectedEntityId(entityId); onTabChange("processes"); }}
+            onJumpToGraph={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            onJumpToTree={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            evidenceId={effectiveEvidenceId}
+            initialSubView="suspicious"
           />
         ) : null}
 
@@ -359,17 +382,6 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
             evidenceId={evidenceIdProp}
             runs={runsQuery.data ?? []}
             landingItems={landingQuery.data?.items ?? []}
-          />
-        ) : null}
-
-        {tab === "raw" ? (
-          <MemoryRawTab
-            caseId={caseId}
-            evidenceId={effectiveEvidenceId || ""}
-            runId={effectiveRunId}
-            runOptions={runOptionsQuery.data ?? null}
-            selectedRunId={selectedRunId}
-            onSelectRunId={setSelectedRunId}
           />
         ) : null}
       </div>

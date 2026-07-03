@@ -202,7 +202,7 @@ describe("MemorySearchTab", () => {
     await screen.findAllByText(/10.0.0.5/);
     fireEvent.click(screen.getAllByText("Open source")[1]);
     expect(actions.onSelectRunId).toHaveBeenCalledWith("run-network");
-    expect(actions.onJumpToTab).toHaveBeenCalledWith("artifacts");
+    expect(actions.onJumpToTab).toHaveBeenCalledWith("network");
   });
 
   it("raw fallback opens raw observations", async () => {
@@ -210,7 +210,7 @@ describe("MemorySearchTab", () => {
     fireEvent.click(screen.getByTestId("memory-search-submit"));
     await screen.findAllByText("powershell.exe");
     fireEvent.click(screen.getAllByText("Raw")[0]);
-    expect(actions.onJumpToTab).toHaveBeenCalledWith("raw");
+    expect(actions.onJumpToTab).toHaveBeenCalledWith("overview");
   });
 
   it("renders precise empty state", async () => {

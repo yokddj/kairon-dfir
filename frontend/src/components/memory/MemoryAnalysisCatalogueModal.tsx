@@ -46,8 +46,9 @@ const PROFILE_SECTION: Record<string, Section> = {
 function familyHref(caseId: string, evidenceId: string, item: MemoryAnalysisCatalogueItem): string {
   if (item.family === "processes") return `/cases/${caseId}/memory/${evidenceId}?tab=processes`;
   if (item.family === "system_info") return `/cases/${caseId}/memory/${evidenceId}?tab=system`;
-  if (item.family === "raw_observations") return `/cases/${caseId}/memory/${evidenceId}?tab=raw`;
-  return `/cases/${caseId}/memory/${evidenceId}?tab=artifacts&artifact=${item.family}`;
+  if (item.family === "raw_observations") return `/cases/${caseId}/memory/${evidenceId}?tab=overview`;
+  const map: Record<string, string> = { network: "network", modules: "modules", handles: "handles", drivers: "modules", kernel_modules: "modules", suspicious_regions: "suspicious" };
+  return `/cases/${caseId}/memory/${evidenceId}?tab=${map[item.family] || "network"}`;
 }
 
 function StatusBadge({

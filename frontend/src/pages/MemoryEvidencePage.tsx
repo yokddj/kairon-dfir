@@ -19,21 +19,16 @@ import type { MemoryScanRun } from "../api/client";
 const ARTIFACT_FAMILY_FROM_TAB: Record<string, string> = {
   processes: "processes",
   system: "system_info",
+  network: "network",
+  modules: "modules",
+  handles: "handles",
+  suspicious: "suspicious_regions",
+  vads: "suspicious_regions",
   raw: "raw_observations",
   artifacts: "artifacts",
 };
 
-function familyForTab(tab: MemoryTab, artifact?: string | null): string {
-  if (tab === "artifacts") {
-    if (artifact === "network") return "network";
-    if (artifact === "modules") return "modules";
-    if (artifact === "handles") return "handles";
-    if (artifact === "drivers") return "drivers";
-    if (artifact === "kernel_modules" || artifact === "kernel-modules") return "kernel_modules";
-    if (artifact === "suspicious_regions" || artifact === "suspicious-regions") return "suspicious_regions";
-    if (artifact === "vads") return "suspicious_regions";
-    return "modules";
-  }
+function familyForTab(tab: MemoryTab, _artifact?: string | null): string {
   return ARTIFACT_FAMILY_FROM_TAB[tab] || "processes";
 }
 
@@ -69,7 +64,18 @@ export default function MemoryEvidencePage() {
     if (legacyTab === "search") navigate(`/cases/${caseId}/search?${params.toString()}`, { replace: true });
     if (legacyTab === "timeline") navigate(`/cases/${caseId}/timeline?${params.toString()}`, { replace: true });
     if (legacyTab === "history") navigate(`/cases/${caseId}/command-history?${params.toString()}`, { replace: true });
-  }, [caseId, evidenceId, navigate, searchParams]);
+    if (legacyTab === "raw") {
+      setSearchParams((current) => { const p = new URLSearchParams(current); p.set("tab", "overview"); return p; }, { replace: true });
+      return;
+    }
+    if (legacyTab === "artifacts") {
+      const artifact = searchParams.get("artifact") || "network";
+      const mapped: Record<string, string> = { network: "network", modules: "modules", handles: "handles", suspicious_regions: "suspicious", "suspicious-regions": "suspicious", vads: "vads" };
+      const newTab = mapped[artifact] || "network";
+      setSearchParams((current) => { const p = new URLSearchParams(current); p.set("tab", newTab); p.delete("artifact"); return p; }, { replace: true });
+      return;
+    }
+  }, [caseId, evidenceId, navigate, searchParams, setSearchParams]);
 
   const tab = useMemo<MemoryTab>(() => {
     const raw = searchParams.get("tab");
