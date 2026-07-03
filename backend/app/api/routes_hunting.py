@@ -9,6 +9,7 @@ from app.models.case import Case
 from app.models.finding import Finding, FindingSeverity, FindingStatus
 from app.models.rule_run import RuleRun, RuleRunStatus
 from app.services.hunting import (
+    assign_finding,
     finding_detail,
     finding_to_dict,
     list_detection_runs,
@@ -17,8 +18,11 @@ from app.services.hunting import (
     rule_to_response,
     run_to_dict,
     suppress_finding,
+    unassign_finding,
+    unsuppress_finding,
     update_finding_status,
     validate_hunting_rule_content,
+    validate_transition,
 )
 
 
@@ -52,6 +56,18 @@ class FindingBulkStatusRequest(BaseModel):
     status: str
     analyst: str = "analyst"
     note: str | None = None
+    reason: str | None = None
+
+
+class FindingUnsuppressRequest(BaseModel):
+    analyst: str = "analyst"
+    reason: str
+    target_status: str = "investigating"
+
+
+class FindingAssignRequest(BaseModel):
+    assignee: str
+    assigned_by: str = "analyst"
 
 
 def _case_or_404(db: Session, case_id: str) -> Case:
@@ -229,11 +245,16 @@ def hunting_get_finding(case_id: str, finding_id: str, db: Session = Depends(get
 @router.patch("/api/cases/{case_id}/findings/{finding_id}")
 def hunting_patch_finding(case_id: str, finding_id: str, payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
     finding = _finding_or_404(db, case_id, finding_id)
-    allowed = {"title", "description", "confidence", "status"}
+    allowed = {"title", "description", "confidence"}
     if "status" in payload:
-        finding = update_finding_status(db, finding, status=str(payload["status"]), analyst=str(payload.get("analyst") or "analyst"), note=payload.get("note"))
+        finding = update_finding_status(db, finding, status=str(payload["status"]), analyst=str(payload.get("analyst") or "analyst"), note=payload.get("note"), reason=payload.get("reason"))
+    if "assigned_to" in payload:
+        if payload["assigned_to"]:
+            finding = assign_finding(db, finding, assignee=str(payload["assigned_to"]), assigned_by=str(payload.get("assigned_by") or "analyst"))
+        else:
+            finding = unassign_finding(db, finding, unassigned_by=str(payload.get("assigned_by") or "analyst"))
     for key, value in payload.items():
-        if key in allowed and key != "status":
+        if key in allowed:
             setattr(finding, key, value)
     db.commit()
     db.refresh(finding)
@@ -256,8 +277,23 @@ def hunting_bulk_status(case_id: str, payload: FindingBulkStatusRequest, db: Ses
     _case_or_404(db, case_id)
     updated = []
     for finding_id in payload.finding_ids:
-        updated.append(finding_to_dict(update_finding_status(db, _finding_or_404(db, case_id, finding_id), status=payload.status, analyst=payload.analyst, note=payload.note)))
+        updated.append(finding_to_dict(update_finding_status(db, _finding_or_404(db, case_id, finding_id), status=payload.status, analyst=payload.analyst, note=payload.note, reason=payload.reason)))
     return {"updated": len(updated), "items": updated}
+
+
+@router.post("/api/cases/{case_id}/findings/{finding_id}/unsuppress")
+def hunting_unsuppress_finding(case_id: str, finding_id: str, payload: FindingUnsuppressRequest, db: Session = Depends(get_db)) -> dict:
+    return finding_to_dict(unsuppress_finding(db, _finding_or_404(db, case_id, finding_id), analyst=payload.analyst, reason=payload.reason, target_status=payload.target_status))
+
+
+@router.post("/api/cases/{case_id}/findings/{finding_id}/assign")
+def hunting_assign_finding(case_id: str, finding_id: str, payload: FindingAssignRequest, db: Session = Depends(get_db)) -> dict:
+    return finding_to_dict(assign_finding(db, _finding_or_404(db, case_id, finding_id), assignee=payload.assignee, assigned_by=payload.assigned_by))
+
+
+@router.post("/api/cases/{case_id}/findings/{finding_id}/unassign")
+def hunting_unassign_finding(case_id: str, finding_id: str, db: Session = Depends(get_db)) -> dict:
+    return finding_to_dict(unassign_finding(db, _finding_or_404(db, case_id, finding_id)))
 
 
 @router.get("/api/cases/{case_id}/detection-runs")
@@ -300,8 +336,7 @@ def hunting_cancel_detection_run(case_id: str, run_id: str, db: Session = Depend
 
 
 def _safe_status(value: str) -> FindingStatus:
-    aliases = {"triaged": "reviewed", "investigating": "open", "accepted_risk": "reviewed", "resolved": "closed", "suppressed": "dismissed"}
     try:
-        return FindingStatus(aliases.get(value, value))
+        return FindingStatus(value)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid finding status")

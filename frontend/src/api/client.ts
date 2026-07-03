@@ -6584,6 +6584,12 @@ export const api = {
     request<Finding>(`/cases/${caseId}/findings/${findingId}/status`, { method: "POST", body: JSON.stringify(payload) }),
   suppressFinding: (caseId: string, findingId: string, payload?: { analyst?: string; reason?: string | null }) =>
     request<Finding>(`/cases/${caseId}/findings/${findingId}/suppress`, { method: "POST", body: JSON.stringify(payload ?? {}) }),
+  unsuppressFinding: (caseId: string, findingId: string, payload: { analyst?: string; reason: string; target_status?: string }) =>
+    request<Finding>(`/cases/${caseId}/findings/${findingId}/unsuppress`, { method: "POST", body: JSON.stringify(payload) }),
+  assignFinding: (caseId: string, findingId: string, payload: { assignee: string; assigned_by?: string }) =>
+    request<Finding>(`/cases/${caseId}/findings/${findingId}/assign`, { method: "POST", body: JSON.stringify(payload) }),
+  unassignFinding: (caseId: string, findingId: string) =>
+    request<Finding>(`/cases/${caseId}/findings/${findingId}/unassign`, { method: "POST", body: JSON.stringify({}) }),
   bulkFindingStatus: (caseId: string, payload: { finding_ids: string[]; status: string; analyst?: string; note?: string | null }) =>
     request<{ updated: number; items: Finding[] }>(`/cases/${caseId}/findings/bulk-status`, { method: "POST", body: JSON.stringify(payload) }),
   runCorrelation: (

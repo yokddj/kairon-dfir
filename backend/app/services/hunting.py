@@ -19,7 +19,7 @@ from app.core.database import utc_now
 from app.core.opensearch import get_events_index, get_opensearch_client, index_exists
 from app.models.case import Case
 from app.models.evidence import Evidence
-from app.models.finding import Finding, FindingSeverity, FindingStatus
+from app.models.finding import Finding, FindingSeverity, FindingStatus, ALLOWED_TRANSITIONS, LEGACY_ALIASES
 from app.models.rule_run import RuleRun, RuleRunStatus
 from app.services.investigation_memory import memory_search_results
 
@@ -493,8 +493,9 @@ def upsert_finding_candidate(db: Session, case_id: str, candidate: FindingCandid
     history_entry = {"timestamp": utc_now().isoformat(), "status": payload["status"].value, "note": "Hunting evaluation applied", "analyst": "system", "previous_status": None}
     if existing:
         previous_status = existing.status.value if hasattr(existing.status, "value") else str(existing.status)
+        preserve = previous_status not in {"new", "open"} and previous_status not in LEGACY_ALIASES
         for key, value in payload.items():
-            if key == "status" and previous_status not in {"new", "open"}:
+            if key == "status" and preserve:
                 continue
             setattr(existing, key, value)
         meta = _finding_meta(existing)
@@ -511,11 +512,19 @@ def upsert_finding_candidate(db: Session, case_id: str, candidate: FindingCandid
     return item, "created"
 
 
-def update_finding_status(db: Session, finding: Finding, *, status: str, analyst: str = "analyst", note: str | None = None) -> Finding:
+def update_finding_status(db: Session, finding: Finding, *, status: str, analyst: str = "analyst", note: str | None = None, reason: str | None = None) -> Finding:
     previous = finding.status.value if hasattr(finding.status, "value") else str(finding.status)
-    finding.status = _status(status)
+    new_status = _status(status)
+    if new_status.value in LEGACY_ALIASES:
+        raise ValueError(f"Legacy aliases are not supported for direct status updates: {status}")
+    validate_transition(previous, new_status.value, reason=reason or note)
+    finding.status = new_status
     meta = _finding_meta(finding)
-    meta.setdefault("status_history", []).append({"timestamp": utc_now().isoformat(), "analyst": analyst, "previous_status": previous, "status": status, "note": note or ""})
+    if new_status == FindingStatus.suppressed:
+        meta["suppression_state"] = "suppressed"
+    elif previous == "suppressed":
+        meta["suppression_state"] = "active"
+    meta.setdefault("status_history", []).append({"timestamp": utc_now().isoformat(), "analyst": analyst, "previous_status": previous, "status": new_status.value, "note": note or ""})
     finding.timeline = _set_meta(finding.timeline, meta)
     db.commit()
     db.refresh(finding)
@@ -524,7 +533,10 @@ def update_finding_status(db: Session, finding: Finding, *, status: str, analyst
 
 def suppress_finding(db: Session, finding: Finding, *, analyst: str = "analyst", reason: str | None = None) -> Finding:
     previous = finding.status.value if hasattr(finding.status, "value") else str(finding.status)
-    finding.status = FindingStatus.dismissed
+    if previous in {"suppressed", "false_positive", "resolved"}:
+        raise ValueError("Cannot suppress: finding is already in a terminal or suppressed state")
+    validate_transition(previous, "suppressed", reason=reason)
+    finding.status = FindingStatus.suppressed
     meta = _finding_meta(finding)
     meta["suppression_state"] = "suppressed"
     meta.setdefault("suppression_history", []).append({"timestamp": utc_now().isoformat(), "analyst": analyst, "reason": reason or "No reason supplied", "previous_status": previous})
@@ -535,8 +547,51 @@ def suppress_finding(db: Session, finding: Finding, *, analyst: str = "analyst",
     return finding
 
 
+def unsuppress_finding(db: Session, finding: Finding, *, analyst: str = "analyst", reason: str | None = None, target_status: str = "investigating") -> Finding:
+    previous = finding.status.value if hasattr(finding.status, "value") else str(finding.status)
+    if previous != "suppressed" and (finding.timeline or [{}])[0].get("payload", {}).get("suppression_state") != "suppressed":
+        raise ValueError("Finding is not suppressed")
+    if not reason:
+        raise ValueError("Reason is required to unsuppress a finding")
+    validate_transition(previous, target_status, reason=reason)
+    finding.status = _status(target_status)
+    meta = _finding_meta(finding)
+    meta["suppression_state"] = "active"
+    meta.setdefault("suppression_history", []).append({"timestamp": utc_now().isoformat(), "analyst": analyst, "reason": reason, "previous_status": previous, "action": "unsuppress"})
+    meta.setdefault("status_history", []).append({"timestamp": utc_now().isoformat(), "analyst": analyst, "previous_status": previous, "status": target_status, "note": f"Unsuppressed: {reason}"})
+    finding.timeline = _set_meta(finding.timeline, meta)
+    db.commit()
+    db.refresh(finding)
+    return finding
+
+
+def assign_finding(db: Session, finding: Finding, *, assignee: str, assigned_by: str = "system") -> Finding:
+    previous_assignee = finding.assigned_to
+    finding.assigned_to = assignee
+    meta = _finding_meta(finding)
+    meta.setdefault("assignment_history", []).append({"timestamp": utc_now().isoformat(), "assigned_to": assignee, "assigned_by": assigned_by, "previous": previous_assignee})
+    finding.timeline = _set_meta(finding.timeline, meta)
+    db.commit()
+    db.refresh(finding)
+    return finding
+
+
+def unassign_finding(db: Session, finding: Finding, *, unassigned_by: str = "system") -> Finding:
+    previous = finding.assigned_to
+    if previous is None:
+        return finding
+    finding.assigned_to = None
+    meta = _finding_meta(finding)
+    meta.setdefault("assignment_history", []).append({"timestamp": utc_now().isoformat(), "assigned_to": None, "assigned_by": unassigned_by, "previous": previous})
+    finding.timeline = _set_meta(finding.timeline, meta)
+    db.commit()
+    db.refresh(finding)
+    return finding
+
+
 def finding_detail(finding: Finding) -> dict[str, Any]:
     meta = _finding_meta(finding)
+    current_status = finding.status.value if hasattr(finding.status, "value") else str(finding.status)
     return {
         "finding": finding_to_dict(finding),
         "rule": meta.get("rule") or {"rule_id": finding.finding_type, "version": finding.correlation_version},
@@ -553,6 +608,8 @@ def finding_detail(finding: Finding) -> dict[str, Any]:
         "navigation_targets": meta.get("navigation_targets") or [],
         "status_history": meta.get("status_history") or [],
         "suppression_history": meta.get("suppression_history") or [],
+        "assignment_history": meta.get("assignment_history") or [],
+        "available_transitions": sorted(ALLOWED_TRANSITIONS.get(current_status, set())),
         "raw_references": meta.get("raw_references") or [],
     }
 
@@ -720,7 +777,7 @@ def finding_to_dict(item: Finding) -> dict[str, Any]:
         "deduplication_key": item.fingerprint,
         "suppression_state": _finding_meta(item).get("suppression_state", "active"),
         "analyst_notes": None,
-        "assigned_to": None,
+        "assigned_to": item.assigned_to,
         "navigation_targets": _finding_meta(item).get("navigation_targets") or [],
         "evidence_references": _finding_meta(item).get("evidence_references") or [],
         "matched_fields": _finding_meta(item).get("matched_fields") or {},
@@ -1185,11 +1242,22 @@ def _severity(value: str) -> FindingSeverity:
 
 
 def _status(value: str) -> FindingStatus:
-    aliases = {"triaged": "reviewed", "investigating": "open", "accepted_risk": "reviewed", "resolved": "closed", "suppressed": "dismissed"}
     try:
-        return FindingStatus(aliases.get(value, value))
+        return FindingStatus(value)
     except Exception:
         return FindingStatus.new
+
+
+def validate_transition(current: str, target: str, *, reason: str | None = None) -> None:
+    if current == target:
+        return
+    if target in ALLOWED_TRANSITIONS.get(current, set()):
+        return
+    closed_states = ALLOWED_TRANSITIONS.get(current, set())
+    msg = f"Invalid transition: {current} -> {target}"
+    if reason and current in {"false_positive", "accepted_risk", "resolved", "suppressed"}:
+        msg = f"Reopen requires explicit reason: {current} -> {target}"
+    raise ValueError(msg)
 
 
 def _legacy_risk(severity: str, confidence: str) -> int:

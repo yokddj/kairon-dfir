@@ -17,12 +17,33 @@ class FindingSeverity(str, enum.Enum):
 
 class FindingStatus(str, enum.Enum):
     new = "new"
+    triaged = "triaged"
+    investigating = "investigating"
+    confirmed = "confirmed"
+    false_positive = "false_positive"
+    accepted_risk = "accepted_risk"
+    resolved = "resolved"
+    suppressed = "suppressed"
     reviewed = "reviewed"
     dismissed = "dismissed"
     open = "open"
-    confirmed = "confirmed"
-    false_positive = "false_positive"
     closed = "closed"
+
+
+ALLOWED_TRANSITIONS: dict[str, set[str]] = {
+    "new": {"triaged", "investigating", "false_positive", "suppressed"},
+    "triaged": {"investigating", "confirmed", "false_positive", "accepted_risk", "suppressed"},
+    "investigating": {"confirmed", "false_positive", "accepted_risk", "resolved", "suppressed"},
+    "confirmed": {"resolved", "accepted_risk", "suppressed"},
+    "false_positive": {"triaged", "investigating"},
+    "accepted_risk": {"investigating", "resolved"},
+    "resolved": {"investigating"},
+    "suppressed": {"triaged", "investigating"},
+}
+
+ACTIVE_STATUSES = frozenset({"new", "triaged", "investigating", "confirmed"})
+TERMINAL_STATUSES = frozenset({"false_positive", "accepted_risk", "resolved", "suppressed"})
+LEGACY_ALIASES = {"reviewed", "dismissed", "open", "closed"}
 
 
 class Finding(UUIDMixin, TimestampMixin, Base):
@@ -63,5 +84,6 @@ class Finding(UUIDMixin, TimestampMixin, Base):
     data_quality: Mapped[list] = mapped_column(JSONVariant, default=list, nullable=False)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     occurrence_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    assigned_to: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
 
     case = relationship("Case", back_populates="findings")

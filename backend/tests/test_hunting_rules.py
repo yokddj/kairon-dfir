@@ -276,10 +276,11 @@ def test_suppression_and_status_history_preserved():
     db = Db()
     evaluate_hunting_rules(db, case_id="case-1", rule_id="hunting.suspicious_powershell_command_line", artifact_provider=lambda: [art()], apply=True)
     finding = db.findings[0]
-    update_finding_status(db, finding, status="confirmed", note="reviewed")
+    update_finding_status(db, finding, status="triaged", note="triaged")
+    update_finding_status(db, finding, status="confirmed", note="confirmed after investigation")
     suppress_finding(db, finding, reason="known admin script")
     detail = finding_detail(finding)
-    assert len(detail["status_history"]) >= 2
+    assert len(detail["status_history"]) >= 3
     assert detail["suppression_history"][0]["reason"] == "known admin script"
 
 

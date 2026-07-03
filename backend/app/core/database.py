@@ -209,6 +209,36 @@ def _ensure_compatible_schema() -> None:
                     ) THEN
                       ALTER TYPE findingstatus ADD VALUE 'dismissed';
                     END IF;
+                    IF NOT EXISTS (
+                      SELECT 1 FROM pg_enum
+                      WHERE enumtypid = 'findingstatus'::regtype AND enumlabel = 'triaged'
+                    ) THEN
+                      ALTER TYPE findingstatus ADD VALUE 'triaged';
+                    END IF;
+                    IF NOT EXISTS (
+                      SELECT 1 FROM pg_enum
+                      WHERE enumtypid = 'findingstatus'::regtype AND enumlabel = 'investigating'
+                    ) THEN
+                      ALTER TYPE findingstatus ADD VALUE 'investigating';
+                    END IF;
+                    IF NOT EXISTS (
+                      SELECT 1 FROM pg_enum
+                      WHERE enumtypid = 'findingstatus'::regtype AND enumlabel = 'accepted_risk'
+                    ) THEN
+                      ALTER TYPE findingstatus ADD VALUE 'accepted_risk';
+                    END IF;
+                    IF NOT EXISTS (
+                      SELECT 1 FROM pg_enum
+                      WHERE enumtypid = 'findingstatus'::regtype AND enumlabel = 'resolved'
+                    ) THEN
+                      ALTER TYPE findingstatus ADD VALUE 'resolved';
+                    END IF;
+                    IF NOT EXISTS (
+                      SELECT 1 FROM pg_enum
+                      WHERE enumtypid = 'findingstatus'::regtype AND enumlabel = 'suppressed'
+                    ) THEN
+                      ALTER TYPE findingstatus ADD VALUE 'suppressed';
+                    END IF;
                   END IF;
                 END
                 $$;
@@ -406,6 +436,7 @@ def _ensure_compatible_schema() -> None:
                 "data_quality": "JSONB NOT NULL DEFAULT '[]'::jsonb",
                 "last_seen_at": "TIMESTAMP WITH TIME ZONE",
                 "occurrence_count": "INTEGER NOT NULL DEFAULT 1",
+                "assigned_to": "VARCHAR(128)",
             }
             for column_name, column_type in additions.items():
                 if column_name not in finding_columns:
