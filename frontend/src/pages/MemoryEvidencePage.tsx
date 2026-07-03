@@ -23,7 +23,7 @@ const ARTIFACT_FAMILY_FROM_TAB: Record<string, string> = {
   modules: "modules",
   handles: "handles",
   suspicious: "suspicious_regions",
-  vads: "suspicious_regions",
+  vads: "vads",
   raw: "raw_observations",
   artifacts: "artifacts",
 };

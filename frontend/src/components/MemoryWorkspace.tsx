@@ -361,7 +361,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
             onJumpToGraph={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
             onJumpToTree={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
             evidenceId={effectiveEvidenceId}
-            initialSubView="suspicious"
+            initialSubView="vads"
           />
         ) : null}
 
