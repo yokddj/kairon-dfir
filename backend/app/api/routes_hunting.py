@@ -274,7 +274,7 @@ def hunting_detection_run(case_id: str, run_id: str, db: Session = Depends(get_d
     if not run or run.case_id != case_id:
         raise HTTPException(status_code=404, detail="Detection run not found")
     result = run_to_dict(run)
-    result["job_id"] = run.hunting_job_id
+    result["job_id"] = (run.metadata_json or {}).get("hunting_job_id")
     return result
 
 
@@ -294,7 +294,7 @@ def hunting_cancel_detection_run(case_id: str, run_id: str, db: Session = Depend
     db.commit()
     db.refresh(run)
     result = run_to_dict(run)
-    result["job_id"] = run.hunting_job_id
+    result["job_id"] = (run.metadata_json or {}).get("hunting_job_id")
     result["cancelled"] = True
     return result
 

@@ -558,7 +558,7 @@ def enqueue_hunting_evaluation(*, case_id: str, evidence_id: str | None = None, 
         if existing:
             return {
                 "run_id": existing.id,
-                "job_id": existing.hunting_job_id,
+                "job_id": (existing.metadata_json or {}).get("job_id"),
                 "status": existing.status.value,
                 "mode": "apply" if apply else "dry_run",
                 "deduplicated": True,
@@ -597,8 +597,7 @@ def enqueue_hunting_evaluation(*, case_id: str, evidence_id: str | None = None, 
     with SessionLocal() as db:
         run = db.get(RuleRun, run_id)
         if run:
-            run.hunting_job_id = job.id
-            run.metadata_json = {**(run.metadata_json or {}), "job_id": job.id, "timeout_seconds": timeout}
+            run.metadata_json = {**(run.metadata_json or {}), "job_id": job.id, "hunting_job_id": job.id, "timeout_seconds": timeout}
             db.commit()
 
     log_activity(

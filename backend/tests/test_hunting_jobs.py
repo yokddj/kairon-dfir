@@ -288,7 +288,7 @@ def test_cli_direct_mode_still_works():
 def test_detection_run_has_job_id():
     db = Db()
     run = RuleRun(id="run-job-1", case_id="case-1", engine="hunting-v1", status=RuleRunStatus.completed, scope="case", total_rules=1, processed_rules=1, current_phase="completed_with_findings", metadata_json={"hunting": True, "apply": False})
-    run.hunting_job_id = "job-test-123"
+    run.metadata_json = {"hunting": True, "apply": False, "hunting_job_id": "job-test-123"}
     db.runs.append(run)
 
     from app.services.hunting import run_to_dict
