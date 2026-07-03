@@ -231,6 +231,21 @@ def test_command_network_proximity_requires_real_timestamps():
     assert eval_command_network_temporal_proximity(r, [cmd, art(artifact_id="n2", family="network", timestamp=None)]) == []
 
 
+def test_command_network_proximity_requires_distinct_process_linked_artifacts():
+    r = rule("command_network_temporal_proximity")
+    self_match = art(
+        artifact_id="event-1",
+        family="network",
+        command_line="whoami.exe",
+        process_entity_id=None,
+        pid=None,
+        process_name="whoami.exe",
+        timestamp="2024-01-01T00:00:00+00:00",
+        fields={"remote_address": "8.8.8.8"},
+    )
+    assert eval_command_network_temporal_proximity(r, [self_match]) == []
+
+
 def test_evidence_inconsistency_and_pid_reuse():
     r = rule("evidence_inconsistency")
     a = art(process_entity_id="proc-1", process_name="a.exe")
