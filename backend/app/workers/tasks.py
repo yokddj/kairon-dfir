@@ -600,8 +600,10 @@ def enqueue_hunting_evaluation(*, case_id: str, evidence_id: str | None = None, 
             run.metadata_json = {**(run.metadata_json or {}), "job_id": job.id, "hunting_job_id": job.id, "timeout_seconds": timeout}
             db.commit()
 
-    log_activity(
-        activity_type="hunting_evaluation_queued",
+    with SessionLocal() as activity_db:
+        log_activity(
+            activity_db,
+            activity_type="hunting_evaluation_queued",
         title="Hunting evaluation enqueued",
         message=f"{'Apply' if apply else 'Dry-run'} evaluation of {len(rule_ids)} rule(s)",
         severity="info",
@@ -9989,7 +9991,7 @@ def run_hunting_evaluation(run_id: str) -> dict:
             return {"status": "missing", "error": "Rule run not found"}
         if run.cancel_requested:
             _update_rule_run(db, run, status=RuleRunStatus.cancelled, finished_at=utc_now().isoformat(), current_phase="cancelled", last_error="Cancelled before execution.")
-            log_activity(activity_type="hunting_evaluation_cancelled", title="Hunting evaluation cancelled", message="Cancelled before execution.", severity="info", case_id=run.case_id, evidence_id=run.evidence_id, actor="system", metadata={"run_id": run_id})
+            log_activity(db, activity_type="hunting_evaluation_cancelled", title="Hunting evaluation cancelled", message="Cancelled before execution.", severity="info", case_id=run.case_id, evidence_id=run.evidence_id, actor="system", metadata={"run_id": run_id})
             return {"status": "cancelled"}
 
         meta = run.metadata_json or {}
@@ -10009,6 +10011,7 @@ def run_hunting_evaluation(run_id: str) -> dict:
             last_error=None,
         )
         log_activity(
+            db,
             activity_type="hunting_evaluation_started",
             title="Hunting evaluation started",
             message=f"{'Apply' if apply else 'Dry-run'} evaluation of {len(rule_ids)} rule(s)",
@@ -10078,7 +10081,7 @@ def run_hunting_evaluation(run_id: str) -> dict:
             if final_run:
                 if final_run.cancel_requested:
                     _update_rule_run(final_db, final_run, status=RuleRunStatus.cancelled, current_phase="cancelled", finished_at=utc_now().isoformat(), last_error="Cancelled during evaluation.")
-                    log_activity(activity_type="hunting_evaluation_cancelled", title="Hunting evaluation cancelled", message="Cancelled during evaluation.", severity="info", case_id=run.case_id, evidence_id=run.evidence_id, actor="system", metadata={"run_id": run_id})
+                    log_activity(final_db, activity_type="hunting_evaluation_cancelled", title="Hunting evaluation cancelled", message="Cancelled during evaluation.", severity="info", case_id=run.case_id, evidence_id=run.evidence_id, actor="system", metadata={"run_id": run_id})
                 else:
                     _update_rule_run(
                         final_db, final_run,
@@ -10102,7 +10105,7 @@ def run_hunting_evaluation(run_id: str) -> dict:
                 })
                 final_run.metadata_json = fin_meta
                 final_db.commit()
-                log_activity(activity_type="hunting_evaluation_completed", title="Hunting evaluation completed", message=f"Created {result.get('findings_created',0)}, updated {result.get('findings_updated',0)}", severity="info", case_id=run.case_id, evidence_id=run.evidence_id, actor="system", metadata={"run_id": run_id, "result": {"status": result.get("status")}})
+                log_activity(final_db, activity_type="hunting_evaluation_completed", title="Hunting evaluation completed", message=f"Created {result.get('findings_created',0)}, updated {result.get('findings_updated',0)}", severity="info", case_id=run.case_id, evidence_id=run.evidence_id, actor="system", metadata={"run_id": run_id, "result": {"status": result.get("status")}})
         finally:
             final_db.close()
 
@@ -10113,9 +10116,9 @@ def run_hunting_evaluation(run_id: str) -> dict:
         try:
             err_run = err_db.get(RuleRun, run_id)
             if err_run:
-                import traceback as tb
-                _update_rule_run(err_db, err_run, status=RuleRunStatus.failed, finished_at=utc_now().isoformat(), current_phase="failed", last_error=tb.format_exc()[:2048])
-                log_activity(activity_type="hunting_evaluation_failed", title="Hunting evaluation failed", message="Evaluation raised an unhandled exception.", severity="error", case_id=err_run.case_id, evidence_id=err_run.evidence_id, actor="system", metadata={"run_id": run_id})
+                import traceback as tb_local
+                _update_rule_run(err_db, err_run, status=RuleRunStatus.failed, finished_at=utc_now().isoformat(), current_phase="failed", last_error=tb_local.format_exc()[:2048])
+                log_activity(err_db, activity_type="hunting_evaluation_failed", title="Hunting evaluation failed", message="Evaluation raised an unhandled exception.", severity="error", case_id=err_run.case_id, evidence_id=err_run.evidence_id, actor="system", metadata={"run_id": run_id})
         finally:
             err_db.close()
         return {"status": "failed", "error": "Evaluation raised an unhandled exception."}
