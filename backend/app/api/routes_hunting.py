@@ -104,16 +104,24 @@ def case_rules(
     _case_or_404(db, case_id)
     filters = {"status": status_filter, "category": category, "severity": severity, "artifact_family": artifact_family, "source_category": source_category, "enabled": enabled, "tag": tag}
     rules = list_hunting_rules({k: v for k, v in filters.items() if v is not None})
-    counts = dict(
-        db.query(Finding.finding_type, Finding.id)
-        .filter(Finding.case_id == case_id, Finding.finding_type.in_([r["rule_id"] for r in rules] or ["__none__"]))
-        .all()
-    ) if False else {}
     for rule in rules:
         rule["findings_count"] = db.query(Finding).filter(Finding.case_id == case_id, Finding.finding_type == rule["rule_id"]).count()
         last_run = db.query(RuleRun).filter(RuleRun.case_id == case_id, RuleRun.engine == "hunting-v1").order_by(RuleRun.created_at.desc()).first()
         rule["last_evaluated"] = last_run.created_at.isoformat() if last_run else None
     return {"items": rules, "total": len(rules)}
+
+
+@router.get("/api/cases/{case_id}/rules/quality")
+def hunting_rules_quality(
+    case_id: str,
+    rule_id: str | None = None,
+    rule_version: str | None = None,
+    db: Session = Depends(get_db),
+) -> dict:
+    _case_or_404(db, case_id)
+    from app.services.rule_quality import compute_rule_quality_metrics
+    metrics = compute_rule_quality_metrics(db, case_id=case_id, rule_id=rule_id, rule_version=rule_version)
+    return {"items": metrics, "total": len(metrics)}
 
 
 @router.get("/api/cases/{case_id}/rules/{rule_id}")
@@ -349,19 +357,6 @@ def hunting_resolve_finding_indicators(case_id: str, payload: FindingIndicatorRe
         if str(entity.get("evidence_id") or "").startswith(case_id):
             entity["evidence_id"] = None
     return resolve_finding_indicators(db, case_id=case_id, entities=entities, visibility=payload.visibility)
-
-
-@router.get("/api/cases/{case_id}/rules/quality")
-def hunting_rules_quality(
-    case_id: str,
-    rule_id: str | None = None,
-    rule_version: str | None = None,
-    db: Session = Depends(get_db),
-) -> dict:
-    _case_or_404(db, case_id)
-    from app.services.rule_quality import compute_rule_quality_metrics
-    metrics = compute_rule_quality_metrics(db, case_id=case_id, rule_id=rule_id, rule_version=rule_version)
-    return {"items": metrics, "total": len(metrics)}
 
 
 @router.get("/api/rules/hunting/quality")
