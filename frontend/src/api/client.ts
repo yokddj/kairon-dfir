@@ -4686,6 +4686,11 @@ export type MemoryArtifactOverview = {
     active_run: MemoryActiveRun | null;
     analysis_state: MemoryFamilyState;
   };
+  vads: {
+    count: number;
+    active_run: MemoryActiveRun | null;
+    analysis_state: MemoryFamilyState;
+  };
   facets: Record<string, unknown>;
   normalization_version: string;
 };

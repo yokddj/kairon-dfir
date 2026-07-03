@@ -40,7 +40,8 @@ type SubView =
   | "handles"
   | "drivers"
   | "kernel"
-  | "suspicious";
+  | "suspicious"
+  | "vads";
 
 const SUBVIEWS: ReadonlyArray<{ key: SubView; label: string; testId: string; description: string; family: string }> = [
   { key: "network", label: "Network", testId: "memory-artifacts-subview-network", description: "TCP/UDP endpoints observed in memory.", family: "network" },
@@ -49,6 +50,7 @@ const SUBVIEWS: ReadonlyArray<{ key: SubView; label: string; testId: string; des
   { key: "drivers", label: "Drivers", testId: "memory-artifacts-subview-drivers", description: "Loaded drivers (driverscan, scan-only).", family: "drivers" },
   { key: "kernel", label: "Kernel modules", testId: "memory-artifacts-subview-kernel", description: "Kernel modules (windows.modules).", family: "kernel_modules" },
   { key: "suspicious", label: "Suspicious regions", testId: "memory-artifacts-subview-suspicious", description: "Indicators (windows.malfind), needs review.", family: "suspicious_regions" },
+  { key: "vads", label: "VADs", testId: "memory-artifacts-subview-vads", description: "Virtual Address Descriptors (windows.vadinfo).", family: "vads" },
 ];
 
 function reported(value: unknown): string {
@@ -610,6 +612,70 @@ function SuspiciousTable({ items, onModal, onOpen, onGraph, onTree }: {
   );
 }
 
+function VadsTable({ items, onModal, onOpen, onGraph, onTree }: {
+  items: Array<Record<string, unknown> & { document_id: string }>;
+  onModal: (id: string) => void;
+  onOpen: (id: string) => void;
+  onGraph: (id: string) => void;
+  onTree: (id: string) => void;
+}) {
+  if (!items.length) {
+    return <p className="rounded-2xl border border-line bg-abyss/40 p-3 text-xs text-muted" data-testid="memory-artifacts-vads-empty">No VAD observations were normalized for this Evidence.</p>;
+  }
+  return (
+    <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
+      <table className="min-w-[1100px] w-full divide-y divide-line text-xs" data-testid="memory-artifacts-vads-table">
+        <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted">
+          <tr>
+            <th className="px-2 py-1">PID</th>
+            <th className="px-2 py-1">Process</th>
+            <th className="px-2 py-1">Start</th>
+            <th className="px-2 py-1">End</th>
+            <th className="px-2 py-1">Protection</th>
+            <th className="px-2 py-1">Tag</th>
+            <th className="px-2 py-1">File</th>
+            <th className="px-2 py-1">Private</th>
+            <th className="px-2 py-1">Actions</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-line">
+          {items.map((row: any) => (
+            <tr key={row.document_id} data-testid="memory-artifacts-vads-row">
+              <td className="px-2 py-1 font-mono">{row.pid}</td>
+              <td className="px-2 py-1">
+                <button
+                  type="button"
+                  className="text-accent underline"
+                  onClick={() => onModal(row.process_entity_id || `pid:${row.pid}`)}
+                  data-testid="memory-artifacts-vads-process"
+                >
+                  {reported(row.process_name)}
+                </button>
+              </td>
+              <td className="px-2 py-1 font-mono">{reported(row.start_address)}</td>
+              <td className="px-2 py-1 font-mono">{reported(row.end_address)}</td>
+              <td className="px-2 py-1 font-mono">{reported(row.protection)}</td>
+              <td className="px-2 py-1">{reported(row.tag)}</td>
+              <td className="px-2 py-1 max-w-[180px] truncate font-mono" title={String(row.file_object || "")}>{reported(row.file_object)}</td>
+              <td className="px-2 py-1">{row.is_private ? "Yes" : "No"}</td>
+              <td className="px-2 py-1">
+                <ProcessActions
+                  entity={{ pid: row.pid, name: row.process_name, process_entity_id: row.process_entity_id }}
+                  onOpen={onOpen}
+                  onGraph={onGraph}
+                  onTree={onTree}
+                  onModal={onModal}
+                  testId="memory-artifacts-vads-actions"
+                />
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 export function MemoryArtifactsTab({
   caseId,
   runOptions,
@@ -689,6 +755,12 @@ export function MemoryArtifactsTab({
     enabled: Boolean(evidenceId) && subView === "suspicious",
     refetchOnWindowFocus: false,
   });
+  const vadsActiveQuery = useQuery({
+    queryKey: ["memory-active", caseId, evidenceId, "vads", page],
+    queryFn: () => api.getMemoryActiveResult(caseId, evidenceId || "", "vads", undefined),
+    enabled: Boolean(evidenceId) && subView === "vads",
+    refetchOnWindowFocus: false,
+  });
 
   // Build the per-family list params using the per-family active
   // run id.  The list endpoints still accept a ``run_id`` query
@@ -702,6 +774,7 @@ export function MemoryArtifactsTab({
     else if (subView === "drivers") activeRunId = driversActiveQuery.data?.active_run?.id;
     else if (subView === "kernel") activeRunId = kernelActiveQuery.data?.active_run?.id;
     else if (subView === "suspicious") activeRunId = suspiciousActiveQuery.data?.active_run?.id;
+    else if (subView === "vads") activeRunId = vadsActiveQuery.data?.active_run?.id;
     const params: Record<string, unknown> = {
       run_id: activeRunId,
       page,
@@ -715,7 +788,7 @@ export function MemoryArtifactsTab({
     return params;
   }, [effectiveRunId, subView, evidenceId, page, filter, pidFilter, objectTypeFilter, reviewFilter,
       networkActiveQuery.data, modulesActiveQuery.data, handlesActiveQuery.data,
-      driversActiveQuery.data, kernelActiveQuery.data, suspiciousActiveQuery.data]);
+      driversActiveQuery.data, kernelActiveQuery.data, suspiciousActiveQuery.data, vadsActiveQuery.data]);
 
   const networkQuery = useQuery<MemoryArtifactList>({
     queryKey: ["memory-artifact-network", caseId, listParams],
@@ -751,6 +824,12 @@ export function MemoryArtifactsTab({
     queryKey: ["memory-artifact-suspicious", caseId, listParams],
     queryFn: () => api.getMemorySuspiciousRegions(caseId, listParams as never),
     enabled: subView === "suspicious",
+    refetchOnWindowFocus: false,
+  });
+  const vadsQuery = useQuery<MemoryArtifactList>({
+    queryKey: ["memory-artifact-vads", caseId, listParams],
+    queryFn: () => api.getMemoryVads(caseId, listParams as never),
+    enabled: subView === "vads",
     refetchOnWindowFocus: false,
   });
 
@@ -860,6 +939,11 @@ export function MemoryArtifactsTab({
                 testId="overview-suspicious"
                 familyValue={overview.suspicious_regions}
               />
+              <FamilyCountCard
+                label="VADs"
+                testId="overview-vads"
+                familyValue={overview.vads}
+              />
             </>
           ) : (
             <>
@@ -869,6 +953,7 @@ export function MemoryArtifactsTab({
               <NotAnalyzedCard label="Handles" testId="overview-handles" />
               <NotAnalyzedCard label="Drivers" testId="overview-drivers" />
               <NotAnalyzedCard label="Suspicious regions" testId="overview-suspicious" />
+              <NotAnalyzedCard label="VADs" testId="overview-vads" />
             </>
           )}
         </div>
@@ -981,7 +1066,8 @@ export function MemoryArtifactsTab({
                 : subView === "handles" ? handlesQuery.data
                 : subView === "drivers" ? driversQuery.data
                 : subView === "kernel" ? kernelQuery.data
-                : suspiciousQuery.data,
+                : subView === "suspicious" ? suspiciousQuery.data
+                : vadsQuery.data,
             )}
             onPage={setPage}
             testId="memory-artifacts-pagination"
@@ -995,8 +1081,17 @@ export function MemoryArtifactsTab({
           isLoading={inspectQuery.isLoading}
           error={inspectQuery.error instanceof Error ? inspectQuery.error : null}
           onClose={() => setInspect(null)}
-        />
-      ) : null}
+            />
+          ) : null}
+          {subView === "vads" ? (
+            <VadsTable
+              items={vadsQuery.data?.items || []}
+              onModal={(id) => setInspect({ type: "memory_vad", id })}
+              onOpen={jumpToEntity}
+              onGraph={onJumpToGraph}
+              onTree={onJumpToTree}
+            />
+          ) : null}
     </div>
   );
 }
