@@ -544,6 +544,102 @@ def enqueue_rules_run(*, case_id: str, engines: list[str], rule_ids: list[str], 
     return job.id
 
 
+def enqueue_hunting_evaluation(*, case_id: str, evidence_id: str | None = None, rule_id: str | None = None, process_entity_id: str | None = None, artifact_family: str | None = None, apply: bool = False, include_disabled: bool = False) -> dict:
+    from app.core.database import utc_now
+    from app.services.hunting import HUNTING_ENGINE_VERSION, load_hunting_rules
+
+    rule_ids = [rule_id] if rule_id else [r.rule_id for r in load_hunting_rules() if include_disabled or r.status != "disabled"]
+    if artifact_family:
+        rules = load_hunting_rules()
+        rule_ids = [r.rule_id for r in rules if include_disabled or r.status != "disabled" and artifact_family in r.artifact_families]
+
+    with SessionLocal() as db:
+        existing = _find_active_hunting_run(db, case_id, evidence_id, rule_ids, apply)
+        if existing:
+            return {
+                "run_id": existing.id,
+                "job_id": existing.hunting_job_id,
+                "status": existing.status.value,
+                "mode": "apply" if apply else "dry_run",
+                "deduplicated": True,
+            }
+        run = RuleRun(
+            case_id=case_id,
+            evidence_id=evidence_id,
+            engine="hunting-v1",
+            status=RuleRunStatus.queued,
+            scope="evidence" if evidence_id else "case",
+            total_rules=len(rule_ids),
+            processed_rules=0,
+            current_phase="queued",
+            metadata_json={
+                "hunting": True,
+                "apply": apply,
+                "rules": rule_ids,
+                "process_entity_id": process_entity_id,
+                "artifact_family": artifact_family,
+                "scope": {"case_id": case_id, "evidence_id": evidence_id, "process_entity_id": process_entity_id, "artifact_family": artifact_family},
+            },
+        )
+        db.add(run)
+        db.commit()
+        db.refresh(run)
+        run_id = run.id
+        run.metadata_json["_enqueue_ts"] = utc_now().isoformat()
+        db.commit()
+
+    timeout = settings.hunting_evaluation_timeout_seconds
+    job = rules_queue.enqueue(
+        "app.workers.tasks.run_hunting_evaluation",
+        run_id,
+        job_timeout=timeout,
+    )
+    with SessionLocal() as db:
+        run = db.get(RuleRun, run_id)
+        if run:
+            run.hunting_job_id = job.id
+            run.metadata_json = {**(run.metadata_json or {}), "job_id": job.id, "timeout_seconds": timeout}
+            db.commit()
+
+    log_activity(
+        activity_type="hunting_evaluation_queued",
+        title="Hunting evaluation enqueued",
+        message=f"{'Apply' if apply else 'Dry-run'} evaluation of {len(rule_ids)} rule(s)",
+        severity="info",
+        case_id=case_id,
+        evidence_id=evidence_id,
+        actor="system",
+        metadata={"run_id": run_id, "job_id": job.id, "apply": apply, "rule_count": len(rule_ids)},
+    )
+    return {"run_id": run_id, "job_id": job.id, "status": "queued", "mode": "apply" if apply else "dry_run", "deduplicated": False}
+
+
+def _find_active_hunting_run(db: Session, case_id: str, evidence_id: str | None, rule_ids: list[str], apply: bool) -> RuleRun | None:
+    active_statuses = [RuleRunStatus.queued, RuleRunStatus.running]
+    query = (
+        db.query(RuleRun)
+        .filter(
+            RuleRun.case_id == case_id,
+            RuleRun.engine == "hunting-v1",
+            RuleRun.status.in_(active_statuses),
+        )
+        .order_by(RuleRun.created_at.desc())
+    )
+    for run in query.all():
+        meta = run.metadata_json or {}
+        if meta.get("apply") != apply:
+            continue
+        if evidence_id and run.evidence_id not in (None, evidence_id):
+            continue
+        if not evidence_id and run.evidence_id is not None:
+            continue
+        existing_rule_ids = sorted(meta.get("rules") or [])
+        if sorted(rule_ids) != existing_rule_ids:
+            continue
+        return run
+    return None
+
+
 def enqueue_semi_auto_analysis(job_run_id: str) -> str:
     job = analysis_queue.enqueue("app.workers.tasks.run_case_semi_auto_analysis", job_run_id, job_timeout=3600)
     with SessionLocal() as db:
@@ -9884,3 +9980,146 @@ def run_case_semi_auto_analysis(job_run_id: str) -> None:
             db.commit()
     finally:
         db.close()
+
+
+def run_hunting_evaluation(run_id: str) -> dict:
+    db: Session = SessionLocal()
+    try:
+        run = db.get(RuleRun, run_id)
+        if not run or run.engine != "hunting-v1":
+            return {"status": "missing", "error": "Rule run not found"}
+        if run.cancel_requested:
+            _update_rule_run(db, run, status=RuleRunStatus.cancelled, finished_at=utc_now().isoformat(), current_phase="cancelled", last_error="Cancelled before execution.")
+            log_activity(activity_type="hunting_evaluation_cancelled", title="Hunting evaluation cancelled", message="Cancelled before execution.", severity="info", case_id=run.case_id, evidence_id=run.evidence_id, actor="system", metadata={"run_id": run_id})
+            return {"status": "cancelled"}
+
+        meta = run.metadata_json or {}
+        apply = meta.get("apply", False)
+        rule_ids = meta.get("rules", [])
+        rule_id = rule_ids[0] if len(rule_ids) == 1 else None
+        evidence_id = run.evidence_id
+
+        _update_rule_run(
+            db, run,
+            status=RuleRunStatus.running,
+            started_at=run.started_at or utc_now().isoformat(),
+            scope=run.scope or ("evidence" if evidence_id else "case"),
+            total_rules=len(rule_ids),
+            processed_rules=0,
+            current_phase="starting",
+            last_error=None,
+        )
+        log_activity(
+            activity_type="hunting_evaluation_started",
+            title="Hunting evaluation started",
+            message=f"{'Apply' if apply else 'Dry-run'} evaluation of {len(rule_ids)} rule(s)",
+            severity="info", case_id=run.case_id, evidence_id=run.evidence_id,
+            actor="system", metadata={"run_id": run_id},
+        )
+        db.close()
+        db = None
+
+        from app.core.database import SessionLocal as SL_local
+
+        def progress_cb(phase: str, extra: dict | None = None) -> None:
+            nonlocal db
+            if not db:
+                db = SL_local()
+            db_run = db.get(RuleRun, run_id)
+            if not db_run:
+                return
+            fields: dict = {"current_phase": phase, "heartbeat_at": utc_now().isoformat()}
+            if extra:
+                if extra.get("rules_completed") is not None:
+                    fields["processed_rules"] = extra["rules_completed"]
+                if extra.get("artifacts_scanned") is not None:
+                    fields["scanned_events"] = extra["artifacts_scanned"]
+                if extra.get("findings_created") is not None:
+                    fields["created_detections"] = extra["findings_created"]
+                if extra.get("findings_updated") is not None:
+                    fields["duplicates"] = extra["findings_updated"]
+                if extra.get("candidate_groups") is not None:
+                    fields["matched"] = extra["candidate_groups"]
+                meta_update = {}
+                for key in ("findings_suppressed", "rules_insufficient_data", "current_rule_id"):
+                    if extra.get(key) is not None:
+                        meta_update[key] = extra[key]
+                if extra.get("current_rule_id") and phase:
+                    fields["current_phase"] = f"{phase}:{extra['current_rule_id']}"
+                if meta_update:
+                    current_meta = dict(db_run.metadata_json or {})
+                    current_meta.update(meta_update)
+                    db_run.metadata_json = current_meta
+            _update_rule_run(db, db_run, **fields)
+            db.commit()
+            db = None
+
+        def cancel_check() -> bool:
+            return _is_rule_run_cancel_requested(run_id)
+
+        from app.services.hunting import evaluate_hunting_rules
+
+        result = evaluate_hunting_rules(
+            db_getter=lambda: SL_local(),
+            case_id=run.case_id,
+            rule_id=rule_id,
+            evidence_id=evidence_id,
+            process_entity_id=(run.metadata_json or {}).get("process_entity_id"),
+            artifact_family=(run.metadata_json or {}).get("artifact_family"),
+            apply=apply,
+            include_disabled=False,
+            existing_run_id=run_id,
+            progress_callback=progress_cb,
+            cancel_check=cancel_check,
+        )
+
+        final_db = SL_local()
+        try:
+            final_run = final_db.get(RuleRun, run_id)
+            if final_run:
+                if final_run.cancel_requested:
+                    _update_rule_run(final_db, final_run, status=RuleRunStatus.cancelled, current_phase="cancelled", finished_at=utc_now().isoformat(), last_error="Cancelled during evaluation.")
+                    log_activity(activity_type="hunting_evaluation_cancelled", title="Hunting evaluation cancelled", message="Cancelled during evaluation.", severity="info", case_id=run.case_id, evidence_id=run.evidence_id, actor="system", metadata={"run_id": run_id})
+                else:
+                    _update_rule_run(
+                        final_db, final_run,
+                        status=RuleRunStatus.completed,
+                        finished_at=utc_now().isoformat(),
+                        current_phase=result.get("status", "completed"),
+                        matched=result.get("candidate_groups", 0),
+                        processed_rules=result.get("rules_evaluated", 0),
+                        scanned_events=result.get("artifacts_scanned", 0),
+                        created_detections=result.get("findings_created", 0),
+                        duplicates=result.get("findings_updated", 0),
+                    )
+                fin_meta = dict(final_run.metadata_json or {})
+                fin_meta.update({
+                    "findings_created": result.get("findings_created", 0),
+                    "findings_updated": result.get("findings_updated", 0),
+                    "findings_suppressed": result.get("findings_suppressed", 0),
+                    "duration_seconds": result.get("duration_seconds", 0),
+                    "missing_prerequisites": result.get("missing_prerequisites", {}),
+                    "rule_results": result.get("rules", []),
+                })
+                final_run.metadata_json = fin_meta
+                final_db.commit()
+                log_activity(activity_type="hunting_evaluation_completed", title="Hunting evaluation completed", message=f"Created {result.get('findings_created',0)}, updated {result.get('findings_updated',0)}", severity="info", case_id=run.case_id, evidence_id=run.evidence_id, actor="system", metadata={"run_id": run_id, "result": {"status": result.get("status")}})
+        finally:
+            final_db.close()
+
+        return {"status": result.get("status", "completed"), "findings_created": result.get("findings_created", 0)}
+    except Exception:
+        logger.exception("Hunting evaluation job failed for run %s", run_id)
+        err_db = SessionLocal()
+        try:
+            err_run = err_db.get(RuleRun, run_id)
+            if err_run:
+                import traceback as tb
+                _update_rule_run(err_db, err_run, status=RuleRunStatus.failed, finished_at=utc_now().isoformat(), current_phase="failed", last_error=tb.format_exc()[:2048])
+                log_activity(activity_type="hunting_evaluation_failed", title="Hunting evaluation failed", message="Evaluation raised an unhandled exception.", severity="error", case_id=err_run.case_id, evidence_id=err_run.evidence_id, actor="system", metadata={"run_id": run_id})
+        finally:
+            err_db.close()
+        return {"status": "failed", "error": "Evaluation raised an unhandled exception."}
+    finally:
+        if db:
+            db.close()

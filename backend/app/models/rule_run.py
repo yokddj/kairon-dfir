@@ -40,6 +40,7 @@ class RuleRun(UUIDMixin, TimestampMixin, Base):
     heartbeat_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_error: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     cancel_requested: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    hunting_job_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     errors: Mapped[list] = mapped_column(JSONVariant, default=list, nullable=False)
     metadata_json: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
     started_at: Mapped[str | None] = mapped_column(String(64), nullable=True)

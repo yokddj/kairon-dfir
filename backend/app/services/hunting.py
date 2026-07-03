@@ -255,9 +255,10 @@ def rule_to_response(rule: HuntingRule, *, findings_count: int = 0, last_evaluat
 
 
 def evaluate_hunting_rules(
-    db: Session,
+    db: Session | None = None,
     *,
-    case_id: str,
+    db_getter: Callable[[], Session] | None = None,
+    case_id: str = "",
     rule_id: str | None = None,
     evidence_id: str | None = None,
     process_entity_id: str | None = None,
@@ -265,13 +266,34 @@ def evaluate_hunting_rules(
     apply: bool = False,
     include_disabled: bool = False,
     artifact_provider: Callable[[], list[HuntingArtifact]] | None = None,
+    existing_run_id: str | None = None,
+    progress_callback: Callable[[str, dict | None], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> dict[str, Any]:
-    if not db.get(Case, case_id):
+    def _report(phase: str, extra: dict | None = None) -> None:
+        if progress_callback:
+            try:
+                progress_callback(phase, extra)
+            except Exception:
+                pass
+
+    _report("validating_scope")
+    def _resolve_db() -> Session:
+        if db is not None:
+            return db
+        if db_getter is not None:
+            return db_getter()
+        raise RuntimeError("No database session available")
+
+    work_db = _resolve_db()
+    if case_id and not work_db.get(Case, case_id):
         raise ValueError("Case not found")
-    if evidence_id:
-        evidence = db.get(Evidence, evidence_id)
+    if evidence_id and case_id:
+        evidence = work_db.get(Evidence, evidence_id)
         if not evidence or evidence.case_id != case_id:
             raise ValueError("Evidence was not found in this case")
+
+    _report("loading_rules")
     rules = [r for r in load_hunting_rules() if (include_disabled or r.status != "disabled")]
     if rule_id:
         rules = [r for r in rules if r.rule_id == rule_id]
@@ -279,16 +301,50 @@ def evaluate_hunting_rules(
         rules = [r for r in rules if artifact_family in r.artifact_families]
     if rule_id and not rules:
         raise ValueError("Rule not found or disabled")
-    run = _create_run(db, case_id, evidence_id, rules, apply=apply, scope="evidence" if evidence_id else "case")
+
+    run: RuleRun | None = None
+    if existing_run_id:
+        run = work_db.get(RuleRun, existing_run_id)
+        if run and run.status not in (RuleRunStatus.queued, RuleRunStatus.running):
+            run = None
+    if run is None:
+        run = _create_run(work_db, case_id, evidence_id, rules, apply=apply, scope="evidence" if evidence_id else "case")
+
     started = time.monotonic()
-    artifacts = artifact_provider() if artifact_provider else collect_hunting_artifacts(db, case_id=case_id, evidence_id=evidence_id, process_entity_id=process_entity_id)
+
+    _report("querying_artifacts")
+    artifacts = artifact_provider() if artifact_provider else collect_hunting_artifacts(work_db, case_id=case_id, evidence_id=evidence_id, process_entity_id=process_entity_id)
     artifacts = [a for a in artifacts if not evidence_id or a.evidence_id == evidence_id]
     artifacts = [a for a in artifacts if not process_entity_id or a.process_entity_id == process_entity_id]
+
+    _report("checking_prerequisites")
     coverage = _coverage(artifacts)
     results = []
     candidates: list[FindingCandidate] = []
     missing_by_rule: dict[str, list[str]] = {}
-    for rule in rules:
+
+    _report("evaluating_rules", {"rules_completed": 0, "rules_total": len(rules), "artifacts_scanned": len(artifacts)})
+    for idx, rule in enumerate(rules):
+        if cancel_check and cancel_check():
+            return {
+                "run_id": run.id,
+                "status": "cancelled",
+                "apply": apply,
+                "scope": {"case_id": case_id, "evidence_id": evidence_id, "process_entity_id": process_entity_id, "artifact_family": artifact_family},
+                "rules_evaluated": len(results),
+                "artifacts_scanned": len(artifacts),
+                "candidate_groups": len(candidates),
+                "findings_created": 0,
+                "findings_updated": 0,
+                "findings_suppressed": 0,
+                "rules": results,
+                "missing_prerequisites": missing_by_rule,
+                "duration_seconds": round(time.monotonic() - started, 3),
+                "findings": [],
+                "cancelled": True,
+            }
+
+        _report("evaluating_rules", {"current_rule_id": rule.rule_id, "rules_completed": idx, "rules_total": len(rules)})
         missing = [item for item in rule.prerequisites if item not in coverage]
         if missing:
             results.append(_rule_status(rule, "insufficient_data", missing_prerequisites=missing))
@@ -298,11 +354,32 @@ def evaluate_hunting_rules(
         rule_candidates = evaluator(rule, artifacts)
         candidates.extend(rule_candidates)
         results.append(_rule_status(rule, "completed_with_findings" if rule_candidates else "completed_empty", findings=len(rule_candidates)))
+
+    _report("materializing_findings", {"rules_completed": len(rules), "candidate_groups": len(candidates)})
     created = updated = suppressed = 0
     persisted_ids: list[str] = []
     if apply:
-        for candidate in candidates:
-            item, action = upsert_finding_candidate(db, case_id, candidate, evaluation_run_id=run.id)
+        for cidx, candidate in enumerate(candidates):
+            if cancel_check and cancel_check():
+                _commit_run_state(work_db, run, status="cancelled", phase="cancelled", artifacts=artifacts, candidates=candidates, created=created, updated=updated, suppressed=suppressed, missing_by_rule=missing_by_rule, persisted_ids=persisted_ids, started=started, apply=apply, rules=rules, results=results)
+                return {
+                    "run_id": run.id,
+                    "status": "cancelled",
+                    "apply": apply,
+                    "scope": {"case_id": case_id, "evidence_id": evidence_id, "process_entity_id": process_entity_id, "artifact_family": artifact_family},
+                    "rules_evaluated": len(rules),
+                    "artifacts_scanned": len(artifacts),
+                    "candidate_groups": len(candidates),
+                    "findings_created": created,
+                    "findings_updated": updated,
+                    "findings_suppressed": suppressed,
+                    "rules": results,
+                    "missing_prerequisites": missing_by_rule,
+                    "duration_seconds": round(time.monotonic() - started, 3),
+                    "findings": [candidate_to_response(c) for c in candidates[:100]],
+                    "cancelled": True,
+                }
+            item, action = upsert_finding_candidate(work_db, case_id, candidate, evaluation_run_id=run.id)
             persisted_ids.append(item.id)
             if action == "created":
                 created += 1
@@ -310,9 +387,36 @@ def evaluate_hunting_rules(
                 suppressed += 1
             else:
                 updated += 1
-        db.commit()
+            if cidx % 50 == 49:
+                _report("materializing_findings", {"rules_completed": len(rules), "findings_created": created, "findings_updated": updated, "findings_suppressed": suppressed, "candidate_groups": len(candidates)})
+        work_db.commit()
+
+    _report("finalizing", {"rules_completed": len(rules), "findings_created": created, "findings_updated": updated, "findings_suppressed": suppressed, "candidate_groups": len(candidates)})
+    _commit_run_state(work_db, run, status="completed_with_findings" if candidates else "completed_empty", phase="completed_with_findings" if candidates else "completed_empty", artifacts=artifacts, candidates=candidates, created=created, updated=updated, suppressed=suppressed, missing_by_rule=missing_by_rule, persisted_ids=persisted_ids, started=started, apply=apply, rules=rules, results=results)
+
+    return _build_result(run, case_id, evidence_id, process_entity_id, artifact_family, apply, artifacts, candidates, created, updated, suppressed, results, missing_by_rule, started)
+
+
+def _commit_run_state(
+    db: Session,
+    run: RuleRun,
+    *,
+    status: str,
+    phase: str,
+    artifacts: list[HuntingArtifact],
+    candidates: list[FindingCandidate],
+    created: int,
+    updated: int,
+    suppressed: int,
+    missing_by_rule: dict[str, list[str]],
+    persisted_ids: list[str],
+    started: float,
+    apply: bool,
+    rules: list[HuntingRule],
+    results: list[dict[str, Any]],
+) -> None:
     run.status = RuleRunStatus.completed
-    run.current_phase = "completed_with_findings" if candidates else "completed_empty"
+    run.current_phase = phase
     run.matched = len(candidates)
     run.processed_rules = len(rules)
     run.scanned_events = len(artifacts)
@@ -335,12 +439,30 @@ def evaluate_hunting_rules(
     }
     db.commit()
     db.refresh(run)
+
+
+def _build_result(
+    run: RuleRun,
+    case_id: str,
+    evidence_id: str | None,
+    process_entity_id: str | None,
+    artifact_family: str | None,
+    apply: bool,
+    artifacts: list[HuntingArtifact],
+    candidates: list[FindingCandidate],
+    created: int,
+    updated: int,
+    suppressed: int,
+    results: list[dict[str, Any]],
+    missing_by_rule: dict[str, list[str]],
+    started: float,
+) -> dict[str, Any]:
     return {
         "run_id": run.id,
         "status": run.current_phase,
         "apply": apply,
         "scope": {"case_id": case_id, "evidence_id": evidence_id, "process_entity_id": process_entity_id, "artifact_family": artifact_family},
-        "rules_evaluated": len(rules),
+        "rules_evaluated": run.processed_rules,
         "artifacts_scanned": len(artifacts),
         "candidate_groups": len(candidates),
         "findings_created": created,
@@ -348,7 +470,7 @@ def evaluate_hunting_rules(
         "findings_suppressed": suppressed,
         "rules": results,
         "missing_prerequisites": missing_by_rule,
-        "duration_seconds": run.metadata_json["duration_seconds"],
+        "duration_seconds": round(time.monotonic() - started, 3),
         "findings": [candidate_to_response(c) for c in candidates[:100]],
     }
 
@@ -459,6 +581,7 @@ def run_to_dict(run: RuleRun) -> dict[str, Any]:
         "updated_at": run.updated_at.isoformat() if run.updated_at else None,
         "started_at": run.started_at,
         "finished_at": run.finished_at,
+        "job_id": getattr(run, "hunting_job_id", None),
     }
 
 

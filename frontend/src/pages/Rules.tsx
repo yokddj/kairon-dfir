@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { api, type HuntingEvaluationResult, type Rule, type RuleImportResponse, type RuleImportRun, type RuleRun, type RuleRunResult, type RuleSet, type SigmaSmokeResponse } from "../api/client";
+import { api, type HuntingDetectionRun, type HuntingEvaluationEnqueueResponse, type HuntingEvaluationResult, type Rule, type RuleImportResponse, type RuleImportRun, type RuleRun, type RuleRunResult, type RuleSet, type SigmaSmokeResponse } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
 type RulesTab = "sigma" | "yara" | "heuristics" | "runs" | "library";
@@ -428,6 +428,7 @@ export default function Rules() {
   const [libraryBulkMessage, setLibraryBulkMessage] = useState("");
   const [runBulkMessage, setRunBulkMessage] = useState("");
   const [huntingResult, setHuntingResult] = useState<HuntingEvaluationResult | null>(null);
+  const [activeHuntingRun, setActiveHuntingRun] = useState<{ run_id: string; job_id: string; mode: string; deduplicated: boolean } | null>(null);
   const [selectedHuntingRuleId, setSelectedHuntingRuleId] = useState<string | null>(null);
   const { data: cases } = useQuery({ queryKey: ["cases"], queryFn: api.listCases });
   const enginesQuery = useQuery({ queryKey: ["rule-engines-status"], queryFn: api.getRuleEngineStatus });
@@ -482,6 +483,35 @@ export default function Rules() {
     queryKey: ["hunting-detection-runs", scopeCaseId],
     queryFn: () => ("listDetectionRuns" in api ? api.listDetectionRuns(scopeCaseId as string) : Promise.resolve({ items: [], total: 0 })),
     enabled: Boolean(scopeCaseId),
+    refetchInterval: activeHuntingRun ? 3000 : false,
+  });
+  const activeHuntingRunQuery = useQuery({
+    queryKey: ["active-hunting-run", scopeCaseId, activeHuntingRun?.run_id],
+    queryFn: async () => {
+      if (!activeHuntingRun || !("getDetectionRun" in api)) return null;
+      return api.getDetectionRun(scopeCaseId as string, activeHuntingRun.run_id);
+    },
+    enabled: Boolean(scopeCaseId && activeHuntingRun),
+    refetchInterval: (query) => {
+      const run = query.state.data as HuntingDetectionRun | null;
+      if (!run) return 3000;
+      const terminal = ["completed", "completed_with_findings", "completed_empty", "failed", "cancelled", "insufficient_data"].includes(run.status);
+      if (terminal) {
+        setActiveHuntingRun(null);
+        void queryClient.invalidateQueries({ queryKey: ["hunting-rules", scopeCaseId] });
+        void queryClient.invalidateQueries({ queryKey: ["hunting-detection-runs", scopeCaseId] });
+        void queryClient.invalidateQueries({ queryKey: ["findings", scopeCaseId] });
+        return false;
+      }
+      return 3000;
+    },
+  });
+  const cancelHuntingEvaluationMutation = useMutation({
+    mutationFn: (runId: string): Promise<HuntingDetectionRun> => ("cancelDetectionRun" in api ? api.cancelDetectionRun(scopeCaseId as string, runId) as Promise<HuntingDetectionRun> : Promise.resolve({ id: runId, run_id: runId, case_id: scopeCaseId as string, engine: "hunting-v1", status: "cancelled", scope: {}, rules: [], counts: {} } as unknown as HuntingDetectionRun)),
+    onSuccess: () => {
+      setActiveHuntingRun(null);
+      void queryClient.invalidateQueries({ queryKey: ["hunting-detection-runs", scopeCaseId] });
+    },
   });
   const selectedImportRunQuery = useQuery({
     queryKey: ["rule-import", selectedImportRunId],
@@ -744,9 +774,21 @@ export default function Rules() {
   }
 
   const evaluateHuntingMutation = useMutation({
-    mutationFn: ({ ruleId, apply }: { ruleId?: string | null; apply: boolean }) => ("evaluateHuntingRules" in api ? api.evaluateHuntingRules(scopeCaseId as string, { rule_id: ruleId || undefined, dry_run: !apply, apply }) : Promise.resolve({ run_id: "unsupported", status: "unsupported", apply, scope: {}, rules_evaluated: 0, artifacts_scanned: 0, candidate_groups: 0, findings_created: 0, findings_updated: 0, findings_suppressed: 0, rules: [], missing_prerequisites: {}, duration_seconds: 0, findings: [] })),
+    mutationFn: ({ ruleId, apply }: { ruleId?: string | null; apply: boolean }): Promise<HuntingEvaluationEnqueueResponse | HuntingEvaluationResult> => {
+      if (!("evaluateHuntingRules" in api)) {
+        return Promise.resolve({ run_id: "unsupported", status: "unsupported" as "unsupported", apply, scope: {}, rules_evaluated: 0, artifacts_scanned: 0, candidate_groups: 0, findings_created: 0, findings_updated: 0, findings_suppressed: 0, rules: [], missing_prerequisites: {}, duration_seconds: 0, findings: [] } as unknown as HuntingEvaluationResult);
+      }
+      return api.evaluateHuntingRules(scopeCaseId as string, { rule_id: ruleId || undefined, dry_run: !apply, apply }) as Promise<HuntingEvaluationEnqueueResponse | HuntingEvaluationResult>;
+    },
     onSuccess: (result) => {
-      setHuntingResult(result);
+      if (result && typeof result === "object" && "job_id" in result && (result as HuntingEvaluationEnqueueResponse).status === "queued") {
+        const enqueued = result as HuntingEvaluationEnqueueResponse;
+        setActiveHuntingRun({ run_id: enqueued.run_id, job_id: enqueued.job_id, mode: enqueued.mode, deduplicated: enqueued.deduplicated });
+        setHuntingResult(null);
+      } else if (result && typeof result === "object" && "rules" in result) {
+        setHuntingResult(result as HuntingEvaluationResult);
+        setActiveHuntingRun(null);
+      }
       void queryClient.invalidateQueries({ queryKey: ["hunting-rules", scopeCaseId] });
       void queryClient.invalidateQueries({ queryKey: ["hunting-detection-runs", scopeCaseId] });
     },
@@ -1436,7 +1478,47 @@ export default function Rules() {
         </div>
         {!scopeCaseId ? <p className="mt-4 rounded-2xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">Select a case before evaluating hunting rules.</p> : null}
         {evaluateHuntingMutation.error instanceof Error ? <p className="mt-4 rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">{evaluateHuntingMutation.error.message}</p> : null}
-        {huntingResult ? (
+        {activeHuntingRun && activeHuntingRunQuery.data ? (
+          <div className="mt-4 rounded-2xl border border-line bg-abyss/70 p-4 text-sm text-muted">
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">
+              Evaluation {activeHuntingRunQuery.data.status}
+              {activeHuntingRun.deduplicated ? " (existing job)" : ""}
+            </p>
+            <p className="mt-2 text-ink">
+              Run {activeHuntingRun.run_id.slice(0, 8)} · mode {activeHuntingRun.mode} · phase {activeHuntingRunQuery.data.status}
+            </p>
+            {activeHuntingRunQuery.data.counts ? (
+              <p className="mt-1 text-xs text-muted">
+                artifacts {activeHuntingRunQuery.data.counts.artifacts_scanned ?? 0} · created {activeHuntingRunQuery.data.counts.findings_created ?? 0} · updated {activeHuntingRunQuery.data.counts.findings_updated ?? 0}
+              </p>
+            ) : null}
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" onClick={() => cancelHuntingEvaluationMutation.mutate(activeHuntingRun.run_id)} className="rounded-2xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning disabled:opacity-50" disabled={cancelHuntingEvaluationMutation.isPending}>
+                Cancel evaluation
+              </button>
+              <Link to={`/activity`} className="rounded-2xl border border-line bg-panel/40 px-4 py-2 text-sm text-muted">
+                View Jobs & Activity
+              </Link>
+              {(activeHuntingRunQuery.data.status === "completed" || activeHuntingRunQuery.data.status === "completed_with_findings" || activeHuntingRunQuery.data.status === "completed_empty") ? (
+                <Link to={`/cases/${scopeCaseId}/findings`} className="rounded-2xl border border-line bg-panel/40 px-4 py-2 text-sm text-muted">
+                  View Findings
+                </Link>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+        {activeHuntingRun && !activeHuntingRunQuery.data ? (
+          <div className="mt-4 rounded-2xl border border-line bg-abyss/70 p-4 text-sm text-muted">
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Evaluation queued</p>
+            <p className="mt-2 text-ink">Run {activeHuntingRun.run_id.slice(0, 8)} · mode {activeHuntingRun.mode}{activeHuntingRun.deduplicated ? " · existing job reused" : ""}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              <button type="button" onClick={() => cancelHuntingEvaluationMutation.mutate(activeHuntingRun.run_id)} className="rounded-2xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning disabled:opacity-50" disabled={cancelHuntingEvaluationMutation.isPending}>
+                Cancel evaluation
+              </button>
+            </div>
+          </div>
+        ) : null}
+        {huntingResult && !activeHuntingRun ? (
           <div className="mt-4 rounded-2xl border border-line bg-abyss/70 p-4 text-sm text-muted">
             <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Evaluation run {huntingResult.run_id}</p>
             <p className="mt-2 text-ink">{huntingResult.status} · rules {huntingResult.rules_evaluated} · artifacts {huntingResult.artifacts_scanned} · candidates {huntingResult.candidate_groups} · created {huntingResult.findings_created} · updated {huntingResult.findings_updated} · suppressed {huntingResult.findings_suppressed}</p>

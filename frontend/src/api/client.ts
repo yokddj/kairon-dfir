@@ -2970,6 +2970,13 @@ export type HuntingEvaluationResult = {
   duration_seconds: number;
   findings: Array<Record<string, unknown>>;
 };
+export type HuntingEvaluationEnqueueResponse = {
+  run_id: string;
+  job_id: string;
+  status: "queued";
+  mode: "dry_run" | "apply";
+  deduplicated: boolean;
+};
 
 export type HuntingDetectionRun = {
   id: string;
@@ -6610,9 +6617,11 @@ export const api = {
   },
   getHuntingRule: (caseId: string, ruleId: string) => request<{ rule: HuntingRule }>(`/cases/${caseId}/rules/${encodeURIComponent(ruleId)}`),
   evaluateHuntingRule: (caseId: string, ruleId: string, payload?: { evidence_id?: string | null; process_entity_id?: string | null; artifact_family?: string | null; dry_run?: boolean; apply?: boolean; include_disabled?: boolean }) =>
-    request<HuntingEvaluationResult>(`/cases/${caseId}/rules/${encodeURIComponent(ruleId)}/evaluate`, { method: "POST", body: JSON.stringify(payload ?? { dry_run: true }) }),
+    request<HuntingEvaluationEnqueueResponse | HuntingEvaluationResult>(`/cases/${caseId}/rules/${encodeURIComponent(ruleId)}/evaluate`, { method: "POST", body: JSON.stringify(payload ?? { dry_run: true }) }),
   evaluateHuntingRules: (caseId: string, payload?: { rule_id?: string | null; evidence_id?: string | null; process_entity_id?: string | null; artifact_family?: string | null; dry_run?: boolean; apply?: boolean; include_disabled?: boolean }) =>
-    request<HuntingEvaluationResult>(`/cases/${caseId}/rules/evaluate`, { method: "POST", body: JSON.stringify(payload ?? { dry_run: true }) }),
+    request<HuntingEvaluationEnqueueResponse | HuntingEvaluationResult>(`/cases/${caseId}/rules/evaluate`, { method: "POST", body: JSON.stringify(payload ?? { dry_run: true }) }),
+  cancelDetectionRun: (caseId: string, runId: string) =>
+    request<HuntingDetectionRun & { job_id?: string | null; cancelled?: boolean }>(`/cases/${caseId}/detection-runs/${runId}/cancel`, { method: "POST", body: JSON.stringify({}) }),
   listDetectionRuns: (caseId: string) => request<{ items: HuntingDetectionRun[]; total: number }>(`/cases/${caseId}/detection-runs`),
   getDetectionRun: (caseId: string, runId: string) => request<HuntingDetectionRun>(`/cases/${caseId}/detection-runs/${runId}`),
   getSigmaCoverage: (params?: { case_id?: string; scope?: "global" | "case" | "all" }) => {
