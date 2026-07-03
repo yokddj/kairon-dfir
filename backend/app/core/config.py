@@ -338,6 +338,7 @@ class Settings(BaseSettings):
     max_parallel_artifacts: int = 1
     max_parallel_rule_runs: int = 1
     rule_run_stale_after_minutes: int = 10
+    hunting_evaluation_timeout_seconds: int = 7200
     sigma_max_matches_per_rule: int = 5000
     sigma_max_detections_per_rule: int = 1000
     sigma_noisy_rule_threshold: int = 10000

@@ -4,12 +4,11 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, utc_now
 from app.models.case import Case
 from app.models.finding import Finding, FindingSeverity, FindingStatus
-from app.models.rule_run import RuleRun
+from app.models.rule_run import RuleRun, RuleRunStatus
 from app.services.hunting import (
-    evaluate_hunting_rules,
     finding_detail,
     finding_to_dict,
     list_detection_runs,
@@ -110,16 +109,18 @@ def evaluate_case_rule(case_id: str, rule_id: str, payload: HuntingEvaluateReque
     _case_or_404(db, case_id)
     request = payload or HuntingEvaluateRequest()
     try:
-        return evaluate_hunting_rules(
-            db,
+        from app.workers.tasks import enqueue_hunting_evaluation
+
+        enqueued = enqueue_hunting_evaluation(
             case_id=case_id,
-            rule_id=rule_id,
             evidence_id=request.evidence_id,
+            rule_id=rule_id,
             process_entity_id=request.process_entity_id,
             artifact_family=request.artifact_family,
             apply=bool(request.apply and not request.dry_run),
             include_disabled=request.include_disabled,
         )
+        return enqueued
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -129,16 +130,18 @@ def evaluate_case_rules(case_id: str, payload: HuntingEvaluateRequest | None = B
     _case_or_404(db, case_id)
     request = payload or HuntingEvaluateRequest()
     try:
-        return evaluate_hunting_rules(
-            db,
+        from app.workers.tasks import enqueue_hunting_evaluation
+
+        enqueued = enqueue_hunting_evaluation(
             case_id=case_id,
-            rule_id=request.rule_id,
             evidence_id=request.evidence_id,
+            rule_id=request.rule_id,
             process_entity_id=request.process_entity_id,
             artifact_family=request.artifact_family,
             apply=bool(request.apply and not request.dry_run),
             include_disabled=request.include_disabled,
         )
+        return enqueued
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -270,7 +273,30 @@ def hunting_detection_run(case_id: str, run_id: str, db: Session = Depends(get_d
     run = db.get(RuleRun, run_id)
     if not run or run.case_id != case_id:
         raise HTTPException(status_code=404, detail="Detection run not found")
-    return run_to_dict(run)
+    result = run_to_dict(run)
+    result["job_id"] = run.hunting_job_id
+    return result
+
+
+@router.post("/api/cases/{case_id}/detection-runs/{run_id}/cancel")
+def hunting_cancel_detection_run(case_id: str, run_id: str, db: Session = Depends(get_db)) -> dict:
+    _case_or_404(db, case_id)
+    run = db.get(RuleRun, run_id)
+    if not run or run.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Detection run not found")
+    if run.status in (RuleRunStatus.completed, RuleRunStatus.failed, RuleRunStatus.cancelled, RuleRunStatus.stale, RuleRunStatus.skipped):
+        return {"run_id": run.id, "status": run.status.value, "cancelled": False, "message": "Run is already in a terminal state"}
+    run.cancel_requested = True
+    if run.status == RuleRunStatus.queued:
+        run.status = RuleRunStatus.cancelled
+        run.current_phase = "cancelled"
+        run.finished_at = utc_now().isoformat()
+    db.commit()
+    db.refresh(run)
+    result = run_to_dict(run)
+    result["job_id"] = run.hunting_job_id
+    result["cancelled"] = True
+    return result
 
 
 def _safe_status(value: str) -> FindingStatus:
