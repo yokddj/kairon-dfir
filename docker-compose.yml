@@ -70,6 +70,7 @@ services:
         KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
         BUILD_DATE: ${BUILD_DATE:-unknown}
     restart: unless-stopped
+    env_file:
       - .env
     depends_on:
       postgres:
