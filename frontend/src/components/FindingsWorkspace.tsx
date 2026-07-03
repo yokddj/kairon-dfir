@@ -8,6 +8,7 @@ import { useTimezonePreference } from "../context/TimezoneContext";
 import { formatTimestamp } from "../lib/time";
 import EventTable from "./EventTable";
 import IndicatorResolutionPanel from "./IndicatorResolutionPanel";
+import PaginationControls from "./PaginationControls";
 
 type Props = {
   caseId: string;
@@ -22,7 +23,10 @@ type Filters = {
   confidence: string;
   status: string;
   findingType: string;
+  source: string;
   evidenceId: string;
+  process: string;
+  pid: string;
   search: string;
 };
 
@@ -35,6 +39,7 @@ function severityTone(severity: string) {
 }
 
 function confidenceTone(confidence: string | null | undefined) {
+  if (confidence === "exact") return "border-accent/50 bg-accent/10 text-accent";
   if (confidence === "high") return "border-emerald-400/40 bg-emerald-400/10 text-emerald-200";
   if (confidence === "medium") return "border-amber-400/40 bg-amber-400/10 text-amber-200";
   return "border-line bg-white/5 text-muted";
@@ -49,9 +54,16 @@ function statusTone(status: string) {
 
 function normalizeStatus(status: string | null | undefined): "new" | "reviewed" | "confirmed" | "dismissed" {
   if (status === "confirmed") return "confirmed";
-  if (status === "reviewed") return "reviewed";
-  if (status === "dismissed" || status === "false_positive" || status === "closed") return "dismissed";
+  if (status === "reviewed" || status === "triaged" || status === "investigating" || status === "accepted_risk") return "reviewed";
+  if (status === "dismissed" || status === "false_positive" || status === "closed" || status === "resolved" || status === "suppressed") return "dismissed";
   return "new";
+}
+
+function sourceLabel(finding: Finding) {
+  const categories = finding.source_categories?.length ? finding.source_categories : finding.source ? finding.source.split(",") : [];
+  const category = categories.filter(Boolean).join(", ") || "Other";
+  const producer = finding.source_plugin_or_parser || finding.rule_id || finding.finding_type || "hunting";
+  return `${category}: ${producer}`;
 }
 
 function uniqueSorted(values: Array<string | null | undefined>) {
@@ -137,20 +149,48 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
   const navigate = useNavigate();
   const { notify } = useNotifications();
   const { effectiveTimezone } = useTimezonePreference();
+  const apiCompat = api as typeof api & {
+    listFindingsPage?: typeof api.listFindingsPage;
+    updateFindingStatus?: typeof api.updateFindingStatus;
+    suppressFinding?: typeof api.suppressFinding;
+  };
   const [filters, setFilters] = useState<Filters>({
     severity: "",
     confidence: "",
     status: "",
     findingType: "",
+    source: "",
     evidenceId,
+    process: "",
+    pid: "",
     search: "",
   });
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(100);
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const [correlationReport, setCorrelationReport] = useState<CorrelationRunResult | null>(null);
 
   const findingsQuery = useQuery({
-    queryKey: ["findings", caseId, filters.evidenceId || "all", host || "all-hosts"],
-    queryFn: () => api.listFindings(caseId, { evidence_id: filters.evidenceId || undefined, host: host || undefined }),
+    queryKey: ["findings", caseId, filters, host || "all-hosts", page, pageSize],
+    queryFn: async () => {
+      if (typeof apiCompat.listFindingsPage !== "function") {
+        const legacy = await api.listFindings(caseId, { evidence_id: filters.evidenceId || undefined, host: host || undefined });
+        return { items: legacy, results: legacy, total: legacy.length, page: 1, page_size: legacy.length || pageSize, total_pages: legacy.length ? 1 : 0 };
+      }
+      const response = await apiCompat.listFindingsPage(caseId, {
+        severity: filters.severity || undefined,
+        confidence: filters.confidence || undefined,
+        status: filters.status || undefined,
+        rule: filters.findingType || undefined,
+        source_category: filters.source || undefined,
+        evidence_id: filters.evidenceId || undefined,
+        process_entity_id: filters.process || undefined,
+        pid: filters.pid || undefined,
+        page,
+        page_size: pageSize,
+      });
+      return response;
+    },
     enabled: Boolean(caseId),
     staleTime: 10_000,
     refetchOnWindowFocus: false,
@@ -173,7 +213,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
   });
 
   const updateStatusMutation = useMutation({
-    mutationFn: ({ findingId, status }: { findingId: string; status: FindingStatus }) => api.updateFinding(caseId, findingId, { status }),
+    mutationFn: ({ findingId, status }: { findingId: string; status: FindingStatus }) => (typeof apiCompat.updateFindingStatus === "function" ? apiCompat.updateFindingStatus(caseId, findingId, { status }) : api.updateFinding(caseId, findingId, { status })),
     onSuccess: (updated) => {
       notify({ title: "Finding updated", description: `${updated.title} -> ${updated.status}`, tone: "success" });
       void queryClient.invalidateQueries({ queryKey: ["findings", caseId] });
@@ -183,7 +223,21 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     },
   });
 
-  const sortedFindings = useMemo(() => sortFindings(findingsQuery.data ?? []), [findingsQuery.data]);
+  const suppressMutation = useMutation({
+    mutationFn: ({ findingId, reason }: { findingId: string; reason?: string }) => (typeof apiCompat.suppressFinding === "function" ? apiCompat.suppressFinding(caseId, findingId, { reason }) : api.updateFinding(caseId, findingId, { status: "dismissed" as FindingStatus, data_quality: [reason || "suppressed"] })),
+    onSuccess: () => {
+      notify({ title: "Finding suppressed", description: "Suppression history was preserved.", tone: "success" });
+      void queryClient.invalidateQueries({ queryKey: ["findings", caseId] });
+    },
+    onError: (error: Error) => notify({ title: "Suppression failed", description: error.message, tone: "error" }),
+  });
+
+  useEffect(() => {
+    setPage(1);
+  }, [filters, pageSize]);
+
+  const serverFindings = findingsQuery.data?.items ?? [];
+  const sortedFindings = useMemo(() => sortFindings(serverFindings), [serverFindings]);
   const evidenceOptions = useMemo(() => uniqueSorted(sortedFindings.map((finding) => finding.evidence_id ?? null)), [sortedFindings]);
   const findingTypeOptions = useMemo(() => uniqueSorted(sortedFindings.map((finding) => finding.finding_type ?? null)), [sortedFindings]);
 
@@ -194,7 +248,10 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
       if (filters.confidence && (finding.confidence ?? "") !== filters.confidence) return false;
       if (filters.status && normalizeStatus(finding.status) !== filters.status) return false;
       if (filters.findingType && (finding.finding_type ?? "") !== filters.findingType) return false;
+      if (filters.source && !(finding.source_categories ?? finding.source?.split(",") ?? []).includes(filters.source)) return false;
       if (filters.evidenceId && (finding.evidence_id ?? "") !== filters.evidenceId) return false;
+      if (filters.process && (finding.process_entity_id ?? finding.related_process_node_ids?.[0] ?? "") !== filters.process) return false;
+      if (filters.pid && String(finding.pid ?? "") !== filters.pid) return false;
       if (host && !(finding.related_hosts ?? []).some((item) => item === host)) return false;
       return matchesFinding(finding, token);
     });
@@ -339,7 +396,9 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
           <div className="rounded-2xl border border-line bg-abyss/70 p-3 text-sm text-muted">
             <p>Risk score: <span className="font-semibold text-white">{selectedFinding.risk_score ?? 0}</span></p>
             <p className="break-words">Time range: <span className="text-white">{formatTimestamp(selectedFinding.time_start ?? selectedFinding.created_at, effectiveTimezone)}</span> → <span className="text-white">{formatTimestamp(selectedFinding.time_end ?? selectedFinding.updated_at, effectiveTimezone)}</span></p>
-            <p className="break-words">Source: <span className="text-white">{selectedFinding.source ?? "unknown"}</span></p>
+            <p className="break-words">Source: <span className="text-white">{sourceLabel(selectedFinding)}</span></p>
+            <p className="break-words">Rule/version: <span className="text-white">{selectedFinding.rule_id || selectedFinding.finding_type || "manual"} {selectedFinding.rule_version || selectedFinding.correlation_version || ""}</span></p>
+            <p className="break-words">Process: <span className="text-white">{selectedFinding.process_entity_id || selectedFinding.related_process_node_ids?.[0] || "n/a"}{selectedFinding.pid ? ` / PID ${selectedFinding.pid}` : ""}</span></p>
           </div>
           <select
             aria-label="Finding status"
@@ -347,8 +406,11 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
             onChange={(event) => updateStatusMutation.mutate({ findingId: selectedFinding.id, status: event.target.value as FindingStatus })}
             className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm"
           >
-            {["new", "reviewed", "confirmed", "dismissed"].map((value) => <option key={value} value={value}>{value}</option>)}
+            {["new", "reviewed", "confirmed", "dismissed", "false_positive", "accepted_risk", "resolved", "suppressed"].map((value) => <option key={value} value={value}>{value}</option>)}
           </select>
+          <button type="button" onClick={() => suppressMutation.mutate({ findingId: selectedFinding.id, reason: "Suppressed from finding detail" })} className="w-full rounded-2xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning">
+            Suppress finding
+          </button>
         </div>
       </div>
 
@@ -370,6 +432,22 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
           </div>
         </div>
         <div className="rounded-2xl border border-line bg-abyss/70 p-4">
+          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Matched fields</p>
+          <div className="mt-3 space-y-2 text-sm text-muted">
+            {Object.entries(selectedFinding.matched_values ?? selectedFinding.matched_fields ?? {}).length ? Object.entries(selectedFinding.matched_values ?? selectedFinding.matched_fields ?? {}).map(([field, values]) => (
+              <p key={`${selectedFinding.id}-${field}`} className="break-words"><span className="font-mono text-accent">{field}</span>: {(values ?? []).join(" · ")}</p>
+            )) : <span>No matched field details</span>}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-line bg-abyss/70 p-4">
+          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Contradictions and uncertainty</p>
+          <div className="mt-3 space-y-2 text-sm text-muted">
+            {Object.entries(selectedFinding.contradictory_fields ?? {}).map(([field, values]) => <p key={`${selectedFinding.id}-contradiction-${field}`} className="break-words"><span className="font-mono text-warning">{field}</span>: {values.join(" · ")}</p>)}
+            {(selectedFinding.missing_prerequisites ?? []).map((value) => <p key={`${selectedFinding.id}-missing-${value}`} className="break-words">Missing prerequisite: {value}</p>)}
+            {!Object.keys(selectedFinding.contradictory_fields ?? {}).length && !(selectedFinding.missing_prerequisites ?? []).length ? <span>No contradictions or missing prerequisites reported.</span> : null}
+          </div>
+        </div>
+        <div className="rounded-2xl border border-line bg-abyss/70 p-4">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Recommended triage</p>
           <div className="mt-3 space-y-2">
             {(selectedFinding.recommended_triage ?? []).length ? (selectedFinding.recommended_triage ?? []).map((step) => <p key={`${selectedFinding.id}-${step}`} className="break-words rounded-xl border border-line/70 bg-panel/40 px-3 py-2 text-sm text-muted">{step}</p>) : <span className="text-sm text-muted">No triage guidance</span>}
@@ -388,16 +466,25 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
 
       <div className="rounded-2xl border border-line bg-abyss/70 p-4">
         <div className="flex flex-wrap items-center justify-between gap-4">
-          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search Timeline</p>
+          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Investigation actions</p>
           <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={openFindingSearch} className="rounded-xl border border-line bg-panel/40 px-3 py-1.5 text-xs text-muted">
+              Open Search
+            </button>
             <button type="button" onClick={openFindingTimeline} className="rounded-xl border border-line bg-panel/40 px-3 py-1.5 text-xs text-muted">
-              Open in Search Timeline
+              Open Incident Timeline
+            </button>
+            <button type="button" onClick={openFindingCommandHistory} className="rounded-xl border border-line bg-panel/40 px-3 py-1.5 text-xs text-muted">
+              Open Command History
             </button>
             {selectedFinding.related_process_node_ids?.length ? (
-              <button type="button" onClick={openProcessGraph} className="rounded-xl border border-line bg-panel/40 px-3 py-1.5 text-xs text-muted">
-                Open in Process Graph
+              <button type="button" aria-label="Open in Process Graph" onClick={openProcessGraph} className="rounded-xl border border-line bg-panel/40 px-3 py-1.5 text-xs text-muted">
+                Focus Graph
               </button>
             ) : null}
+            <button type="button" onClick={openFindingNetwork} className="rounded-xl border border-line bg-panel/40 px-3 py-1.5 text-xs text-muted">
+              Open Network
+            </button>
           </div>
         </div>
         <div className="mt-3 space-y-3">
@@ -475,6 +562,35 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     navigate(`/cases/${caseId}?${params.toString()}`);
   }
 
+  function appendFindingScope(params: URLSearchParams) {
+    if (!selectedFinding) return;
+    if (selectedFinding.evidence_id) params.set("evidence_id", selectedFinding.evidence_id);
+    const processEntityId = selectedFinding.process_entity_id || selectedFinding.related_process_node_ids?.[0];
+    if (processEntityId) params.set("process_entity_id", processEntityId);
+    if (selectedFinding.pid) params.set("pid", String(selectedFinding.pid));
+    const source = selectedFinding.source_categories?.[0] || selectedFinding.source?.split(",")?.[0];
+    if (source) params.set("source_category", source);
+    params.set("finding_id", selectedFinding.id);
+  }
+
+  function openFindingSearch() {
+    const params = new URLSearchParams();
+    appendFindingScope(params);
+    navigate(`/cases/${caseId}/search?${params.toString()}`);
+  }
+
+  function openFindingCommandHistory() {
+    const params = new URLSearchParams();
+    appendFindingScope(params);
+    navigate(`/cases/${caseId}/command-history?${params.toString()}`);
+  }
+
+  function openFindingNetwork() {
+    const params = new URLSearchParams({ tab: "network" });
+    appendFindingScope(params);
+    navigate(`/cases/${caseId}/memory${selectedFinding?.evidence_id ? `/${selectedFinding.evidence_id}` : ""}?${params.toString()}`);
+  }
+
   function openFindingProcessTree(item: Record<string, unknown>) {
     const process = (item.process as Record<string, unknown>) ?? {};
     const params = new URLSearchParams({ mode: "process_focus" });
@@ -508,7 +624,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     if (!selectedFinding) return;
     const params = new URLSearchParams();
     params.set("mode", "investigation");
-    params.set("finding_id", selectedFinding.id);
+    appendFindingScope(params);
     navigate(`/cases/${caseId}/timeline?${params.toString()}`);
   }
 
@@ -590,7 +706,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
       ) : null}
 
       <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-5">
           <label className="block">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Severity</span>
             <select value={filters.severity} onChange={(event) => setFilters((current) => ({ ...current, severity: event.target.value }))} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
@@ -620,11 +736,26 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
             </select>
           </label>
           <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source</span>
+            <select value={filters.source} onChange={(event) => setFilters((current) => ({ ...current, source: event.target.value }))} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
+              <option value="">All</option>
+              {["Memory", "Disk", "Event Log", "Registry", "Network Log", "Other"].map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </label>
+          <label className="block">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Evidence</span>
             <select value={filters.evidenceId} onChange={(event) => setFilters((current) => ({ ...current, evidenceId: event.target.value }))} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
               <option value="">All</option>
               {evidenceOptions.map((value) => <option key={value} value={value}>{value}</option>)}
             </select>
+          </label>
+          <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Process</span>
+            <input value={filters.process} onChange={(event) => setFilters((current) => ({ ...current, process: event.target.value }))} placeholder="canonical entity id" className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm" />
+          </label>
+          <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">PID</span>
+            <input value={filters.pid} onChange={(event) => setFilters((current) => ({ ...current, pid: event.target.value }))} placeholder="6996" className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm" />
           </label>
           <label className="block">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search</span>
@@ -633,13 +764,16 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
         </div>
       </div>
 
+      <PaginationControls page={page} totalPages={findingsQuery.data?.total_pages ?? 0} total={findingsQuery.data?.total ?? filteredFindings.length} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
+
       {findingsQuery.isPending ? <div className="rounded-3xl border border-line bg-panel/40 p-6 text-sm text-muted">Loading findings…</div> : null}
       {findingsQuery.error instanceof Error ? <div className="rounded-3xl border border-danger/40 bg-danger/10 p-6 text-sm text-danger">{findingsQuery.error.message}</div> : null}
 
       {!findingsQuery.isPending && !filteredFindings.length ? (
         <div className="rounded-3xl border border-line bg-panel/40 p-6 text-sm text-muted">
           <p className="text-base font-semibold text-white">No findings yet</p>
-          <p className="mt-2">Run correlation to generate automated findings for this case.</p>
+          <p className="mt-2">No findings were generated by the evaluated rules for the available artifacts.</p>
+          <p className="mt-2">If rules have not been evaluated yet, run hunting evaluation from Rules. Current filters may also hide existing findings.</p>
           <button
             type="button"
             onClick={() => runCorrelationMutation.mutate({ page: 1 })}
@@ -671,6 +805,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
                         <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${severityTone(finding.severity)}`}>{finding.severity}</span>
                         <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${confidenceTone(finding.confidence)}`}>{finding.confidence ?? "low"}</span>
                         <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${statusTone(normalizedStatus)}`}>{normalizedStatus}</span>
+                        <Chip>{sourceLabel(finding)}</Chip>
                       </div>
                       <p className="mt-3 line-clamp-2 text-sm text-muted">{finding.summary || finding.description || "No summary."}</p>
                       <div className="mt-3 flex flex-wrap gap-2">
@@ -680,8 +815,9 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
                     </div>
                     <div className="text-right text-xs text-muted">
                       <p>risk {finding.risk_score ?? 0}</p>
-                      <p>{formatTimestamp(finding.time_start ?? finding.created_at, effectiveTimezone)}</p>
-                      <p>{(finding.related_event_ids ?? []).length} events</p>
+                      <p>{formatTimestamp(finding.first_seen ?? finding.time_start ?? finding.created_at, effectiveTimezone)}</p>
+                      <p>{finding.grouped_artifact_count ?? finding.related_artifact_ids?.length ?? 0} artifacts</p>
+                      {finding.pid ? <p>PID {finding.pid}</p> : null}
                       {finding.evidence_id ? <p className="font-mono">{finding.evidence_id.slice(0, 8)}</p> : null}
                     </div>
                   </div>
@@ -691,6 +827,8 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
           </div>
         </div>
       ) : null}
+
+      {filteredFindings.length ? <PaginationControls page={page} totalPages={findingsQuery.data?.total_pages ?? 0} total={findingsQuery.data?.total ?? filteredFindings.length} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} /> : null}
 
       {filteredFindings.length && selectedFinding ? (
         <ResponsiveDetailPanel open mode="drawer" widthClass="h-full w-full sm:w-[88vw] xl:w-[82vw] 2xl:w-[78vw]" heading="Finding detail" subheading="Wide investigation detail aligned with Search, Timeline and Detections." onClose={() => setSelectedFindingId(null)}>

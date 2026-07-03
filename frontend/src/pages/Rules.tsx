@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
-import { api, type Rule, type RuleImportResponse, type RuleImportRun, type RuleRun, type RuleRunResult, type RuleSet, type SigmaSmokeResponse } from "../api/client";
+import { api, type HuntingEvaluationResult, type Rule, type RuleImportResponse, type RuleImportRun, type RuleRun, type RuleRunResult, type RuleSet, type SigmaSmokeResponse } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
 type RulesTab = "sigma" | "yara" | "heuristics" | "runs" | "library";
@@ -427,6 +427,8 @@ export default function Rules() {
   const [confirmationPhrase, setConfirmationPhrase] = useState("");
   const [libraryBulkMessage, setLibraryBulkMessage] = useState("");
   const [runBulkMessage, setRunBulkMessage] = useState("");
+  const [huntingResult, setHuntingResult] = useState<HuntingEvaluationResult | null>(null);
+  const [selectedHuntingRuleId, setSelectedHuntingRuleId] = useState<string | null>(null);
   const { data: cases } = useQuery({ queryKey: ["cases"], queryFn: api.listCases });
   const enginesQuery = useQuery({ queryKey: ["rule-engines-status"], queryFn: api.getRuleEngineStatus });
 
@@ -470,6 +472,16 @@ export default function Rules() {
       const items = (query.state.data as { items?: RuleImportRun[] } | undefined)?.items ?? [];
       return Boolean(pendingImport) || items.some((item) => isActiveImportStatus(item.status)) ? 1500 : false;
     },
+  });
+  const huntingRulesQuery = useQuery({
+    queryKey: ["hunting-rules", scopeCaseId],
+    queryFn: () => ("listHuntingRules" in api ? api.listHuntingRules(scopeCaseId as string) : Promise.resolve({ items: [], total: 0 })),
+    enabled: Boolean(scopeCaseId),
+  });
+  const huntingRunsQuery = useQuery({
+    queryKey: ["hunting-detection-runs", scopeCaseId],
+    queryFn: () => ("listDetectionRuns" in api ? api.listDetectionRuns(scopeCaseId as string) : Promise.resolve({ items: [], total: 0 })),
+    enabled: Boolean(scopeCaseId),
   });
   const selectedImportRunQuery = useQuery({
     queryKey: ["rule-import", selectedImportRunId],
@@ -730,6 +742,15 @@ export default function Rules() {
     setSelectedImportRunId(null);
     setTab("library");
   }
+
+  const evaluateHuntingMutation = useMutation({
+    mutationFn: ({ ruleId, apply }: { ruleId?: string | null; apply: boolean }) => ("evaluateHuntingRules" in api ? api.evaluateHuntingRules(scopeCaseId as string, { rule_id: ruleId || undefined, dry_run: !apply, apply }) : Promise.resolve({ run_id: "unsupported", status: "unsupported", apply, scope: {}, rules_evaluated: 0, artifacts_scanned: 0, candidate_groups: 0, findings_created: 0, findings_updated: 0, findings_suppressed: 0, rules: [], missing_prerequisites: {}, duration_seconds: 0, findings: [] })),
+    onSuccess: (result) => {
+      setHuntingResult(result);
+      void queryClient.invalidateQueries({ queryKey: ["hunting-rules", scopeCaseId] });
+      void queryClient.invalidateQueries({ queryKey: ["hunting-detection-runs", scopeCaseId] });
+    },
+  });
 
   const importSingleMutation = useMutation({
     mutationFn: ({ file, engine }: { file: File; engine: "sigma" | "yara" }) => api.importRuleFile(file, { engine, import_mode: engine === "yara" ? "auto" : "split", case_id: engine === "sigma" ? undefined : scopeCaseId || undefined, namespace: namespace || undefined, enabled: true }),
@@ -1398,6 +1419,90 @@ export default function Rules() {
       </section>
 
       <section className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Hunting Rules v1</p>
+            <h3 className="mt-2 text-xl font-semibold">Explainable deterministic findings</h3>
+            <p className="mt-2 max-w-3xl text-sm text-muted">Built-in YAML rules evaluate normalized artifacts without parser reruns, Volatility reruns, external intelligence, opaque AI scores, or threat-family attribution.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" disabled={!scopeCaseId || evaluateHuntingMutation.isPending} onClick={() => evaluateHuntingMutation.mutate({ ruleId: selectedHuntingRuleId, apply: false })} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent disabled:opacity-50">
+              Dry-run selected/all
+            </button>
+            <button type="button" disabled={!scopeCaseId || evaluateHuntingMutation.isPending} onClick={() => evaluateHuntingMutation.mutate({ ruleId: selectedHuntingRuleId, apply: true })} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50">
+              Apply selected/all
+            </button>
+          </div>
+        </div>
+        {!scopeCaseId ? <p className="mt-4 rounded-2xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">Select a case before evaluating hunting rules.</p> : null}
+        {evaluateHuntingMutation.error instanceof Error ? <p className="mt-4 rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-danger">{evaluateHuntingMutation.error.message}</p> : null}
+        {huntingResult ? (
+          <div className="mt-4 rounded-2xl border border-line bg-abyss/70 p-4 text-sm text-muted">
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Evaluation run {huntingResult.run_id}</p>
+            <p className="mt-2 text-ink">{huntingResult.status} · rules {huntingResult.rules_evaluated} · artifacts {huntingResult.artifacts_scanned} · candidates {huntingResult.candidate_groups} · created {huntingResult.findings_created} · updated {huntingResult.findings_updated} · suppressed {huntingResult.findings_suppressed}</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {huntingResult.rules.slice(0, 12).map((rule) => <span key={rule.rule_id} className="rounded-full border border-line bg-panel/40 px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em]">{rule.rule_id.replace("hunting.", "")}:{rule.status}</span>)}
+            </div>
+          </div>
+        ) : null}
+        <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(320px,0.8fr)]">
+          <div className="overflow-hidden rounded-2xl border border-line">
+            <table className="w-full min-w-[900px] text-left text-sm">
+              <thead className="bg-abyss/80 text-xs uppercase tracking-[0.16em] text-muted">
+                <tr>
+                  <th className="px-4 py-3">Rule</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Version</th>
+                  <th className="px-4 py-3">Category</th>
+                  <th className="px-4 py-3">Severity</th>
+                  <th className="px-4 py-3">Confidence</th>
+                  <th className="px-4 py-3">Prerequisites</th>
+                  <th className="px-4 py-3">Findings</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(huntingRulesQuery.data?.items ?? []).map((rule) => (
+                  <tr key={rule.rule_id} onClick={() => setSelectedHuntingRuleId(rule.rule_id)} className={`cursor-pointer border-t border-line/70 hover:bg-white/5 ${selectedHuntingRuleId === rule.rule_id ? "bg-accent/10" : ""}`}>
+                    <td className="px-4 py-3"><p className="font-semibold text-ink">{rule.title}</p><p className="mt-1 font-mono text-[10px] text-muted">{rule.rule_id}</p></td>
+                    <td className="px-4 py-3">{rule.status}</td>
+                    <td className="px-4 py-3">{rule.version}</td>
+                    <td className="px-4 py-3">{rule.category}</td>
+                    <td className="px-4 py-3">{rule.severity}</td>
+                    <td className="px-4 py-3">{rule.confidence}</td>
+                    <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{rule.prerequisites.map((item) => <span key={`${rule.rule_id}-${item}`} className="rounded-full border border-line px-2 py-0.5 font-mono text-[10px] text-muted">{item}</span>)}</div></td>
+                    <td className="px-4 py-3">{rule.findings_count ?? 0}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="rounded-2xl border border-line bg-abyss/70 p-4">
+            {selectedHuntingRuleId ? (() => {
+              const rule = (huntingRulesQuery.data?.items ?? []).find((item) => item.rule_id === selectedHuntingRuleId);
+              if (!rule) return <p className="text-sm text-muted">Select a rule.</p>;
+              return (
+                <div className="space-y-4 text-sm">
+                  <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Rule detail</p><h4 className="mt-2 text-lg font-semibold">{rule.title}</h4><p className="mt-2 text-muted">{rule.description}</p></div>
+                  <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Logic summary</p><p className="mt-2 text-muted">{rule.logic_summary}</p></div>
+                  <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Thresholds</p><pre className="mt-2 overflow-auto rounded-xl border border-line bg-panel/40 p-3 text-xs text-muted">{JSON.stringify(rule.threshold, null, 2)}</pre></div>
+                  <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Sources</p><p className="mt-2 text-muted">{rule.supported_source_categories.join(" · ")}</p></div>
+                  <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Guidance</p><p className="mt-2 text-muted">{rule.guidance}</p></div>
+                  <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Navigation</p><p className="mt-2 text-muted">{rule.navigation.join(" · ")}</p></div>
+                </div>
+              );
+            })() : <p className="text-sm text-muted">Select a hunting rule to inspect exact prerequisites, threshold logic, guidance, and navigation preferences.</p>}
+          </div>
+        </div>
+        <div className="mt-4 rounded-2xl border border-line bg-abyss/70 p-4">
+          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Recent hunting evaluation runs</p>
+          <div className="mt-3 space-y-2 text-sm text-muted">
+            {(huntingRunsQuery.data?.items ?? []).slice(0, 5).map((run) => <p key={run.id} className="break-words rounded-xl border border-line/70 bg-panel/40 px-3 py-2">{run.status} · {run.counts?.artifacts_scanned ?? 0} artifacts · created {run.counts?.findings_created ?? 0} · updated {run.counts?.findings_updated ?? 0} · {run.created_at}</p>)}
+            {!(huntingRunsQuery.data?.items ?? []).length ? <p>No hunting evaluations have been recorded for this case.</p> : null}
+          </div>
+        </div>
+      </section>
+
+      <section className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
         <div className="flex flex-wrap gap-2">
           {tabLabels.map((item) => (
             <button key={item.id} type="button" onClick={() => setTab(item.id)} className={`rounded-full border px-4 py-2 text-sm ${tab === item.id ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/80 text-muted"}`}>
@@ -1616,7 +1721,7 @@ export default function Rules() {
                 <p className="mt-2 text-sm text-muted">Upload one <span className="font-mono">.yml</span> or <span className="font-mono">.yaml</span> Sigma rule. Global import is the default and recommended scope.</p>
                 <label className="mt-4 inline-flex cursor-pointer rounded-2xl border border-line bg-panel/50 px-4 py-2 text-sm text-muted">
                   Import global Sigma rule
-                  <input className="hidden" type="file" onChange={(event) => event.target.files?.[0] && handleSigmaFileImport(event.target.files[0])} />
+                  <input aria-label="Import Sigma rule" className="hidden" type="file" onChange={(event) => event.target.files?.[0] && handleSigmaFileImport(event.target.files[0])} />
                 </label>
               </div>
               <div className="rounded-2xl border border-line bg-abyss/80 p-4">
@@ -1624,7 +1729,7 @@ export default function Rules() {
                 <p className="mt-2 text-sm text-muted">Upload a ZIP/TAR/7z containing multiple Sigma YAML rules. Global import is recommended so the pack is available to all cases.</p>
                 <label className="mt-4 inline-flex cursor-pointer rounded-2xl border border-line bg-panel/50 px-4 py-2 text-sm text-muted">
                   Import global Sigma rule pack
-                  <input className="hidden" type="file" onChange={(event) => event.target.files?.[0] && handleSigmaArchiveImport(event.target.files[0])} />
+                  <input aria-label="Import Sigma rule pack" className="hidden" type="file" onChange={(event) => event.target.files?.[0] && handleSigmaArchiveImport(event.target.files[0])} />
                 </label>
               </div>
             </div>

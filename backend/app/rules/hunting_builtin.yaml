@@ -1,0 +1,254 @@
+schema_version: 1
+rules:
+  - rule_id: hunting.suspicious_powershell_command_line
+    title: Suspicious PowerShell Command Line
+    description: Detects combinations of PowerShell flags and payload patterns that are stronger together than any single flag alone.
+    version: 1.0.0
+    status: stable
+    category: command_line
+    artifact_families: [command_line, process]
+    supported_source_categories: [Memory, Event Log, Disk]
+    severity: medium
+    confidence: high
+    tags: [powershell, execution]
+    attack: [T1059.001]
+    prerequisites: [command_lines]
+    logic: {type: builtin, name: suspicious_powershell_command_line}
+    grouping: {by: process}
+    threshold: {minimum_signals: 2}
+    suppression: {supported: true}
+    explanation: PowerShell command line contained multiple suspicious execution indicators.
+    guidance: Review the full command line, parent process, network activity, and script source before triage.
+    navigation: [command_history, search, timeline, process, graph, raw]
+    author: Kairon built-in
+  - rule_id: hunting.suspicious_shell_command_line
+    title: Suspicious Shell Command Line
+    description: Detects shell commands with combined reconnaissance, download, execution, obfuscation, or suspicious redirection behavior.
+    version: 1.0.0
+    status: stable
+    category: command_line
+    artifact_families: [command_line, process]
+    supported_source_categories: [Memory, Event Log, Disk]
+    severity: medium
+    confidence: medium
+    tags: [shell, execution]
+    attack: [T1059]
+    prerequisites: [command_lines]
+    logic: {type: builtin, name: suspicious_shell_command_line}
+    grouping: {by: process}
+    threshold: {minimum_signals: 2}
+    suppression: {supported: true}
+    explanation: Shell command line contained multiple suspicious behavior indicators.
+    guidance: Review chained commands, parent process, written paths, and network activity.
+    navigation: [command_history, search, timeline, process, graph, raw]
+    author: Kairon built-in
+  - rule_id: hunting.scan_only_process
+    title: Process Visible Only In Scan-Oriented Sources
+    description: Detects a process observed in scan-oriented memory sources but absent from listing-oriented process sources.
+    version: 1.0.0
+    status: stable
+    category: process
+    artifact_families: [process]
+    supported_source_categories: [Memory]
+    severity: low
+    confidence: medium
+    tags: [memory, process]
+    attack: []
+    prerequisites: [process_entities]
+    logic: {type: builtin, name: scan_only_process}
+    grouping: {by: process}
+    threshold: {minimum_signals: 1}
+    suppression: {supported: true}
+    explanation: Process appeared in scan-oriented source data without listing-oriented confirmation.
+    guidance: Treat as an investigative lead; terminated or stale processes can produce this pattern.
+    navigation: [process, graph, search, raw]
+    author: Kairon built-in
+  - rule_id: hunting.anomalous_parent_child
+    title: Anomalous Parent Child Relationship
+    description: Detects high-value unusual process parent-child combinations using canonical lineage context.
+    version: 1.0.0
+    status: stable
+    category: parent_child
+    artifact_families: [process]
+    supported_source_categories: [Memory, Event Log, Disk]
+    severity: medium
+    confidence: medium
+    tags: [process, lineage]
+    attack: [T1059]
+    prerequisites: [process_entities]
+    logic: {type: builtin, name: anomalous_parent_child}
+    grouping: {by: process_lineage}
+    threshold: {minimum_signals: 1}
+    suppression: {supported: true}
+    explanation: Observed parent process is unusual for the child process and context.
+    guidance: Confirm executable paths, user/session, and command line before escalation.
+    navigation: [process, graph, command_history, timeline, search]
+    author: Kairon built-in
+  - rule_id: hunting.suspicious_executable_location
+    title: Suspicious Executable Location
+    description: Detects process execution from user-writable or unusual locations with process context.
+    version: 1.0.0
+    status: stable
+    category: execution
+    artifact_families: [process, command_line]
+    supported_source_categories: [Memory, Event Log, Disk]
+    severity: medium
+    confidence: medium
+    tags: [path, execution]
+    attack: [T1204]
+    prerequisites: [process_entities]
+    logic: {type: builtin, name: suspicious_executable_location}
+    grouping: {by: process}
+    threshold: {minimum_signals: 1}
+    suppression: {supported: true}
+    explanation: Executable path was in a user-writable or unusual execution location.
+    guidance: Check parent process, signer/vendor metadata if available, and whether this is an installer/updater.
+    navigation: [process, search, timeline, raw]
+    author: Kairon built-in
+  - rule_id: hunting.sensitive_privilege_context
+    title: Sensitive Privilege With Suspicious Context
+    description: Detects sensitive Windows privileges on non-expected process contexts or combined with other suspicious process traits.
+    version: 1.0.0
+    status: stable
+    category: privilege
+    artifact_families: [privilege, process]
+    supported_source_categories: [Memory, Event Log, Disk]
+    severity: medium
+    confidence: medium
+    tags: [privilege]
+    attack: [T1134]
+    prerequisites: [privileges, process_entities]
+    logic: {type: builtin, name: sensitive_privilege_context}
+    grouping: {by: process}
+    threshold: {minimum_signals: 1}
+    suppression: {supported: true}
+    explanation: Sensitive privilege was observed with process context that is not clearly expected system behavior.
+    guidance: Review account, integrity/session, path, and parent process.
+    navigation: [process, search, raw]
+    author: Kairon built-in
+  - rule_id: hunting.suspicious_network_combination
+    title: Suspicious Network Combination
+    description: Detects outbound network activity combined with suspicious process, command-line, path, or scan-only context.
+    version: 1.0.0
+    status: stable
+    category: network
+    artifact_families: [network, process, command_line]
+    supported_source_categories: [Memory, Network Log, Event Log, Disk]
+    severity: medium
+    confidence: medium
+    tags: [network]
+    attack: [T1105]
+    prerequisites: [network_connections, process_entities]
+    logic: {type: builtin, name: suspicious_network_combination}
+    grouping: {by: process_remote_endpoint}
+    threshold: {minimum_signals: 2}
+    suppression: {supported: true}
+    explanation: Network activity was combined with suspicious process or command context; public IP alone is not enough.
+    guidance: Review remote endpoint, owning process, command line, and timeline context.
+    navigation: [network, process, graph, search, timeline]
+    author: Kairon built-in
+  - rule_id: hunting.suspicious_memory_region
+    title: Suspicious Memory Region
+    description: Detects already-normalized suspicious memory region or VAD indicators without malware-family attribution.
+    version: 1.0.0
+    status: stable
+    category: suspicious_memory
+    artifact_families: [suspicious_memory, vad]
+    supported_source_categories: [Memory]
+    severity: high
+    confidence: high
+    tags: [memory, vad]
+    attack: [T1055]
+    prerequisites: [malfind_or_suspicious_regions]
+    logic: {type: builtin, name: suspicious_memory_region}
+    grouping: {by: process_region}
+    threshold: {minimum_signals: 1}
+    suppression: {supported: true}
+    explanation: Suspicious memory region indicators were present in normalized memory artifacts.
+    guidance: Inspect bounded disassembly/hexdump preview, protection, tag, and process context.
+    navigation: [process, graph, search, raw]
+    author: Kairon built-in
+  - rule_id: hunting.module_discrepancy
+    title: Module Discrepancy Or Writable Module Path
+    description: Detects module source discrepancies or modules loaded from writable/unusual paths.
+    version: 1.0.0
+    status: stable
+    category: module
+    artifact_families: [module]
+    supported_source_categories: [Memory]
+    severity: medium
+    confidence: medium
+    tags: [module, dll]
+    attack: [T1574]
+    prerequisites: [modules]
+    logic: {type: builtin, name: module_discrepancy}
+    grouping: {by: process_module}
+    threshold: {minimum_signals: 1}
+    suppression: {supported: true}
+    explanation: Module evidence had a source discrepancy or unusual writable path.
+    guidance: Compare module lists, VAD mappings, path, signer/vendor metadata if available, and raw source.
+    navigation: [process, search, raw]
+    author: Kairon built-in
+  - rule_id: hunting.persistence_observed_process
+    title: Persistence Configuration With Observed Process
+    description: Correlates persistence configuration with observed process or command evidence while distinguishing configuration from proven execution.
+    version: 1.0.0
+    status: stable
+    category: persistence
+    artifact_families: [persistence, process, command_line]
+    supported_source_categories: [Registry, Event Log, Disk, Memory]
+    severity: medium
+    confidence: medium
+    tags: [persistence]
+    attack: [T1547, T1053, T1543]
+    prerequisites: [persistence_artifacts, process_entities]
+    logic: {type: builtin, name: persistence_observed_process}
+    grouping: {by: persistence_target}
+    threshold: {minimum_signals: 2}
+    suppression: {supported: true}
+    explanation: Persistence configuration target was also observed in process or command evidence; execution causality is not assumed unless supported.
+    guidance: Review timestamps and source provenance before deciding if persistence caused execution.
+    navigation: [search, timeline, command_history, process, raw]
+    author: Kairon built-in
+  - rule_id: hunting.command_network_temporal_proximity
+    title: Suspicious Command And Network Temporal Proximity
+    description: Detects suspicious command-line evidence followed by outbound network activity from the same process within a bounded real timestamp window.
+    version: 1.0.0
+    status: stable
+    category: cross_artifact
+    artifact_families: [command_line, network, timeline]
+    supported_source_categories: [Memory, Event Log, Network Log, Disk]
+    severity: high
+    confidence: high
+    tags: [timeline, network, command]
+    attack: [T1105, T1059]
+    prerequisites: [command_lines, network_connections, timeline_events]
+    logic: {type: builtin, name: command_network_temporal_proximity}
+    grouping: {by: process_time_window}
+    threshold: {max_delta_seconds: 300}
+    suppression: {supported: true}
+    explanation: Timestamped suspicious command and outbound network activity occurred close together for the same process.
+    guidance: Do not use this rule when timestamps are missing; inspect both timeline entries.
+    navigation: [timeline, command_history, network, process, graph]
+    author: Kairon built-in
+  - rule_id: hunting.evidence_inconsistency
+    title: Evidence Inconsistency
+    description: Detects useful process evidence inconsistencies such as name/path/parent conflicts or PID reuse ambiguity.
+    version: 1.0.0
+    status: stable
+    category: cross_artifact
+    artifact_families: [process]
+    supported_source_categories: [Memory, Event Log, Disk]
+    severity: informational
+    confidence: medium
+    tags: [data-quality, process]
+    attack: []
+    prerequisites: [process_entities]
+    logic: {type: builtin, name: evidence_inconsistency}
+    grouping: {by: process}
+    threshold: {minimum_conflicts: 1}
+    suppression: {supported: true}
+    explanation: Multiple observations conflict or indicate PID ambiguity.
+    guidance: Treat as data-quality or investigation context, not a threat verdict by itself.
+    navigation: [process, graph, search, raw]
+    author: Kairon built-in
