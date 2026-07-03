@@ -1251,13 +1251,22 @@ def _status(value: str) -> FindingStatus:
 def validate_transition(current: str, target: str, *, reason: str | None = None) -> None:
     if current == target:
         return
+    current = _map_legacy(current)
+    target = _map_legacy(target)
     if target in ALLOWED_TRANSITIONS.get(current, set()):
         return
-    closed_states = ALLOWED_TRANSITIONS.get(current, set())
-    msg = f"Invalid transition: {current} -> {target}"
-    if reason and current in {"false_positive", "accepted_risk", "resolved", "suppressed"}:
-        msg = f"Reopen requires explicit reason: {current} -> {target}"
-    raise ValueError(msg)
+    is_reopen = current in {"false_positive", "accepted_risk", "resolved", "suppressed"}
+    if is_reopen and not reason:
+        raise ValueError("Reopen from terminal/suppressed state requires explicit reason")
+    if is_reopen:
+        return
+    raise ValueError(f"Invalid transition: {current} -> {target}")
+
+
+def _map_legacy(status: str) -> str:
+    if status in ALLOWED_TRANSITIONS:
+        return status
+    return {"open": "new", "reviewed": "triaged", "dismissed": "suppressed", "closed": "resolved"}.get(status, status)
 
 
 def _legacy_risk(severity: str, confidence: str) -> int:
