@@ -2042,8 +2042,8 @@ export type Artifact = {
 };
 
 export type FindingSeverity = "info" | "low" | "medium" | "high" | "critical";
-export type FindingConfidence = "low" | "medium" | "high";
-export type FindingStatus = "new" | "reviewed" | "confirmed" | "dismissed" | "open" | "false_positive" | "closed";
+export type FindingConfidence = "low" | "medium" | "high" | "exact";
+export type FindingStatus = "new" | "reviewed" | "triaged" | "investigating" | "confirmed" | "false_positive" | "accepted_risk" | "resolved" | "suppressed" | "dismissed" | "open" | "closed";
 
 export type FindingTimelineItem = {
   timestamp?: string | null;
@@ -2058,6 +2058,8 @@ export type Finding = {
   case_id: string;
   evidence_id?: string | null;
   finding_type?: string | null;
+  rule_id?: string | null;
+  rule_version?: string | null;
   title: string;
   summary?: string | null;
   description?: string | null;
@@ -2085,11 +2087,59 @@ export type Finding = {
   mitre?: string[];
   recommended_triage?: string[];
   source?: string | null;
+  source_categories?: string[];
+  source_category?: string | null;
+  source_plugin_or_parser?: string | null;
+  artifact_types?: string[];
+  process_entity_id?: string | null;
+  pid?: number | null;
+  ppid?: number | null;
+  first_seen?: string | null;
+  last_seen?: string | null;
+  event_count?: number;
+  grouped_artifact_count?: number;
+  navigation_targets?: Array<Record<string, unknown>>;
+  evidence_references?: Array<Record<string, unknown>>;
+  matched_fields?: Record<string, string[]>;
+  matched_values?: Record<string, string[]>;
+  contradictory_fields?: Record<string, string[]>;
+  missing_prerequisites?: string[];
+  suppression_state?: string;
+  analyst_notes?: string | null;
+  assigned_to?: string | null;
   correlation_version?: string | null;
   data_quality?: string[];
   fingerprint?: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type FindingListResponse = {
+  items: Finding[];
+  results?: Finding[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+};
+
+export type FindingDetail = {
+  finding: Finding;
+  rule?: Record<string, unknown>;
+  evidence_references: Array<Record<string, unknown>>;
+  matched_artifacts: Array<Record<string, unknown>>;
+  matched_fields: Record<string, string[]>;
+  matched_values?: Record<string, string[]>;
+  reasons: string[];
+  contradictions: Record<string, string[]>;
+  missing_prerequisites: string[];
+  process_summary?: Record<string, unknown> | null;
+  timeline_context: Array<Record<string, unknown>>;
+  correlation_summaries: Array<Record<string, unknown>>;
+  navigation_targets: Array<Record<string, unknown>>;
+  status_history: Array<Record<string, unknown>>;
+  suppression_history: Array<Record<string, unknown>>;
+  raw_references: Array<Record<string, unknown>>;
 };
 
 export type CorrelationRunResult = {
@@ -2873,6 +2923,71 @@ export type Rule = {
   metadata_json: Record<string, unknown>;
   created_at: string;
   updated_at: string;
+};
+
+export type HuntingRule = {
+  id: string;
+  rule_id: string;
+  title: string;
+  description: string;
+  version: string;
+  status: "experimental" | "stable" | "deprecated" | "disabled";
+  category: string;
+  artifact_families: string[];
+  supported_source_categories: string[];
+  severity: string;
+  confidence: string;
+  prerequisites: string[];
+  tags: string[];
+  attack: string[];
+  logic_summary: string;
+  threshold: Record<string, unknown>;
+  grouping: Record<string, unknown>;
+  suppression: Record<string, unknown>;
+  guidance: string;
+  navigation: string[];
+  author: string;
+  checksum: string;
+  enabled: boolean;
+  last_evaluated?: string | null;
+  findings_count?: number;
+};
+
+export type HuntingRuleListResponse = { items: HuntingRule[]; total: number };
+export type HuntingEvaluationResult = {
+  run_id: string;
+  status: string;
+  apply: boolean;
+  scope: Record<string, unknown>;
+  rules_evaluated: number;
+  artifacts_scanned: number;
+  candidate_groups: number;
+  findings_created: number;
+  findings_updated: number;
+  findings_suppressed: number;
+  rules: Array<{ rule_id: string; version: string; status: string; findings: number; missing_prerequisites: string[] }>;
+  missing_prerequisites: Record<string, string[]>;
+  duration_seconds: number;
+  findings: Array<Record<string, unknown>>;
+};
+
+export type HuntingDetectionRun = {
+  id: string;
+  run_id: string;
+  case_id: string;
+  evidence_id?: string | null;
+  engine: string;
+  status: string;
+  scope: Record<string, unknown>;
+  rules: string[];
+  counts: Record<string, number>;
+  duration_seconds?: number | null;
+  errors: unknown[];
+  missing_prerequisites: Record<string, string[]>;
+  created_at?: string | null;
+  updated_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
 };
 
 export type RuleSet = {
@@ -6425,11 +6540,45 @@ export const api = {
     if (params?.finding_type) query.set("finding_type", params.finding_type);
     if (params?.evidence_id) query.set("evidence_id", params.evidence_id);
     if (params?.host) query.set("host", params.host);
-    return request<Finding[]>(`/cases/${caseId}/findings${query.size ? `?${query.toString()}` : ""}`);
+    return request<Finding[] | FindingListResponse>(`/cases/${caseId}/findings${query.size ? `?${query.toString()}` : ""}`).then((payload) => Array.isArray(payload) ? payload : payload.items);
   },
-  getFinding: (caseId: string, findingId: string) => request<Finding>(`/cases/${caseId}/findings/${findingId}`),
+  listFindingsPage: (
+    caseId: string,
+    params?: {
+      status?: string;
+      severity?: string;
+      confidence?: string;
+      rule?: string;
+      category?: string;
+      source_category?: string;
+      evidence_id?: string;
+      process_entity_id?: string;
+      pid?: number | string;
+      tag?: string;
+      suppressed?: boolean;
+      assigned_to?: string;
+      has_correlations?: boolean;
+      time_from?: string;
+      time_to?: string;
+      page?: number;
+      page_size?: number;
+    },
+  ) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (value !== undefined && value !== "") query.set(key, String(value));
+    }
+    return request<FindingListResponse>(`/cases/${caseId}/findings${query.size ? `?${query.toString()}` : ""}`);
+  },
+  getFinding: (caseId: string, findingId: string) => request<FindingDetail | Finding>(`/cases/${caseId}/findings/${findingId}`),
   createFinding: (caseId: string, payload: Partial<Finding>) => request<Finding>(`/cases/${caseId}/findings`, { method: "POST", body: JSON.stringify(payload) }),
   updateFinding: (caseId: string, findingId: string, payload: Partial<Finding>) => request<Finding>(`/cases/${caseId}/findings/${findingId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  updateFindingStatus: (caseId: string, findingId: string, payload: { status: string; analyst?: string; note?: string | null }) =>
+    request<Finding>(`/cases/${caseId}/findings/${findingId}/status`, { method: "POST", body: JSON.stringify(payload) }),
+  suppressFinding: (caseId: string, findingId: string, payload?: { analyst?: string; reason?: string | null }) =>
+    request<Finding>(`/cases/${caseId}/findings/${findingId}/suppress`, { method: "POST", body: JSON.stringify(payload ?? {}) }),
+  bulkFindingStatus: (caseId: string, payload: { finding_ids: string[]; status: string; analyst?: string; note?: string | null }) =>
+    request<{ updated: number; items: Finding[] }>(`/cases/${caseId}/findings/bulk-status`, { method: "POST", body: JSON.stringify(payload) }),
   runCorrelation: (
     caseId: string,
     payload?: {
@@ -6452,6 +6601,20 @@ export const api = {
     }
     return request<RuleListResponse>(`/rules${query.size ? `?${query.toString()}` : ""}`);
   },
+  listHuntingRules: (caseId: string, params?: Record<string, string | number | boolean | undefined>) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (value !== undefined && value !== "") query.append(key, String(value));
+    }
+    return request<HuntingRuleListResponse>(`/cases/${caseId}/rules${query.size ? `?${query.toString()}` : ""}`);
+  },
+  getHuntingRule: (caseId: string, ruleId: string) => request<{ rule: HuntingRule }>(`/cases/${caseId}/rules/${encodeURIComponent(ruleId)}`),
+  evaluateHuntingRule: (caseId: string, ruleId: string, payload?: { evidence_id?: string | null; process_entity_id?: string | null; artifact_family?: string | null; dry_run?: boolean; apply?: boolean; include_disabled?: boolean }) =>
+    request<HuntingEvaluationResult>(`/cases/${caseId}/rules/${encodeURIComponent(ruleId)}/evaluate`, { method: "POST", body: JSON.stringify(payload ?? { dry_run: true }) }),
+  evaluateHuntingRules: (caseId: string, payload?: { rule_id?: string | null; evidence_id?: string | null; process_entity_id?: string | null; artifact_family?: string | null; dry_run?: boolean; apply?: boolean; include_disabled?: boolean }) =>
+    request<HuntingEvaluationResult>(`/cases/${caseId}/rules/evaluate`, { method: "POST", body: JSON.stringify(payload ?? { dry_run: true }) }),
+  listDetectionRuns: (caseId: string) => request<{ items: HuntingDetectionRun[]; total: number }>(`/cases/${caseId}/detection-runs`),
+  getDetectionRun: (caseId: string, runId: string) => request<HuntingDetectionRun>(`/cases/${caseId}/detection-runs/${runId}`),
   getSigmaCoverage: (params?: { case_id?: string; scope?: "global" | "case" | "all" }) => {
     const query = new URLSearchParams();
     if (params?.case_id) query.set("case_id", params.case_id);
