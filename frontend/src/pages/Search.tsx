@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type EventContextResponse, type EventMarking, type EventMarkingStatus, type SearchQuickFilter, type SearchV2Response, type SearchV2Result } from "../api/client";
+import FindingIndicatorBadge from "../components/FindingIndicatorBadge";
+import { useFindingIndicators } from "../lib/useFindingIndicators";
 import ResponsiveDetailPanel, { useMinWidthQuery } from "../components/ResponsiveDetailPanel";
 import SearchBar from "../components/SearchBar";
 import { useActiveCase } from "../context/ActiveCaseContext";
@@ -729,6 +731,7 @@ function genericColumns(): ColumnDef[] {
     { key: "entity", label: "Key Entity", defaultWidth: 250, minWidth: 150, render: (_result, summary, pivot, density) => pivot({ label: "key entity", field: "message", value: summary.keyEntity, operator: "contains", className: cellTextClass(density) }) },
     { key: "message", label: "Snippet", defaultWidth: 320, minWidth: 180, render: (_result, summary, _pivot, density) => <span data-testid="search-snippet-cell" className={cellTextClass(density)} title={summary.compactMessage}>{applyCellFallbacks(summary.compactMessage)}</span> },
     { key: "risk", label: "Risk", defaultWidth: 95, minWidth: 80, render: (result) => <ResultBadge tone={riskTone(result.risk_score)}>{String(result.risk_score ?? 0)}</ResultBadge> },
+    { key: "findings", label: "Findings", defaultWidth: 85, minWidth: 70, render: (result) => typeof result === "object" && result ? <FindingIndicatorBadge indicator={(result as any).__findingIndicator ?? null} caseId={(result as any).__caseId ?? ""} compact testId="search-finding-indicator" /> : null },
     { key: "review", label: "Review", defaultWidth: 130, minWidth: 100, render: (result) => <MarkingBadge marking={getResultMarking(result)} /> },
   ];
 }
@@ -1519,13 +1522,43 @@ export default function Search() {
   }, [globalFacets, response?.facets]);
   const parsedSearchError = useMemo(() => parseSearchError(searchQuery.error), [searchQuery.error]);
   const results = response?.results ?? [];
+  const indicatorEntities = useMemo(() =>
+    results.filter((r) => r.kind !== "finding").map((r) => {
+      const raw = r.raw as Record<string, unknown> || {};
+      const process = (raw.process as Record<string, unknown>) || {};
+      const evidenceId = (r as any).evidence_id || raw.evidence_id as string || "";
+      const entityId = process.entity_id as string || process.guid as string || (raw as any).process_entity_id as string || "";
+      const key = entityId || `search:${evidenceId}:${r.id}`;
+      return {
+        key: String(key),
+        entity_type: entityId ? "process" : "event",
+        process_entity_id: entityId || null,
+        artifact_id: (raw as any).artifact_id as string || null,
+        event_id: (raw as any).event_id as string || r.id,
+        evidence_id: evidenceId || null,
+        pid: process.pid as number || null,
+      };
+    }).filter((e) => e.process_entity_id || e.evidence_id).slice(0, 500),
+  [results]);
+  const { data: findingsMap = {} } = useFindingIndicators(resolvedCaseId || undefined, indicatorEntities.length ? indicatorEntities : null);
+  const enrichedResults = useMemo(() =>
+    results.map((r) => {
+      if (r.kind === "finding") return r;
+      const raw = r.raw as Record<string, unknown> || {};
+      const process = (raw.process as Record<string, unknown>) || {};
+      const evidenceId = (r as any).evidence_id || raw.evidence_id as string || "";
+      const entityId = process.entity_id as string || process.guid as string || (raw as any).process_entity_id as string || "";
+      const key = entityId || `search:${evidenceId}:${r.id}`;
+      return { ...r, __findingIndicator: findingsMap[String(key)] || null, __caseId: resolvedCaseId };
+    }),
+  [results, findingsMap, resolvedCaseId]);
   const groupedSearchSummary = useMemo(
     () => buildGroupedSearchSummary(results, searchRequestState.q, response?.total),
     [results, response?.total, searchRequestState.q],
   );
-  const findingResults = useMemo(() => results.filter((item) => item.kind === "finding"), [results]);
-  const eventResults = useMemo(() => results.filter((item) => item.kind === "event"), [results]);
-  const selectedResult = useMemo(() => results.find((item) => item.id === selectedId) ?? null, [results, selectedId]);
+  const findingResults = useMemo(() => enrichedResults.filter((item) => item.kind === "finding"), [enrichedResults]);
+  const eventResults = useMemo(() => enrichedResults.filter((item) => item.kind === "event"), [enrichedResults]);
+  const selectedResult = useMemo(() => enrichedResults.find((item) => item.id === selectedId) ?? null, [enrichedResults, selectedId]);
   const eventContextQuery = useQuery({
     queryKey: ["event-context", resolvedCaseId, selectedResult?.id, selectedResult?.kind],
     queryFn: () => api.getEventContext(resolvedCaseId || "", selectedResult?.id ?? ""),
@@ -2499,7 +2532,7 @@ export default function Search() {
           {!searchQuery.isError && results.length ? (
             <>
               {state.tab === "results" ? (
-                <SearchTable results={results} columns={genericResultColumns} selectedId={selectedId} onSelect={handleSelect} actionBuilder={buildActions} pivotRenderer={renderPivotValue} testId="results-table" density={density} sort={state.sort} onSortChange={updateBackendSort} />
+                <SearchTable results={enrichedResults} columns={genericResultColumns} selectedId={selectedId} onSelect={handleSelect} actionBuilder={buildActions} pivotRenderer={renderPivotValue} testId="results-table" density={density} sort={state.sort} onSortChange={updateBackendSort} />
               ) : null}
 
               {state.tab === "findings" ? (

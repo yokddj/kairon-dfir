@@ -6595,6 +6595,8 @@ export const api = {
     request<Finding>(`/cases/${caseId}/findings/${findingId}/assign`, { method: "POST", body: JSON.stringify(payload) }),
   unassignFinding: (caseId: string, findingId: string) =>
     request<Finding>(`/cases/${caseId}/findings/${findingId}/unassign`, { method: "POST", body: JSON.stringify({}) }),
+  resolveFindingIndicators: (caseId: string, payload: FindingIndicatorResolveRequest) =>
+    request<FindingIndicatorResolveResponse>(`/cases/${caseId}/finding-indicators/resolve`, { method: "POST", body: JSON.stringify(payload) }),
   bulkFindingStatus: (caseId: string, payload: { finding_ids: string[]; status: string; analyst?: string; note?: string | null }) =>
     request<{ updated: number; items: Finding[] }>(`/cases/${caseId}/findings/bulk-status`, { method: "POST", body: JSON.stringify(payload) }),
   runCorrelation: (
@@ -7091,4 +7093,32 @@ export const api = {
       restart_instructions: NonNullable<PerformanceState["restart_instructions"]>;
     }>("/admin/performance/restart-instructions"),
   getAdminPerformanceRecommendation: () => request<PerformanceState["recommendation"]>("/admin/performance/recommendation"),
+};
+
+export type FindingIndicatorSummary = {
+  total: number;
+  active: number;
+  highest_severity: string | null;
+  highest_confidence: string | null;
+  statuses: Record<string, number>;
+  finding_ids: string[];
+  suppressed_count: number;
+  association_basis: string[];
+  partial: boolean;
+};
+
+export type FindingIndicatorResolveRequest = {
+  entities: Array<{
+    key: string;
+    entity_type: string;
+    process_entity_id?: string | null;
+    artifact_id?: string | null;
+    event_id?: string | null;
+    evidence_id?: string | null;
+    pid?: number | null;
+  }>;
+};
+
+export type FindingIndicatorResolveResponse = {
+  results: Record<string, FindingIndicatorSummary>;
 };
