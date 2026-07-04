@@ -23,3 +23,4 @@ class CaseHost(UUIDMixin, TimestampMixin, Base):
     case = relationship("Case", back_populates="host_identities")
     aliases = relationship("CaseHostAlias", back_populates="case_host", cascade="all, delete-orphan")
     audit_entries = relationship("CaseHostIdentityAudit", back_populates="case_host", cascade="all, delete-orphan")
+    evidences = relationship("Evidence", back_populates="host")
