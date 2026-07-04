@@ -21,7 +21,8 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.core.activity import log_activity
 from app.core.app_settings import load_runtime_settings
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import get_db, utc_now
+from app.models.case_host import CaseHost
 from app.core.evidence_paths import fingerprint_external_path, storage_capabilities, validate_external_path
 from app.core.manifest import default_manifest, write_manifest
 from app.core.opensearch import OpenSearchIngestBlockedError, count_documents, delete_events_by_evidence, get_events_index, get_opensearch_client, resolve_aggregatable_field, search_documents
@@ -2375,6 +2376,49 @@ def get_evidence(evidence_id: str, db: Session = Depends(get_db)) -> Evidence:
     if not item:
         raise HTTPException(status_code=404, detail="Evidence not found")
     return _ensure_rebuilt_ingest_plan(db, item)
+
+
+class EvidenceHostAssignRequest(BaseModel):
+    host_id: str
+    reason: str | None = None
+    analyst: str | None = "analyst"
+
+
+@router.post("/api/evidences/{evidence_id}/assign-host")
+def assign_evidence_host(evidence_id: str, payload: EvidenceHostAssignRequest, db: Session = Depends(get_db)):
+    evidence = db.get(Evidence, evidence_id)
+    if not evidence:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    host = db.get(CaseHost, payload.host_id)
+    if not host or host.case_id != evidence.case_id:
+        raise HTTPException(status_code=400, detail="Host not found in this case")
+    evidence.host_id = payload.host_id
+    evidence.host_assignment_status = "confirmed"
+    evidence.host_assignment_method = "analyst_assigned"
+    evidence.host_assignment_confidence = "high"
+    evidence.host_assignment_reason = payload.reason or "Analyst assigned"
+    evidence.host_assignment_updated_at = utc_now().isoformat()
+    evidence.host_assignment_updated_by = payload.analyst or "analyst"
+    db.commit()
+    db.refresh(evidence)
+    return {"evidence_id": evidence.id, "host_id": evidence.host_id, "status": "confirmed"}
+
+
+@router.post("/api/evidences/{evidence_id}/unassign-host")
+def unassign_evidence_host(evidence_id: str, db: Session = Depends(get_db)):
+    evidence = db.get(Evidence, evidence_id)
+    if not evidence:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    evidence.host_id = None
+    evidence.host_assignment_status = "unassigned"
+    evidence.host_assignment_method = None
+    evidence.host_assignment_confidence = None
+    evidence.host_assignment_reason = None
+    evidence.host_assignment_updated_at = utc_now().isoformat()
+    evidence.host_assignment_updated_by = "analyst"
+    db.commit()
+    db.refresh(evidence)
+    return {"evidence_id": evidence.id, "status": "unassigned"}
 
 
 @router.get("/api/evidences/{evidence_id}/manifest")

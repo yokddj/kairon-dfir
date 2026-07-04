@@ -4,8 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, Path, status
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from app.core.database import get_db
+from app.core.database import get_db, utc_now
 from app.models.case import Case
+from app.models.evidence import Evidence
 from app.services.host_identity import build_case_host_candidates, get_case_hosts, get_host_identity_audit, merge_hosts, rename_canonical_host, split_alias
 
 

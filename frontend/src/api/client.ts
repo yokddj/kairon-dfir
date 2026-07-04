@@ -481,6 +481,10 @@ export type Evidence = {
   provided_host?: string | null;
   detected_host: string | null;
   detected_user: string | null;
+  host_id?: string | null;
+  host_assignment_status?: string | null;
+  host_assignment_method?: string | null;
+  host_assignment_confidence?: string | null;
   source_tool: string | null;
   path_validation: Record<string, unknown>;
   ingest_source: Record<string, unknown>;
@@ -4877,6 +4881,10 @@ export const api = {
     return request<{ case_id: string; detached_host: CaseContextHostSummary; source_host_id: string }>(`/cases/${caseId}/hosts/${hostId}/aliases/${aliasId}${suffix}`, { method: "DELETE" });
   },
   getCaseHostAudit: (caseId: string) => request<CaseHostAuditResponse>(`/cases/${caseId}/hosts/audit`),
+  assignEvidenceHost: (evidenceId: string, payload: { host_id: string; reason?: string | null; analyst?: string | null }) =>
+    request<{ evidence_id: string; host_id: string; status: string }>(`/evidences/${evidenceId}/assign-host`, { method: "POST", body: JSON.stringify(payload) }),
+  unassignEvidenceHost: (evidenceId: string) =>
+    request<{ evidence_id: string; status: string }>(`/evidences/${evidenceId}/unassign-host`, { method: "POST", body: JSON.stringify({}) }),
   updateCase: (caseId: string, payload: Partial<DfirCase>) => request<DfirCase>(`/cases/${caseId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteCase: (caseId: string) => request<void>(`/cases/${caseId}`, { method: "DELETE" }),
   getInvestigationSummary: (caseId: string) => request<InvestigationSummary>(`/cases/${caseId}/investigation-summary`),

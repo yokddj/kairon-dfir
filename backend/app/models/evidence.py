@@ -70,6 +70,13 @@ class Evidence(UUIDMixin, Base):
     ingest_status: Mapped[IngestStatus] = mapped_column(Enum(IngestStatus), default=IngestStatus.pending, nullable=False)
     detected_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
     detected_user: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    host_id: Mapped[str | None] = mapped_column(ForeignKey("case_hosts.id", ondelete="SET NULL"), nullable=True, index=True)
+    host_assignment_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    host_assignment_method: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    host_assignment_confidence: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    host_assignment_reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    host_assignment_updated_at: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    host_assignment_updated_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_tool: Mapped[str | None] = mapped_column(String(255), nullable=True)
     path_validation: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
     ingest_source: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
@@ -85,6 +92,7 @@ class Evidence(UUIDMixin, Base):
     rule_runs = relationship("RuleRun", back_populates="evidence")
     memory_scan_runs = relationship("MemoryScanRun", back_populates="evidence", cascade="all, delete-orphan")
     memory_artifact_summaries = relationship("MemoryArtifactSummary", back_populates="evidence", cascade="all, delete-orphan")
+    host = relationship("CaseHost", back_populates="evidences")
 
 
 def resolve_public_evidence_type(

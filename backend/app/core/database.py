@@ -572,6 +572,13 @@ def _ensure_compatible_schema() -> None:
                 "file_count": "BIGINT",
                 "path_validation": "JSONB NOT NULL DEFAULT '{}'::jsonb",
                 "ingest_source": "JSONB NOT NULL DEFAULT '{}'::jsonb",
+                "host_id": "UUID REFERENCES case_hosts(id) ON DELETE SET NULL",
+                "host_assignment_status": "VARCHAR(32)",
+                "host_assignment_method": "VARCHAR(64)",
+                "host_assignment_confidence": "VARCHAR(16)",
+                "host_assignment_reason": "VARCHAR(512)",
+                "host_assignment_updated_at": "VARCHAR(64)",
+                "host_assignment_updated_by": "VARCHAR(128)",
             }
             for column_name, column_type in additions.items():
                 if column_name not in evidence_columns:
