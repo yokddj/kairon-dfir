@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Kairon administrative CLI."""
 from __future__ import annotations
 
@@ -96,7 +95,3 @@ def main() -> None:
         cmd_reset_password(args)
     else:
         parser.print_help()
-
-
-if __name__ == "__main__":
-    main()
