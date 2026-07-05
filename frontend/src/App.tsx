@@ -10,6 +10,7 @@ import { NotificationsProvider } from "./context/NotificationsContext";
 import { TimezoneProvider } from "./context/TimezoneContext";
 
 const LoginPage = lazy(() => import("./pages/LoginPage"));
+const SetupWizardPage = lazy(() => import("./pages/SetupWizardPage"));
 const AdminUsersPage = lazy(() => import("./pages/AdminUsersPage"));
 const ChangePasswordPage = lazy(() => import("./pages/ChangePasswordPage"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
@@ -109,6 +110,7 @@ export default function App() {
     <AuthProvider>
       <Routes>
         <Route path="/login" element={<Suspense fallback={<WorkspaceLoadingFallback />}><LoginPage /></Suspense>} />
+        <Route path="/setup" element={<Suspense fallback={<WorkspaceLoadingFallback />}><SetupWizardPage /></Suspense>} />
         <Route path="*" element={
           <ProtectedRoute>
             <ActiveCaseProvider>

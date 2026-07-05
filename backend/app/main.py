@@ -67,6 +67,8 @@ app.add_middleware(
 PUBLIC_PATH_PREFIXES = [
     "/api/auth/login",
     "/api/auth/logout",
+    "/api/auth/needs-setup",
+    "/api/auth/setup",
     "/api/system/version",
     "/api/system/health",
     "/api/system/status",

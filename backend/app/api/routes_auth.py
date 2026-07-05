@@ -177,3 +177,68 @@ def change_password(payload: ChangePasswordRequest, request: Request, db: Sessio
     db.commit()
     log_audit("password_change", actor_user_id=user.id, result="success")
     return {"status": "password_changed"}
+
+
+class SetupRequest(BaseModel):
+    username: str
+    email: str | None = None
+    display_name: str | None = None
+    password: str
+
+
+@router.get("/api/auth/needs-setup")
+def needs_setup(db: Session = Depends(get_db)):
+    user_count = db.query(User).count()
+    return {"needs_setup": user_count == 0}
+
+
+@router.post("/api/auth/setup")
+def create_first_admin(payload: SetupRequest, response: Response, request: Request, db: Session = Depends(get_db)):
+    existing = db.query(User).count()
+    if existing > 0:
+        raise HTTPException(status_code=403, detail="Setup already completed")
+    if len(payload.password) < 12:
+        raise HTTPException(status_code=400, detail="Password must be at least 12 characters")
+    if not payload.username.strip():
+        raise HTTPException(status_code=400, detail="Username is required")
+
+    user = User(
+        username=payload.username.strip(),
+        email=payload.email,
+        display_name=payload.display_name or payload.username.strip(),
+        password_hash=hash_password(payload.password),
+        is_admin=True,
+        is_active=True,
+    )
+    db.add(user)
+    db.commit()
+
+    # Grant access to all existing cases
+    from app.models.case_access import CaseAccess
+    from app.models.case import Case
+    for case in db.query(Case).all():
+        db.add(CaseAccess(case_id=case.id, user_id=user.id, role="owner", granted_by="setup_wizard"))
+    db.commit()
+
+    # Auto-login
+    token = create_session_token()
+    token_h = hash_token(token)
+    session = UserSession(
+        user_id=user.id,
+        token_hash=token_h,
+        created_at=datetime.now(timezone.utc).isoformat(),
+        expires_at=(datetime.now(timezone.utc) + timedelta(hours=SESSION_EXPIRY_HOURS)).isoformat(),
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent"),
+    )
+    db.add(session)
+    db.commit()
+
+    _set_session_cookie(response, token)
+    log_audit("setup_first_admin", actor_user_id=user.id, result="success")
+    return {
+        "user_id": user.id,
+        "username": user.username,
+        "is_admin": True,
+        "status": "setup_complete",
+    }
