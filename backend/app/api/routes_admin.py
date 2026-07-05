@@ -97,26 +97,27 @@ def update_user(user_id: str, payload: UpdateUserRequest, db: Session = Depends(
     return {"id": user.id, "username": user.username, "is_admin": user.is_admin}
 
 @router.post("/users/{user_id}/disable")
-def disable_user(user_id: str, payload: DisableUserRequest, request: Request, db: Session = Depends(get_db), admin_user: User = Depends(require_admin)):
+def disable_user(user_id: str, payload: DisableUserRequest | None = None, request: Request = None, db: Session = Depends(get_db), admin_user: User = Depends(require_admin)):
+    disabled = payload.disabled if payload else True
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if user.id == admin_user.id and payload.disabled:
+    if user.id == admin_user.id and disabled:
         raise HTTPException(status_code=400, detail="Cannot disable yourself")
-    if payload.disabled and user.is_admin:
+    if disabled and user.is_admin:
         active_admins = db.query(User).filter(User.is_admin == True, User.is_active == True, User.id != user.id).count()
         if active_admins == 0:
             raise HTTPException(status_code=400, detail="Cannot disable the last active admin")
-    user.is_active = not payload.disabled
+    user.is_active = not disabled
     user.updated_at = datetime.now(timezone.utc).isoformat()
-    if payload.disabled:
+    if disabled:
         db.query(UserSession).filter(UserSession.user_id == user_id, UserSession.revoked_at == None).update(
             {"revoked_at": datetime.now(timezone.utc).isoformat()}
         )
     db.commit()
     log_audit("user_disable", actor_user_id=admin_user.id, result="success", resource_type="user", resource_id=user.id,
-              ip_address=request.client.host if request.client else None,
-              user_agent=request.headers.get("user-agent"))
+              ip_address=request.client.host if request and request.client else None,
+              user_agent=request.headers.get("user-agent") if request else None)
     return {"id": user.id, "is_active": user.is_active}
 
 @router.post("/users/{user_id}/enable")
