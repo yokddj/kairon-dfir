@@ -1245,12 +1245,19 @@ def run_siem_query(payload: SiemRequest) -> SearchResponse:
 
 
 @router.get("/api/search/facets")
-def search_facets(case_id: str | None = None, evidence_id: str | None = None, db: Session = Depends(get_db)) -> dict:
+def search_facets(
+    case_id: str | None = None,
+    evidence_id: str | None = None,
+    host_id: str | None = Query(default=None),
+    host_scope: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> dict:
     client = get_opensearch_client()
     index = _resolve_index(case_id)
     if not _index_available(index):
         return _empty_search_facets()
-    cache_key = f"{index}:{case_id or 'all'}:{evidence_id or 'all'}"
+    host_key = host_id or host_scope or "all"
+    cache_key = f"{index}:{case_id or 'all'}:{evidence_id or 'all'}:{host_key}"
     cached = _cache_get(_FACETS_CACHE, cache_key, _FACETS_CACHE_TTL)
     if cached is not None:
         return cached
@@ -1262,6 +1269,30 @@ def search_facets(case_id: str | None = None, evidence_id: str | None = None, db
         scope_filters.append({"term": {"case_id": case_id}})
     if evidence_id:
         scope_filters.append({"term": {"evidence_id": evidence_id}})
+    if host_id and host_id not in ("unassigned", "conflicted"):
+        host = db.get(CaseHost, host_id) if db else None
+        if host and host.canonical_name:
+            expanded = list(expand_host_filter(db, host.case_id, host.canonical_name))
+            scope_filters.append({
+                "bool": {
+                    "should": [
+                        {"term": {"host.evidence_host_id": host_id}},
+                        {"term": {"host.identity_id": host_id}},
+                        {"terms": {"host.canonical": expanded}},
+                        {"terms": {"host.name": expanded}},
+                    ],
+                    "minimum_should_match": 1,
+                }
+            })
+    elif host_scope in ("unassigned", "conflicted") or (host_id in ("unassigned", "conflicted")):
+        scope_filters.append({
+            "bool": {
+                "should": [
+                    {"bool": {"must_not": [{"exists": {"field": "host.evidence_host_id"}}]}},
+                ],
+                "minimum_should_match": 1,
+            }
+        })
     facets = {}
     for key, field in FACET_FIELDS.items():
         resolved_field = resolve_aggregatable_field(client, index, field)
@@ -1315,6 +1346,8 @@ def search_case_events_and_findings(
     confidence: list[str] | None = Query(default=None),
     finding_type: list[str] | None = Query(default=None),
     host: str | None = Query(default=None),
+    host_id: str | None = Query(default=None),
+    host_scope: str | None = Query(default=None),
     user: str | None = Query(default=None),
     exclude_host: str | None = Query(default=None),
     exclude_user: str | None = Query(default=None),
@@ -1365,6 +1398,8 @@ def search_case_events_and_findings(
         confidence=confidence,
         finding_type=finding_type,
         host=host,
+        host_id=host_id,
+        host_scope=host_scope,
         user=user,
         exclude_host=exclude_host,
         exclude_user=exclude_user,

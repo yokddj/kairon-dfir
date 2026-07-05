@@ -1939,3 +1939,210 @@ def _v20_memory_upload_sessions_resumable_fields(connection: Connection) -> None
         name="ix_memory_uploads_expires_at",
         create_sql="CREATE INDEX ix_memory_uploads_expires_at ON memory_uploads (expires_at)",
     )
+
+
+# ---------------------------------------------------------------------------
+# v21: Host-aware findings columns and assignment_history table
+# ---------------------------------------------------------------------------
+
+
+@register(21, "host_scope_findings_and_assignment_history")
+def _v21_host_scope_findings_and_assignment_history(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    dialect = connection.dialect.name
+
+    if "findings" in inspector.get_table_names():
+        existing = {c["name"] for c in inspector.get_columns("findings")}
+        additions = [
+            ("primary_host_id", "VARCHAR"),
+            ("related_host_ids", "JSONB" if dialect == "postgresql" else "JSON"),
+            ("host_scope", "VARCHAR DEFAULT 'single_host'"),
+        ]
+        for column_name, column_type in additions:
+            if column_name not in existing:
+                if column_name == "related_host_ids":
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE findings ADD COLUMN {column_name} {column_type} DEFAULT '[]'"
+                        )
+                    )
+                elif column_name == "host_scope":
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE findings ADD COLUMN {column_name} VARCHAR DEFAULT 'single_host'"
+                        )
+                    )
+                else:
+                    connection.execute(
+                        text(
+                            f"ALTER TABLE findings ADD COLUMN {column_name} {column_type}"
+                        )
+                    )
+                logger.info("v21: added findings.%s", column_name)
+
+    if "assignment_history" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                """
+                CREATE TABLE assignment_history (
+                    id UUID PRIMARY KEY,
+                    evidence_id UUID NOT NULL,
+                    case_id VARCHAR NOT NULL,
+                    previous_host_id UUID,
+                    new_host_id UUID,
+                    previous_status VARCHAR,
+                    new_status VARCHAR,
+                    method VARCHAR,
+                    confidence VARCHAR,
+                    actor VARCHAR,
+                    reason TEXT,
+                    created_at VARCHAR
+                )
+                """
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_assignment_history_case_id "
+                "ON assignment_history (case_id)"
+            )
+        )
+        connection.execute(
+            text(
+                "CREATE INDEX ix_assignment_history_evidence_id "
+                "ON assignment_history (evidence_id)"
+            )
+        )
+        logger.info("v21: created assignment_history table")
+
+
+# ---------------------------------------------------------------------------
+# v22: Authentication infrastructure — users, sessions, case_access, audit
+# ---------------------------------------------------------------------------
+
+
+@register(22, "auth_users_sessions_caseaccess_audit")
+def _v22_auth_infrastructure(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    dialect = connection.dialect.name
+    jsonb_type = "JSONB" if dialect == "postgresql" else "JSON"
+
+    if "users" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS users ("
+                "id VARCHAR PRIMARY KEY, "
+                "username VARCHAR UNIQUE NOT NULL, "
+                "email VARCHAR, "
+                "display_name VARCHAR, "
+                "password_hash VARCHAR NOT NULL, "
+                "is_active BOOLEAN NOT NULL DEFAULT TRUE, "
+                "is_admin BOOLEAN NOT NULL DEFAULT FALSE, "
+                "created_at VARCHAR, "
+                "updated_at VARCHAR, "
+                "last_login_at VARCHAR, "
+                "password_changed_at VARCHAR"
+                ")"
+            )
+        )
+        try:
+            connection.execute(
+                text("CREATE INDEX ix_users_username ON users (username)")
+            )
+        except Exception:
+            pass
+        logger.info("v22: created users table")
+
+    if "sessions" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS sessions ("
+                "id VARCHAR PRIMARY KEY, "
+                "user_id VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
+                "token_hash VARCHAR UNIQUE NOT NULL, "
+                "created_at VARCHAR, "
+                "expires_at VARCHAR NOT NULL, "
+                "revoked_at VARCHAR, "
+                "ip_address VARCHAR, "
+                "user_agent VARCHAR"
+                ")"
+            )
+        )
+        try:
+            connection.execute(
+                text("CREATE INDEX ix_sessions_user_id ON sessions (user_id)")
+            )
+        except Exception:
+            pass
+        try:
+            connection.execute(
+                text("CREATE INDEX ix_sessions_token_hash ON sessions (token_hash)")
+            )
+        except Exception:
+            pass
+        logger.info("v22: created sessions table")
+
+    if "case_access" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                "CREATE TABLE IF NOT EXISTS case_access ("
+                "id VARCHAR PRIMARY KEY, "
+                "case_id VARCHAR NOT NULL, "
+                "user_id VARCHAR NOT NULL REFERENCES users(id) ON DELETE CASCADE, "
+                "role VARCHAR NOT NULL DEFAULT 'viewer', "
+                "granted_by VARCHAR, "
+                "created_at VARCHAR"
+                ")"
+            )
+        )
+        try:
+            connection.execute(
+                text("CREATE INDEX ix_case_access_case_id ON case_access (case_id)")
+            )
+        except Exception:
+            pass
+        try:
+            connection.execute(
+                text("CREATE INDEX ix_case_access_user_id ON case_access (user_id)")
+            )
+        except Exception:
+            pass
+        try:
+            connection.execute(
+                text("CREATE INDEX ix_case_access_case_user ON case_access (case_id, user_id)")
+            )
+        except Exception:
+            pass
+        logger.info("v22: created case_access table")
+
+    if "audit_events" not in inspector.get_table_names():
+        connection.execute(
+            text(
+                f"CREATE TABLE IF NOT EXISTS audit_events ("
+                "id VARCHAR PRIMARY KEY, "
+                "occurred_at VARCHAR, "
+                "actor_user_id VARCHAR, "
+                "action VARCHAR NOT NULL, "
+                "resource_type VARCHAR, "
+                "resource_id VARCHAR, "
+                "case_id VARCHAR, "
+                "result VARCHAR, "
+                "ip_address VARCHAR, "
+                "user_agent VARCHAR, "
+                f"metadata_json {jsonb_type}"
+                ")"
+            )
+        )
+        for idx_name, idx_cols in (
+            ("ix_audit_events_occurred_at", "occurred_at"),
+            ("ix_audit_events_actor_user_id", "actor_user_id"),
+            ("ix_audit_events_action", "action"),
+            ("ix_audit_events_case_id", "case_id"),
+        ):
+            try:
+                connection.execute(
+                    text(f"CREATE INDEX IF NOT EXISTS {idx_name} ON audit_events ({idx_cols})")
+                )
+            except Exception:
+                pass
+        logger.info("v22: created audit_events table")

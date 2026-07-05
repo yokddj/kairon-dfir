@@ -14,6 +14,7 @@ type Props = {
   caseId: string;
   evidenceId?: string;
   host?: string;
+  hostId?: string;
   embedded?: boolean;
   showHeader?: boolean;
 };
@@ -148,7 +149,7 @@ function BreakdownList({ title, values }: { title: string; values?: Record<strin
   );
 }
 
-export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", embedded = false, showHeader = true }: Props) {
+export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", hostId, embedded = false, showHeader = true }: Props) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const { notify } = useNotifications();
@@ -175,10 +176,10 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
   const [correlationReport, setCorrelationReport] = useState<CorrelationRunResult | null>(null);
 
   const findingsQuery = useQuery({
-    queryKey: ["findings", caseId, filters, host || "all-hosts", page, pageSize],
+    queryKey: ["findings", caseId, filters, host || "all-hosts", hostId || "", page, pageSize],
     queryFn: async () => {
       if (typeof apiCompat.listFindingsPage !== "function") {
-        const legacy = await api.listFindings(caseId, { evidence_id: filters.evidenceId || undefined, host: host || undefined });
+        const legacy = await api.listFindings(caseId, { evidence_id: filters.evidenceId || undefined, host: host || undefined, host_id: hostId || undefined } as any);
         return { items: legacy, results: legacy, total: legacy.length, page: 1, page_size: legacy.length || pageSize, total_pages: legacy.length ? 1 : 0 };
       }
       const response = await apiCompat.listFindingsPage(caseId, {
@@ -190,6 +191,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
         evidence_id: filters.evidenceId || undefined,
         process_entity_id: filters.process || undefined,
         pid: filters.pid || undefined,
+        host_id: hostId || undefined as any,
         page,
         page_size: pageSize,
       });
@@ -201,7 +203,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
   });
 
   const runCorrelationMutation = useMutation({
-    mutationFn: ({ page = 1 }: { page?: number } = {}) => api.runCorrelation(caseId, { evidence_id: filters.evidenceId || undefined, host: host || undefined, force: true, page, page_size: 25 }),
+    mutationFn: ({ page = 1 }: { page?: number } = {}) => api.runCorrelation(caseId, { evidence_id: filters.evidenceId || undefined, host: host || undefined, host_id: hostId || undefined as any, force: true, page, page_size: 25 }),
     onSuccess: ({ report }) => {
       setCorrelationReport(report);
       notify({

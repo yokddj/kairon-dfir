@@ -7,17 +7,21 @@ import {
   Gauge,
   HardDrive,
   Home,
+  KeyRound,
   ListChecks,
+  LogOut,
   MemoryStick,
   Network,
   ScanSearch,
   Search,
   ShieldAlert,
   Terminal,
+  UserCog,
   Waypoints,
 } from "lucide-react";
-import { NavLink, useLocation } from "react-router-dom";
+import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useActiveCase } from "../context/ActiveCaseContext";
+import { useAuth } from "../context/AuthContext";
 
 type NavItem = {
   to: string;
@@ -80,6 +84,8 @@ function SidebarLink({ item, activeCaseId }: { item: NavItem; activeCaseId: stri
 
 export default function Sidebar() {
   const { activeCaseId, caseContext } = useActiveCase();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const showValidationMatrix = Boolean(caseContext?.summary?.validation_matrix?.show_validation_matrix);
   const groups: NavGroup[] = [
     {
@@ -178,6 +184,52 @@ export default function Sidebar() {
           </section>
         ))}
       </nav>
+
+      <div className="mt-auto border-t border-line/80 pt-5">
+        <div className="mb-4 flex items-center gap-3 rounded-2xl px-4">
+          <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent/10 text-xs font-bold text-accent">
+            {user?.username?.[0]?.toUpperCase() || "?"}
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm text-ink">{user?.display_name || user?.username || "User"}</p>
+            <p className="truncate text-[11px] text-muted">{user?.is_admin ? "Admin" : "User"}</p>
+          </div>
+        </div>
+        {user?.is_admin && (
+          <NavLink
+            to="/admin/users"
+            className={({ isActive }) =>
+              `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
+                isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
+              }`
+            }
+          >
+            <UserCog size={16} />
+            Users
+          </NavLink>
+        )}
+        <NavLink
+          to="/account/change-password"
+          className={({ isActive }) =>
+            `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
+              isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
+            }`
+          }
+        >
+          <KeyRound size={16} />
+          Change Password
+        </NavLink>
+        <button
+          onClick={async () => {
+            await logout();
+            navigate("/login");
+          }}
+          className="flex w-full items-center gap-3 rounded-2xl px-4 py-3 text-sm text-muted transition hover:bg-white/5 hover:text-ink"
+        >
+          <LogOut size={16} />
+          Sign Out
+        </button>
+      </div>
     </aside>
   );
 }

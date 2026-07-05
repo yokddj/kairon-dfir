@@ -6,6 +6,7 @@ import { useFindingIndicators } from "../lib/useFindingIndicators";
 import ResponsiveDetailPanel, { useMinWidthQuery } from "../components/ResponsiveDetailPanel";
 import SearchBar from "../components/SearchBar";
 import { useActiveCase } from "../context/ActiveCaseContext";
+import { HostFilter } from "../components/HostFilter";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 
 type Scope = "events" | "findings" | "all";
@@ -210,6 +211,7 @@ function buildState(searchParams: URLSearchParams) {
     status: splitParam(searchParams.get("status")),
     confidence: splitParam(searchParams.get("confidence")),
     host: searchParams.get("host") ?? "",
+    host_id: searchParams.get("host_id") ?? "",
     user: searchParams.get("user") ?? "",
     exclude_host: searchParams.get("exclude_host") ?? "",
     exclude_user: searchParams.get("exclude_user") ?? "",
@@ -1397,6 +1399,7 @@ export default function Search() {
       status: state.status,
       confidence: state.confidence,
       host: state.host || selectedHost,
+      host_id: state.host_id || null,
       user: state.user,
       exclude_host: state.exclude_host,
       exclude_user: state.exclude_user,
@@ -1450,6 +1453,7 @@ export default function Search() {
         status: searchRequestState.status,
         confidence: searchRequestState.confidence,
         host: searchRequestState.host || undefined,
+        host_id: searchRequestState.host_id || undefined,
         user: searchRequestState.user || undefined,
         exclude_host: searchRequestState.exclude_host || undefined,
         exclude_user: searchRequestState.exclude_user || undefined,
@@ -1622,6 +1626,7 @@ export default function Search() {
     if (state.marked_has_note) chips.push({ key: "marked_has_note", label: "has analyst note", clear: { marked_has_note: null } });
     if (state.marked_in_finding) chips.push({ key: "marked_in_finding", label: "in finding", clear: { marked_in_finding: null } });
     if (searchRequestState.host) chips.push({ key: "host", label: `host: ${searchRequestState.host}`, clear: { host: null } });
+    if (searchRequestState.host_id) chips.push({ key: "host_id", label: `host ID: ${searchRequestState.host_id}`, clear: { host_id: null } });
     if (state.user) chips.push({ key: "user", label: `user: ${state.user}`, clear: { user: null } });
     if (state.parser.length) chips.push({ key: "parser", label: `parser: ${state.parser.join(", ")}`, clear: { parser: null } });
     if (state.backend_variant.length) chips.push({ key: "backend_variant", label: `backend: ${state.backend_variant.join(", ")}`, clear: { backend_variant: null } });
@@ -1856,6 +1861,7 @@ export default function Search() {
     if (searchRequestState.exclude_artifact_type.length) params.set("exclude_artifact_type", joinParam(searchRequestState.exclude_artifact_type));
     if (searchRequestState.exclude_parser.length) params.set("exclude_parser", joinParam(searchRequestState.exclude_parser));
     if (searchRequestState.host) params.set("host", searchRequestState.host);
+    if (searchRequestState.host_id) params.set("host_id", searchRequestState.host_id);
     if (searchRequestState.user) params.set("user", searchRequestState.user);
     if (searchRequestState.exclude_host) params.set("exclude_host", searchRequestState.exclude_host);
     if (searchRequestState.exclude_user) params.set("exclude_user", searchRequestState.exclude_user);
@@ -2185,6 +2191,10 @@ export default function Search() {
             </select>
           </label>
           <TextField label="Source file" value={state.source_file} onChange={(value) => updateParams({ source_file: value })} placeholder="Security.evtx" />
+          <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Host ID</span>
+            <HostFilter hostId={state.host_id || null} onChange={(value) => updateParams({ host_id: value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" />
+          </label>
           <TextField label="Host" value={state.host} onChange={(value) => updateParams({ host: value })} placeholder="TEST-WIN10-01" />
           <TextField label="User" value={state.user} onChange={(value) => updateParams({ user: value })} placeholder="user01" />
           <TextField label="Evidence" value={searchRequestState.evidence_id} onChange={(value) => updateParams({ evidence_id: value })} placeholder="evidence id" />

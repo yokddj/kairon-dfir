@@ -85,5 +85,8 @@ class Finding(UUIDMixin, TimestampMixin, Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     occurrence_count: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     assigned_to: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    primary_host_id: Mapped[str | None] = mapped_column(ForeignKey("case_hosts.id", ondelete="SET NULL"), nullable=True)
+    related_host_ids: Mapped[list] = mapped_column(JSONVariant, default=list, nullable=False)
+    host_scope: Mapped[str] = mapped_column(String(32), default="single_host", nullable=False)
 
     case = relationship("Case", back_populates="findings")

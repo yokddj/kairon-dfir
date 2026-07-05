@@ -109,6 +109,7 @@ from app.services.memory.upload_lifecycle import (
 )
 from app.services.usable_ingest import FULL_FORENSIC_MODE, USABLE_INGEST_MODE, ingest_mode_metadata, normalize_ingest_mode
 from datetime import UTC, datetime
+from app.services.reassignment import execute_host_reassignment, backfill_evidence_documents, invalidate_host_caches
 from app.services.reconciliation import capture_reprocess_baseline
 from app.workers.tasks import _resolve_retry_profile, enqueue_core_ez_rebuild, enqueue_defender_evtx_index, enqueue_ingest, enqueue_mft_full_index, enqueue_mft_summary_index, enqueue_problematic_artifact_retry, enqueue_recmd_user_activity_index, enqueue_registry_persistence_summary_index, enqueue_srum_index
 
@@ -2386,22 +2387,17 @@ class EvidenceHostAssignRequest(BaseModel):
 
 @router.post("/api/evidences/{evidence_id}/assign-host")
 def assign_evidence_host(evidence_id: str, payload: EvidenceHostAssignRequest, db: Session = Depends(get_db)):
-    evidence = db.get(Evidence, evidence_id)
-    if not evidence:
-        raise HTTPException(status_code=404, detail="Evidence not found")
-    host = db.get(CaseHost, payload.host_id)
-    if not host or host.case_id != evidence.case_id:
-        raise HTTPException(status_code=400, detail="Host not found in this case")
-    evidence.host_id = payload.host_id
-    evidence.host_assignment_status = "confirmed"
-    evidence.host_assignment_method = "analyst_assigned"
-    evidence.host_assignment_confidence = "high"
-    evidence.host_assignment_reason = payload.reason or "Analyst assigned"
-    evidence.host_assignment_updated_at = utc_now().isoformat()
-    evidence.host_assignment_updated_by = payload.analyst or "analyst"
-    db.commit()
-    db.refresh(evidence)
-    return {"evidence_id": evidence.id, "host_id": evidence.host_id, "status": "confirmed"}
+    try:
+        result = execute_host_reassignment(
+            db,
+            evidence_id,
+            payload.host_id,
+            actor=payload.analyst or "analyst",
+            reason=payload.reason,
+        )
+        return result
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.post("/api/evidences/{evidence_id}/unassign-host")
@@ -2419,6 +2415,120 @@ def unassign_evidence_host(evidence_id: str, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(evidence)
     return {"evidence_id": evidence.id, "status": "unassigned"}
+
+
+class EvidenceReassignHostRequest(BaseModel):
+    host_id: str
+    reason: str | None = None
+    actor: str | None = "analyst"
+    confidence: str | None = "high"
+
+
+@router.post("/api/evidences/{evidence_id}/reassign-host")
+def reassign_evidence_host(evidence_id: str, payload: EvidenceReassignHostRequest, db: Session = Depends(get_db)):
+    try:
+        result = execute_host_reassignment(
+            db,
+            evidence_id,
+            payload.host_id,
+            actor=payload.actor or "analyst",
+            reason=payload.reason,
+            confidence=payload.confidence or "high",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    try:
+        result["backfill"] = backfill_evidence_documents(db, evidence_id)
+    except Exception:
+        logger.exception("backfill failed for evidence %s", evidence_id)
+        result["backfill"] = {"error": "backfill failed"}
+    invalidate_host_caches(evidence_id, payload.host_id)
+    return result
+
+
+@router.get("/api/evidences/{evidence_id}/host-history")
+def get_evidence_host_history(evidence_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    from app.models.assignment_history import AssignmentHistory
+
+    rows = (
+        db.query(AssignmentHistory)
+        .filter(AssignmentHistory.evidence_id == evidence_id)
+        .order_by(AssignmentHistory.created_at_str.desc())
+        .all()
+    )
+    return [
+        {
+            "id": row.id,
+            "evidence_id": row.evidence_id,
+            "case_id": row.case_id,
+            "previous_host_id": row.previous_host_id,
+            "new_host_id": row.new_host_id,
+            "previous_status": row.previous_status,
+            "new_status": row.new_status,
+            "method": row.method,
+            "confidence": row.confidence,
+            "actor": row.actor,
+            "reason": row.reason,
+            "created_at": row.created_at_str,
+        }
+        for row in rows
+    ]
+
+
+@router.post("/api/evidences/{evidence_id}/host-backfill")
+def backfill_evidence_host(
+    evidence_id: str,
+    payload: dict = {},
+    db: Session = Depends(get_db),
+) -> dict:
+    """Backfill OpenSearch documents for one Evidence with its host_id."""
+    from app.services.host_backfill import backfill_evidence_host_id
+
+    evidence = db.get(Evidence, evidence_id)
+    if not evidence:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    dry_run = bool(payload.get("dry_run", False))
+    return backfill_evidence_host_id(db, evidence_id=evidence_id, dry_run=dry_run)
+
+
+@router.post("/api/cases/{case_id}/hosts/backfill")
+def backfill_case_hosts(
+    case_id: str,
+    payload: dict = {},
+    db: Session = Depends(get_db),
+) -> dict:
+    """Backfill OpenSearch documents for all evidences in a case."""
+    from app.models.case import Case
+    from app.services.host_backfill import backfill_case_hosts as do_backfill
+
+    case = db.get(Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    evidence_id = str(payload.get("evidence_id") or "").strip() or None
+    evidence_total = int(payload.get("evidence_total") or 0)
+    evidence_offset = int(payload.get("evidence_offset") or 0)
+    dry_run = bool(payload.get("dry_run", False))
+    return do_backfill(
+        db,
+        case_id=case_id,
+        evidence_id=evidence_id,
+        dry_run=dry_run,
+    )
+
+
+@router.get("/api/cases/{case_id}/hosts/document-counts")
+def get_case_host_document_counts(
+    case_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Get counts of documents with/without host.evidence_host_id."""
+    from app.models.case import Case
+    from app.services.host_backfill import get_host_document_counts
+
+    case = db.get(Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return get_host_document_counts(db, case_id=case_id)
 
 
 @router.get("/api/evidences/{evidence_id}/manifest")

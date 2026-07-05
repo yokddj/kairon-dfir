@@ -111,16 +111,17 @@ def canonicalize_host(
     }
 
 
-def _evidence_hosts(db: Session, evidence_id: str | None) -> tuple[str | None, str | None]:
+def _evidence_hosts(db: Session, evidence_id: str | None) -> tuple[str | None, str | None, str | None]:
     if not evidence_id:
-        return None, None
+        return None, None, None
     evidence = db.get(Evidence, evidence_id)
     if not evidence:
-        return None, None
+        return None, None, None
     metadata = dict(evidence.metadata_json or {})
     provided = str(metadata.get("provided_host") or "").strip() or None
     detected = str(getattr(evidence, "detected_host", None) or "").strip() or None
-    return provided, detected
+    host_id = str(evidence.host_id or "").strip() or None
+    return provided, detected, host_id
 
 
 def _apply_host_canonicalization(event: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
@@ -739,7 +740,10 @@ def apply_case_host_identity(db: Session, case_id: str, event: dict[str, Any]) -
         observed_host = {}
         event["observed_host"] = observed_host
     observed_name = str(observed_host.get("name") or host.get("name") or host.get("hostname") or "").strip()
-    provided_host, detected_host = _evidence_hosts(db, str(event.get("evidence_id") or "").strip() or None)
+    provided_host, detected_host, evidence_host_id = _evidence_hosts(db, str(event.get("evidence_id") or "").strip() or None)
+    if evidence_host_id:
+        host["evidence_host_id"] = evidence_host_id
+        host["identity_id"] = host.get("identity_id") or evidence_host_id
     canonicalized = canonicalize_host(provided_host=provided_host, detected_host=detected_host, artifact_host=observed_name)
     if canonicalized.get("canonical") or is_invalid_host_value(observed_name):
         return _apply_host_canonicalization(event, canonicalized)
@@ -754,7 +758,7 @@ def apply_case_host_identity(db: Session, case_id: str, event: dict[str, Any]) -
     host["hostname"] = resolved["canonical_name"]
     host["canonical"] = resolved["canonical_name"]
     host["aliases"] = list(resolved.get("aliases") or [])
-    host["identity_id"] = resolved["case_host_id"]
+    host["identity_id"] = host.get("identity_id") or resolved["case_host_id"]
     host["identity_confidence"] = resolved["confidence"]
     return event
 

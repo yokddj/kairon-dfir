@@ -18,6 +18,7 @@ from app.core.opensearch import fetch_event_by_id, get_events_index, get_opensea
 from app.models.detection_result import DetectionResult
 from app.models.evidence import Evidence
 from app.models.finding import Finding, FindingSeverity, FindingStatus
+from app.models.case_host import CaseHost
 from app.services.event_markings import event_marking_filter_ids, marking_map_for_events, serialize_marking
 from app.services.host_identity import expand_host_filter, is_invalid_host_value, normalize_host_alias, resolve_canonical_host
 from app.services.investigation_memory import (
@@ -681,10 +682,17 @@ def _build_event_filters(case_id: str, params: dict[str, Any], db: Session | Non
                             ],
                             "minimum_should_match": 1,
                         }
+
                     }
                 )
             else:
                 filters.append({"term": {field_name: value}})
+    host_id = str(params.get("host_id") or "").strip()
+    if host_id:
+        filters.append(_host_id_filter(host_id, db, include_unlinked_evidence=True))
+    host_scope = str(params.get("host_scope") or "").strip().lower()
+    if not host_id and host_scope in ("unassigned", "conflicted"):
+        filters.append(_unassigned_host_filter(db))
     risk_min = params.get("risk_min")
     risk_max = params.get("risk_max")
     if risk_min is not None or risk_max is not None:
@@ -911,6 +919,42 @@ def _host_filter(case_id: str, value: str, db: Session | None = None) -> dict[st
             "minimum_should_match": 1,
         }
     }
+
+
+def _host_id_filter(host_id: str, db: Session | None = None, *, include_unlinked_evidence: bool = True) -> dict[str, Any]:
+    if host_id == "unassigned":
+        return _unassigned_host_filter(db)
+    if host_id == "conflicted":
+        return _conflicted_host_filter(db)
+    host = db.get(CaseHost, host_id) if db else None
+    canonical = host.canonical_name if host else None
+    if not canonical:
+        return {"bool": {"must_not": [{"match_all": {}}]}}
+    should: list[dict[str, Any]] = [
+        {"term": {"host.evidence_host_id": host_id}},
+        {"term": {"host.identity_id": host_id}},
+    ]
+    expanded = list(expand_host_filter(db, host.case_id, canonical) if db else [canonical])
+    if expanded:
+        should.append({"terms": {"host.canonical": expanded}})
+        should.append({"terms": {"host.name": expanded}})
+    if include_unlinked_evidence:
+        evidence_ids = [e.id for e in (db.query(Evidence).filter(Evidence.host_id == host_id, Evidence.case_id == host.case_id).all() if db else [])]
+        if evidence_ids:
+            should.append({"terms": {"evidence_id": evidence_ids}})
+    return {"bool": {"should": should, "minimum_should_match": 1}}
+
+
+def _unassigned_host_filter(db: Session | None = None) -> dict[str, Any]:
+    should: list[dict[str, Any]] = [
+        {"bool": {"must_not": [{"exists": {"field": "host.evidence_host_id"}}], "must": [{"exists": {"field": "host.name"}}]}},
+        {"bool": {"must_not": [{"exists": {"field": "host.evidence_host_id"}}]}},
+    ]
+    return {"bool": {"should": should, "minimum_should_match": 1}}
+
+
+def _conflicted_host_filter(db: Session | None = None) -> dict[str, Any]:
+    return {"bool": {"must_not": [{"exists": {"field": "host.evidence_host_id"}}]}}
 
 
 def _build_event_exclusions(case_id: str, params: dict[str, Any], db: Session | None = None) -> list[dict[str, Any]]:

@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type CommandHistoryItem } from "../api/client";
+import { HostFilter } from "../components/HostFilter";
 
 const PAGE_SIZE = 100;
 const SOURCE_OPTIONS = ["", "Memory", "Disk", "Event Log", "Registry", "Browser", "Other"];
@@ -87,6 +88,7 @@ function buildParams(searchParams: URLSearchParams) {
   return {
     evidence_id: searchParams.get("evidence_id") || undefined,
     host: searchParams.get("host") || undefined,
+    host_id: searchParams.get("host_id") || undefined,
     user: searchParams.get("user") || undefined,
     family: searchParams.get("family") || searchParams.get("shell") || undefined,
     launcher: searchParams.get("launcher") || undefined,
@@ -300,6 +302,10 @@ export default function CommandHistoryPage() {
           <label className="text-xs text-zinc-400">
             Host
             <input className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100" value={params.host ?? ""} onChange={(event) => update({ host: event.target.value })} placeholder="HOSTA" />
+          </label>
+          <label className="text-xs text-zinc-400">
+            Host ID
+            <HostFilter hostId={params.host_id ?? null} onChange={(value) => update({ host_id: value })} className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100" />
           </label>
           <label className="text-xs text-zinc-400">
             Risk min

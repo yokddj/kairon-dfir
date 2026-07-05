@@ -54,6 +54,7 @@ def _structured_db_error(
 from app.core.config import get_settings
 from app.core.database import get_db
 from app.models.case import Case
+from app.models.case_host import CaseHost
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryArtifactSummary, MemoryNativeProbe, MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition, MemorySymbolRequirement
 from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolBlockedAcquireRequest, MemorySymbolBlockedAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadDirectResponse, MemoryUploadFinalizeRequest, MemoryUploadReadinessRead, MemoryUploadSessionCreateRequest, MemoryUploadSessionCreateResponse, MemoryUploadStatusRead
@@ -3074,6 +3075,8 @@ def list_memory_network_connections(
     case_id: str,
     evidence_id: str = Query(...),
     run_id: str | None = Query(default=None),
+    host_id: str | None = Query(default=None),
+    host: str | None = Query(default=None),
     protocol: str | None = Query(default=None),
     local_address: str | None = Query(default=None),
     local_port: int | None = Query(default=None),
@@ -3086,7 +3089,32 @@ def list_memory_network_connections(
     page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
 ):
-    _require_evidence_for_case(db, case_id, evidence_id)
+    effective_evidence_id = evidence_id
+    if host_id:
+        host_row = db.get(CaseHost, host_id)
+        if host_row and host_row.case_id == case_id:
+            host_evidence_ids = [
+                e.id for e in db.query(Evidence).filter(
+                    Evidence.case_id == case_id,
+                    Evidence.host_id == host_id,
+                ).all()
+            ]
+            if host_evidence_ids:
+                effective_evidence_id = evidence_id if evidence_id in host_evidence_ids else host_evidence_ids[0]
+    elif host and not host_id:
+        from app.services.host_identity import resolve_canonical_host
+        resolved = resolve_canonical_host(db, case_id, host)
+        if resolved:
+            host_evidence_ids = [
+                e.id for e in db.query(Evidence).filter(
+                    Evidence.case_id == case_id,
+                    Evidence.host_id == resolved["case_host_id"],
+                ).all()
+            ]
+            if host_evidence_ids:
+                effective_evidence_id = evidence_id if evidence_id in host_evidence_ids else host_evidence_ids[0]
+
+    _require_evidence_for_case(db, case_id, effective_evidence_id)
     _require_run_or_any(db, case_id, run_id)
     filters: dict[str, Any] = {
         "protocol": protocol,
@@ -3102,7 +3130,7 @@ def list_memory_network_connections(
         case_id,
         document_type="memory_network_connection",
         run_id=run_id,
-        evidence_id=evidence_id,
+        evidence_id=effective_evidence_id,
         page=page,
         page_size=page_size,
         filters=filters,

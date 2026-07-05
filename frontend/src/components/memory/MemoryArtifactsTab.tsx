@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Search,
 } from "lucide-react";
+import { HostFilter } from "../HostFilter";
 
 type Props = {
   caseId: string;
@@ -695,6 +696,7 @@ export function MemoryArtifactsTab({
   const [pidFilter, setPidFilter] = useState("");
   const [objectTypeFilter, setObjectTypeFilter] = useState("");
   const [reviewFilter, setReviewFilter] = useState("");
+  const [hostId, setHostId] = useState<string | null>(null);
   const [inspect, setInspect] = useState<{ type: string; id: string } | null>(null);
 
   const effectiveRunId = selectedRunId || runOptions?.default_run_id || null;
@@ -781,6 +783,7 @@ export function MemoryArtifactsTab({
       page_size: pageSize,
     };
     if (evidenceId) params.evidence_id = evidenceId;
+    if (hostId) params.host_id = hostId;
     if (filter) params.process_name = filter;
     if (pidFilter) params.pid = Number(pidFilter);
     if (objectTypeFilter) params.object_type = objectTypeFilter;
@@ -962,6 +965,9 @@ export function MemoryArtifactsTab({
       <section className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel">
         <div className="flex flex-wrap items-center gap-2" data-testid="memory-artifacts-filters">
           <Filter className="h-3.5 w-3.5 text-muted" />
+          {subView === "network" ? (
+            <HostFilter hostId={hostId} onChange={(value) => { setHostId(value); setPage(1); }} className="rounded-xl border border-line bg-abyss/70 px-3 py-1 text-xs" />
+          ) : null}
           {subView === "handles" ? (
             <input
               value={objectTypeFilter}

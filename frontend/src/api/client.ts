@@ -445,6 +445,17 @@ function extractDownloadFilename(contentDisposition: string | null, fallback: st
   return basicMatch?.[1] ? basicMatch[1] : fallback;
 }
 
+export type AuthUser = {
+  user_id: string;
+  username: string;
+  display_name: string | null;
+  email: string | null;
+  is_admin: boolean;
+  is_active: boolean;
+  created_at: string;
+  last_login_at: string | null;
+};
+
 export type DfirCase = {
   id: string;
   name: string;
@@ -6093,6 +6104,7 @@ export const api = {
     params?: {
       evidence_id?: string;
       host?: string;
+      host_id?: string | null;
       user?: string;
       shell?: string;
       family?: string;
@@ -6239,6 +6251,7 @@ export const api = {
       confidence?: string[];
       finding_type?: string[];
       host?: string;
+      host_id?: string | null;
       user?: string;
       exclude_host?: string;
       exclude_user?: string;
@@ -6332,6 +6345,7 @@ export const api = {
     caseId: string,
     params?: {
       host?: string;
+      host_id?: string | null;
       evidence_id?: string;
       source_category?: string;
       source?: string;
@@ -6551,6 +6565,7 @@ export const api = {
       finding_type?: string;
       evidence_id?: string;
       host?: string;
+      host_id?: string;
     },
   ) => {
     const query = new URLSearchParams();
@@ -6560,6 +6575,7 @@ export const api = {
     if (params?.finding_type) query.set("finding_type", params.finding_type);
     if (params?.evidence_id) query.set("evidence_id", params.evidence_id);
     if (params?.host) query.set("host", params.host);
+    if (params?.host_id) query.set("host_id", params.host_id);
     return request<Finding[] | FindingListResponse>(`/cases/${caseId}/findings${query.size ? `?${query.toString()}` : ""}`).then((payload) => Array.isArray(payload) ? payload : payload.items);
   },
   listFindingsPage: (
@@ -6582,6 +6598,7 @@ export const api = {
       time_to?: string;
       page?: number;
       page_size?: number;
+      host_id?: string;
     },
   ) => {
     const query = new URLSearchParams();
@@ -6619,6 +6636,7 @@ export const api = {
       force_reset_status?: boolean;
       page?: number;
       page_size?: number;
+      host_id?: string | null;
     },
   ) => request<{ report: CorrelationRunResult; findings: Finding[] }>(`/cases/${caseId}/correlate`, { method: "POST", body: JSON.stringify(payload ?? {}) }),
   exportFindingMarkdown: (findingId: string) => request<string>(`/findings/${findingId}/export-markdown`, { method: "POST" }),
@@ -7115,6 +7133,12 @@ export const api = {
       restart_instructions: NonNullable<PerformanceState["restart_instructions"]>;
     }>("/admin/performance/restart-instructions"),
   getAdminPerformanceRecommendation: () => request<PerformanceState["recommendation"]>("/admin/performance/recommendation"),
+  login: (payload: { username: string; password: string }) =>
+    request<AuthUser>("/auth/login", { method: "POST", body: JSON.stringify(payload) }),
+  logout: () => request<{ status: string }>("/auth/logout", { method: "POST" }),
+  me: () => request<AuthUser>("/auth/me"),
+  changePassword: (payload: { current_password: string; new_password: string }) =>
+    request<{ status: string }>("/auth/change-password", { method: "POST", body: JSON.stringify(payload) }),
 };
 
 export type FindingIndicatorSummary = {
