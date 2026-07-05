@@ -156,7 +156,7 @@ export default function Sidebar() {
         <img src="/brand/kairon-dfir-mark.svg" alt="" className="h-11 w-11 rounded-2xl border border-accent/30 bg-accent/10 p-1.5" />
         <div>
           <p className="font-mono text-xs uppercase tracking-[0.22em] text-accent">Kairon DFIR</p>
-          <p className="text-sm text-muted">Analyst-centered workspace</p>
+          <p className="text-sm text-muted">Investigation workspace</p>
         </div>
       </div>
 

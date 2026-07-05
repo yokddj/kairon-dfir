@@ -14,23 +14,20 @@ interface UserRow {
 }
 
 const ROLE_INFO = {
-  admin: { label: "Admin", desc: "Full platform administration. Can manage users, access all cases, assign permissions, and perform sensitive operations.", color: "text-amber-400" },
-  analyst: { label: "Analyst", desc: "Can investigate assigned cases, upload evidence, modify findings, and run permitted analysis actions. Cannot manage users.", color: "text-blue-400" },
-  viewer: { label: "Viewer", desc: "Read-only access to assigned cases. Cannot upload evidence, modify findings, or execute administrative actions.", color: "text-zinc-400" },
+  admin: { label: "Administrator", desc: "Can use Kairon and manage other users, passwords, sessions and account status.", color: "text-amber-400" },
+  user: { label: "Standard user", desc: "Can use Kairon and change their own password. Cannot view or manage other users.", color: "text-zinc-400" },
 };
 
 const PERMISSION_MATRIX = [
-  ["Manage users", "Yes", "No", "No"],
-  ["Case access", "All cases", "Assigned only", "Assigned only"],
-  ["Search & Timeline", "Yes", "Yes", "Yes"],
-  ["Upload Evidence", "Yes", "Yes", "No"],
-  ["Create/modify findings", "Yes", "Yes", "No"],
-  ["Change lifecycle", "Yes", "Yes", "No"],
-  ["Reassign Evidence", "Yes", "Policy-based", "No"],
-  ["Run hunting rules", "Yes", "Yes", "No"],
-  ["Host backfill", "Yes", "No", "No"],
-  ["Manage case access", "Yes", "No", "No"],
-  ["View audit log", "Yes", "Limited", "No"],
+  ["Use Kairon", "Yes", "Yes"],
+  ["Change own password", "Yes", "Yes"],
+  ["View users", "Yes", "No"],
+  ["Create users", "Yes", "No"],
+  ["Edit users", "Yes", "No"],
+  ["Disable users", "Yes", "No"],
+  ["Reset passwords", "Yes", "No"],
+  ["Revoke sessions", "Yes", "No"],
+  ["Promote users", "Yes", "No"],
 ];
 
 export default function AdminUsersPage() {
@@ -93,8 +90,8 @@ export default function AdminUsersPage() {
               <tr className="border-b border-zinc-700 text-left text-zinc-400">
                 <th className="p-2">Capability</th>
                 <th className="p-2">Admin</th>
-                <th className="p-2">Analyst</th>
-                <th className="p-2">Viewer</th>
+                <th className="p-2">Administrator</th>
+                <th className="p-2">Standard user</th>
               </tr>
             </thead>
             <tbody>{PERMISSION_MATRIX.map((row, i) => (
@@ -150,8 +147,8 @@ export default function AdminUsersPage() {
                   <td className="p-3 text-white font-medium">{u.username}</td>
                   <td className="p-3">{u.display_name || "-"}</td>
                   <td className="p-3 text-zinc-400">{u.email || "-"}</td>
-                  <td className={`p-3 font-medium ${u.is_admin ? ROLE_INFO.admin.color : ROLE_INFO.analyst.color}`}>
-                    {u.is_admin ? ROLE_INFO.admin.label : ROLE_INFO.analyst.label}
+                  <td className={`p-3 font-medium ${u.is_admin ? ROLE_INFO.admin.color : ROLE_INFO.user.color}`}>
+                    {u.is_admin ? ROLE_INFO.admin.label : ROLE_INFO.user.label}
                   </td>
                   <td className="p-3">
                     <span className={`inline-block rounded-full px-2 py-0.5 text-xs font-medium ${u.is_active ? "bg-emerald-900/40 text-emerald-400" : "bg-red-900/40 text-red-400"}`}>
@@ -192,7 +189,7 @@ function EmptyState({ onCreate }: { onCreate: () => void }) {
   return (
     <div className="rounded-lg border border-dashed border-zinc-700 p-12 text-center">
       <p className="text-zinc-400 mb-4">No additional users yet.</p>
-      <p className="text-zinc-500 text-sm mb-6">Create an analyst or viewer to begin collaborating.</p>
+      <p className="text-zinc-500 text-sm mb-6">Create a standard user account to begin collaborating.</p>
       <button onClick={onCreate}
         className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700">
         Create user
@@ -244,12 +241,12 @@ function CreateUserForm({ onClose, onCreated }: { onClose: () => void; onCreated
           <Input label="Confirm password *" value={confirmPassword} onChange={setConfirmPassword} type="password" />
           <div>
             <label className="text-xs text-zinc-400 mb-1 block">Global role</label>
-            <select value={isAdmin ? "admin" : "analyst"} onChange={e => setIsAdmin(e.target.value === "admin")}
+            <select value={isAdmin ? "admin" : "user"} onChange={e => setIsAdmin(e.target.value === "admin")}
               className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-white text-sm">
-              <option value="admin">Admin — Full platform administration</option>
-              <option value="analyst">Analyst — Investigate assigned cases</option>
+              <option value="user">Standard user — Use Kairon investigation features</option>
+              <option value="admin">Administrator — Full platform administration</option>
             </select>
-            <p className="text-xs text-zinc-500 mt-1">{isAdmin ? ROLE_INFO.admin.desc : ROLE_INFO.analyst.desc}</p>
+            <p className="text-xs text-zinc-500 mt-1">{isAdmin ? ROLE_INFO.admin.desc : ROLE_INFO.user.desc}</p>
           </div>
         </div>
         <div className="flex gap-2 mt-6">
@@ -301,12 +298,12 @@ function EditUserForm({ user: u, onClose, onUpdated }: { user: UserRow; onClose:
           <Input label="Email" value={email} onChange={setEmail} type="email" />
           <div>
             <label className="text-xs text-zinc-400 mb-1 block">Global role</label>
-            <select value={isAdmin ? "admin" : "analyst"} onChange={e => setIsAdmin(e.target.value === "admin")}
+            <select value={isAdmin ? "admin" : "user"} onChange={e => setIsAdmin(e.target.value === "admin")}
               className="w-full rounded-md border border-zinc-700 bg-zinc-800 px-3 py-2 text-white text-sm">
-              <option value="admin">Admin — Full platform administration</option>
-              <option value="analyst">Analyst — Investigate assigned cases</option>
+              <option value="user">Standard user — Use Kairon investigation features</option>
+              <option value="admin">Administrator — Full platform administration</option>
             </select>
-            <p className="text-xs text-zinc-500 mt-1">{isAdmin ? ROLE_INFO.admin.desc : ROLE_INFO.analyst.desc}</p>
+            <p className="text-xs text-zinc-500 mt-1">{isAdmin ? ROLE_INFO.admin.desc : ROLE_INFO.user.desc}</p>
           </div>
         </div>
         <div className="flex gap-2 mt-6">

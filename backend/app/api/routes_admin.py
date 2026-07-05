@@ -34,7 +34,7 @@ class UpdateUserRequest(BaseModel):
 
 class CaseAccessRequest(BaseModel):
     user_id: str
-    role: str = "viewer"  # owner, analyst, viewer
+    role: str = "user"  # user or admin effective; legacy analyst/viewer normalized to user
 
 @router.get("/users")
 def list_users(db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
