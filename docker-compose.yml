@@ -51,6 +51,9 @@ services:
       retries: 10
 
   opensearch-dashboards:
+    profiles:
+      - default
+      - dashboards
     image: opensearchproject/opensearch-dashboards:2.15.0
     environment:
       OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
@@ -71,6 +74,7 @@ services:
         BUILD_DATE: ${BUILD_DATE:-unknown}
     restart: unless-stopped
     env_file:
+      - config/defaults.env
       - .env
     depends_on:
       postgres:
@@ -102,6 +106,7 @@ services:
       context: .
       dockerfile: backend/Dockerfile
     env_file:
+      - config/defaults.env
       - .env
     depends_on:
       postgres:
@@ -128,6 +133,7 @@ services:
         KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
         BUILD_DATE: ${BUILD_DATE:-unknown}
     env_file:
+      - config/defaults.env
       - .env
     environment:
       MEMORY_WORKER_MODE: dedicated_worker
@@ -178,6 +184,7 @@ services:
         KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
         BUILD_DATE: ${BUILD_DATE:-unknown}
     env_file:
+      - config/defaults.env
       - .env
     environment:
       MEMORY_WORKER_MODE: dedicated_worker
@@ -233,6 +240,7 @@ services:
         KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
         BUILD_DATE: ${BUILD_DATE:-unknown}
     env_file:
+      - config/defaults.env
       - .env
     environment:
       MEMORY_WORKER_MODE: dedicated_worker
@@ -283,6 +291,7 @@ services:
         KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
         BUILD_DATE: ${BUILD_DATE:-unknown}
     env_file:
+      - config/defaults.env
       - .env
     environment:
       MEMORY_SYMBOL_TASK_QUEUE: ${MEMORY_SYMBOL_TASK_QUEUE:-memory-symbols}
@@ -331,6 +340,7 @@ services:
         KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
         BUILD_DATE: ${BUILD_DATE:-unknown}
     env_file:
+      - config/defaults.env
       - .env
     environment:
       MEMORY_SYMBOL_EGRESS_GATEWAY_SECRET: ${MEMORY_SYMBOL_EGRESS_GATEWAY_SECRET}
