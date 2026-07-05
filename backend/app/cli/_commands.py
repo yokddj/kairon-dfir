@@ -11,6 +11,8 @@ from app.services.auth_utils import hash_password
 
 
 def cmd_create_admin(args: argparse.Namespace) -> None:
+    from app.core.database import init_db
+    init_db()
     db = SessionLocal()
     try:
         username = args.username or input("Username: ")
@@ -38,6 +40,8 @@ def cmd_create_admin(args: argparse.Namespace) -> None:
 
 
 def cmd_list_users(args: argparse.Namespace) -> None:
+    from app.core.database import init_db
+    init_db()
     db = SessionLocal()
     try:
         users = db.query(User).order_by(User.username).all()
@@ -53,6 +57,8 @@ def cmd_list_users(args: argparse.Namespace) -> None:
 
 
 def cmd_reset_password(args: argparse.Namespace) -> None:
+    from app.core.database import init_db
+    init_db()
     db = SessionLocal()
     try:
         user = db.query(User).filter(User.username == args.username).first()
