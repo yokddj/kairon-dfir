@@ -716,7 +716,10 @@ def _v10_memory_symbol_preparation_reconciliation(connection: Connection) -> Non
 
     def _create_index_if_missing(index_name: str, create_sql: str) -> None:
         if dialect == "postgresql":
-            connection.execute(text(create_sql))
+            try:
+                connection.execute(text(create_sql))
+            except Exception:
+                connection.rollback()
             return
         # SQLite: check sqlite_master for an existing index.
         existing = {
