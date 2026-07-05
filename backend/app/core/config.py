@@ -55,7 +55,7 @@ class Settings(BaseSettings):
     bootstrap_admin_username: str = os.getenv("KAIRON_BOOTSTRAP_ADMIN_USERNAME", "")
     bootstrap_admin_password: str = os.getenv("KAIRON_BOOTSTRAP_ADMIN_PASSWORD", "")
     bootstrap_admin_email: str = os.getenv("KAIRON_BOOTSTRAP_ADMIN_EMAIL", "")
-    allowed_origins_env: str = os.getenv("KAIRON_ALLOWED_ORIGINS", "http://localhost:5173,http://192.168.1.19:5173")
+    allowed_origins_env: str = os.getenv("KAIRON_ALLOWED_ORIGINS", "http://localhost:5173")
     csrf_secret: str = os.getenv("KAIRON_CSRF_SECRET", "CHANGE_ME_CSRF_SECRET")
     backend_max_upload_size: int = Field(default=2147483648)
     memory_analysis_enabled: bool = False
@@ -364,6 +364,17 @@ class Settings(BaseSettings):
     dfir_enable_demo_cases: bool = False
     dfir_enable_validation_features: bool = False
     dfir_default_case_mode: str = "investigation"
+    kairon_public_url: str = os.getenv("KAIRON_PUBLIC_URL", "http://localhost:5173")
+    kairon_deployment_mode: str = os.getenv("KAIRON_DEPLOYMENT_MODE", "localhost")
+
+    @property
+    def public_url(self) -> str:
+        return str(self.kairon_public_url or "http://localhost:5173").strip()
+
+    @property
+    def deployment_mode(self) -> str:
+        mode = str(self.kairon_deployment_mode or "localhost").strip().lower()
+        return mode if mode in {"localhost", "lan", "https"} else "localhost"
 
     @property
     def database_url(self) -> str:
