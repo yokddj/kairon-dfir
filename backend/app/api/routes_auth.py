@@ -5,6 +5,7 @@ import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from pydantic import BaseModel, Field
 from datetime import datetime, timedelta, timezone
 
@@ -28,6 +29,19 @@ def _check_login_rate(ip: str) -> bool:
     _login_attempts[ip] = [t for t in _login_attempts[ip] if t > window_start]
     _login_attempts[ip].append(now)
     return len(_login_attempts[ip]) <= _LOGIN_RATE_LIMIT
+
+
+_setup_attempts: dict[str, list[float]] = defaultdict(list)
+_SETUP_RATE_LIMIT = 10
+_SETUP_RATE_WINDOW = 60
+
+
+def _check_setup_rate(ip: str) -> bool:
+    now = time.time()
+    window_start = now - _SETUP_RATE_WINDOW
+    _setup_attempts[ip] = [t for t in _setup_attempts[ip] if t > window_start]
+    _setup_attempts[ip].append(now)
+    return len(_setup_attempts[ip]) <= _SETUP_RATE_LIMIT
 
 router = APIRouter(tags=["auth"])
 
@@ -187,13 +201,23 @@ class SetupRequest(BaseModel):
 
 
 @router.get("/api/auth/needs-setup")
-def needs_setup(db: Session = Depends(get_db)):
+def needs_setup(request: Request, response: Response, db: Session = Depends(get_db)):
+    # Rate limit
+    client_ip = request.client.host if request.client else "unknown"
+    if not _check_setup_rate(client_ip):
+        raise HTTPException(status_code=429, detail="Too many requests")
+    # No cache
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
     user_count = db.query(User).count()
     return {"needs_setup": user_count == 0}
 
 
 @router.post("/api/auth/setup")
 def create_first_admin(payload: SetupRequest, response: Response, request: Request, db: Session = Depends(get_db)):
+    # Race protection: use PostgreSQL advisory lock to serialize first-admin creation.
+    # Hash the endpoint name to a stable lock id so concurrent requests block each other.
+    db.execute(text("SELECT pg_advisory_xact_lock(974123)"))
     existing = db.query(User).count()
     if existing > 0:
         raise HTTPException(status_code=403, detail="Setup already completed")

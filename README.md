@@ -44,22 +44,50 @@ Requirements:
 ```bash
 git clone https://github.com/yokddj/kairon-dfir.git
 cd kairon-dfir
-cp .env.example .env
-docker compose up -d --build
+./scripts/setup.sh              # wizard generates .env with secrets
+docker compose build --pull     # build fresh images
+docker compose up -d            # start all services
 ```
 
-Open:
+Open http://localhost:5173 — the first-run wizard creates your admin account.
 
-- Frontend: http://127.0.0.1:5173
-- Backend health: http://127.0.0.1:8000/health
-- API docs: http://127.0.0.1:8000/docs
-
-Default beta/investigation mode is clean:
+For memory analysis support:
 
 ```bash
-DFIR_ENABLE_DEMO_CASES=false
-DFIR_ENABLE_VALIDATION_FEATURES=false
-DFIR_DEFAULT_CASE_MODE=investigation
+docker compose --profile memory build --pull
+docker compose --profile memory up -d
+```
+
+### First-Run Experience
+
+On first launch with zero users:
+1. Browser opens http://localhost:5173
+2. Setup wizard appears (create admin account)
+3. After creation, you're automatically logged in
+4. Admin can add more users from Admin → Users
+
+Normal operation:
+1. Login page appears
+2. Enter credentials
+3. Dashboard loads
+
+See [docs/first-run.md](docs/first-run.md) for details and troubleshooting.
+
+### Troubleshooting Fresh Install
+
+If the login page appears instead of the setup wizard:
+
+```bash
+# Verify users table is empty
+docker compose exec postgres psql -U dfir -d dfir -c "SELECT COUNT(*) FROM users;"
+
+# Verify setup endpoint
+curl http://localhost:5173/api/auth/needs-setup
+# Should return: {"needs_setup":true}
+
+# Rebuild images (stale image may lack setup code)
+docker compose build --no-cache --pull backend frontend
+docker compose up -d backend frontend
 ```
 
 Use validation flags only in QA, training, or controlled product presentations. This repository does not include evidence archives, processed data, OpenSearch indexes, Postgres dumps, public challenge datasets, or answer keys.
