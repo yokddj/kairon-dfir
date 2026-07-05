@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.orm import Session
 
+from app.core.database import get_db
+from app.models.case_host import CaseHost
 from app.services.command_history import get_command_history
 
 
@@ -12,6 +15,7 @@ router = APIRouter(tags=["command-history"])
 def case_command_history(
     case_id: str,
     evidence_id: str | None = Query(default=None),
+    host_id: str | None = Query(default=None),
     host: str | None = Query(default=None),
     user: str | None = Query(default=None),
     shell: str | None = Query(default=None),
@@ -38,12 +42,20 @@ def case_command_history(
     sort: str | None = Query(default=None),
     sort_by: str | None = Query(default=None),
     sort_order: str | None = Query(default=None),
+    db: Session = Depends(get_db),
 ) -> dict:
+    resolved_host = host
+    if host_id:
+        host_row = db.get(CaseHost, host_id)
+        if host_row:
+            resolved_host = host_row.canonical_name
+        else:
+            raise HTTPException(status_code=404, detail="Host not found")
     return get_command_history(
         case_id,
         {
             "evidence_id": evidence_id,
-            "host": host,
+            "host": resolved_host,
             "user": user,
             "shell": shell,
             "family": family,

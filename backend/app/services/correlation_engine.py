@@ -429,6 +429,24 @@ def _event_matches_host(event: dict, host_aliases: set[str]) -> bool:
     return bool(set(values).intersection(host_aliases))
 
 
+def _same_host(left: dict, right: dict) -> bool:
+    left_host = str(_nested_get(left, "host.name") or _nested_get(left, "host.canonical") or _nested_get(left, "host.identity_id") or _nested_get(left, "host.id") or "")
+    right_host = str(_nested_get(right, "host.name") or _nested_get(right, "host.canonical") or _nested_get(right, "host.identity_id") or _nested_get(right, "host.id") or "")
+    if not left_host or not right_host:
+        return False
+    return normalize_host_alias(left_host) == normalize_host_alias(right_host)
+
+
+def _event_host(event: dict) -> str:
+    return str(_nested_get(event, "host.name") or _nested_get(event, "host.canonical") or _nested_get(event, "host.identity_id") or _nested_get(event, "host.id") or "")
+
+
+def _same_host_value(left_host: str, right_host: str) -> bool:
+    if not left_host or not right_host:
+        return False
+    return normalize_host_alias(left_host) == normalize_host_alias(right_host)
+
+
 def _iter_events_for_case(
     case_id: str,
     evidence_id: str | None = None,
@@ -561,6 +579,8 @@ def _generate_findings(case: Case, evidences: list[Evidence], events: list[dict]
             process_ts = _parse_ts(process_event.get("@timestamp"))
             if not download_ts or not process_ts or process_ts < download_ts or process_ts > download_ts + timedelta(hours=48):
                 continue
+            if not _same_host(download, process_event):
+                continue
             exact, filename_only = _match_paths(download_path, _extract_event_path(process_event))
             if not exact and not filename_only:
                 continue
@@ -571,6 +591,8 @@ def _generate_findings(case: Case, evidences: list[Evidence], events: list[dict]
             for detection_event in defender:
                 detection_ts = _parse_ts(detection_event.get("@timestamp"))
                 if not process_ts or not detection_ts or detection_ts < process_ts - timedelta(hours=1) or detection_ts > process_ts + timedelta(hours=48):
+                    continue
+                if not _same_host(process_event, detection_event):
                     continue
                 det_exact, det_filename = _match_paths(_extract_event_path(process_event), _extract_event_path(detection_event))
                 if not det_exact and not det_filename:
@@ -666,9 +688,13 @@ def _generate_findings(case: Case, evidences: list[Evidence], events: list[dict]
         related_srum = []
         domains: list[str] = []
         if node_time:
+            node_process_events = [event for event in processes if str(event.get("id") or "") in (node.get("source_events") or [])]
+            node_host = _event_host(node_process_events[0]) if node_process_events else ""
             for event in dns_events:
                 event_time = _parse_ts(event.get("@timestamp"))
                 if not event_time or event_time < node_time - timedelta(minutes=30) or event_time > node_time + timedelta(minutes=30):
+                    continue
+                if node_host and not _same_host_value(node_host, _event_host(event)):
                     continue
                 process_name = _normalize_text(_nested_get(event, "process.name")).lower()
                 domain = _normalize_text(_nested_get(event, "dns.domain") or _nested_get(event, "dns.name")).lower()
@@ -680,6 +706,8 @@ def _generate_findings(case: Case, evidences: list[Evidence], events: list[dict]
             for event in srum_events:
                 event_time = _parse_ts(event.get("@timestamp"))
                 if not event_time or event_time < node_time - timedelta(hours=2) or event_time > node_time + timedelta(hours=2):
+                    continue
+                if node_host and not _same_host_value(node_host, _event_host(event)):
                     continue
                 app = _normalize_text(_nested_get(event, "srum.application") or _nested_get(event, "process.name")).lower()
                 outbound = int(_nested_get(event, "srum.bytes_sent") or _nested_get(event, "network.bytes_sent") or 0)
@@ -721,6 +749,8 @@ def _generate_findings(case: Case, evidences: list[Evidence], events: list[dict]
         for process_event in processes:
             process_ts = _parse_ts(process_event.get("@timestamp"))
             if persistence_ts and process_ts and process_ts >= persistence_ts and process_ts <= persistence_ts + timedelta(days=7):
+                if not _same_host(persistence_event, process_event):
+                    continue
                 if _match_paths(command, _extract_event_path(process_event))[0] or _match_paths(command, _extract_event_path(process_event))[1]:
                     matches.append(process_event)
         supporting_inventory = []
@@ -976,6 +1006,8 @@ def _generate_findings(case: Case, evidences: list[Evidence], events: list[dict]
                 event_time = _parse_ts(event.get("@timestamp"))
                 if not event_time or event_time < cloud_ts - timedelta(hours=24) or event_time > cloud_ts:
                     continue
+                if not _same_host(cloud_event, event):
+                    continue
                 if int(_nested_get(event, "risk_score") or 0) >= 70:
                     nearby_suspicious.append(event)
         if nearby_suspicious:
@@ -1013,6 +1045,8 @@ def _generate_findings(case: Case, evidences: list[Evidence], events: list[dict]
             if not event_time or event_time < usb_ts - timedelta(hours=2) or event_time > usb_ts + timedelta(hours=2):
                 continue
             if event is usb_event:
+                continue
+            if not _same_host(usb_event, event):
                 continue
             artifact_type = str(_nested_get(event, "artifact.type") or "")
             path = _extract_event_path(event)
@@ -1058,6 +1092,8 @@ def _generate_findings(case: Case, evidences: list[Evidence], events: list[dict]
         for deletion in deletion_events:
             del_ts = _parse_ts(deletion.get("@timestamp"))
             if not del_ts or del_ts < exec_ts or del_ts > exec_ts + timedelta(hours=72):
+                continue
+            if not _same_host(exec_event, deletion):
                 continue
             exact, filename_only = _match_paths(exec_path, _extract_event_path(deletion))
             if exact or filename_only:

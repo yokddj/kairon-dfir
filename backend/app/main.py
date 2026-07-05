@@ -1,11 +1,13 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette._utils import AwaitableOrContextManagerWrapper
-from starlette.requests import Request
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.responses import Response
 
-from app.api import routes_activity, routes_cases, routes_command_history, routes_email_artifacts, routes_evidence, routes_events, routes_findings, routes_hosts, routes_hunting, routes_indicators, routes_memory, routes_memory_experimental, routes_memory_recovery, routes_motw, routes_persistence, routes_reports, routes_rules, routes_search, routes_system, routes_tags, routes_timeline, routes_velociraptor
+from app.api import routes_activity, routes_admin, routes_auth, routes_cases, routes_command_history, routes_email_artifacts, routes_evidence, routes_events, routes_findings, routes_hosts, routes_hunting, routes_indicators, routes_memory, routes_memory_experimental, routes_memory_recovery, routes_motw, routes_persistence, routes_reports, routes_rules, routes_search, routes_system, routes_tags, routes_timeline, routes_velociraptor
 from app.core.config import get_settings
 from app.core.database import init_db
 from app.core.opensearch import ensure_events_indices_safe_settings
@@ -61,6 +63,77 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Public endpoints that don't require authentication
+PUBLIC_PATH_PREFIXES = [
+    "/api/auth/login",
+    "/api/auth/logout",
+    "/api/system/version",
+    "/api/system/health",
+    "/api/system/status",
+    "/api/docs",
+    "/api/openapi.json",
+    "/api/redoc",
+]
+PUBLIC_PATH_PREFIXES_SET = set(PUBLIC_PATH_PREFIXES)
+
+
+class AuthMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        # Skip auth if disabled (e.g. during tests)
+        if not settings.auth_enabled:
+            return await call_next(request)
+        
+        path = request.url.path
+        # Allow public paths
+        for prefix in PUBLIC_PATH_PREFIXES:
+            if path.startswith(prefix):
+                return await call_next(request)
+        # Allow OPTIONS (CORS preflight)
+        if request.method == "OPTIONS":
+            return await call_next(request)
+        # Allow static files
+        if path.startswith("/static") or path.startswith("/favicon"):
+            return await call_next(request)
+        
+        # Check session for all other paths
+        token = request.cookies.get("kairon_session")
+        if not token:
+            return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+        
+        from app.core.database import SessionLocal
+        from app.services.auth_utils import hash_token
+        from app.models.session import Session as UserSession
+        from app.models.user import User
+        from datetime import datetime, timezone
+        
+        db = SessionLocal()
+        try:
+            token_h = hash_token(token)
+            session = db.query(UserSession).filter(
+                UserSession.token_hash == token_h,
+                UserSession.revoked_at == None,
+            ).first()
+            if not session:
+                return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+            if session.expires_at < datetime.now(timezone.utc).isoformat():
+                session.revoked_at = datetime.now(timezone.utc).isoformat()
+                db.commit()
+                return JSONResponse(status_code=401, content={"detail": "Session expired"})
+            user = db.get(User, session.user_id)
+            if not user or not user.is_active:
+                return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
+            # Store user in request state for route handlers
+            request.state.user = user
+        finally:
+            db.close()
+        
+        return await call_next(request)
+
+
+app.add_middleware(AuthMiddleware)
+
+app.include_router(routes_admin.router)
+app.include_router(routes_auth.router)
 app.include_router(routes_cases.router)
 app.include_router(routes_activity.router)
 app.include_router(routes_command_history.router)
@@ -87,6 +160,17 @@ app.include_router(routes_velociraptor.router)
 
 @app.on_event("startup")
 def on_startup() -> None:
+    try:
+        from app.services.bootstrap import bootstrap_admin
+        created = bootstrap_admin()
+        if created:
+            import logging
+            logger = logging.getLogger("uvicorn")
+            logger.warning("Bootstrap admin created from environment variables. Remove KAIRON_BOOTSTRAP_ADMIN_* after setup.")
+    except Exception as e:
+        import logging
+        logging.getLogger("uvicorn").error("Bootstrap admin failed: %s", e)
+
     init_db()
     ensure_events_indices_safe_settings()
     auto_bootstrap_dashboards()

@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.case_host import CaseHost
+from app.services.host_identity import resolve_canonical_host
 from app.services.timeline_service import (
     build_incident_timeline_draft,
     build_incident_timeline_story_bundle,
@@ -29,6 +31,8 @@ router = APIRouter(tags=["timeline"])
 def get_case_timeline(
     case_id: str,
     host: str | None = Query(default=None),
+    host_id: str | None = Query(default=None),
+    host_scope: str | None = Query(default=None),
     evidence_id: str | None = Query(default=None),
     source_category: str | None = Query(default=None),
     source: str | None = Query(default=None),
@@ -69,12 +73,19 @@ def get_case_timeline(
     key_events_only: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> dict:
+    resolved_host = host
+    if host_id and host_id not in ("unassigned", "conflicted") and not host:
+        host_obj = db.get(CaseHost, host_id)
+        if host_obj and host_obj.canonical_name:
+            resolved_host = host_obj.canonical_name
     if lightweight:
         return build_lightweight_timeline_response(
             db,
             case_id,
             {
-                "host": host,
+                "host": resolved_host,
+                "host_id": host_id,
+                "host_scope": host_scope,
                 "evidence_id": evidence_id,
                 "source_category": source_category or source,
                 "run_id": run_id,
@@ -117,7 +128,9 @@ def get_case_timeline(
         db,
         case_id,
         {
-            "host": host,
+            "host": resolved_host,
+            "host_id": host_id,
+            "host_scope": host_scope,
             "evidence_id": evidence_id,
             "source_category": source_category or source,
             "run_id": run_id,
@@ -168,18 +181,27 @@ def get_incident_timeline_draft(
     case_id: str,
     sources: list[str] | None = Query(default=None),
     host: list[str] | None = Query(default=None),
+    host_id: str | None = Query(default=None),
+    host_scope: str | None = Query(default=None),
     phase: list[str] | None = Query(default=None),
     include_low_signal: bool = Query(default=False),
     max_items: int = Query(default=60, ge=1, le=200),
     regenerate: bool = Query(default=False),
     db: Session = Depends(get_db),
 ) -> dict:
+    resolved_host = list(host or [])
+    if host_id and host_id not in ("unassigned", "conflicted") and not resolved_host:
+        host_obj = db.get(CaseHost, host_id)
+        if host_obj and host_obj.canonical_name:
+            resolved_host.append(host_obj.canonical_name)
     return build_incident_timeline_draft(
         db,
         case_id,
         {
             "sources": sources,
-            "host": host,
+            "host": resolved_host,
+            "host_id": host_id,
+            "host_scope": host_scope,
             "phase": phase,
             "include_low_signal": include_low_signal,
             "max_items": max_items,

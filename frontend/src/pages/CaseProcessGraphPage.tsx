@@ -4,11 +4,14 @@ import { useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import ProcessTreePanel from "../components/ProcessTreePanel";
 import { useActiveCase } from "../context/ActiveCaseContext";
+import { HostFilter } from "../components/HostFilter";
 
 export default function CaseProcessGraphPage() {
   const { caseId = "" } = useParams();
-  const [searchParams] = useSearchParams();
-  const { setActiveCaseId, selectedEvidenceId, selectedHost } = useActiveCase();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { setActiveCaseId, selectedEvidenceId, selectedHost, caseContext } = useActiveCase();
+  const hostId = searchParams.get("host_id") ?? "";
+  const hosts = caseContext?.hosts ?? [];
   const evidencesQuery = useQuery({
     queryKey: ["evidences", caseId],
     queryFn: () => api.listEvidences(caseId),
@@ -41,12 +44,39 @@ export default function CaseProcessGraphPage() {
         ? "focused"
         : "suspicious";
 
+  const filteredEvidences = hostId
+    ? (evidencesQuery.data ?? []).filter(e => e.host_id === hostId)
+    : (evidencesQuery.data ?? []);
+  const evidenceIdFromUrl = searchParams.get("evidence_id") ?? selectedEvidenceId;
+  const resolvedEvidenceId = evidenceIdFromUrl || "";
+
   return (
     <div className="space-y-6">
       <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Process Graph</p>
         <h2 className="mt-2 text-2xl font-semibold">Execution graph for the active case</h2>
         <p className="mt-2 text-sm text-muted">Use the global host/evidence filters to scope the graph before drilling into individual processes.</p>
+        <div className="mt-4 flex flex-wrap items-center gap-3">
+          <label className="flex items-center gap-2 text-xs text-muted">
+            <span className="font-mono text-[11px] uppercase tracking-[0.16em]">Host ID</span>
+            <HostFilter hostId={hostId || null} onChange={(value) => setSearchParams((prev) => { const next = new URLSearchParams(prev); if (value) next.set("host_id", value); else next.delete("host_id"); return next; })} className="rounded-xl border border-line bg-abyss/80 px-3 py-2" />
+          </label>
+          {hostId && filteredEvidences.length > 1 ? (
+            <label className="flex items-center gap-2 text-xs text-muted">
+              <span className="font-mono text-[11px] uppercase tracking-[0.16em]">Evidence</span>
+              <select
+                value={resolvedEvidenceId}
+                onChange={(e) => setSearchParams((prev) => { const next = new URLSearchParams(prev); if (e.target.value) next.set("evidence_id", e.target.value); else next.delete("evidence_id"); return next; })}
+                className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-xs"
+              >
+                <option value="">All evidence</option>
+                {filteredEvidences.map((e) => (
+                  <option key={e.id} value={e.id}>{e.original_filename || e.id}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+        </div>
       </section>
       <ProcessTreePanel
         caseId={caseId}

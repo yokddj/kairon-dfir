@@ -7,6 +7,7 @@ import { api, type SearchQuickFilter, type TimelineBookmark, type TimelineItem, 
 import PaginationControls from "../components/PaginationControls";
 import ResponsiveDetailPanel from "../components/ResponsiveDetailPanel";
 import { useActiveCase } from "../context/ActiveCaseContext";
+import { HostFilter } from "../components/HostFilter";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { compareValues, nextSortDirection, type SortDirection } from "../lib/sorting";
 import { formatTimestamp } from "../lib/time";
@@ -100,6 +101,7 @@ function TimelinePage() {
   const [timeTo, setTimeTo] = useState(searchParams.get("time_to") ?? "");
   const [riskMin, setRiskMin] = useState(searchParams.get("risk_min") ?? (mode === "investigation" ? "40" : ""));
   const [groupBy, setGroupBy] = useState(searchParams.get("group_by") ?? "hour");
+  const [hostId, setHostId] = useState(searchParams.get("host_id") ?? "");
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(searchParams.get("selected"));
   const [tableSortKey, setTableSortKey] = useState("timestamp");
@@ -130,6 +132,7 @@ function TimelinePage() {
   const timelineParams = useMemo(
     () => ({
       host: selectedHost || undefined,
+      host_id: hostId || undefined,
       evidence_id: resolvedEvidenceId || undefined,
       mode,
       q: query || undefined,
@@ -316,6 +319,7 @@ function TimelinePage() {
     if (riskMin) params.set("risk_min", riskMin); else params.delete("risk_min");
     if (groupBy) params.set("group_by", groupBy); else params.delete("group_by");
     if (selectedId) params.set("selected", selectedId); else params.delete("selected");
+    if (hostId) params.set("host_id", hostId); else params.delete("host_id");
     setSearchParams(params, { replace: true });
   }, [groupBy, mode, query, riskMin, searchParams, selectedId, setSearchParams, sort, timeFrom, timeTo]);
 
@@ -507,6 +511,10 @@ function TimelinePage() {
 
         {showAdvanced ? (
           <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <label className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
+              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Host ID</span>
+              <HostFilter hostId={hostId || null} onChange={(value) => setHostId(value ?? "")} className="w-full bg-transparent outline-none" />
+            </label>
             <label className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
               <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Sort</span>
               <select value={sort} onChange={(event) => setSort(event.target.value)} className="w-full bg-transparent outline-none">

@@ -396,6 +396,8 @@ def ensure_case_index(case_id: str) -> str:
                                 "aliases": {"type": "keyword"},
                                 "identity_id": {"type": "keyword"},
                                 "identity_confidence": {"type": "keyword"},
+                                "evidence_host_id": {"type": "keyword"},
+                                "canonical": {"type": "keyword"},
                             }
                         },
                         "observed_host": {

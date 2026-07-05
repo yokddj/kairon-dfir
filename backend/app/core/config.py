@@ -1,5 +1,6 @@
 from functools import lru_cache
 from pathlib import Path
+import os
 import re
 
 from pydantic import Field
@@ -49,6 +50,13 @@ class Settings(BaseSettings):
     backend_port: int = 8000
     backend_cors_origins: str = "*"
     backend_cors_origin_regex: str = r".*"
+    session_secret_key: str = os.getenv("KAIRON_SESSION_SECRET", "CHANGE_ME_SESSION_SECRET")
+    auth_enabled: bool = os.getenv("KAIRON_AUTH_ENABLED", "true").lower() not in ("0", "false", "no")
+    bootstrap_admin_username: str = os.getenv("KAIRON_BOOTSTRAP_ADMIN_USERNAME", "")
+    bootstrap_admin_password: str = os.getenv("KAIRON_BOOTSTRAP_ADMIN_PASSWORD", "")
+    bootstrap_admin_email: str = os.getenv("KAIRON_BOOTSTRAP_ADMIN_EMAIL", "")
+    allowed_origins_env: str = os.getenv("KAIRON_ALLOWED_ORIGINS", "http://localhost:5173,http://192.168.1.19:5173")
+    csrf_secret: str = os.getenv("KAIRON_CSRF_SECRET", "CHANGE_ME_CSRF_SECRET")
     backend_max_upload_size: int = Field(default=2147483648)
     memory_analysis_enabled: bool = False
     volatility3_command: str = "vol"
@@ -366,7 +374,7 @@ class Settings(BaseSettings):
 
     @property
     def cors_origins(self) -> list[str]:
-        value = self.backend_cors_origins.strip()
+        value = self.allowed_origins_env.strip()
         if value == "*":
             return ["*"]
         return [origin.strip() for origin in value.split(",") if origin.strip()]
@@ -619,6 +627,18 @@ class Settings(BaseSettings):
     def memory_symbol_import_quarantine_path(self) -> Path:
         value = str(self.memory_symbol_import_quarantine_root or "").strip()
         return Path(value) if value else self.backend_temp_dir / "symbol-import-quarantine"
+
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> "Settings":
+        if os.getenv("KAIRON_PROFILE") == "release":
+            for field_name in ("session_secret_key", "csrf_secret"):
+                value = getattr(self, field_name, "")
+                if "CHANGE_ME" in str(value):
+                    raise ValueError(
+                        f"{field_name} must not be a default CHANGE_ME value in production (profile=release)"
+                    )
+        return self
 
 
 @lru_cache

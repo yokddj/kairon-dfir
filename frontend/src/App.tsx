@@ -2,11 +2,16 @@ import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes, useLocation, useParams } from "react-router-dom";
 import Layout from "./components/Layout";
 import NoActiveCaseState from "./components/NoActiveCaseState";
+import { ProtectedRoute } from "./components/ProtectedRoute";
 import { ActiveCaseProvider } from "./context/ActiveCaseContext";
 import { useActiveCase } from "./context/ActiveCaseContext";
+import { AuthProvider } from "./context/AuthContext";
 import { NotificationsProvider } from "./context/NotificationsContext";
 import { TimezoneProvider } from "./context/TimezoneContext";
 
+const LoginPage = lazy(() => import("./pages/LoginPage"));
+const AdminUsersPage = lazy(() => import("./pages/AdminUsersPage"));
+const ChangePasswordPage = lazy(() => import("./pages/ChangePasswordPage"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Cases = lazy(() => import("./pages/Cases"));
 const CaseDetail = lazy(() => import("./pages/CaseDetail"));
@@ -101,60 +106,71 @@ function ActiveCaseSearchViewRedirect({ view }: { view: "timeline" | "artifact_v
 
 export default function App() {
   return (
-    <ActiveCaseProvider>
-      <TimezoneProvider>
-        <NotificationsProvider>
-          <Layout>
-            <Suspense fallback={<WorkspaceLoadingFallback />}>
-              <Routes>
-                <Route path="/" element={<Dashboard />} />
-                <Route path="/cases" element={<Cases />} />
-                <Route path="/cases/:caseId/overview" element={<CaseOverviewPage />} />
-                <Route path="/cases/:caseId/hosts" element={<CaseHostsPage />} />
-                <Route path="/cases/:caseId/search" element={<Search />} />
-                <Route path="/cases/:caseId/findings" element={<Findings />} />
-                <Route path="/cases/:caseId/timeline" element={<CaseSearchViewRedirect view="timeline" />} />
-                <Route path="/cases/:caseId/process-graph" element={<CaseProcessGraphPage />} />
-                <Route path="/cases/:caseId/command-history" element={<CommandHistoryPage />} />
-                <Route path="/cases/:caseId/artifact-search" element={<LegacyCaseParamRedirect suffix="/artifacts" />} />
-                <Route path="/cases/:caseId/artifacts" element={<ArtifactExplorer />} />
-                <Route path="/cases/:caseId/incident-timeline" element={<IncidentTimelinePage />} />
-                <Route path="/cases/:caseId/validation-matrix" element={<ValidationMatrixPage />} />
-                <Route path="/cases/:caseId/evidence" element={<NavigateToCaseTab tab="evidences" />} />
-                <Route path="/cases/:caseId/detections" element={<Detections />} />
-                <Route path="/cases/:caseId/reports" element={<CaseReportsPage />} />
-                <Route path="/cases/:caseId/debug-export" element={<DebugExportPage />} />
-                <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
-                <Route path="/cases/:caseId/memory/landing" element={<CaseMemoryLanding />} />
-                <Route path="/cases/:caseId/memory/upload" element={<MemoryUploadPage />} />
-                <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
-                <Route path="/cases/:caseId/process-tree" element={<LegacyCaseParamRedirect suffix="/process-graph" />} />
-                <Route path="/cases/:caseId/dashboard" element={<LegacyCaseParamRedirect suffix="/overview" />} />
-                <Route path="/cases/:caseId" element={<CaseDetail />} />
-                <Route path="/evidences/:evidenceId" element={<EvidenceDetail />} />
-                <Route path="/search" element={<LegacyCaseRoute suffix="/search" />} />
-                <Route path="/artifacts/explorer" element={<LegacyCaseRoute suffix="/artifacts" />} />
-                <Route path="/activity" element={<ActivityPage />} />
-                <Route path="/siem" element={<Siem />} />
-                <Route path="/timeline" element={<ActiveCaseSearchViewRedirect view="timeline" />} />
-                <Route path="/process-tree" element={<LegacyActiveCaseRedirect suffix="/process-graph" />} />
-                <Route path="/command-history" element={<LegacyActiveCaseRedirect suffix="/command-history" />} />
-                <Route path="/dashboard" element={<LegacyActiveCaseRedirect suffix="/overview" />} />
-                <Route path="/analysis/semi-auto" element={<LegacyActiveCaseRedirect suffix="/findings" />} />
-                <Route path="/semi-auto" element={<LegacyActiveCaseRedirect suffix="/findings" />} />
-                <Route path="/rules" element={<Rules />} />
-                <Route path="/detections" element={<LegacyCaseRoute suffix="/detections" />} />
-                <Route path="/findings" element={<LegacyCaseRoute suffix="/findings" />} />
-                <Route path="/docs" element={<DocsPage />} />
-                <Route path="/docs/:slug" element={<DocsPage />} />
-                <Route path="/system" element={<SystemPage />} />
-                <Route path="/system/performance" element={<SystemPage />} />
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </Routes>
-            </Suspense>
-          </Layout>
-        </NotificationsProvider>
-      </TimezoneProvider>
-    </ActiveCaseProvider>
+    <AuthProvider>
+      <Routes>
+        <Route path="/login" element={<Suspense fallback={<WorkspaceLoadingFallback />}><LoginPage /></Suspense>} />
+        <Route path="*" element={
+          <ProtectedRoute>
+            <ActiveCaseProvider>
+              <TimezoneProvider>
+                <NotificationsProvider>
+                  <Layout>
+                    <Suspense fallback={<WorkspaceLoadingFallback />}>
+                      <Routes>
+                        <Route path="/" element={<Dashboard />} />
+                        <Route path="/cases" element={<Cases />} />
+                        <Route path="/cases/:caseId/overview" element={<CaseOverviewPage />} />
+                        <Route path="/cases/:caseId/hosts" element={<CaseHostsPage />} />
+                        <Route path="/cases/:caseId/search" element={<Search />} />
+                        <Route path="/cases/:caseId/findings" element={<Findings />} />
+                        <Route path="/cases/:caseId/timeline" element={<CaseSearchViewRedirect view="timeline" />} />
+                        <Route path="/cases/:caseId/process-graph" element={<CaseProcessGraphPage />} />
+                        <Route path="/cases/:caseId/command-history" element={<CommandHistoryPage />} />
+                        <Route path="/cases/:caseId/artifact-search" element={<LegacyCaseParamRedirect suffix="/artifacts" />} />
+                        <Route path="/cases/:caseId/artifacts" element={<ArtifactExplorer />} />
+                        <Route path="/cases/:caseId/incident-timeline" element={<IncidentTimelinePage />} />
+                        <Route path="/cases/:caseId/validation-matrix" element={<ValidationMatrixPage />} />
+                        <Route path="/cases/:caseId/evidence" element={<NavigateToCaseTab tab="evidences" />} />
+                        <Route path="/cases/:caseId/detections" element={<Detections />} />
+                        <Route path="/cases/:caseId/reports" element={<CaseReportsPage />} />
+                        <Route path="/cases/:caseId/debug-export" element={<DebugExportPage />} />
+                        <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
+                        <Route path="/cases/:caseId/memory/landing" element={<CaseMemoryLanding />} />
+                        <Route path="/cases/:caseId/memory/upload" element={<MemoryUploadPage />} />
+                        <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
+                        <Route path="/cases/:caseId/process-tree" element={<LegacyCaseParamRedirect suffix="/process-graph" />} />
+                        <Route path="/cases/:caseId/dashboard" element={<LegacyCaseParamRedirect suffix="/overview" />} />
+                        <Route path="/cases/:caseId" element={<CaseDetail />} />
+                        <Route path="/evidences/:evidenceId" element={<EvidenceDetail />} />
+                        <Route path="/search" element={<LegacyCaseRoute suffix="/search" />} />
+                        <Route path="/artifacts/explorer" element={<LegacyCaseRoute suffix="/artifacts" />} />
+                        <Route path="/activity" element={<ActivityPage />} />
+                        <Route path="/siem" element={<Siem />} />
+                        <Route path="/timeline" element={<ActiveCaseSearchViewRedirect view="timeline" />} />
+                        <Route path="/process-tree" element={<LegacyActiveCaseRedirect suffix="/process-graph" />} />
+                        <Route path="/command-history" element={<LegacyActiveCaseRedirect suffix="/command-history" />} />
+                        <Route path="/dashboard" element={<LegacyActiveCaseRedirect suffix="/overview" />} />
+                        <Route path="/analysis/semi-auto" element={<LegacyActiveCaseRedirect suffix="/findings" />} />
+                        <Route path="/semi-auto" element={<LegacyActiveCaseRedirect suffix="/findings" />} />
+                        <Route path="/rules" element={<Rules />} />
+                        <Route path="/detections" element={<LegacyCaseRoute suffix="/detections" />} />
+                        <Route path="/findings" element={<LegacyCaseRoute suffix="/findings" />} />
+                        <Route path="/docs" element={<DocsPage />} />
+                        <Route path="/docs/:slug" element={<DocsPage />} />
+                        <Route path="/system" element={<SystemPage />} />
+                        <Route path="/system/performance" element={<SystemPage />} />
+                        <Route path="/admin/users" element={<AdminUsersPage />} />
+                        <Route path="/account/change-password" element={<ChangePasswordPage />} />
+                        <Route path="*" element={<Navigate to="/" replace />} />
+                      </Routes>
+                    </Suspense>
+                  </Layout>
+                </NotificationsProvider>
+              </TimezoneProvider>
+            </ActiveCaseProvider>
+          </ProtectedRoute>
+        } />
+      </Routes>
+    </AuthProvider>
   );
 }

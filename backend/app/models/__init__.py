@@ -1,7 +1,10 @@
 from app.models.app_setting import AppSetting
 from app.models.activity import AppActivityEvent
 from app.models.artifact import Artifact
+from app.models.assignment_history import AssignmentHistory
 from app.models.case import Case
+from app.models.audit_event import AuditEvent
+from app.models.case_access import CaseAccess
 from app.models.case_report import CaseReport
 from app.models.case_host import CaseHost
 from app.models.case_host_alias import CaseHostAlias
@@ -23,8 +26,10 @@ from app.models.memory import (
     MemorySymbolRequirement,
 )
 from app.models.rule import Rule
+from app.models.session import Session
 from app.models.rule_import_run import RuleImportRun
 from app.models.rule_set import RuleSet
 from app.models.rule_run import RuleRun
 from app.models.tag import Tag
 from app.models.timeline_bookmark import TimelineBookmark
+from app.models.user import User
