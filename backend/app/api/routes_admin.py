@@ -27,6 +27,11 @@ class DisableUserRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     new_password: str
 
+class UpdateUserRequest(BaseModel):
+    email: str | None = None
+    display_name: str | None = None
+    is_admin: bool | None = None
+
 class CaseAccessRequest(BaseModel):
     user_id: str
     role: str = "viewer"  # owner, analyst, viewer
@@ -67,11 +72,29 @@ def create_user(payload: CreateUserRequest, request: Request, db: Session = Depe
     return {"id": user.id, "username": user.username, "is_admin": user.is_admin}
 
 @router.patch("/users/{user_id}")
-def update_user(user_id: str, db: Session = Depends(get_db), _admin: User = Depends(require_admin)):
+def update_user(user_id: str, payload: UpdateUserRequest, db: Session = Depends(get_db), admin_user: User = Depends(require_admin)):
     user = db.get(User, user_id)
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return {"id": user.id}
+    
+    if payload.is_admin is False and user.is_admin:
+        active_admins = db.query(User).filter(User.is_admin == True, User.is_active == True, User.id != user.id).count()
+        if active_admins == 0:
+            raise HTTPException(status_code=409, detail="Cannot remove the last active administrator")
+    
+    if payload.email is not None:
+        user.email = payload.email
+    if payload.display_name is not None:
+        user.display_name = payload.display_name
+    if payload.is_admin is not None:
+        user.is_admin = payload.is_admin
+    
+    user.updated_at = datetime.now(timezone.utc).isoformat()
+    db.commit()
+    
+    log_audit("user_update", actor_user_id=admin_user.id, resource_type="user", resource_id=user.id,
+              metadata={"username": user.username, "is_admin": user.is_admin})
+    return {"id": user.id, "username": user.username, "is_admin": user.is_admin}
 
 @router.post("/users/{user_id}/disable")
 def disable_user(user_id: str, payload: DisableUserRequest, request: Request, db: Session = Depends(get_db), admin_user: User = Depends(require_admin)):
@@ -104,6 +127,8 @@ def enable_user(user_id: str, db: Session = Depends(get_db), _admin: User = Depe
     user.is_active = True
     user.updated_at = datetime.now(timezone.utc).isoformat()
     db.commit()
+    log_audit("user_enable", actor_user_id=_admin.id, resource_type="user", resource_id=user_id,
+              metadata={"username": user.username})
     return {"id": user.id, "is_active": True}
 
 @router.post("/users/{user_id}/reset-password")
@@ -124,6 +149,22 @@ def reset_password(user_id: str, payload: ResetPasswordRequest, request: Request
               ip_address=request.client.host if request.client else None,
               user_agent=request.headers.get("user-agent"))
     return {"id": user.id, "status": "password_reset"}
+
+@router.post("/users/{user_id}/revoke-sessions")
+def revoke_user_sessions(user_id: str, db: Session = Depends(get_db), admin_user: User = Depends(require_admin)):
+    user = db.get(User, user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    revoked = db.query(UserSession).filter(
+        UserSession.user_id == user_id,
+        UserSession.revoked_at == None,
+    ).update({"revoked_at": datetime.now(timezone.utc).isoformat()})
+    db.commit()
+    
+    log_audit("user_sessions_revoked", actor_user_id=admin_user.id, resource_type="user", resource_id=user_id,
+              metadata={"username": user.username, "sessions_revoked": revoked})
+    return {"id": user_id, "sessions_revoked": revoked}
 
 @router.get("/cases/{case_id}/access")
 def list_case_access(case_id: str, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
@@ -146,6 +187,9 @@ def grant_case_access(case_id: str, payload: CaseAccessRequest, db: Session = De
     else:
         db.add(CaseAccess(case_id=case_id, user_id=payload.user_id, role=payload.role, granted_by=admin_user.id))
     db.commit()
+    log_audit("case_access_grant", actor_user_id=admin_user.id, case_id=case_id,
+              resource_type="case_access", resource_id=payload.user_id,
+              metadata={"role": payload.role})
     return {"status": "granted", "case_id": case_id, "user_id": payload.user_id, "role": payload.role}
 
 @router.delete("/cases/{case_id}/access/{user_id}")
@@ -159,4 +203,6 @@ def revoke_case_access(case_id: str, user_id: str, db: Session = Depends(get_db)
                 raise HTTPException(status_code=400, detail="Cannot revoke the last owner of a case")
         db.delete(access)
         db.commit()
+        log_audit("case_access_revoke", actor_user_id=_admin.id, case_id=case_id,
+                  resource_type="case_access", resource_id=user_id)
     return {"status": "revoked", "case_id": case_id, "user_id": user_id}

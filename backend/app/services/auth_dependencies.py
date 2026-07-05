@@ -62,3 +62,15 @@ def require_case_access(case_id: str):
 
 def get_optional_user(request: Request, db: Session = Depends(get_db)) -> User | None:
     return _get_session_user_dep(request, db)
+
+
+def get_effective_case_role(user: User, case_id: str, db: Session) -> str | None:
+    if user.is_admin:
+        return "admin"
+    access = db.query(CaseAccess).filter(
+        CaseAccess.case_id == case_id,
+        CaseAccess.user_id == user.id,
+    ).first()
+    if not access:
+        return None
+    return access.role
