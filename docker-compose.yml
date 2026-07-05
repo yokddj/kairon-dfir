@@ -2,13 +2,13 @@ services:
   postgres:
     image: postgres:16-alpine@sha256:20edbde7749f822887a1a022ad526fde0a47d6b2be9a8364433605cf65099416
     environment:
-      POSTGRES_DB: ${POSTGRES_DB}
-      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_DB: ${POSTGRES_DB:-dfir}
+      POSTGRES_USER: ${POSTGRES_USER:-dfir}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dfir} -d ${POSTGRES_DB:-dfir}"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -343,7 +343,7 @@ services:
       - config/defaults.env
       - .env
     environment:
-      MEMORY_SYMBOL_EGRESS_GATEWAY_SECRET: ${MEMORY_SYMBOL_EGRESS_GATEWAY_SECRET}
+      MEMORY_SYMBOL_EGRESS_GATEWAY_SECRET: ${MEMORY_SYMBOL_EGRESS_GATEWAY_SECRET:-}
       MEMORY_SYMBOL_EGRESS_GATEWAY_PORT: "8443"
       MEMORY_SYMBOL_INITIAL_HOST: ${MEMORY_SYMBOL_INITIAL_HOST:-msdl.microsoft.com}
       MEMORY_SYMBOL_REDIRECT_SUFFIXES: ${MEMORY_SYMBOL_REDIRECT_SUFFIXES:-.blob.core.windows.net}
