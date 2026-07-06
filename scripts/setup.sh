@@ -74,6 +74,7 @@ write_env() {
 
   # Derive mode-specific defaults
   local derived_url="$PUBLIC_URL"
+  local derived_dashboards_url="http://localhost:5601"
   if [[ -z "$derived_url" ]]; then
     case "$DEPLOYMENT_MODE" in
       localhost) derived_url="http://localhost:5173" ;;
@@ -148,8 +149,13 @@ ENVEOF
   echo "  4. Open browser:  $derived_url"
   echo "     (First run: web setup wizard creates your admin account)"
   echo ""
-  echo "  For memory analysis, start with: docker compose --profile memory up -d"
-  echo "  For dashboards:   http://localhost:5601"
+  if [[ "${MEMORY_ENABLED:-false}" == "true" ]]; then
+    echo "  For memory analysis:  docker compose --profile memory build --pull"
+    echo "                         docker compose --profile memory up -d"
+  fi
+  if [[ "${DASHBOARDS_ENABLED:-false}" == "true" ]]; then
+    echo "  For dashboards:   $derived_dashboards_url"
+  fi
 }
 
 interactive_mode() {

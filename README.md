@@ -51,6 +51,18 @@ docker compose up -d            # start all services
 
 Open http://localhost:5173 — the first-run wizard creates your admin account.
 
+### Deployment Modes
+
+| Scenario | Mode | Example URL |
+|----------|------|-------------|
+| Browser and Kairon on the same machine | `localhost` | `http://localhost:5173` |
+| Access from other machines on a trusted LAN | `lan` | `http://192.0.2.10:5173` |
+| Domain, TLS or untrusted networks | `https` | `https://kairon.example.com` |
+
+> **LAN mode uses HTTP and must not be exposed to untrusted networks.**
+
+See [docs/deployment-modes.md](docs/deployment-modes.md) for details.
+
 For memory analysis support:
 
 ```bash
@@ -75,22 +87,58 @@ See [docs/first-run.md](docs/first-run.md) for details and troubleshooting.
 
 ### Troubleshooting Fresh Install
 
-If the login page appears instead of the setup wizard:
+If the login page appears instead of the setup wizard, a stale Docker image is likely running:
 
 ```bash
-# Verify users table is empty
+# Verify zero users
 docker compose exec postgres psql -U dfir -d dfir -c "SELECT COUNT(*) FROM users;"
+# Must return: 0
 
-# Verify setup endpoint
-curl http://localhost:5173/api/auth/needs-setup
-# Should return: {"needs_setup":true}
+# Verify endpoint
+curl -s http://localhost:5173/api/auth/needs-setup
+# Must return: {"needs_setup":true}
 
-# Rebuild images (stale image may lack setup code)
+# Rebuild and restart
 docker compose build --no-cache --pull backend frontend
 docker compose up -d backend frontend
 ```
 
-Use validation flags only in QA, training, or controlled product presentations. This repository does not include evidence archives, processed data, OpenSearch indexes, Postgres dumps, public challenge datasets, or answer keys.
+Other diagnostic commands:
+```bash
+git rev-parse HEAD                 # commit in use
+docker compose images               # image IDs and creation time
+docker compose logs --tail=50 backend frontend
+docker compose ps
+```
+
+See [docs/first-run.md](docs/first-run.md) and [docs/troubleshooting.md](docs/troubleshooting.md) for more.
+
+### Roles
+
+Kairon uses two roles: **Administrator** and **Standard user**. Both can use all investigation features. Only administrators can view and manage other users.
+
+See [docs/roles-and-permissions.md](docs/roles-and-permissions.md).
+
+> Per-case user assignment is not enabled in the current beta.
+
+### After First Login
+
+1. Go to **Admin → Users**.
+2. Click **Create user**.
+3. Choose **Standard user** as the default role.
+4. Test the new account and verify it cannot access Admin → Users.
+
+### Upgrading
+
+```bash
+git pull
+docker compose build --pull
+docker compose up -d --force-recreate
+```
+
+> `git pull` alone does not update running containers. A rebuild is required.
+
+To preserve data, do not use `docker compose down -v` during upgrades. The `-v` flag permanently deletes PostgreSQL, OpenSearch and Redis data for this Compose project.
 
 ## First Investigation Workflow
 
