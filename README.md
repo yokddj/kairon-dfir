@@ -36,7 +36,11 @@ The project is intended for trusted labs and controlled private beta deployments
 
 Requirements:
 
-- Docker and Docker Compose plugin.
+- **Linux** (Ubuntu/Debian recommended) with Docker and Docker Compose v2.
+- **macOS** with Docker Desktop (best-effort in this beta).
+- **Windows** via WSL2 (Ubuntu). See [docs/windows-wsl.md](docs/windows-wsl.md). Native PowerShell is not supported.
+
+Hardware:
 - 4 CPU cores minimum; 8+ preferred for multi-host evidence.
 - 16 GB RAM minimum; 32 GB preferred for full MFT and large OpenSearch indices.
 - Persistent disk sized for uploaded evidence plus extracted/indexed data.
@@ -44,12 +48,17 @@ Requirements:
 ```bash
 git clone https://github.com/yokddj/kairon-dfir.git
 cd kairon-dfir
-./scripts/setup.sh              # wizard generates .env with secrets
-docker compose build --pull     # build fresh images
-docker compose up -d            # start all services
+./scripts/setup.sh
 ```
 
-Open http://localhost:5173 — the first-run wizard creates your admin account.
+The setup wizard generates configuration, builds Docker images, and starts all services. Open the URL shown at the end — the first-run wizard creates your admin account in the browser.
+
+### Manual Commands (Alternative)
+
+```bash
+./scripts/setup.sh --no-start        # configure + build only
+docker compose up -d                  # start manually
+```
 
 ### Deployment Modes
 
@@ -131,14 +140,18 @@ See [docs/roles-and-permissions.md](docs/roles-and-permissions.md).
 ### Upgrading
 
 ```bash
+./scripts/setup.sh --upgrade     # pull code, rebuild, restart — preserves all data
+```
+
+Or manually:
+```bash
 git pull
 docker compose build --pull
 docker compose up -d --force-recreate
 ```
 
 > `git pull` alone does not update running containers. A rebuild is required.
-
-To preserve data, do not use `docker compose down -v` during upgrades. The `-v` flag permanently deletes PostgreSQL, OpenSearch and Redis data for this Compose project.
+> Do not use `docker compose down -v` during upgrades — the `-v` flag permanently deletes all data.
 
 ## First Investigation Workflow
 

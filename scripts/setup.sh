@@ -1,29 +1,79 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Kairon DFIR first-run setup wizard.
-# Usage: bash scripts/setup.sh          (interactive)
-#        bash scripts/setup.sh --help
-#
-# Non-interactive examples:
-#   bash scripts/setup.sh --mode localhost --no-memory --no-dashboards
-#   bash scripts/setup.sh --mode https --url https://dfir.example.com --admin-user admin --admin-email admin@example.com
+# Kairon DFIR one-command deployment script.
+# Usage: bash scripts/setup.sh                 (interactive: configure + build + start)
+#        bash scripts/setup.sh --non-interactive --mode lan --url http://192.0.2.10:5173
+#        bash scripts/setup.sh --upgrade        (pull + rebuild + restart, preserves data)
+#        bash scripts/setup.sh --validate-only
+#        bash scripts/setup.sh --no-start       (configure + build only)
+#        bash scripts/setup.sh --no-build       (configure + start only, warns about stale images)
+#        bash scripts/setup.sh -h
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# ---- Platform detection ----
+detect_platform() {
+  local os
+  os="$(uname -s 2>/dev/null || echo "unknown")"
+
+  # Detect Windows native shells (Git Bash, MSYS2, Cygwin)
+  if [[ "$os" == MINGW* ]] || [[ "$os" == MSYS* ]] || [[ "$os" == CYGWIN* ]]; then
+    cat >&2 <<'EOF'
+Windows native shell detected.
+
+Kairon deployment on Windows is supported through WSL2.
+Please open Ubuntu/WSL2, clone the repository inside the Linux filesystem,
+and run:
+    ./scripts/setup.sh
+
+Native PowerShell/CMD deployment is not supported in this beta.
+EOF
+    exit 3
+  fi
+
+  # Detect WSL2
+  if grep -qi microsoft /proc/version 2>/dev/null; then
+    echo "WSL2 detected."
+    if [[ "$ROOT_DIR" == /mnt/* ]]; then
+      cat >&2 <<'EOF'
+WARNING: Repository is under /mnt (Windows filesystem).
+This may cause performance issues, permission errors, and line-ending problems.
+Recommended: clone inside the WSL Linux filesystem instead:
+    cd ~ && git clone https://github.com/yokddj/kairon-dfir.git
+EOF
+    fi
+    echo "Recommended repository location: ~/kairon-dfir"
+    echo ""
+  fi
+
+  if [[ "$os" == Darwin ]]; then
+    echo "macOS detected. Docker Desktop must be installed and running."
+    echo "Support is best-effort in this beta."
+    echo ""
+  fi
+}
+
+# ---- Configuration variables ----
 DEPLOYMENT_MODE=""
 PUBLIC_URL=""
 AUTH_ENABLED="true"
-ENABLE_MEMORY="false"
-ENABLE_DASHBOARDS="false"
+ENABLE_MEMORY="${KAIRON_ENABLE_MEMORY:-false}"
+ENABLE_DASHBOARDS="${KAIRON_ENABLE_DASHBOARDS:-false}"
 BOOTSTRAP_ADMIN_USERNAME=""
 BOOTSTRAP_ADMIN_EMAIL=""
 INTERACTIVE=true
+DO_BUILD=true
+DO_START=true
+DO_UPGRADE=false
+FORCE_RECREATE=false
+VALIDATE_ONLY=false
+HEALTH_TIMEOUT="${KAIRON_HEALTH_TIMEOUT_SECONDS:-180}"
 
 usage() {
   cat <<'EOF'
-Kairon DFIR setup — creates .env with secrets and configuration.
+Kairon DFIR setup — configure, build and start all services.
 
 Usage: bash scripts/setup.sh [OPTIONS]
 
@@ -38,8 +88,24 @@ Options:
   --dashboards             Enable OpenSearch Dashboards.
   --admin-user USERNAME    Bootstrap admin username.
   --admin-email EMAIL      Bootstrap admin email.
+  --no-build               Skip Docker image build (warns about stale images).
+  --no-start               Generate .env and build but do not start services.
+  --force-recreate         Pass --force-recreate to docker compose up.
+  --upgrade                Pull code, rebuild, restart — preserves all data.
+  --validate-only          Validate prerequisites and .env, exit without changes.
   --debug                  Write generated secrets to stdout.
   -h, --help               Show this message.
+
+Deployment modes:
+  localhost  Single machine, browser and Kairon on the same host
+  lan        Server on a trusted private network, accessed from other machines
+  https      Public domain with TLS reverse proxy
+
+Environment variables (non-interactive mode):
+  KAIRON_DEPLOYMENT_MODE
+  KAIRON_PUBLIC_URL
+  KAIRON_ENABLE_MEMORY
+  KAIRON_ENABLE_DASHBOARDS
 EOF
   exit 0
 }
@@ -50,7 +116,7 @@ generate_secret() {
 
 check_prerequisites() {
   local missing=()
-  for cmd in docker openssl python3; do
+  for cmd in git docker openssl curl; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       missing+=("$cmd")
     fi
@@ -61,10 +127,54 @@ check_prerequisites() {
   fi
 
   if [[ "${#missing[@]}" -gt 0 ]]; then
-    echo "Missing prerequisites: ${missing[*]}" >&2
+    echo "ERROR: Missing prerequisites: ${missing[*]}" >&2
     echo "Install them and re-run this script." >&2
     exit 1
   fi
+
+  if ! docker info >/dev/null 2>&1; then
+    echo "ERROR: Docker daemon is not running or not accessible." >&2
+    exit 1
+  fi
+}
+
+check_ports() {
+  local ports=(5173)
+  for port in "${ports[@]}"; do
+    if ss -tlnp 2>/dev/null | grep -q ":$port " || lsof -i ":$port" >/dev/null 2>&1; then
+      echo "ERROR: Port $port is already in use." >&2
+      exit 1
+    fi
+  done
+}
+
+preserve_secrets_from_env() {
+  local env_file="$1"
+  if [[ ! -f "$env_file" ]]; then
+    return 0
+  fi
+
+  echo "Existing .env found. Preserving existing secrets..."
+  local backup_file="${env_file}.backup-$(date -u +%Y%m%dT%H%M%SZ)"
+  cp "$env_file" "$backup_file"
+  echo "Backup: $backup_file"
+
+  # Read existing secrets
+  KAIRON_SESSION_SECRET_EXISTING=$(grep '^KAIRON_SESSION_SECRET=' "$env_file" | sed 's/^KAIRON_SESSION_SECRET=//' || echo "")
+  KAIRON_CSRF_SECRET_EXISTING=$(grep '^KAIRON_CSRF_SECRET=' "$env_file" | sed 's/^KAIRON_CSRF_SECRET=//' || echo "")
+  POSTGRES_PASSWORD_EXISTING=$(grep '^POSTGRES_PASSWORD=' "$env_file" | sed 's/^POSTGRES_PASSWORD=//' || echo "")
+  OPENSEARCH_INITIAL_ADMIN_PASSWORD_EXISTING=$(grep '^OPENSEARCH_INITIAL_ADMIN_PASSWORD=' "$env_file" | sed 's/^OPENSEARCH_INITIAL_ADMIN_PASSWORD=//' || echo "")
+
+  # Read existing feature flags
+  ENABLE_MEMORY_EXISTING=$(grep '^KAIRON_ENABLE_MEMORY=' "$env_file" | sed 's/^KAIRON_ENABLE_MEMORY=//' || echo "false")
+  ENABLE_DASHBOARDS_EXISTING=$(grep '^KAIRON_ENABLE_DASHBOARDS=' "$env_file" | sed 's/^KAIRON_ENABLE_DASHBOARDS=//' || echo "false")
+  
+  export KAIRON_SESSION_SECRET_EXISTING
+  export KAIRON_CSRF_SECRET_EXISTING
+  export POSTGRES_PASSWORD_EXISTING
+  export OPENSEARCH_INITIAL_ADMIN_PASSWORD_EXISTING
+  [[ -n "$ENABLE_MEMORY_EXISTING" ]] && ENABLE_MEMORY="$ENABLE_MEMORY_EXISTING"
+  [[ -n "$ENABLE_DASHBOARDS_EXISTING" ]] && ENABLE_DASHBOARDS="$ENABLE_DASHBOARDS_EXISTING"
 }
 
 write_env() {
@@ -72,7 +182,6 @@ write_env() {
   local timestamp
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
-  # Derive mode-specific defaults
   local derived_url="$PUBLIC_URL"
   local derived_dashboards_url="http://localhost:5601"
   if [[ -z "$derived_url" ]]; then
@@ -87,10 +196,15 @@ write_env() {
   if [[ "$DEPLOYMENT_MODE" == "https" ]]; then
     derived_url="${derived_url%/}"
     if [[ ! "$derived_url" =~ ^https:// ]]; then
-      echo "WARNING: HTTPS mode selected but public URL does not start with https://" >&2
-      echo "         You should configure an HTTPS reverse proxy and update KAIRON_PUBLIC_URL." >&2
+      echo "WARNING: HTTPS mode selected but URL does not start with https://" >&2
     fi
   fi
+
+  # Use preserved secrets if available, otherwise generate new
+  local session_secret="${KAIRON_SESSION_SECRET_EXISTING:-$(generate_secret)}"
+  local csrf_secret="${KAIRON_CSRF_SECRET_EXISTING:-$(generate_secret)}"
+  local postgres_pwd="${POSTGRES_PASSWORD_EXISTING:-$(generate_secret)}"
+  local opensearch_pwd="${OPENSEARCH_INITIAL_ADMIN_PASSWORD_EXISTING:-$(generate_secret)}"
 
   echo "# Kairon DFIR environment — generated by scripts/setup.sh at ${timestamp}" > "$env_file"
   echo "# Deployment mode: ${DEPLOYMENT_MODE}" >> "$env_file"
@@ -101,13 +215,13 @@ KAIRON_DEPLOYMENT_MODE=${DEPLOYMENT_MODE}
 KAIRON_PUBLIC_URL=${derived_url}
 KAIRON_AUTH_ENABLED=${AUTH_ENABLED}
 
-# ---- Secrets (auto-generated) ----
-KAIRON_SESSION_SECRET=$(generate_secret)
-KAIRON_CSRF_SECRET=$(generate_secret)
-POSTGRES_PASSWORD=$(generate_secret)
-OPENSEARCH_INITIAL_ADMIN_PASSWORD=$(generate_secret)
+# ---- Secrets ----
+KAIRON_SESSION_SECRET=${session_secret}
+KAIRON_CSRF_SECRET=${csrf_secret}
+POSTGRES_PASSWORD=${postgres_pwd}
+OPENSEARCH_INITIAL_ADMIN_PASSWORD=${opensearch_pwd}
 
-# ---- Optional bootstrap admin (prefer CLI: python -m app.cli create-admin) ----
+# ---- Optional bootstrap admin (prefer web wizard) ----
 KAIRON_BOOTSTRAP_ADMIN_USERNAME=${BOOTSTRAP_ADMIN_USERNAME}
 KAIRON_BOOTSTRAP_ADMIN_EMAIL=${BOOTSTRAP_ADMIN_EMAIL}
 KAIRON_BOOTSTRAP_ADMIN_PASSWORD=
@@ -132,37 +246,121 @@ ENVEOF
   echo "  Auth:  $AUTH_ENABLED"
   echo "  Memory:  $ENABLE_MEMORY"
   echo "  Dashboards:  $ENABLE_DASHBOARDS"
-  if [[ -n "$BOOTSTRAP_ADMIN_USERNAME" ]]; then
-    echo "  Admin user:  $BOOTSTRAP_ADMIN_USERNAME"
-    if [[ -n "$BOOTSTRAP_ADMIN_EMAIL" ]]; then
-      echo "  Admin email: $BOOTSTRAP_ADMIN_EMAIL"
+}
+
+build_and_start() {
+  echo ""
+  echo "=== Building Docker images ==="
+  local build_args="--pull"
+  if [[ "$FORCE_RECREATE" == true ]] || [[ "$DO_UPGRADE" == true ]]; then
+    build_args="--no-cache --pull"
+  fi
+  docker compose build $build_args
+  echo "Build complete."
+
+  if [[ "$DO_START" != true ]]; then
+    echo "Services not started (--no-start)."
+    return
+  fi
+
+  echo ""
+  echo "=== Starting services ==="
+  local up_args="-d"
+  if [[ "$FORCE_RECREATE" == true ]] || [[ "$DO_UPGRADE" == true ]]; then
+    up_args="$up_args --force-recreate"
+  fi
+  docker compose up $up_args
+
+  wait_for_health
+}
+
+wait_for_health() {
+  local deadline=$((SECONDS + HEALTH_TIMEOUT))
+  local backend_ok=false
+  local frontend_ok=false
+  local version=""
+
+  echo ""
+  echo "=== Waiting for services (timeout: ${HEALTH_TIMEOUT}s) ==="
+  
+  while [[ $SECONDS -lt $deadline ]]; do
+    if [[ "$backend_ok" != true ]]; then
+      if version=$(curl -s -m 5 http://localhost:8000/api/system/version 2>/dev/null); then
+        echo "Backend: healthy"
+        backend_ok=true
+      fi
+    fi
+
+    if [[ "$frontend_ok" != true ]]; then
+      if curl -s -o /dev/null -m 5 http://localhost:5173 2>/dev/null; then
+        echo "Frontend: healthy"
+        frontend_ok=true
+      fi
+    fi
+
+    if [[ "$backend_ok" == true ]] && [[ "$frontend_ok" == true ]]; then
+      break
+    fi
+    sleep 3
+  done
+
+  if [[ "$backend_ok" != true ]]; then
+    echo "WARNING: Backend did not respond in time."
+    echo "Check logs: docker compose logs --tail=50 backend"
+  fi
+  if [[ "$frontend_ok" != true ]]; then
+    echo "WARNING: Frontend did not respond in time."
+    echo "Check logs: docker compose logs --tail=50 frontend"
+  fi
+}
+
+show_final_output() {
+  local derived_url="${PUBLIC_URL:-http://localhost:5173}"
+  echo ""
+  echo "============================================"
+  echo "  Kairon DFIR is running."
+  echo "  URL:  $derived_url"
+  echo ""
+
+  local needs_setup="unknown"
+  if needs_setup=$(curl -s -m 5 "${derived_url}/api/auth/needs-setup" 2>/dev/null); then
+    if echo "$needs_setup" | grep -q '"needs_setup":true'; then
+      echo "  First administrator wizard: YES"
+      echo "  Open the URL in your browser and create the admin account."
+      echo ""
+    elif echo "$needs_setup" | grep -q '"needs_setup":false'; then
+      echo "  Users already exist. Sign in with an existing account."
+      echo ""
     fi
   fi
 
-  local secrets_list
-  secrets_list="$(grep -E '^(KAIRON_SESSION_SECRET|KAIRON_CSRF_SECRET|POSTGRES_PASSWORD|OPENSEARCH_INITIAL_ADMIN_PASSWORD)=' "$env_file" | sed 's/=.*/=******/')"
-  echo ""
-  echo "=== Next steps ==="
-  echo "  1. Review .env:  cat $env_file"
-  echo "  2. Build images:  docker compose build --pull"
-  echo "  3. Start services:  docker compose up -d"
-  echo "  4. Open browser:  $derived_url"
-  echo "     (First run: web setup wizard creates your admin account)"
-  echo ""
-  if [[ "${MEMORY_ENABLED:-false}" == "true" ]]; then
-    echo "  For memory analysis:  docker compose --profile memory build --pull"
-    echo "                         docker compose --profile memory up -d"
+  echo "  Useful commands:"
+  echo "    docker compose ps"
+  echo "    docker compose logs --tail=100 backend"
+  echo "    docker compose logs --tail=100 frontend"
+
+  if [[ "$AUTH_ENABLED" == true ]]; then
+    echo "    docker compose exec postgres psql -U dfir -d dfir -c \"SELECT username, is_admin, is_active FROM users;\""
   fi
-  if [[ "${DASHBOARDS_ENABLED:-false}" == "true" ]]; then
-    echo "  For dashboards:   $derived_dashboards_url"
+
+  if [[ "$ENABLE_MEMORY" == true ]]; then
+    echo ""
+    echo "  Memory analysis profile:"
+    echo "    docker compose --profile memory build --pull"
+    echo "    docker compose --profile memory up -d"
   fi
+
+  if [[ "$ENABLE_DASHBOARDS" == true ]]; then
+    echo ""
+    echo "  Dashboards: http://localhost:5601"
+  fi
+  echo "============================================"
 }
 
 interactive_mode() {
   echo "=== Kairon DFIR First-Run Setup ==="
   echo ""
 
-  # Deployment mode
   echo "Select deployment mode:"
   echo "  1) localhost — single developer machine (default)"
   echo "  2) lan — local network access from other machines"
@@ -177,19 +375,21 @@ interactive_mode() {
   echo "  Selected: $DEPLOYMENT_MODE"
   echo ""
 
-  # Public URL
   local default_url
   case "$DEPLOYMENT_MODE" in
     localhost) default_url="http://localhost:5173" ;;
     lan)       default_url="http://localhost:5173" ;;
     https)     default_url="https://localhost" ;;
   esac
-  read -r -p "Public URL [$default_url]: " url_input
+  if [[ "$DEPLOYMENT_MODE" == "lan" ]]; then
+    read -r -p "Public URL (e.g. http://192.0.2.10:5173) [$default_url]: " url_input
+  else
+    read -r -p "Public URL [$default_url]: " url_input
+  fi
   PUBLIC_URL="${url_input:-$default_url}"
   echo "  Public URL: $PUBLIC_URL"
   echo ""
 
-  # Auth
   read -r -p "Enable authentication? [Y/n]: " auth_input
   case "${auth_input:-y}" in
     [Nn]*) AUTH_ENABLED="false" ;;
@@ -198,7 +398,6 @@ interactive_mode() {
   echo "  Authentication: $AUTH_ENABLED"
   echo ""
 
-  # Optional features
   read -r -p "Enable memory analysis? [y/N]: " mem_input
   case "${mem_input:-n}" in
     [Yy]*) ENABLE_MEMORY="true" ;;
@@ -215,22 +414,30 @@ interactive_mode() {
   echo "  Dashboards: $ENABLE_DASHBOARDS"
   echo ""
 
-  # Admin credentials
-  echo "--- Bootstrap Admin (optional) ---"
-  echo "Note: Admin password is NOT saved to .env."
-  echo "      Create the admin later with: docker compose run --rm backend python -m app.cli create-admin"
-  read -r -p "Bootstrap admin username (leave blank to skip): " admin_user
-  if [[ -n "$admin_user" ]]; then
-    BOOTSTRAP_ADMIN_USERNAME="$admin_user"
-    read -r -p "Bootstrap admin email: " admin_email
-    BOOTSTRAP_ADMIN_EMAIL="$admin_email"
+  echo "=== Configuration summary ==="
+  echo "  Mode:  $DEPLOYMENT_MODE"
+  echo "  URL:   $PUBLIC_URL"
+  echo "  Auth:  $AUTH_ENABLED"
+  echo "  Memory: $ENABLE_MEMORY"
+  echo "  Dashboards: $ENABLE_DASHBOARDS"
+  echo ""
+
+  if [[ "$DEPLOYMENT_MODE" == "lan" ]]; then
+    echo "WARNING: LAN mode uses HTTP. Do not expose it to untrusted networks."
+    echo ""
   fi
+
+  read -r -p "Build and start services now? [Y/n]: " start_input
+  case "${start_input:-y}" in
+    [Nn]*) DO_START=false ;;
+    *)     DO_START=true ;;
+  esac
   echo ""
 }
 
 non_interactive_mode() {
   if [[ -z "$DEPLOYMENT_MODE" ]]; then
-    echo "Error: --mode is required in non-interactive mode." >&2
+    echo "ERROR: --mode is required in non-interactive mode." >&2
     echo "Valid modes: localhost, lan, https" >&2
     exit 2
   fi
@@ -238,7 +445,7 @@ non_interactive_mode() {
   case "$DEPLOYMENT_MODE" in
     localhost|lan|https) ;;
     *)
-      echo "Error: Invalid deployment mode '$DEPLOYMENT_MODE'. Valid: localhost, lan, https" >&2
+      echo "ERROR: Invalid deployment mode '$DEPLOYMENT_MODE'." >&2
       exit 2
       ;;
   esac
@@ -247,18 +454,53 @@ non_interactive_mode() {
 check_existing_env() {
   local env_file="$ROOT_DIR/.env"
   if [[ -f "$env_file" ]]; then
-    echo "WARNING: $env_file already exists." >&2
+    echo "NOTE: $env_file already exists. Secrets will be preserved."
     if [[ "$INTERACTIVE" == true ]]; then
-      read -r -p "Overwrite? [y/N]: " overwrite
-      case "${overwrite:-n}" in
-        [Yy]*) return 0 ;;
-        *) echo "Aborted."; exit 0 ;;
+      read -r -p "Regenerate configuration? [y/N]: " regen
+      case "${regen:-n}" in
+        [Yy]*) 
+          echo "WARNING: Regenerating configuration will create new secrets."
+          read -r -p "Type 'REGENERATE' to confirm: " confirm
+          if [[ "$confirm" != "REGENERATE" ]]; then
+            echo "Keeping existing secrets. Configuration updated."
+            preserve_secrets_from_env "$env_file"
+            return 0
+          fi
+          ;;
+        *) 
+          preserve_secrets_from_env "$env_file"
+          return 0
+          ;;
       esac
     else
-      echo "Pass --non-interactive to overwrite, or remove the existing .env first." >&2
-      exit 1
+      preserve_secrets_from_env "$env_file"
     fi
   fi
+}
+
+do_upgrade() {
+  echo "=== Kairon DFIR Upgrade ==="
+  echo ""
+  
+  if [[ ! -f "$ROOT_DIR/.env" ]]; then
+    echo "ERROR: No .env found. Run './scripts/setup.sh' first." >&2
+    exit 1
+  fi
+
+  preserve_secrets_from_env "$ROOT_DIR/.env"
+  
+  echo ""
+  echo "Pulling latest code..."
+  git -C "$ROOT_DIR" pull 2>&1 || echo "WARNING: git pull failed. Continuing with local code."
+  echo ""
+
+  echo "Rebuilding and restarting services..."
+  FORCE_RECREATE=true
+  DO_BUILD=true
+  DO_START=true
+  build_and_start
+  show_final_output
+  exit 0
 }
 
 # ---- Argument parsing ----
@@ -272,6 +514,11 @@ while [[ $# -gt 0 ]]; do
     --dashboards) ENABLE_DASHBOARDS="true"; shift ;;
     --admin-user) BOOTSTRAP_ADMIN_USERNAME="$2"; shift 2 ;;
     --admin-email) BOOTSTRAP_ADMIN_EMAIL="$2"; shift 2 ;;
+    --no-build) DO_BUILD=false; shift ;;
+    --no-start) DO_START=false; shift ;;
+    --force-recreate) FORCE_RECREATE=true; shift ;;
+    --upgrade) DO_UPGRADE=true; shift ;;
+    --validate-only) VALIDATE_ONLY=true; shift ;;
     --debug)
       echo "=== Debug: secrets will NOT be generated ==="
       generate_secret() { echo "DEBUG_SECRET_$(openssl rand -hex 4)"; }
@@ -282,16 +529,50 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-check_prerequisites || true
+# ---- Platform check ----
+detect_platform
+
+# ---- Upgrade path ----
+if [[ "$DO_UPGRADE" == true ]]; then
+  check_prerequisites
+  do_upgrade
+fi
+
+# ---- Validate only ----
+if [[ "$VALIDATE_ONLY" == true ]]; then
+  check_prerequisites
+  if [[ -f "$ROOT_DIR/.env" ]]; then
+    echo ".env exists."
+    "$SCRIPT_DIR/validate-config.sh" || true
+  else
+    echo "WARNING: .env not found. Run './scripts/setup.sh' first." >&2
+    exit 1
+  fi
+  echo "Validate-only: no changes made."
+  exit 0
+fi
+
+# ---- Normal flow ----
+check_prerequisites
 
 if [[ "$INTERACTIVE" == true ]]; then
   check_existing_env
   interactive_mode
 else
-  if [[ -f "$ROOT_DIR/.env" ]]; then
-    echo "Non-interactive mode: overwriting existing .env" >&2
-  fi
+  check_existing_env
   non_interactive_mode
 fi
 
 write_env
+
+if [[ "$DO_START" == true ]] && [[ "$DO_BUILD" != true ]]; then
+  cat >&2 <<'EOF'
+WARNING: --no-build may reuse stale Docker images.
+Use this only if you know the images are already up to date.
+EOF
+fi
+
+if [[ "$DO_BUILD" == true ]] || [[ "$DO_START" == true ]]; then
+  build_and_start
+  show_final_output
+fi
