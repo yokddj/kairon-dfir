@@ -46,6 +46,14 @@ EOF
     fi
     echo "Recommended repository location: ~/kairon-dfir"
     echo ""
+    
+    if ! docker info >/dev/null 2>&1; then
+      cat >&2 <<'EOF'
+Docker is installed but not reachable from WSL2.
+Enable Docker Desktop WSL integration for this distribution,
+or install Docker Engine inside WSL.
+EOF
+    fi
   fi
 
   if [[ "$os" == Darwin ]]; then
@@ -314,6 +322,35 @@ wait_for_health() {
   fi
 }
 
+show_planned_actions() {
+  local env_file="$ROOT_DIR/.env"
+  local has_env="no"
+  local has_data="unknown"
+  [[ -f "$env_file" ]] && has_env="yes"
+  if docker compose ps --format '{{.Name}}' 2>/dev/null | grep -q .; then
+    has_data="yes (containers running)"
+  fi
+
+  local profiles="none"
+  [[ "$ENABLE_MEMORY" == true ]] && profiles="memory"
+  [[ "$ENABLE_DASHBOARDS" == true ]] && profiles="${profiles:+$profiles,}dashboards"
+  [[ -z "$profiles" ]] && profiles="none"
+
+  echo ""
+  echo "=== Planned actions ==="
+  echo "  Write/update .env:      $([[ "$has_env" == no ]] && echo yes || echo 'yes (secrets preserved)')"
+  echo "  Build images:           $([[ "$DO_BUILD" == true ]] && echo yes || echo no)"
+  echo "  Start services:         $([[ "$DO_START" == true ]] && echo yes || echo no)"
+  echo "  Force recreate:         $([[ "$FORCE_RECREATE" == true ]] && echo yes || echo no)"
+  echo "  Compose profiles:       $profiles"
+  echo "  Public URL:             ${PUBLIC_URL:-auto}"
+  echo "  Existing .env:          $has_env"
+  echo "  Existing containers:    $has_data"
+  echo "  Destructive actions:    no"
+  echo "================================"
+  echo ""
+}
+
 show_final_output() {
   local derived_url="${PUBLIC_URL:-http://localhost:5173}"
   echo ""
@@ -563,6 +600,7 @@ else
   non_interactive_mode
 fi
 
+show_planned_actions
 write_env
 
 if [[ "$DO_BUILD" != true ]]; then
