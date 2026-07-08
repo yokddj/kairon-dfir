@@ -565,14 +565,18 @@ fi
 
 write_env
 
-if [[ "$DO_START" == true ]] && [[ "$DO_BUILD" != true ]]; then
-  cat >&2 <<'EOF'
+if [[ "$DO_BUILD" != true ]]; then
+  if [[ "$DO_UPGRADE" != true ]]; then
+    cat >&2 <<'EOF'
 WARNING: --no-build may reuse stale Docker images.
 Use this only if you know the images are already up to date.
 EOF
+  fi
 fi
 
 if [[ "$DO_BUILD" == true ]] || [[ "$DO_START" == true ]]; then
   build_and_start
-  show_final_output
+  if [[ "$DO_START" == true ]]; then
+    show_final_output
+  fi
 fi
