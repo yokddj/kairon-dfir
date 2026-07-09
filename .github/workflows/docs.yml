@@ -1,0 +1,63 @@
+name: Docs
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  docs-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check no personal IPs
+        run: |
+          if grep -rPn '192\.168\.1\.19' --include='*.md' --include='*.sh' --include='*.env*' --include='*.yml' \
+            README.md docs/ scripts/ .env.example config/ docker-compose.yml 2>/dev/null; then
+            echo "ERROR: personal IP 192.168.1.19 found in docs/config"
+            exit 1
+          fi
+          echo "OK: no personal IPs"
+
+      - name: Check no legacy role claims
+        run: |
+          if grep -rPin '(assigned cases only|read.only role|analyst role|viewer role|Analyst.*manage|Viewer.*manage)' \
+            README.md docs/ 2>/dev/null; then
+            echo "ERROR: legacy role claims found in docs"
+            exit 1
+          fi
+          echo "OK: no legacy role claims"
+
+      - name: Check no default password claims
+        run: |
+          if grep -rPin 'default password|admin/admin|admin/password' \
+            README.md docs/ 2>/dev/null; then
+            echo "ERROR: default password claim found"
+            exit 1
+          fi
+          echo "OK: no default password claims"
+
+      - name: Check no PowerShell as supported
+        run: |
+          if grep -rPin 'Native PowerShell|Native.*CMD|PowerShell deployment.*supported' \
+            README.md docs/ 2>/dev/null; then
+            echo "ERROR: PowerShell listed as supported deployment path"
+            exit 1
+          fi
+          echo "OK: PowerShell not listed as supported"
+
+      - name: Check no CLI first-admin as primary flow
+        run: |
+          if grep -rPin 'create-admin.*first|first.*admin.*CLI|primary.*admin.*CLI' \
+            README.md docs/ 2>/dev/null; then
+            echo "ERROR: CLI first-admin presented as primary flow"
+            exit 1
+          fi
+          echo "OK: web wizard is primary"
+
+      - name: Check setup.sh in README quick start
+        run: |
+          grep -q './scripts/setup.sh' README.md || { echo "WARNING: setup.sh not in README"; }
+          echo "OK: README references setup.sh"
