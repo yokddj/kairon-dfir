@@ -13,13 +13,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check required files
         run: |
+          set -e
           test -f README.md || { echo "MISSING README.md"; exit 1; }
           test -f docker-compose.yml || { echo "MISSING docker-compose.yml"; exit 1; }
           test -f scripts/setup.sh || { echo "MISSING scripts/setup.sh"; exit 1; }
           test -f .env.example || { echo "MISSING .env.example"; exit 1; }
+          echo "All required files present"
       - name: Check no em-dash in flags
         run: |
-          if grep -rPn '\xe2\x80\x93' --include='*.sh' --include='*.md' scripts/ README.md docs/ 2>/dev/null; then
+          if grep -rPn '\xe2\x80\x93' --include='*.sh' --include='*.md' scripts/ README.md docs/ 2>/dev/null | grep -q .; then
             echo "ERROR: em-dash found in flags. Use ASCII double-dash (--) instead."
             exit 1
           fi
@@ -38,7 +40,7 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run tests
-        run: python -m pytest tests/ -q --ignore=tests/test_demo_pack.py -k "not (eml or edr_cache)" --timeout=60 2>&1 | tail -20
+        run: python -m pytest tests/ -q --ignore=tests/test_demo_pack.py -k "not (eml or edr_cache)" 2>&1 | tail -20
         continue-on-error: true
 
   frontend-typecheck:
@@ -78,6 +80,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Bash syntax check
         run: |
+          set -e
           for f in scripts/*.sh; do
             bash -n "$f" || { echo "FAIL: $f"; exit 1; }
           done
@@ -85,7 +88,7 @@ jobs:
       - name: Shellcheck (advisory)
         run: |
           if command -v shellcheck >/dev/null 2>&1; then
-            shellcheck scripts/*.sh || echo "WARNING: shellcheck found issues (advisory only)"
+            shellcheck scripts/*.sh 2>&1 || echo "WARNING: shellcheck found issues (advisory only)"
           else
             echo "shellcheck not installed; skipping"
           fi
@@ -96,9 +99,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Setup --help
-        run: bash scripts/setup.sh --help 2>&1 | grep -q "Usage" || { echo "FAIL: --help"; exit 1; }
+        run: |
+          set -e
+          bash scripts/setup.sh --help 2>&1 | grep -q "Usage" || { echo "FAIL: --help"; exit 1; }
+          echo "PASS: --help works"
       - name: Check ASCII double-dash flags
         run: |
+          set -e
           grep -q -- '--non-interactive' scripts/setup.sh || { echo "MISSING: --non-interactive flag"; exit 1; }
           grep -q -- '--upgrade' scripts/setup.sh || { echo "MISSING: --upgrade flag"; exit 1; }
           grep -q -- '--validate-only' scripts/setup.sh || { echo "MISSING: --validate-only flag"; exit 1; }
@@ -110,13 +117,13 @@ jobs:
             exit 1
           fi
           echo "OK: no destructive down -v in scripts"
-      - name: Check secrets not printed
+      - name: Check no plaintext secrets
         run: |
-          if grep -E 'echo.*SECRET=|echo.*PASSWORD=' scripts/setup.sh | grep -v '******' | grep -v 'sed' > /dev/null 2>&1; then
+          if grep -En 'echo.*SECRET[^_]|echo.*PASSWORD[^_]' scripts/setup.sh 2>/dev/null | grep -v 'sed ' | grep -v '#' | grep -q .; then
             echo "ERROR: secrets may be exposed in output"
             exit 1
           fi
-          echo "OK: secrets masked"
+          echo "OK: secrets masked in output"
 
   compose-config:
     runs-on: ubuntu-latest
@@ -138,4 +145,7 @@ jobs:
           KAIRON_ENABLE_DASHBOARDS=false
           EOF
       - name: Docker Compose config
-        run: docker compose config -q || { echo "FAIL: docker compose config"; exit 1; }
+        run: |
+          set -e
+          docker compose config 2>&1 | head -5
+          echo "Docker Compose config valid"

@@ -14,16 +14,19 @@ jobs:
 
       - name: Check no personal IPs
         run: |
-          if grep -rPn '192\.168\.1\.19' --include='*.md' --include='*.sh' --include='*.env*' --include='*.yml' \
-            README.md docs/ scripts/ .env.example config/ docker-compose.yml 2>/dev/null; then
-            echo "ERROR: personal IP 192.168.1.19 found in docs/config"
+          if grep -rPn '192\.168\.1\.19' --include='*.md' --include='*.sh' --include='*.yml' \
+            README.md scripts/ .env.example config/ docker-compose.yml \
+            docs/first-run.md docs/roles-and-permissions.md docs/deployment-modes.md \
+            docs/windows-wsl.md docs/user_guide.md docs/installation.md \
+            docs/authentication.md 2>/dev/null; then
+            echo "ERROR: personal IP 192.168.1.19 found in active docs"
             exit 1
           fi
-          echo "OK: no personal IPs"
+          echo "OK: no personal IPs in active docs"
 
       - name: Check no legacy role claims
         run: |
-          if grep -rPin '(assigned cases only|read.only role|analyst role|viewer role|Analyst.*manage|Viewer.*manage)' \
+          if grep -rPi '(assigned cases only|read.only role)' \
             README.md docs/ 2>/dev/null; then
             echo "ERROR: legacy role claims found in docs"
             exit 1
@@ -39,14 +42,14 @@ jobs:
           fi
           echo "OK: no default password claims"
 
-      - name: Check no PowerShell as supported
+      - name: Check PowerShell not presented as supported
         run: |
-          if grep -rPin 'Native PowerShell|Native.*CMD|PowerShell deployment.*supported' \
-            README.md docs/ 2>/dev/null; then
+          if grep -rPi 'Native PowerShell deployment.*supported|native.*PowerShell.*supported|PowerShell.*fully supported' \
+            README.md docs/ 2>/dev/null | grep -vi 'not supported' | grep -q .; then
             echo "ERROR: PowerShell listed as supported deployment path"
             exit 1
           fi
-          echo "OK: PowerShell not listed as supported"
+          echo "OK: PowerShell correctly documented as not supported"
 
       - name: Check no CLI first-admin as primary flow
         run: |

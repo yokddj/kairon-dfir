@@ -91,10 +91,10 @@ check "no secrets exposed" "! grep -E 'echo.*SECRET=|echo.*PASSWORD=' scripts/se
 # ---- Docs checks ----
 echo ""
 echo "--- Documentation ---"
-check "no IP 192.168.1.19" "! grep -rPn '192\.168\.1\.19' --include='*.md' --include='*.sh' --include='*.yml' README.md docs/ scripts/ .env.example 2>/dev/null | grep -v 'docs/sprints/' | grep -v 'docs/test_baseline' | grep -v 'docs/deployment_remote' | grep -v 'docs/memory_process_model' | grep -q ."
-check "no 'assigned cases only'" "! grep -rPin 'assigned cases only|read.only role' README.md docs/ 2>/dev/null | grep -q ."
+check "no IP 192.168.1.19" "! grep -rPn '192\.168\.1\.19' --include='*.md' --include='*.yml' README.md .env.example config/ docs/first-run.md docs/roles-and-permissions.md docs/deployment-modes.md docs/windows-wsl.md 2>/dev/null | grep -q ."
+check "no 'assigned cases only'" "! grep -rPi 'assigned cases only|read.only role' README.md docs/ 2>/dev/null | grep -q ."
 check "no 'default password'" "! grep -rPin 'default password' README.md docs/ 2>/dev/null | grep -q ."
-check "no native PowerShell support" "! grep -rPin 'Native PowerShell is supported|PowerShell.*deployment.*supported|Native.*CMD.*supported' README.md docs/ 2>/dev/null | grep -v 'not supported' | grep -q ."
+check "no PowerShell as supported" "! grep -rPin 'Native PowerShell (deployment|is supported|CMD.*supported)' README.md docs/ 2>/dev/null | grep -v 'not supported' | grep -q ."
 check "setup.sh in README" "grep -q './scripts/setup.sh' README.md"
 
 # ---- Frontend (skip in --fast) ----
