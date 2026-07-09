@@ -48,6 +48,7 @@ warn()  { echo "  WARN: $1"; }
 check() { if eval "$2" 2>/dev/null; then pass "$1"; else fail "$1 ($2)"; fi; }
 
 cd "$ROOT_DIR"
+PYTHON_BIN="$(command -v python3 || command -v python || true)"
 
 echo "=== Kairon DFIR Quality Gate ==="
 echo ""
@@ -95,6 +96,7 @@ check "no IP 192.168.1.19" "! grep -rPn '192\.168\.1\.19' --include='*.md' --inc
 check "no 'assigned cases only'" "! grep -rPi 'assigned cases only|read.only role' README.md docs/ 2>/dev/null | grep -q ."
 check "no 'default password'" "! grep -rPin 'default password' README.md docs/ 2>/dev/null | grep -q ."
 check "no PowerShell as supported" "! grep -rPin 'Native PowerShell (deployment|is supported|CMD.*supported)' README.md docs/ 2>/dev/null | grep -v 'not supported' | grep -q ."
+check "no CLI first-admin primary flow" "! grep -rPin 'create-admin.*first|first.*admin.*CLI|primary.*admin.*CLI' README.md docs/first-run.md docs/roles-and-permissions.md 2>/dev/null | grep -vi 'no CLI' | grep -q ."
 check "setup.sh in README" "grep -q './scripts/setup.sh' README.md"
 
 # ---- Frontend (skip in --fast) ----
@@ -117,7 +119,11 @@ if [[ "$FAST" != true ]] && [[ "$FULL" == true ]]; then
   echo ""
   echo "--- Backend tests ---"
   if [[ -f backend/pyproject.toml ]]; then
-    check "Backend tests" "(cd backend && python -m pytest tests/test_correlation_metadata.py tests/test_host_assignment.py -x -q) 2>/dev/null"
+    if [[ -n "$PYTHON_BIN" ]]; then
+      check "Backend tests" "(cd backend && '$PYTHON_BIN' -m pytest tests/test_correlation_metadata.py tests/test_host_assignment.py -x -q) 2>/dev/null"
+    else
+      fail "Backend tests (python not found)"
+    fi
   else
     warn "backend/pyproject.toml not found"
   fi
