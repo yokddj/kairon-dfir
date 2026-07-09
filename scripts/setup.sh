@@ -239,6 +239,7 @@ KAIRON_ENABLE_DASHBOARDS=${ENABLE_DASHBOARDS}
 MEMORY_ANALYSIS_ENABLED=${ENABLE_MEMORY}
 MEMORY_UPLOAD_ENABLED=${ENABLE_MEMORY}
 MEMORY_UPLOAD_MIN_FREE_SPACE_BYTES=5368709120
+MEMORY_WORKER_MODE=dedicated_worker
 
 # ---- Advanced overrides (see config/defaults.env for all defaults) ----
 # POSTGRES_HOST=postgres
@@ -264,6 +265,13 @@ build_and_start() {
   local compose_args=()
   [[ "$ENABLE_MEMORY" == true ]] && compose_args+=(--profile memory)
   [[ "$ENABLE_DASHBOARDS" == true ]] && compose_args+=(--profile dashboards)
+
+  if [[ "$ENABLE_MEMORY" == true ]]; then
+    echo "Preparing memory storage permissions..."
+    MEMORY_EVIDENCE_HOST_ROOT="$ROOT_DIR/data/evidence" \
+      MEMORY_OUTPUT_HOST_ROOT="$ROOT_DIR/data/memory-output" \
+      sh "$SCRIPT_DIR/prepare_memory_storage_permissions.sh"
+  fi
 
   local build_args=(--pull)
   if [[ "$FORCE_RECREATE" == true ]] || [[ "$DO_UPGRADE" == true ]]; then
