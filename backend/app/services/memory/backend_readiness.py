@@ -99,7 +99,6 @@ def _dedicated_worker_status(command: str | None) -> dict:
     healthy = [item for item in capabilities if item.get("healthy") and item.get("queue") == settings.memory_queue_name]
     selected = healthy[0] if healthy else (capabilities[0] if capabilities else {})
     worker_online = bool(healthy)
-    execution_allowed = bool(settings.memory_allow_external_tool_execution)
     feature_enabled = bool(settings.memory_analysis_enabled)
     process_enabled = bool(settings.memory_process_profile_enabled)
     supported_profiles = [str(item) for item in selected.get("supported_profiles") or []]
@@ -107,7 +106,8 @@ def _dedicated_worker_status(command: str | None) -> dict:
     plugins = selected.get("plugins") if isinstance(selected.get("plugins"), dict) else {}
     backend_version = selected.get("volatility_version")
     available = worker_online and queue_reachable
-    ready = bool(feature_enabled and execution_allowed and available)
+    execution_allowed = bool(feature_enabled and available)
+    ready = bool(feature_enabled and available)
     if not worker_online:
         status = "not_found" if queue_reachable else "check_failed"
         message = "Kairon is running without the optional memory worker. Disk analysis remains fully available."
@@ -115,10 +115,6 @@ def _dedicated_worker_status(command: str | None) -> dict:
     elif not feature_enabled:
         status = "disabled"
         message = "The isolated memory worker is online, but Memory Analysis is disabled by server configuration."
-        error_code = None
-    elif not execution_allowed:
-        status = "blocked"
-        message = "The isolated memory worker is online, but external memory-tool execution is disabled."
         error_code = None
     else:
         status = "available"

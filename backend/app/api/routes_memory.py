@@ -1846,7 +1846,7 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
             status="disabled",
             message="Memory Analysis is currently disabled. Enable memory analysis in backend configuration before registering authorized RAM evidence for analysis.",
         )
-    if not settings.memory_allow_external_tool_execution:
+    if not settings.memory_allow_external_tool_execution and settings.memory_execution_mode != "dedicated_worker":
         raise HTTPException(status_code=403, detail="External memory-tool execution is disabled by server configuration.")
     if not payload or not payload.authorization_acknowledged:
         raise HTTPException(
