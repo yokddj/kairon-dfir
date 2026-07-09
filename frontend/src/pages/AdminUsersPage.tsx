@@ -73,7 +73,7 @@ export default function AdminUsersPage() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-white">Users</h1>
-          <p className="text-sm text-zinc-400 mt-1">Manage platform users, roles, and case access.</p>
+          <p className="text-sm text-zinc-400 mt-1">Manage platform users and roles.</p>
           <button onClick={() => setShowMatrix(!showMatrix)} className="text-xs text-blue-400 hover:text-blue-300 mt-1 underline">
             {showMatrix ? "Hide permission matrix" : "Compare roles"}
           </button>
