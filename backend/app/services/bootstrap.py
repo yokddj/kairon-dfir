@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.core.config import settings
+from app.core.config import get_settings
 from app.core.database import SessionLocal
 from app.models.user import User
 from app.models.case_access import CaseAccess
@@ -17,6 +17,7 @@ def bootstrap_admin(db: Session | None = None) -> bool:
     try:
         if db.query(User).count() > 0:
             return False
+        settings = get_settings()
         username = settings.bootstrap_admin_username.strip()
         password = settings.bootstrap_admin_password.strip()
         email = settings.bootstrap_admin_email.strip() or None

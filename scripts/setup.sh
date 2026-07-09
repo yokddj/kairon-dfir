@@ -237,9 +237,13 @@ KAIRON_BOOTSTRAP_ADMIN_PASSWORD=
 KAIRON_ENABLE_MEMORY=${ENABLE_MEMORY}
 KAIRON_ENABLE_DASHBOARDS=${ENABLE_DASHBOARDS}
 MEMORY_ANALYSIS_ENABLED=${ENABLE_MEMORY}
+MEMORY_ALLOW_EXTERNAL_TOOL_EXECUTION=${ENABLE_MEMORY}
 MEMORY_UPLOAD_ENABLED=${ENABLE_MEMORY}
 MEMORY_UPLOAD_MIN_FREE_SPACE_BYTES=5368709120
 MEMORY_WORKER_MODE=dedicated_worker
+MEMORY_PROCESS_PROFILE_ENABLED=${ENABLE_MEMORY}
+MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory
+MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo
 
 # ---- Advanced overrides (see config/defaults.env for all defaults) ----
 # POSTGRES_HOST=postgres
