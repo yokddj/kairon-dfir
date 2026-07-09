@@ -87,6 +87,11 @@ def plan_profile_capability(profile: str, *, worker_capability: dict[str, Any] |
 
 
 def profile_has_enabled_plugins(profile: str) -> tuple[bool, str | None]:
+    settings = get_settings()
+    if profile not in settings.allowed_memory_profiles:
+        return False, "Profile is disabled by memory profile configuration."
+    if profile != "metadata_only" and not settings.memory_process_profile_enabled:
+        return False, "Memory process profiles are disabled by server configuration."
     plan = plan_profile_capability(profile)
     if plan["plugin_names"] and not plan["has_enabled_plugins"]:
         return False, "No plugins for this profile are enabled by memory plugin configuration."
