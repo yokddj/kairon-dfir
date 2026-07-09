@@ -91,7 +91,6 @@ Options:
   --non-interactive        Run without prompts (requires --mode and --url).
   --mode MODE              Deployment mode: localhost, lan, https.
   --url URL                Public URL (e.g. http://localhost:5173).
-  --no-auth                Disable authentication (not recommended).
   --memory                 Enable memory analysis feature.
   --dashboards             Enable OpenSearch Dashboards.
   --admin-user USERNAME    Bootstrap admin username.
@@ -259,11 +258,15 @@ ENVEOF
 build_and_start() {
   echo ""
   echo "=== Building Docker images ==="
-  local build_args="--pull"
+  local compose_args=()
+  [[ "$ENABLE_MEMORY" == true ]] && compose_args+=(--profile memory)
+  [[ "$ENABLE_DASHBOARDS" == true ]] && compose_args+=(--profile dashboards)
+
+  local build_args=(--pull)
   if [[ "$FORCE_RECREATE" == true ]] || [[ "$DO_UPGRADE" == true ]]; then
-    build_args="--no-cache --pull"
+    build_args=(--no-cache --pull)
   fi
-  docker compose build $build_args
+  docker compose "${compose_args[@]}" build "${build_args[@]}"
   echo "Build complete."
 
   if [[ "$DO_START" != true ]]; then
@@ -273,11 +276,11 @@ build_and_start() {
 
   echo ""
   echo "=== Starting services ==="
-  local up_args="-d"
+  local up_args=(-d)
   if [[ "$FORCE_RECREATE" == true ]] || [[ "$DO_UPGRADE" == true ]]; then
-    up_args="$up_args --force-recreate"
+    up_args+=(--force-recreate)
   fi
-  docker compose up $up_args
+  docker compose "${compose_args[@]}" up "${up_args[@]}"
 
   wait_for_health
 }
@@ -427,12 +430,8 @@ interactive_mode() {
   echo "  Public URL: $PUBLIC_URL"
   echo ""
 
-  read -r -p "Enable authentication? [Y/n]: " auth_input
-  case "${auth_input:-y}" in
-    [Nn]*) AUTH_ENABLED="false" ;;
-    *)     AUTH_ENABLED="true" ;;
-  esac
-  echo "  Authentication: $AUTH_ENABLED"
+  AUTH_ENABLED="true"
+  echo "  Authentication: true (required)"
   echo ""
 
   read -r -p "Enable memory analysis? [y/N]: " mem_input
@@ -546,7 +545,10 @@ while [[ $# -gt 0 ]]; do
     --non-interactive) INTERACTIVE=false; shift ;;
     --mode) DEPLOYMENT_MODE="$2"; shift 2 ;;
     --url) PUBLIC_URL="$2"; shift 2 ;;
-    --no-auth) AUTH_ENABLED="false"; shift ;;
+    --no-auth)
+      echo "ERROR: authentication is required and cannot be disabled." >&2
+      exit 2
+      ;;
     --memory) ENABLE_MEMORY="true"; shift ;;
     --dashboards) ENABLE_DASHBOARDS="true"; shift ;;
     --admin-user) BOOTSTRAP_ADMIN_USERNAME="$2"; shift 2 ;;
