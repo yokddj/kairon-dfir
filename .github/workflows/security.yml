@@ -1,0 +1,74 @@
+name: Security
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly on Monday at 06:00 UTC
+
+jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for accidental .env
+        run: |
+          if git ls-files | grep -q '^\.env$'; then
+            echo "WARNING: .env is tracked in git"
+          fi
+          echo "OK"
+
+      - name: Check for private keys
+        run: |
+          if grep -rP '-----BEGIN (RSA |EC |DSA |OPENSSH )PRIVATE KEY-----' \
+            --include='*.py' --include='*.sh' --include='*.yml' --include='*.yaml' \
+            --include='*.json' --include='*.md' --include='*.txt' \
+            . 2>/dev/null; then
+            echo "ERROR: private key found in repository"
+            exit 1
+          fi
+          echo "OK: no private keys"
+
+      - name: Check for common token patterns
+        run: |
+          if grep -rP '(ghp_|gho_|ghu_|ghs_|ghr_)[a-zA-Z0-9]{36,}' \
+            --include='*.py' --include='*.sh' --include='*.yml' --include='*.yaml' \
+            --include='*.json' --include='*.env*' --include='*.md' \
+            . 2>/dev/null; then
+            echo "ERROR: possible GitHub token found"
+            exit 1
+          fi
+          echo "OK: no token patterns"
+
+      - name: Check CHANGE_ME in release-critical vars
+        run: |
+          if grep -q 'CHANGE_ME_SESSION_SECRET\|CHANGE_ME_CSRF_SECRET\|CHANGE_ME_POSTGRES_PASSWORD\|CHANGE_ME_OPENSEARCH_PASSWORD' \
+            .env.example 2>/dev/null; then
+            echo "WARNING: CHANGE_ME placeholders in .env.example (expected in template)"
+          fi
+          if grep -q 'CHANGE_ME' config/defaults.env 2>/dev/null; then
+            echo "ERROR: CHANGE_ME found in config/defaults.env (must not contain placeholders)"
+            exit 1
+          fi
+          echo "OK"
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install & audit
+        run: |
+          npm ci 2>/dev/null || true
+          npm audit --audit-level=critical 2>&1 || echo "WARNING: npm audit found issues (advisory only)"
+        continue-on-error: true
