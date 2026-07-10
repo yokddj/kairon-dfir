@@ -16,6 +16,14 @@ Kairon keeps the active case, host and evidence visible while moving between inv
 
 If Search or Artifact Views show no records, check the evidence `Processing` status first. Then review `Parser Coverage` to confirm whether the artifact family is supported, partially supported or intentionally out of scope.
 
+## Host context and filtering
+
+The global host selector scopes investigation views by `host_id` when Kairon has resolved a canonical host. URLs also keep the display `host` as a readable fallback for older links and evidence that only has a host name. Host-name matching is normalized case-insensitively and treats short names such as `WS-01` as equivalent to FQDN-style names such as `WS-01.local`.
+
+Host scope applies consistently to `Evidence & Ingest`, `Processing`, `Search`, `Artifact Views`, `Memory` and the investigation context panel. Clear the host filter from the top bar or the context panel when you need to inspect all hosts or evidence without host attribution.
+
+Memory evidence remains isolated per evidence item. If a memory URL points to evidence outside the active host scope, Kairon shows a clear mismatch message instead of silently displaying memory results from another host.
+
 ## Shareable links
 
-Case-scoped URLs preserve useful filters such as `host` and `evidence_id`. Share links from Search, Timeline, Artifact Views or Memory when another analyst needs the same investigation context.
+Case-scoped URLs preserve useful filters such as `host_id`, `host` and `evidence_id`. Share links from Search, Timeline, Artifact Views or Memory when another analyst needs the same investigation context.

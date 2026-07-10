@@ -5,6 +5,7 @@ import { api, type CaseContextResponse, type DfirCase } from "../api/client";
 type ActiveCaseContextValue = {
   activeCase: DfirCase | null;
   activeCaseId: string;
+  selectedHostId: string;
   selectedHost: string;
   selectedEvidenceId: string;
   caseContext: CaseContextResponse | null;
@@ -12,6 +13,7 @@ type ActiveCaseContextValue = {
   setActiveCase: (item: DfirCase | null) => void;
   setActiveCaseId: (caseId: string) => void;
   clearActiveCase: () => void;
+  setSelectedHostId: (hostId: string) => void;
   setSelectedHost: (host: string) => void;
   clearSelectedHost: () => void;
   setSelectedEvidenceId: (evidenceId: string) => void;
@@ -20,6 +22,7 @@ type ActiveCaseContextValue = {
 
 const STORAGE_KEYS = {
   caseId: "dfir.activeCaseId",
+  hostId: "dfir.selectedHostId",
   host: "dfir.selectedHost",
   evidenceId: "dfir.selectedEvidenceId",
 };
@@ -28,6 +31,7 @@ const ActiveCaseContext = createContext<ActiveCaseContextValue | null>(null);
 
 export function ActiveCaseProvider({ children }: { children: ReactNode }) {
   const [activeCaseId, setActiveCaseIdState] = useState<string>(() => localStorage.getItem(STORAGE_KEYS.caseId) ?? "");
+  const [selectedHostId, setSelectedHostIdState] = useState<string>(() => localStorage.getItem(STORAGE_KEYS.hostId) ?? "");
   const [selectedHost, setSelectedHostState] = useState<string>(() => localStorage.getItem(STORAGE_KEYS.host) ?? "");
   const [selectedEvidenceId, setSelectedEvidenceIdState] = useState<string>(() => localStorage.getItem(STORAGE_KEYS.evidenceId) ?? "");
   const casesQuery = useQuery({ queryKey: ["cases"], queryFn: api.listCases });
@@ -43,6 +47,11 @@ export function ActiveCaseProvider({ children }: { children: ReactNode }) {
     if (activeCaseId) localStorage.setItem(STORAGE_KEYS.caseId, activeCaseId);
     else localStorage.removeItem(STORAGE_KEYS.caseId);
   }, [activeCaseId]);
+
+  useEffect(() => {
+    if (selectedHostId) localStorage.setItem(STORAGE_KEYS.hostId, selectedHostId);
+    else localStorage.removeItem(STORAGE_KEYS.hostId);
+  }, [selectedHostId]);
 
   useEffect(() => {
     if (selectedHost) localStorage.setItem(STORAGE_KEYS.host, selectedHost);
@@ -61,18 +70,23 @@ export function ActiveCaseProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!caseContextQuery.data) return;
-    if (selectedHost && selectedHost !== "unknown" && !caseContextQuery.data.hosts.some((item) => item.canonical_name === selectedHost)) {
+    if (selectedHostId && !caseContextQuery.data.hosts.some((item) => item.id === selectedHostId)) {
+      setSelectedHostIdState("");
+      setSelectedHostState("");
+    }
+    if (selectedHost && !selectedHostId && selectedHost !== "unknown" && !caseContextQuery.data.hosts.some((item) => [item.canonical_name, item.display_name, ...(item.all_names || [])].some((name) => name === selectedHost))) {
       setSelectedHostState("");
     }
     if (selectedEvidenceId && !caseContextQuery.data.evidences.some((item) => item.id === selectedEvidenceId)) {
       setSelectedEvidenceIdState("");
     }
-  }, [caseContextQuery.data, selectedEvidenceId, selectedHost]);
+  }, [caseContextQuery.data, selectedEvidenceId, selectedHost, selectedHostId]);
 
   const value = useMemo<ActiveCaseContextValue>(
     () => ({
       activeCase,
       activeCaseId,
+      selectedHostId,
       selectedHost,
       selectedEvidenceId,
       caseContext: caseContextQuery.data ?? null,
@@ -81,15 +95,20 @@ export function ActiveCaseProvider({ children }: { children: ReactNode }) {
       setActiveCaseId: (caseId) => setActiveCaseIdState(caseId.trim()),
       clearActiveCase: () => {
         setActiveCaseIdState("");
+        setSelectedHostIdState("");
         setSelectedHostState("");
         setSelectedEvidenceIdState("");
       },
+      setSelectedHostId: (hostId) => setSelectedHostIdState(hostId.trim()),
       setSelectedHost: (host) => setSelectedHostState(host.trim()),
-      clearSelectedHost: () => setSelectedHostState(""),
+      clearSelectedHost: () => {
+        setSelectedHostIdState("");
+        setSelectedHostState("");
+      },
       setSelectedEvidenceId: (evidenceId) => setSelectedEvidenceIdState(evidenceId.trim()),
       clearSelectedEvidenceId: () => setSelectedEvidenceIdState(""),
     }),
-    [activeCase, activeCaseId, caseContextQuery.data, caseContextQuery.isLoading, selectedEvidenceId, selectedHost],
+    [activeCase, activeCaseId, caseContextQuery.data, caseContextQuery.isLoading, selectedEvidenceId, selectedHost, selectedHostId],
   );
 
   return <ActiveCaseContext.Provider value={value}>{children}</ActiveCaseContext.Provider>;

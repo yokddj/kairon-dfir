@@ -12,6 +12,7 @@ const listCasesMock = vi.fn();
 const activeCaseState: any = {
   activeCase: { id: "case-1", name: "Case Alpha" },
   activeCaseId: "case-1",
+  selectedHostId: "host-1",
   selectedHost: "TEST-WIN10-01",
   selectedEvidenceId: "ev-1",
   caseContext: {
@@ -24,6 +25,7 @@ const activeCaseState: any = {
   setActiveCase: vi.fn(),
   setActiveCaseId: vi.fn(),
   clearActiveCase: vi.fn(),
+  setSelectedHostId: vi.fn(),
   setSelectedHost: vi.fn(),
   clearSelectedHost: vi.fn(),
   setSelectedEvidenceId: vi.fn(),
@@ -64,6 +66,7 @@ describe("workspace navigation", () => {
     listCasesMock.mockResolvedValue([{ id: "case-1", name: "Case Alpha" }]);
     activeCaseState.activeCase = { id: "case-1", name: "Case Alpha" };
     activeCaseState.activeCaseId = "case-1";
+    activeCaseState.selectedHostId = "host-1";
     activeCaseState.selectedHost = "TEST-WIN10-01";
     activeCaseState.selectedEvidenceId = "ev-1";
   });
@@ -120,6 +123,7 @@ describe("workspace navigation", () => {
   it("disables case workspace links when no case is selected", () => {
     activeCaseState.activeCase = null;
     activeCaseState.activeCaseId = "";
+    activeCaseState.selectedHostId = "";
     activeCaseState.selectedHost = "";
     activeCaseState.selectedEvidenceId = "";
     renderWithProviders(<Sidebar />);

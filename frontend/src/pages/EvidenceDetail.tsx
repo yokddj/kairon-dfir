@@ -5,6 +5,7 @@ import { api, type CaseReport, type EvidenceBenchmark, type EvidenceIndexingPlan
 import DebugExportDialog from "../components/DebugExportDialog";
 import InvestigationContext from "../components/InvestigationContext";
 import { useNotifications } from "../context/NotificationsContext";
+import { useHostContext } from "../hooks/useHostContext";
 
 type ArtifactFilters = {
   status: string;
@@ -223,6 +224,7 @@ export default function EvidenceDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { notify } = useNotifications();
+  const { activeHost, activeHostId, hasHostFilter, hostMatchesName, clearHostFilter } = useHostContext();
   const [nowMs, setNowMs] = useState(() => Date.now());
   const parseSelectionRef = useRef<HTMLDetailsElement | null>(null);
   const selectedArtifactTypesRef = useRef<HTMLDivElement | null>(null);
@@ -730,6 +732,8 @@ export default function EvidenceDetail() {
   });
 
   const data = evidenceQuery.data;
+  const evidenceHostLabel = data?.provided_host || data?.detected_host || "";
+  const evidenceMatchesActiveHost = !hasHostFilter || (activeHostId && data?.host_id === activeHostId) || hostMatchesName(evidenceHostLabel);
   const manifest = manifestQuery.data;
   const evidenceRuns = evidenceRunsQuery.data ?? [];
   const indexingPlan: EvidenceIndexingPlan | undefined = indexingPlanQuery.data;
@@ -2082,7 +2086,8 @@ function formatReportStatus(status: string | null | undefined) {
     <div className="min-w-0 space-y-6">
       <InvestigationContext
         caseId={data?.case_id}
-        host={data?.provided_host || data?.detected_host}
+        hostId={activeHostId || data?.host_id}
+        host={activeHost || evidenceHostLabel}
         evidenceId={evidenceId}
         evidenceName={data?.original_filename}
         current="Evidence"
@@ -2096,6 +2101,11 @@ function formatReportStatus(status: string | null | undefined) {
           { label: "Parser Coverage", to: "/parser-coverage", description: "Review supported parsers and known gaps" },
         ]}
       />
+      {hasHostFilter && !evidenceMatchesActiveHost ? (
+        <div className="rounded-3xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">
+          This evidence is associated with {evidenceHostLabel || "no host"}, not active host {activeHost}. <button type="button" onClick={clearHostFilter} className="underline underline-offset-4">Clear host filter</button> to inspect it without host scope.
+        </div>
+      ) : null}
       <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">

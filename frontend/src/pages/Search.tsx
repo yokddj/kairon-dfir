@@ -8,6 +8,7 @@ import SearchBar from "../components/SearchBar";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { HostFilter } from "../components/HostFilter";
 import InvestigationContext from "../components/InvestigationContext";
+import { useHostContext } from "../hooks/useHostContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 
 type Scope = "events" | "findings" | "all";
@@ -1329,6 +1330,7 @@ export default function Search() {
   const navigate = useNavigate();
   const { caseId: routeCaseId } = useParams();
   const { activeCaseId, selectedEvidenceId, selectedHost, setActiveCaseId } = useActiveCase();
+  const { activeHost, activeHostId, clearHostFilter } = useHostContext();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const state = useMemo(() => buildState(searchParams), [searchParams]);
@@ -1401,8 +1403,8 @@ export default function Search() {
       severity: state.severity,
       status: state.status,
       confidence: state.confidence,
-      host: state.host || selectedHost,
-      host_id: state.host_id || null,
+      host: state.host || activeHost || selectedHost,
+      host_id: state.host_id || activeHostId || null,
       user: state.user,
       exclude_host: state.exclude_host,
       exclude_user: state.exclude_user,
@@ -1431,7 +1433,7 @@ export default function Search() {
       page_size: state.page_size,
       cursor: undefined,
     }),
-    [selectedEvidenceId, selectedHost, state],
+    [activeHost, activeHostId, selectedEvidenceId, selectedHost, state],
   );
 
   const searchQuery = useQuery({
@@ -1628,8 +1630,8 @@ export default function Search() {
     if (state.marking_status) chips.push({ key: "marking_status", label: `marking: ${state.marking_status}`, clear: { marking_status: null } });
     if (state.marked_has_note) chips.push({ key: "marked_has_note", label: "has analyst note", clear: { marked_has_note: null } });
     if (state.marked_in_finding) chips.push({ key: "marked_in_finding", label: "in finding", clear: { marked_in_finding: null } });
-    if (searchRequestState.host) chips.push({ key: "host", label: `host: ${searchRequestState.host}`, clear: { host: null } });
-    if (searchRequestState.host_id) chips.push({ key: "host_id", label: `host ID: ${searchRequestState.host_id}`, clear: { host_id: null } });
+    if (searchRequestState.host) chips.push({ key: "host", label: `host: ${searchRequestState.host}`, clear: { host: null, host_id: null } });
+    if (searchRequestState.host_id) chips.push({ key: "host_id", label: `host ID: ${searchRequestState.host_id}`, clear: { host_id: null, host: null } });
     if (state.user) chips.push({ key: "user", label: `user: ${state.user}`, clear: { user: null } });
     if (state.parser.length) chips.push({ key: "parser", label: `parser: ${state.parser.join(", ")}`, clear: { parser: null } });
     if (state.backend_variant.length) chips.push({ key: "backend_variant", label: `backend: ${state.backend_variant.join(", ")}`, clear: { backend_variant: null } });
@@ -1652,7 +1654,7 @@ export default function Search() {
     if (state.status.length) chips.push({ key: "status", label: `status: ${state.status.join(", ")}`, clear: { status: null } });
     if (state.time_from || state.time_to) chips.push({ key: "time", label: `time: ${state.time_from || "…"} → ${state.time_to || "…"}`, clear: { time_from: null, time_to: null } });
     return chips;
-  }, [searchRequestState.evidence_id, searchRequestState.host, searchRequestState.source_category, state]);
+  }, [searchRequestState.evidence_id, searchRequestState.host, searchRequestState.host_id, searchRequestState.source_category, state]);
   const querySyntaxChips = useMemo(
     () =>
       (response?.query_syntax?.applied_filters ?? []).map((item, index) => ({
@@ -1705,6 +1707,9 @@ export default function Search() {
       if (!("page" in updates)) next.set("page", "1");
       return next;
     }, { replace: true });
+    if ((updates.host_id === null || updates.host_id === "") && (updates.host === null || updates.host === "")) {
+      clearHostFilter();
+    }
     if (!("selected" in updates)) setSelectedId("");
   }
 
@@ -2118,6 +2123,7 @@ export default function Search() {
       <InvestigationContext
         caseId={resolvedCaseId}
         host={searchRequestState.host}
+        hostId={searchRequestState.host_id}
         evidenceId={searchRequestState.evidence_id}
         current={state.tab === "timeline" ? "Timeline" : "Search"}
         breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: "Case", to: resolvedCaseId ? `/cases/${resolvedCaseId}` : undefined }, { label: state.tab === "timeline" ? "Timeline" : "Search" }]}
