@@ -512,7 +512,7 @@ export default function CaseDetail() {
                           </tbody>
                         </table>
                       </div>
-                    ) : <p className="mt-3 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">No parser-level records yet. No artifacts were generated for this parser; this can be normal depending on evidence type and parser support.</p>}
+                    ) : <p className="mt-3 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">No parser-level records yet. No artifacts were generated for this parser; this can be normal depending on evidence type and parser support. <Link to="/parser-coverage" className="text-accent underline underline-offset-4">Why no artifacts?</Link></p>}
                   </div>
                   <div className="mt-5">
                     <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Errors and warnings</p>
