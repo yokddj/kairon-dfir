@@ -1,4 +1,4 @@
-import { Link } from "react-router-dom";
+import { Link, useLocation } from "react-router-dom";
 
 type BreadcrumbItem = {
   label: string;
@@ -14,6 +14,7 @@ type ContextAction = {
 type InvestigationContextProps = {
   caseId?: string | null;
   caseName?: string | null;
+  hostId?: string | null;
   host?: string | null;
   evidenceId?: string | null;
   evidenceName?: string | null;
@@ -27,10 +28,11 @@ function shortId(value?: string | null) {
   return value.length > 12 ? `${value.slice(0, 8)}...` : value;
 }
 
-function appendScope(to: string, host?: string | null, evidenceId?: string | null) {
-  if (!host && !evidenceId) return to;
+function appendScope(to: string, host?: string | null, evidenceId?: string | null, hostId?: string | null) {
+  if (!host && !evidenceId && !hostId) return to;
   const [path, query = ""] = to.split("?");
   const params = new URLSearchParams(query);
+  if (hostId && !params.has("host_id")) params.set("host_id", hostId);
   if (host && !params.has("host")) params.set("host", host);
   if (evidenceId && !params.has("evidence_id")) params.set("evidence_id", evidenceId);
   const nextQuery = params.toString();
@@ -50,7 +52,15 @@ export function InvestigationBreadcrumbs({ items }: { items: BreadcrumbItem[] })
   );
 }
 
-export default function InvestigationContext({ caseId, caseName, host, evidenceId, evidenceName, current, breadcrumbs, actions }: InvestigationContextProps) {
+export default function InvestigationContext({ caseId, caseName, hostId, host, evidenceId, evidenceName, current, breadcrumbs, actions }: InvestigationContextProps) {
+  const location = useLocation();
+  const clearHostHref = (() => {
+    const params = new URLSearchParams(location.search);
+    params.delete("host_id");
+    params.delete("host");
+    const query = params.toString();
+    return `${location.pathname}${query ? `?${query}` : ""}`;
+  })();
   const baseCrumbs = breadcrumbs ?? [
     { label: "Cases", to: "/cases" },
     caseId ? { label: caseName || "Case", to: `/cases/${caseId}` } : { label: "No case" },
@@ -77,8 +87,9 @@ export default function InvestigationContext({ caseId, caseName, host, evidenceI
             <p className="mt-1 truncate text-sm font-semibold text-ink" title={caseName || caseId || "No case selected"}>{caseName || caseId || "No case selected"}</p>
           </div>
           <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
-            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Host</p>
-            <p className="mt-1 truncate text-sm font-semibold text-ink" title={host || "All hosts"}>{host || "All hosts"}</p>
+            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Active host</p>
+            <p className="mt-1 truncate text-sm font-semibold text-ink" title={host || "All hosts"}>{host ? `Filtered by ${host}` : "All hosts"}</p>
+            {host ? <Link to={clearHostHref} className="mt-1 inline-block text-xs text-accent hover:underline">Clear host filter</Link> : null}
           </div>
           <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
             <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Evidence</p>
@@ -88,7 +99,7 @@ export default function InvestigationContext({ caseId, caseName, host, evidenceI
         {visibleActions.length ? (
           <div className="flex flex-wrap gap-2 lg:max-w-md lg:justify-end" aria-label="Investigation pivots">
             {visibleActions.map((action) => (
-              <Link key={action.label} to={appendScope(action.to, host, evidenceId)} title={action.description} className="rounded-full border border-line bg-abyss/80 px-3 py-1.5 text-xs font-medium text-muted hover:border-accent/40 hover:text-accent">
+              <Link key={action.label} to={appendScope(action.to, host, evidenceId, hostId)} title={action.description} className="rounded-full border border-line bg-abyss/80 px-3 py-1.5 text-xs font-medium text-muted hover:border-accent/40 hover:text-accent">
                 {action.label}
               </Link>
             ))}

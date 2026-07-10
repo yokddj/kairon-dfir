@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
+import { useHostContext } from "../hooks/useHostContext";
 
 function shortId(id: string): string {
   if (!id) return "";
@@ -61,21 +62,22 @@ export default function CaseMemoryLanding() {
   const { caseId = "" } = useParams();
   const navigate = useNavigate();
   const { setActiveCaseId } = useActiveCase();
+  const { activeHost, activeHostId, hasHostFilter, clearHostFilter, withHostScope } = useHostContext();
 
   useEffect(() => {
     setActiveCaseId(caseId);
   }, [caseId, setActiveCaseId]);
 
   const overviewQuery = useQuery({
-    queryKey: ["memory-overview", caseId],
-    queryFn: () => api.getMemoryOverview(caseId),
+    queryKey: ["memory-overview", caseId, activeHostId, activeHost],
+    queryFn: () => api.getMemoryOverview(caseId, { host_id: activeHostId || undefined, host: activeHost || undefined }),
     enabled: Boolean(caseId),
     refetchOnWindowFocus: false,
   });
 
   const landingQuery = useQuery({
-    queryKey: ["memory-landing", caseId],
-    queryFn: () => api.getMemoryEvidenceLanding(caseId),
+    queryKey: ["memory-landing", caseId, activeHostId, activeHost],
+    queryFn: () => api.getMemoryEvidenceLanding(caseId, { host_id: activeHostId || undefined, host: activeHost || undefined }),
     enabled: Boolean(caseId),
     refetchOnWindowFocus: false,
   });
@@ -86,9 +88,9 @@ export default function CaseMemoryLanding() {
   useEffect(() => {
     if (!overview) return;
     if (overview.evidences.length === 1) {
-      navigate(`/cases/${caseId}/memory/${overview.evidences[0].id}/overview`, { replace: true });
+      navigate(withHostScope(`/cases/${caseId}/memory/${overview.evidences[0].id}/overview`), { replace: true });
     }
-  }, [overview, navigate, caseId]);
+  }, [overview, navigate, caseId, withHostScope]);
 
   if (overviewQuery.isLoading) {
     return (
@@ -111,12 +113,12 @@ export default function CaseMemoryLanding() {
       <div className="space-y-4">
         <div className="rounded-[28px] border border-line bg-panel/70 p-8 text-sm text-muted shadow-panel">
           <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Memory Analysis</p>
-          <h2 className="mt-2 text-3xl font-semibold">No memory evidence in this case</h2>
+          <h2 className="mt-2 text-3xl font-semibold">{hasHostFilter ? `No memory evidence for ${activeHost}` : "No memory evidence in this case"}</h2>
           <p className="mt-2 max-w-3xl text-sm text-muted">
-            Register authorized RAM evidence to enable isolated memory analysis. The workspace will appear here as soon as an
-            image has been uploaded and ingested.
+            {hasHostFilter ? "Clear the host filter to see all memory evidence in this case, including evidence without an assigned host." : "Register authorized RAM evidence to enable isolated memory analysis. The workspace will appear here as soon as an image has been uploaded and ingested."}
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
+            {hasHostFilter ? <button type="button" onClick={clearHostFilter} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-accent">Clear host filter</button> : null}
             <Link to={`/cases/${caseId}/memory/upload`} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">
               Add memory image
             </Link>
@@ -163,7 +165,7 @@ export default function CaseMemoryLanding() {
           return (
             <Link
               key={item.evidence_id}
-              to={`/cases/${caseId}/memory/${item.evidence_id}/overview`}
+              to={withHostScope(`/cases/${caseId}/memory/${item.evidence_id}/overview`)}
               data-testid="memory-evidence-card"
               data-evidence-id={item.evidence_id}
               className="block rounded-[28px] border border-line bg-panel/70 p-5 shadow-panel transition hover:border-accent"

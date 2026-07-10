@@ -20,7 +20,7 @@ describe("InvestigationContext", () => {
 
     expect(screen.getByRole("navigation", { name: /investigation breadcrumbs/i })).toBeInTheDocument();
     expect(screen.getAllByText("Case Alpha")).toHaveLength(2);
-    expect(screen.getByText("HOST-01")).toBeInTheDocument();
+    expect(screen.getByText("Filtered by HOST-01")).toBeInTheDocument();
     expect(screen.getByText("collection.zip")).toBeInTheDocument();
   });
 

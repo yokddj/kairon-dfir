@@ -53,6 +53,8 @@ class MemoryEvidenceRead(BaseModel):
     size_bytes: int
     ingest_status: str
     created_at: datetime
+    detected_host: str | None = None
+    host_id: str | None = None
 
     model_config = {"from_attributes": True}
 

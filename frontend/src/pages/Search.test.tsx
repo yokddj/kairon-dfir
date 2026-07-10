@@ -30,9 +30,14 @@ vi.mock("../api/client", () => ({
 vi.mock("../context/ActiveCaseContext", () => ({
   useActiveCase: () => ({
     activeCaseId: "case-1",
+    selectedHostId: "",
     selectedHost: "",
     selectedEvidenceId: "",
+    caseContext: { hosts: [] },
     setActiveCaseId: vi.fn(),
+    setSelectedHostId: vi.fn(),
+    setSelectedHost: vi.fn(),
+    clearSelectedHost: vi.fn(),
   }),
 }));
 
