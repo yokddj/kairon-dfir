@@ -18,7 +18,9 @@ export type MemoryTab =
   | "suspicious"
   | "vads"
   | "system"
-  | "runs";
+  | "runs"
+  | "raw"
+  | "artifacts";
 
 export const MEMORY_TABS: ReadonlyArray<{ key: MemoryTab; label: string; testId: string }> = [
   { key: "overview", label: "Overview", testId: "memory-tab-overview" },
@@ -31,9 +33,10 @@ export const MEMORY_TABS: ReadonlyArray<{ key: MemoryTab; label: string; testId:
   { key: "vads", label: "VADs", testId: "memory-tab-vads" },
   { key: "system", label: "System", testId: "memory-tab-system" },
   { key: "runs", label: "Runs", testId: "memory-tab-runs" },
+  { key: "raw", label: "Raw Observations", testId: "memory-tab-raw" },
 ];
 
-const TAB_KEYS: ReadonlyArray<string> = MEMORY_TABS.map((tab) => tab.key);
+const TAB_KEYS: ReadonlyArray<string> = [...MEMORY_TABS.map((tab) => tab.key), "artifacts"];
 
 export function isMemoryTab(value: string | null): value is MemoryTab {
   return value !== null && (TAB_KEYS as string[]).includes(value);

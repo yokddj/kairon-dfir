@@ -316,6 +316,7 @@ const renderPage = (path: string) => {
       <MemoryRouter initialEntries={[path]}>
         <Routes>
           <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
+          <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
           <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
         </Routes>
       </MemoryRouter>

@@ -149,6 +149,7 @@ const renderPage = () => {
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[`/cases/${CASE}/memory/${EVID}`]}>
         <Routes>
+          <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
           <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
         </Routes>
       </MemoryRouter>

@@ -139,6 +139,7 @@ export default function App() {
                         <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
                         <Route path="/cases/:caseId/memory/landing" element={<CaseMemoryLanding />} />
                         <Route path="/cases/:caseId/memory/upload" element={<MemoryUploadPage />} />
+                        <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/process-tree" element={<LegacyCaseParamRedirect suffix="/process-graph" />} />
                         <Route path="/cases/:caseId/dashboard" element={<LegacyCaseParamRedirect suffix="/overview" />} />

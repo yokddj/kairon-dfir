@@ -22,6 +22,8 @@ type RunProfile = "processes_basic" | "processes_extended" | "metadata_only";
 type MemoryWorkspaceProps = {
   caseId: string;
   evidenceId?: string;
+  activeTab?: MemoryTab;
+  onTabChange?: (next: MemoryTab) => void;
 };
 
 function backendBadge(status: MemoryBackendStatus): string {
@@ -58,10 +60,11 @@ function modeLabel(mode: MemoryOverview["mode"]): string {
   }
 }
 
-export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWorkspaceProps) {
+export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab, onTabChange: onTabChangeProp }: MemoryWorkspaceProps) {
   const { setActiveCaseId } = useActiveCase();
   const [searchParams] = useSearchParams();
-  const [tab, setTab] = useMemoryTab();
+  const [urlTab, setUrlTab] = useMemoryTab();
+  const tab = activeTab ?? urlTab;
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [profile, setProfile] = useState<RunProfile | null>(null);
   const [search, setSearch] = useState("");
@@ -192,9 +195,10 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
 
   const onTabChange = useCallback(
     (next: MemoryTab) => {
-      setTab(next);
+      if (onTabChangeProp) onTabChangeProp(next);
+      else setUrlTab(next);
     },
-    [setTab],
+    [onTabChangeProp, setUrlTab],
   );
 
   const tabsAriaProps = useMemo(
@@ -238,6 +242,33 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
       {overviewQuery.error instanceof Error ? (
         <section className="rounded-2xl border border-rose-400/30 bg-rose-500/10 p-5 text-sm text-rose-100">{overviewQuery.error.message}</section>
       ) : null}
+
+      <nav
+        {...tabsAriaProps}
+        className="flex flex-wrap gap-2 rounded-[28px] border border-line bg-panel/60 p-3 shadow-panel"
+        data-testid="memory-subview-tabs"
+      >
+        {MEMORY_TABS.map((item) => (
+          <button
+            key={item.key}
+            type="button"
+            id={`memory-tab-${item.key}`}
+            role="tab"
+            aria-selected={tab === item.key}
+            aria-controls={`memory-tabpanel-${item.key}`}
+            data-testid={item.testId}
+            onClick={() => onTabChange(item.key)}
+            className={
+              "rounded-xl px-3 py-2 text-xs transition " +
+              (tab === item.key
+                ? "bg-accent text-abyss"
+                : "border border-line bg-abyss/70 text-muted hover:text-ink")
+            }
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
 
       <div role="tabpanel"
         id={`memory-tabpanel-${tab}`}
@@ -365,6 +396,21 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
           />
         ) : null}
 
+        {tab === "artifacts" ? (
+          <MemoryArtifactsTab
+            caseId={caseId}
+            runOptions={runOptionsQuery.data ?? null}
+            selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
+            onSelectEntity={(entityId) => { setSelectedEntityId(entityId); }}
+            onJumpToProcesses={(entityId) => { setSelectedEntityId(entityId); onTabChange("processes"); }}
+            onJumpToGraph={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            onJumpToTree={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            evidenceId={effectiveEvidenceId}
+            initialSubView="network"
+          />
+        ) : null}
+
         {tab === "system" ? (
           <MemorySystemTab
             caseId={caseId}
@@ -382,6 +428,17 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp }: MemoryWo
             evidenceId={evidenceIdProp}
             runs={runsQuery.data ?? []}
             landingItems={landingQuery.data?.items ?? []}
+          />
+        ) : null}
+
+        {tab === "raw" ? (
+          <MemoryRawTab
+            caseId={caseId}
+            evidenceId={effectiveEvidenceId ?? ""}
+            runId={effectiveRunId}
+            runOptions={runOptionsQuery.data ?? null}
+            selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
           />
         ) : null}
       </div>

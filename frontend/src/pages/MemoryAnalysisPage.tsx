@@ -22,7 +22,11 @@ export default function MemoryAnalysisPage() {
     if (!overview) return;
     if (overview.evidences.length === 1) {
       const onlyEvidenceId = overview.evidences[0].id;
-      navigate(`/cases/${caseId}/memory/${onlyEvidenceId}${location.search || ""}`, { replace: true });
+      const params = new URLSearchParams(location.search);
+      const tab = params.get("tab") || "overview";
+      params.delete("tab");
+      const query = params.toString();
+      navigate(`/cases/${caseId}/memory/${onlyEvidenceId}/${tab}${query ? `?${query}` : ""}`, { replace: true });
     }
   }, [overviewQuery.data, caseId, location.search, navigate]);
 

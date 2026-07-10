@@ -22,11 +22,11 @@ vi.mock("../api/client", () => ({
   },
 }));
 
-function renderSidebar() {
+function renderSidebar(initialEntry = "/cases/case-1/overview") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={["/cases/case-1/overview"]}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         <Sidebar />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -64,6 +64,19 @@ describe("Memory navigation", () => {
   it("does not remove the Memory section when no memory evidence exists", async () => {
     renderSidebar();
     expect(await screen.findByRole("link", { name: /Memory Overview/i })).toBeInTheDocument();
+  });
+
+  it("preserves the selected memory evidence when navigating Memory subviews", async () => {
+    renderSidebar("/cases/case-1/memory/ev-A/processes");
+    const memory = screen.getByText("Memory").closest("section")!;
+    expect(await within(memory).findByRole("link", { name: /Runs/i })).toHaveAttribute(
+      "href",
+      "/cases/case-1/memory/ev-A/runs",
+    );
+    expect(within(memory).getByRole("link", { name: /Network/i })).toHaveAttribute(
+      "href",
+      "/cases/case-1/memory/ev-A/network",
+    );
   });
 
   it("falls back to the cases list when no active case is set", () => {

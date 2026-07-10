@@ -30,26 +30,51 @@ type NavItem = {
   requiresCase?: boolean;
 };
 
+const MEMORY_TAB_BY_LABEL: Record<string, string> = {
+  "Memory Overview": "overview",
+  Processes: "processes",
+  "Process Graph": "graph",
+  Network: "network",
+  "Modules & DLLs": "modules",
+  Handles: "handles",
+  "Suspicious Memory": "suspicious",
+  VADs: "vads",
+  System: "system",
+  Runs: "runs",
+  "Raw Observations": "raw",
+};
+
+function activeMemoryEvidenceId(pathname: string, activeCaseId: string): string | null {
+  const match = pathname.match(/^\/cases\/([^/]+)\/memory\/([^/]+)(?:\/[^/]+)?$/);
+  if (!match || match[1] !== activeCaseId) return null;
+  const evidenceId = match[2];
+  if (evidenceId === "landing" || evidenceId === "upload") return null;
+  return evidenceId;
+}
+
 type NavGroup = {
   title: string;
   items: NavItem[];
 };
 
 function SidebarLink({ item, activeCaseId }: { item: NavItem; activeCaseId: string }) {
-  const target = item.requiresCase && activeCaseId ? item.to.replace(":caseId", activeCaseId) : item.to;
+  const location = useLocation();
+  const memoryTab = MEMORY_TAB_BY_LABEL[item.label];
+  const currentMemoryEvidenceId = activeMemoryEvidenceId(location.pathname, activeCaseId);
+  const baseTarget = item.requiresCase && activeCaseId ? item.to.replace(":caseId", activeCaseId) : item.to;
+  const target = memoryTab && activeCaseId && currentMemoryEvidenceId
+    ? `/cases/${activeCaseId}/memory/${currentMemoryEvidenceId}/${memoryTab}`
+    : baseTarget;
   const disabled = Boolean(item.requiresCase && !activeCaseId);
   const Icon = item.icon;
-  const location = useLocation();
 
   const isActive = (() => {
     if (disabled) return false;
     const targetPath = target.split("?")[0];
-    if (location.pathname !== targetPath) return false;
-    if (!location.pathname.includes("/memory") || !item.to.includes("tab=")) return true;
-    const targetParams = new URLSearchParams(item.to.split("?")[1] || "");
-    const targetTab = targetParams.get("tab");
-    const currentTab = new URLSearchParams(location.search).get("tab");
-    return targetTab === currentTab;
+    if (!location.pathname.includes("/memory") || !memoryTab) return location.pathname === targetPath;
+    const parts = location.pathname.split("/").filter(Boolean);
+    const currentTab = parts[4] || new URLSearchParams(location.search).get("tab") || "overview";
+    return currentTab === memoryTab && location.pathname.startsWith(`/cases/${activeCaseId}/memory`);
   })();
 
   if (disabled) {
@@ -132,6 +157,7 @@ export default function Sidebar() {
         { to: "/cases/:caseId/memory?tab=vads", label: "VADs", icon: HardDrive, requiresCase: true },
         { to: "/cases/:caseId/memory?tab=system", label: "System", icon: Gauge, requiresCase: true },
         { to: "/cases/:caseId/memory?tab=runs", label: "Runs", icon: ListChecks, requiresCase: true },
+        { to: "/cases/:caseId/memory?tab=raw", label: "Raw Observations", icon: HardDrive, requiresCase: true },
       ],
     },
     {

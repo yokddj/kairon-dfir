@@ -86,7 +86,7 @@ export default function CaseMemoryLanding() {
   useEffect(() => {
     if (!overview) return;
     if (overview.evidences.length === 1) {
-      navigate(`/cases/${caseId}/memory/${overview.evidences[0].id}`, { replace: true });
+      navigate(`/cases/${caseId}/memory/${overview.evidences[0].id}/overview`, { replace: true });
     }
   }, [overview, navigate, caseId]);
 
@@ -163,7 +163,7 @@ export default function CaseMemoryLanding() {
           return (
             <Link
               key={item.evidence_id}
-              to={`/cases/${caseId}/memory/${item.evidence_id}`}
+              to={`/cases/${caseId}/memory/${item.evidence_id}/overview`}
               data-testid="memory-evidence-card"
               data-evidence-id={item.evidence_id}
               className="block rounded-[28px] border border-line bg-panel/70 p-5 shadow-panel transition hover:border-accent"
