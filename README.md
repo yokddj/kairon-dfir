@@ -30,6 +30,7 @@ The project is intended for trusted labs and controlled private beta deployments
 - Normalizes artifacts for search, triage, timelines, detections, findings, and reports.
 - Provides analyst workflows for Search, Artifact Views, Command History, Execution Stories, Incident Timeline, Findings, and Reports.
 - Records evidence SHA-256, size, upload metadata, integrity checks, custody events, and exportable JSON manifests. See [docs/evidence-integrity.md](docs/evidence-integrity.md).
+- Shows a per-case Evidence Processing Queue with parser status, errors, partial results, and navigation to evidence, artifacts, Search, and memory views. See [docs/processing-queue.md](docs/processing-queue.md).
 - Includes an experimental Memory Analysis workflow for authorized RAM evidence, disabled by default and isolated from current global Search, Timeline, Detections, Findings, Reports, and SIEM.
 - Keeps validation features optional and disabled by default for normal investigations.
 

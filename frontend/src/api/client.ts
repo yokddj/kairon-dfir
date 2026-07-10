@@ -535,6 +535,68 @@ export type EvidenceIntegrity = {
   actual_size_bytes?: number | null;
 };
 
+export type ProcessingParserRun = {
+  run_id?: string;
+  parser: string;
+  family: string;
+  status: string;
+  started_at?: string | null;
+  finished_at?: string | null;
+  duration?: number | null;
+  artifacts: number;
+  records?: number;
+  error?: string | null;
+};
+
+export type ProcessingRun = {
+  run_id: string;
+  evidence_id?: string | null;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  duration: number | null;
+  triggered_by: string;
+  parser_family: string;
+  parser_name: string;
+  message: string | null;
+  error_summary: string | null;
+  error_details: Record<string, unknown>;
+  artifact_count: number;
+  parser_runs?: ProcessingParserRun[];
+  warning_count?: number;
+  failed_parser_count?: number;
+};
+
+export type ProcessingEvidenceItem = {
+  evidence_id: string;
+  case_id: string;
+  filename: string;
+  evidence_type: string;
+  host: string | null;
+  uploaded_at: string | null;
+  processing_status: string;
+  last_run_status: string;
+  last_run_started_at: string | null;
+  last_run_finished_at: string | null;
+  duration: number | null;
+  parser_count: number;
+  successful_parser_count: number;
+  failed_parser_count: number;
+  warning_count: number;
+  artifact_count: number;
+  last_error: string | null;
+  runs: ProcessingRun[];
+  parser_runs: ProcessingParserRun[];
+  errors: Array<{ parser: string; summary: string | null; details: Record<string, unknown> }>;
+  links: { evidence: string; artifacts: string; search: string; memory?: string | null };
+};
+
+export type CaseProcessingQueue = {
+  case_id: string;
+  summary: Record<string, number>;
+  items: ProcessingEvidenceItem[];
+};
+
 export type MemoryEvidence = {
   id: string;
   case_id: string;
@@ -5778,6 +5840,10 @@ export const api = {
   verifyEvidenceIntegrity: (caseId: string, evidenceId: string) => request<EvidenceIntegrity>(`/cases/${caseId}/evidence/${evidenceId}/verify-integrity`, { method: "POST" }),
   exportEvidenceManifest: (caseId: string, evidenceId: string) => request<EvidenceManifest>(`/cases/${caseId}/evidence/${evidenceId}/manifest`),
   getEvidenceCustodyEvents: (caseId: string, evidenceId: string) => request<EvidenceCustodyEvent[]>(`/cases/${caseId}/evidence/${evidenceId}/events`),
+  getCaseProcessing: (caseId: string) => request<CaseProcessingQueue>(`/cases/${caseId}/processing`),
+  getEvidenceProcessing: (caseId: string, evidenceId: string) => request<ProcessingEvidenceItem>(`/cases/${caseId}/evidence/${evidenceId}/processing`),
+  getCaseEvidenceProcessingRuns: (caseId: string, evidenceId: string) => request<ProcessingRun[]>(`/cases/${caseId}/evidence/${evidenceId}/runs`),
+  getCaseEvidenceProcessingRun: (caseId: string, evidenceId: string, runId: string) => request<ProcessingRun>(`/cases/${caseId}/evidence/${evidenceId}/runs/${runId}`),
   getEvidenceOnDemandModules: (evidenceId: string) => request<OnDemandModulesResponse>(`/evidences/${evidenceId}/on-demand-modules`),
   getEvidenceSearchSummary: (evidenceId: string) => request<EvidenceSearchSummary>(`/evidences/${evidenceId}/search-summary`),
   getEvidenceMftDiagnostic: (evidenceId: string) => request<MftDiagnostic>(`/evidences/${evidenceId}/mft-diagnostic`),
