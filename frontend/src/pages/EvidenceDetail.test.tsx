@@ -36,11 +36,19 @@ const checkEvtxHealthMock = vi.fn();
 const acceptProblematicArtifactWarningMock = vi.fn();
 const indexEvidenceMftSummaryMock = vi.fn();
 const indexEvidenceMftFullMock = vi.fn();
+const getEvidenceIntegrityMock = vi.fn();
+const verifyEvidenceIntegrityMock = vi.fn();
+const exportEvidenceManifestMock = vi.fn();
+const getEvidenceCustodyEventsMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
     getEvidence: (...args: unknown[]) => getEvidenceMock(...args),
     getEvidenceManifest: (...args: unknown[]) => getEvidenceManifestMock(...args),
+    getEvidenceIntegrity: (...args: unknown[]) => getEvidenceIntegrityMock(...args),
+    verifyEvidenceIntegrity: (...args: unknown[]) => verifyEvidenceIntegrityMock(...args),
+    exportEvidenceManifest: (...args: unknown[]) => exportEvidenceManifestMock(...args),
+    getEvidenceCustodyEvents: (...args: unknown[]) => getEvidenceCustodyEventsMock(...args),
     getEvidenceOnDemandModules: (...args: unknown[]) => getEvidenceOnDemandModulesMock(...args),
     getEvidenceSearchSummary: (...args: unknown[]) => getEvidenceSearchSummaryMock(...args),
     getEvidenceMftDiagnostic: (...args: unknown[]) => getEvidenceMftDiagnosticMock(...args),
@@ -391,6 +399,24 @@ function setupMinimalEvidenceDetail(overrides?: {
   vi.clearAllMocks();
   getEvidenceMock.mockResolvedValue({ ...evidencePayload, ...overrides?.evidence });
   getEvidenceManifestMock.mockResolvedValue(manifestPayload);
+  getEvidenceIntegrityMock.mockResolvedValue({
+    evidence_id: "evidence-1",
+    case_id: "case-1",
+    sha256: "abc",
+    size_bytes: 100,
+    integrity_status: "unknown",
+    integrity_checked_at: null,
+  });
+  verifyEvidenceIntegrityMock.mockResolvedValue({
+    evidence_id: "evidence-1",
+    case_id: "case-1",
+    sha256: "abc",
+    size_bytes: 100,
+    integrity_status: "verified",
+    integrity_checked_at: "2026-05-21T10:10:00Z",
+  });
+  exportEvidenceManifestMock.mockResolvedValue(manifestPayload);
+  getEvidenceCustodyEventsMock.mockResolvedValue([]);
   getEvidenceOnDemandModulesMock.mockResolvedValue({
     evidence_id: "evidence-1",
     case_id: "case-1",
@@ -468,6 +494,43 @@ describe("EvidenceDetail minimal processing UX", () => {
     expect(screen.getByText("Real failures / retry")).toBeInTheDocument();
     expect(screen.getByText("Investigation actions")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete evidence" })).toBeInTheDocument();
+  });
+
+  it("renders SHA-256 and empty custody state in the integrity panel", async () => {
+    renderPage();
+
+    expect(await screen.findByText("collection.zip")).toBeInTheDocument();
+    expect(await screen.findByTestId("evidence-integrity-panel")).toBeInTheDocument();
+    expect(screen.getByText("abc")).toBeInTheDocument();
+    expect(screen.getByText("Integrity not checked yet.")).toBeInTheDocument();
+    expect(screen.getByText("No chain-of-custody events recorded yet.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Export manifest/i })).toBeInTheDocument();
+  });
+
+  it("renders verified integrity and custody events", async () => {
+    getEvidenceIntegrityMock.mockResolvedValueOnce({ evidence_id: "evidence-1", case_id: "case-1", sha256: "abc", size_bytes: 100, integrity_status: "verified", integrity_checked_at: "2026-05-21T10:10:00Z" });
+    getEvidenceCustodyEventsMock.mockResolvedValueOnce([
+      { id: "event-1", evidence_id: "evidence-1", event_type: "uploaded", actor_user_id: "user-1", timestamp: "2026-05-21T10:00:00Z", summary: "Evidence uploaded and registered.", details_json: {} },
+      { id: "event-2", evidence_id: "evidence-1", event_type: "integrity_checked", actor_user_id: "user-1", timestamp: "2026-05-21T10:10:00Z", summary: "SHA-256 verified.", details_json: {} },
+    ]);
+
+    renderPage();
+
+    expect((await screen.findAllByText("SHA-256 verified.")).length).toBeGreaterThan(0);
+    expect(screen.getByText("uploaded")).toBeInTheDocument();
+    expect(screen.getByText("Evidence uploaded and registered.")).toBeInTheDocument();
+  });
+
+  it("renders mismatch and missing file integrity states", async () => {
+    getEvidenceIntegrityMock.mockResolvedValueOnce({ evidence_id: "evidence-1", case_id: "case-1", sha256: "abc", size_bytes: 100, integrity_status: "mismatch", integrity_checked_at: "2026-05-21T10:10:00Z" });
+    const { unmount } = renderPage();
+    expect(await screen.findByText("Hash mismatch detected.")).toBeInTheDocument();
+    unmount();
+
+    setupMinimalEvidenceDetail();
+    getEvidenceIntegrityMock.mockResolvedValueOnce({ evidence_id: "evidence-1", case_id: "case-1", sha256: "abc", size_bytes: 100, integrity_status: "missing_file", integrity_checked_at: "2026-05-21T10:10:00Z" });
+    renderPage();
+    expect(await screen.findByText("Stored file missing.")).toBeInTheDocument();
   });
 
   it("shows active progress at the top with live run counters", async () => {

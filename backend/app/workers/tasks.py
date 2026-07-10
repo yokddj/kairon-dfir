@@ -69,7 +69,7 @@ from app.models.artifact import Artifact
 from app.models.case_analysis_job import CaseAnalysisJob, CaseAnalysisJobStatus
 from app.models.detection_result import DetectionResult
 from app.models.rule_run import RuleRun, RuleRunStatus
-from app.models.evidence import Evidence, EvidenceType, IngestStatus, resolve_public_evidence_type
+from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceType, IngestStatus, resolve_public_evidence_type
 from app.models.rule import Rule
 from app.models.rule_set import RuleSet
 from app.rules_engine.heuristic import build_heuristic_query, load_heuristic_rule
@@ -91,6 +91,7 @@ from app.services.host_attribution import choose_primary_host, classify_host_can
 from app.services.host_identity import apply_case_host_identity
 from app.services.parser_backend_evaluation import _tool_dll_path
 from app.services.evidence_runs import get_evidence_run, merge_evidence_metadata, start_ingest_run, sync_ingest_run_from_metadata, upsert_ingest_run
+from app.services.evidence_integrity import record_evidence_event
 from app.services.evtx_profile import EVTX_PROFILE_FAST_HIGH_VALUE, normalize_evtx_fast_limits
 from app.services.ingest_benchmarks import (
     build_parser_breakdown,
@@ -3855,6 +3856,13 @@ def ingest_evidence(evidence_id: str) -> None:
         if ingest_mode == USABLE_INGEST_MODE:
             detections_enabled = False
         evidence.ingest_status = IngestStatus.processing
+        record_evidence_event(
+            db,
+            evidence,
+            EvidenceCustodyEventType.processing_started,
+            "Evidence processing started.",
+            details={"run_id": current_run_id, "ingest_mode": ingest_mode},
+        )
         db.commit()
         log_activity(
             db,
@@ -5472,6 +5480,20 @@ def ingest_evidence(evidence_id: str) -> None:
         else:
             evidence.ingest_status = IngestStatus.completed
         evidence.processed_at = utc_now_naive()
+        evidence.last_processed_at = evidence.processed_at
+        record_evidence_event(
+            db,
+            evidence,
+            EvidenceCustodyEventType.processing_failed if evidence.ingest_status == IngestStatus.failed else EvidenceCustodyEventType.processing_completed,
+            "Evidence processing failed." if evidence.ingest_status == IngestStatus.failed else "Evidence processing completed.",
+            details={
+                "run_id": current_run_id,
+                "status": evidence.ingest_status.value,
+                "records_indexed": indexed_count,
+                "artifacts_processed": artifacts_processed,
+                "error_count": len(errors),
+            },
+        )
         metadata = dict(evidence.metadata_json or {})
         metadata["opensearch_bulk"] = {
             "attempted": bool(opensearch_bulk.get("attempted")),
@@ -5914,6 +5936,20 @@ def ingest_evidence(evidence_id: str) -> None:
                 failed_evidence.metadata_json = merge_evidence_metadata(failed_evidence.metadata_json or {}, metadata)
                 failed_evidence.error_log = {"fatal": concise_error, "fatal_raw": str(exc), "fatal_type": abort_kind}
                 failed_evidence.processed_at = finished_at
+                failed_evidence.last_processed_at = finished_at
+                record_evidence_event(
+                    failed_db,
+                    failed_evidence,
+                    EvidenceCustodyEventType.processing_failed if failed_evidence.ingest_status == IngestStatus.failed else EvidenceCustodyEventType.processing_completed,
+                    "Evidence processing failed." if failed_evidence.ingest_status == IngestStatus.failed else "Evidence processing completed with errors.",
+                    details={
+                        "run_id": run_id,
+                        "status": failed_evidence.ingest_status.value,
+                        "abort_kind": abort_kind,
+                        "artifacts_completed": completed_count,
+                        "artifacts_failed": failed_count,
+                    },
+                )
                 if run_id:
                     metadata = upsert_ingest_run(
                         metadata,

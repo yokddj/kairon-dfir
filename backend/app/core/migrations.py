@@ -2151,3 +2151,58 @@ def _v22_auth_infrastructure(connection: Connection) -> None:
             except Exception:
                 pass
         logger.info("v22: created audit_events table")
+
+
+@register(23, "evidence_integrity_chain_of_custody")
+def _v23_evidence_integrity_chain_of_custody(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    tables = set(inspector.get_table_names())
+    dialect = connection.dialect.name
+    if "evidences" in tables:
+        existing = {c["name"] for c in inspector.get_columns("evidences")}
+        column_defs = {
+            "mime_type": "VARCHAR(255)",
+            "detected_type": "VARCHAR(255)",
+            "uploaded_by_user_id": "VARCHAR",
+            "uploaded_at": "TIMESTAMP",
+            "first_seen_at": "TIMESTAMP",
+            "last_processed_at": "TIMESTAMP",
+            "integrity_status": "VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+            "integrity_checked_at": "TIMESTAMP",
+            "notes": "VARCHAR(2048)",
+        }
+        for column_name, column_type in column_defs.items():
+            if column_name not in existing:
+                connection.execute(text(f"ALTER TABLE evidences ADD COLUMN {column_name} {column_type}"))
+        if "uploaded_at" not in existing:
+            connection.execute(text("UPDATE evidences SET uploaded_at = created_at WHERE uploaded_at IS NULL"))
+        if dialect == "postgresql":
+            connection.execute(text("ALTER TABLE evidences ALTER COLUMN uploaded_at SET DEFAULT CURRENT_TIMESTAMP"))
+            connection.execute(text("ALTER TABLE evidences ALTER COLUMN uploaded_at SET NOT NULL"))
+            connection.execute(text("ALTER TABLE evidences ALTER COLUMN sha256 DROP NOT NULL"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidences_uploaded_by_user_id ON evidences (uploaded_by_user_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidences_integrity_status ON evidences (integrity_status)"))
+
+    if "evidence_custody_events" not in tables:
+        pk_type = "UUID" if dialect == "postgresql" else "VARCHAR(36)"
+        json_type = "JSONB" if dialect == "postgresql" else "JSON"
+        connection.execute(
+            text(
+                f"""
+                CREATE TABLE evidence_custody_events (
+                    id {pk_type} PRIMARY KEY,
+                    evidence_id {pk_type} NOT NULL,
+                    event_type VARCHAR(64) NOT NULL,
+                    actor_user_id VARCHAR,
+                    timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    summary VARCHAR(512) NOT NULL,
+                    details_json {json_type} NOT NULL DEFAULT '{{}}',
+                    FOREIGN KEY(evidence_id) REFERENCES evidences(id) ON DELETE CASCADE,
+                    FOREIGN KEY(actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+                )
+                """
+            )
+        )
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_custody_events_evidence_id ON evidence_custody_events (evidence_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_custody_events_event_type ON evidence_custody_events (event_type)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_custody_events_timestamp ON evidence_custody_events (timestamp)"))
