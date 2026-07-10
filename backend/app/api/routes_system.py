@@ -63,6 +63,7 @@ DOCS_CATALOG = [
     {"slug": "index", "title": "Índice", "summary": "Qué es la plataforma, flujo de trabajo y mapa de documentación.", "filename": "index.md"},
     {"slug": "feature-map", "title": "Feature map", "summary": "Capacidades actuales, estado, rutas, backends, limitaciones y próximos pasos.", "filename": "feature_map.md"},
     {"slug": "artifacts-matrix", "title": "Artifact support matrix", "summary": "Matriz de artefactos detectados, parseados, indexados, buscables y pendientes.", "filename": "artifacts_matrix.md"},
+    {"slug": "parser-coverage", "title": "Parser coverage matrix", "summary": "Cobertura real por familia, formatos, campos normalizados, vistas y limitaciones.", "filename": "parser-coverage.md"},
     {"slug": "parser-backends", "title": "Parser backends", "summary": "Backends estables, advanced, planned y tooling_missing.", "filename": "parser_backends.md"},
     {"slug": "api-summary", "title": "API summary", "summary": "Mapa de endpoints y workflows principales.", "filename": "api_summary.md"},
     {"slug": "user-guide", "title": "User guide", "summary": "Flujo de analista desde upload hasta reporte.", "filename": "user_guide.md"},
