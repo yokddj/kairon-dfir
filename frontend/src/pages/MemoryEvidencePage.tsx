@@ -367,7 +367,7 @@ export default function MemoryEvidencePage() {
         </div>
       ) : null}
 
-      {evidence && symbolReadiness && false ? (
+      {evidence && symbolReadiness ? (
         <MemorySymbolResolutionPanel
           caseId={caseId}
           evidenceId={evidenceId}

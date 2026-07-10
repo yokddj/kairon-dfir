@@ -86,7 +86,7 @@ describe("workspace navigation", () => {
     expect(screen.queryByText(/^Timeline$/)).not.toBeInTheDocument();
     expect(screen.getByText("Execution Stories")).toBeInTheDocument();
     expect(screen.getByText("Evidence & Ingest")).toBeInTheDocument();
-    expect(screen.getByText("Memory Analysis")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /^Memory Overview$/i })).toHaveAttribute("href", "/cases/case-1/memory?tab=overview");
     expect(screen.getByText("Detections")).toBeInTheDocument();
     expect(screen.getByText("Reports")).toBeInTheDocument();
     expect(screen.getByText("Rules")).toBeInTheDocument();

@@ -4,8 +4,8 @@
  * The analyst sees a per-evidence state badge, a "Probe symbol
  * requirements" button, an "Acquire symbols" button (only when
  * acquisition is supported), a structured acquisition modal, and
- * a Run analysis button that is disabled when the exact symbol is
- * not cached.
+ * a Run analysis button that remains available while Volatility
+ * resolves symbols during analysis.
  */
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
@@ -359,11 +359,15 @@ describe("Per-evidence Windows symbol resolution", () => {
     );
   });
 
-  it("disables the Run analysis button when symbols are missing", async () => {
+  it("keeps the Run analysis button available when symbols are missing", async () => {
     const apiMock = buildApiMock();
     setup(apiMock);
     const runButton = await screen.findByTestId("memory-open-catalogue");
-    expect(runButton).toBeDisabled();
+    expect(runButton).toBeEnabled();
+    expect(runButton).toHaveAttribute(
+      "title",
+      "Volatility will identify the image and resolve symbols when analysis starts.",
+    );
   });
 
   it("renders an Acquire symbols button when acquisition is supported", async () => {
@@ -440,15 +444,15 @@ describe("Per-evidence Windows symbol resolution", () => {
     expect(apiMock.requestMemorySymbolAcquisition).not.toHaveBeenCalled();
   });
 
-  it("renders the structured blocker banner with error code when the symbol is missing", async () => {
+  it("renders the structured symbol message and error code when the symbol is missing", async () => {
     const apiMock = buildApiMock();
     setup(apiMock);
-    const banner = await screen.findByTestId("memory-symbol-blocker-banner");
-    expect(banner).toHaveAttribute("data-state", "missing");
-    expect(within(banner).getByTestId("memory-symbol-blocker-message")).toHaveTextContent(
+    const panel = await screen.findByTestId("memory-symbol-resolution-panel");
+    expect(panel).toHaveAttribute("data-state", "missing");
+    expect(within(panel).getByTestId("memory-symbol-message")).toHaveTextContent(
       /Windows symbols required for this evidence are not cached/i,
     );
-    expect(within(banner).getByTestId("memory-symbol-blocker-code")).toHaveTextContent(
+    expect(within(panel).getByTestId("memory-symbol-error-code")).toHaveTextContent(
       "MEMORY_SYMBOLS_REQUIRED",
     );
   });
@@ -463,7 +467,7 @@ describe("Per-evidence Windows symbol resolution", () => {
     expect(dom).not.toMatch(/https?:\/\/192\.168\./);
   });
 
-  it("disables Run analysis with no generic server error when acquisition is unsupported", async () => {
+  it("keeps Run analysis available with no generic server error when acquisition is unsupported", async () => {
     const apiMock = buildApiMock();
     (apiMock.getMemorySymbolReadiness as ReturnType<typeof vi.fn>).mockResolvedValue(
       makeReadiness({
@@ -475,7 +479,7 @@ describe("Per-evidence Windows symbol resolution", () => {
     );
     setup(apiMock);
     const runButton = await screen.findByTestId("memory-open-catalogue");
-    expect(runButton).toBeDisabled();
+    expect(runButton).toBeEnabled();
     expect(runButton).toHaveAttribute("title");
     // No acquire button when acquisition is not supported.
     expect(screen.queryByTestId("memory-symbol-acquire-button")).toBeNull();
