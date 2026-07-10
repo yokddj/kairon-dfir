@@ -1374,12 +1374,14 @@ export default function Search() {
 
   useEffect(() => {
     if (debouncedQuery === state.q) return;
-    const next = new URLSearchParams(searchParams);
-    if (debouncedQuery) next.set("q", debouncedQuery);
-    else next.delete("q");
-    next.set("page", "1");
-    setSearchParams(next, { replace: true });
-  }, [debouncedQuery, searchParams, setSearchParams, state.q]);
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (debouncedQuery) next.set("q", debouncedQuery);
+      else next.delete("q");
+      next.set("page", "1");
+      return next;
+    }, { replace: true });
+  }, [debouncedQuery, setSearchParams, state.q]);
 
   const searchRequestState = useMemo(
     () => ({
@@ -1682,23 +1684,27 @@ export default function Search() {
 
   function closeSelectedResult() {
     setSelectedId("");
-    const next = new URLSearchParams(searchParams);
-    next.delete("selected");
-    setSearchParams(next, { replace: true });
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.delete("selected");
+      return next;
+    }, { replace: true });
   }
 
   function updateParams(updates: Record<string, string | null>) {
-    const next = new URLSearchParams(searchParams);
-    for (const [key, value] of Object.entries(updates)) {
-      if (value === null || value === "") next.delete(key);
-      else next.set(key, value);
-    }
-    if (!("selected" in updates)) {
-      next.delete("selected");
-      setSelectedId("");
-    }
-    if (!("page" in updates)) next.set("page", "1");
-    setSearchParams(next, { replace: true });
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      for (const [key, value] of Object.entries(updates)) {
+        if (value === null || value === "") next.delete(key);
+        else next.set(key, value);
+      }
+      if (!("selected" in updates)) {
+        next.delete("selected");
+      }
+      if (!("page" in updates)) next.set("page", "1");
+      return next;
+    }, { replace: true });
+    if (!("selected" in updates)) setSelectedId("");
   }
 
   function updateBackendSort(nextSort: SortValue) {
@@ -1711,10 +1717,12 @@ export default function Search() {
 
   function handleSelect(result: SearchV2Result) {
     setSelectedId(result.id);
-    const next = new URLSearchParams(searchParams);
-    next.set("selected", result.id);
-    next.set("tab", state.tab);
-    setSearchParams(next, { replace: true });
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("selected", result.id);
+      next.set("tab", state.tab);
+      return next;
+    }, { replace: true });
   }
 
   function applyTimePreset(preset: "24h" | "7d" | "30d" | "clear") {
@@ -1788,21 +1796,22 @@ export default function Search() {
   }
 
   function applyQuickFilter(item: SearchQuickFilter) {
-    const next = new URLSearchParams();
-    next.set("tab", "results");
-    next.set("scope", String(item.params.scope ?? "events"));
-    next.set("page_size", String(state.page_size));
-    if (searchRequestState.evidence_id) next.set("evidence_id", searchRequestState.evidence_id);
-    if (searchRequestState.host) next.set("host", searchRequestState.host);
-    if (item.params.risk_min !== undefined) next.set("risk_min", String(item.params.risk_min));
-    if (Array.isArray(item.params.event_type)) next.set("event_type", joinParam(item.params.event_type as string[]));
-    if (Array.isArray(item.params.event_category)) next.set("event_category", joinParam(item.params.event_category as string[]));
-    if (Array.isArray(item.params.artifact_type)) next.set("artifact_type", joinParam(item.params.artifact_type as string[]));
-    if (Array.isArray(item.params.severity)) next.set("severity", joinParam(item.params.severity as string[]));
-    if (item.params.process_name) next.set("process_name", asString(item.params.process_name));
+    const updates: Record<string, string | null> = {
+      tab: "results",
+      scope: String(item.params.scope ?? state.scope),
+      page_size: String(state.page_size),
+    };
+    if (searchRequestState.evidence_id && !state.evidence_id) updates.evidence_id = searchRequestState.evidence_id;
+    if (searchRequestState.host && !state.host) updates.host = searchRequestState.host;
+    if (item.params.risk_min !== undefined) updates.risk_min = String(item.params.risk_min);
+    if (Array.isArray(item.params.event_type)) updates.event_type = joinParam(item.params.event_type as string[]);
+    if (Array.isArray(item.params.event_category)) updates.event_category = joinParam(item.params.event_category as string[]);
+    if (Array.isArray(item.params.artifact_type)) updates.artifact_type = joinParam(item.params.artifact_type as string[]);
+    if (Array.isArray(item.params.severity)) updates.severity = joinParam(item.params.severity as string[]);
+    if (item.params.process_name) updates.process_name = asString(item.params.process_name);
     setContextResponse(null);
     setContextLabel("");
-    setSearchParams(next, { replace: true });
+    updateParams(updates);
   }
 
   function handleFacetClick(field: string, value: string, mode: "include" | "exclude" = "include") {
