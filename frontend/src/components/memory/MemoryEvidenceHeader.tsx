@@ -132,10 +132,13 @@ export function MemoryEvidenceHeader({
     evidence.detection_status === "probe_failed";
   const isFirstAnalysis = headerLabel === "Analyze memory";
   const isInProgress = headerLabel === "Analysis in progress..." || isAnalyzing;
-  const runDisabled = detectionBlocked || isAnalyzing || isInProgress;
+  const evidenceBlocked = evidence.can_analyze === false;
+  const runDisabled = detectionBlocked || evidenceBlocked || isAnalyzing || isInProgress;
   const runTitle = detectionBlocked
     ? "Confirm the evidence type before starting analysis."
-    : isInProgress
+    : evidenceBlocked
+      ? "This evidence is not ready for memory analysis."
+      : isInProgress
       ? "Analysis is running. Returns will refresh automatically."
       : "Volatility will identify the image and resolve symbols when analysis starts.";
   const prepState = symbolPreparation?.effective_state || symbolPreparation?.preparation_state || symbolPreparation?.ui_state;

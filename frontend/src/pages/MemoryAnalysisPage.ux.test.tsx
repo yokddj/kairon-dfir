@@ -109,6 +109,10 @@ function renderPage(initialPath = "/cases/case-1/memory/ev-memory") {
   );
 }
 
+function renderLegacyArtifactsPage() {
+  return renderPage("/cases/case-1/memory/ev-memory?tab=artifacts");
+}
+
 function overview() {
   return {
     case_id: "case-1",
@@ -783,8 +787,7 @@ describe("Memory analysis UX fixes v1", () => {
 
   // 27. Artifacts tab is present and shows "Not analyzed" when no run
   it("renders the Artifacts tab with Not analyzed state", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-artifacts"));
+    renderLegacyArtifactsPage();
     const tab = await screen.findByTestId("memory-artifacts-tab");
     expect(tab).toBeInTheDocument();
     // Without a run, all six overview cards show "Not analyzed".
@@ -793,8 +796,7 @@ describe("Memory analysis UX fixes v1", () => {
 
   // 28. Artifacts subviews are present
   it("lists every Artifacts subview", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-artifacts"));
+    renderLegacyArtifactsPage();
     await screen.findByTestId("memory-artifacts-tab");
     for (const sv of ["network", "modules", "handles", "drivers", "kernel", "suspicious"]) {
       expect(screen.getByTestId(`memory-artifacts-subview-${sv}`)).toBeInTheDocument();
@@ -803,16 +805,14 @@ describe("Memory analysis UX fixes v1", () => {
 
   // 29. Network subview renders the empty state when no rows
   it("renders the Network table empty state when no rows", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-artifacts"));
+    renderLegacyArtifactsPage();
     await screen.findByTestId("memory-artifacts-tab");
     expect(await screen.findByTestId("memory-artifacts-network-empty")).toBeInTheDocument();
   });
 
   // 30. Modules subview renders the empty state when no rows
   it("renders the Modules empty state when no rows", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-artifacts"));
+    renderLegacyArtifactsPage();
     await screen.findByTestId("memory-artifacts-tab");
     fireEvent.click(await screen.findByTestId("memory-artifacts-subview-modules"));
     expect(await screen.findByTestId("memory-artifacts-modules-empty")).toBeInTheDocument();
@@ -820,8 +820,7 @@ describe("Memory analysis UX fixes v1", () => {
 
   // 31. Handles subview renders the empty state when no rows
   it("renders the Handles empty state when no rows", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-artifacts"));
+    renderLegacyArtifactsPage();
     await screen.findByTestId("memory-artifacts-tab");
     fireEvent.click(await screen.findByTestId("memory-artifacts-subview-handles"));
     expect(await screen.findByTestId("memory-artifacts-handles-empty")).toBeInTheDocument();
@@ -829,8 +828,7 @@ describe("Memory analysis UX fixes v1", () => {
 
   // 32. Drivers subview renders the empty state when no rows
   it("renders the Drivers empty state when no rows", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-artifacts"));
+    renderLegacyArtifactsPage();
     await screen.findByTestId("memory-artifacts-tab");
     fireEvent.click(await screen.findByTestId("memory-artifacts-subview-drivers"));
     expect(await screen.findByTestId("memory-artifacts-drivers-empty")).toBeInTheDocument();
@@ -838,8 +836,7 @@ describe("Memory analysis UX fixes v1", () => {
 
   // 33. Suspicious regions show needs_review status
   it("renders the suspicious regions empty state when no rows", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-artifacts"));
+    renderLegacyArtifactsPage();
     await screen.findByTestId("memory-artifacts-tab");
     fireEvent.click(await screen.findByTestId("memory-artifacts-subview-suspicious"));
     expect(await screen.findByTestId("memory-artifacts-suspicious-empty")).toBeInTheDocument();
@@ -847,16 +844,14 @@ describe("Memory analysis UX fixes v1", () => {
 
   // 34. Run selector is hidden in the evidence-scoped Artifacts tab
   it("hides the manual run selector in the evidence-scoped Artifacts tab", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-artifacts"));
+    renderLegacyArtifactsPage();
     await screen.findByTestId("memory-artifacts-tab");
     expect(screen.queryByTestId("memory-artifacts-run-picker")).not.toBeInTheDocument();
   });
 
   // 35. Artifacts filters are present
   it("shows the Artifacts filters and reset", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-artifacts"));
+    renderLegacyArtifactsPage();
     await screen.findByTestId("memory-artifacts-tab");
     expect(screen.getByTestId("memory-artifacts-filter-name")).toBeInTheDocument();
     expect(screen.getByTestId("memory-artifacts-filter-pid")).toBeInTheDocument();
@@ -865,8 +860,7 @@ describe("Memory analysis UX fixes v1", () => {
 
   // 36. Pagination controls are present
   it("shows pagination controls in the Artifacts tab", async () => {
-    renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-artifacts"));
+    renderLegacyArtifactsPage();
     await screen.findByTestId("memory-artifacts-tab");
     expect(screen.getByTestId("memory-artifacts-pagination")).toBeInTheDocument();
   });
@@ -891,8 +885,7 @@ describe("Memory analysis UX fixes v1", () => {
       }],
       facets: {}, normalization_version: "memory_artifact_canonical_v1",
     });
-    renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-artifacts"));
+    renderLegacyArtifactsPage();
     await screen.findByTestId("memory-artifacts-tab");
     const rows = await screen.findAllByTestId("memory-artifacts-network-row");
     expect(rows.length).toBe(1);
@@ -919,8 +912,7 @@ describe("Memory analysis UX fixes v1", () => {
       }],
       facets: {}, normalization_version: "memory_artifact_canonical_v1",
     });
-    renderPage();
-    fireEvent.click(await screen.findByTestId("memory-tab-artifacts"));
+    renderLegacyArtifactsPage();
     await screen.findByTestId("memory-artifacts-tab");
     fireEvent.click(await screen.findByTestId("memory-artifacts-subview-suspicious"));
     expect(await screen.findByTestId("memory-artifacts-suspicious-review")).toHaveTextContent("needs_review");

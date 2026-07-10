@@ -115,7 +115,7 @@ export function MemorySearchTab({ caseId, evidenceId, selectedRunId, onSelectRun
       const targetTab = target.tab as string || "";
       const artifactFamily = (target as any).artifact_family as string || "";
       const map: Record<string, string> = { processes: "processes", network: "network", modules: "modules", handles: "handles", suspicious_regions: "suspicious", suspicious: "suspicious", vads: "vads", drivers: "modules", kernel_modules: "modules", kernel: "modules" };
-      const resolved = isMemoryTab(targetTab) ? targetTab : map[targetTab] || map[artifactFamily] || "network";
+      const resolved = targetTab === "artifacts" ? map[artifactFamily] || "overview" : isMemoryTab(targetTab) ? targetTab : map[targetTab] || map[artifactFamily] || "network";
       onJumpToTab(resolved as MemoryTab);
     }
   };

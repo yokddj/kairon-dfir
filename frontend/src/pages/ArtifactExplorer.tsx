@@ -644,6 +644,8 @@ export default function ArtifactExplorer() {
   const artifactTypeSelectOptions = useMemo(() => {
     const options = new Set(artifactTypeOptions.filter((option) => !INTERNAL_ARTIFACT_TYPES_HIDDEN_FROM_MAIN.has(option)));
     options.add("startup_persistence");
+    options.add("scheduled_task");
+    options.add("evtx");
     options.add("motw");
     options.add("email");
     return Array.from(options).sort((left, right) => artifactViewLabel(left).localeCompare(artifactViewLabel(right)));

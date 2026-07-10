@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../../api/client", () => ({
   api: {
     getCanonicalProcessTree: vi.fn(),
+    getCanonicalProcessLineage: vi.fn(),
     getCanonicalProcessEntities: vi.fn(),
     getCanonicalProcessEntityDetail: vi.fn(),
     getMemorySymbolPreparation: vi.fn(),
@@ -70,6 +71,9 @@ const ws01Tree = {
 const ws01TreeForCmd = {
   ...ws01Tree,
   search_results: ["cmd-11184"],
+  exact_match_ids: ["cmd-11184"],
+  selected_entity_id: "cmd-11184",
+  metrics: { ...ws01Tree.metrics, context_ancestors: 1 },
 };
 
 const ws01Entities = {
@@ -157,6 +161,9 @@ const cmdDetail = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  (api.getCanonicalProcessTree as ReturnType<typeof vi.fn>).mockResolvedValue(ws01Tree as any);
+  (api.getCanonicalProcessLineage as ReturnType<typeof vi.fn>).mockResolvedValue(ws01TreeForCmd as any);
+  (api.getCanonicalProcessEntityDetail as ReturnType<typeof vi.fn>).mockResolvedValue(cmdDetail as any);
 });
 
 const renderGraph = (props: Record<string, unknown> = {}) => {
@@ -175,31 +182,29 @@ const renderGraph = (props: Record<string, unknown> = {}) => {
 
 describe("Process search focus v1", () => {
   it("1) searching by exact PID 11184 selects cmd.exe, not wininit.exe", async () => {
-    (api.getCanonicalProcessTree as ReturnType<typeof vi.fn>).mockImplementation(
+    (api.getCanonicalProcessLineage as ReturnType<typeof vi.fn>).mockImplementation(
       async (_caseId, params) => {
-        if (params && (params as any).search === "11184") {
+        if (params && (params as any).pid === 11184) {
           return ws01TreeForCmd as any;
         }
         return ws01Tree as any;
       },
     );
-    (api.getCanonicalProcessEntityDetail as ReturnType<typeof vi.fn>).mockResolvedValue(cmdDetail as any);
     renderGraph();
     // The search input is a Search by PID input (data-testid from
     // MemoryWorkspace).  The graph has its own search input.
     const searchInput = await screen.findByTestId("memory-graph-search");
     fireEvent.change(searchInput, { target: { value: "11184" } });
     await waitFor(() => {
-      expect(api.getCanonicalProcessTree).toHaveBeenCalledWith(
+      expect(api.getCanonicalProcessLineage).toHaveBeenCalledWith(
         CASE,
-        expect.objectContaining({ search: "11184" }),
+        expect.objectContaining({ pid: 11184 }),
       );
     });
   });
 
   it("2) the search results payload is honoured by the graph", async () => {
     (api.getCanonicalProcessTree as ReturnType<typeof vi.fn>).mockResolvedValue(ws01TreeForCmd as any);
-    (api.getCanonicalProcessEntityDetail as ReturnType<typeof vi.fn>).mockResolvedValue(cmdDetail as any);
     renderGraph();
     // No user action needed: the mock returns search_results.
     // The detail panel should eventually render the cmd.exe detail.
@@ -209,13 +214,14 @@ describe("Process search focus v1", () => {
       expect(body).toMatch(/PID 11184/);
     });
     // The Search match badge is rendered on the focused node.
-    const badges = screen.queryAllByTestId("memory-graph-search-match-badge");
-    expect(badges.length).toBeGreaterThanOrEqual(1);
+    await waitFor(() => {
+      const badges = screen.queryAllByTestId("memory-graph-search-match-badge");
+      expect(badges.length).toBeGreaterThanOrEqual(1);
+    });
   });
 
   it("3) the target node has the data-target attribute and the Search match badge", async () => {
     (api.getCanonicalProcessTree as ReturnType<typeof vi.fn>).mockResolvedValue(ws01TreeForCmd as any);
-    (api.getCanonicalProcessEntityDetail as ReturnType<typeof vi.fn>).mockResolvedValue(cmdDetail as any);
     renderGraph();
     // The first node in the layout is the root (wininit.exe) but
     // when the search returns search_results, wininit.exe is
@@ -223,8 +229,10 @@ describe("Process search focus v1", () => {
     const nodes = await screen.findAllByTestId("memory-graph-node");
     expect(nodes.length).toBeGreaterThanOrEqual(2);
     // The target (search match) is the cmd-11184 node.
-    const targets = document.querySelectorAll('[data-testid="memory-graph-node"][data-target="true"]');
-    expect(targets.length).toBeGreaterThanOrEqual(1);
+    await waitFor(() => {
+      const targets = document.querySelectorAll('[data-testid="memory-graph-node"][data-target="true"]');
+      expect(targets.length).toBeGreaterThanOrEqual(1);
+    });
     // At least one Context badge is rendered.
     const contextBadges = screen.queryAllByTestId("memory-graph-context-badge");
     expect(contextBadges.length).toBeGreaterThanOrEqual(1);
@@ -232,7 +240,6 @@ describe("Process search focus v1", () => {
 
   it("4) ancestors appear as Context (not as Search match)", async () => {
     (api.getCanonicalProcessTree as ReturnType<typeof vi.fn>).mockResolvedValue(ws01TreeForCmd as any);
-    (api.getCanonicalProcessEntityDetail as ReturnType<typeof vi.fn>).mockResolvedValue(cmdDetail as any);
     renderGraph();
     // The wininit.exe node should have data-context="true" and no
     // Search match badge.  We find the wininit node by aria-label
@@ -244,7 +251,6 @@ describe("Process search focus v1", () => {
 
   it("5) detail panel shows the target process (PID 11184, PPID 664)", async () => {
     (api.getCanonicalProcessTree as ReturnType<typeof vi.fn>).mockResolvedValue(ws01TreeForCmd as any);
-    (api.getCanonicalProcessEntityDetail as ReturnType<typeof vi.fn>).mockResolvedValue(cmdDetail as any);
     renderGraph();
     const detail = await screen.findByTestId("memory-graph-detail");
     expect(detail.textContent).toMatch(/PID 11184/);
@@ -257,12 +263,13 @@ describe("Process search focus v1", () => {
       ...ws01TreeForCmd,
       search_results: ["cmd-11184"],
     } as any);
-    (api.getCanonicalProcessEntityDetail as ReturnType<typeof vi.fn>).mockResolvedValue(cmdDetail as any);
     renderGraph();
     // The first search_result is the only one marked as target.
     await screen.findAllByTestId("memory-graph-node");
-    const targets = document.querySelectorAll('[data-testid="memory-graph-node"][data-target="true"]');
-    expect(targets.length).toBe(1);
+    await waitFor(() => {
+      const targets = document.querySelectorAll('[data-testid="memory-graph-node"][data-target="true"]');
+      expect(targets.length).toBe(1);
+    });
   });
 });
 
@@ -316,7 +323,6 @@ describe("First analysis simplification v1", () => {
 describe("Search summary UX", () => {
   it("9) the search summary shows exact match and context ancestor counts", async () => {
     (api.getCanonicalProcessTree as ReturnType<typeof vi.fn>).mockResolvedValue(ws01TreeForCmd as any);
-    (api.getCanonicalProcessEntityDetail as ReturnType<typeof vi.fn>).mockResolvedValue(cmdDetail as any);
     renderGraph();
     const summary = await screen.findByTestId("memory-graph-search-summary");
     expect(summary.textContent).toMatch(/exact PID match|1 secondary match/);
