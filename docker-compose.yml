@@ -376,7 +376,8 @@ services:
 
   frontend:
     build:
-      context: ./frontend
+      context: .
+      dockerfile: frontend/Dockerfile
       args:
         KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
         BUILD_DATE: ${BUILD_DATE:-unknown}
