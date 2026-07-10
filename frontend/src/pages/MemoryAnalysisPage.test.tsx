@@ -62,6 +62,7 @@ function renderPage(initialPath = "/cases/case-1/memory/ev-memory") {
       <QueryClientProvider client={queryClient}>
         <Routes>
           <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
+          <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
           <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
         </Routes>
       </QueryClientProvider>
@@ -471,6 +472,15 @@ describe("MemoryAnalysisPage workspace", () => {
       expect(screen.getByTestId("runs-table")).toBeInTheDocument();
     });
     expect(screen.getByTestId("run-row-run-basic")).toBeInTheDocument();
+  });
+
+  it("opens a direct evidence-scoped Runs URL without rendering the selector", async () => {
+    renderPage("/cases/case-1/memory/ev-memory/runs");
+    expect(await screen.findByTestId("memory-runs-tab")).toBeInTheDocument();
+    expect(screen.queryByTestId("memory-landing")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(listMemoryRunsMock).toHaveBeenCalledWith("case-1", "ev-memory");
+    });
   });
 
   // 6. Raw tab contains legacy views

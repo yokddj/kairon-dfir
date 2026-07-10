@@ -101,6 +101,7 @@ function renderPage(initialPath = "/cases/case-1/memory/ev-memory") {
       <QueryClientProvider client={queryClient}>
         <Routes>
           <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
+          <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
           <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
         </Routes>
       </QueryClientProvider>

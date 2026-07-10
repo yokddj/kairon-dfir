@@ -33,7 +33,7 @@ function familyForTab(tab: MemoryTab, _artifact?: string | null): string {
 }
 
 export default function MemoryEvidencePage() {
-  const { caseId = "", evidenceId = "" } = useParams();
+  const { caseId = "", evidenceId = "", memoryTab = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { setActiveCaseId } = useActiveCase();
@@ -64,28 +64,26 @@ export default function MemoryEvidencePage() {
     if (legacyTab === "search") navigate(`/cases/${caseId}/search?${params.toString()}`, { replace: true });
     if (legacyTab === "timeline") navigate(`/cases/${caseId}/timeline?${params.toString()}`, { replace: true });
     if (legacyTab === "history") navigate(`/cases/${caseId}/command-history?${params.toString()}`, { replace: true });
-    if (legacyTab === "raw") {
-      setSearchParams((current) => { const p = new URLSearchParams(current); p.set("tab", "overview"); return p; }, { replace: true });
-      return;
-    }
-    if (legacyTab === "artifacts") {
-      const artifact = searchParams.get("artifact") || "network";
-      const mapped: Record<string, string> = { network: "network", modules: "modules", handles: "handles", suspicious_regions: "suspicious", "suspicious-regions": "suspicious", vads: "vads" };
-      const newTab = mapped[artifact] || "network";
-      setSearchParams((current) => { const p = new URLSearchParams(current); p.set("tab", newTab); p.delete("artifact"); return p; }, { replace: true });
-      return;
-    }
-  }, [caseId, evidenceId, navigate, searchParams, setSearchParams]);
+  }, [caseId, evidenceId, memoryTab, navigate, searchParams, setSearchParams]);
 
   const tab = useMemo<MemoryTab>(() => {
+    if (isMemoryTab(memoryTab)) return memoryTab;
     const raw = searchParams.get("tab");
     return isMemoryTab(raw) ? raw : "overview";
-  }, [searchParams]);
+  }, [memoryTab, searchParams]);
 
   const artifactParam = searchParams.get("artifact");
   const family = familyForTab(tab, artifactParam);
 
   const historicalRunId = searchParams.get("run_id") || null;
+
+  const memoryViewPath = useCallback((targetEvidenceId: string, targetTab: MemoryTab = tab) => {
+    const params = new URLSearchParams(searchParams);
+    params.delete("tab");
+    params.delete("run_id");
+    const query = params.toString();
+    return `/cases/${caseId}/memory/${targetEvidenceId}/${targetTab}${query ? `?${query}` : ""}`;
+  }, [caseId, searchParams, tab]);
 
   const overviewQuery = useQuery({
     queryKey: ["memory-overview", caseId],
@@ -215,13 +213,13 @@ export default function MemoryEvidencePage() {
   }, [overview]);
 
   useEffect(() => {
-    if (!evidenceId) return;
+    if (!evidenceId || isMemoryTab(memoryTab)) return;
     setSearchParams((current) => {
       const params = new URLSearchParams(current);
       if (!params.get("tab")) params.set("tab", "overview");
       return params;
     }, { replace: true });
-  }, [evidenceId, setSearchParams]);
+  }, [evidenceId, memoryTab, setSearchParams]);
 
   useEffect(() => {
     if (catalogueQuery.data) return;
@@ -323,7 +321,7 @@ export default function MemoryEvidencePage() {
           selectedEvidenceId={evidenceId}
           evidences={landingItems}
           onChange={(newEvidenceId) => {
-            navigate(`/cases/${caseId}/memory/${newEvidenceId}`);
+            navigate(memoryViewPath(newEvidenceId));
           }}
         />
       ) : null}
@@ -404,7 +402,7 @@ export default function MemoryEvidencePage() {
           </p>
           <div className="mt-2 flex flex-wrap gap-2">
             <Link
-              to={`/cases/${caseId}/memory/${evidenceId}?tab=runs`}
+              to={memoryViewPath(evidenceId, "runs")}
               className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted"
               data-testid="memory-batch-progress-view"
             >
@@ -425,7 +423,13 @@ export default function MemoryEvidencePage() {
         </section>
       ) : null}
 
-      <MemoryWorkspace key={evidenceId} caseId={caseId} evidenceId={evidenceId} />
+      <MemoryWorkspace
+        key={evidenceId}
+        caseId={caseId}
+        evidenceId={evidenceId}
+        activeTab={tab}
+        onTabChange={(nextTab) => navigate(memoryViewPath(evidenceId, nextTab))}
+      />
 
       {catalogueOpen && catalogueQuery.data && evidence ? (
         <MemoryAnalysisCatalogueModal
