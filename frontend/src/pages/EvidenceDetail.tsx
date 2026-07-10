@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type CaseReport, type EvidenceBenchmark, type EvidenceIndexingPlan, type EvidenceIndexingStep, type EvidenceRun, type EvtxHealthCheckResult, type EvtxProfile, type IngestPlanCandidate, type OnDemandModule, type ProblematicArtifact, type RuleRun, type VelociraptorCandidate } from "../api/client";
 import DebugExportDialog from "../components/DebugExportDialog";
+import InvestigationContext from "../components/InvestigationContext";
 import { useNotifications } from "../context/NotificationsContext";
 
 type ArtifactFilters = {
@@ -867,6 +868,8 @@ export default function EvidenceDetail() {
   const artifactViewsHref = data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
   const detectionsHref = data?.case_id ? `/cases/${data.case_id}/detections?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
   const reportsHref = data?.case_id ? `/cases/${data.case_id}/reports?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
+  const processingHref = data?.case_id ? `/cases/${data.case_id}?tab=processing` : "#";
+  const memoryHref = data?.case_id ? `/cases/${data.case_id}/memory/${evidenceId}/overview` : "#";
   const problematicHref = "#problematic-artifacts";
   const coreActions = [
     { id: "search", label: "Search this evidence", href: coreSearchHref, description: "Search all indexed data scoped to this evidence." },
@@ -2077,6 +2080,22 @@ function formatReportStatus(status: string | null | undefined) {
 
   return (
     <div className="min-w-0 space-y-6">
+      <InvestigationContext
+        caseId={data?.case_id}
+        host={data?.provided_host || data?.detected_host}
+        evidenceId={evidenceId}
+        evidenceName={data?.original_filename}
+        current="Evidence"
+        breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: "Case", to: data?.case_id ? `/cases/${data.case_id}` : undefined }, { label: "Evidence", to: data?.case_id ? `/cases/${data.case_id}/evidence` : undefined }, { label: data?.original_filename || "Evidence" }]}
+        actions={[
+          { label: "Search", to: coreSearchHref, description: "Search indexed events from this evidence" },
+          { label: "Timeline", to: timelineHref, description: "Timeline scoped to this evidence" },
+          { label: "Artifact Views", to: artifactViewsHref, description: "Artifact views scoped to this evidence" },
+          { label: "Processing", to: processingHref, description: "Open processing queue for this evidence" },
+          { label: "Memory", to: memoryHref, description: "Open memory workspace if this is memory evidence" },
+          { label: "Parser Coverage", to: "/parser-coverage", description: "Review supported parsers and known gaps" },
+        ]}
+      />
       <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">

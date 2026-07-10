@@ -7,6 +7,7 @@ import CreateFindingDialog from "../components/CreateFindingDialog";
 import DebugExportDialog from "../components/DebugExportDialog";
 import EventTable, { type EventView } from "../components/EventTable";
 import IndicatorResolutionPanel from "../components/IndicatorResolutionPanel";
+import InvestigationContext from "../components/InvestigationContext";
 import PaginationControls from "../components/PaginationControls";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
@@ -917,6 +918,21 @@ export default function ArtifactExplorer() {
 
   return (
     <div className="space-y-6">
+      <InvestigationContext
+        caseId={caseId}
+        caseName={(casesQuery.data ?? []).find((item: DfirCase) => item.id === caseId)?.name}
+        host={hostFilter}
+        evidenceId={evidenceIdFilter}
+        current="Artifact Views"
+        breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: caseId ? "Case" : "All cases", to: caseId ? `/cases/${caseId}` : undefined }, { label: "Artifact Views" }]}
+        actions={caseId ? [
+          { label: "Search", to: `/cases/${caseId}/search${artifactType ? `?artifact_type=${encodeURIComponent(artifactType)}` : ""}`, description: "Open matching documents in Search" },
+          { label: "Timeline", to: `/cases/${caseId}/search?view=timeline&sort=@timestamp&order=asc`, description: "Timeline with this context" },
+          { label: "Processing", to: `/cases/${caseId}?tab=processing`, description: "Review processing queue" },
+          { label: "Evidence", to: `/cases/${caseId}/evidence`, description: "Return to evidence inventory" },
+          { label: "Parser Coverage", to: "/parser-coverage", description: "Understand missing artifact support" },
+        ] : []}
+      />
       <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Case Workspace</p>
         <h2 className="mt-2 text-2xl font-semibold">Artifact Views</h2>
