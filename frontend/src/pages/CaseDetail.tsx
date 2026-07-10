@@ -8,6 +8,7 @@ import DebugExportDialog from "../components/DebugExportDialog";
 import EvidenceUpload from "../components/EvidenceUpload";
 import EventTable from "../components/EventTable";
 import FindingsWorkspace from "../components/FindingsWorkspace";
+import InvestigationContext from "../components/InvestigationContext";
 import ProcessTreePanel from "../components/ProcessTreePanel";
 import Timeline from "../components/Timeline";
 import { useActiveCase } from "../context/ActiveCaseContext";
@@ -139,6 +140,12 @@ export default function CaseDetail() {
   return (
     <div className="space-y-8">
       {caseQuery.error instanceof Error ? <div className="rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger">{caseQuery.error.message}</div> : null}
+      <InvestigationContext
+        caseId={caseId}
+        caseName={caseQuery.data?.name}
+        current={tabLabels[tab]}
+        breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: caseQuery.data?.name || "Case", to: `/cases/${caseId}` }, { label: tabLabels[tab] }]}
+      />
       <section className="rounded-[28px] border border-line bg-panel/60 p-6 shadow-panel">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div>

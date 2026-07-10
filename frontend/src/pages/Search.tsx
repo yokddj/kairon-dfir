@@ -7,6 +7,7 @@ import ResponsiveDetailPanel, { useMinWidthQuery } from "../components/Responsiv
 import SearchBar from "../components/SearchBar";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { HostFilter } from "../components/HostFilter";
+import InvestigationContext from "../components/InvestigationContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 
 type Scope = "events" | "findings" | "all";
@@ -2114,6 +2115,20 @@ export default function Search() {
 
   return (
     <div className="min-w-0 w-full max-w-none space-y-6 overflow-x-hidden">
+      <InvestigationContext
+        caseId={resolvedCaseId}
+        host={searchRequestState.host}
+        evidenceId={searchRequestState.evidence_id}
+        current={state.tab === "timeline" ? "Timeline" : "Search"}
+        breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: "Case", to: resolvedCaseId ? `/cases/${resolvedCaseId}` : undefined }, { label: state.tab === "timeline" ? "Timeline" : "Search" }]}
+        actions={resolvedCaseId ? [
+          { label: "Artifact Views", to: `/cases/${resolvedCaseId}/artifacts`, description: "Focused artifact-family views" },
+          { label: "Processing", to: `/cases/${resolvedCaseId}?tab=processing`, description: "Review queue and evidence runs" },
+          { label: "Evidence", to: `/cases/${resolvedCaseId}/evidence`, description: "Open evidence inventory" },
+          { label: "Findings", to: `/cases/${resolvedCaseId}/findings`, description: "Promote events into findings" },
+          { label: "Parser Coverage", to: "/parser-coverage", description: "Check parser coverage and limitations" },
+        ] : []}
+      />
       <section className="min-w-0 rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Search UI v2</p>
         <h2 className="mt-2 text-2xl font-semibold">Investigation Search</h2>
