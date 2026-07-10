@@ -52,6 +52,10 @@ function renderPage(initialEntries = ["/search"]) {
   );
 }
 
+function searchPath(params: Record<string, string>) {
+  return `/search?${new URLSearchParams(params).toString()}`;
+}
+
 const baseResponse = {
   query: {},
   query_syntax: {
@@ -363,15 +367,29 @@ describe("Search page", () => {
   });
 
   it("clear filters resets the query state", async () => {
-    renderPage(["/search?evidence_id=ev-1&artifact_type=browser&parser=browser_chromium_history&source_file=History&exclude_artifact_type=mft"]);
+    renderPage([searchPath({
+      q: "powershell",
+      evidence_id: "ev-1",
+      host: "desktop-1",
+      artifact_type: "browser",
+      parser: "browser_chromium_history",
+      source_file: "History",
+      exclude_artifact_type: "mft",
+      time_from: "2026-05-15T10:00:00Z",
+      time_to: "2026-05-15T12:00:00Z",
+    })]);
     await screen.findByTestId("results-table");
     await userEvent.click(screen.getByRole("button", { name: /clear filters/i }));
     await waitFor(() =>
       expect(searchCaseMock).toHaveBeenLastCalledWith(
         "case-1",
         expect.not.objectContaining({
+          q: "powershell",
           evidence_id: "ev-1",
+          host: "desktop-1",
           exclude_artifact_type: ["mft"],
+          time_from: "2026-05-15T10:00:00Z",
+          time_to: "2026-05-15T12:00:00Z",
         }),
       ),
     );
@@ -1002,6 +1020,136 @@ describe("Search page", () => {
     await screen.findByTestId("results-table");
     await userEvent.click(screen.getByRole("button", { name: /PowerShell activity/i }));
     await waitFor(() => expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ scope: "events", process_name: "powershell.exe" })));
+  });
+
+  it("preserves time range when applying a quick advanced filter", async () => {
+    renderPage([searchPath({ time_from: "2026-05-15T10:00:00Z", time_to: "2026-05-15T12:00:00Z" })]);
+    await screen.findByTestId("results-table");
+
+    await userEvent.click(screen.getByRole("button", { name: /High risk events/i }));
+
+    await waitFor(() =>
+      expect(searchCaseMock).toHaveBeenLastCalledWith(
+        "case-1",
+        expect.objectContaining({
+          risk_min: 70,
+          time_from: "2026-05-15T10:00:00Z",
+          time_to: "2026-05-15T12:00:00Z",
+        }),
+      ),
+    );
+    expect(screen.getByTestId("active-filter-chips")).toHaveTextContent(/time: 2026-05-15T10:00:00Z → 2026-05-15T12:00:00Z/i);
+  });
+
+  it("preserves time range when changing an advanced field filter", async () => {
+    renderPage([searchPath({ time_from: "2026-05-15T10:00:00Z", time_to: "2026-05-15T12:00:00Z" })]);
+    await screen.findByTestId("results-table");
+    await userEvent.click(screen.getByRole("button", { name: /advanced filters/i }));
+
+    await userEvent.selectOptions(screen.getByLabelText(/^Severity$/i), "high");
+
+    await waitFor(() =>
+      expect(searchCaseMock).toHaveBeenLastCalledWith(
+        "case-1",
+        expect.objectContaining({
+          severity: ["high"],
+          time_from: "2026-05-15T10:00:00Z",
+          time_to: "2026-05-15T12:00:00Z",
+        }),
+      ),
+    );
+  });
+
+  it("preserves query text and time range when applying a quick advanced filter", async () => {
+    renderPage([searchPath({ q: "powershell", time_from: "2026-05-15T10:00:00Z", time_to: "2026-05-15T12:00:00Z" })]);
+    await screen.findByTestId("results-table");
+
+    await userEvent.click(screen.getByRole("button", { name: /PowerShell activity/i }));
+
+    await waitFor(() =>
+      expect(searchCaseMock).toHaveBeenLastCalledWith(
+        "case-1",
+        expect.objectContaining({
+          q: "powershell",
+          process_name: "powershell.exe",
+          time_from: "2026-05-15T10:00:00Z",
+          time_to: "2026-05-15T12:00:00Z",
+        }),
+      ),
+    );
+  });
+
+  it("preserves host and evidence with time range when applying a quick advanced filter", async () => {
+    renderPage([searchPath({ evidence_id: "ev-1", host: "desktop-1", time_from: "2026-05-15T10:00:00Z", time_to: "2026-05-15T12:00:00Z" })]);
+    await screen.findByTestId("results-table");
+
+    await userEvent.click(screen.getByRole("button", { name: /High risk events/i }));
+
+    await waitFor(() =>
+      expect(searchCaseMock).toHaveBeenLastCalledWith(
+        "case-1",
+        expect.objectContaining({
+          evidence_id: "ev-1",
+          host: "desktop-1",
+          risk_min: 70,
+          time_from: "2026-05-15T10:00:00Z",
+          time_to: "2026-05-15T12:00:00Z",
+        }),
+      ),
+    );
+  });
+
+  it("hydrates URL filters after refresh and keeps them in the request", async () => {
+    renderPage([searchPath({
+      q: "powershell",
+      evidence_id: "ev-1",
+      host: "desktop-1",
+      artifact_type: "browser",
+      severity: "high",
+      source_category: "Disk",
+      time_from: "2026-05-15T10:00:00Z",
+      time_to: "2026-05-15T12:00:00Z",
+    })]);
+
+    await screen.findByTestId("results-table");
+
+    expect(searchCaseMock).toHaveBeenLastCalledWith(
+      "case-1",
+      expect.objectContaining({
+        q: "powershell",
+        evidence_id: "ev-1",
+        host: "desktop-1",
+        artifact_type: ["browser"],
+        severity: ["high"],
+        source_category: "Disk",
+        time_from: "2026-05-15T10:00:00Z",
+        time_to: "2026-05-15T12:00:00Z",
+      }),
+    );
+    expect(screen.getByLabelText(/^Time from$/i)).toBeInTheDocument();
+    expect(screen.getByTestId("active-filter-chips")).toHaveTextContent(/time: 2026-05-15T10:00:00Z → 2026-05-15T12:00:00Z/i);
+  });
+
+  it("clearing one advanced filter preserves the time range", async () => {
+    renderPage([searchPath({
+      filters: JSON.stringify([{ field: "process.command_line", operator: "contains", value: "powershell", negate: false }]),
+      time_from: "2026-05-15T10:00:00Z",
+      time_to: "2026-05-15T12:00:00Z",
+    })]);
+    const chips = await screen.findByTestId("active-filter-chips");
+
+    await userEvent.click(within(chips).getByText(/Command line contains powershell/i));
+
+    await waitFor(() =>
+      expect(searchCaseMock).toHaveBeenLastCalledWith(
+        "case-1",
+        expect.objectContaining({
+          filters: undefined,
+          time_from: "2026-05-15T10:00:00Z",
+          time_to: "2026-05-15T12:00:00Z",
+        }),
+      ),
+    );
   });
 
   it("artifact specialized view renders DNS columns", async () => {
