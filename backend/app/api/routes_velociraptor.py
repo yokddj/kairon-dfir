@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from app.core.activity import log_activity
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import get_db, utc_now_naive
 from app.core.manifest import default_manifest, write_manifest
 from app.core.opensearch import OpenSearchIngestBlockedError
 from app.core.storage import (
@@ -17,9 +17,12 @@ from app.core.storage import (
 )
 from app.ingest.velociraptor import discover_velociraptor_evidences, open_evidence_container
 from app.models.case import Case
-from app.models.evidence import Evidence, EvidenceType, IngestStatus
+from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidenceType, IngestStatus
+from app.models.user import User
 from app.schemas.evidence import EvidenceRead
 from app.services.evidence_runs import mark_opensearch_infrastructure_block, merge_evidence_metadata
+from app.services.auth_dependencies import get_optional_user
+from app.services.evidence_integrity import record_evidence_event
 from app.services.host_identity import is_invalid_host_value
 from app.services.ingest_plan import build_plan, persist_plan
 from app.services.usable_ingest import ingest_mode_metadata, normalize_ingest_mode
@@ -28,6 +31,11 @@ from app.workers.tasks import enqueue_ingest
 
 router = APIRouter(tags=["velociraptor"])
 settings = get_settings()
+
+
+def _current_user_id(current_user: User | None) -> str | None:
+    value = getattr(current_user, "id", None)
+    return str(value) if value else None
 
 
 def _mark_evidence_blocked_before_ingest(db: Session, evidence: Evidence, exc: OpenSearchIngestBlockedError) -> None:
@@ -283,11 +291,12 @@ def discover_velociraptor_zip(
     provided_host: str | None = Form(None),
     evtx_profile: str | None = Form(None),
     db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
 ) -> dict:
     if not db.get(Case, case_id):
         raise HTTPException(status_code=404, detail="Case not found")
     normalized_provided_host = _require_provided_host(provided_host)
-    evidence_id, stored_path, size = save_upload(case_id, file)
+    evidence_id, stored_path, size, uploaded_sha256 = save_upload(case_id, file)
     normalized_ingest_mode = normalize_ingest_mode(ingest_mode)
     normalized_evtx_profile = str(evtx_profile or "").strip() or None
     evidence = Evidence(
@@ -296,8 +305,14 @@ def discover_velociraptor_zip(
         original_filename=file.filename or stored_path.name,
         stored_path=str(stored_path),
         evidence_type=EvidenceType.velociraptor_zip,
-        sha256=sha256_file(stored_path),
+        sha256=uploaded_sha256,
         size_bytes=size,
+        mime_type=file.content_type,
+        detected_type=EvidenceType.velociraptor_zip.value,
+        uploaded_by_user_id=_current_user_id(current_user),
+        uploaded_at=utc_now_naive(),
+        first_seen_at=utc_now_naive(),
+        integrity_status=EvidenceIntegrityStatus.unknown,
         ingest_status=IngestStatus.pending,
         source_tool="velociraptor",
         ingest_source={
@@ -313,6 +328,8 @@ def discover_velociraptor_zip(
         error_log={},
     )
     db.add(evidence)
+    record_evidence_event(db, evidence, EvidenceCustodyEventType.uploaded, "Evidence uploaded and registered.", actor_user_id=_current_user_id(current_user), details={"original_filename": evidence.original_filename, "size_bytes": evidence.size_bytes, "evidence_type": evidence.evidence_type.value})
+    record_evidence_event(db, evidence, EvidenceCustodyEventType.hash_computed, "SHA-256 computed for uploaded evidence.", actor_user_id=_current_user_id(current_user), details={"sha256": evidence.sha256, "size_bytes": evidence.size_bytes})
     db.commit()
     db.refresh(evidence)
     _write_initial_manifest(evidence)

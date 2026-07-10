@@ -11,7 +11,7 @@ from app.models.case_host_alias import CaseHostAlias
 from app.models.case_host_identity_audit import CaseHostIdentityAudit
 from app.models.case_analysis_job import CaseAnalysisJob
 from app.models.detection_result import DetectionResult
-from app.models.evidence import Evidence
+from app.models.evidence import Evidence, EvidenceCustodyEvent
 from app.models.event_marking import EventMarking
 from app.models.finding import Finding
 from app.models.incident_timeline_draft import IncidentTimelineDraft

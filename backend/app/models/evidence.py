@@ -41,6 +41,25 @@ class EvidenceStorageMode(str, enum.Enum):
     external_reference = "external_reference"
 
 
+class EvidenceIntegrityStatus(str, enum.Enum):
+    unknown = "unknown"
+    verified = "verified"
+    mismatch = "mismatch"
+    missing_file = "missing_file"
+    error = "error"
+
+
+class EvidenceCustodyEventType(str, enum.Enum):
+    uploaded = "uploaded"
+    hash_computed = "hash_computed"
+    processing_started = "processing_started"
+    processing_completed = "processing_completed"
+    processing_failed = "processing_failed"
+    integrity_checked = "integrity_checked"
+    manifest_exported = "manifest_exported"
+    metadata_updated = "metadata_updated"
+
+
 class Evidence(UUIDMixin, Base):
     __tablename__ = "evidences"
 
@@ -52,7 +71,7 @@ class Evidence(UUIDMixin, Base):
     storage_mode: Mapped[EvidenceStorageMode] = mapped_column(Enum(EvidenceStorageMode), default=EvidenceStorageMode.uploaded, nullable=False)
     is_external: Mapped[bool] = mapped_column(default=False, nullable=False)
     copy_to_storage: Mapped[bool] = mapped_column(default=True, nullable=False)
-    sha256: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    sha256: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     # Memory image detection fields.  Populated by the memory
     # image probe; nullable for evidence that is not a memory
     # candidate.
@@ -66,6 +85,15 @@ class Evidence(UUIDMixin, Base):
     operator_override_at: Mapped[datetime | None] = mapped_column(nullable=True)
     probed_at: Mapped[datetime | None] = mapped_column(nullable=True)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    detected_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    uploaded_by_user_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    uploaded_at: Mapped[datetime] = mapped_column(default=utc_now_naive, nullable=False)
+    first_seen_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    last_processed_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    integrity_status: Mapped[EvidenceIntegrityStatus] = mapped_column(Enum(EvidenceIntegrityStatus), default=EvidenceIntegrityStatus.unknown, nullable=False)
+    integrity_checked_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    notes: Mapped[str | None] = mapped_column(String(2048), nullable=True)
     file_count: Mapped[int | None] = mapped_column(nullable=True)
     ingest_status: Mapped[IngestStatus] = mapped_column(Enum(IngestStatus), default=IngestStatus.pending, nullable=False)
     detected_host: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -93,6 +121,22 @@ class Evidence(UUIDMixin, Base):
     memory_scan_runs = relationship("MemoryScanRun", back_populates="evidence", cascade="all, delete-orphan")
     memory_artifact_summaries = relationship("MemoryArtifactSummary", back_populates="evidence", cascade="all, delete-orphan")
     host = relationship("CaseHost", back_populates="evidences")
+    uploaded_by = relationship("User")
+    custody_events = relationship("EvidenceCustodyEvent", back_populates="evidence", cascade="all, delete-orphan")
+
+
+class EvidenceCustodyEvent(UUIDMixin, Base):
+    __tablename__ = "evidence_custody_events"
+
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_type: Mapped[EvidenceCustodyEventType] = mapped_column(Enum(EvidenceCustodyEventType), nullable=False, index=True)
+    actor_user_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    timestamp: Mapped[datetime] = mapped_column(default=utc_now_naive, nullable=False, index=True)
+    summary: Mapped[str] = mapped_column(String(512), nullable=False)
+    details_json: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
+
+    evidence = relationship("Evidence", back_populates="custody_events")
+    actor = relationship("User")
 
 
 def resolve_public_evidence_type(

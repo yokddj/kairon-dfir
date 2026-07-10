@@ -479,8 +479,17 @@ export type Evidence = {
   is_external: boolean;
   copy_to_storage: boolean;
   evidence_type: string;
-  sha256: string;
-  size_bytes: number;
+  sha256: string | null;
+  size_bytes: number | null;
+  mime_type?: string | null;
+  detected_type?: string | null;
+  uploaded_by_user_id?: string | null;
+  uploaded_at?: string | null;
+  first_seen_at?: string | null;
+  last_processed_at?: string | null;
+  integrity_status?: "unknown" | "verified" | "mismatch" | "missing_file" | "error" | string;
+  integrity_checked_at?: string | null;
+  notes?: string | null;
   file_count: number | null;
   ingest_status: string;
   display_status?: string | null;
@@ -503,6 +512,27 @@ export type Evidence = {
   error_log: Record<string, unknown>;
   created_at: string;
   processed_at: string | null;
+};
+
+export type EvidenceCustodyEvent = {
+  id: string;
+  evidence_id: string;
+  event_type: string;
+  actor_user_id: string | null;
+  timestamp: string | null;
+  summary: string;
+  details_json: Record<string, unknown>;
+};
+
+export type EvidenceIntegrity = {
+  evidence_id: string;
+  case_id: string;
+  sha256: string | null;
+  size_bytes: number | null;
+  integrity_status: string;
+  integrity_checked_at: string | null;
+  actual_sha256?: string | null;
+  actual_size_bytes?: number | null;
 };
 
 export type MemoryEvidence = {
@@ -3994,13 +4024,25 @@ export type EvidenceManifest = {
   evidence_id: string;
   case_id: string;
   original_filename: string;
-  sha256: string;
+  sha256: string | null;
+  size_bytes?: number | null;
   evidence_type: string;
-  source_tool: string | null;
-  created_at: string | null;
-  processed_at: string | null;
-  files: Array<{ path: string; size: number; sha256: string | null; extension: string; ignored: boolean; reason: string | null }>;
-  artifacts: Array<{
+  mime_type?: string | null;
+  detected_type?: string | null;
+  uploaded_by?: string | null;
+  uploaded_by_user_id?: string | null;
+  uploaded_at?: string | null;
+  host?: { id: string; name: string } | null;
+  integrity_status?: string;
+  integrity_checked_at?: string | null;
+  processing_status?: string;
+  last_processed_at?: string | null;
+  events?: EvidenceCustodyEvent[];
+  source_tool?: string | null;
+  created_at?: string | null;
+  processed_at?: string | null;
+  files?: Array<{ path: string; size: number; sha256: string | null; extension: string; ignored: boolean; reason: string | null }>;
+  artifacts?: Array<{
     name: string;
     source_path: string;
     artifact_type: string;
@@ -4011,8 +4053,8 @@ export type EvidenceManifest = {
     reason?: string | null;
     planned_parser?: string | null;
   }>;
-  stats: Record<string, number>;
-  errors: Array<Record<string, unknown>>;
+  stats?: Record<string, number>;
+  errors?: Array<Record<string, unknown>>;
 };
 
 export type IngestPlanCandidate = {
@@ -5732,6 +5774,10 @@ export const api = {
     request<MemoryArtifactDetail>(`/cases/${caseId}/memory/artifacts/${documentType}/${documentId}`),
   getEvidence: (evidenceId: string) => request<Evidence>(`/evidences/${evidenceId}`),
   getEvidenceManifest: (evidenceId: string) => request<EvidenceManifest>(`/evidences/${evidenceId}/manifest`),
+  getEvidenceIntegrity: (caseId: string, evidenceId: string) => request<EvidenceIntegrity>(`/cases/${caseId}/evidence/${evidenceId}/integrity`),
+  verifyEvidenceIntegrity: (caseId: string, evidenceId: string) => request<EvidenceIntegrity>(`/cases/${caseId}/evidence/${evidenceId}/verify-integrity`, { method: "POST" }),
+  exportEvidenceManifest: (caseId: string, evidenceId: string) => request<EvidenceManifest>(`/cases/${caseId}/evidence/${evidenceId}/manifest`),
+  getEvidenceCustodyEvents: (caseId: string, evidenceId: string) => request<EvidenceCustodyEvent[]>(`/cases/${caseId}/evidence/${evidenceId}/events`),
   getEvidenceOnDemandModules: (evidenceId: string) => request<OnDemandModulesResponse>(`/evidences/${evidenceId}/on-demand-modules`),
   getEvidenceSearchSummary: (evidenceId: string) => request<EvidenceSearchSummary>(`/evidences/${evidenceId}/search-summary`),
   getEvidenceMftDiagnostic: (evidenceId: string) => request<MftDiagnostic>(`/evidences/${evidenceId}/mft-diagnostic`),
