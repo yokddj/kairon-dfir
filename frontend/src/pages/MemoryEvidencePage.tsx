@@ -4,6 +4,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { MemoryWorkspace } from "../components/MemoryWorkspace";
+import InvestigationContext from "../components/InvestigationContext";
 import { MemoryEvidenceHeader } from "../components/memory/MemoryEvidenceHeader";
 import { MemoryEvidenceSelector } from "../components/memory/MemoryEvidenceSelector";
 import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysisCatalogueModal";
@@ -315,6 +316,21 @@ export default function MemoryEvidencePage() {
 
   return (
     <div className="space-y-6" data-testid="memory-evidence-workspace">
+      <InvestigationContext
+        caseId={caseId}
+        host={evidence.detected_host}
+        evidenceId={evidenceId}
+        evidenceName={evidence.filename}
+        current="Memory"
+        breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: "Case", to: `/cases/${caseId}` }, { label: "Memory", to: `/cases/${caseId}/memory?tab=overview` }, { label: evidence.filename || "Evidence" }]}
+        actions={[
+          { label: "Evidence Detail", to: `/evidences/${evidenceId}`, description: "Open integrity and processing details" },
+          { label: "Search", to: `/cases/${caseId}/search?source_category=Memory`, description: "Search memory-derived documents" },
+          { label: "Timeline", to: `/cases/${caseId}/search?source_category=Memory&view=timeline&sort=@timestamp&order=asc`, description: "Timeline memory-derived events" },
+          { label: "Artifacts", to: `/cases/${caseId}/artifacts?source_category=Memory`, description: "Review artifact views with this scope" },
+          { label: "Processing", to: `/cases/${caseId}?tab=processing`, description: "Open processing queue" },
+        ]}
+      />
       {landingItems.length > 1 ? (
         <MemoryEvidenceSelector
           caseId={caseId}
