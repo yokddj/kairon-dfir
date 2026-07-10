@@ -21,7 +21,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.core.activity import log_activity
 from app.core.app_settings import load_runtime_settings
 from app.core.config import get_settings
-from app.core.database import get_db, utc_now
+from app.core.database import get_db, utc_now, utc_now_naive
 from app.models.case_host import CaseHost
 from app.core.evidence_paths import fingerprint_external_path, storage_capabilities, validate_external_path
 from app.core.manifest import default_manifest, write_manifest
@@ -47,7 +47,7 @@ from app.ingest.velociraptor.zip_inventory import is_supported_archive_container
 from app.models.artifact import Artifact
 from app.models.case import Case
 from app.models.detection_result import DetectionResult
-from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
+from app.models.evidence import Evidence, EvidenceCustodyEvent, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidenceStorageMode, EvidenceType, IngestStatus
 from app.models.memory import MemoryUpload
 from app.models.rule_run import RuleRun, RuleRunStatus
 from app.schemas.evidence import ArtifactRead, EvidenceRead, EvidenceRunQueuedResponse, EvidenceRunRead
@@ -62,6 +62,8 @@ from app.services.evidence_runs import (
     start_ingest_run,
     upsert_ingest_run,
 )
+from app.services.auth_dependencies import get_optional_user
+from app.services.evidence_integrity import build_evidence_integrity_payload, build_evidence_manifest, record_evidence_event, serialize_evidence_event, verify_evidence_integrity
 from app.services.ingest_benchmarks import (
     benchmark_mode_to_reprocess_mode,
     compare_ingest_benchmarks,
@@ -108,6 +110,7 @@ from app.services.memory.upload_lifecycle import (
     update_memory_upload,
 )
 from app.services.usable_ingest import FULL_FORENSIC_MODE, USABLE_INGEST_MODE, ingest_mode_metadata, normalize_ingest_mode
+from app.models.user import User
 from datetime import UTC, datetime
 from app.services.reassignment import execute_host_reassignment, backfill_evidence_documents, invalidate_host_caches
 from app.services.reconciliation import capture_reprocess_baseline
@@ -140,6 +143,51 @@ def _load_evidence_manifest(item: Evidence) -> dict:
         except Exception:
             return default_manifest(item)
     return default_manifest(item)
+
+
+def _get_case_evidence(db: Session, case_id: str, evidence_id: str) -> Evidence:
+    item = db.get(Evidence, evidence_id)
+    if not item or item.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    return item
+
+
+def _custody_events_for_evidence(db: Session, evidence_id: str) -> list[EvidenceCustodyEvent]:
+    return (
+        db.query(EvidenceCustodyEvent)
+        .filter(EvidenceCustodyEvent.evidence_id == evidence_id)
+        .order_by(EvidenceCustodyEvent.timestamp.asc())
+        .all()
+    )
+
+
+def _record_upload_custody_events(db: Session, evidence: Evidence, *, actor_user_id: str | None, hash_summary: str = "SHA-256 computed for uploaded evidence.") -> None:
+    record_evidence_event(
+        db,
+        evidence,
+        EvidenceCustodyEventType.uploaded,
+        "Evidence uploaded and registered.",
+        actor_user_id=actor_user_id,
+        details={
+            "original_filename": evidence.original_filename,
+            "size_bytes": evidence.size_bytes,
+            "evidence_type": getattr(evidence.evidence_type, "value", evidence.evidence_type),
+        },
+    )
+    if evidence.sha256:
+        record_evidence_event(
+            db,
+            evidence,
+            EvidenceCustodyEventType.hash_computed,
+            hash_summary,
+            actor_user_id=actor_user_id,
+            details={"sha256": evidence.sha256, "size_bytes": evidence.size_bytes},
+        )
+
+
+def _current_user_id(current_user: User | None) -> str | None:
+    value = getattr(current_user, "id", None)
+    return str(value) if value else None
 
 
 def _artifact_id_lookup(artifact_rows: list[Artifact]) -> dict[tuple[str, str], str]:
@@ -1907,6 +1955,7 @@ def upload_evidence(
     memory_authorization_acknowledged: bool = Form(False),
     memory_upload_id: str | None = Form(None),
     db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
 ) -> Evidence:
     if hasattr(ingest_mode, "get") and not hasattr(db, "get"):
         db = ingest_mode  # type: ignore[assignment]
@@ -1959,6 +2008,7 @@ def upload_evidence(
                     "ingest_mode": normalized_ingest_mode,
                     "evtx_profile": normalized_evtx_profile,
                     "authorization_acknowledged": True,
+                    "uploaded_by_user_id": _current_user_id(current_user),
                 },
                 db=db,
             )
@@ -2054,7 +2104,7 @@ def upload_evidence(
                 },
             ) from exc
     else:
-        evidence_id, stored_path, size = save_upload(case_id, file)
+        evidence_id, stored_path, size, uploaded_sha256 = save_upload(case_id, file)
     raw_collection = False
     folder_entries: list[dict] = []
     file_count: int | None = None
@@ -2086,8 +2136,14 @@ def upload_evidence(
         is_external=False,
         copy_to_storage=True,
         evidence_type=EvidenceType.velociraptor_zip if raw_collection else EvidenceType.parsed_folder if folder_upload else detected_type,
-        sha256=uploaded_sha256 or sha256_file(stored_path),
+        sha256=uploaded_sha256,
         size_bytes=size,
+        mime_type=file.content_type,
+        detected_type=getattr(detected_type, "value", detected_type),
+        uploaded_by_user_id=_current_user_id(current_user),
+        uploaded_at=utc_now_naive(),
+        first_seen_at=utc_now_naive(),
+        integrity_status=EvidenceIntegrityStatus.unknown,
         file_count=file_count,
         ingest_status=IngestStatus.pending,
         source_tool=source_tool,
@@ -2117,6 +2173,7 @@ def upload_evidence(
         error_log={},
     )
     db.add(evidence)
+    _record_upload_custody_events(db, evidence, actor_user_id=_current_user_id(current_user))
     db.commit()
     db.refresh(evidence)
     evidence.ingest_source = {
@@ -2168,7 +2225,7 @@ def upload_evidence(
 
 
 @router.post("/api/cases/{case_id}/evidences/upload-folder", response_model=EvidenceRead, status_code=status.HTTP_201_CREATED)
-def upload_evidence_folder(case_id: str, files: list[UploadFile] = File(...), db: Session = Depends(get_db)) -> Evidence:
+def upload_evidence_folder(case_id: str, files: list[UploadFile] = File(...), db: Session = Depends(get_db), current_user: User | None = Depends(get_optional_user)) -> Evidence:
     _ensure_browser_folder_upload_allowed(files)
     if not db.get(Case, case_id):
         raise HTTPException(status_code=404, detail="Case not found")
@@ -2186,6 +2243,11 @@ def upload_evidence_folder(case_id: str, files: list[UploadFile] = File(...), db
         evidence_type=EvidenceType.velociraptor_zip if raw_collection else EvidenceType.parsed_folder,
         sha256=folder_sha256,
         size_bytes=total_size,
+        detected_type=(EvidenceType.velociraptor_zip if raw_collection else EvidenceType.parsed_folder).value,
+        uploaded_by_user_id=_current_user_id(current_user),
+        uploaded_at=utc_now_naive(),
+        first_seen_at=utc_now_naive(),
+        integrity_status=EvidenceIntegrityStatus.unknown,
         file_count=len([item for item in folder_entries if not item.get("ignored")]),
         ingest_status=IngestStatus.pending,
         source_tool="raw_collection" if raw_collection else None,
@@ -2195,6 +2257,7 @@ def upload_evidence_folder(case_id: str, files: list[UploadFile] = File(...), db
         error_log={},
     )
     db.add(evidence)
+    _record_upload_custody_events(db, evidence, actor_user_id=_current_user_id(current_user), hash_summary="Folder fingerprint computed for uploaded evidence.")
     db.commit()
     db.refresh(evidence)
     _write_initial_manifest(evidence)
@@ -2244,7 +2307,7 @@ def validate_storage_path(payload: ValidatePathRequest, db: Session = Depends(ge
 
 @router.post("/api/cases/{case_id}/evidences/register-path", response_model=EvidenceRead, status_code=status.HTTP_201_CREATED)
 @router.post("/api/cases/{case_id}/evidence/register-path", response_model=EvidenceRead, status_code=status.HTTP_201_CREATED)
-def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Session = Depends(get_db)) -> Evidence:
+def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Session = Depends(get_db), current_user: User | None = Depends(get_optional_user)) -> Evidence:
     if not db.get(Case, case_id):
         raise HTTPException(status_code=404, detail="Case not found")
 
@@ -2321,6 +2384,11 @@ def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Sessi
         evidence_type=EvidenceType.velociraptor_zip if raw_collection else detected_type,
         sha256=sha256,
         size_bytes=size_bytes,
+        detected_type=getattr(detected_type, "value", detected_type),
+        uploaded_by_user_id=_current_user_id(current_user),
+        uploaded_at=utc_now_naive(),
+        first_seen_at=utc_now_naive(),
+        integrity_status=EvidenceIntegrityStatus.unknown,
         file_count=validation.get("file_count"),
         ingest_status=IngestStatus.pending,
         source_tool="raw_collection" if raw_collection else _source_tool_for_detected_evidence_type(detected_type),
@@ -2330,6 +2398,7 @@ def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Sessi
         error_log={},
     )
     db.add(evidence)
+    _record_upload_custody_events(db, evidence, actor_user_id=_current_user_id(current_user), hash_summary="SHA-256 or directory fingerprint computed for registered evidence.")
     db.commit()
     db.refresh(evidence)
     _write_initial_manifest(evidence)
@@ -2536,10 +2605,38 @@ def get_evidence_manifest(evidence_id: str, db: Session = Depends(get_db)) -> JS
     item = db.get(Evidence, evidence_id)
     if not item:
         raise HTTPException(status_code=404, detail="Evidence not found")
-    path = evidence_manifest_path(item.case_id, item.id)
-    if not path.exists():
-        return JSONResponse(default_manifest(item))
-    return JSONResponse(json.loads(path.read_text(encoding="utf-8")))
+    events = _custody_events_for_evidence(db, item.id)
+    return JSONResponse(build_evidence_manifest(item, events))
+
+
+@router.get("/api/cases/{case_id}/evidence/{evidence_id}/integrity")
+def get_case_evidence_integrity(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    return build_evidence_integrity_payload(_get_case_evidence(db, case_id, evidence_id))
+
+
+@router.post("/api/cases/{case_id}/evidence/{evidence_id}/verify-integrity")
+def verify_case_evidence_integrity(case_id: str, evidence_id: str, db: Session = Depends(get_db), current_user: User | None = Depends(get_optional_user)) -> dict:
+    item = _get_case_evidence(db, case_id, evidence_id)
+    result = verify_evidence_integrity(db, item, actor_user_id=_current_user_id(current_user))
+    db.commit()
+    db.refresh(item)
+    return result
+
+
+@router.get("/api/cases/{case_id}/evidence/{evidence_id}/manifest")
+def get_case_evidence_manifest(case_id: str, evidence_id: str, db: Session = Depends(get_db), current_user: User | None = Depends(get_optional_user)) -> JSONResponse:
+    item = _get_case_evidence(db, case_id, evidence_id)
+    events = _custody_events_for_evidence(db, item.id)
+    record_evidence_event(db, item, EvidenceCustodyEventType.manifest_exported, "Evidence integrity manifest exported.", actor_user_id=_current_user_id(current_user), details={"format": "json"})
+    db.commit()
+    events = _custody_events_for_evidence(db, item.id)
+    return JSONResponse(build_evidence_manifest(item, events))
+
+
+@router.get("/api/cases/{case_id}/evidence/{evidence_id}/events")
+def get_case_evidence_events(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    item = _get_case_evidence(db, case_id, evidence_id)
+    return [serialize_evidence_event(event) for event in _custody_events_for_evidence(db, item.id)]
 
 
 @router.get("/api/evidences/{evidence_id}/problematic-artifacts")

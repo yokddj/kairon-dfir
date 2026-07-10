@@ -15,8 +15,17 @@ class EvidenceRead(BaseModel):
     is_external: bool
     copy_to_storage: bool
     evidence_type: EvidenceType
-    sha256: str
-    size_bytes: int
+    sha256: str | None
+    size_bytes: int | None
+    mime_type: str | None = None
+    detected_type: str | None = None
+    uploaded_by_user_id: str | None = None
+    uploaded_at: datetime | None = None
+    first_seen_at: datetime | None = None
+    last_processed_at: datetime | None = None
+    integrity_status: str = "unknown"
+    integrity_checked_at: datetime | None = None
+    notes: str | None = None
     file_count: int | None
     ingest_status: IngestStatus
     display_status: str | None = None

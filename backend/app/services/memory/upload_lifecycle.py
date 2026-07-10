@@ -15,7 +15,8 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal, utc_now_naive
 from app.core.manifest import default_manifest, write_manifest
 from app.core.storage import safe_display_filename, sha256_file
-from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
+from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidenceStorageMode, EvidenceType, IngestStatus
+from app.services.evidence_integrity import record_evidence_event
 from app.models.memory import MemoryUpload
 from app.services.memory.upload_capacity import assert_memory_upload_capacity, release_memory_upload_slot_if_owner
 from app.services.memory.evidence_access import secure_uploaded_memory_permissions
@@ -398,6 +399,13 @@ def _build_evidence_from_upload(
         evidence_type=EvidenceType.memory_dump,
         sha256=item.sha256,
         size_bytes=int(item.expected_bytes),
+        mime_type=None,
+        detected_type=EvidenceType.memory_dump.value,
+        uploaded_by_user_id=metadata.get("uploaded_by_user_id"),
+        uploaded_at=utc_now_naive(),
+        first_seen_at=utc_now_naive(),
+        last_processed_at=utc_now_naive(),
+        integrity_status=EvidenceIntegrityStatus.unknown,
         ingest_status=IngestStatus.completed,
         source_tool=None,
         path_validation={},
@@ -455,6 +463,9 @@ def _persist_evidence_minimal(
     secure_uploaded_memory_permissions(canonical, settings=get_settings())
     evidence = _build_evidence_from_upload(item, canonical)
     db.add(evidence)
+    record_evidence_event(db, evidence, EvidenceCustodyEventType.uploaded, "Memory evidence uploaded and registered.", actor_user_id=evidence.uploaded_by_user_id, details={"original_filename": evidence.original_filename, "size_bytes": evidence.size_bytes, "evidence_type": evidence.evidence_type.value})
+    if evidence.sha256:
+        record_evidence_event(db, evidence, EvidenceCustodyEventType.hash_computed, "SHA-256 computed for uploaded memory evidence.", actor_user_id=evidence.uploaded_by_user_id, details={"sha256": evidence.sha256, "size_bytes": evidence.size_bytes})
     db.commit()
     db.refresh(evidence)
     return evidence
