@@ -21,13 +21,18 @@ def _safe_disk_event_count(case_id: str) -> int:
         return 0
 
 
-def list_memory_evidences(db: Session, case_id: str) -> list[Evidence]:
-    return (
+def list_memory_evidences(db: Session, case_id: str, *, host_id: str | None = None, host: str | None = None) -> list[Evidence]:
+    from app.services.processing_queue import _matches_host_scope
+
+    evidences = (
         db.query(Evidence)
         .filter(Evidence.case_id == case_id, Evidence.evidence_type == EvidenceType.memory_dump)
         .order_by(Evidence.created_at.desc())
         .all()
     )
+    if host_id or host:
+        evidences = [evidence for evidence in evidences if _matches_host_scope(evidence, host_id=host_id, host=host)]
+    return evidences
 
 
 def _has_memory_results(db: Session, case_id: str) -> bool:
@@ -84,8 +89,8 @@ def _message_for_mode(*, enabled: bool, mode: str, has_results: bool) -> str:
     return "This case has both disk events and memory evidence. Memory results remain isolated from Search, Timeline, Detections, Findings, Reports, and SIEM in this build."
 
 
-def get_case_memory_overview(db: Session, case_id: str) -> dict:
-    evidences = list_memory_evidences(db, case_id)
+def get_case_memory_overview(db: Session, case_id: str, *, host_id: str | None = None, host: str | None = None) -> dict:
+    evidences = list_memory_evidences(db, case_id, host_id=host_id, host=host)
     runs = (
         db.query(MemoryScanRun)
         .filter(MemoryScanRun.case_id == case_id)
@@ -109,7 +114,7 @@ def get_case_memory_overview(db: Session, case_id: str) -> dict:
     }
 
 
-def get_evidence_landing(db: Session, case_id: str) -> list[dict]:
+def get_evidence_landing(db: Session, case_id: str, *, host_id: str | None = None, host: str | None = None) -> list[dict]:
     """Return a per-evidence summary for the memory case landing page.
 
     Each entry includes the evidence metadata, a per-family status
@@ -118,7 +123,7 @@ def get_evidence_landing(db: Session, case_id: str) -> list[dict]:
     """
     from app.services.memory.counts import get_memory_family_count
 
-    evidences = list_memory_evidences(db, case_id)
+    evidences = list_memory_evidences(db, case_id, host_id=host_id, host=host)
     network_unavailable = not network_basic_available()[0]
     items: list[dict] = []
     for evidence in evidences:
@@ -186,6 +191,7 @@ def get_evidence_landing(db: Session, case_id: str) -> list[dict]:
                 "case_id": evidence.case_id,
                 "filename": evidence.original_filename,
                 "detected_host": evidence.detected_host,
+                "host_id": evidence.host_id,
                 "size_bytes": evidence.size_bytes,
                 "created_at": evidence.created_at.isoformat() if evidence.created_at else None,
                 "processed_at": evidence.processed_at.isoformat() if evidence.processed_at else None,

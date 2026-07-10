@@ -2437,8 +2437,16 @@ def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Sessi
 
 
 @router.get("/api/cases/{case_id}/evidences", response_model=list[EvidenceRead])
-def list_evidences(case_id: str, db: Session = Depends(get_db)) -> list[Evidence]:
-    return db.query(Evidence).filter(Evidence.case_id == case_id).order_by(Evidence.created_at.desc()).all()
+def list_evidences(case_id: str, host_id: str | None = Query(default=None), host: str | None = Query(default=None), db: Session = Depends(get_db)) -> list[Evidence]:
+    query = db.query(Evidence).filter(Evidence.case_id == case_id)
+    if host_id:
+        query = query.filter(Evidence.host_id == host_id)
+    evidences = query.order_by(Evidence.created_at.desc()).all()
+    if host and not host_id:
+        from app.services.processing_queue import _matches_host_scope
+
+        evidences = [evidence for evidence in evidences if _matches_host_scope(evidence, host=host)]
+    return evidences
 
 
 @router.get("/api/evidences/{evidence_id}", response_model=EvidenceRead)
@@ -2641,10 +2649,10 @@ def get_case_evidence_events(case_id: str, evidence_id: str, db: Session = Depen
 
 
 @router.get("/api/cases/{case_id}/processing")
-def get_case_processing(case_id: str, db: Session = Depends(get_db)) -> dict:
+def get_case_processing(case_id: str, host_id: str | None = Query(default=None), host: str | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
     if not db.get(Case, case_id):
         raise HTTPException(status_code=404, detail="Case not found")
-    return list_case_processing(db, case_id)
+    return list_case_processing(db, case_id, host_id=host_id, host=host)
 
 
 @router.get("/api/cases/{case_id}/evidence/{evidence_id}/processing")

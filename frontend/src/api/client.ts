@@ -18,6 +18,14 @@ const API_BASE_URLS = Array.from(
 );
 export const API_BASE_URL = API_BASE_URLS[0] ?? fallbackApiBase;
 
+function hostScopeQuery(params?: { host_id?: string | null; host?: string | null }) {
+  const query = new URLSearchParams();
+  if (params?.host_id) query.set("host_id", params.host_id);
+  if (params?.host) query.set("host", params.host);
+  const value = query.toString();
+  return value ? `?${value}` : "";
+}
+
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   let lastError: unknown;
   const attemptedUrls: string[] = [];
@@ -573,6 +581,7 @@ export type ProcessingEvidenceItem = {
   filename: string;
   evidence_type: string;
   host: string | null;
+  host_id?: string | null;
   uploaded_at: string | null;
   processing_status: string;
   last_run_status: string;
@@ -605,6 +614,8 @@ export type MemoryEvidence = {
   size_bytes: number;
   ingest_status: string;
   created_at: string;
+  detected_host?: string | null;
+  host_id?: string | null;
 };
 
 export type MemoryEvidenceReadiness = {
@@ -773,6 +784,7 @@ export type MemoryEvidenceLandingItem = {
   case_id: string;
   filename: string;
   detected_host: string | null;
+  host_id?: string | null;
   size_bytes: number;
   created_at: string | null;
   processed_at: string | null;
@@ -2009,6 +2021,7 @@ export type CaseContextEvidenceSummary = {
   is_external: boolean;
   events_indexed: number;
   parser_errors: number;
+  host_id?: string | null;
   detected_host: string | null;
 };
 
@@ -5082,9 +5095,9 @@ export const api = {
   },
   listDocs: () => request<DocEntry[]>("/docs"),
   getDoc: (slug: string) => request<DocPage>(`/docs/${slug}`),
-  listEvidences: (caseId: string) => request<Evidence[]>(`/cases/${caseId}/evidences`),
+  listEvidences: (caseId: string, params?: { host_id?: string | null; host?: string | null }) => request<Evidence[]>(`/cases/${caseId}/evidences${hostScopeQuery(params)}`),
   getMemoryBackendOverview: () => request<MemoryBackendOverview>("/memory/backends"),
-  getMemoryOverview: (caseId: string) => request<MemoryOverview>(`/cases/${caseId}/memory`),
+  getMemoryOverview: (caseId: string, params?: { host_id?: string | null; host?: string | null }) => request<MemoryOverview>(`/cases/${caseId}/memory${hostScopeQuery(params)}`),
   getMemoryUploadReadiness: (caseId: string, selectedSizeBytes?: number) => {
     const query = selectedSizeBytes && selectedSizeBytes > 0 ? `?selected_size_bytes=${encodeURIComponent(String(selectedSizeBytes))}` : "";
     return request<MemoryUploadReadiness>(`/cases/${caseId}/memory/upload-readiness${query}`);
@@ -5146,7 +5159,7 @@ export const api = {
     }),
   getActiveMemoryUpload: (caseId: string) =>
     request<MemoryUploadStatus | null>(`/cases/${caseId}/memory/uploads/active`),
-  listMemoryEvidences: (caseId: string) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences`),
+  listMemoryEvidences: (caseId: string, params?: { host_id?: string | null; host?: string | null }) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences${hostScopeQuery(params)}`),
   getMemoryEvidenceReadiness: (caseId: string, evidenceId: string) => request<MemoryEvidenceReadiness>(`/cases/${caseId}/memory/evidences/${evidenceId}/readiness`),
   getMemoryEvidenceDiagnostics: (caseId: string, evidenceId: string) =>
     request<{
@@ -5481,7 +5494,7 @@ export const api = {
     const query = evidenceId ? `?evidence_id=${encodeURIComponent(evidenceId)}` : "";
     return request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs${query}`);
   },
-  getMemoryEvidenceLanding: (caseId: string) => request<MemoryEvidenceLanding>(`/cases/${caseId}/memory/landing`),
+  getMemoryEvidenceLanding: (caseId: string, params?: { host_id?: string | null; host?: string | null }) => request<MemoryEvidenceLanding>(`/cases/${caseId}/memory/landing${hostScopeQuery(params)}`),
   getMemoryActiveResult: (
     caseId: string,
     evidenceId: string,
@@ -5840,7 +5853,7 @@ export const api = {
   verifyEvidenceIntegrity: (caseId: string, evidenceId: string) => request<EvidenceIntegrity>(`/cases/${caseId}/evidence/${evidenceId}/verify-integrity`, { method: "POST" }),
   exportEvidenceManifest: (caseId: string, evidenceId: string) => request<EvidenceManifest>(`/cases/${caseId}/evidence/${evidenceId}/manifest`),
   getEvidenceCustodyEvents: (caseId: string, evidenceId: string) => request<EvidenceCustodyEvent[]>(`/cases/${caseId}/evidence/${evidenceId}/events`),
-  getCaseProcessing: (caseId: string) => request<CaseProcessingQueue>(`/cases/${caseId}/processing`),
+  getCaseProcessing: (caseId: string, params?: { host_id?: string | null; host?: string | null }) => request<CaseProcessingQueue>(`/cases/${caseId}/processing${hostScopeQuery(params)}`),
   getEvidenceProcessing: (caseId: string, evidenceId: string) => request<ProcessingEvidenceItem>(`/cases/${caseId}/evidence/${evidenceId}/processing`),
   getCaseEvidenceProcessingRuns: (caseId: string, evidenceId: string) => request<ProcessingRun[]>(`/cases/${caseId}/evidence/${evidenceId}/runs`),
   getCaseEvidenceProcessingRun: (caseId: string, evidenceId: string, runId: string) => request<ProcessingRun>(`/cases/${caseId}/evidence/${evidenceId}/runs/${runId}`),

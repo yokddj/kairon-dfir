@@ -161,6 +161,6 @@ describe("CaseDetail Processing Queue", () => {
     expect(await screen.findByText("WS-01")).toBeInTheDocument();
     expect(screen.getByText("WS-02")).toBeInTheDocument();
     expect(screen.getByText("WS-03")).toBeInTheDocument();
-    expect(getCaseProcessingMock).toHaveBeenCalledWith("case-1");
+    expect(getCaseProcessingMock).toHaveBeenCalledWith("case-1", { host_id: undefined, host: undefined });
   });
 });

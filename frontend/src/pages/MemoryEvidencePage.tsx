@@ -5,6 +5,7 @@ import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { MemoryWorkspace } from "../components/MemoryWorkspace";
 import InvestigationContext from "../components/InvestigationContext";
+import { useHostContext } from "../hooks/useHostContext";
 import { MemoryEvidenceHeader } from "../components/memory/MemoryEvidenceHeader";
 import { MemoryEvidenceSelector } from "../components/memory/MemoryEvidenceSelector";
 import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysisCatalogueModal";
@@ -38,6 +39,7 @@ export default function MemoryEvidencePage() {
   const [searchParams, setSearchParams] = useSearchParams();
   const navigate = useNavigate();
   const { setActiveCaseId } = useActiveCase();
+  const { activeHost, activeHostId, hasHostFilter, clearHostFilter, withHostScope } = useHostContext();
   const [catalogueOpen, setCatalogueOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [confirmationOpen, setConfirmationOpen] = useState(false);
@@ -56,6 +58,8 @@ export default function MemoryEvidencePage() {
     const params = new URLSearchParams();
     params.set("source_category", "Memory");
     params.set("evidence_id", evidenceId);
+    if (activeHostId) params.set("host_id", activeHostId);
+    if (activeHost) params.set("host", activeHost);
     const runId = searchParams.get("run_id");
     const processEntityId = searchParams.get("process_entity_id");
     const pid = searchParams.get("pid");
@@ -65,7 +69,7 @@ export default function MemoryEvidencePage() {
     if (legacyTab === "search") navigate(`/cases/${caseId}/search?${params.toString()}`, { replace: true });
     if (legacyTab === "timeline") navigate(`/cases/${caseId}/timeline?${params.toString()}`, { replace: true });
     if (legacyTab === "history") navigate(`/cases/${caseId}/command-history?${params.toString()}`, { replace: true });
-  }, [caseId, evidenceId, memoryTab, navigate, searchParams, setSearchParams]);
+  }, [activeHost, activeHostId, caseId, evidenceId, memoryTab, navigate, searchParams, setSearchParams]);
 
   const tab = useMemo<MemoryTab>(() => {
     if (isMemoryTab(memoryTab)) return memoryTab;
@@ -87,8 +91,8 @@ export default function MemoryEvidencePage() {
   }, [caseId, searchParams, tab]);
 
   const overviewQuery = useQuery({
-    queryKey: ["memory-overview", caseId],
-    queryFn: () => api.getMemoryOverview(caseId),
+    queryKey: ["memory-overview", caseId, activeHostId, activeHost],
+    queryFn: () => api.getMemoryOverview(caseId, { host_id: activeHostId || undefined, host: activeHost || undefined }),
     enabled: Boolean(caseId),
     refetchOnWindowFocus: false,
   });
@@ -111,8 +115,8 @@ export default function MemoryEvidencePage() {
   );
 
   const landingQuery = useQuery({
-    queryKey: memoryQueryKeys.landing(caseId),
-    queryFn: () => api.getMemoryEvidenceLanding(caseId),
+    queryKey: [...memoryQueryKeys.landing(caseId), activeHostId, activeHost],
+    queryFn: () => api.getMemoryEvidenceLanding(caseId, { host_id: activeHostId || undefined, host: activeHost || undefined }),
     enabled: Boolean(caseId),
     refetchOnWindowFocus: false,
     refetchInterval: hasActiveRuns ? 3000 : false,
@@ -308,8 +312,12 @@ export default function MemoryEvidencePage() {
 
   if (!evidence) {
     return (
-      <div className="rounded-[28px] border border-rose-400/30 bg-rose-500/10 p-8 text-sm text-rose-100 shadow-panel">
-        Memory evidence was not found for this case.
+      <div className="space-y-4 rounded-[28px] border border-rose-400/30 bg-rose-500/10 p-8 text-sm text-rose-100 shadow-panel">
+        <p>{hasHostFilter ? `This memory evidence is not associated with active host ${activeHost}.` : "Memory evidence was not found for this case."}</p>
+        <div className="flex flex-wrap gap-2">
+          <Link to={withHostScope(`/cases/${caseId}/memory/landing`)} className="rounded-xl border border-rose-200/40 bg-rose-950/30 px-3 py-2 text-xs text-rose-100">Open filtered memory selector</Link>
+          {hasHostFilter ? <button type="button" onClick={clearHostFilter} className="rounded-xl border border-rose-200/40 bg-rose-950/30 px-3 py-2 text-xs text-rose-100">Clear host filter</button> : null}
+        </div>
       </div>
     );
   }
@@ -318,7 +326,8 @@ export default function MemoryEvidencePage() {
     <div className="space-y-6" data-testid="memory-evidence-workspace">
       <InvestigationContext
         caseId={caseId}
-        host={evidence.detected_host}
+        host={activeHost || evidence.detected_host}
+        hostId={activeHostId || evidence.host_id}
         evidenceId={evidenceId}
         evidenceName={evidence.filename}
         current="Memory"
