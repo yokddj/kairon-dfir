@@ -16,6 +16,15 @@ vi.mock("../api/client", () => ({
   },
 }));
 
+vi.mock("../context/ActiveCaseContext", () => ({
+  useActiveCase: () => ({
+    selectedHost: "HOSTA",
+    selectedEvidenceId: "ev-1",
+    setSelectedHost: vi.fn(),
+    setSelectedEvidenceId: vi.fn(),
+  }),
+}));
+
 function LocationProbe() {
   const location = useLocation();
   return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;

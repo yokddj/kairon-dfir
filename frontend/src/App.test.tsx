@@ -27,6 +27,25 @@ vi.mock("./context/ActiveCaseContext", () => ({
   useActiveCase: () => activeCaseState,
 }));
 
+vi.mock("./context/AuthContext", () => ({
+  AuthProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  useAuth: () => ({
+    user: {
+      user_id: "test-user",
+      username: "analyst",
+      display_name: "Analyst",
+      email: null,
+      is_admin: true,
+      is_active: true,
+      created_at: "2026-01-01T00:00:00Z",
+      last_login_at: null,
+    },
+    loading: false,
+    login: vi.fn(),
+    logout: vi.fn(),
+  }),
+}));
+
 vi.mock("./context/NotificationsContext", () => ({
   NotificationsProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));

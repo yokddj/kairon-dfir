@@ -186,7 +186,7 @@ describe("symbol acquisition terminal state (frontend)", () => {
       }),
     );
     expect(screen.queryByTestId("memory-preparation-acquire-button")).toBeNull();
-    expect(screen.getByTestId("memory-preparation-title").textContent).toMatch(/exact windows symbols required/i);
+    expect(screen.getByTestId("memory-preparation-title").textContent).toMatch(/symbols will resolve during analysis/i);
   });
 
   it("9) after the canonical task ends, the acquire button remains absent (no stale mutation state)", () => {

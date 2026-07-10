@@ -1132,7 +1132,9 @@ export default function ProcessTreePanel({
       tone: "border-emerald-400/30 bg-emerald-500/10 text-emerald-100",
     };
   }, [focusKind, isExactStoryContext, mode]);
-  const storyTarget = executionStory?.target ?? selectedNode ?? null;
+  const storyTarget = executionStory?.quality?.response_mode === "lightweight" && !executionStory?.target
+    ? null
+    : executionStory?.target ?? selectedNode ?? null;
   const storySubtitle = storyTarget
     ? `Investigating ${storyTarget.name || storyTarget.path || "process"}${storyTarget.pid !== null && storyTarget.pid !== undefined ? ` PID ${storyTarget.pid}` : ""}${storyTarget.host ? ` on ${storyTarget.host}` : selectedHost ? ` on ${selectedHost}` : ""}`
     : "Select a process to build a story";
