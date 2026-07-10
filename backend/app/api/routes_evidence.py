@@ -64,6 +64,7 @@ from app.services.evidence_runs import (
 )
 from app.services.auth_dependencies import get_optional_user
 from app.services.evidence_integrity import build_evidence_integrity_payload, build_evidence_manifest, record_evidence_event, serialize_evidence_event, verify_evidence_integrity
+from app.services.processing_queue import get_evidence_processing, get_evidence_processing_run, list_case_processing
 from app.services.ingest_benchmarks import (
     benchmark_mode_to_reprocess_mode,
     compare_ingest_benchmarks,
@@ -2637,6 +2638,37 @@ def get_case_evidence_manifest(case_id: str, evidence_id: str, db: Session = Dep
 def get_case_evidence_events(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> list[dict]:
     item = _get_case_evidence(db, case_id, evidence_id)
     return [serialize_evidence_event(event) for event in _custody_events_for_evidence(db, item.id)]
+
+
+@router.get("/api/cases/{case_id}/processing")
+def get_case_processing(case_id: str, db: Session = Depends(get_db)) -> dict:
+    if not db.get(Case, case_id):
+        raise HTTPException(status_code=404, detail="Case not found")
+    return list_case_processing(db, case_id)
+
+
+@router.get("/api/cases/{case_id}/evidence/{evidence_id}/processing")
+def get_case_evidence_processing(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    result = get_evidence_processing(db, case_id, evidence_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    return result
+
+
+@router.get("/api/cases/{case_id}/evidence/{evidence_id}/runs")
+def get_case_evidence_processing_runs(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> list[dict]:
+    result = get_evidence_processing(db, case_id, evidence_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    return result["runs"]
+
+
+@router.get("/api/cases/{case_id}/evidence/{evidence_id}/runs/{run_id}")
+def get_case_evidence_processing_run(case_id: str, evidence_id: str, run_id: str, db: Session = Depends(get_db)) -> dict:
+    run = get_evidence_processing_run(db, case_id, evidence_id, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
 
 
 @router.get("/api/evidences/{evidence_id}/problematic-artifacts")

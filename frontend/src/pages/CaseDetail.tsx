@@ -12,10 +12,11 @@ import ProcessTreePanel from "../components/ProcessTreePanel";
 import Timeline from "../components/Timeline";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
-const tabs = ["overview", "evidences", "artifacts", "artifact_explorer", "search", "process_tree", "investigation_timeline", "detections", "findings", "activity"] as const;
+const tabs = ["overview", "evidences", "processing", "artifacts", "artifact_explorer", "search", "process_tree", "investigation_timeline", "detections", "findings", "activity"] as const;
 const tabLabels: Record<(typeof tabs)[number], string> = {
   overview: "Overview",
   evidences: "Evidence & Ingest",
+  processing: "Processing",
   artifacts: "Artifact Inventory",
   artifact_explorer: "Artifact Search",
   search: "Search",
@@ -39,6 +40,7 @@ export default function CaseDetail() {
   const [searchEventId, setSearchEventId] = useState(searchParams.get("event_id") ?? "");
   const [searchEvidenceId, setSearchEvidenceId] = useState(searchParams.get("evidence_id") ?? "");
   const [selectedEventIds, setSelectedEventIds] = useState<string[]>([]);
+  const [selectedProcessingId, setSelectedProcessingId] = useState<string>("");
   const [findingDialogOpen, setFindingDialogOpen] = useState(false);
   const [debugExportOpen, setDebugExportOpen] = useState(false);
   const caseQuery = useQuery({ queryKey: ["case", caseId], queryFn: () => api.getCase(caseId), enabled: Boolean(caseId), staleTime: 15_000, refetchOnWindowFocus: false });
@@ -48,6 +50,7 @@ export default function CaseDetail() {
   const detectionsQuery = useQuery({ queryKey: ["detections", caseId], queryFn: () => api.listDetections(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const summaryQuery = useQuery({ queryKey: ["investigation-summary", caseId], queryFn: () => api.getInvestigationSummary(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const activityQuery = useQuery({ queryKey: ["case-activity", caseId], queryFn: () => api.listCaseActivity(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
+  const processingQuery = useQuery({ queryKey: ["case-processing", caseId], queryFn: () => api.getCaseProcessing(caseId), enabled: Boolean(caseId), staleTime: 5_000, refetchInterval: tab === "processing" ? 5000 : false, refetchOnWindowFocus: false });
   const siemLinksQuery = useQuery({ queryKey: ["siem-external-links", "case", caseId], queryFn: () => api.siemExternalLinks({ case_id: caseId }), enabled: Boolean(caseId), staleTime: 30_000, refetchOnWindowFocus: false });
   const searchQuery = useQuery({
     queryKey: ["case-search", caseId, query, searchEventId, searchEvidenceId],
@@ -127,9 +130,11 @@ export default function CaseDetail() {
       ["Detections", summaryQuery.data?.counts.detections ?? caseQuery.data?.detections_count ?? 0],
       ["Findings", summaryQuery.data?.counts.findings ?? caseQuery.data?.findings_count ?? 0],
       ["Status", caseQuery.data?.status ?? "-"],
+      ["Evidence processing", processingSummaryLabel(processingQuery.data?.summary)],
     ],
-    [artifactsQuery.data?.length, caseQuery.data?.detections_count, caseQuery.data?.findings_count, caseQuery.data?.status, evidencesQuery.data?.length, summaryQuery.data?.counts.detections, summaryQuery.data?.counts.findings],
+    [artifactsQuery.data?.length, caseQuery.data?.detections_count, caseQuery.data?.findings_count, caseQuery.data?.status, evidencesQuery.data?.length, processingQuery.data?.summary, summaryQuery.data?.counts.detections, summaryQuery.data?.counts.findings],
   );
+  const selectedProcessing = processingQuery.data?.items.find((item) => item.evidence_id === selectedProcessingId) ?? processingQuery.data?.items[0] ?? null;
 
   return (
     <div className="space-y-8">
@@ -141,7 +146,7 @@ export default function CaseDetail() {
             <h2 className="mt-2 text-3xl font-semibold">{caseQuery.data?.name}</h2>
             <p className="mt-3 max-w-3xl text-sm text-muted">{caseQuery.data?.description}</p>
           </div>
-          <div className="grid gap-3 md:grid-cols-5">
+          <div className="grid gap-3 md:grid-cols-6">
             {overviewStats.map(([label, value]) => (
               <div key={String(label)} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
                 <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">{label}</p>
@@ -189,6 +194,7 @@ export default function CaseDetail() {
             onUploaded={() => {
               void queryClient.invalidateQueries({ queryKey: ["evidences", caseId] });
               void queryClient.invalidateQueries({ queryKey: ["artifacts", caseId] });
+              void queryClient.invalidateQueries({ queryKey: ["case-processing", caseId] });
             }}
           />
           <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
@@ -366,6 +372,7 @@ export default function CaseDetail() {
             caseId={caseId}
             onUploaded={() => {
               void queryClient.invalidateQueries({ queryKey: ["evidences", caseId] });
+              void queryClient.invalidateQueries({ queryKey: ["case-processing", caseId] });
             }}
           />
           {!evidencesQuery.data?.length ? (
@@ -385,6 +392,137 @@ export default function CaseDetail() {
               </div>
             </Link>
           ))}
+        </section>
+      ) : null}
+
+      {tab === "processing" ? (
+        <section className="space-y-5" data-testid="processing-queue-view">
+          <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div>
+                <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Evidence Processing Queue</p>
+                <h3 className="mt-2 text-2xl font-semibold">Processing status by evidence</h3>
+                <p className="mt-2 max-w-3xl text-sm text-muted">Track queued, running, completed and failed evidence processing without hiding parser errors. Partial results remain navigable when individual parsers fail.</p>
+              </div>
+              <div className="grid min-w-[320px] grid-cols-4 gap-2 text-center text-sm">
+                {processingStatusCards(processingQuery.data?.summary).map((item) => (
+                  <div key={item.label} className="rounded-2xl border border-line bg-abyss/70 px-3 py-2">
+                    <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">{item.label}</p>
+                    <p className="mt-1 text-lg font-semibold text-ink">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+          {processingQuery.error instanceof Error ? <div className="rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger">{processingQuery.error.message}</div> : null}
+          {!processingQuery.isLoading && !(processingQuery.data?.items ?? []).length ? (
+            <div className="rounded-3xl border border-line bg-panel/40 p-5 text-sm text-muted">No processing runs yet. Upload evidence to see pending, queued, running and completed parser activity.</div>
+          ) : null}
+          {(processingQuery.data?.items ?? []).length ? (
+            <div className="grid gap-5 xl:grid-cols-[1.35fr_0.9fr]">
+              <div className="overflow-hidden rounded-3xl border border-line bg-panel/70 shadow-panel">
+                <div className="overflow-x-auto">
+                  <table className="min-w-full text-left text-sm">
+                    <thead className="border-b border-line bg-abyss/70 font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+                      <tr>
+                        <th className="px-4 py-3">Status</th>
+                        <th className="px-4 py-3">Evidence filename</th>
+                        <th className="px-4 py-3">Host</th>
+                        <th className="px-4 py-3">Type</th>
+                        <th className="px-4 py-3">Last processed</th>
+                        <th className="px-4 py-3">Duration</th>
+                        <th className="px-4 py-3">Parsers OK</th>
+                        <th className="px-4 py-3">Failed</th>
+                        <th className="px-4 py-3">Artifacts</th>
+                        <th className="px-4 py-3">Last error</th>
+                        <th className="px-4 py-3">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-line/70">
+                      {(processingQuery.data?.items ?? []).map((item) => (
+                        <tr key={item.evidence_id} className={selectedProcessing?.evidence_id === item.evidence_id ? "bg-accent/10" : "bg-panel/40"}>
+                          <td className="px-4 py-3"><span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.12em] ${processingStatusClass(item.processing_status)}`}>{item.processing_status.replaceAll("_", " ")}</span></td>
+                          <td className="max-w-[240px] truncate px-4 py-3 font-semibold text-ink" title={item.filename}>{item.filename}</td>
+                          <td className="max-w-[160px] truncate px-4 py-3 text-muted" title={item.host || "-"}>{item.host || "-"}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-muted">{item.evidence_type}</td>
+                          <td className="px-4 py-3 text-muted">{formatDateTime(item.last_run_finished_at || item.last_run_started_at)}</td>
+                          <td className="px-4 py-3 text-muted">{formatDuration(item.duration)}</td>
+                          <td className="px-4 py-3 text-mint">{item.successful_parser_count}</td>
+                          <td className="px-4 py-3 text-danger">{item.failed_parser_count}</td>
+                          <td className="px-4 py-3 text-muted">{item.artifact_count}</td>
+                          <td className="max-w-[260px] truncate px-4 py-3 text-muted" title={item.last_error || ""}>{item.last_error || "-"}</td>
+                          <td className="px-4 py-3">
+                            <div className="flex flex-wrap gap-2">
+                              <button type="button" onClick={() => setSelectedProcessingId(item.evidence_id)} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted">View details</button>
+                              <Link to={`/evidences/${item.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted">Open evidence</Link>
+                              <Link to={`/cases/${caseId}/artifacts?evidence_id=${item.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted">Open artifacts</Link>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              {selectedProcessing ? (
+                <aside className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel" data-testid="processing-detail-panel">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Processing Detail</p>
+                      <h3 className="mt-2 text-xl font-semibold">{selectedProcessing.filename}</h3>
+                      <p className="mt-1 text-sm text-muted">{selectedProcessing.host || "Host unknown"} · {selectedProcessing.evidence_type}</p>
+                    </div>
+                    <span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.12em] ${processingStatusClass(selectedProcessing.processing_status)}`}>{selectedProcessing.processing_status.replaceAll("_", " ")}</span>
+                  </div>
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border border-line bg-abyss/60 p-3"><p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">Uploaded</p><p className="mt-1 text-sm text-ink">{formatDateTime(selectedProcessing.uploaded_at)}</p></div>
+                    <div className="rounded-2xl border border-line bg-abyss/60 p-3"><p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">Artifacts generated</p><p className="mt-1 text-sm text-ink">{selectedProcessing.artifact_count}</p></div>
+                    <div className="rounded-2xl border border-line bg-abyss/60 p-3"><p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">Parsers OK</p><p className="mt-1 text-sm text-mint">{selectedProcessing.successful_parser_count}</p></div>
+                    <div className="rounded-2xl border border-line bg-abyss/60 p-3"><p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">Parsers failed</p><p className="mt-1 text-sm text-danger">{selectedProcessing.failed_parser_count}</p></div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    <Link to={`/evidences/${selectedProcessing.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Evidence detail</Link>
+                    <Link to={`/cases/${caseId}/search?evidence_id=${selectedProcessing.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Search results</Link>
+                    <Link to={`/cases/${caseId}/artifacts?evidence_id=${selectedProcessing.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Artifact Explorer</Link>
+                    {selectedProcessing.links.memory ? <Link to={selectedProcessing.links.memory} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Memory views</Link> : null}
+                  </div>
+                  <div className="mt-5">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Timeline of processing runs</p>
+                    {selectedProcessing.runs.length ? (
+                      <ol className="mt-3 space-y-2">
+                        {selectedProcessing.runs.map((run) => (
+                          <li key={run.run_id} className="rounded-2xl border border-line bg-abyss/60 p-3">
+                            <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-mono text-[11px] uppercase tracking-[0.14em] text-accent">{run.triggered_by} · {run.status.replaceAll("_", " ")}</span><span className="text-xs text-muted">{formatDateTime(run.started_at)} - {formatDateTime(run.finished_at)}</span></div>
+                            <p className="mt-1 text-sm text-muted">{run.message || run.error_summary || "Run recorded."}</p>
+                          </li>
+                        ))}
+                      </ol>
+                    ) : <p className="mt-3 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">No processing runs yet. This evidence has been uploaded but processing has not started.</p>}
+                  </div>
+                  <div className="mt-5">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Parser-level status</p>
+                    {selectedProcessing.parser_runs.length ? (
+                      <div className="mt-3 overflow-x-auto rounded-2xl border border-line">
+                        <table className="min-w-full text-left text-xs">
+                          <thead className="bg-abyss/70 font-mono uppercase tracking-[0.12em] text-muted"><tr><th className="px-3 py-2">Parser</th><th className="px-3 py-2">Family</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Artifacts</th><th className="px-3 py-2">Error</th></tr></thead>
+                          <tbody className="divide-y divide-line/70">
+                            {selectedProcessing.parser_runs.map((parser) => (
+                              <tr key={`${parser.family}-${parser.parser}`}><td className="px-3 py-2 text-ink">{parser.parser}</td><td className="px-3 py-2 text-muted">{parser.family}</td><td className="px-3 py-2 text-muted">{parser.status}</td><td className="px-3 py-2 text-muted">{parser.artifacts}</td><td className="px-3 py-2 text-danger">{parser.error || "-"}</td></tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    ) : <p className="mt-3 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">No parser-level records yet. No artifacts were generated for this parser; this can be normal depending on evidence type and parser support.</p>}
+                  </div>
+                  <div className="mt-5">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Errors and warnings</p>
+                    {selectedProcessing.errors.length ? <div className="mt-3 space-y-2">{selectedProcessing.errors.map((error, index) => <div key={`${error.parser}-${index}`} className="rounded-2xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger"><span className="font-mono text-xs uppercase tracking-[0.12em]">{error.parser}</span><p className="mt-1">{error.summary || "Processing failed."}</p></div>)}</div> : <p className="mt-3 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">No parser errors recorded for this evidence.</p>}
+                    {selectedProcessing.processing_status === "completed_with_warnings" ? <p className="mt-3 text-sm text-amber">Processing completed with warnings. Some parsers failed, but partial results are available.</p> : null}
+                  </div>
+                </aside>
+              ) : null}
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -567,4 +705,45 @@ export default function CaseDetail() {
       />
     </div>
   );
+}
+
+function processingSummaryLabel(summary: Record<string, number> | undefined) {
+  if (!summary) return "-";
+  const completed = Number(summary.completed ?? 0) + Number(summary.completed_with_warnings ?? 0);
+  const running = Number(summary.running ?? 0) + Number(summary.queued ?? 0);
+  const failed = Number(summary.failed ?? 0);
+  return `${completed} completed · ${running} running · ${failed} failed`;
+}
+
+function processingStatusCards(summary: Record<string, number> | undefined) {
+  return [
+    { label: "Completed", value: Number(summary?.completed ?? 0) + Number(summary?.completed_with_warnings ?? 0) },
+    { label: "Running", value: Number(summary?.running ?? 0) },
+    { label: "Queued", value: Number(summary?.queued ?? 0) + Number(summary?.pending ?? 0) },
+    { label: "Failed", value: Number(summary?.failed ?? 0) },
+  ];
+}
+
+function processingStatusClass(status: string) {
+  if (status === "completed") return "border-mint/30 bg-mint/10 text-mint";
+  if (status === "completed_with_warnings") return "border-amber/30 bg-amber/10 text-amber";
+  if (status === "failed") return "border-danger/30 bg-danger/10 text-danger";
+  if (status === "running" || status === "queued") return "border-accent/30 bg-accent/10 text-accent";
+  return "border-line bg-abyss/60 text-muted";
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString();
+}
+
+function formatDuration(value: number | null | undefined) {
+  if (value === null || value === undefined) return "-";
+  if (value < 1) return `${Math.round(value * 1000)} ms`;
+  if (value < 60) return `${value.toFixed(1)} s`;
+  const minutes = Math.floor(value / 60);
+  const seconds = Math.round(value % 60);
+  return `${minutes}m ${seconds}s`;
 }
