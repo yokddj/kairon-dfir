@@ -41,7 +41,7 @@ def build_evidence_root(case_id: str, evidence_id: str) -> Path:
     return root
 
 
-def save_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int]:
+def save_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int, str]:
     evidence_id = str(uuid4())
     root = build_evidence_root(case_id, evidence_id)
     original_dir = root / "original"
@@ -49,11 +49,13 @@ def save_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int]:
     filename = Path(upload.filename or "upload.bin").name
     stored_path = original_dir / filename
     size = 0
+    digest = hashlib.sha256()
     with stored_path.open("wb") as buffer:
         while chunk := upload.file.read(1024 * 1024):
             size += len(chunk)
+            digest.update(chunk)
             buffer.write(chunk)
-    return evidence_id, stored_path, size
+    return evidence_id, stored_path, size, digest.hexdigest()
 
 
 def safe_display_filename(filename: str | None) -> str:

@@ -266,6 +266,16 @@ export default function EvidenceDetail() {
     enabled: Boolean(evidenceId),
     refetchInterval: () => (evidenceQuery.data?.ingest_status === "pending" || evidenceQuery.data?.ingest_status === "processing" ? 3000 : false),
   });
+  const integrityQuery = useQuery({
+    queryKey: ["evidence-integrity", evidenceQuery.data?.case_id, evidenceId],
+    queryFn: () => api.getEvidenceIntegrity(evidenceQuery.data!.case_id, evidenceId),
+    enabled: Boolean(evidenceId && evidenceQuery.data?.case_id),
+  });
+  const custodyEventsQuery = useQuery({
+    queryKey: ["evidence-custody-events", evidenceQuery.data?.case_id, evidenceId],
+    queryFn: () => api.getEvidenceCustodyEvents(evidenceQuery.data!.case_id, evidenceId),
+    enabled: Boolean(evidenceId && evidenceQuery.data?.case_id),
+  });
   const onDemandModulesQuery = useQuery({
     queryKey: ["evidence-on-demand-modules", evidenceId],
     queryFn: () => api.getEvidenceOnDemandModules(evidenceId),
@@ -325,6 +335,38 @@ export default function EvidenceDetail() {
     },
     onError: (error) => {
       notify({ title: "Cancel indexing failed", description: error instanceof Error ? error.message : "The indexing state could not be cancelled.", tone: "error" });
+    },
+  });
+  const verifyIntegrityMutation = useMutation({
+    mutationFn: () => api.verifyEvidenceIntegrity(evidenceQuery.data!.case_id, evidenceId),
+    onSuccess: async (result) => {
+      const status = result.integrity_status === "verified" ? "SHA-256 verified." : result.integrity_status === "mismatch" ? "Hash mismatch detected." : result.integrity_status === "missing_file" ? "Stored file missing." : "Integrity check completed.";
+      notify({ title: "Integrity checked", description: status, tone: result.integrity_status === "verified" ? "success" : "warning" });
+      await queryClient.invalidateQueries({ queryKey: ["evidence", evidenceId] });
+      await queryClient.invalidateQueries({ queryKey: ["evidence-integrity", evidenceQuery.data?.case_id, evidenceId] });
+      await queryClient.invalidateQueries({ queryKey: ["evidence-custody-events", evidenceQuery.data?.case_id, evidenceId] });
+      await queryClient.invalidateQueries({ queryKey: ["evidence-manifest", evidenceId] });
+    },
+    onError: (error) => {
+      notify({ title: "Integrity check failed", description: error instanceof Error ? error.message : "The integrity check could not be completed.", tone: "error" });
+    },
+  });
+  const exportManifestMutation = useMutation({
+    mutationFn: () => api.exportEvidenceManifest(evidenceQuery.data!.case_id, evidenceId),
+    onSuccess: async (manifest) => {
+      const blob = new Blob([JSON.stringify(manifest, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `kairon-evidence-manifest-${evidenceId}.json`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      notify({ title: "Manifest exported", description: "Evidence integrity manifest downloaded as JSON.", tone: "success" });
+      await queryClient.invalidateQueries({ queryKey: ["evidence-custody-events", evidenceQuery.data?.case_id, evidenceId] });
+      await queryClient.invalidateQueries({ queryKey: ["evidence-manifest", evidenceId] });
+    },
+    onError: (error) => {
+      notify({ title: "Manifest export failed", description: error instanceof Error ? error.message : "The manifest could not be exported.", tone: "error" });
     },
   });
   const indexMftSummaryMutation = useMutation({
@@ -906,6 +948,16 @@ export default function EvidenceDetail() {
   const evtxSelectedFiles = Array.isArray(data?.metadata_json?.evtx_selected_files) ? (data.metadata_json.evtx_selected_files as unknown[]) : [];
   const evtxCoverageIsFull = evtxCoverageStatus === "full" && evtxDeferredCount === 0 && evtxPartialCount === 0;
   const indexedDocumentsTotal = Number(searchSummaryQuery.data?.total_indexed_docs ?? data?.metadata_json?.events_indexed ?? manifest?.stats?.indexed_events ?? 0);
+  const integrity = integrityQuery.data;
+  const custodyEvents = custodyEventsQuery.data ?? manifest?.events ?? [];
+  const integrityStatus = String(integrity?.integrity_status ?? data?.integrity_status ?? manifest?.integrity_status ?? "unknown");
+  const integrityCheckedAt = integrity?.integrity_checked_at ?? data?.integrity_checked_at ?? manifest?.integrity_checked_at ?? null;
+  const evidenceSha256 = integrity?.sha256 ?? data?.sha256 ?? manifest?.sha256 ?? null;
+  const evidenceSizeBytes = integrity?.size_bytes ?? data?.size_bytes ?? manifest?.size_bytes ?? null;
+  const uploadedAt = data?.uploaded_at ?? manifest?.uploaded_at ?? data?.created_at ?? null;
+  const uploadedBy = manifest?.uploaded_by ?? data?.uploaded_by_user_id ?? null;
+  const integrityStatusLabel = integrityStatus === "unknown" ? "Integrity not checked yet." : integrityStatus === "verified" ? "SHA-256 verified." : integrityStatus === "mismatch" ? "Hash mismatch detected." : integrityStatus === "missing_file" ? "Stored file missing." : "Integrity check error.";
+  const integrityTone = integrityStatus === "verified" ? "border-mint/30 bg-mint/10 text-mint" : integrityStatus === "mismatch" || integrityStatus === "missing_file" || integrityStatus === "error" ? "border-danger/30 bg-danger/10 text-danger" : "border-amber/30 bg-amber/10 text-amber";
   const mftDiagnostic = mftDiagnosticQuery.data ?? searchSummaryQuery.data?.mft_diagnostic ?? null;
   const mftStatus = mftDiagnostic?.mft_status;
   const mftVisibleInParseMode = Boolean(mftDiagnostic?.mft_present_in_evidence || mftStatus?.available || mftStatus?.status === "tooling_missing" || mftStatus?.status === "indexed" || mftStatus?.status === "indexing" || mftStatus?.status === "failed");
@@ -1633,6 +1685,31 @@ function formatReportStatus(status: string | null | undefined) {
             <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Skipped empty</p><p className="mt-1 text-lg font-semibold text-muted">{skippedEmptyCount}</p></div>
             <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Completed</p><p className="mt-1 text-sm font-semibold text-ink">{formatDateTime(completedAt)}</p></div>
           </div>
+          <div className="mt-5 rounded-3xl border border-line bg-abyss/60 p-4" data-testid="evidence-integrity-panel">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-3">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Evidence Integrity</p>
+                  <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${integrityTone}`}>{integrityStatus.replaceAll("_", " ")}</span>
+                </div>
+                <p className="mt-2 text-sm text-muted">{integrityStatusLabel}</p>
+                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">SHA-256</p><p className="mt-1 break-all font-mono text-xs text-ink">{evidenceSha256 || "No hash recorded yet"}</p></div>
+                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Size</p><p className="mt-1 text-sm font-semibold text-ink">{formatBytes(evidenceSizeBytes)}</p></div>
+                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Uploaded by</p><p className="mt-1 truncate text-sm font-semibold text-ink">{uploadedBy || "-"}</p></div>
+                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Last integrity check</p><p className="mt-1 text-sm font-semibold text-ink">{formatDateTime(integrityCheckedAt)}</p></div>
+                </div>
+              </div>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <button type="button" onClick={() => verifyIntegrityMutation.mutate()} disabled={!data?.case_id || verifyIntegrityMutation.isPending} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">{verifyIntegrityMutation.isPending ? "Verifying..." : "Verify integrity"}</button>
+                <button type="button" onClick={() => exportManifestMutation.mutate()} disabled={!data?.case_id || exportManifestMutation.isPending} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted disabled:opacity-60">{exportManifestMutation.isPending ? "Exporting..." : "Export manifest"}</button>
+              </div>
+            </div>
+            <div className="mt-4 border-t border-line pt-4">
+              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Chain of Custody / Activity</p>
+              {custodyEvents.length ? <ol className="mt-3 space-y-2">{custodyEvents.slice(-8).reverse().map((event) => <li key={event.id} className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-mono text-[11px] uppercase tracking-[0.14em] text-accent">{event.event_type.replaceAll("_", " ")}</span><span className="text-xs text-muted">{formatDateTime(event.timestamp)}</span></div><p className="mt-1 text-sm text-ink">{event.summary}</p>{event.actor_user_id ? <p className="mt-1 text-xs text-muted">Actor: {event.actor_user_id}</p> : null}</li>)}</ol> : <p className="mt-3 rounded-2xl border border-line bg-panel/60 px-3 py-2 text-sm text-muted">No chain-of-custody events recorded yet.</p>}
+            </div>
+          </div>
         </section>
 
         <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
@@ -2048,6 +2125,79 @@ function formatReportStatus(status: string | null | undefined) {
           <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
             <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">EVTX</p>
             <p className={`mt-1 text-sm font-semibold ${evtxCoverageIsFull ? "text-mint" : evtxDeferredCount || evtxPartialCount ? "text-amber" : "text-ink"}`}>{evtxCoverageLabel}</p>
+          </div>
+        </div>
+
+        <div className="mt-5 rounded-3xl border border-line bg-abyss/60 p-4" data-testid="evidence-integrity-panel">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Evidence Integrity</p>
+                <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${integrityTone}`}>{integrityStatus.replaceAll("_", " ")}</span>
+              </div>
+              <p className="mt-2 text-sm text-muted">{integrityStatusLabel}</p>
+              <dl className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
+                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">SHA-256</dt>
+                  <dd className="mt-1 break-all font-mono text-xs text-ink">{evidenceSha256 || "No hash recorded yet"}</dd>
+                </div>
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
+                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Size</dt>
+                  <dd className="mt-1 text-sm font-semibold text-ink">{formatBytes(evidenceSizeBytes)}</dd>
+                </div>
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
+                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Uploaded by</dt>
+                  <dd className="mt-1 truncate text-sm font-semibold text-ink" title={uploadedBy || "-"}>{uploadedBy || "-"}</dd>
+                </div>
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
+                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Uploaded at</dt>
+                  <dd className="mt-1 text-sm font-semibold text-ink">{formatDateTime(uploadedAt)}</dd>
+                </div>
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
+                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Original filename</dt>
+                  <dd className="mt-1 truncate text-sm font-semibold text-ink" title={data?.original_filename || "-"}>{data?.original_filename || "-"}</dd>
+                </div>
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
+                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Evidence type</dt>
+                  <dd className="mt-1 text-sm font-semibold text-ink">{data?.evidence_type || manifest?.evidence_type || "unknown"}</dd>
+                </div>
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
+                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Host</dt>
+                  <dd className="mt-1 truncate text-sm font-semibold text-ink" title={manifest?.host?.name || data?.provided_host || data?.detected_host || "-"}>{manifest?.host?.name || data?.provided_host || data?.detected_host || "-"}</dd>
+                </div>
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
+                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Last integrity check</dt>
+                  <dd className="mt-1 text-sm font-semibold text-ink">{formatDateTime(integrityCheckedAt)}</dd>
+                </div>
+              </dl>
+            </div>
+            <div className="flex shrink-0 flex-wrap gap-2">
+              <button type="button" onClick={() => verifyIntegrityMutation.mutate()} disabled={!data?.case_id || verifyIntegrityMutation.isPending} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">
+                {verifyIntegrityMutation.isPending ? "Verifying..." : "Verify integrity"}
+              </button>
+              <button type="button" onClick={() => exportManifestMutation.mutate()} disabled={!data?.case_id || exportManifestMutation.isPending} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted disabled:opacity-60">
+                {exportManifestMutation.isPending ? "Exporting..." : "Export manifest"}
+              </button>
+            </div>
+          </div>
+          <div className="mt-4 border-t border-line pt-4">
+            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Chain of Custody / Activity</p>
+            {custodyEvents.length ? (
+              <ol className="mt-3 space-y-2">
+                {custodyEvents.slice(-8).reverse().map((event) => (
+                  <li key={event.id} className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-accent">{event.event_type.replaceAll("_", " ")}</span>
+                      <span className="text-xs text-muted">{formatDateTime(event.timestamp)}</span>
+                    </div>
+                    <p className="mt-1 text-sm text-ink">{event.summary}</p>
+                    {event.actor_user_id ? <p className="mt-1 text-xs text-muted">Actor: {event.actor_user_id}</p> : null}
+                  </li>
+                ))}
+              </ol>
+            ) : (
+              <p className="mt-3 rounded-2xl border border-line bg-panel/60 px-3 py-2 text-sm text-muted">No chain-of-custody events recorded yet.</p>
+            )}
           </div>
         </div>
 
@@ -3801,7 +3951,7 @@ function formatReportStatus(status: string | null | undefined) {
             <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Original files</p>
             <div className="mt-4 max-h-[420px] overflow-auto rounded-2xl border border-line bg-abyss/80 p-4 font-mono text-xs text-muted">
               {(manifest?.files ?? []).length ? (
-                manifest?.files.map((item) => (
+                (manifest?.files ?? []).map((item) => (
                   <div key={item.path} className="mb-2 rounded-xl border border-line/50 p-3">
                     <p>{item.path}</p>
                     <p className="mt-1 text-[11px] text-muted">{item.size} bytes · {item.extension || "no ext"} · {item.ignored ? `ignored (${item.reason})` : "included"}</p>
