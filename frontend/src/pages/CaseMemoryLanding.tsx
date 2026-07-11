@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useHostContext } from "../hooks/useHostContext";
+import type { CaseContextHostSummary, MemoryEvidenceLandingItem } from "../api/client";
 
 function shortId(id: string): string {
   if (!id) return "";
@@ -58,6 +59,27 @@ function sizeLabel(bytes: number): string {
   return `${bytes} B`;
 }
 
+function normalizeHostName(value: string | null | undefined): string {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized.endsWith(".local") ? normalized.slice(0, -6) : normalized;
+}
+
+function assignedHost(item: MemoryEvidenceLandingItem, hosts: CaseContextHostSummary[]): CaseContextHostSummary | null {
+  if (!item.host_id) return null;
+  return hosts.find((host) => host.id === item.host_id) ?? null;
+}
+
+function assignmentStatus(item: MemoryEvidenceLandingItem, hosts: CaseContextHostSummary[]): { label: string; tone: "ok" | "warn" | "muted" } {
+  const host = assignedHost(item, hosts);
+  if (!item.host_id) return { label: "Unassigned", tone: "muted" };
+  const detected = normalizeHostName(item.detected_host);
+  if (!host || !detected) return { label: "Assigned", tone: "ok" };
+  const names = [host.id, host.canonical_name, host.display_name, ...(host.aliases || []), ...(host.all_names || [])];
+  return names.some((name) => normalizeHostName(name) === detected)
+    ? { label: "Assigned", tone: "ok" }
+    : { label: "Mismatch", tone: "warn" };
+}
+
 export default function CaseMemoryLanding() {
   const { caseId = "" } = useParams();
   const navigate = useNavigate();
@@ -78,6 +100,13 @@ export default function CaseMemoryLanding() {
   const landingQuery = useQuery({
     queryKey: ["memory-landing", caseId, activeHostId, activeHost],
     queryFn: () => api.getMemoryEvidenceLanding(caseId, { host_id: activeHostId || undefined, host: activeHost || undefined }),
+    enabled: Boolean(caseId),
+    refetchOnWindowFocus: false,
+  });
+
+  const caseHostsQuery = useQuery({
+    queryKey: ["case-hosts", caseId],
+    queryFn: () => typeof api.getCaseHosts === "function" ? api.getCaseHosts(caseId) : Promise.resolve({ case_id: caseId, hosts: [], host_candidates: [] }),
     enabled: Boolean(caseId),
     refetchOnWindowFocus: false,
   });
@@ -132,6 +161,7 @@ export default function CaseMemoryLanding() {
   }
 
   const items = landing?.items || [];
+  const caseHosts = caseHostsQuery.data?.hosts ?? [];
 
   return (
     <div className="space-y-6" data-testid="memory-landing">
@@ -162,24 +192,39 @@ export default function CaseMemoryLanding() {
           const completedFamilies = familySummaries.filter((family) => family.state === "completed" || family.state === "ready");
           const unavailableFamilies = familySummaries.filter((family) => family.state === "unavailable");
           const failedFamilies = familySummaries.filter((family) => family.state === "latest_attempt_failed");
+          const host = assignedHost(item, caseHosts);
+          const status = assignmentStatus(item, caseHosts);
           return (
-            <Link
+            <article
               key={item.evidence_id}
-              to={withHostScope(`/cases/${caseId}/memory/${item.evidence_id}/overview`)}
               data-testid="memory-evidence-card"
               data-evidence-id={item.evidence_id}
-              className="block rounded-[28px] border border-line bg-panel/70 p-5 shadow-panel transition hover:border-accent"
+              className="rounded-[28px] border border-line bg-panel/70 p-5 shadow-panel transition hover:border-accent"
             >
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-base font-semibold text-ink">{item.filename}</p>
                   <p className="mt-1 text-xs text-muted">
-                    {item.detected_host || "Host unknown"} · {sizeLabel(item.size_bytes)} · <span className="font-mono">{shortId(item.evidence_id)}</span>
+                    Detected/provided host: <span className="text-ink">{item.detected_host || "Unknown"}</span> · {sizeLabel(item.size_bytes)} · <span className="font-mono">{shortId(item.evidence_id)}</span>
                   </p>
                 </div>
-                <span className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted">
-                  {item.run_count} {item.run_count === 1 ? "run" : "runs"}
-                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  <span className={`rounded-md border px-2 py-0.5 text-[10px] ${toneClasses(status.tone)}`}>{status.label}</span>
+                  <span className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted">
+                    {item.run_count} {item.run_count === 1 ? "run" : "runs"}
+                  </span>
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-2 text-xs sm:grid-cols-2" data-testid="memory-evidence-host-summary">
+                <div className="rounded-xl border border-line bg-abyss/60 px-3 py-2 text-muted">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.16em]">Detected/provided host</span>
+                  <p className="mt-1 font-semibold text-ink">{item.detected_host || "Unknown"}</p>
+                </div>
+                <div className="rounded-xl border border-line bg-abyss/60 px-3 py-2 text-muted">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.16em]">Assigned host</span>
+                  <p className="mt-1 font-semibold text-ink">{host?.display_name || "Unassigned"}</p>
+                </div>
               </div>
 
               <div className="mt-4 grid grid-cols-3 gap-2 text-[10px]">
@@ -212,7 +257,18 @@ export default function CaseMemoryLanding() {
                   );
                 })}
               </div>
-            </Link>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Link to={withHostScope(`/cases/${caseId}/memory/${item.evidence_id}/overview`)} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">
+                  Open memory workspace
+                </Link>
+                <Link to={`/evidences/${item.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">
+                  Open evidence details
+                </Link>
+                <Link to={withHostScope(`/cases/${caseId}/memory/${item.evidence_id}/overview`)} className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
+                  {item.host_id ? "Change host" : "Assign host"}
+                </Link>
+              </div>
+            </article>
           );
         })}
       </div>
