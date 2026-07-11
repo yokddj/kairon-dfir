@@ -414,6 +414,8 @@ def _ensure_compatible_schema() -> None:
                     connection.execute(text(f'ALTER TABLE case_host_aliases ADD COLUMN "{column_name}" {column_type}'))
         if "findings" in existing_tables:
             finding_columns = {column["name"] for column in inspector.get_columns("findings")}
+            connection.execute(text("ALTER TABLE findings ALTER COLUMN status TYPE VARCHAR(32) USING status::text"))
+            connection.execute(text("ALTER TABLE findings ALTER COLUMN severity TYPE VARCHAR(32) USING severity::text"))
             additions = {
                 "event_ids": "JSONB NOT NULL DEFAULT '[]'::jsonb",
                 "detection_ids": "JSONB NOT NULL DEFAULT '[]'::jsonb",
@@ -448,10 +450,19 @@ def _ensure_compatible_schema() -> None:
                 "primary_host_id": "VARCHAR",
                 "related_host_ids": "JSONB NOT NULL DEFAULT '[]'::jsonb",
                 "host_scope": "VARCHAR DEFAULT 'single_host'",
+                "linked_evidence_id": "UUID",
+                "linked_host_id": "UUID",
+                "linked_artifact_id": "UUID",
+                "linked_artifact_family": "VARCHAR(128)",
+                "linked_artifact_type": "VARCHAR(128)",
+                "source_view": "VARCHAR(128)",
+                "created_by": "VARCHAR(128)",
+                "archived_at": "TIMESTAMP WITH TIME ZONE",
             }
             for column_name, column_type in additions.items():
                 if column_name not in finding_columns:
                     connection.execute(text(f'ALTER TABLE findings ADD COLUMN "{column_name}" {column_type}'))
+            connection.execute(text("UPDATE findings SET linked_evidence_id = evidence_id WHERE linked_evidence_id IS NULL AND evidence_id IS NOT NULL"))
         if "timeline_bookmarks" in existing_tables:
             bookmark_columns = {column["name"] for column in inspector.get_columns("timeline_bookmarks")}
             additions = {

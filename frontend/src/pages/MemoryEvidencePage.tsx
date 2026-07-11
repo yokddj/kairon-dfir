@@ -423,6 +423,7 @@ export default function MemoryEvidencePage() {
           { label: "Search", to: `/cases/${caseId}/search?source_category=Memory`, description: "Search memory-derived documents" },
           { label: "Timeline", to: `/cases/${caseId}/search?source_category=Memory&view=timeline&sort=@timestamp&order=asc`, description: "Timeline memory-derived events" },
           { label: "Artifacts", to: `/cases/${caseId}/artifacts?source_category=Memory`, description: "Review artifact views with this scope" },
+          { label: "Add finding", to: `/cases/${caseId}/findings?create=1&source_view=memory&artifact_family=${encodeURIComponent(family)}&evidence_id=${encodeURIComponent(evidenceId)}&title=${encodeURIComponent("Suspicious memory artifact")}${activeHostId || evidence.host_id ? `&host_id=${encodeURIComponent(activeHostId || evidence.host_id || "")}` : ""}`, description: "Create a contextual memory finding" },
           { label: "Processing", to: `/cases/${caseId}?tab=processing`, description: "Open processing queue" },
         ]}
       />

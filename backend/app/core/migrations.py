@@ -2254,3 +2254,43 @@ def _v25_case_management_metadata(connection: Connection) -> None:
 
     connection.execute(text("UPDATE cases SET status = 'active' WHERE status = 'open' OR status IS NULL"))
     connection.execute(text("UPDATE cases SET priority = 'medium' WHERE priority IS NULL OR priority = ''"))
+
+
+@register(26, "findings_notes_v1")
+def _v26_findings_notes_v1(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    if "findings" not in inspector.get_table_names():
+        return
+    dialect = connection.dialect.name
+    existing = {c["name"] for c in inspector.get_columns("findings")}
+
+    if dialect == "postgresql" and "status" in existing:
+        connection.execute(text("ALTER TABLE findings ALTER COLUMN status TYPE VARCHAR(32) USING status::text"))
+    if dialect == "postgresql" and "severity" in existing:
+        connection.execute(text("ALTER TABLE findings ALTER COLUMN severity TYPE VARCHAR(32) USING severity::text"))
+
+    column_defs = {
+        "linked_evidence_id": "UUID",
+        "linked_host_id": "UUID",
+        "linked_artifact_id": "UUID",
+        "linked_artifact_family": "VARCHAR(128)",
+        "linked_artifact_type": "VARCHAR(128)",
+        "source_view": "VARCHAR(128)",
+        "created_by": "VARCHAR(128)",
+        "archived_at": "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "TIMESTAMP",
+    }
+    for column_name, column_type in column_defs.items():
+        if column_name not in existing:
+            connection.execute(text(f"ALTER TABLE findings ADD COLUMN {column_name} {column_type}"))
+
+    connection.execute(text("UPDATE findings SET status = 'draft' WHERE status IS NULL OR status = ''"))
+    connection.execute(text("UPDATE findings SET status = 'archived' WHERE status = 'suppressed' AND archived_at IS NOT NULL"))
+    if dialect == "postgresql":
+        connection.execute(text("UPDATE findings SET linked_evidence_id = evidence_id WHERE linked_evidence_id IS NULL AND evidence_id IS NOT NULL"))
+    else:
+        connection.execute(text("UPDATE findings SET linked_evidence_id = evidence_id WHERE linked_evidence_id IS NULL AND evidence_id IS NOT NULL"))
+
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_findings_linked_evidence_id ON findings (linked_evidence_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_findings_linked_host_id ON findings (linked_host_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_findings_linked_artifact_id ON findings (linked_artifact_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_findings_archived_at ON findings (archived_at)"))

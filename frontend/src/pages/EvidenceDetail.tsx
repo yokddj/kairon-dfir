@@ -1692,6 +1692,7 @@ function formatReportStatus(status: string | null | undefined) {
   });
   const commandHistoryHref = data?.case_id ? `/cases/${data.case_id}/command-history?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
   const findingsHref = data?.case_id ? `/cases/${data.case_id}/findings?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
+  const addFindingHref = data?.case_id ? `/cases/${data.case_id}/findings?create=1&evidence_id=${encodeURIComponent(evidenceId)}&title=${encodeURIComponent("Evidence note")}&source_view=evidence${data.host_id ? `&host_id=${encodeURIComponent(data.host_id)}` : ""}` : "#";
   const deleteConfirmationValid = deleteConfirmText.trim() === "DELETE";
   const minimalProcessingView = true;
   if (minimalProcessingView) {
@@ -1717,6 +1718,7 @@ function formatReportStatus(status: string | null | undefined) {
               <button type="button" onClick={() => setDeleteDialogOpen(true)} className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
                 Delete evidence
               </button>
+              {data?.case_id ? <Link to={addFindingHref} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Add finding</Link> : null}
               {data?.case_id ? <Link to={`/cases/${data.case_id}`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back to case</Link> : null}
             </div>
           </div>
