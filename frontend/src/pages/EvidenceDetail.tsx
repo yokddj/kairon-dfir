@@ -279,7 +279,7 @@ export default function EvidenceDetail() {
   });
   const caseHostsQuery = useQuery({
     queryKey: ["case-hosts", evidenceQuery.data?.case_id],
-    queryFn: () => api.getCaseHosts(evidenceQuery.data!.case_id),
+    queryFn: () => typeof api.getCaseHosts === "function" ? api.getCaseHosts(evidenceQuery.data!.case_id) : Promise.resolve({ case_id: evidenceQuery.data!.case_id, hosts: [], host_candidates: [] }),
     enabled: Boolean(evidenceQuery.data?.case_id),
     staleTime: 15_000,
     refetchOnWindowFocus: false,
@@ -758,6 +758,7 @@ export default function EvidenceDetail() {
   const evidenceHostLabel = data?.provided_host || data?.detected_host || "";
   const evidenceMatchesActiveHost = !hasHostFilter || (activeHostId && data?.host_id === activeHostId) || hostMatchesName(evidenceHostLabel);
   const assignmentMismatch = Boolean(data?.host_id && data?.detected_host && assignedHost && !assignedHostMatchesDetected(assignedHost, data.detected_host));
+  const isMemoryEvidence = String(data?.evidence_type || "").toLowerCase().includes("memory");
 
   useEffect(() => {
     if (!data) return;
@@ -1743,6 +1744,33 @@ function formatReportStatus(status: string | null | undefined) {
             <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Skipped empty</p><p className="mt-1 text-lg font-semibold text-muted">{skippedEmptyCount}</p></div>
             <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Completed</p><p className="mt-1 text-sm font-semibold text-ink">{formatDateTime(completedAt)}</p></div>
           </div>
+          <div className="mt-5 rounded-3xl border border-accent/30 bg-abyss/60 p-4" data-testid="evidence-host-assignment-panel">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Host assignment</p>
+                <p className="mt-1 text-base font-semibold text-ink">Change host assignment</p>
+                <p className="mt-2 text-xs text-muted">Detected/provided host is preserved as metadata. Assigned host controls host filters, including Memory.</p>
+              </div>
+              <span className={`rounded-full border px-3 py-1 text-xs ${data?.host_id ? (assignmentMismatch ? "border-amber/30 bg-amber/10 text-amber" : "border-mint/30 bg-mint/10 text-mint") : "border-line bg-panel/50 text-muted"}`}>
+                {data?.host_id ? (assignmentMismatch ? "mismatch" : "confirmed") : "unassigned"}
+              </span>
+            </div>
+            {isMemoryEvidence && !data?.host_id ? (
+              <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber" role="alert">
+                This memory evidence is not assigned to a case host. Host filters may not include it until assigned.
+              </div>
+            ) : null}
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3 text-sm text-muted"><p className="font-mono text-[11px] uppercase tracking-[0.16em]">Detected/provided host</p><p className="mt-1 text-base font-semibold text-ink">{data?.detected_host || data?.provided_host || "-"}</p></div>
+              <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3 text-sm text-muted"><p className="font-mono text-[11px] uppercase tracking-[0.16em]">Assigned host</p><p className="mt-1 text-base font-semibold text-ink">{assignedHost?.display_name || "Unassigned"}</p></div>
+              <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3 text-sm text-muted"><p className="font-mono text-[11px] uppercase tracking-[0.16em]">Actions</p><p className="mt-1 text-xs text-muted">Assign to existing host, create a new host, or mark unassigned.</p></div>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-[160px_1fr_auto] md:items-end">
+              <label className="block text-xs text-muted">Change host<select value={hostAssignmentMode} onChange={(event) => setHostAssignmentMode(event.target.value as "existing" | "create")} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink"><option value="existing">Assign to existing host</option><option value="create">Create new host</option></select></label>
+              {hostAssignmentMode === "existing" ? <label className="block text-xs text-muted">Assign to existing host<select value={hostAssignmentId} onChange={(event) => setHostAssignmentId(event.target.value)} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink"><option value="">Mark unassigned</option>{caseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}</select></label> : <label className="block text-xs text-muted">Create new host<input value={hostAssignmentName} onChange={(event) => setHostAssignmentName(event.target.value)} placeholder="WS-01" className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink" /></label>}
+              <button type="button" onClick={() => hostAssignmentMutation.mutate()} disabled={hostAssignmentMutation.isPending || (hostAssignmentMode === "create" && !hostAssignmentName.trim())} className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">{hostAssignmentMutation.isPending ? "Saving..." : hostAssignmentMode === "create" ? "Create new host" : hostAssignmentId ? "Change host" : "Mark unassigned"}</button>
+            </div>
+          </div>
           <div className="mt-5 rounded-3xl border border-line bg-abyss/60 p-4" data-testid="evidence-integrity-panel">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div className="min-w-0">
@@ -2205,6 +2233,64 @@ function formatReportStatus(status: string | null | undefined) {
           <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
             <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">EVTX</p>
             <p className={`mt-1 text-sm font-semibold ${evtxCoverageIsFull ? "text-mint" : evtxDeferredCount || evtxPartialCount ? "text-amber" : "text-ink"}`}>{evtxCoverageLabel}</p>
+          </div>
+        </div>
+
+        <div className="mt-5 rounded-3xl border border-accent/30 bg-abyss/60 p-4" data-testid="evidence-host-assignment-panel">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Host assignment</p>
+              <p className="mt-1 text-base font-semibold text-ink">Change host assignment</p>
+              <p className="mt-2 text-xs text-muted">Detected/provided host is preserved as metadata. Assigned host controls host filters, including Memory.</p>
+            </div>
+            <span className={`rounded-full border px-3 py-1 text-xs ${data?.host_id ? (assignmentMismatch ? "border-amber/30 bg-amber/10 text-amber" : "border-mint/30 bg-mint/10 text-mint") : "border-line bg-panel/50 text-muted"}`}>
+              {data?.host_id ? (assignmentMismatch ? "mismatch" : "confirmed") : "unassigned"}
+            </span>
+          </div>
+          {isMemoryEvidence && !data?.host_id ? (
+            <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber" role="alert">
+              This memory evidence is not assigned to a case host. Host filters may not include it until assigned.
+            </div>
+          ) : null}
+          <div className="mt-4 grid gap-3 md:grid-cols-3">
+            <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3 text-sm text-muted">
+              <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Detected/provided host</p>
+              <p className="mt-1 text-base font-semibold text-ink">{data?.detected_host || data?.provided_host || "-"}</p>
+            </div>
+            <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3 text-sm text-muted">
+              <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Assigned host</p>
+              <p className="mt-1 text-base font-semibold text-ink">{assignedHost?.display_name || "Unassigned"}</p>
+            </div>
+            <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3 text-sm text-muted">
+              <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Actions</p>
+              <p className="mt-1 text-xs text-muted">Assign to existing host, create a new host, or mark unassigned.</p>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-[160px_1fr_auto] md:items-end">
+            <label className="block text-xs text-muted">
+              Change host
+              <select value={hostAssignmentMode} onChange={(event) => setHostAssignmentMode(event.target.value as "existing" | "create")} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink">
+                <option value="existing">Assign to existing host</option>
+                <option value="create">Create new host</option>
+              </select>
+            </label>
+            {hostAssignmentMode === "existing" ? (
+              <label className="block text-xs text-muted">
+                Assign to existing host
+                <select value={hostAssignmentId} onChange={(event) => setHostAssignmentId(event.target.value)} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink">
+                  <option value="">Mark unassigned</option>
+                  {caseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
+                </select>
+              </label>
+            ) : (
+              <label className="block text-xs text-muted">
+                Create new host
+                <input value={hostAssignmentName} onChange={(event) => setHostAssignmentName(event.target.value)} placeholder="WS-01" className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink" />
+              </label>
+            )}
+            <button type="button" onClick={() => hostAssignmentMutation.mutate()} disabled={hostAssignmentMutation.isPending || (hostAssignmentMode === "create" && !hostAssignmentName.trim())} className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">
+              {hostAssignmentMutation.isPending ? "Saving..." : hostAssignmentMode === "create" ? "Create new host" : hostAssignmentId ? "Change host" : "Mark unassigned"}
+            </button>
           </div>
         </div>
 
@@ -2964,7 +3050,8 @@ function formatReportStatus(status: string | null | undefined) {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Host assignment</p>
-                  <p className="mt-2 text-xs text-muted">Detected host is preserved from parsers or metadata. Assigned host controls host filtering.</p>
+                  <p className="mt-1 text-base font-semibold text-ink">Change host assignment</p>
+                  <p className="mt-2 text-xs text-muted">Detected/provided host is preserved from parsers or metadata. Assigned host controls host filtering, including Memory.</p>
                 </div>
                 <span className={`rounded-full border px-3 py-1 text-xs ${data?.host_id ? (assignmentMismatch ? "border-amber/30 bg-amber/10 text-amber" : "border-mint/30 bg-mint/10 text-mint") : "border-line bg-panel/50 text-muted"}`}>
                   {data?.host_id ? (assignmentMismatch ? "mismatch" : "confirmed") : "unassigned"}
@@ -2972,7 +3059,7 @@ function formatReportStatus(status: string | null | undefined) {
               </div>
               <div className="mt-4 grid gap-3 md:grid-cols-3">
                 <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Detected host</p>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Detected/provided host</p>
                   <p className="mt-1 text-base font-semibold text-ink">{data?.detected_host || data?.provided_host || "-"}</p>
                 </div>
                 <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3">
@@ -2989,30 +3076,35 @@ function formatReportStatus(status: string | null | undefined) {
                   Detected host differs from assigned host. This can happen with aliases, FQDNs, renamed systems or memory images. The assigned host controls filtering.
                 </div>
               ) : null}
+              {isMemoryEvidence && !data?.host_id ? (
+                <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber" role="alert">
+                  This memory evidence is not assigned to a case host. Host filters may not include it until assigned.
+                </div>
+              ) : null}
               <div className="mt-4 grid gap-3 md:grid-cols-[160px_1fr_auto] md:items-end">
                 <label className="block text-xs text-muted">
-                  Action
+                  Change host
                   <select value={hostAssignmentMode} onChange={(event) => setHostAssignmentMode(event.target.value as "existing" | "create")} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink">
-                    <option value="existing">Assign existing</option>
+                    <option value="existing">Assign to existing host</option>
                     <option value="create">Create new host</option>
                   </select>
                 </label>
                 {hostAssignmentMode === "existing" ? (
                   <label className="block text-xs text-muted">
-                    Host
+                    Assign to existing host
                     <select value={hostAssignmentId} onChange={(event) => setHostAssignmentId(event.target.value)} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink">
-                      <option value="">Unassigned</option>
+                      <option value="">Mark unassigned</option>
                       {caseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
                     </select>
                   </label>
                 ) : (
                   <label className="block text-xs text-muted">
-                    New host name
+                    Create new host
                     <input value={hostAssignmentName} onChange={(event) => setHostAssignmentName(event.target.value)} placeholder="WS-01" className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink" />
                   </label>
                 )}
                 <button type="button" onClick={() => hostAssignmentMutation.mutate()} disabled={hostAssignmentMutation.isPending || (hostAssignmentMode === "create" && !hostAssignmentName.trim())} className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">
-                  {hostAssignmentMutation.isPending ? "Saving..." : hostAssignmentMode === "create" ? "Create and assign" : hostAssignmentId ? "Change host" : "Mark unassigned"}
+                  {hostAssignmentMutation.isPending ? "Saving..." : hostAssignmentMode === "create" ? "Create new host" : hostAssignmentId ? "Change host" : "Mark unassigned"}
                 </button>
               </div>
             </div>

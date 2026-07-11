@@ -40,6 +40,8 @@ const getEvidenceIntegrityMock = vi.fn();
 const verifyEvidenceIntegrityMock = vi.fn();
 const exportEvidenceManifestMock = vi.fn();
 const getEvidenceCustodyEventsMock = vi.fn();
+const getCaseHostsMock = vi.fn();
+const updateEvidenceHostMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -49,6 +51,8 @@ vi.mock("../api/client", () => ({
     verifyEvidenceIntegrity: (...args: unknown[]) => verifyEvidenceIntegrityMock(...args),
     exportEvidenceManifest: (...args: unknown[]) => exportEvidenceManifestMock(...args),
     getEvidenceCustodyEvents: (...args: unknown[]) => getEvidenceCustodyEventsMock(...args),
+    getCaseHosts: (...args: unknown[]) => getCaseHostsMock(...args),
+    updateEvidenceHost: (...args: unknown[]) => updateEvidenceHostMock(...args),
     getEvidenceOnDemandModules: (...args: unknown[]) => getEvidenceOnDemandModulesMock(...args),
     getEvidenceSearchSummary: (...args: unknown[]) => getEvidenceSearchSummaryMock(...args),
     getEvidenceMftDiagnostic: (...args: unknown[]) => getEvidenceMftDiagnosticMock(...args),
@@ -428,6 +432,14 @@ function setupMinimalEvidenceDetail(overrides?: {
   });
   exportEvidenceManifestMock.mockResolvedValue(manifestPayload);
   getEvidenceCustodyEventsMock.mockResolvedValue([]);
+  getCaseHostsMock.mockResolvedValue({
+    case_id: "case-1",
+    hosts: [
+      { id: "host-hosta", canonical_name: "HOSTA", display_name: "HOSTA", confidence: "manual", source: "manual", event_count: 0, evidence_count: 1, findings_count: 0, high_risk_count: 0, aliases: ["hosta"], alias_rows: [], all_names: ["HOSTA", "hosta"], alias_count: 1 },
+    ],
+    host_candidates: [],
+  });
+  updateEvidenceHostMock.mockResolvedValue({ ...evidencePayload, host_id: "host-hosta" });
   getEvidenceOnDemandModulesMock.mockResolvedValue({
     evidence_id: "evidence-1",
     case_id: "case-1",
@@ -768,6 +780,22 @@ describe("EvidenceDetail minimal processing UX", () => {
     expect(screen.getByRole("link", { name: "Command History" })).toHaveAttribute("href", "/cases/case-1/command-history?evidence_id=evidence-1");
     expect(screen.getByRole("link", { name: "Artifact Views" })).toHaveAttribute("href", "/cases/case-1/artifacts?evidence_id=evidence-1");
     expect(screen.getByRole("link", { name: "Timeline" })).toHaveAttribute("href", "/cases/case-1/search?evidence_id=evidence-1&view=timeline&sort=@timestamp&order=asc");
+  });
+
+  it("shows clear host assignment controls for unassigned memory evidence", async () => {
+    setupMinimalEvidenceDetail({ evidence: { evidence_type: "memory_dump", original_filename: "ram.raw", host_id: null, detected_host: "WIN-RAM01", provided_host: null } });
+    renderPage();
+
+    expect(await screen.findByText("ram.raw")).toBeInTheDocument();
+    const panel = await screen.findByTestId("evidence-host-assignment-panel");
+    expect(panel).toHaveTextContent("Host assignment");
+    expect(panel).toHaveTextContent("Detected/provided host");
+    expect(panel).toHaveTextContent("Assigned host");
+    expect(panel).toHaveTextContent("Change host assignment");
+    expect(within(panel).getByLabelText(/Assign to existing host/i)).toBeInTheDocument();
+    expect(panel).toHaveTextContent("Create new host");
+    expect(within(panel).getByRole("button", { name: /Mark unassigned/i })).toBeInTheDocument();
+    expect(panel).toHaveTextContent("This memory evidence is not assigned to a case host");
   });
 });
 
