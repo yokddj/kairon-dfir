@@ -27,6 +27,7 @@ The project is intended for trusted labs and controlled private beta deployments
 ## What It Does
 
 - Ingests Windows forensic evidence into case-centered investigations.
+- Organizes investigations with case status, priority, tags, notes, archive/close lifecycle actions, and filters. See [docs/case-management.md](docs/case-management.md).
 - Normalizes a growing set of Windows and memory artifacts for search, triage, timelines, detections, findings, and reports. See [docs/parser-coverage.md](docs/parser-coverage.md) for exact parser support status.
 - Provides analyst workflows for Search, Artifact Views, Command History, Execution Stories, Incident Timeline, Findings, and Reports.
 - Records evidence SHA-256, size, upload metadata, integrity checks, custody events, and exportable JSON manifests. See [docs/evidence-integrity.md](docs/evidence-integrity.md).

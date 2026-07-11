@@ -17,6 +17,7 @@ const docSlugByHref: Record<string, string> = {
   "testing.md": "testing",
   "artifacts_matrix.md": "artifacts-matrix",
   "parser-coverage.md": "parser-coverage",
+  "case-management.md": "case-management",
   "investigation-workflow.md": "investigation-workflow",
   "large_evidence.md": "large-evidence",
   "performance.md": "performance",
