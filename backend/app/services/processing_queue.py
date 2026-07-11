@@ -259,15 +259,16 @@ def build_processing_item(evidence: Evidence, artifacts: list[Artifact], memory_
     failed_parser_count = sum(1 for row in parser_rows if row["status"] in {"failed", "timed_out", "error"})
     status = _public_status(evidence, runs, warning_count, failed_parser_count)
     latest = runs[0] if runs else None
-    host = getattr(getattr(evidence, "host", None), "display_name", None) or getattr(getattr(evidence, "host", None), "canonical_name", None) or (evidence.metadata_json or {}).get("provided_host") or evidence.detected_host
+    assigned_host = getattr(getattr(evidence, "host", None), "display_name", None) or getattr(getattr(evidence, "host", None), "canonical_name", None)
     artifact_count = len(artifacts) + sum(int(plugin.row_count or 0) for run in memory_runs for plugin in run.plugin_runs)
     return {
         "evidence_id": evidence.id,
         "case_id": evidence.case_id,
         "filename": evidence.original_filename,
         "evidence_type": _status_value(evidence.evidence_type) or str(evidence.evidence_type or "unknown"),
-        "host": host,
+        "host": assigned_host or "Unassigned",
         "host_id": evidence.host_id,
+        "detected_host": evidence.detected_host or (evidence.metadata_json or {}).get("provided_host"),
         "uploaded_at": _iso(getattr(evidence, "uploaded_at", None) or evidence.created_at),
         "processing_status": status,
         "last_run_status": latest.get("status") if latest else status,
@@ -294,7 +295,10 @@ def build_processing_item(evidence: Evidence, artifacts: list[Artifact], memory_
 
 def _matches_host_scope(evidence: Evidence, host_id: str | None = None, host: str | None = None) -> bool:
     if host_id:
-        return evidence.host_id == host_id
+        if evidence.host_id:
+            return evidence.host_id == host_id
+        if not host:
+            return False
     if not host:
         return True
     expected = normalize_host_alias(host)

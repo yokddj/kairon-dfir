@@ -219,6 +219,17 @@ function isRawDiscoveryEvidenceLike(evidence: { evidence_type?: string; metadata
   return evidence.evidence_type === "velociraptor_zip" || collectionKind === "raw_evidence_collection" || sourceType === "raw_collection";
 }
 
+function normalizeEvidenceHostName(value: string | null | undefined) {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized.endsWith(".local") ? normalized.slice(0, -6) : normalized;
+}
+
+function assignedHostMatchesDetected(host: { id: string; canonical_name: string; display_name: string; aliases?: string[]; all_names?: string[] } | null, detected: string | null | undefined) {
+  const target = normalizeEvidenceHostName(detected);
+  if (!host || !target) return false;
+  return [host.id, host.canonical_name, host.display_name, ...(host.aliases || []), ...(host.all_names || [])].some((name) => normalizeEvidenceHostName(name) === target);
+}
+
 export default function EvidenceDetail() {
   const { evidenceId = "" } = useParams();
   const navigate = useNavigate();
@@ -251,6 +262,9 @@ export default function EvidenceDetail() {
   const [benchmarkNoProgressTimeoutSeconds, setBenchmarkNoProgressTimeoutSeconds] = useState(600);
   const [benchmarkHeartbeatTimeoutSeconds, setBenchmarkHeartbeatTimeoutSeconds] = useState(300);
   const [advancedProcessingDetailsOpen, setAdvancedProcessingDetailsOpen] = useState(false);
+  const [hostAssignmentMode, setHostAssignmentMode] = useState<"existing" | "create">("existing");
+  const [hostAssignmentId, setHostAssignmentId] = useState("");
+  const [hostAssignmentName, setHostAssignmentName] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const evidenceQuery = useQuery({
@@ -262,6 +276,13 @@ export default function EvidenceDetail() {
       return status === "pending" || status === "processing" ? 3000 : false;
     },
     refetchIntervalInBackground: true,
+  });
+  const caseHostsQuery = useQuery({
+    queryKey: ["case-hosts", evidenceQuery.data?.case_id],
+    queryFn: () => api.getCaseHosts(evidenceQuery.data!.case_id),
+    enabled: Boolean(evidenceQuery.data?.case_id),
+    staleTime: 15_000,
+    refetchOnWindowFocus: false,
   });
   const manifestQuery = useQuery({
     queryKey: ["evidence-manifest", evidenceId],
@@ -732,8 +753,38 @@ export default function EvidenceDetail() {
   });
 
   const data = evidenceQuery.data;
+  const caseHosts = caseHostsQuery.data?.hosts ?? [];
+  const assignedHost = caseHosts.find((host) => host.id === data?.host_id) ?? null;
   const evidenceHostLabel = data?.provided_host || data?.detected_host || "";
   const evidenceMatchesActiveHost = !hasHostFilter || (activeHostId && data?.host_id === activeHostId) || hostMatchesName(evidenceHostLabel);
+  const assignmentMismatch = Boolean(data?.host_id && data?.detected_host && assignedHost && !assignedHostMatchesDetected(assignedHost, data.detected_host));
+
+  useEffect(() => {
+    if (!data) return;
+    setHostAssignmentId(data.host_id || "");
+    setHostAssignmentMode("existing");
+  }, [data?.id, data?.host_id]);
+
+  const hostAssignmentMutation = useMutation({
+    mutationFn: async () => {
+      if (!data?.case_id) throw new Error("Evidence case is not loaded.");
+      if (hostAssignmentMode === "create") {
+        const name = hostAssignmentName.trim();
+        if (!name) throw new Error("Enter a host name.");
+        return api.updateEvidenceHost(data.case_id, evidenceId, { host_name: name, reason: "Assigned from Evidence Detail" });
+      }
+      return api.updateEvidenceHost(data.case_id, evidenceId, { host_id: hostAssignmentId || null, reason: hostAssignmentId ? "Assigned from Evidence Detail" : "Marked unassigned from Evidence Detail" });
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(["evidence", evidenceId], updated);
+      void queryClient.invalidateQueries({ queryKey: ["case-hosts", updated.case_id] });
+      void queryClient.invalidateQueries({ queryKey: ["case-context", updated.case_id] });
+      void queryClient.invalidateQueries({ queryKey: ["evidence-custody-events", updated.case_id, evidenceId] });
+      setHostAssignmentName("");
+      notify({ title: "Host assignment updated", tone: "success" });
+    },
+    onError: (error: Error) => notify({ title: "Host assignment failed", description: error.message, tone: "error" }),
+  });
   const manifest = manifestQuery.data;
   const evidenceRuns = evidenceRunsQuery.data ?? [];
   const indexingPlan: EvidenceIndexingPlan | undefined = indexingPlanQuery.data;
@@ -2909,14 +2960,60 @@ function formatReportStatus(status: string | null | undefined) {
                 <p className="mt-1 text-lg font-semibold text-ink">{Object.keys(searchSummaryQuery.data?.artifact_type_counts ?? {}).length || indexedArtifactTypeCounts.length}</p>
               </div>
             </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <div className="rounded-2xl border border-line bg-abyss/50 px-4 py-3 text-sm text-muted">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Host provided by user</p>
-                <p className="mt-1 text-lg font-semibold text-ink">{data?.provided_host ?? "-"}</p>
+            <div className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4 text-sm text-muted">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Host assignment</p>
+                  <p className="mt-2 text-xs text-muted">Detected host is preserved from parsers or metadata. Assigned host controls host filtering.</p>
+                </div>
+                <span className={`rounded-full border px-3 py-1 text-xs ${data?.host_id ? (assignmentMismatch ? "border-amber/30 bg-amber/10 text-amber" : "border-mint/30 bg-mint/10 text-mint") : "border-line bg-panel/50 text-muted"}`}>
+                  {data?.host_id ? (assignmentMismatch ? "mismatch" : "confirmed") : "unassigned"}
+                </span>
               </div>
-              <div className="rounded-2xl border border-line bg-abyss/50 px-4 py-3 text-sm text-muted">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Host detected</p>
-                <p className="mt-1 text-lg font-semibold text-ink">{data?.detected_host ?? "-"}</p>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Detected host</p>
+                  <p className="mt-1 text-base font-semibold text-ink">{data?.detected_host || data?.provided_host || "-"}</p>
+                </div>
+                <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Assigned host</p>
+                  <p className="mt-1 text-base font-semibold text-ink">{assignedHost?.display_name || "Unassigned"}</p>
+                </div>
+                <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Assignment method</p>
+                  <p className="mt-1 text-base font-semibold text-ink">{data?.host_assignment_method?.replaceAll("_", " ") || "-"}</p>
+                </div>
+              </div>
+              {assignmentMismatch ? (
+                <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber">
+                  Detected host differs from assigned host. This can happen with aliases, FQDNs, renamed systems or memory images. The assigned host controls filtering.
+                </div>
+              ) : null}
+              <div className="mt-4 grid gap-3 md:grid-cols-[160px_1fr_auto] md:items-end">
+                <label className="block text-xs text-muted">
+                  Action
+                  <select value={hostAssignmentMode} onChange={(event) => setHostAssignmentMode(event.target.value as "existing" | "create")} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink">
+                    <option value="existing">Assign existing</option>
+                    <option value="create">Create new host</option>
+                  </select>
+                </label>
+                {hostAssignmentMode === "existing" ? (
+                  <label className="block text-xs text-muted">
+                    Host
+                    <select value={hostAssignmentId} onChange={(event) => setHostAssignmentId(event.target.value)} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink">
+                      <option value="">Unassigned</option>
+                      {caseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
+                    </select>
+                  </label>
+                ) : (
+                  <label className="block text-xs text-muted">
+                    New host name
+                    <input value={hostAssignmentName} onChange={(event) => setHostAssignmentName(event.target.value)} placeholder="WS-01" className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink" />
+                  </label>
+                )}
+                <button type="button" onClick={() => hostAssignmentMutation.mutate()} disabled={hostAssignmentMutation.isPending || (hostAssignmentMode === "create" && !hostAssignmentName.trim())} className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">
+                  {hostAssignmentMutation.isPending ? "Saving..." : hostAssignmentMode === "create" ? "Create and assign" : hostAssignmentId ? "Change host" : "Mark unassigned"}
+                </button>
               </div>
             </div>
             {indexedArtifactTypeCounts.length ? (

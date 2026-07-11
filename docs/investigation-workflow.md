@@ -24,6 +24,16 @@ Host scope applies consistently to `Evidence & Ingest`, `Processing`, `Search`, 
 
 Memory evidence remains isolated per evidence item. If a memory URL points to evidence outside the active host scope, Kairon shows a clear mismatch message instead of silently displaying memory results from another host.
 
+## Evidence host assignment
+
+Evidence can be assigned to a case host during upload, from server-path registration, or later from the evidence detail page. Choose an existing host, create a new host, or leave the evidence `Unassigned` when attribution is not yet known.
+
+Kairon keeps the manual assignment separate from detected host metadata. `Assigned host` controls host-scoped views and filters. `Detected host` remains parser or evidence metadata and is preserved as a hint, even when it differs from the assigned host.
+
+When a host filter is active, evidence with an assigned `host_id` is matched by that assignment first. Evidence without an assignment can still match by normalized detected host name as a fallback. This lets analysts fix memory captures and renamed hosts without losing automatic metadata.
+
+If the assigned host and detected host differ, the UI shows a mismatch indicator. Treat it as an attribution review cue rather than an ingest failure.
+
 ## Shareable links
 
 Case-scoped URLs preserve useful filters such as `host_id`, `host` and `evidence_id`. Share links from Search, Timeline, Artifact Views or Memory when another analyst needs the same investigation context.
