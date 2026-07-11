@@ -14,6 +14,7 @@ Esta documentación describe el estado real de la plataforma. Las capacidades pa
 
 - [user_guide.md](user_guide.md): flujo de analista de upload a reporte.
 - [case-management.md](case-management.md): estados, prioridad, tags, archivado y filtros de casos.
+- [findings-notes.md](findings-notes.md): notas y hallazgos investigativos enlazados a casos, evidencias, hosts y artefactos.
 - [quickstart.md](quickstart.md): arranque rápido.
 - [search.md](search.md): Search workspace, filtros, frases de comandos y Timeline.
 - [timeline_reports.md](timeline_reports.md): timeline y reportes.

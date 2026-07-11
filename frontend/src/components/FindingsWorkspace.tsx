@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, type CorrelationRunResult, type Finding, type FindingStatus, type SearchResponse } from "../api/client";
 import ResponsiveDetailPanel from "./ResponsiveDetailPanel";
 import { useNotifications } from "../context/NotificationsContext";
@@ -29,7 +29,11 @@ type Filters = {
   process: string;
   pid: string;
   search: string;
+  tag: string;
+  includeArchived: boolean;
 };
+
+const v1Statuses = ["draft", "review", "confirmed", "false_positive", "archived"];
 
 function severityTone(severity: string) {
   if (severity === "critical") return "border-danger/60 bg-danger/15 text-danger";
@@ -152,6 +156,7 @@ function BreakdownList({ title, values }: { title: string; values?: Record<strin
 export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", hostId, embedded = false, showHeader = true }: Props) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { notify } = useNotifications();
   const { effectiveTimezone } = useTimezonePreference();
   const apiCompat = api as typeof api & {
@@ -169,11 +174,26 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     process: "",
     pid: "",
     search: "",
+    tag: "",
+    includeArchived: false,
   });
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(100);
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const [correlationReport, setCorrelationReport] = useState<CorrelationRunResult | null>(null);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editingFinding, setEditingFinding] = useState<Finding | null>(null);
+  const [formTitle, setFormTitle] = useState("");
+  const [formBody, setFormBody] = useState("");
+  const [formSeverity, setFormSeverity] = useState("info");
+  const [formStatus, setFormStatus] = useState("draft");
+  const [formTags, setFormTags] = useState("");
+  const [formEvidenceId, setFormEvidenceId] = useState(evidenceId);
+  const [formHostId, setFormHostId] = useState(hostId || "");
+  const [formArtifactId, setFormArtifactId] = useState("");
+  const [formArtifactFamily, setFormArtifactFamily] = useState("");
+  const [formArtifactType, setFormArtifactType] = useState("");
+  const [formSourceView, setFormSourceView] = useState("");
 
   const findingsQuery = useQuery({
     queryKey: ["findings", caseId, filters, host || "all-hosts", hostId || "", page, pageSize],
@@ -182,13 +202,18 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
         const legacy = await api.listFindings(caseId, { evidence_id: filters.evidenceId || undefined, host: host || undefined, host_id: hostId || undefined } as any);
         return { items: legacy, results: legacy, total: legacy.length, page: 1, page_size: legacy.length || pageSize, total_pages: legacy.length ? 1 : 0 };
       }
-      const response = await apiCompat.listFindingsPage(caseId, {
+        const response = await apiCompat.listFindingsPage(caseId, {
         severity: filters.severity || undefined,
         confidence: filters.confidence || undefined,
         status: filters.status || undefined,
         rule: filters.findingType || undefined,
         source_category: filters.source || undefined,
         evidence_id: filters.evidenceId || undefined,
+        linked_evidence_id: filters.evidenceId || undefined,
+        linked_host_id: hostId || undefined as any,
+        tag: filters.tag || undefined,
+        q: filters.search || undefined,
+        include_archived: filters.includeArchived || undefined,
         process_entity_id: filters.process || undefined,
         pid: filters.pid || undefined,
         host_id: hostId || undefined as any,
@@ -229,6 +254,45 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     },
   });
 
+  const saveFindingMutation = useMutation({
+    mutationFn: () => {
+      const payload: Partial<Finding> = {
+        title: formTitle.trim(),
+        body: formBody,
+        description: formBody,
+        severity: formSeverity as Finding["severity"],
+        status: formStatus as Finding["status"],
+        tags: formTags.split(",").map((tag) => tag.trim()).filter(Boolean),
+        linked_evidence_id: formEvidenceId.trim() || undefined,
+        evidence_id: formEvidenceId.trim() || undefined,
+        linked_host_id: formHostId.trim() || undefined,
+        linked_artifact_id: formArtifactId.trim() || undefined,
+        linked_artifact_family: formArtifactFamily.trim() || undefined,
+        linked_artifact_type: formArtifactType.trim() || undefined,
+        source_view: formSourceView.trim() || undefined,
+      };
+      return editingFinding ? api.updateFinding(caseId, editingFinding.id, payload) : api.createFinding(caseId, payload);
+    },
+    onSuccess: (updated) => {
+      notify({ title: editingFinding ? "Finding updated" : "Finding created", description: updated.title, tone: "success" });
+      setEditorOpen(false);
+      setEditingFinding(null);
+      setSelectedFindingId(updated.id);
+      void queryClient.invalidateQueries({ queryKey: ["findings", caseId] });
+    },
+    onError: (error: Error) => notify({ title: "Finding save failed", description: error.message, tone: "error" }),
+  });
+
+  const archiveFindingMutation = useMutation({
+    mutationFn: (findingId: string) => api.deleteFinding(caseId, findingId),
+    onSuccess: () => {
+      notify({ title: "Finding archived", description: "Archived findings can be shown with Include archived.", tone: "success" });
+      setSelectedFindingId(null);
+      void queryClient.invalidateQueries({ queryKey: ["findings", caseId] });
+    },
+    onError: (error: Error) => notify({ title: "Archive failed", description: error.message, tone: "error" }),
+  });
+
   const suppressMutation = useMutation({
     mutationFn: ({ findingId, reason }: { findingId: string; reason?: string }) => (typeof apiCompat.suppressFinding === "function" ? apiCompat.suppressFinding(caseId, findingId, { reason }) : api.updateFinding(caseId, findingId, { status: "suppressed" as FindingStatus, data_quality: [reason || "suppressed"] })),
     onSuccess: () => {
@@ -242,10 +306,47 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     setPage(1);
   }, [filters, pageSize]);
 
+  useEffect(() => {
+    if (searchParams.get("create") !== "1") return;
+    setEditingFinding(null);
+    setFormTitle(searchParams.get("title") || "Suspicious memory artifact");
+    setFormBody(searchParams.get("body") || "");
+    setFormSeverity(searchParams.get("severity") || "info");
+    setFormStatus(searchParams.get("status") || "draft");
+    setFormTags(searchParams.get("tags") || "");
+    setFormEvidenceId(searchParams.get("evidence_id") || evidenceId || "");
+    setFormHostId(searchParams.get("host_id") || hostId || "");
+    setFormArtifactId(searchParams.get("artifact_id") || "");
+    setFormArtifactFamily(searchParams.get("artifact_family") || "");
+    setFormArtifactType(searchParams.get("artifact_type") || "");
+    setFormSourceView(searchParams.get("source_view") || "");
+    setEditorOpen(true);
+    const next = new URLSearchParams(searchParams);
+    next.delete("create");
+    setSearchParams(next, { replace: true });
+  }, [evidenceId, hostId, searchParams, setSearchParams]);
+
+  function openEditor(finding?: Finding | null) {
+    setEditingFinding(finding || null);
+    setFormTitle(finding?.title || "");
+    setFormBody(finding?.body || finding?.description || "");
+    setFormSeverity(finding?.severity || "info");
+    setFormStatus(finding?.status === "new" ? "draft" : finding?.status || "draft");
+    setFormTags((finding?.tags || []).join(", "));
+    setFormEvidenceId(finding?.linked_evidence_id || finding?.evidence_id || evidenceId || "");
+    setFormHostId(finding?.linked_host_id || hostId || "");
+    setFormArtifactId(finding?.linked_artifact_id || "");
+    setFormArtifactFamily(finding?.linked_artifact_family || "");
+    setFormArtifactType(finding?.linked_artifact_type || "");
+    setFormSourceView(finding?.source_view || "");
+    setEditorOpen(true);
+  }
+
   const serverFindings = findingsQuery.data?.items ?? [];
   const sortedFindings = useMemo(() => sortFindings(serverFindings), [serverFindings]);
   const evidenceOptions = useMemo(() => uniqueSorted(sortedFindings.map((finding) => finding.evidence_id ?? null)), [sortedFindings]);
   const findingTypeOptions = useMemo(() => uniqueSorted(sortedFindings.map((finding) => finding.finding_type ?? null)), [sortedFindings]);
+  const tagOptions = useMemo(() => uniqueSorted(sortedFindings.flatMap((finding) => finding.tags ?? [])), [sortedFindings]);
 
   const filteredFindings = useMemo(() => {
     const token = filters.search.trim().toLowerCase();
@@ -253,6 +354,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
       if (filters.severity && finding.severity !== filters.severity) return false;
       if (filters.confidence && (finding.confidence ?? "") !== filters.confidence) return false;
       if (filters.status && (finding.status ?? "") !== filters.status) return false;
+      if (filters.tag && !(finding.tags ?? []).includes(filters.tag)) return false;
       if (filters.findingType && (finding.finding_type ?? "") !== filters.findingType) return false;
       if (filters.source && !(finding.source_categories ?? finding.source?.split(",") ?? []).includes(filters.source)) return false;
       if (filters.evidenceId && (finding.evidence_id ?? "") !== filters.evidenceId) return false;
@@ -370,7 +472,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
   });
 
   const overview = useMemo(() => {
-    const counts = { total: filteredFindings.length, critical: 0, high: 0, medium: 0, new: 0, triaged: 0, investigating: 0, confirmed: 0, resolved: 0, suppressed: 0, false_positive: 0, accepted_risk: 0 };
+    const counts = { total: filteredFindings.length, critical: 0, high: 0, medium: 0, draft: 0, review: 0, archived: 0, new: 0, triaged: 0, investigating: 0, confirmed: 0, resolved: 0, suppressed: 0, false_positive: 0, accepted_risk: 0 };
       for (const finding of filteredFindings) {
         if (finding.severity === "critical") counts.critical += 1;
         if (finding.severity === "high") counts.high += 1;
@@ -413,10 +515,16 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
             onChange={(event) => updateStatusMutation.mutate({ findingId: selectedFinding.id, status: event.target.value as FindingStatus })}
             className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm"
           >
-            {["new", "triaged", "investigating", "confirmed", "false_positive", "accepted_risk", "resolved", "suppressed"].map((value) => <option key={value} value={value}>{lifecycleLabel(value)}</option>)}
+            {[...v1Statuses, "new", "triaged", "investigating", "accepted_risk", "resolved", "suppressed"].map((value) => <option key={value} value={value}>{lifecycleLabel(value)}</option>)}
           </select>
           <button type="button" onClick={() => suppressMutation.mutate({ findingId: selectedFinding.id, reason: "Suppressed from finding detail" })} className="w-full rounded-2xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm text-warning">
             Suppress finding
+          </button>
+          <button type="button" onClick={() => openEditor(selectedFinding)} className="w-full rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">
+            Edit finding
+          </button>
+          <button type="button" onClick={() => window.confirm("Archive this finding? It can be restored by including archived findings.") && archiveFindingMutation.mutate(selectedFinding.id)} className="w-full rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-muted">
+            Archive finding
           </button>
         </div>
       </div>
@@ -648,6 +756,13 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
+                onClick={() => openEditor(null)}
+                className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent"
+              >
+                Create finding
+              </button>
+              <button
+                type="button"
                 onClick={() => runCorrelationMutation.mutate({ page: 1 })}
                 disabled={runCorrelationMutation.isPending || !caseId}
                 className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
@@ -665,6 +780,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-4 xl:grid-cols-8">
             <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Total</p><p className="mt-2 text-lg font-semibold">{overview.total}</p></div>
+            <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Draft</p><p className="mt-2 text-lg font-semibold">{(overview as Record<string, number>).draft ?? 0}</p></div>
             <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">New</p><p className="mt-2 text-lg font-semibold">{overview.new}</p></div>
             <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Triaged</p><p className="mt-2 text-lg font-semibold">{overview.triaged}</p></div>
             <div className="rounded-2xl border border-line bg-abyss/70 p-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Investigating</p><p className="mt-2 text-lg font-semibold">{overview.investigating}</p></div>
@@ -731,7 +847,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Status</span>
             <select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
               <option value="">All</option>
-              {["new", "triaged", "investigating", "confirmed", "false_positive", "accepted_risk", "resolved", "suppressed"].map((value) => <option key={value} value={value}>{lifecycleLabel(value)}</option>)}
+              {[...v1Statuses, "new", "triaged", "investigating", "accepted_risk", "resolved", "suppressed"].map((value) => <option key={value} value={value}>{lifecycleLabel(value)}</option>)}
             </select>
           </label>
           <label className="block">
@@ -767,6 +883,16 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search</span>
             <input value={filters.search} onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="title, path, domain, host, user…" className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm" />
           </label>
+          <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Tag</span>
+            <select value={filters.tag} onChange={(event) => setFilters((current) => ({ ...current, tag: event.target.value }))} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm" aria-label="Finding tag filter">
+              <option value="">All</option>
+              {tagOptions.map((value) => <option key={value} value={value}>{value}</option>)}
+            </select>
+          </label>
+          <label className="flex items-end gap-2 rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-muted">
+            <input type="checkbox" checked={filters.includeArchived} onChange={(event) => setFilters((current) => ({ ...current, includeArchived: event.target.checked }))} /> Include archived
+          </label>
         </div>
       </div>
 
@@ -777,9 +903,10 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
 
       {!findingsQuery.isPending && !filteredFindings.length ? (
         <div className="rounded-3xl border border-line bg-panel/40 p-6 text-sm text-muted">
-          <p className="text-base font-semibold text-white">No findings yet</p>
-          <p className="mt-2">No findings were generated by the evaluated rules for the available artifacts.</p>
-          <p className="mt-2">If rules have not been evaluated yet, run hunting evaluation from Rules. Current filters may also hide existing findings.</p>
+          <p className="text-base font-semibold text-white">{filters.search || filters.severity || filters.status || filters.tag ? "No findings match these filters." : "No findings yet."}</p>
+          <p className="mt-2">Create a finding from this case or from evidence, memory, search, or artifacts.</p>
+          {(filters.search || filters.severity || filters.status || filters.tag) ? <p className="mt-2">Clear filters.</p> : null}
+          <button type="button" onClick={() => openEditor(null)} className="mt-4 mr-2 rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent">Create finding</button>
           <button
             type="button"
             onClick={() => runCorrelationMutation.mutate({ page: 1 })}
@@ -813,7 +940,8 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
                         <span className={`rounded-full border px-2.5 py-1 font-mono text-[10px] uppercase tracking-[0.14em] ${statusTone(finding.status ?? "new")}`}>{lifecycleLabel(finding.status)}</span>
                         <Chip>{sourceLabel(finding)}</Chip>
                       </div>
-                      <p className="mt-3 line-clamp-2 text-sm text-muted">{finding.summary || finding.description || "No summary."}</p>
+                      <p className="mt-3 line-clamp-2 text-sm text-muted">{finding.summary || finding.body || finding.description || "No summary."}</p>
+                      <p className="mt-2 text-xs text-muted">Linked evidence: {finding.linked_evidence_id || finding.evidence_id || "none"} · Linked host: {finding.linked_host_id || "none"} · Source: {finding.source_view || finding.source || "manual"}</p>
                       <div className="mt-3 flex flex-wrap gap-2">
                         {(finding.reasons ?? []).slice(0, 3).map((reason) => <Chip key={`${finding.id}-${reason}`} tone="warning">{reason}</Chip>)}
                         {(finding.tags ?? []).slice(0, 3).map((tag) => <Chip key={`${finding.id}-${tag}`}>{tag}</Chip>)}
@@ -825,6 +953,10 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
                       <p>{finding.grouped_artifact_count ?? finding.related_artifact_ids?.length ?? 0} artifacts</p>
                       {finding.pid ? <p>PID {finding.pid}</p> : null}
                       {finding.evidence_id ? <p className="font-mono">{finding.evidence_id.slice(0, 8)}</p> : null}
+                      <span className="mt-2 inline-flex gap-2">
+                        <span onClick={(event) => { event.stopPropagation(); openEditor(finding); }} className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs text-muted">Edit</span>
+                        <span onClick={(event) => { event.stopPropagation(); if (window.confirm("Archive this finding?")) archiveFindingMutation.mutate(finding.id); }} className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs text-muted">Archive</span>
+                      </span>
                     </div>
                   </div>
                 </button>
@@ -840,6 +972,42 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
         <ResponsiveDetailPanel open mode="drawer" widthClass="h-full w-full sm:w-[88vw] xl:w-[82vw] 2xl:w-[78vw]" heading="Finding detail" subheading="Wide investigation detail aligned with Search, Timeline and Detections." onClose={() => setSelectedFindingId(null)}>
           {findingDetailContent}
         </ResponsiveDetailPanel>
+      ) : null}
+
+      {editorOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label="Finding editor">
+          <div className="w-full max-w-3xl rounded-3xl border border-line bg-panel p-6 shadow-panel">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">{editingFinding ? "Edit finding" : "Create finding"}</p>
+                <h2 className="mt-1 text-xl font-semibold">Findings / Notes v1</h2>
+              </div>
+              <button type="button" onClick={() => setEditorOpen(false)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Cancel</button>
+            </div>
+            <div className="mt-4 grid gap-3">
+              <label className="text-xs text-muted">Title<input value={formTitle} onChange={(event) => setFormTitle(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+              <label className="text-xs text-muted">Body / Notes<textarea value={formBody} onChange={(event) => setFormBody(event.target.value)} className="mt-1 h-28 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="text-xs text-muted">Severity<select value={formSeverity} onChange={(event) => setFormSeverity(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink">{["info", "low", "medium", "high", "critical"].map((value) => <option key={value} value={value}>{value}</option>)}</select></label>
+                <label className="text-xs text-muted">Status<select value={formStatus} onChange={(event) => setFormStatus(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink">{v1Statuses.map((value) => <option key={value} value={value}>{lifecycleLabel(value)}</option>)}</select></label>
+              </div>
+              <label className="text-xs text-muted">Tags<input value={formTags} onChange={(event) => setFormTags(event.target.value)} placeholder="ctf, memory, suspicious" className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="text-xs text-muted">Linked evidence<input value={formEvidenceId} onChange={(event) => setFormEvidenceId(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+                <label className="text-xs text-muted">Linked host<input value={formHostId} onChange={(event) => setFormHostId(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+              </div>
+              <div className="grid gap-3 md:grid-cols-3">
+                <label className="text-xs text-muted">Artifact ID<input value={formArtifactId} onChange={(event) => setFormArtifactId(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+                <label className="text-xs text-muted">Artifact family<input value={formArtifactFamily} onChange={(event) => setFormArtifactFamily(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+                <label className="text-xs text-muted">Artifact type<input value={formArtifactType} onChange={(event) => setFormArtifactType(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+              </div>
+              <label className="text-xs text-muted">Source view<input value={formSourceView} onChange={(event) => setFormSourceView(event.target.value)} placeholder="memory, evidence, artifacts, search" className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+            </div>
+            <button type="button" onClick={() => saveFindingMutation.mutate()} disabled={saveFindingMutation.isPending || !formTitle.trim()} className="mt-5 rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50">
+              {saveFindingMutation.isPending ? "Saving..." : "Save finding"}
+            </button>
+          </div>
+        </div>
       ) : null}
     </section>
   );

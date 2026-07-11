@@ -1,14 +1,20 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.activity import log_activity
 from app.core.database import get_db
 from app.core.opensearch import fetch_event_by_id
+from app.models.artifact import Artifact
 from app.models.case import Case
+from app.models.case_host import CaseHost
 from app.models.detection_result import DetectionResult
+from app.models.evidence import Evidence
 from app.models.finding import Finding, FindingSeverity, FindingStatus
 from app.schemas.finding import FindingCreate, FindingRead, FindingUpdate
 from app.services.correlation_engine import run_correlation_engine
@@ -114,20 +120,38 @@ def _normalize_finding_create(case_id: str, payload: FindingCreate, db: Session)
             },
         )
 
-    if not event_ids and not requested_detection_ids:
-        raise HTTPException(status_code=400, detail="A finding must reference at least one event or detection.")
+    title = payload.title.strip()
+    description = payload.description
+    if not description and (event_ids or requested_detection_ids):
+        description = _default_finding_description(
+            event_ids=event_ids,
+            detection_ids=requested_detection_ids,
+            detections=detections,
+        )
 
-    title = (payload.title or "").strip() or _default_finding_title(
+    linked_evidence_id = payload.linked_evidence_id or payload.evidence_id
+    if linked_evidence_id:
+        evidence = db.get(Evidence, linked_evidence_id)
+        if not evidence or evidence.case_id != case_id:
+            raise HTTPException(status_code=400, detail="Linked evidence must belong to the selected case.")
+    linked_host_id = payload.linked_host_id
+    if linked_host_id:
+        host = db.get(CaseHost, linked_host_id)
+        if not host or host.case_id != case_id:
+            raise HTTPException(status_code=400, detail="Linked host must belong to the selected case.")
+    linked_artifact_id = payload.linked_artifact_id
+    if linked_artifact_id:
+        artifact = db.get(Artifact, linked_artifact_id)
+        if not artifact or artifact.case_id != case_id:
+            raise HTTPException(status_code=400, detail="Linked artifact must belong to the selected case.")
+
+    if not title:
+        title = _default_finding_title(
         event_ids=event_ids,
         detection_ids=requested_detection_ids,
         detections=detections,
         event_previews=event_previews,
-    )
-    description = payload.description or _default_finding_description(
-        event_ids=event_ids,
-        detection_ids=requested_detection_ids,
-        detections=detections,
-    )
+        )
 
     return {
         "title": title,
@@ -138,6 +162,13 @@ def _normalize_finding_create(case_id: str, payload: FindingCreate, db: Session)
         "event_ids": event_ids,
         "detection_ids": requested_detection_ids,
         "evidence_id": payload.evidence_id,
+        "linked_evidence_id": linked_evidence_id,
+        "linked_host_id": linked_host_id,
+        "linked_artifact_id": linked_artifact_id,
+        "linked_artifact_family": payload.linked_artifact_family,
+        "linked_artifact_type": payload.linked_artifact_type,
+        "source_view": payload.source_view,
+        "created_by": payload.created_by,
         "finding_type": payload.finding_type,
         "confidence": payload.confidence,
         "source": payload.source,
@@ -212,6 +243,11 @@ def list_findings(
     status_filter: FindingStatus | None = Query(default=None, alias="status"),
     finding_type: str | None = Query(default=None),
     evidence_id: str | None = Query(default=None),
+    linked_evidence_id: str | None = Query(default=None),
+    linked_host_id: str | None = Query(default=None),
+    tag: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    include_archived: bool = Query(default=False),
     host: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[Finding]:
@@ -226,8 +262,20 @@ def list_findings(
     if finding_type:
         query = query.filter(Finding.finding_type == finding_type)
     if evidence_id:
-        query = query.filter(Finding.evidence_id == evidence_id)
+        query = query.filter(or_(Finding.evidence_id == evidence_id, Finding.linked_evidence_id == evidence_id))
+    if linked_evidence_id:
+        query = query.filter(Finding.linked_evidence_id == linked_evidence_id)
+    if linked_host_id:
+        query = query.filter(Finding.linked_host_id == linked_host_id)
+    if not include_archived:
+        query = query.filter(Finding.status != FindingStatus.archived, Finding.archived_at.is_(None))
+    if q:
+        token = f"%{q.strip().lower()}%"
+        query = query.filter(or_(Finding.title.ilike(token), Finding.description.ilike(token)))
     items = query.order_by(Finding.created_at.desc()).all()
+    if tag:
+        wanted = tag.strip().lower()
+        items = [item for item in items if wanted in {str(value).strip().lower() for value in (item.tags or [])}]
     host_value = host.strip() if isinstance(host, str) else None
     if host_value:
         expanded_hosts = {value.lower() for value in expand_host_filter(db, case_id, host_value)}
@@ -258,19 +306,58 @@ def create_finding(case_id: str, payload: FindingCreate, db: Session = Depends(g
         title="Finding created",
         message=f"Created finding {item.title}",
         case_id=case_id,
-        metadata={"finding_id": item.id, "event_count": len(item.event_ids), "detection_count": len(item.detection_ids)},
+        metadata={"finding_id": item.id, "event_count": len(item.event_ids), "detection_count": len(item.detection_ids), "linked_evidence_id": item.linked_evidence_id, "linked_host_id": item.linked_host_id, "linked_artifact_id": item.linked_artifact_id},
     )
+    if item.linked_evidence_id or item.linked_host_id or item.linked_artifact_id:
+        log_activity(
+            db,
+            activity_type="finding_linked",
+            title="Finding linked",
+            message=f"Linked finding {item.title}",
+            case_id=case_id,
+            metadata={"finding_id": item.id, "linked_evidence_id": item.linked_evidence_id, "linked_host_id": item.linked_host_id, "linked_artifact_id": item.linked_artifact_id},
+        )
     return item
 
 
 @router.patch("/api/cases/{case_id}/findings/{finding_id}", response_model=FindingRead)
 def update_case_finding(case_id: str, finding_id: str, payload: FindingUpdate, db: Session = Depends(get_db)) -> Finding:
     item = _get_case_finding_or_404(db, case_id, finding_id)
-    for key, value in payload.model_dump(exclude_none=True).items():
+    updates = payload.model_dump(exclude_unset=True)
+    if "linked_evidence_id" in updates and updates["linked_evidence_id"]:
+        evidence = db.get(Evidence, updates["linked_evidence_id"])
+        if not evidence or evidence.case_id != case_id:
+            raise HTTPException(status_code=400, detail="Linked evidence must belong to the selected case.")
+    if "evidence_id" in updates and updates["evidence_id"]:
+        evidence = db.get(Evidence, updates["evidence_id"])
+        if not evidence or evidence.case_id != case_id:
+            raise HTTPException(status_code=400, detail="Linked evidence must belong to the selected case.")
+    if "linked_host_id" in updates and updates["linked_host_id"]:
+        host = db.get(CaseHost, updates["linked_host_id"])
+        if not host or host.case_id != case_id:
+            raise HTTPException(status_code=400, detail="Linked host must belong to the selected case.")
+    if "linked_artifact_id" in updates and updates["linked_artifact_id"]:
+        artifact = db.get(Artifact, updates["linked_artifact_id"])
+        if not artifact or artifact.case_id != case_id:
+            raise HTTPException(status_code=400, detail="Linked artifact must belong to the selected case.")
+    if "evidence_id" in updates and "linked_evidence_id" not in updates:
+        updates["linked_evidence_id"] = updates["evidence_id"]
+    for key, value in updates.items():
         setattr(item, key, value)
     db.commit()
     db.refresh(item)
+    log_activity(db, activity_type="finding_updated", title="Finding updated", message=f"Updated finding {item.title}", case_id=case_id, metadata={"finding_id": item.id})
     return item
+
+
+@router.delete("/api/cases/{case_id}/findings/{finding_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_case_finding(case_id: str, finding_id: str, db: Session = Depends(get_db)) -> Response:
+    item = _get_case_finding_or_404(db, case_id, finding_id)
+    item.status = FindingStatus.archived
+    item.archived_at = datetime.now(timezone.utc)
+    db.commit()
+    log_activity(db, activity_type="finding_archived", title="Finding archived", message=f"Archived finding {item.title}", case_id=case_id, metadata={"finding_id": item.id})
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.patch("/api/findings/{finding_id}", response_model=FindingRead)

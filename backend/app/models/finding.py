@@ -16,11 +16,14 @@ class FindingSeverity(str, enum.Enum):
 
 
 class FindingStatus(str, enum.Enum):
+    draft = "draft"
+    review = "review"
     new = "new"
     triaged = "triaged"
     investigating = "investigating"
     confirmed = "confirmed"
     false_positive = "false_positive"
+    archived = "archived"
     accepted_risk = "accepted_risk"
     resolved = "resolved"
     suppressed = "suppressed"
@@ -58,6 +61,13 @@ class Finding(UUIDMixin, TimestampMixin, Base):
     event_ids: Mapped[list] = mapped_column(JSONVariant, default=list, nullable=False)
     detection_ids: Mapped[list] = mapped_column(JSONVariant, default=list, nullable=False)
     evidence_id: Mapped[str | None] = mapped_column(ForeignKey("evidences.id", ondelete="SET NULL"), nullable=True, index=True)
+    linked_evidence_id: Mapped[str | None] = mapped_column(ForeignKey("evidences.id", ondelete="SET NULL"), nullable=True, index=True)
+    linked_host_id: Mapped[str | None] = mapped_column(ForeignKey("case_hosts.id", ondelete="SET NULL"), nullable=True, index=True)
+    linked_artifact_id: Mapped[str | None] = mapped_column(ForeignKey("artifacts.id", ondelete="SET NULL"), nullable=True, index=True)
+    linked_artifact_family: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    linked_artifact_type: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    source_view: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     finding_type: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     confidence: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     source: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
@@ -88,5 +98,10 @@ class Finding(UUIDMixin, TimestampMixin, Base):
     primary_host_id: Mapped[str | None] = mapped_column(ForeignKey("case_hosts.id", ondelete="SET NULL"), nullable=True)
     related_host_ids: Mapped[list] = mapped_column(JSONVariant, default=list, nullable=False)
     host_scope: Mapped[str] = mapped_column(String(32), default="single_host", nullable=False)
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
 
     case = relationship("Case", back_populates="findings")
+
+    @property
+    def body(self) -> str | None:
+        return self.description

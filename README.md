@@ -172,6 +172,11 @@ docker compose up -d --force-recreate
 
 3. Index evidence for investigation
    - Click Index evidence for investigation.
+
+4. Capture findings and notes
+   - Open the case Findings tab.
+   - Create draft notes or confirmed findings with severity, status, tags, and evidence/host links.
+   - Use Add finding from Evidence Detail or Memory to prefill context.
    - Use recommended indexing for the normal path.
    - Use Index selected artifact types only when you want a focused parse.
 

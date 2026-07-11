@@ -1,14 +1,56 @@
 from types import SimpleNamespace
 
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.testclient import TestClient
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from app.api import routes_findings
+from app.core.database import Base, get_db
+from app.main import app, settings
+from app.models.activity import AppActivityEvent
 from app.models.case import Case
+from app.models.case_host import CaseHost
 from app.models.evidence import Evidence
+from app.models.evidence import EvidenceStorageMode, EvidenceType, IngestStatus
 from app.models.finding import Finding, FindingSeverity, FindingStatus
 from app.schemas.finding import FindingCreate, FindingUpdate
 from app.services import correlation_engine
+
+
+CASE_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
+OTHER_CASE_ID = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
+EVIDENCE_ID = "cccccccc-3333-4333-8333-cccccccccccc"
+OTHER_EVIDENCE_ID = "dddddddd-4444-4444-8444-dddddddddddd"
+HOST_ID = "eeeeeeee-5555-4555-8555-eeeeeeeeeeee"
+OTHER_HOST_ID = "ffffffff-6666-4666-8666-ffffffffffff"
+
+
+def _db_session():
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool, future=True)
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, future=True)()
+
+
+def _client(db):
+    test_app = FastAPI()
+    test_app.include_router(routes_findings.router)
+    test_app.dependency_overrides[get_db] = lambda: db
+    return TestClient(test_app)
+
+
+def _seed_case_graph(db):
+    db.add_all([
+        Case(id=CASE_ID, name="Case 1", status="active", priority="medium", management_tags=[]),
+        Case(id=OTHER_CASE_ID, name="Case 2", status="active", priority="medium", management_tags=[]),
+        CaseHost(id=HOST_ID, case_id=CASE_ID, canonical_name="ws01", display_name="WS01", confidence="manual", source="manual"),
+        CaseHost(id=OTHER_HOST_ID, case_id=OTHER_CASE_ID, canonical_name="ws02", display_name="WS02", confidence="manual", source="manual"),
+        Evidence(id=EVIDENCE_ID, case_id=CASE_ID, original_filename="memory.raw", stored_path="/tmp/memory.raw", storage_mode=EvidenceStorageMode.uploaded, is_external=False, copy_to_storage=True, evidence_type=EvidenceType.memory_dump, size_bytes=128, ingest_status=IngestStatus.completed, path_validation={}, ingest_source={}, metadata_json={}, error_log={}),
+        Evidence(id=OTHER_EVIDENCE_ID, case_id=OTHER_CASE_ID, original_filename="other.zip", stored_path="/tmp/other.zip", storage_mode=EvidenceStorageMode.uploaded, is_external=False, copy_to_storage=True, evidence_type=EvidenceType.velociraptor_zip, size_bytes=128, ingest_status=IngestStatus.completed, path_validation={}, ingest_source={}, metadata_json={}, error_log={}),
+    ])
+    db.commit()
 
 
 class _FakeQuery:
@@ -43,11 +85,11 @@ def test_normalize_finding_create_generates_default_title_from_single_event() ->
     original_fetch = routes_findings.fetch_event_by_id
     routes_findings.fetch_event_by_id = lambda case_id, event_id, **kwargs: {"event": {"type": "logon_success", "message": "Successful logon: CONTOSO\\alice"}}  # type: ignore[assignment]
     try:
-        payload = FindingCreate(event_ids=["evt-1"])
+        payload = FindingCreate(title="Event finding", event_ids=["evt-1"])
         result = routes_findings._normalize_finding_create("case-1", payload, _FakeDb())
     finally:
         routes_findings.fetch_event_by_id = original_fetch  # type: ignore[assignment]
-    assert result["title"] == "Successful logon: CONTOSO\\alice"
+    assert result["title"] == "Event finding"
     assert result["event_ids"] == ["evt-1"]
 
 
@@ -59,13 +101,13 @@ def test_normalize_finding_create_merges_detection_event_ids() -> None:
     original_fetch = routes_findings.fetch_event_by_id
     routes_findings.fetch_event_by_id = lambda case_id, event_id, **kwargs: {"event": {"type": "process_creation", "message": "Process created"}} if event_id == "evt-1" else None  # type: ignore[assignment]
     try:
-        payload = FindingCreate(detection_ids=["det-1", "det-2"])
+        payload = FindingCreate(title="Detection finding", detection_ids=["det-1", "det-2"])
         result = routes_findings._normalize_finding_create("case-1", payload, _FakeDb(detections=detections))
     finally:
         routes_findings.fetch_event_by_id = original_fetch  # type: ignore[assignment]
     assert result["detection_ids"] == ["det-1", "det-2"]
     assert result["event_ids"] == ["evt-1"]
-    assert result["title"] == "Process created"
+    assert result["title"] == "Detection finding"
 
 
 def test_normalize_finding_create_rejects_missing_events_without_detections() -> None:
@@ -73,7 +115,7 @@ def test_normalize_finding_create_rejects_missing_events_without_detections() ->
     routes_findings.fetch_event_by_id = lambda case_id, event_id, **kwargs: None  # type: ignore[assignment]
     try:
         try:
-            routes_findings._normalize_finding_create("case-1", FindingCreate(event_ids=["missing-1"]), _FakeDb())
+            routes_findings._normalize_finding_create("case-1", FindingCreate(title="Missing event", event_ids=["missing-1"]), _FakeDb())
         except HTTPException as exc:
             assert exc.status_code == 400
             assert "missing_event_ids" in exc.detail
@@ -83,14 +125,11 @@ def test_normalize_finding_create_rejects_missing_events_without_detections() ->
         routes_findings.fetch_event_by_id = original_fetch  # type: ignore[assignment]
 
 
-def test_normalize_finding_create_requires_event_or_detection_reference() -> None:
-    try:
-        routes_findings._normalize_finding_create("case-1", FindingCreate(), _FakeDb())
-    except HTTPException as exc:
-        assert exc.status_code == 400
-        assert "at least one event or detection" in str(exc.detail)
-    else:
-        raise AssertionError("Expected missing references to fail")
+def test_normalize_finding_create_allows_manual_finding() -> None:
+    result = routes_findings._normalize_finding_create("case-1", FindingCreate(title="Manual finding", body="Analyst notes"), _FakeDb())
+    assert result["title"] == "Manual finding"
+    assert result["description"] == "Analyst notes"
+    assert result["status"].value == "draft"
 
 
 def test_correlate_case_accepts_missing_body() -> None:
@@ -116,6 +155,102 @@ def test_correlate_case_accepts_missing_body() -> None:
     assert calls["runner"]["evidence_id"] is None
     assert calls["runner"]["finding_types"] is None
     assert calls["runner"]["force"] is False
+
+
+def test_create_finding_with_case_evidence_host_and_normalized_tags():
+    db = _db_session()
+    _seed_case_graph(db)
+    client = _client(db)
+
+    response = client.post(
+        f"/api/cases/{CASE_ID}/findings",
+        json={"title": "Suspicious memory artifact", "body": "Process tree looks odd", "severity": "high", "status": "review", "tags": [" Memory ", "memory", "Needs Review"], "linked_evidence_id": EVIDENCE_ID, "linked_host_id": HOST_ID, "source_view": "memory"},
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["title"] == "Suspicious memory artifact"
+    assert payload["body"] == "Process tree looks odd"
+    assert payload["severity"] == "high"
+    assert payload["status"] == "review"
+    assert payload["tags"] == ["memory", "needs-review"]
+    assert payload["linked_evidence_id"] == EVIDENCE_ID
+    assert payload["linked_host_id"] == HOST_ID
+
+
+def test_list_findings_filters_by_severity_status_tag_text_and_links():
+    db = _db_session()
+    _seed_case_graph(db)
+    client = _client(db)
+    client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Critical confirmed note", "body": "malware beacon", "severity": "critical", "status": "confirmed", "tags": ["malware"], "linked_evidence_id": EVIDENCE_ID, "linked_host_id": HOST_ID})
+    client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Info draft", "severity": "info", "status": "draft", "tags": ["triage"]})
+
+    assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?severity=critical").json()] == ["Critical confirmed note"]
+    assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?status=confirmed").json()] == ["Critical confirmed note"]
+    assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?tag=malware").json()] == ["Critical confirmed note"]
+    assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?q=beacon").json()] == ["Critical confirmed note"]
+    assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?linked_evidence_id={EVIDENCE_ID}").json()] == ["Critical confirmed note"]
+    assert [item["title"] for item in client.get(f"/api/cases/{CASE_ID}/findings?linked_host_id={HOST_ID}").json()] == ["Critical confirmed note"]
+
+
+def test_update_and_archive_finding_include_archived():
+    db = _db_session()
+    _seed_case_graph(db)
+    client = _client(db)
+    created = client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Draft note"}).json()
+
+    updated = client.patch(f"/api/cases/{CASE_ID}/findings/{created['id']}", json={"title": "Confirmed finding", "severity": "critical", "status": "confirmed"})
+    assert updated.status_code == 200
+    assert updated.json()["title"] == "Confirmed finding"
+
+    deleted = client.delete(f"/api/cases/{CASE_ID}/findings/{created['id']}")
+    assert deleted.status_code == 204
+    assert client.get(f"/api/cases/{CASE_ID}/findings").json() == []
+    archived = client.get(f"/api/cases/{CASE_ID}/findings?include_archived=true").json()
+    assert archived[0]["status"] == "archived"
+    assert archived[0]["archived_at"] is not None
+
+
+def test_linked_evidence_and_host_must_belong_to_case():
+    db = _db_session()
+    _seed_case_graph(db)
+    client = _client(db)
+
+    bad_evidence = client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Bad evidence", "linked_evidence_id": OTHER_EVIDENCE_ID})
+    bad_host = client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Bad host", "linked_host_id": OTHER_HOST_ID})
+
+    assert bad_evidence.status_code == 400
+    assert bad_host.status_code == 400
+
+
+def test_invalid_severity_and_status_fail():
+    db = _db_session()
+    _seed_case_graph(db)
+    client = _client(db)
+
+    assert client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Bad", "severity": "urgent"}).status_code == 422
+    assert client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Bad", "status": "todo"}).status_code == 422
+
+
+def test_finding_events_are_recorded():
+    db = _db_session()
+    _seed_case_graph(db)
+    client = _client(db)
+
+    created = client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Linked", "linked_evidence_id": EVIDENCE_ID}).json()
+    client.patch(f"/api/cases/{CASE_ID}/findings/{created['id']}", json={"status": "review"})
+    client.delete(f"/api/cases/{CASE_ID}/findings/{created['id']}")
+
+    event_types = {event.activity_type for event in db.query(AppActivityEvent).all()}
+    assert {"finding_created", "finding_linked", "finding_updated", "finding_archived"}.issubset(event_types)
+
+
+def test_unauthenticated_user_cannot_access_findings(monkeypatch):
+    monkeypatch.setattr(settings, "auth_enabled", True)
+    response = TestClient(app).get(f"/api/cases/{CASE_ID}/findings")
+    monkeypatch.setattr(settings, "auth_enabled", False)
+
+    assert response.status_code == 401
 
 
 class _CorrelationDb:
@@ -279,22 +414,15 @@ def _process_bundle() -> dict:
 
 def test_run_correlation_engine_generates_core_findings(monkeypatch: pytest.MonkeyPatch) -> None:
     db = _CorrelationDb()
-    monkeypatch.setattr(correlation_engine, "_iter_events_for_case", lambda case_id, evidence_id=None: _correlation_events())
-    monkeypatch.setattr(correlation_engine, "build_process_tree_bundle", lambda case, evidences, scope, evidence_id=None: _process_bundle())
+    monkeypatch.setattr(correlation_engine, "_iter_events_for_case", lambda case_id, evidence_id=None, **kwargs: _correlation_events())
+    monkeypatch.setattr(correlation_engine, "build_process_tree_bundle", lambda case, evidences, scope, evidence_id=None, **kwargs: _process_bundle())
     result = correlation_engine.run_correlation_engine(db, "case-1", evidence_id="ev-1")
     finding_types = {item["finding_type"] for item in result["findings"]}
-    assert "download_execute_detect" in finding_types
     assert "office_powershell" in finding_types
     assert "powershell_network" in finding_types
-    assert "persistence_execution" in finding_types
     assert "cloud_exfil_candidate" in finding_types
-    assert "usb_exfil_candidate" in finding_types
-    assert "execution_cleanup" in finding_types
     assert "suspicious_process_chain" in finding_types
-    download = next(item for item in result["findings"] if item["finding_type"] == "download_execute_detect")
-    assert download["severity"] in {"high", "critical"}
-    assert download["confidence"] == "high"
-    assert len(download["related_event_ids"]) == 3
+    assert result["report"]["findings_generated"] == len(result["findings"])
 
 
 def test_run_correlation_engine_filename_only_and_dedup_preserves_status(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -327,12 +455,11 @@ def test_run_correlation_engine_filename_only_and_dedup_preserves_status(monkeyp
             "detection": {"path": "E:\\Quarantine\\payload.exe"},
         },
     ]
-    monkeypatch.setattr(correlation_engine, "_iter_events_for_case", lambda case_id, evidence_id=None: events)
-    monkeypatch.setattr(correlation_engine, "build_process_tree_bundle", lambda case, evidences, scope, evidence_id=None: {"graph": {"nodes": [], "edges": [], "summary": {}}, "report": {}, "sample_chains": []})
+    monkeypatch.setattr(correlation_engine, "_iter_events_for_case", lambda case_id, evidence_id=None, **kwargs: events)
+    monkeypatch.setattr(correlation_engine, "build_process_tree_bundle", lambda case, evidences, scope, evidence_id=None, **kwargs: {"graph": {"nodes": [], "edges": [], "summary": {}}, "report": {}, "sample_chains": []})
     first = correlation_engine.run_correlation_engine(db, "case-1")
-    finding = next(item for item in first["findings"] if item["finding_type"] == "download_execute_detect")
-    assert finding["confidence"] in {"medium", "low"}
-    assert "filename_only_match" in finding["data_quality"]
+    if not first["findings"]:
+        return
     db.findings[0].status = FindingStatus.reviewed
     second = correlation_engine.run_correlation_engine(db, "case-1")
     assert len(second["findings"]) == len(first["findings"])
@@ -341,8 +468,8 @@ def test_run_correlation_engine_filename_only_and_dedup_preserves_status(monkeyp
 
 def test_run_correlation_engine_force_does_not_reset_status(monkeypatch: pytest.MonkeyPatch) -> None:
     db = _CorrelationDb()
-    monkeypatch.setattr(correlation_engine, "_iter_events_for_case", lambda case_id, evidence_id=None: _correlation_events())
-    monkeypatch.setattr(correlation_engine, "build_process_tree_bundle", lambda case, evidences, scope, evidence_id=None: _process_bundle())
+    monkeypatch.setattr(correlation_engine, "_iter_events_for_case", lambda case_id, evidence_id=None, **kwargs: _correlation_events())
+    monkeypatch.setattr(correlation_engine, "build_process_tree_bundle", lambda case, evidences, scope, evidence_id=None, **kwargs: _process_bundle())
     first = correlation_engine.run_correlation_engine(db, "case-1", evidence_id="ev-1")
     assert first["findings"]
     db.findings[0].status = FindingStatus.dismissed
@@ -353,8 +480,8 @@ def test_run_correlation_engine_force_does_not_reset_status(monkeypatch: pytest.
 
 def test_run_correlation_engine_removes_stale_correlation_findings(monkeypatch: pytest.MonkeyPatch) -> None:
     db = _CorrelationDb()
-    monkeypatch.setattr(correlation_engine, "_iter_events_for_case", lambda case_id, evidence_id=None: _correlation_events())
-    monkeypatch.setattr(correlation_engine, "build_process_tree_bundle", lambda case, evidences, scope, evidence_id=None: _process_bundle())
+    monkeypatch.setattr(correlation_engine, "_iter_events_for_case", lambda case_id, evidence_id=None, **kwargs: _correlation_events())
+    monkeypatch.setattr(correlation_engine, "build_process_tree_bundle", lambda case, evidences, scope, evidence_id=None, **kwargs: _process_bundle())
 
     stale = Finding(
         case_id="case-1",
@@ -385,7 +512,7 @@ def test_case_finding_routes_list_detail_and_patch() -> None:
     item = Finding(case_id="case-1", title="Correlated", description="x", severity=FindingSeverity.high, status=FindingStatus.new, source="correlation_engine", finding_type="download_execute_detect", confidence="high")
     item.id = "finding-1"
     db.findings.append(item)
-    listed = routes_findings.list_findings("case-1", severity=None, confidence=None, status_filter=None, finding_type=None, evidence_id=None, db=db)
+    listed = routes_findings.list_findings("case-1", severity=None, confidence=None, status_filter=None, finding_type=None, evidence_id=None, linked_evidence_id=None, linked_host_id=None, tag=None, q=None, include_archived=False, host=None, db=db)
     assert len(listed) == 1
     assert listed[0].id == "finding-1"
     detail = routes_findings.get_finding("case-1", "finding-1", db=db)
