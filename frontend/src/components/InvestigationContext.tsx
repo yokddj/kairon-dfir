@@ -69,6 +69,7 @@ export default function InvestigationContext({ caseId, caseName, hostId, host, e
   const defaultActions: ContextAction[] = caseId
     ? [
         { label: "Search", to: `/cases/${caseId}/search`, description: "Cross-artifact search" },
+        { label: "Findings", to: `/cases/${caseId}/findings`, description: "Document notes and confirmed findings" },
         { label: "Timeline", to: `/cases/${caseId}/search?view=timeline&sort=@timestamp&order=asc`, description: "Chronological view" },
         { label: "Artifact Views", to: `/cases/${caseId}/artifacts`, description: "Focused artifact families" },
         { label: "Processing", to: `/cases/${caseId}?tab=processing`, description: "Evidence queue and runs" },
