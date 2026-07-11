@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db, utc_now
+from app.models.artifact import Artifact
 from app.models.case import Case
+from app.models.case_host import CaseHost
+from app.models.evidence import Evidence
 from app.models.finding import Finding, FindingSeverity, FindingStatus
 from app.models.rule_run import RuleRun, RuleRunStatus
 from app.services.hunting import (
@@ -195,6 +199,10 @@ def hunting_list_findings(
     category: str | None = None,
     source_category: str | None = None,
     evidence_id: str | None = None,
+    linked_evidence_id: str | None = None,
+    linked_host_id: str | None = None,
+    q: str | None = None,
+    include_archived: bool = False,
     process_entity_id: str | None = None,
     pid: int | None = None,
     tag: str | None = None,
@@ -218,9 +226,18 @@ def hunting_list_findings(
     if rule:
         query = query.filter(Finding.finding_type == rule)
     if evidence_id:
-        query = query.filter((Finding.evidence_id == evidence_id) | Finding.related_evidence_ids.contains([evidence_id]))
+        query = query.filter(or_(Finding.evidence_id == evidence_id, Finding.linked_evidence_id == evidence_id, Finding.related_evidence_ids.contains([evidence_id])))
+    if linked_evidence_id:
+        query = query.filter(Finding.linked_evidence_id == linked_evidence_id)
+    if linked_host_id:
+        query = query.filter(Finding.linked_host_id == linked_host_id)
     if tag:
         query = query.filter(Finding.tags.contains([tag]))
+    if q:
+        token = f"%{q.strip().lower()}%"
+        query = query.filter(or_(Finding.title.ilike(token), Finding.description.ilike(token)))
+    if not include_archived:
+        query = query.filter(Finding.status != FindingStatus.archived, Finding.archived_at.is_(None))
     if time_from:
         query = query.filter(Finding.time_end >= time_from)
     if time_to:
@@ -258,7 +275,22 @@ def hunting_get_finding(case_id: str, finding_id: str, db: Session = Depends(get
 @router.patch("/api/cases/{case_id}/findings/{finding_id}")
 def hunting_patch_finding(case_id: str, finding_id: str, payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
     finding = _finding_or_404(db, case_id, finding_id)
-    allowed = {"title", "description", "confidence"}
+    allowed = {"title", "description", "confidence", "severity", "tags", "evidence_id", "linked_evidence_id", "linked_host_id", "linked_artifact_id", "linked_artifact_family", "linked_artifact_type", "source_view", "created_by"}
+    if "body" in payload and "description" not in payload:
+        payload["description"] = payload["body"]
+    for evidence_key in ("evidence_id", "linked_evidence_id"):
+        if payload.get(evidence_key):
+            evidence = db.get(Evidence, payload[evidence_key])
+            if not evidence or evidence.case_id != case_id:
+                raise HTTPException(status_code=400, detail="Linked evidence must belong to the selected case.")
+    if payload.get("linked_host_id"):
+        host = db.get(CaseHost, payload["linked_host_id"])
+        if not host or host.case_id != case_id:
+            raise HTTPException(status_code=400, detail="Linked host must belong to the selected case.")
+    if payload.get("linked_artifact_id"):
+        artifact = db.get(Artifact, payload["linked_artifact_id"])
+        if not artifact or artifact.case_id != case_id:
+            raise HTTPException(status_code=400, detail="Linked artifact must belong to the selected case.")
     if "status" in payload:
         finding = update_finding_status(db, finding, status=str(payload["status"]), analyst=str(payload.get("analyst") or "analyst"), note=payload.get("note"), reason=payload.get("reason"))
     if "assigned_to" in payload:
@@ -268,7 +300,13 @@ def hunting_patch_finding(case_id: str, finding_id: str, payload: dict = Body(..
             finding = unassign_finding(db, finding, unassigned_by=str(payload.get("assigned_by") or "analyst"))
     for key, value in payload.items():
         if key in allowed:
+            if key == "severity" and value is not None:
+                value = FindingSeverity(value)
+            if key == "tags" and isinstance(value, list):
+                value = [str(tag).strip().lower().replace(" ", "-") for tag in value if str(tag).strip()]
             setattr(finding, key, value)
+    if "evidence_id" in payload and "linked_evidence_id" not in payload:
+        finding.linked_evidence_id = payload["evidence_id"]
     db.commit()
     db.refresh(finding)
     return finding_to_dict(finding)

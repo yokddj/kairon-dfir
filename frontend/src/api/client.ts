@@ -2181,7 +2181,7 @@ export type Artifact = {
 
 export type FindingSeverity = "info" | "low" | "medium" | "high" | "critical";
 export type FindingConfidence = "low" | "medium" | "high" | "exact";
-export type FindingStatus = "new" | "reviewed" | "triaged" | "investigating" | "confirmed" | "false_positive" | "accepted_risk" | "resolved" | "suppressed" | "dismissed" | "open" | "closed";
+export type FindingStatus = "draft" | "review" | "new" | "reviewed" | "triaged" | "investigating" | "confirmed" | "false_positive" | "archived" | "accepted_risk" | "resolved" | "suppressed" | "dismissed" | "open" | "closed";
 
 export type FindingTimelineItem = {
   timestamp?: string | null;
@@ -2201,6 +2201,7 @@ export type Finding = {
   title: string;
   summary?: string | null;
   description?: string | null;
+  body?: string | null;
   severity: FindingSeverity;
   confidence?: FindingConfidence | null;
   status: FindingStatus;
@@ -2208,6 +2209,13 @@ export type Finding = {
   query?: string | null;
   event_ids?: string[];
   detection_ids?: string[];
+  linked_evidence_id?: string | null;
+  linked_host_id?: string | null;
+  linked_artifact_id?: string | null;
+  linked_artifact_family?: string | null;
+  linked_artifact_type?: string | null;
+  source_view?: string | null;
+  created_by?: string | null;
   time_start?: string | null;
   time_end?: string | null;
   timeline?: FindingTimelineItem[];
@@ -2248,6 +2256,7 @@ export type Finding = {
   correlation_version?: string | null;
   data_quality?: string[];
   fingerprint?: string | null;
+  archived_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -6717,8 +6726,13 @@ export const api = {
       status?: string;
       finding_type?: string;
       evidence_id?: string;
+      linked_evidence_id?: string;
+      linked_host_id?: string;
       host?: string;
       host_id?: string;
+      tag?: string;
+      q?: string;
+      include_archived?: boolean;
     },
   ) => {
     const query = new URLSearchParams();
@@ -6727,8 +6741,13 @@ export const api = {
     if (params?.status) query.set("status", params.status);
     if (params?.finding_type) query.set("finding_type", params.finding_type);
     if (params?.evidence_id) query.set("evidence_id", params.evidence_id);
+    if (params?.linked_evidence_id) query.set("linked_evidence_id", params.linked_evidence_id);
+    if (params?.linked_host_id) query.set("linked_host_id", params.linked_host_id);
     if (params?.host) query.set("host", params.host);
     if (params?.host_id) query.set("host_id", params.host_id);
+    if (params?.tag) query.set("tag", params.tag);
+    if (params?.q) query.set("q", params.q);
+    if (params?.include_archived) query.set("include_archived", "true");
     return request<Finding[] | FindingListResponse>(`/cases/${caseId}/findings${query.size ? `?${query.toString()}` : ""}`).then((payload) => Array.isArray(payload) ? payload : payload.items);
   },
   listFindingsPage: (
@@ -6741,9 +6760,13 @@ export const api = {
       category?: string;
       source_category?: string;
       evidence_id?: string;
+      linked_evidence_id?: string;
+      linked_host_id?: string;
       process_entity_id?: string;
       pid?: number | string;
       tag?: string;
+      q?: string;
+      include_archived?: boolean;
       suppressed?: boolean;
       assigned_to?: string;
       has_correlations?: boolean;
@@ -6758,11 +6781,12 @@ export const api = {
     for (const [key, value] of Object.entries(params ?? {})) {
       if (value !== undefined && value !== "") query.set(key, String(value));
     }
-    return request<FindingListResponse>(`/cases/${caseId}/findings${query.size ? `?${query.toString()}` : ""}`);
+    return request<FindingListResponse | Finding[]>(`/cases/${caseId}/findings${query.size ? `?${query.toString()}` : ""}`).then((payload) => Array.isArray(payload) ? { items: payload, results: payload, total: payload.length, page: params?.page ?? 1, page_size: params?.page_size ?? payload.length, total_pages: payload.length ? 1 : 0 } : payload);
   },
   getFinding: (caseId: string, findingId: string) => request<FindingDetail | Finding>(`/cases/${caseId}/findings/${findingId}`),
   createFinding: (caseId: string, payload: Partial<Finding>) => request<Finding>(`/cases/${caseId}/findings`, { method: "POST", body: JSON.stringify(payload) }),
   updateFinding: (caseId: string, findingId: string, payload: Partial<Finding>) => request<Finding>(`/cases/${caseId}/findings/${findingId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteFinding: (caseId: string, findingId: string) => request<void>(`/cases/${caseId}/findings/${findingId}`, { method: "DELETE" }),
   updateFindingStatus: (caseId: string, findingId: string, payload: { status: string; analyst?: string; note?: string | null }) =>
     request<Finding>(`/cases/${caseId}/findings/${findingId}/status`, { method: "POST", body: JSON.stringify(payload) }),
   suppressFinding: (caseId: string, findingId: string, payload?: { analyst?: string; reason?: string | null }) =>
