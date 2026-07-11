@@ -2206,3 +2206,51 @@ def _v23_evidence_integrity_chain_of_custody(connection: Connection) -> None:
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_custody_events_evidence_id ON evidence_custody_events (evidence_id)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_custody_events_event_type ON evidence_custody_events (event_type)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_custody_events_timestamp ON evidence_custody_events (timestamp)"))
+
+
+# ---------------------------------------------------------------------------
+# v24: Evidence custody enum values for host assignment events
+# ---------------------------------------------------------------------------
+
+
+@register(24, "evidence_custody_host_assignment_event_types")
+def _v24_evidence_custody_host_assignment_event_types(connection: Connection) -> None:
+    if connection.dialect.name != "postgresql":
+        return
+
+    enum_exists = connection.execute(
+        text("SELECT 1 FROM pg_type WHERE typname = 'evidencecustodyeventtype'")
+    ).fetchone()
+    if not enum_exists:
+        return
+
+    for value in ("host_assigned", "host_unassigned", "host_created", "host_assignment_changed"):
+        connection.execute(text(f"ALTER TYPE evidencecustodyeventtype ADD VALUE IF NOT EXISTS '{value}'"))
+
+
+# ---------------------------------------------------------------------------
+# v25: Case management metadata
+# ---------------------------------------------------------------------------
+
+
+@register(25, "case_management_metadata")
+def _v25_case_management_metadata(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    if "cases" not in inspector.get_table_names():
+        return
+    dialect = connection.dialect.name
+    existing = {c["name"] for c in inspector.get_columns("cases")}
+
+    if dialect == "postgresql" and "status" in existing:
+        connection.execute(text("ALTER TABLE cases ALTER COLUMN status TYPE VARCHAR(32) USING status::text"))
+    if "priority" not in existing:
+        connection.execute(text("ALTER TABLE cases ADD COLUMN priority VARCHAR(32) NOT NULL DEFAULT 'medium'"))
+    if "case_notes" not in existing:
+        connection.execute(text("ALTER TABLE cases ADD COLUMN case_notes TEXT"))
+    if "management_tags" not in existing:
+        tags_type = "JSONB" if dialect == "postgresql" else "JSON"
+        default_value = "'[]'::jsonb" if dialect == "postgresql" else "'[]'"
+        connection.execute(text(f"ALTER TABLE cases ADD COLUMN management_tags {tags_type} NOT NULL DEFAULT {default_value}"))
+
+    connection.execute(text("UPDATE cases SET status = 'active' WHERE status = 'open' OR status IS NULL"))
+    connection.execute(text("UPDATE cases SET priority = 'medium' WHERE priority IS NULL OR priority = ''"))
