@@ -101,7 +101,7 @@ from app.services.problematic_artifacts import (
     resolve_problematic_artifact_path,
     run_evtx_health_check,
 )
-from app.services.host_identity import is_invalid_host_value
+from app.services.host_identity import create_manual_case_host, is_invalid_host_value
 from app.services.memory.upload_lifecycle import (
     MemoryUploadRegistrationError,
     create_memory_upload,
@@ -112,6 +112,7 @@ from app.services.memory.upload_lifecycle import (
 )
 from app.services.usable_ingest import FULL_FORENSIC_MODE, USABLE_INGEST_MODE, ingest_mode_metadata, normalize_ingest_mode
 from app.models.user import User
+from app.models.assignment_history import AssignmentHistory
 from datetime import UTC, datetime
 from app.services.reassignment import execute_host_reassignment, backfill_evidence_documents, invalidate_host_caches
 from app.services.reconciliation import capture_reprocess_baseline
@@ -189,6 +190,129 @@ def _record_upload_custody_events(db: Session, evidence: Evidence, *, actor_user
 def _current_user_id(current_user: User | None) -> str | None:
     value = getattr(current_user, "id", None)
     return str(value) if value else None
+
+
+def _actor_label(current_user: User | None, fallback: str | None = None) -> str:
+    return fallback or _current_user_id(current_user) or "analyst"
+
+
+def _host_display_name(db: Session, host_id: str | None) -> str | None:
+    if not host_id:
+        return None
+    host = db.get(CaseHost, host_id)
+    return host.display_name if host else None
+
+
+def _record_host_assignment_event(
+    db: Session,
+    evidence: Evidence,
+    *,
+    previous_host_id: str | None,
+    new_host_id: str | None,
+    actor_user_id: str | None,
+    actor: str,
+    reason: str | None,
+    method: str,
+    host_created: bool = False,
+) -> None:
+    if previous_host_id and new_host_id and previous_host_id != new_host_id:
+        event_type = EvidenceCustodyEventType.host_assignment_changed
+    elif new_host_id:
+        event_type = EvidenceCustodyEventType.host_assigned
+    else:
+        event_type = EvidenceCustodyEventType.host_unassigned
+    previous_name = _host_display_name(db, previous_host_id)
+    new_name = _host_display_name(db, new_host_id)
+    summary = f"Evidence assigned to host {new_name}." if new_name else "Evidence host assignment cleared."
+    record_evidence_event(
+        db,
+        evidence,
+        event_type,
+        summary,
+        actor_user_id=actor_user_id,
+        details={
+            "previous_host_id": previous_host_id,
+            "previous_host_name": previous_name,
+            "new_host_id": new_host_id,
+            "new_host_name": new_name,
+            "detected_host": evidence.detected_host,
+            "actor_user_id": actor_user_id,
+            "actor": actor,
+            "reason": reason,
+            "method": method,
+            "host_created": host_created,
+        },
+    )
+    if host_created and new_host_id:
+        record_evidence_event(
+            db,
+            evidence,
+            EvidenceCustodyEventType.host_created,
+            f"Host {new_name or new_host_id} created from evidence assignment.",
+            actor_user_id=actor_user_id,
+            details={"new_host_id": new_host_id, "new_host_name": new_name, "detected_host": evidence.detected_host, "actor_user_id": actor_user_id},
+        )
+
+
+def _set_evidence_host_assignment(
+    db: Session,
+    evidence: Evidence,
+    *,
+    host_id: str | None,
+    actor_user_id: str | None,
+    actor: str,
+    reason: str | None = None,
+    method: str = "analyst_assigned",
+    confidence: str = "high",
+    host_created: bool = False,
+) -> Evidence:
+    previous_host_id = evidence.host_id
+    previous_status = evidence.host_assignment_status
+    if host_id:
+        host = db.get(CaseHost, host_id)
+        if not host or host.case_id != evidence.case_id:
+            raise HTTPException(status_code=400, detail="Host not found in this case")
+    evidence.host_id = host_id
+    evidence.host_assignment_status = "confirmed" if host_id else "unassigned"
+    evidence.host_assignment_method = method if host_id else "analyst_unassigned"
+    evidence.host_assignment_confidence = confidence if host_id else None
+    evidence.host_assignment_reason = reason
+    evidence.host_assignment_updated_at = utc_now().isoformat()
+    evidence.host_assignment_updated_by = actor
+    db.add(
+        AssignmentHistory(
+            evidence_id=evidence.id,
+            case_id=evidence.case_id,
+            previous_host_id=previous_host_id,
+            new_host_id=host_id,
+            previous_status=previous_status,
+            new_status=evidence.host_assignment_status,
+            method=evidence.host_assignment_method,
+            confidence=evidence.host_assignment_confidence,
+            actor=actor,
+            reason=reason,
+            created_at_str=utc_now().isoformat(),
+        )
+    )
+    _record_host_assignment_event(
+        db,
+        evidence,
+        previous_host_id=previous_host_id,
+        new_host_id=host_id,
+        actor_user_id=actor_user_id,
+        actor=actor,
+        reason=reason,
+        method=evidence.host_assignment_method or method,
+        host_created=host_created,
+    )
+    db.commit()
+    db.refresh(evidence)
+    try:
+        backfill_evidence_documents(db, evidence.id)
+    except Exception:
+        logger.exception("host assignment backfill failed for evidence %s", evidence.id)
+    invalidate_host_caches(evidence.id, host_id or previous_host_id or "")
+    return evidence
 
 
 def _artifact_id_lookup(artifact_rows: list[Artifact]) -> dict[tuple[str, str], str]:
@@ -1098,6 +1222,7 @@ class RegisterPathRequest(BaseModel):
     packaging: str | None = None
     ingest_mode: str | None = None
     provided_host: str | None = None
+    host_id: str | None = None
     evtx_profile: str | None = None
 
 
@@ -1420,6 +1545,16 @@ def _require_provided_host(value: str | None) -> str:
     if not normalized:
         raise HTTPException(status_code=400, detail="Host name is required for evidence indexing.")
     return normalized
+
+
+def _validated_case_host_id(db: Session, case_id: str, host_id: str | None) -> str | None:
+    value = str(host_id or "").strip() or None
+    if not value:
+        return None
+    host = db.get(CaseHost, value)
+    if not host or host.case_id != case_id:
+        raise HTTPException(status_code=400, detail="Host not found in this case")
+    return value
 
 
 def _evidence_intent_warnings(*, evidence_intent: str, detected_type: EvidenceType, path: Path) -> list[str]:
@@ -1952,6 +2087,7 @@ def upload_evidence(
     packaging: str | None = Form(None),
     ingest_mode: str | None = Form(None),
     provided_host: str | None = Form(None),
+    host_id: str | None = Form(None),
     evtx_profile: str | None = Form(None),
     memory_authorization_acknowledged: bool = Form(False),
     memory_upload_id: str | None = Form(None),
@@ -1965,7 +2101,8 @@ def upload_evidence(
         memory_upload_id = None
     if not db.get(Case, case_id):
         raise HTTPException(status_code=404, detail="Case not found")
-    normalized_provided_host = _require_provided_host(provided_host)
+    normalized_provided_host = _normalize_provided_host(provided_host)
+    assigned_host_id = _validated_case_host_id(db, case_id, host_id)
     uploaded_name = file.filename or "upload.bin"
     uploaded_suffix = Path(uploaded_name).suffix.lower()
     memory_upload = is_memory_upload_filename(uploaded_name)
@@ -2046,7 +2183,18 @@ def upload_evidence(
             raise HTTPException(status_code=500, detail="Kairon could not finalize the uploaded memory image.") from exc
         update_memory_upload(upload_state.id, db=db, status="finalizing", bytes_received=size, sha256=uploaded_sha256)
         try:
-            return register_memory_evidence(upload_state.id, db=db)
+            evidence = register_memory_evidence(upload_state.id, db=db)
+            if assigned_host_id:
+                evidence = _set_evidence_host_assignment(
+                    db,
+                    evidence,
+                    host_id=assigned_host_id,
+                    actor_user_id=_current_user_id(current_user),
+                    actor=_actor_label(current_user),
+                    reason="Assigned during upload",
+                    method="upload_assignment",
+                )
+            return evidence
         except MemoryUploadRegistrationError as exc:
             if exc.code == "MEMORY_EVIDENCE_DUPLICATE":
                 raise HTTPException(
@@ -2147,6 +2295,13 @@ def upload_evidence(
         integrity_status=EvidenceIntegrityStatus.unknown,
         file_count=file_count,
         ingest_status=IngestStatus.pending,
+        host_id=assigned_host_id,
+        host_assignment_status="confirmed" if assigned_host_id else None,
+        host_assignment_method="upload_assignment" if assigned_host_id else None,
+        host_assignment_confidence="high" if assigned_host_id else None,
+        host_assignment_reason="Assigned during upload" if assigned_host_id else None,
+        host_assignment_updated_at=utc_now().isoformat() if assigned_host_id else None,
+        host_assignment_updated_by=_actor_label(current_user) if assigned_host_id else None,
         source_tool=source_tool,
         path_validation={},
         ingest_source={
@@ -2175,6 +2330,17 @@ def upload_evidence(
     )
     db.add(evidence)
     _record_upload_custody_events(db, evidence, actor_user_id=_current_user_id(current_user))
+    if assigned_host_id:
+        _record_host_assignment_event(
+            db,
+            evidence,
+            previous_host_id=None,
+            new_host_id=assigned_host_id,
+            actor_user_id=_current_user_id(current_user),
+            actor=_actor_label(current_user),
+            reason="Assigned during upload",
+            method="upload_assignment",
+        )
     db.commit()
     db.refresh(evidence)
     evidence.ingest_source = {
@@ -2324,7 +2490,8 @@ def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Sessi
     normalized_intent = _normalize_evidence_intent(payload.evidence_intent or "mounted")
     normalized_packaging = _normalize_packaging(payload.packaging or "mounted_path")
     normalized_ingest_mode = normalize_ingest_mode(payload.ingest_mode)
-    normalized_provided_host = _require_provided_host(payload.provided_host)
+    normalized_provided_host = _normalize_provided_host(payload.provided_host)
+    assigned_host_id = _validated_case_host_id(db, case_id, payload.host_id)
     normalized_evtx_profile = str(payload.evtx_profile or "").strip() or None
 
     if copy_to_storage:
@@ -2392,6 +2559,13 @@ def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Sessi
         integrity_status=EvidenceIntegrityStatus.unknown,
         file_count=validation.get("file_count"),
         ingest_status=IngestStatus.pending,
+        host_id=assigned_host_id,
+        host_assignment_status="confirmed" if assigned_host_id else None,
+        host_assignment_method="upload_assignment" if assigned_host_id else None,
+        host_assignment_confidence="high" if assigned_host_id else None,
+        host_assignment_reason="Assigned during registration" if assigned_host_id else None,
+        host_assignment_updated_at=utc_now().isoformat() if assigned_host_id else None,
+        host_assignment_updated_by=_actor_label(current_user) if assigned_host_id else None,
         source_tool="raw_collection" if raw_collection else _source_tool_for_detected_evidence_type(detected_type),
         path_validation=validation.get("path_validation") or {},
         ingest_source=ingest_source,
@@ -2400,6 +2574,17 @@ def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Sessi
     )
     db.add(evidence)
     _record_upload_custody_events(db, evidence, actor_user_id=_current_user_id(current_user), hash_summary="SHA-256 or directory fingerprint computed for registered evidence.")
+    if assigned_host_id:
+        _record_host_assignment_event(
+            db,
+            evidence,
+            previous_host_id=None,
+            new_host_id=assigned_host_id,
+            actor_user_id=_current_user_id(current_user),
+            actor=_actor_label(current_user),
+            reason="Assigned during registration",
+            method="upload_assignment",
+        )
     db.commit()
     db.refresh(evidence)
     _write_initial_manifest(evidence)
@@ -2463,6 +2648,50 @@ class EvidenceHostAssignRequest(BaseModel):
     analyst: str | None = "analyst"
 
 
+class EvidenceCaseHostPatchRequest(BaseModel):
+    host_id: str | None = None
+    host_name: str | None = None
+    reason: str | None = None
+    analyst: str | None = None
+
+
+@router.patch("/api/cases/{case_id}/evidence/{evidence_id}/host", response_model=EvidenceRead)
+def patch_case_evidence_host(
+    case_id: str,
+    evidence_id: str,
+    payload: EvidenceCaseHostPatchRequest,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
+) -> Evidence:
+    evidence = _get_case_evidence(db, case_id, evidence_id)
+    actor = _actor_label(current_user, payload.analyst)
+    actor_user_id = _current_user_id(current_user)
+    if payload.host_name and payload.host_id:
+        raise HTTPException(status_code=400, detail="Provide host_id or host_name, not both")
+    host_created = False
+    target_host_id: str | None = None
+    if payload.host_name:
+        try:
+            host, host_created = create_manual_case_host(db, case_id, payload.host_name, analyst=actor, reason=payload.reason)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        target_host_id = str(host["id"])
+        evidence = _get_case_evidence(db, case_id, evidence_id)
+    elif payload.host_id:
+        target_host_id = _validated_case_host_id(db, case_id, payload.host_id)
+    return _set_evidence_host_assignment(
+        db,
+        evidence,
+        host_id=target_host_id,
+        actor_user_id=actor_user_id,
+        actor=actor,
+        reason=payload.reason,
+        method="analyst_assigned" if target_host_id else "analyst_unassigned",
+        confidence="high",
+        host_created=host_created,
+    )
+
+
 @router.post("/api/evidences/{evidence_id}/assign-host")
 def assign_evidence_host(evidence_id: str, payload: EvidenceHostAssignRequest, db: Session = Depends(get_db)):
     try:
@@ -2479,19 +2708,19 @@ def assign_evidence_host(evidence_id: str, payload: EvidenceHostAssignRequest, d
 
 
 @router.post("/api/evidences/{evidence_id}/unassign-host")
-def unassign_evidence_host(evidence_id: str, db: Session = Depends(get_db)):
+def unassign_evidence_host(evidence_id: str, db: Session = Depends(get_db), current_user: User | None = Depends(get_optional_user)):
     evidence = db.get(Evidence, evidence_id)
     if not evidence:
         raise HTTPException(status_code=404, detail="Evidence not found")
-    evidence.host_id = None
-    evidence.host_assignment_status = "unassigned"
-    evidence.host_assignment_method = None
-    evidence.host_assignment_confidence = None
-    evidence.host_assignment_reason = None
-    evidence.host_assignment_updated_at = utc_now().isoformat()
-    evidence.host_assignment_updated_by = "analyst"
-    db.commit()
-    db.refresh(evidence)
+    evidence = _set_evidence_host_assignment(
+        db,
+        evidence,
+        host_id=None,
+        actor_user_id=_current_user_id(current_user),
+        actor=_actor_label(current_user),
+        reason="Analyst unassigned",
+        method="analyst_unassigned",
+    )
     return {"evidence_id": evidence.id, "status": "unassigned"}
 
 

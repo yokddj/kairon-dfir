@@ -38,6 +38,13 @@ class EvidenceRead(BaseModel):
     provided_host: str | None = None
     detected_host: str | None
     detected_user: str | None
+    host_id: str | None = None
+    host_assignment_status: str | None = None
+    host_assignment_method: str | None = None
+    host_assignment_confidence: str | None = None
+    host_assignment_reason: str | None = None
+    host_assignment_updated_at: str | None = None
+    host_assignment_updated_by: str | None = None
     source_tool: str | None
     path_validation: dict
     ingest_source: dict

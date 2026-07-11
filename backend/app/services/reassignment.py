@@ -7,7 +7,8 @@ from sqlalchemy.orm import Session
 from app.core.opensearch import get_events_index, get_opensearch_client, search_documents
 from app.models.assignment_history import AssignmentHistory
 from app.models.case_host import CaseHost
-from app.models.evidence import Evidence
+from app.models.evidence import Evidence, EvidenceCustodyEventType
+from app.services.evidence_integrity import record_evidence_event
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,22 @@ def execute_host_reassignment(
         created_at_str=datetime.now(UTC).isoformat(),
     )
     db.add(history)
+    event_type = EvidenceCustodyEventType.host_assignment_changed if old_host_id and old_host_id != new_host_id else EvidenceCustodyEventType.host_assigned
+    record_evidence_event(
+        db,
+        evidence,
+        event_type,
+        f"Evidence assigned to host {host.display_name}.",
+        actor_user_id=None,
+        details={
+            "previous_host_id": old_host_id,
+            "new_host_id": new_host_id,
+            "detected_host": evidence.detected_host,
+            "actor": actor,
+            "reason": reason,
+            "method": "analyst_reassigned",
+        },
+    )
     db.commit()
     db.refresh(evidence)
 
@@ -96,9 +113,13 @@ def backfill_evidence_documents(db: Session, evidence_id: str) -> dict[str, Any]
     if host_id:
         script_parts.append("ctx._source.host.evidence_host_id = params.evidence_host_id")
         script_params["evidence_host_id"] = host_id
+    else:
+        script_parts.append("if (ctx._source.host != null) { ctx._source.host.remove('evidence_host_id') }")
     if host_name:
         script_parts.append("ctx._source.host.canonical = params.canonical")
         script_params["canonical"] = host_name
+    elif not host_id:
+        script_parts.append("if (ctx._source.host != null) { ctx._source.host.remove('canonical') }")
     script_parts.append(
         "ctx._source.host.assignment_status = params.assignment_status"
     )

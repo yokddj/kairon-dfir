@@ -58,6 +58,10 @@ class EvidenceCustodyEventType(str, enum.Enum):
     integrity_checked = "integrity_checked"
     manifest_exported = "manifest_exported"
     metadata_updated = "metadata_updated"
+    host_assigned = "host_assigned"
+    host_unassigned = "host_unassigned"
+    host_created = "host_created"
+    host_assignment_changed = "host_assignment_changed"
 
 
 class Evidence(UUIDMixin, Base):

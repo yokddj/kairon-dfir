@@ -34,7 +34,7 @@ export default function CaseDetail() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const { activeCaseId, clearActiveCase, setActiveCase } = useActiveCase();
+  const { activeCaseId, clearActiveCase, setActiveCase, caseContext } = useActiveCase();
   const { activeHost, activeHostId, hasHostFilter, clearHostFilter } = useHostContext();
   const initialTab = searchParams.get("tab");
   const [tab, setTab] = useState<(typeof tabs)[number]>(tabs.includes(initialTab as (typeof tabs)[number]) ? (initialTab as (typeof tabs)[number]) : "overview");
@@ -54,6 +54,7 @@ export default function CaseDetail() {
   const summaryQuery = useQuery({ queryKey: ["investigation-summary", caseId], queryFn: () => api.getInvestigationSummary(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const activityQuery = useQuery({ queryKey: ["case-activity", caseId], queryFn: () => api.listCaseActivity(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const processingQuery = useQuery({ queryKey: ["case-processing", caseId, activeHostId, activeHost], queryFn: () => api.getCaseProcessing(caseId, { host_id: activeHostId || undefined, host: activeHost || undefined }), enabled: Boolean(caseId), staleTime: 5_000, refetchInterval: tab === "processing" ? 5000 : false, refetchOnWindowFocus: false });
+  const hostNameById = useMemo(() => new Map((caseContext?.hosts ?? []).map((host) => [host.id, host.display_name || host.canonical_name])), [caseContext?.hosts]);
   const siemLinksQuery = useQuery({ queryKey: ["siem-external-links", "case", caseId], queryFn: () => api.siemExternalLinks({ case_id: caseId }), enabled: Boolean(caseId), staleTime: 30_000, refetchOnWindowFocus: false });
   const searchQuery = useQuery({
     queryKey: ["case-search", caseId, query, searchEventId, searchEvidenceId, activeHostId, activeHost],
@@ -393,18 +394,28 @@ export default function CaseDetail() {
               {hasHostFilter ? <>No evidence associated with {activeHost}. <button type="button" onClick={clearHostFilter} className="text-accent underline underline-offset-4">Clear host filter</button> to see all evidence, including unassigned evidence.</> : "This is the evidence workspace for the case. Click the upload panel above to add a raw evidence collection, parsed KAPE/EZ Tools output, or loose CSV/JSON artifacts."}
             </div>
           ) : null}
-          {(evidencesQuery.data ?? []).map((item) => (
-            <Link key={item.id} to={`/evidences/${item.id}`} className="flex items-center justify-between rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-              <div>
+          {(evidencesQuery.data ?? []).map((item) => {
+            const assignedHostName = item.host_id ? hostNameById.get(item.host_id) || item.host_id.slice(0, 8) : "Unassigned";
+            const detectedHost = item.detected_host || item.provided_host || "-";
+            const mismatch = Boolean(item.host_id && detectedHost !== "-" && assignedHostName !== detectedHost);
+            return (
+            <Link key={item.id} to={`/evidences/${item.id}`} className="flex items-center justify-between gap-4 rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
+              <div className="min-w-0">
                 <p className="text-base font-semibold">{item.original_filename}</p>
                 <p className="mt-1 font-mono text-xs text-muted">{item.sha256}</p>
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+                  <span className="rounded-full border border-line bg-abyss/70 px-2 py-1 text-muted">Detected: {detectedHost}</span>
+                  <span className={`rounded-full border px-2 py-1 ${item.host_id ? "border-mint/30 bg-mint/10 text-mint" : "border-line bg-abyss/70 text-muted"}`}>Assigned: {assignedHostName}</span>
+                  {mismatch ? <span className="rounded-full border border-amber/30 bg-amber/10 px-2 py-1 text-amber">Mismatch</span> : null}
+                </div>
               </div>
               <div className="text-right">
                 <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">{item.evidence_type}</p>
                 <p className="mt-2 text-sm text-muted">{item.ingest_status}</p>
               </div>
             </Link>
-          ))}
+            );
+          })}
         </section>
       ) : null}
 
