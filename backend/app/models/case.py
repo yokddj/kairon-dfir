@@ -3,13 +3,22 @@ import enum
 from sqlalchemy import Enum, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.database import TimestampMixin, UUIDMixin, Base
+from app.core.database import JSONVariant, TimestampMixin, UUIDMixin, Base
 
 
 class CaseStatus(str, enum.Enum):
     open = "open"
+    active = "active"
+    on_hold = "on_hold"
     closed = "closed"
     archived = "archived"
+
+
+class CasePriority(str, enum.Enum):
+    low = "low"
+    medium = "medium"
+    high = "high"
+    critical = "critical"
 
 
 class CaseMode(str, enum.Enum):
@@ -24,7 +33,10 @@ class Case(UUIDMixin, TimestampMixin, Base):
 
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    status: Mapped[CaseStatus] = mapped_column(Enum(CaseStatus), default=CaseStatus.open, nullable=False)
+    status: Mapped[CaseStatus] = mapped_column(Enum(CaseStatus, native_enum=False, length=32), default=CaseStatus.active, nullable=False)
+    priority: Mapped[CasePriority] = mapped_column(Enum(CasePriority, native_enum=False, length=32), default=CasePriority.medium, nullable=False)
+    case_notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    management_tags: Mapped[list] = mapped_column(JSONVariant, default=list, nullable=False)
     mode: Mapped[CaseMode] = mapped_column(Enum(CaseMode), default=CaseMode.investigation, nullable=False)
     timezone: Mapped[str | None] = mapped_column(String(128), nullable=True)
 

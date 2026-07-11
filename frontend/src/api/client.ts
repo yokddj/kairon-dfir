@@ -468,13 +468,28 @@ export type DfirCase = {
   id: string;
   name: string;
   description: string | null;
-  status: "open" | "closed" | "archived";
+  status: "active" | "open" | "on_hold" | "closed" | "archived";
+  priority: "low" | "medium" | "high" | "critical";
+  tags: string[];
+  case_notes: string | null;
   mode: "investigation" | "demo" | "training" | "validation";
   timezone: string | null;
+  evidence_count: number;
+  host_count: number;
+  processing_summary: Record<string, number>;
   detections_count: number;
   findings_count: number;
   created_at: string;
   updated_at: string;
+};
+
+export type CaseListParams = {
+  q?: string | null;
+  status?: string | null;
+  priority?: string | null;
+  tag?: string | null;
+  include_archived?: boolean;
+  sort?: string | null;
 };
 
 export type Evidence = {
@@ -4972,7 +4987,7 @@ function buildArtifactQuery(path: string, params: Record<string, unknown> | unde
 }
 
 export const api = {
-  listCases: () => request<DfirCase[]>("/cases"),
+  listCases: (params?: CaseListParams | { queryKey?: unknown }) => request<DfirCase[]>(buildArtifactQuery("/cases", params && "queryKey" in params ? undefined : params)),
   createCase: (payload: Partial<DfirCase>) => request<DfirCase>("/cases", { method: "POST", body: JSON.stringify(payload) }),
   getCase: (caseId: string) => request<DfirCase>(`/cases/${caseId}`),
   getCaseContext: (caseId: string) => request<CaseContextResponse>(`/cases/${caseId}/context`),
@@ -5021,6 +5036,10 @@ export const api = {
   updateEvidenceHost: (caseId: string, evidenceId: string, payload: { host_id?: string | null; host_name?: string | null; reason?: string | null; analyst?: string | null }) =>
     request<Evidence>(`/cases/${caseId}/evidence/${evidenceId}/host`, { method: "PATCH", body: JSON.stringify(payload) }),
   updateCase: (caseId: string, payload: Partial<DfirCase>) => request<DfirCase>(`/cases/${caseId}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  archiveCase: (caseId: string) => request<DfirCase>(`/cases/${caseId}/archive`, { method: "POST" }),
+  unarchiveCase: (caseId: string) => request<DfirCase>(`/cases/${caseId}/unarchive`, { method: "POST" }),
+  closeCase: (caseId: string) => request<DfirCase>(`/cases/${caseId}/close`, { method: "POST" }),
+  reopenCase: (caseId: string) => request<DfirCase>(`/cases/${caseId}/reopen`, { method: "POST" }),
   deleteCase: (caseId: string) => request<void>(`/cases/${caseId}`, { method: "DELETE" }),
   getInvestigationSummary: (caseId: string) => request<InvestigationSummary>(`/cases/${caseId}/investigation-summary`),
   getSemiAutoAnalysis: (caseId: string, options?: { time_from?: string; time_to?: string }) => {

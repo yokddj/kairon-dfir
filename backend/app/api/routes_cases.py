@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 import json
 import logging
 import time
+from sqlalchemy import func
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
@@ -14,7 +15,7 @@ from app.core.opensearch import delete_case_index, get_events_index, get_index_h
 from app.core.storage import case_storage_root, safe_remove
 from app.models.activity import AppActivityEvent
 from app.models.artifact import Artifact
-from app.models.case import Case
+from app.models.case import Case, CasePriority, CaseStatus
 from app.models.case_analysis_job import CaseAnalysisJob, CaseAnalysisJobStatus
 from app.models.detection_result import DetectionResult
 from app.models.event_marking import EventMarking
@@ -22,6 +23,7 @@ from app.models.evidence import Evidence
 from app.models.finding import Finding
 from app.models.incident_timeline_draft import IncidentTimelineDraft
 from app.models.case_report import CaseReport
+from app.models.case_host import CaseHost
 from app.models.rule import Rule
 from app.models.rule_run import RuleRun
 from app.models.rule_set import RuleSet
@@ -34,7 +36,7 @@ from app.services.case_state import build_case_next_actions, derive_case_investi
 from app.services.indexing_profiles import evidence_has_active_indexing
 from app.services.stats_service import count_detections, count_events, count_findings
 from app.services.validation_matrix import get_validation_matrix, render_validation_matrix_markdown, validation_matrix_visibility
-from app.schemas.case import CaseCreate, CaseRead, CaseUpdate
+from app.schemas.case import CaseCreate, CaseRead, CaseUpdate, normalize_case_tags
 from app.workers.tasks import enqueue_semi_auto_analysis
 
 
@@ -63,7 +65,54 @@ _SEMI_AUTO_PHASES = [
 def _apply_case_counts(db: Session, item: Case) -> Case:
     item.detections_count = count_detections(db, item.id)
     item.findings_count = count_findings(db, item.id)
+    item.evidence_count = db.query(func.count(Evidence.id)).filter(Evidence.case_id == item.id).scalar() or 0
+    item.host_count = db.query(func.count(CaseHost.id)).filter(CaseHost.case_id == item.id).scalar() or 0
+    rows = db.query(Evidence.ingest_status, func.count(Evidence.id)).filter(Evidence.case_id == item.id).group_by(Evidence.ingest_status).all()
+    item.processing_summary = {getattr(status_value, "value", str(status_value)): int(count or 0) for status_value, count in rows}
     return item
+
+
+def _priority_rank(value: CasePriority | str | None) -> int:
+    raw = getattr(value, "value", value) or "medium"
+    return {"critical": 4, "high": 3, "medium": 2, "low": 1}.get(str(raw), 2)
+
+
+def _case_status_value(item: Case) -> str:
+    return getattr(item.status, "value", str(item.status or "active"))
+
+
+def _case_priority_value(item: Case) -> str:
+    return getattr(item.priority, "value", str(item.priority or "medium"))
+
+
+def _case_tags(item: Case) -> list[str]:
+    return normalize_case_tags(list(item.management_tags or []))
+
+
+def _log_case_management_event(db: Session, item: Case, activity_type: str, title: str, message: str, metadata: dict | None = None) -> None:
+    log_activity(
+        db,
+        activity_type=activity_type,
+        title=title,
+        message=message,
+        case_id=item.id,
+        metadata={"case_name": item.name, "status": _case_status_value(item), "priority": _case_priority_value(item), **(metadata or {})},
+    )
+
+
+def _set_case_status(db: Session, item: Case, status_value: CaseStatus) -> Case:
+    previous = _case_status_value(item)
+    item.status = status_value
+    event_map = {
+        CaseStatus.closed: ("case_closed", "Case closed", f"Closed case {item.name}"),
+        CaseStatus.active: ("case_reopened", "Case reopened", f"Reopened case {item.name}"),
+        CaseStatus.archived: ("case_archived", "Case archived", f"Archived case {item.name}"),
+    }
+    activity_type, title, message = event_map.get(status_value, ("case_updated", "Case updated", f"Updated case {item.name}"))
+    _log_case_management_event(db, item, activity_type, title, message, {"previous_status": previous, "new_status": status_value.value})
+    db.commit()
+    db.refresh(item)
+    return _apply_case_counts(db, item)
 
 
 def _summary_cache_get(case_id: str) -> dict | None:
@@ -386,13 +435,56 @@ def _build_case_context(db: Session, case_id: str) -> dict:
 
 
 @router.get("", response_model=list[CaseRead])
-def list_cases(db: Session = Depends(get_db)) -> list[Case]:
-    return [_apply_case_counts(db, item) for item in db.query(Case).order_by(Case.created_at.desc()).all()]
+def list_cases(
+    q: str | None = Query(default=None),
+    status_filter: CaseStatus | None = Query(default=None, alias="status"),
+    priority: CasePriority | None = Query(default=None),
+    tag: str | None = Query(default=None),
+    include_archived: bool = Query(default=False),
+    sort: str = Query(default="updated_desc"),
+    db: Session = Depends(get_db),
+) -> list[Case]:
+    items = db.query(Case).all()
+    text_query = (q or "").strip().lower()
+    normalized_tag = normalize_case_tags([tag])[0] if tag and normalize_case_tags([tag]) else None
+    filtered: list[Case] = []
+    for item in items:
+        status_value = _case_status_value(item)
+        if not include_archived and status_value == CaseStatus.archived.value:
+            continue
+        if status_filter and status_value != status_filter.value:
+            continue
+        if priority and _case_priority_value(item) != priority.value:
+            continue
+        tags = _case_tags(item)
+        if normalized_tag and normalized_tag not in tags:
+            continue
+        if text_query:
+            haystack = " ".join([item.name or "", item.description or "", item.case_notes or "", " ".join(tags)]).lower()
+            if text_query not in haystack:
+                continue
+        filtered.append(item)
+
+    if sort == "created_desc":
+        filtered.sort(key=lambda item: item.created_at, reverse=True)
+    elif sort == "created_asc":
+        filtered.sort(key=lambda item: item.created_at)
+    elif sort == "updated_asc":
+        filtered.sort(key=lambda item: item.updated_at)
+    elif sort == "priority":
+        filtered.sort(key=lambda item: (_priority_rank(item.priority), item.updated_at), reverse=True)
+    elif sort == "name":
+        filtered.sort(key=lambda item: (item.name or "").lower())
+    else:
+        filtered.sort(key=lambda item: item.updated_at, reverse=True)
+    return [_apply_case_counts(db, item) for item in filtered]
 
 
 @router.post("", response_model=CaseRead, status_code=status.HTTP_201_CREATED)
 def create_case(payload: CaseCreate, db: Session = Depends(get_db)) -> Case:
-    item = Case(**payload.model_dump())
+    data = payload.model_dump(exclude={"tags"})
+    tags = payload.tags
+    item = Case(**data, management_tags=tags)
     db.add(item)
     db.commit()
     db.refresh(item)
@@ -402,7 +494,7 @@ def create_case(payload: CaseCreate, db: Session = Depends(get_db)) -> Case:
         title="Case created",
         message=f"Created case {item.name}",
         case_id=item.id,
-        metadata={"case_name": item.name},
+        metadata={"case_name": item.name, "status": _case_status_value(item), "priority": _case_priority_value(item), "tags": _case_tags(item)},
     )
     return _apply_case_counts(db, item)
 
@@ -486,11 +578,68 @@ def update_case(case_id: str, payload: CaseUpdate, db: Session = Depends(get_db)
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(status_code=404, detail="Case not found")
-    for key, value in payload.model_dump(exclude_none=True).items():
+    before = {
+        "status": _case_status_value(item),
+        "priority": _case_priority_value(item),
+        "tags": _case_tags(item),
+        "name": item.name,
+        "description": item.description,
+        "case_notes": item.case_notes,
+    }
+    data = payload.model_dump(exclude_unset=True, exclude={"tags"})
+    if payload.tags is not None:
+        item.management_tags = payload.tags or []
+    for key, value in data.items():
         setattr(item, key, value)
+    after = {
+        "status": _case_status_value(item),
+        "priority": _case_priority_value(item),
+        "tags": _case_tags(item),
+        "name": item.name,
+        "description": item.description,
+        "case_notes": item.case_notes,
+    }
+    if before["priority"] != after["priority"]:
+        _log_case_management_event(db, item, "case_priority_changed", "Case priority changed", f"Changed case priority for {item.name}", {"previous_priority": before["priority"], "new_priority": after["priority"]})
+    if before["tags"] != after["tags"]:
+        _log_case_management_event(db, item, "case_tags_changed", "Case tags changed", f"Changed case tags for {item.name}", {"previous_tags": before["tags"], "new_tags": after["tags"]})
+    if before != after:
+        _log_case_management_event(db, item, "case_updated", "Case updated", f"Updated case {item.name}", {"previous": before, "updated": after})
     db.commit()
     db.refresh(item)
     return _apply_case_counts(db, item)
+
+
+@router.post("/{case_id}/archive", response_model=CaseRead)
+def archive_case(case_id: str, db: Session = Depends(get_db)) -> Case:
+    item = db.get(Case, case_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return _set_case_status(db, item, CaseStatus.archived)
+
+
+@router.post("/{case_id}/unarchive", response_model=CaseRead)
+def unarchive_case(case_id: str, db: Session = Depends(get_db)) -> Case:
+    item = db.get(Case, case_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return _set_case_status(db, item, CaseStatus.active)
+
+
+@router.post("/{case_id}/close", response_model=CaseRead)
+def close_case(case_id: str, db: Session = Depends(get_db)) -> Case:
+    item = db.get(Case, case_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return _set_case_status(db, item, CaseStatus.closed)
+
+
+@router.post("/{case_id}/reopen", response_model=CaseRead)
+def reopen_case(case_id: str, db: Session = Depends(get_db)) -> Case:
+    item = db.get(Case, case_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return _set_case_status(db, item, CaseStatus.active)
 
 
 @router.delete("/{case_id}")
