@@ -2206,3 +2206,23 @@ def _v23_evidence_integrity_chain_of_custody(connection: Connection) -> None:
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_custody_events_evidence_id ON evidence_custody_events (evidence_id)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_custody_events_event_type ON evidence_custody_events (event_type)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_custody_events_timestamp ON evidence_custody_events (timestamp)"))
+
+
+# ---------------------------------------------------------------------------
+# v24: Evidence custody enum values for host assignment events
+# ---------------------------------------------------------------------------
+
+
+@register(24, "evidence_custody_host_assignment_event_types")
+def _v24_evidence_custody_host_assignment_event_types(connection: Connection) -> None:
+    if connection.dialect.name != "postgresql":
+        return
+
+    enum_exists = connection.execute(
+        text("SELECT 1 FROM pg_type WHERE typname = 'evidencecustodyeventtype'")
+    ).fetchone()
+    if not enum_exists:
+        return
+
+    for value in ("host_assigned", "host_unassigned", "host_created", "host_assignment_changed"):
+        connection.execute(text(f"ALTER TYPE evidencecustodyeventtype ADD VALUE IF NOT EXISTS '{value}'"))
