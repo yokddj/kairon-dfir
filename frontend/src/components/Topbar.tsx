@@ -4,6 +4,7 @@ import { API_BASE_URL } from "../api/client";
 import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
+import { useHostContext } from "../hooks/useHostContext";
 
 function formatEvidenceStatus(status: string) {
   if (!status) return "unknown";
@@ -19,14 +20,12 @@ export default function Topbar() {
     caseContext,
     isCaseContextLoading,
     selectedEvidenceId,
-    selectedHost,
     setActiveCase,
     clearActiveCase,
-    setSelectedHost,
-    clearSelectedHost,
     setSelectedEvidenceId,
     clearSelectedEvidenceId,
   } = useActiveCase();
+  const { activeHostId, activeHostSummary, setHostFilter, clearHostFilter } = useHostContext();
   const { timezoneMode, setTimezoneMode, effectiveTimezone, userTimezone } = useTimezonePreference();
   const { data: cases } = useQuery({ queryKey: ["cases"], queryFn: api.listCases });
   const now = new Intl.DateTimeFormat(undefined, {
@@ -40,7 +39,6 @@ export default function Topbar() {
   }).format(new Date());
 
   const selectedEvidence = caseContext?.evidences.find((item) => item.id === selectedEvidenceId) ?? null;
-  const selectedHostSummary = caseContext?.hosts.find((item) => item.canonical_name === selectedHost) ?? null;
   const warnings = caseContext?.summary.warnings ?? [];
 
   function handleCaseChange(caseId: string) {
@@ -84,18 +82,18 @@ export default function Topbar() {
             <span className="sr-only">Host filter</span>
             <select
               aria-label="Host filter"
-              value={selectedHost}
+              value={activeHostId}
               disabled={!activeCaseId || isCaseContextLoading}
               onChange={(event) => {
-                if (!event.target.value) clearSelectedHost();
-                else setSelectedHost(event.target.value);
+                if (!event.target.value) clearHostFilter();
+                else setHostFilter(event.target.value);
               }}
               className="rounded-full border border-line bg-abyss/80 px-4 py-2 text-xs text-muted disabled:opacity-50"
             >
               <option value="">Host: All hosts</option>
               {(caseContext?.hosts ?? []).map((item) => (
-                <option key={item.id} value={item.canonical_name}>
-                  {`${item.display_name} · ${item.event_count} events · ${item.alias_count} aliases`}
+                <option key={item.id} value={item.id}>
+                  {`${item.display_name} · ${item.evidence_count} evidence · ${item.event_count} events`}
                 </option>
               ))}
             </select>
@@ -153,8 +151,13 @@ export default function Topbar() {
               Overview
             </Link>
             <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">
-              {selectedHostSummary ? `Host: ${selectedHostSummary.display_name}${selectedHostSummary.alias_count ? ` · includes ${selectedHostSummary.alias_count} aliases` : ""}` : "Host: All hosts"}
+              {activeHostSummary ? `Host: ${activeHostSummary.display_name}${activeHostSummary.alias_count ? ` · includes ${activeHostSummary.alias_count} aliases` : ""}` : "Host: All hosts"}
             </span>
+            {activeHostSummary ? (
+              <button type="button" onClick={clearHostFilter} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-muted">
+                Clear host filter
+              </button>
+            ) : null}
             <span className="max-w-[280px] truncate rounded-full border border-line bg-abyss/70 px-3 py-1.5">
               {selectedEvidence ? `Evidence: ${selectedEvidence.name}` : "Evidence: All evidence"}
             </span>

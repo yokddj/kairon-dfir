@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db, utc_now
 from app.models.case import Case
 from app.models.evidence import Evidence
-from app.services.host_identity import build_case_host_candidates, get_case_hosts, get_host_identity_audit, merge_hosts, rename_canonical_host, split_alias
+from app.services.host_identity import build_case_host_candidates, create_manual_case_host, get_case_hosts, get_host_identity_audit, merge_hosts, rename_canonical_host, split_alias
 
 
 router = APIRouter(prefix="/api/cases/{case_id}/hosts", tags=["hosts"])
@@ -33,6 +33,12 @@ class RenameHostRequest(BaseModel):
     analyst: str | None = None
 
 
+class CreateHostRequest(BaseModel):
+    host_name: str
+    reason: str | None = None
+    analyst: str | None = None
+
+
 class SplitAliasRequest(BaseModel):
     reason: str | None = None
     analyst: str | None = None
@@ -51,6 +57,16 @@ def list_case_hosts(case_id: str, db: Session = Depends(get_db)) -> dict:
         "hosts": get_case_hosts(db, case_id),
         "host_candidates": build_case_host_candidates(db, case_id),
     }
+
+
+@router.post("")
+def create_case_host(case_id: str, payload: CreateHostRequest, db: Session = Depends(get_db)) -> dict:
+    _ensure_case(db, case_id)
+    try:
+        host, created = create_manual_case_host(db, case_id, payload.host_name, analyst=payload.analyst, reason=payload.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"case_id": case_id, "host": host, "created": created}
 
 
 @router.post("/merge")

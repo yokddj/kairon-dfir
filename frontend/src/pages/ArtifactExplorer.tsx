@@ -11,6 +11,7 @@ import InvestigationContext from "../components/InvestigationContext";
 import PaginationControls from "../components/PaginationControls";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
+import { useHostContext } from "../hooks/useHostContext";
 
 const USER_ACTIVITY_TABS = [
   { value: "shellbag", label: "Shellbags" },
@@ -605,6 +606,7 @@ export default function ArtifactExplorer() {
   const { caseId: routeCaseId } = useParams();
   const [searchParams] = useSearchParams();
   const { activeCaseId, selectedEvidenceId, selectedHost, setActiveCaseId } = useActiveCase();
+  const { activeHost, activeHostId, hasHostFilter, clearHostFilter } = useHostContext();
   const { effectiveTimezone } = useTimezonePreference();
   const queryClient = useQueryClient();
   const [caseId, setCaseId] = useState(routeCaseId || activeCaseId);
@@ -638,7 +640,8 @@ export default function ArtifactExplorer() {
   const [debugExportOpen, setDebugExportOpen] = useState(false);
   const [debugExportScope, setDebugExportScope] = useState<"artifact_type" | "selected_events">("artifact_type");
   const evidenceIdFilter = searchParams.get("evidence_id") || selectedEvidenceId;
-  const hostFilter = searchParams.get("host") || selectedHost;
+  const hostIdFilter = searchParams.get("host_id") || activeHostId;
+  const hostFilter = searchParams.get("host") || activeHost || selectedHost;
   const casesQuery = useQuery({ queryKey: ["cases"], queryFn: api.listCases });
   const facetsQuery = useQuery({ queryKey: ["artifact-explorer-facets", caseId], queryFn: () => api.searchFacets({ caseId: caseId || undefined }) });
   const artifactTypeOptions = Object.keys(facetsQuery.data?.["artifact.type"] ?? {});
@@ -706,19 +709,20 @@ export default function ArtifactExplorer() {
           backend_variant: backendVariant === "advanced" ? ["advanced"] : backendVariant === "all" ? ["all"] : [],
         evidence_id: evidenceIdFilter ? [evidenceIdFilter] : [],
         host: hostFilter ? [hostFilter] : [],
+        host_id: hostIdFilter ? [hostIdFilter] : [],
       },
       timezone: effectiveTimezone,
       page,
       page_size: pageSize,
     }),
-    [artifactName, artifactType, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly],
+    [artifactName, artifactType, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly],
   );
   const isStartupPersistenceView = artifactType === "startup_persistence";
   const isMotwView = artifactType === "motw" || artifactType === "zone_identifier";
   const isEmailView = artifactType === "email" || artifactType === "email_store" || artifactType === "webmail_activity";
   const result = useQuery({ queryKey: ["artifact-explorer", payload], queryFn: () => api.search(payload), enabled: !isStartupPersistenceView && !isMotwView && !isEmailView });
   const persistenceQuery = useQuery({
-    queryKey: ["startup-persistence", caseId, hostFilter, query, persistenceType, persistenceSource, persistenceSuspiciousOnly, persistenceRiskMin, page, pageSize],
+    queryKey: ["startup-persistence", caseId, hostFilter, hostIdFilter, query, persistenceType, persistenceSource, persistenceSuspiciousOnly, persistenceRiskMin, page, pageSize],
     queryFn: () =>
       api.getStartupPersistence(caseId!, {
         host: hostFilter ? [hostFilter] : undefined,
@@ -746,7 +750,7 @@ export default function ArtifactExplorer() {
     enabled: Boolean(caseId && selectedPersistenceItem && (selectedPersistenceItem.indicator_resolution?.length ?? 0) > 0),
   });
   const motwQuery = useQuery({
-    queryKey: ["motw", caseId, hostFilter, query, motwZoneId, motwExtension, motwRiskMin, page, pageSize],
+    queryKey: ["motw", caseId, hostFilter, hostIdFilter, query, motwZoneId, motwExtension, motwRiskMin, page, pageSize],
     queryFn: () =>
       api.getMotw(caseId!, {
         host: hostFilter ? [hostFilter] : undefined,
@@ -773,7 +777,7 @@ export default function ArtifactExplorer() {
     enabled: Boolean(caseId && selectedMotwItem && (selectedMotwItem.indicator_resolution?.length ?? 0) > 0),
   });
   const emailQuery = useQuery({
-    queryKey: ["email-artifacts", caseId, hostFilter, query, emailType, emailClient, emailInterestingOnly, emailRiskMin, page, pageSize],
+    queryKey: ["email-artifacts", caseId, hostFilter, hostIdFilter, query, emailType, emailClient, emailInterestingOnly, emailRiskMin, page, pageSize],
     queryFn: () =>
       api.getEmailArtifacts(caseId!, {
         host: hostFilter ? [hostFilter] : undefined,
@@ -922,6 +926,7 @@ export default function ArtifactExplorer() {
         caseId={caseId}
         caseName={(casesQuery.data ?? []).find((item: DfirCase) => item.id === caseId)?.name}
         host={hostFilter}
+        hostId={hostIdFilter}
         evidenceId={evidenceIdFilter}
         current="Artifact Views"
         breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: caseId ? "Case" : "All cases", to: caseId ? `/cases/${caseId}` : undefined }, { label: "Artifact Views" }]}
@@ -962,10 +967,11 @@ export default function ArtifactExplorer() {
           </p>
         </div>
         {!caseId ? <p className="mt-2 text-sm text-amber-300">Artifact Views are available after selecting a case.</p> : null}
-        {hostFilter || evidenceIdFilter ? (
+          {hostFilter || evidenceIdFilter ? (
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted">
             <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{hostFilter ? `Host filter: ${hostFilter}` : "Host filter: all hosts"}</span>
             <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{evidenceIdFilter ? `Evidence filter: ${evidenceIdFilter.slice(0, 8)}` : "Evidence filter: all evidence"}</span>
+            {hasHostFilter ? <button type="button" onClick={clearHostFilter} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-accent">Clear host filter</button> : null}
           </div>
         ) : null}
         <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -1220,7 +1226,7 @@ export default function ArtifactExplorer() {
       ) : null}
       {caseId && !isStartupPersistenceView && !isMotwView && !isEmailView && !(result.data?.total ?? 0) && !result.isPending ? (
         <section className="rounded-[28px] border border-line bg-panel/50 p-6 text-sm text-muted">
-          No processed artifacts are available yet. Upload or process evidence first.
+          {hasHostFilter ? <>No artifacts for {hostFilter} with current filters. <button type="button" onClick={clearHostFilter} className="text-accent underline underline-offset-4">Clear the host filter</button> or check Processing.</> : "No processed artifacts are available yet. Upload or process evidence first."}
         </section>
       ) : null}
       {isStartupPersistenceView ? (

@@ -187,29 +187,29 @@ def get_memory_backends() -> dict:
 
 
 @router.get("/cases/{case_id}/memory", response_model=MemoryOverviewRead)
-def get_memory_overview(case_id: str, db: Session = Depends(get_db)) -> dict:
+def get_memory_overview(case_id: str, host_id: str | None = Query(default=None), host: str | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
     _require_case(db, case_id)
-    return get_case_memory_overview(db, case_id)
+    return get_case_memory_overview(db, case_id, host_id=host_id, host=host)
 
 
 @router.get("/cases/{case_id}/memory/evidences", response_model=list[MemoryEvidenceRead])
-def get_memory_evidences(case_id: str, db: Session = Depends(get_db)) -> list[Evidence]:
+def get_memory_evidences(case_id: str, host_id: str | None = Query(default=None), host: str | None = Query(default=None), db: Session = Depends(get_db)) -> list[Evidence]:
     _require_case(db, case_id)
-    return list_memory_evidences(db, case_id)
+    return list_memory_evidences(db, case_id, host_id=host_id, host=host)
 
 
 @router.get(
     "/cases/{case_id}/memory/landing",
     response_model=None,
 )
-def get_memory_evidence_landing(case_id: str, db: Session = Depends(get_db)) -> dict:
+def get_memory_evidence_landing(case_id: str, host_id: str | None = Query(default=None), host: str | None = Query(default=None), db: Session = Depends(get_db)) -> dict:
     """Per-evidence landing for the memory case page.  Each entry
     includes the evidence metadata and a per-family status snapshot
     (Ready / Not analyzed / Completed / Running / Latest attempt
     failed / Unavailable).
     """
     _require_case(db, case_id)
-    items = get_evidence_landing(db, case_id)
+    items = get_evidence_landing(db, case_id, host_id=host_id, host=host)
     return {
         "case_id": case_id,
         "items": items,

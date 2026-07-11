@@ -10,11 +10,14 @@ from app.models.artifact import Artifact
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
 from app.models.memory import MemoryPluginRun, MemoryScanRun
+from app.services.memory.overview import list_memory_evidences
 from app.services.processing_queue import get_evidence_processing, get_evidence_processing_run, list_case_processing
 
 CASE_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 EVIDENCE_ID = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
 SECOND_EVIDENCE_ID = "cccccccc-3333-4333-8333-cccccccccccc"
+HOST_WS01_ID = "dddddddd-1111-4111-8111-dddddddddddd"
+HOST_WS02_ID = "eeeeeeee-2222-4222-8222-eeeeeeeeeeee"
 
 
 def _db() -> Session:
@@ -30,7 +33,7 @@ def _case(db: Session) -> Case:
     return case
 
 
-def _evidence(db: Session, *, evidence_id: str = EVIDENCE_ID, filename: str = "triage.zip", status: IngestStatus = IngestStatus.pending, metadata: dict | None = None, error_log: dict | None = None, evidence_type: EvidenceType = EvidenceType.velociraptor_zip) -> Evidence:
+def _evidence(db: Session, *, evidence_id: str = EVIDENCE_ID, filename: str = "triage.zip", status: IngestStatus = IngestStatus.pending, metadata: dict | None = None, error_log: dict | None = None, evidence_type: EvidenceType = EvidenceType.velociraptor_zip, detected_host: str = "WS-01", host_id: str | None = None) -> Evidence:
     evidence = Evidence(
         id=evidence_id,
         case_id=CASE_ID,
@@ -44,7 +47,8 @@ def _evidence(db: Session, *, evidence_id: str = EVIDENCE_ID, filename: str = "t
         sha256="0" * 64,
         size_bytes=128,
         ingest_status=status,
-        detected_host="WS-01",
+        detected_host=detected_host,
+        host_id=host_id,
         path_validation={},
         ingest_source={},
         metadata_json=metadata or {},
@@ -70,6 +74,31 @@ def test_list_processing_status_of_case_with_multiple_evidences():
     assert result["summary"]["completed"] == 1
     assert result["summary"]["running"] == 1
     assert {item["host"] for item in result["items"]} == {"WS-01", "WS-02"}
+
+
+def test_list_processing_can_filter_by_host_id_and_host_alias():
+    db = _db()
+    _case(db)
+    _evidence(db, evidence_id=EVIDENCE_ID, filename="triage-ws01.zip", detected_host="WS-01.local", host_id=HOST_WS01_ID)
+    _evidence(db, evidence_id=SECOND_EVIDENCE_ID, filename="triage-ws02.zip", detected_host="WS-02", host_id=HOST_WS02_ID)
+
+    by_id = list_case_processing(db, CASE_ID, host_id=HOST_WS01_ID)
+    by_alias = list_case_processing(db, CASE_ID, host="ws-01")
+
+    assert [item["evidence_id"] for item in by_id["items"]] == [EVIDENCE_ID]
+    assert by_id["items"][0]["host_id"] == HOST_WS01_ID
+    assert [item["evidence_id"] for item in by_alias["items"]] == [EVIDENCE_ID]
+    assert by_alias["summary"]["pending"] == 1
+
+
+def test_memory_evidences_can_filter_by_host_id_and_host_alias():
+    db = _db()
+    _case(db)
+    _evidence(db, evidence_id=EVIDENCE_ID, filename="ws01.raw", evidence_type=EvidenceType.memory_dump, detected_host="WS-01.local", host_id=HOST_WS01_ID)
+    _evidence(db, evidence_id=SECOND_EVIDENCE_ID, filename="ws02.raw", evidence_type=EvidenceType.memory_dump, detected_host="WS-02", host_id=HOST_WS02_ID)
+
+    assert [item.id for item in list_memory_evidences(db, CASE_ID, host_id=HOST_WS02_ID)] == [SECOND_EVIDENCE_ID]
+    assert [item.id for item in list_memory_evidences(db, CASE_ID, host="ws-01")] == [EVIDENCE_ID]
 
 
 def test_list_runs_of_evidence():
