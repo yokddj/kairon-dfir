@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { CheckCircle2, LoaderCircle, UploadCloud } from "lucide-react";
 import { api, type Evidence, type EvidenceIntent, type EvidencePackaging, type EvtxProfile, type IngestMode, type VelociraptorDiscoverResponse } from "../api/client";
@@ -205,8 +205,10 @@ async function snapshotSelectedFile(file: File): Promise<File> {
 
 export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const capabilitiesQuery = useQuery({ queryKey: ["storage-capabilities"], queryFn: () => api.getStorageCapabilities(), staleTime: 60_000, refetchOnWindowFocus: false });
   const systemStatusQuery = useQuery({ queryKey: ["system-status"], queryFn: () => api.getSystemStatus(), staleTime: 60_000, refetchOnWindowFocus: false });
+  const caseHostsQuery = useQuery({ queryKey: ["case-hosts", caseId], queryFn: () => api.getCaseHosts(caseId), enabled: Boolean(caseId), staleTime: 15_000, refetchOnWindowFocus: false });
   const experimentalFolderUploadEnabled = isExperimentalFolderUploadEnabled();
   const experimentalFolderMaxFiles = getExperimentalFolderMaxFiles();
   const experimentalFolderMaxTotalBytes = getExperimentalFolderMaxTotalBytes();
@@ -227,6 +229,8 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   const [showAdvancedProcessing, setShowAdvancedProcessing] = useState(false);
   const [showAdvancedUploadOptions, setShowAdvancedUploadOptions] = useState(false);
   const [providedHost, setProvidedHost] = useState("");
+  const [assignedHostId, setAssignedHostId] = useState("");
+  const [newHostName, setNewHostName] = useState("");
   const [pathValidation, setPathValidation] = useState<Awaited<ReturnType<typeof api.validateEvidencePath>> | null>(null);
   const [pathValidationError, setPathValidationError] = useState("");
   const [fileIntent, setFileIntent] = useState<FileIntent | null>(null);
@@ -244,8 +248,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   const memoryUploadLimit = capabilities?.memory_upload_max_bytes ?? uploadLimit;
   const allowedRoots = capabilities?.allowed_roots ?? [];
   const hostPathImportEnabled = Boolean(capabilities?.allow_host_path_import);
-  const hostRequired = !providedHost.trim();
-  const registerDisabled = uploading || !pathValidation?.valid || !hostPathImportEnabled || hostRequired;
+  const registerDisabled = uploading || !pathValidation?.valid || !hostPathImportEnabled;
   const effectiveEvtxProfile: EvtxProfile = ingestMode === "full_forensic" ? "full" : evtxProfile;
   const evtxecmdBackend = systemStatusQuery.data?.evtx_parser_backends?.evtxecmd;
   const evtxecmdAvailable = Boolean(evtxecmdBackend?.available);
@@ -270,6 +273,27 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
     if (selectedFormat === "raw_folder" || selectedFormat === "parsed_folder") return "directory";
     if (selectedFormat === "server_path") return "mounted_path";
     return "single_file";
+  }
+
+  async function resolveUploadHostId(): Promise<string | undefined> {
+    if (assignedHostId === "__create__") {
+      const name = newHostName.trim();
+      if (!name) {
+        setStatus("Enter a host name or choose Unassigned.");
+        return undefined;
+      }
+      const result = await api.createCaseHost(caseId, { host_name: name, reason: "Created during evidence upload" });
+      await queryClient.invalidateQueries({ queryKey: ["case-hosts", caseId] });
+      await queryClient.invalidateQueries({ queryKey: ["case-context", caseId] });
+      setAssignedHostId(result.host.id);
+      return result.host.id;
+    }
+    return assignedHostId || undefined;
+  }
+
+  async function assignCreatedDiscoveryEvidence(evidence: Evidence, hostId: string | undefined) {
+    if (!hostId) return evidence;
+    return api.updateEvidenceHost(evidence.case_id, evidence.id, { host_id: hostId, reason: "Assigned during upload" });
   }
 
   function buildProgressHandler(totalBytes: number) {
@@ -314,6 +338,8 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   }
 
   async function handleUploadFile(file: File, intent: FileIntent) {
+    const uploadHostId = await resolveUploadHostId();
+    if (assignedHostId === "__create__" && !uploadHostId) return;
     setDetectionPreview(buildDetectionPreview(file, intent));
     setUploading(true);
     setCurrentItem(file.name);
@@ -333,6 +359,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
       if (intent === "raw_archive") {
         const result: VelociraptorDiscoverResponse | null = await uploadRawArchiveWithAutoDetection(file, buildProgressHandler(file.size));
         if (result) {
+          result.evidence = await assignCreatedDiscoveryEvidence(result.evidence, uploadHostId);
           if (result.fallback_supported) {
             setPhase("processing");
             setStatus("This archive was processed as generic evidence.");
@@ -348,6 +375,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
             packaging: "archive",
             ingestMode,
             providedHost: providedHost.trim() || undefined,
+            hostId: uploadHostId,
             evtxProfile: effectiveEvtxProfile,
           });
           if (isRawDiscoveryEvidence(evidence)) {
@@ -367,6 +395,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
           packaging: intent === "parsed_archive" ? "archive" : "single_file",
           ingestMode,
           providedHost: providedHost.trim() || undefined,
+          hostId: uploadHostId,
           evtxProfile: effectiveEvtxProfile,
           memoryAuthorizationAcknowledged: isMemoryImageFile(file) && memoryAuthorizationAcknowledged,
         });
@@ -405,11 +434,8 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
 
   async function handleExperimentalFolderUpload(files: FileList | null) {
     if (!files?.length || uploading) return;
-    if (!providedHost.trim()) {
-      setStatus("Enter the host name before indexing evidence.");
-      resetPickers();
-      return;
-    }
+    const uploadHostId = await resolveUploadHostId();
+    if (assignedHostId === "__create__" && !uploadHostId) return;
     const selectedFiles = await Promise.all(Array.from(files).map((file) => snapshotSelectedFile(file)));
     const totalBytes = selectedFiles.reduce((sum, file) => sum + file.size, 0);
     const folderName = normalizeFilePath((selectedFiles[0] as File & { webkitRelativePath?: string }).webkitRelativePath || selectedFiles[0].name).split("/")[0] || "folder";
@@ -441,6 +467,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         evidenceIntent: selectedKind === "parsed_evidence" ? "parsed" : "raw",
         ingestMode,
         providedHost: providedHost.trim() || undefined,
+        hostId: uploadHostId,
         evtxProfile: effectiveEvtxProfile,
       });
       if (isRawDiscoveryEvidence(evidence)) {
@@ -477,10 +504,6 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   }
 
   async function startIndexing() {
-    if (!providedHost.trim()) {
-      setStatus("Host name is required before indexing evidence.");
-      return;
-    }
     if (selectedKind === "server_path") {
       if (!pathValidation?.valid) {
         const validatedPath = await validateServerPath();
@@ -525,10 +548,8 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   }
 
   async function registerServerPath(startIngest: boolean) {
-    if (!providedHost.trim()) {
-      setStatus("Enter the host name before indexing evidence.");
-      return;
-    }
+    const uploadHostId = await resolveUploadHostId();
+    if (assignedHostId === "__create__" && !uploadHostId) return;
     setUploading(true);
     setPhase("processing");
     setStatus("Registering server-mounted path");
@@ -543,6 +564,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         packaging: selectedPackaging(),
         ingest_mode: ingestMode,
         provided_host: providedHost.trim() || undefined,
+        host_id: uploadHostId,
         evtx_profile: effectiveEvtxProfile,
       });
       onUploaded?.();
@@ -559,6 +581,8 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   }
 
   const currentFormatOption = FORMAT_OPTIONS[selectedKind].find((option) => option.id === selectedFormat);
+  const caseHosts = caseHostsQuery.data?.hosts ?? [];
+  const assignedHostLabel = assignedHostId === "__create__" ? `Create ${newHostName.trim() || "new host"}` : caseHosts.find((host) => host.id === assignedHostId)?.display_name || "Unassigned";
   const progressPct = uploadBytes.total > 0 ? Math.round((uploadBytes.loaded / uploadBytes.total) * 100) : phase === "completed" ? 100 : 0;
   const statusTone = phase === "failed" ? "text-danger" : phase === "completed" ? "text-mint" : "text-accent";
   const showStatusPanel = phase !== "idle" || uploading || status !== "Choose an evidence type and a format to start.";
@@ -600,7 +624,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
           <div className="rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger">
             <p className="font-semibold">Experimental browser folder upload</p>
             <p className="mt-2">This path is unreliable for many files. Limit: {experimentalFolderMaxFiles} files and {formatBytes(experimentalFolderMaxTotalBytes)} total.</p>
-            <button type="button" disabled={uploading || hostRequired} onClick={() => folderInputRef.current?.click()} className="mt-4 rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm font-semibold text-danger disabled:opacity-60">
+            <button type="button" disabled={uploading} onClick={() => folderInputRef.current?.click()} className="mt-4 rounded-2xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm font-semibold text-danger disabled:opacity-60">
               Try experimental folder upload
             </button>
           </div>
@@ -615,7 +639,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         <div className="rounded-3xl border border-line bg-panel/70 p-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Recommended method</p>
           <p className="mt-3 text-sm text-muted">Upload a RAW evidence archive. The backend may automatically detect known collection layouts and, if it does not, it will fall back to generic archive ingest.</p>
-          <button type="button" disabled={uploading || hostRequired} onClick={() => openFilePicker("raw_archive", ".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
+          <button type="button" disabled={uploading} onClick={() => openFilePicker("raw_archive", ".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
             Upload RAW evidence archive
           </button>
         </div>
@@ -626,7 +650,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         <div className="rounded-3xl border border-line bg-panel/70 p-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Recommended method</p>
           <p className="mt-3 text-sm text-muted">Upload a parsed evidence archive and process it as structured evidence.</p>
-          <button type="button" disabled={uploading || hostRequired} onClick={() => openFilePicker("parsed_archive", ".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
+          <button type="button" disabled={uploading} onClick={() => openFilePicker("parsed_archive", ".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
             Upload parsed evidence archive
           </button>
         </div>
@@ -637,7 +661,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         <div className="rounded-3xl border border-line bg-panel/70 p-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Recommended method</p>
           <p className="mt-3 text-sm text-muted">Upload a parsed evidence file such as CSV, JSONL, timeline export or parser output.</p>
-          <button type="button" disabled={uploading || hostRequired} onClick={() => openFilePicker("parsed_single_file", ".csv,.json,.jsonl,.txt,.log,.xml")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
+          <button type="button" disabled={uploading} onClick={() => openFilePicker("parsed_single_file", ".csv,.json,.jsonl,.txt,.log,.xml")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
             Upload parsed evidence file
           </button>
         </div>
@@ -648,7 +672,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         <div className="rounded-3xl border border-line bg-panel/70 p-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Recommended method</p>
           <p className="mt-3 text-sm text-muted">Upload a RAW evidence file such as EVTX, EML, registry hive/export, database, log or similar artifact.</p>
-          <button type="button" disabled={uploading || hostRequired} onClick={() => openFilePicker("raw_single_file", ".evtx,.pf,.lnk,.reg,.dat,.db,.sqlite,.csv,.json,.jsonl,.log,.txt,.eml,.mbox,.pst,.ost,.xml")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
+          <button type="button" disabled={uploading} onClick={() => openFilePicker("raw_single_file", ".evtx,.pf,.lnk,.reg,.dat,.db,.sqlite,.csv,.json,.jsonl,.log,.txt,.eml,.mbox,.pst,.ost,.xml")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
             Upload RAW evidence file
           </button>
         </div>
@@ -824,7 +848,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
                 ? "Search-first ingest. Heavy modules do not run automatically."
                 : "Deeper processing selected intentionally. This can take significantly longer."}
             </p>
-            {providedHost.trim() ? <p className="mt-3 text-xs text-slate-300">Evidence host: {providedHost.trim()}</p> : null}
+            <p className="mt-3 text-xs text-slate-300">Assigned host: {assignedHostLabel}</p>
           </div>
         </div>
         <div className="mt-4 rounded-3xl border border-line bg-panel/40 p-5">
@@ -866,11 +890,28 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         </div>
         {showAdvancedUploadOptions && selectedKind === "raw_evidence" ? renderEvtxProfileSelector() : null}
         <div className="mt-4 grid gap-4 xl:grid-cols-2">
-          <label className="block">
-            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Host name required</span>
-            <input required value={providedHost} onChange={(event) => setProvidedHost(event.target.value)} placeholder="HOSTA or hosta.examplecorp.local" className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm" />
-            <span className="mt-2 block text-xs text-muted">Name of the computer this evidence belongs to. This becomes the canonical host for filters unless a reliable artifact conflict is recorded.</span>
-          </label>
+          <div className="rounded-2xl border border-line bg-abyss/60 p-4">
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Host assignment</p>
+            <label className="mt-3 block text-sm text-muted">
+              Assigned host
+              <select value={assignedHostId} onChange={(event) => setAssignedHostId(event.target.value)} className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink">
+                <option value="">Unassigned</option>
+                {caseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
+                <option value="__create__">Create new host...</option>
+              </select>
+            </label>
+            {assignedHostId === "__create__" ? (
+              <label className="mt-3 block text-sm text-muted">
+                New host name
+                <input value={newHostName} onChange={(event) => setNewHostName(event.target.value)} placeholder="WS-01" className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" />
+              </label>
+            ) : null}
+            <label className="mt-3 block text-sm text-muted">
+              Detected/provided host hint
+              <input value={providedHost} onChange={(event) => setProvidedHost(event.target.value)} placeholder="Optional hostname from evidence label" className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" />
+            </label>
+            <p className="mt-2 text-xs text-muted">Assigned host controls host filters. The detected/provided hint is preserved separately.</p>
+          </div>
           <div className="rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
             <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Before you launch</p>
             <ul className="mt-3 space-y-1 text-xs text-muted">
@@ -878,6 +919,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
                 {selectedKind === "raw_evidence" ? <li>EVTX: Full EVTX Indexing if EVTX is discovered</li> : null}
               <li>Packaging: {selectedPackaging().replaceAll("_", " ")}</li>
               <li>Intent: {selectedEvidenceIntent()}</li>
+              <li>Assigned host: {assignedHostLabel}</li>
             </ul>
           </div>
         </div>
@@ -893,8 +935,8 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         <div className="rounded-3xl border border-line bg-panel/70 p-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Step 2</p>
           <h3 className="mt-2 text-lg font-semibold text-ink">Identify host</h3>
-          <p className="mt-2 text-sm text-muted">Which computer does this evidence come from?</p>
-          <p className={`mt-3 text-xs ${providedHost.trim() ? "text-mint" : "text-warning"}`}>{providedHost.trim() ? `Host: ${providedHost.trim()}` : "Host name is required."}</p>
+          <p className="mt-2 text-sm text-muted">Optionally assign this evidence to a case host.</p>
+          <p className="mt-3 text-xs text-mint">Assigned host: {assignedHostLabel}</p>
         </div>
         <div className="rounded-3xl border border-line bg-panel/70 p-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Step 3</p>
@@ -933,7 +975,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
             <li>EVTX: Full coverage with EvtxECmd if event logs are found</li>
             <li>Rules/reports: on-demand after indexing</li>
           </ul>
-          <button type="button" onClick={() => void startIndexing()} disabled={uploading || !providedHost.trim() || (!pendingFile && selectedKind !== "server_path") || (Boolean(pendingFile && isMemoryImageFile(pendingFile)) && !memoryAuthorizationAcknowledged)} className="mt-4 w-full rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
+          <button type="button" onClick={() => void startIndexing()} disabled={uploading || (assignedHostId === "__create__" && !newHostName.trim()) || (!pendingFile && selectedKind !== "server_path") || (Boolean(pendingFile && isMemoryImageFile(pendingFile)) && !memoryAuthorizationAcknowledged)} className="mt-4 w-full rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
             {uploading ? "Indexing..." : "Index evidence"}
           </button>
         </div>
@@ -1004,7 +1046,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
               <ul className="mt-3 space-y-1 text-xs text-muted">
                 <li>Packaging: {selectedPackaging().replaceAll("_", " ")}</li>
                 <li>Intent: {selectedEvidenceIntent()}</li>
-                <li>Host: {providedHost.trim() || "Required before indexing"}</li>
+                <li>Assigned host: {assignedHostLabel}</li>
                 {selectedKind === "raw_evidence" ? <li>EVTX: Full EVTX Indexing if EVTX is discovered</li> : null}
               </ul>
               {ingestMode === "usable_search" ? (

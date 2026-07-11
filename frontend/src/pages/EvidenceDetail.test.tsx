@@ -89,6 +89,17 @@ vi.mock("../context/NotificationsContext", () => ({
   useNotifications: () => ({ notify: notifyMock }),
 }));
 
+vi.mock("../context/ActiveCaseContext", () => ({
+  useActiveCase: () => ({
+    selectedHostId: "",
+    selectedHost: "",
+    caseContext: { hosts: [] },
+    setSelectedHostId: vi.fn(),
+    setSelectedHost: vi.fn(),
+    clearSelectedHost: vi.fn(),
+  }),
+}));
+
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(

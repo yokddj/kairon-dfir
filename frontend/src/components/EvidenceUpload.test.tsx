@@ -135,17 +135,24 @@ describe("EvidenceUpload", () => {
     expect(screen.getByRole("button", { name: /Index evidence/i })).toBeDisabled();
   });
 
-  it("requires host before starting the primary indexing path", async () => {
+  it("allows unassigned primary indexing", async () => {
     renderComponent();
     await selectPrimaryFile(makeFile("evtx", "Security.evtx"));
-    expect(screen.getByLabelText(/Host name required/i)).toBeRequired();
-    expect(screen.getByRole("button", { name: /Index evidence/i })).toBeDisabled();
-    expect(uploadEvidenceMock).not.toHaveBeenCalled();
+    expect(screen.getByLabelText(/Detected\/provided host hint/i)).not.toBeRequired();
+    expect(await screen.findByText(/Detected: Windows Event Log/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Index evidence/i }));
+    await waitFor(() =>
+      expect(uploadEvidenceMock).toHaveBeenCalledWith(
+        "case-1",
+        expect.any(File),
+        expect.objectContaining({ providedHost: undefined }),
+      ),
+    );
   });
 
   it("indexes a selected file with core indexing metadata and provided host", async () => {
     renderComponent();
-    await userEvent.type(screen.getByLabelText(/Host name required/i), "HOSTA");
+    await userEvent.type(screen.getByLabelText(/Detected\/provided host hint/i), "HOSTA");
     await selectPrimaryFile(makeFile("evtx", "Security.evtx"));
     expect(await screen.findByText(/Detected: Windows Event Log/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /Index evidence/i }));
@@ -168,7 +175,7 @@ describe("EvidenceUpload", () => {
   it("detects a memory image, shows privacy warning, and does not auto-run analysis", async () => {
     uploadEvidenceMock.mockResolvedValueOnce({ id: "ev-memory", evidence_type: "memory_dump", metadata_json: {}, ingest_status: "completed" });
     renderComponent();
-    await userEvent.type(screen.getByLabelText(/Host name required/i), "HOSTA");
+    await userEvent.type(screen.getByLabelText(/Detected\/provided host hint/i), "HOSTA");
     await selectPrimaryFile(makeFile("memory", "authorized.mem"));
 
     expect(await screen.findByText(/Detected: Memory image/i)).toBeInTheDocument();
@@ -241,7 +248,7 @@ describe("EvidenceUpload", () => {
       discovery: { collection_id: "ev-discovery", collection_root: "/tmp", hostname: null, candidates: [], summary: { total_candidates: 1 }, total_files_scanned: 1, warnings: [] },
     });
     renderComponent();
-    await userEvent.type(screen.getByLabelText(/Host name required/i), "HOSTA");
+    await userEvent.type(screen.getByLabelText(/Detected\/provided host hint/i), "HOSTA");
     await userEvent.click(screen.getByRole("button", { name: /Advanced processing/i }));
     await userEvent.click(screen.getByRole("button", { name: /Select Advanced/i }));
     await openAdvancedOptions();
@@ -259,13 +266,13 @@ describe("EvidenceUpload", () => {
     );
   });
 
-  it("keeps server path registration in advanced options and requires host", async () => {
+  it("keeps server path registration in advanced options with an optional host hint", async () => {
     renderComponent();
     await openAdvancedOptions();
     await userEvent.click(screen.getByRole("button", { name: /^Server-mounted path Evidence already available/i }));
     expect(screen.getByRole("button", { name: /Validate path/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Register path and ingest/i })).toBeDisabled();
-    await userEvent.type(screen.getByLabelText(/Host name required/i), "HOSTA");
+    await userEvent.type(screen.getByLabelText(/Detected\/provided host hint/i), "HOSTA");
     await userEvent.type(screen.getByPlaceholderText("/mnt/evidence/case001 or /mnt/evidence/case001/archive.7z"), "/mnt/evidence/CASE001");
     await userEvent.click(screen.getByRole("button", { name: /Validate path/i }));
     await waitFor(() => expect(validateEvidencePathMock).toHaveBeenCalled());

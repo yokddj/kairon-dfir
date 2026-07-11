@@ -18,6 +18,14 @@ const API_BASE_URLS = Array.from(
 );
 export const API_BASE_URL = API_BASE_URLS[0] ?? fallbackApiBase;
 
+function hostScopeQuery(params?: { host_id?: string | null; host?: string | null }) {
+  const query = new URLSearchParams();
+  if (params?.host_id) query.set("host_id", params.host_id);
+  if (params?.host) query.set("host", params.host);
+  const value = query.toString();
+  return value ? `?${value}` : "";
+}
+
 export async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
   let lastError: unknown;
   const attemptedUrls: string[] = [];
@@ -505,6 +513,9 @@ export type Evidence = {
   host_assignment_status?: string | null;
   host_assignment_method?: string | null;
   host_assignment_confidence?: string | null;
+  host_assignment_reason?: string | null;
+  host_assignment_updated_at?: string | null;
+  host_assignment_updated_by?: string | null;
   source_tool: string | null;
   path_validation: Record<string, unknown>;
   ingest_source: Record<string, unknown>;
@@ -573,6 +584,7 @@ export type ProcessingEvidenceItem = {
   filename: string;
   evidence_type: string;
   host: string | null;
+  host_id?: string | null;
   uploaded_at: string | null;
   processing_status: string;
   last_run_status: string;
@@ -605,6 +617,8 @@ export type MemoryEvidence = {
   size_bytes: number;
   ingest_status: string;
   created_at: string;
+  detected_host?: string | null;
+  host_id?: string | null;
 };
 
 export type MemoryEvidenceReadiness = {
@@ -773,6 +787,7 @@ export type MemoryEvidenceLandingItem = {
   case_id: string;
   filename: string;
   detected_host: string | null;
+  host_id?: string | null;
   size_bytes: number;
   created_at: string | null;
   processed_at: string | null;
@@ -2009,6 +2024,7 @@ export type CaseContextEvidenceSummary = {
   is_external: boolean;
   events_indexed: number;
   parser_errors: number;
+  host_id?: string | null;
   detected_host: string | null;
 };
 
@@ -4984,6 +5000,8 @@ export const api = {
     };
   },
   getCaseHosts: (caseId: string) => request<CaseHostsResponse>(`/cases/${caseId}/hosts`),
+  createCaseHost: (caseId: string, payload: { host_name: string; reason?: string | null; analyst?: string | null }) =>
+    request<{ case_id: string; host: CaseContextHostSummary; created: boolean }>(`/cases/${caseId}/hosts`, { method: "POST", body: JSON.stringify(payload) }),
   mergeCaseHosts: (caseId: string, payload: { canonical_host_id: string; aliases: string[]; reason?: string | null; analyst?: string | null }) =>
     request<{ case_id: string; host: CaseContextHostSummary }>(`/cases/${caseId}/hosts/merge`, { method: "POST", body: JSON.stringify(payload) }),
   renameCaseHost: (caseId: string, hostId: string, payload: { display_name?: string | null; canonical_name?: string | null; reason?: string | null; analyst?: string | null }) =>
@@ -5000,6 +5018,8 @@ export const api = {
     request<{ evidence_id: string; host_id: string; status: string }>(`/evidences/${evidenceId}/assign-host`, { method: "POST", body: JSON.stringify(payload) }),
   unassignEvidenceHost: (evidenceId: string) =>
     request<{ evidence_id: string; status: string }>(`/evidences/${evidenceId}/unassign-host`, { method: "POST", body: JSON.stringify({}) }),
+  updateEvidenceHost: (caseId: string, evidenceId: string, payload: { host_id?: string | null; host_name?: string | null; reason?: string | null; analyst?: string | null }) =>
+    request<Evidence>(`/cases/${caseId}/evidence/${evidenceId}/host`, { method: "PATCH", body: JSON.stringify(payload) }),
   updateCase: (caseId: string, payload: Partial<DfirCase>) => request<DfirCase>(`/cases/${caseId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteCase: (caseId: string) => request<void>(`/cases/${caseId}`, { method: "DELETE" }),
   getInvestigationSummary: (caseId: string) => request<InvestigationSummary>(`/cases/${caseId}/investigation-summary`),
@@ -5082,9 +5102,9 @@ export const api = {
   },
   listDocs: () => request<DocEntry[]>("/docs"),
   getDoc: (slug: string) => request<DocPage>(`/docs/${slug}`),
-  listEvidences: (caseId: string) => request<Evidence[]>(`/cases/${caseId}/evidences`),
+  listEvidences: (caseId: string, params?: { host_id?: string | null; host?: string | null }) => request<Evidence[]>(`/cases/${caseId}/evidences${hostScopeQuery(params)}`),
   getMemoryBackendOverview: () => request<MemoryBackendOverview>("/memory/backends"),
-  getMemoryOverview: (caseId: string) => request<MemoryOverview>(`/cases/${caseId}/memory`),
+  getMemoryOverview: (caseId: string, params?: { host_id?: string | null; host?: string | null }) => request<MemoryOverview>(`/cases/${caseId}/memory${hostScopeQuery(params)}`),
   getMemoryUploadReadiness: (caseId: string, selectedSizeBytes?: number) => {
     const query = selectedSizeBytes && selectedSizeBytes > 0 ? `?selected_size_bytes=${encodeURIComponent(String(selectedSizeBytes))}` : "";
     return request<MemoryUploadReadiness>(`/cases/${caseId}/memory/upload-readiness${query}`);
@@ -5146,7 +5166,7 @@ export const api = {
     }),
   getActiveMemoryUpload: (caseId: string) =>
     request<MemoryUploadStatus | null>(`/cases/${caseId}/memory/uploads/active`),
-  listMemoryEvidences: (caseId: string) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences`),
+  listMemoryEvidences: (caseId: string, params?: { host_id?: string | null; host?: string | null }) => request<MemoryEvidence[]>(`/cases/${caseId}/memory/evidences${hostScopeQuery(params)}`),
   getMemoryEvidenceReadiness: (caseId: string, evidenceId: string) => request<MemoryEvidenceReadiness>(`/cases/${caseId}/memory/evidences/${evidenceId}/readiness`),
   getMemoryEvidenceDiagnostics: (caseId: string, evidenceId: string) =>
     request<{
@@ -5481,7 +5501,7 @@ export const api = {
     const query = evidenceId ? `?evidence_id=${encodeURIComponent(evidenceId)}` : "";
     return request<MemoryScanRun[]>(`/cases/${caseId}/memory/runs${query}`);
   },
-  getMemoryEvidenceLanding: (caseId: string) => request<MemoryEvidenceLanding>(`/cases/${caseId}/memory/landing`),
+  getMemoryEvidenceLanding: (caseId: string, params?: { host_id?: string | null; host?: string | null }) => request<MemoryEvidenceLanding>(`/cases/${caseId}/memory/landing${hostScopeQuery(params)}`),
   getMemoryActiveResult: (
     caseId: string,
     evidenceId: string,
@@ -5840,7 +5860,7 @@ export const api = {
   verifyEvidenceIntegrity: (caseId: string, evidenceId: string) => request<EvidenceIntegrity>(`/cases/${caseId}/evidence/${evidenceId}/verify-integrity`, { method: "POST" }),
   exportEvidenceManifest: (caseId: string, evidenceId: string) => request<EvidenceManifest>(`/cases/${caseId}/evidence/${evidenceId}/manifest`),
   getEvidenceCustodyEvents: (caseId: string, evidenceId: string) => request<EvidenceCustodyEvent[]>(`/cases/${caseId}/evidence/${evidenceId}/events`),
-  getCaseProcessing: (caseId: string) => request<CaseProcessingQueue>(`/cases/${caseId}/processing`),
+  getCaseProcessing: (caseId: string, params?: { host_id?: string | null; host?: string | null }) => request<CaseProcessingQueue>(`/cases/${caseId}/processing${hostScopeQuery(params)}`),
   getEvidenceProcessing: (caseId: string, evidenceId: string) => request<ProcessingEvidenceItem>(`/cases/${caseId}/evidence/${evidenceId}/processing`),
   getCaseEvidenceProcessingRuns: (caseId: string, evidenceId: string) => request<ProcessingRun[]>(`/cases/${caseId}/evidence/${evidenceId}/runs`),
   getCaseEvidenceProcessingRun: (caseId: string, evidenceId: string, runId: string) => request<ProcessingRun>(`/cases/${caseId}/evidence/${evidenceId}/runs/${runId}`),
@@ -5958,13 +5978,13 @@ export const api = {
     request<PathValidationResult>("/evidence/validate-path", { method: "POST", body: JSON.stringify(payload) }),
   registerEvidencePath: (
     caseId: string,
-    payload: { path: string; name?: string; copy_to_storage: boolean; start_ingest: boolean; storage_mode?: string; evidence_intent?: EvidenceIntent; packaging?: EvidencePackaging; ingest_mode?: IngestMode; provided_host?: string; evtx_profile?: EvtxProfile },
+    payload: { path: string; name?: string; copy_to_storage: boolean; start_ingest: boolean; storage_mode?: string; evidence_intent?: EvidenceIntent; packaging?: EvidencePackaging; ingest_mode?: IngestMode; provided_host?: string; host_id?: string; evtx_profile?: EvtxProfile },
   ) =>
     request<Evidence>(`/cases/${caseId}/evidences/register-path`, { method: "POST", body: JSON.stringify(payload) }),
   uploadEvidence: async (
     caseId: string,
     file: File,
-    options?: UploadOptions & { evidenceIntent?: EvidenceIntent; packaging?: EvidencePackaging; folderName?: string; folderUpload?: boolean; ingestMode?: IngestMode; providedHost?: string; evtxProfile?: EvtxProfile; memoryAuthorizationAcknowledged?: boolean; memoryUploadId?: string },
+    options?: UploadOptions & { evidenceIntent?: EvidenceIntent; packaging?: EvidencePackaging; folderName?: string; folderUpload?: boolean; ingestMode?: IngestMode; providedHost?: string; hostId?: string; evtxProfile?: EvtxProfile; memoryAuthorizationAcknowledged?: boolean; memoryUploadId?: string },
   ) => {
     const formData = new FormData();
     formData.append("file", file);
@@ -5972,6 +5992,7 @@ export const api = {
     if (options?.packaging) formData.append("packaging", options.packaging);
     if (options?.ingestMode) formData.append("ingest_mode", options.ingestMode);
     if (options?.providedHost) formData.append("provided_host", options.providedHost);
+    if (options?.hostId) formData.append("host_id", options.hostId);
     if (options?.evtxProfile) formData.append("evtx_profile", options.evtxProfile);
     if (options?.memoryAuthorizationAcknowledged) formData.append("memory_authorization_acknowledged", "true");
     if (options?.memoryUploadId) formData.append("memory_upload_id", options.memoryUploadId);
@@ -5979,7 +6000,7 @@ export const api = {
     if (options?.folderName) formData.append("folder_name", options.folderName);
     return uploadFormData<Evidence>(`/cases/${caseId}/evidences/upload`, formData, { onProgress: options?.onProgress, transport: "xhr" });
   },
-  uploadEvidenceFolder: async (caseId: string, files: File[], options?: UploadOptions & { evidenceIntent?: EvidenceIntent; ingestMode?: IngestMode; providedHost?: string; evtxProfile?: EvtxProfile }) => {
+  uploadEvidenceFolder: async (caseId: string, files: File[], options?: UploadOptions & { evidenceIntent?: EvidenceIntent; ingestMode?: IngestMode; providedHost?: string; hostId?: string; evtxProfile?: EvtxProfile }) => {
     const folderName = ((files[0] as File & { webkitRelativePath?: string } | undefined)?.webkitRelativePath || files[0]?.name || "uploaded-folder")
       .split("/")[0]
       .trim() || "uploaded-folder";
@@ -5989,6 +6010,7 @@ export const api = {
       evidenceIntent: options?.evidenceIntent ?? "raw",
       ingestMode: options?.ingestMode,
       providedHost: options?.providedHost,
+      hostId: options?.hostId,
       evtxProfile: options?.evtxProfile,
       packaging: "directory",
       folderUpload: true,

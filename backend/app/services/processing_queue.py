@@ -11,6 +11,7 @@ from app.models.artifact import Artifact
 from app.models.evidence import Evidence, IngestStatus
 from app.models.memory import MemoryPluginRun, MemoryScanRun
 from app.services.evidence_runs import list_evidence_runs, sync_ingest_run_from_metadata
+from app.services.host_identity import normalize_host_alias
 
 
 PROCESSING_STATES = {
@@ -258,14 +259,16 @@ def build_processing_item(evidence: Evidence, artifacts: list[Artifact], memory_
     failed_parser_count = sum(1 for row in parser_rows if row["status"] in {"failed", "timed_out", "error"})
     status = _public_status(evidence, runs, warning_count, failed_parser_count)
     latest = runs[0] if runs else None
-    host = getattr(getattr(evidence, "host", None), "display_name", None) or getattr(getattr(evidence, "host", None), "canonical_name", None) or (evidence.metadata_json or {}).get("provided_host") or evidence.detected_host
+    assigned_host = getattr(getattr(evidence, "host", None), "display_name", None) or getattr(getattr(evidence, "host", None), "canonical_name", None)
     artifact_count = len(artifacts) + sum(int(plugin.row_count or 0) for run in memory_runs for plugin in run.plugin_runs)
     return {
         "evidence_id": evidence.id,
         "case_id": evidence.case_id,
         "filename": evidence.original_filename,
         "evidence_type": _status_value(evidence.evidence_type) or str(evidence.evidence_type or "unknown"),
-        "host": host,
+        "host": assigned_host or "Unassigned",
+        "host_id": evidence.host_id,
+        "detected_host": evidence.detected_host or (evidence.metadata_json or {}).get("provided_host"),
         "uploaded_at": _iso(getattr(evidence, "uploaded_at", None) or evidence.created_at),
         "processing_status": status,
         "last_run_status": latest.get("status") if latest else status,
@@ -290,8 +293,37 @@ def build_processing_item(evidence: Evidence, artifacts: list[Artifact], memory_
     }
 
 
-def list_case_processing(db: Session, case_id: str) -> dict:
+def _matches_host_scope(evidence: Evidence, host_id: str | None = None, host: str | None = None) -> bool:
+    if host_id:
+        if evidence.host_id:
+            return evidence.host_id == host_id
+        if not host:
+            return False
+    if not host:
+        return True
+    expected = normalize_host_alias(host)
+    evidence_host = getattr(evidence, "host", None)
+    values = [
+        getattr(evidence_host, "display_name", None),
+        getattr(evidence_host, "canonical_name", None),
+        *(getattr(evidence_host, "all_names", None) or []),
+        (evidence.metadata_json or {}).get("provided_host"),
+        evidence.detected_host,
+    ]
+    for value in values:
+        normalized = normalize_host_alias(str(value or ""))
+        if not normalized:
+            continue
+        if normalized == expected:
+            return True
+        if "." in normalized and normalized.split(".", 1)[0] == expected:
+            return True
+    return False
+
+
+def list_case_processing(db: Session, case_id: str, *, host_id: str | None = None, host: str | None = None) -> dict:
     evidences = db.query(Evidence).filter(Evidence.case_id == case_id).order_by(Evidence.created_at.desc()).all()
+    evidences = [evidence for evidence in evidences if _matches_host_scope(evidence, host_id=host_id, host=host)]
     artifacts_by_evidence = _artifact_rows_by_evidence(db, case_id)
     memory_by_evidence = _memory_runs_by_evidence(db, case_id)
     items = [build_processing_item(evidence, artifacts_by_evidence.get(evidence.id, []), memory_by_evidence.get(evidence.id, [])) for evidence in evidences]

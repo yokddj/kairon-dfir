@@ -625,6 +625,63 @@ def get_case_hosts(db: Session, case_id: str) -> list[dict[str, Any]]:
     return sorted(output, key=lambda item: (-item["event_count"], item["display_name"]))
 
 
+def create_manual_case_host(db: Session, case_id: str, host_name: str, *, analyst: str | None = None, reason: str | None = None) -> tuple[dict[str, Any], bool]:
+    display_name = str(host_name or "").strip()
+    normalized = normalize_host_alias(display_name)
+    if not normalized or normalized in INVALID_HOST_VALUES:
+        raise ValueError("Host name is required")
+    if len(display_name) > 255:
+        raise ValueError("Host name is too long")
+    if not all(ch.isalnum() or ch in {"-", "_", "."} for ch in display_name):
+        raise ValueError("Host name contains unsupported characters")
+
+    existing_alias = (
+        db.query(CaseHostAlias)
+        .options(joinedload(CaseHostAlias.case_host).joinedload(CaseHost.aliases))
+        .filter(CaseHostAlias.case_id == case_id, CaseHostAlias.normalized_alias == normalized)
+        .first()
+    )
+    if existing_alias:
+        return _serialize_case_host(existing_alias.case_host), False
+
+    existing_host = (
+        db.query(CaseHost)
+        .options(joinedload(CaseHost.aliases))
+        .filter(CaseHost.case_id == case_id, CaseHost.canonical_name == normalized)
+        .first()
+    )
+    if existing_host:
+        return _serialize_case_host(existing_host), False
+
+    host = CaseHost(case_id=case_id, canonical_name=normalized, display_name=display_name, confidence="manual", source="manual")
+    db.add(host)
+    db.flush()
+    db.add(
+        CaseHostAlias(
+            case_host_id=host.id,
+            case_id=case_id,
+            alias=display_name,
+            normalized_alias=normalized,
+            source="manual",
+            confidence="manual",
+            is_primary=True,
+        )
+    )
+    _audit_entry(
+        db,
+        case_id=case_id,
+        case_host_id=host.id,
+        action="host_created",
+        old_value={},
+        new_value={"host_id": host.id, "display_name": display_name, "canonical_name": normalized},
+        reason=reason,
+        analyst=analyst,
+    )
+    db.commit()
+    db.refresh(host)
+    return _serialize_case_host(host), True
+
+
 def build_case_host_candidates(db: Session, case_id: str) -> list[dict[str, Any]]:
     hosts = get_case_hosts(db, case_id)
     candidates: list[dict[str, Any]] = []

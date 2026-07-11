@@ -12,6 +12,7 @@ import InvestigationContext from "../components/InvestigationContext";
 import ProcessTreePanel from "../components/ProcessTreePanel";
 import Timeline from "../components/Timeline";
 import { useActiveCase } from "../context/ActiveCaseContext";
+import { useHostContext } from "../hooks/useHostContext";
 
 const tabs = ["overview", "evidences", "processing", "artifacts", "artifact_explorer", "search", "process_tree", "investigation_timeline", "detections", "findings", "activity"] as const;
 const tabLabels: Record<(typeof tabs)[number], string> = {
@@ -33,7 +34,8 @@ export default function CaseDetail() {
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const { activeCaseId, clearActiveCase, setActiveCase } = useActiveCase();
+  const { activeCaseId, clearActiveCase, setActiveCase, caseContext } = useActiveCase();
+  const { activeHost, activeHostId, hasHostFilter, clearHostFilter } = useHostContext();
   const initialTab = searchParams.get("tab");
   const [tab, setTab] = useState<(typeof tabs)[number]>(tabs.includes(initialTab as (typeof tabs)[number]) ? (initialTab as (typeof tabs)[number]) : "overview");
   const [caseTimezone, setCaseTimezone] = useState("");
@@ -45,16 +47,17 @@ export default function CaseDetail() {
   const [findingDialogOpen, setFindingDialogOpen] = useState(false);
   const [debugExportOpen, setDebugExportOpen] = useState(false);
   const caseQuery = useQuery({ queryKey: ["case", caseId], queryFn: () => api.getCase(caseId), enabled: Boolean(caseId), staleTime: 15_000, refetchOnWindowFocus: false });
-  const evidencesQuery = useQuery({ queryKey: ["evidences", caseId], queryFn: () => api.listEvidences(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
+  const evidencesQuery = useQuery({ queryKey: ["evidences", caseId, activeHostId, activeHost], queryFn: () => api.listEvidences(caseId, { host_id: activeHostId || undefined, host: activeHost || undefined }), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const artifactsQuery = useQuery({ queryKey: ["artifacts", caseId], queryFn: () => api.listArtifacts(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const findingsQuery = useQuery({ queryKey: ["findings", caseId], queryFn: () => api.listFindings(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const detectionsQuery = useQuery({ queryKey: ["detections", caseId], queryFn: () => api.listDetections(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const summaryQuery = useQuery({ queryKey: ["investigation-summary", caseId], queryFn: () => api.getInvestigationSummary(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const activityQuery = useQuery({ queryKey: ["case-activity", caseId], queryFn: () => api.listCaseActivity(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
-  const processingQuery = useQuery({ queryKey: ["case-processing", caseId], queryFn: () => api.getCaseProcessing(caseId), enabled: Boolean(caseId), staleTime: 5_000, refetchInterval: tab === "processing" ? 5000 : false, refetchOnWindowFocus: false });
+  const processingQuery = useQuery({ queryKey: ["case-processing", caseId, activeHostId, activeHost], queryFn: () => api.getCaseProcessing(caseId, { host_id: activeHostId || undefined, host: activeHost || undefined }), enabled: Boolean(caseId), staleTime: 5_000, refetchInterval: tab === "processing" ? 5000 : false, refetchOnWindowFocus: false });
+  const hostNameById = useMemo(() => new Map((caseContext?.hosts ?? []).map((host) => [host.id, host.display_name || host.canonical_name])), [caseContext?.hosts]);
   const siemLinksQuery = useQuery({ queryKey: ["siem-external-links", "case", caseId], queryFn: () => api.siemExternalLinks({ case_id: caseId }), enabled: Boolean(caseId), staleTime: 30_000, refetchOnWindowFocus: false });
   const searchQuery = useQuery({
-    queryKey: ["case-search", caseId, query, searchEventId, searchEvidenceId],
+    queryKey: ["case-search", caseId, query, searchEventId, searchEvidenceId, activeHostId, activeHost],
     queryFn: () =>
       api.search({
         case_id: caseId,
@@ -62,6 +65,8 @@ export default function CaseDetail() {
         filters: {
           event_id: searchEventId ? [searchEventId] : [],
           evidence_id: searchEvidenceId ? [searchEvidenceId] : [],
+          host: activeHost ? [activeHost] : [],
+          host_id: activeHostId ? [activeHostId] : [],
         },
         page: 1,
         page_size: 50,
@@ -143,6 +148,8 @@ export default function CaseDetail() {
       <InvestigationContext
         caseId={caseId}
         caseName={caseQuery.data?.name}
+        hostId={activeHostId}
+        host={activeHost}
         current={tabLabels[tab]}
         breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: caseQuery.data?.name || "Case", to: `/cases/${caseId}` }, { label: tabLabels[tab] }]}
       />
@@ -367,7 +374,7 @@ export default function CaseDetail() {
                   <span className="rounded-full border border-line px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-accent">{item.ingest_status}</span>
                 </Link>
               ))}
-              {!evidencesQuery.data?.length ? <p className="text-sm text-muted">No evidences uploaded yet. Use the upload panel to add a raw evidence collection, KAPE/EZ outputs, or loose CSV/JSON files.</p> : null}
+              {!evidencesQuery.data?.length ? <p className="text-sm text-muted">{hasHostFilter ? `No recent evidence for ${activeHost}. Clear the host filter to see all evidence.` : "No evidences uploaded yet. Use the upload panel to add a raw evidence collection, KAPE/EZ outputs, or loose CSV/JSON files."}</p> : null}
             </div>
           </div>
         </section>
@@ -384,21 +391,31 @@ export default function CaseDetail() {
           />
           {!evidencesQuery.data?.length ? (
             <div className="rounded-3xl border border-line bg-panel/40 p-5 text-sm text-muted">
-              This is the evidence workspace for the case. Click the upload panel above to add a raw evidence collection, parsed KAPE/EZ Tools output, or loose CSV/JSON artifacts.
+              {hasHostFilter ? <>No evidence associated with {activeHost}. <button type="button" onClick={clearHostFilter} className="text-accent underline underline-offset-4">Clear host filter</button> to see all evidence, including unassigned evidence.</> : "This is the evidence workspace for the case. Click the upload panel above to add a raw evidence collection, parsed KAPE/EZ Tools output, or loose CSV/JSON artifacts."}
             </div>
           ) : null}
-          {(evidencesQuery.data ?? []).map((item) => (
-            <Link key={item.id} to={`/evidences/${item.id}`} className="flex items-center justify-between rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-              <div>
+          {(evidencesQuery.data ?? []).map((item) => {
+            const assignedHostName = item.host_id ? hostNameById.get(item.host_id) || item.host_id.slice(0, 8) : "Unassigned";
+            const detectedHost = item.detected_host || item.provided_host || "-";
+            const mismatch = Boolean(item.host_id && detectedHost !== "-" && assignedHostName !== detectedHost);
+            return (
+            <Link key={item.id} to={`/evidences/${item.id}`} className="flex items-center justify-between gap-4 rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
+              <div className="min-w-0">
                 <p className="text-base font-semibold">{item.original_filename}</p>
                 <p className="mt-1 font-mono text-xs text-muted">{item.sha256}</p>
+                <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+                  <span className="rounded-full border border-line bg-abyss/70 px-2 py-1 text-muted">Detected: {detectedHost}</span>
+                  <span className={`rounded-full border px-2 py-1 ${item.host_id ? "border-mint/30 bg-mint/10 text-mint" : "border-line bg-abyss/70 text-muted"}`}>Assigned: {assignedHostName}</span>
+                  {mismatch ? <span className="rounded-full border border-amber/30 bg-amber/10 px-2 py-1 text-amber">Mismatch</span> : null}
+                </div>
               </div>
               <div className="text-right">
                 <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">{item.evidence_type}</p>
                 <p className="mt-2 text-sm text-muted">{item.ingest_status}</p>
               </div>
             </Link>
-          ))}
+            );
+          })}
         </section>
       ) : null}
 
@@ -423,7 +440,9 @@ export default function CaseDetail() {
           </div>
           {processingQuery.error instanceof Error ? <div className="rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger">{processingQuery.error.message}</div> : null}
           {!processingQuery.isLoading && !(processingQuery.data?.items ?? []).length ? (
-            <div className="rounded-3xl border border-line bg-panel/40 p-5 text-sm text-muted">No processing runs yet. Upload evidence to see pending, queued, running and completed parser activity.</div>
+            <div className="rounded-3xl border border-line bg-panel/40 p-5 text-sm text-muted">
+              {hasHostFilter ? <>No processing entries for {activeHost}. <button type="button" onClick={clearHostFilter} className="text-accent underline underline-offset-4">Clear host filter</button> to see all evidence.</> : "No processing runs yet. Upload evidence to see pending, queued, running and completed parser activity."}
+            </div>
           ) : null}
           {(processingQuery.data?.items ?? []).length ? (
             <div className="grid gap-5 xl:grid-cols-[1.35fr_0.9fr]">

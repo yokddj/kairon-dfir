@@ -352,6 +352,7 @@ def _build_case_context(db: Session, case_id: str) -> dict:
                 "is_external": evidence.is_external,
                 "events_indexed": artifact_counts_by_evidence.get(evidence.id, 0),
                 "parser_errors": parser_errors_by_evidence.get(evidence.id, 0),
+                "host_id": evidence.host_id,
                 "detected_host": (evidence_summaries.get(evidence.id) or {}).get("primary_host") or evidence.detected_host,
                 "detected_host_source": (evidence_summaries.get(evidence.id) or {}).get("primary_host_source"),
                 "detected_host_confidence": (evidence_summaries.get(evidence.id) or {}).get("primary_host_confidence"),
