@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api } from "../api/client";
+import { Link, useParams, useSearchParams } from "react-router-dom";
+import { api, type DfirCase } from "../api/client";
 import ArtifactBadge from "../components/ArtifactBadge";
 import CreateFindingDialog from "../components/CreateFindingDialog";
 import DebugExportDialog from "../components/DebugExportDialog";
@@ -31,10 +31,9 @@ const tabLabels: Record<(typeof tabs)[number], string> = {
 
 export default function CaseDetail() {
   const { caseId = "" } = useParams();
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
-  const { activeCaseId, clearActiveCase, setActiveCase, caseContext } = useActiveCase();
+  const { activeCaseId, setActiveCase, caseContext } = useActiveCase();
   const { activeHost, activeHostId, hasHostFilter, clearHostFilter } = useHostContext();
   const initialTab = searchParams.get("tab");
   const [tab, setTab] = useState<(typeof tabs)[number]>(tabs.includes(initialTab as (typeof tabs)[number]) ? (initialTab as (typeof tabs)[number]) : "overview");
@@ -46,6 +45,13 @@ export default function CaseDetail() {
   const [selectedProcessingId, setSelectedProcessingId] = useState<string>("");
   const [findingDialogOpen, setFindingDialogOpen] = useState(false);
   const [debugExportOpen, setDebugExportOpen] = useState(false);
+  const [metadataEditorOpen, setMetadataEditorOpen] = useState(false);
+  const [editName, setEditName] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [editPriority, setEditPriority] = useState("medium");
+  const [editStatus, setEditStatus] = useState("active");
+  const [editTags, setEditTags] = useState("");
+  const [editNotes, setEditNotes] = useState("");
   const caseQuery = useQuery({ queryKey: ["case", caseId], queryFn: () => api.getCase(caseId), enabled: Boolean(caseId), staleTime: 15_000, refetchOnWindowFocus: false });
   const evidencesQuery = useQuery({ queryKey: ["evidences", caseId, activeHostId, activeHost], queryFn: () => api.listEvidences(caseId, { host_id: activeHostId || undefined, host: activeHost || undefined }), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const artifactsQuery = useQuery({ queryKey: ["artifacts", caseId], queryFn: () => api.listArtifacts(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
@@ -87,22 +93,43 @@ export default function CaseDetail() {
       void queryClient.invalidateQueries({ queryKey: ["cases"] });
     },
   });
-  const deleteCaseMutation = useMutation({
-    mutationFn: () => api.deleteCase(caseId),
-    onSuccess: () => {
-      if (activeCaseId === caseId) {
-        clearActiveCase();
-      }
+  const updateCaseMetadataMutation = useMutation({
+    mutationFn: () => api.updateCase(caseId, { name: editName, description: editDescription, priority: editPriority as DfirCase["priority"], status: editStatus as DfirCase["status"], tags: editTags.split(",").map((tag) => tag.trim()).filter(Boolean), case_notes: editNotes }),
+    onSuccess: (updated) => {
+      setMetadataEditorOpen(false);
+      setActiveCase(updated);
+      void queryClient.invalidateQueries({ queryKey: ["case", caseId] });
       void queryClient.invalidateQueries({ queryKey: ["cases"] });
-      void navigate("/cases");
     },
   });
-
+  const caseStatusMutation = useMutation({
+    mutationFn: (action: "archive" | "unarchive" | "close" | "reopen") => {
+      if (action === "archive") return api.archiveCase(caseId);
+      if (action === "unarchive") return api.unarchiveCase(caseId);
+      if (action === "close") return api.closeCase(caseId);
+      return api.reopenCase(caseId);
+    },
+    onSuccess: (updated) => {
+      setActiveCase(updated);
+      void queryClient.invalidateQueries({ queryKey: ["case", caseId] });
+      void queryClient.invalidateQueries({ queryKey: ["cases"] });
+    },
+  });
   useEffect(() => {
     if (caseQuery.data && caseQuery.data.id !== activeCaseId) {
       setActiveCase(caseQuery.data);
     }
   }, [activeCaseId, caseQuery.data, setActiveCase]);
+
+  useEffect(() => {
+    if (!caseQuery.data || !metadataEditorOpen) return;
+    setEditName(caseQuery.data.name || "");
+    setEditDescription(caseQuery.data.description || "");
+    setEditPriority(caseQuery.data.priority || "medium");
+    setEditStatus(caseQuery.data.status === "open" ? "active" : caseQuery.data.status || "active");
+    setEditTags((caseQuery.data.tags || []).join(", "));
+    setEditNotes(caseQuery.data.case_notes || "");
+  }, [caseQuery.data, metadataEditorOpen]);
 
   useEffect(() => {
     const requestedTab = searchParams.get("tab");
@@ -132,15 +159,18 @@ export default function CaseDetail() {
   const overviewStats = useMemo(
     () => [
       ["Evidences", evidencesQuery.data?.length ?? 0],
+      ["Hosts", caseQuery.data?.host_count ?? caseContext?.hosts?.length ?? 0],
       ["Artifact Inventory", artifactsQuery.data?.length ?? 0],
       ["Detections", summaryQuery.data?.counts.detections ?? caseQuery.data?.detections_count ?? 0],
       ["Findings", summaryQuery.data?.counts.findings ?? caseQuery.data?.findings_count ?? 0],
-      ["Status", caseQuery.data?.status ?? "-"],
+      ["Status", caseQuery.data?.status === "open" ? "active" : caseQuery.data?.status ?? "-"],
+      ["Priority", caseQuery.data?.priority ?? "medium"],
       ["Evidence processing", processingSummaryLabel(processingQuery.data?.summary)],
     ],
-    [artifactsQuery.data?.length, caseQuery.data?.detections_count, caseQuery.data?.findings_count, caseQuery.data?.status, evidencesQuery.data?.length, processingQuery.data?.summary, summaryQuery.data?.counts.detections, summaryQuery.data?.counts.findings],
+    [artifactsQuery.data?.length, caseContext?.hosts?.length, caseQuery.data?.detections_count, caseQuery.data?.findings_count, caseQuery.data?.host_count, caseQuery.data?.priority, caseQuery.data?.status, evidencesQuery.data?.length, processingQuery.data?.summary, summaryQuery.data?.counts.detections, summaryQuery.data?.counts.findings],
   );
   const selectedProcessing = processingQuery.data?.items.find((item) => item.evidence_id === selectedProcessingId) ?? processingQuery.data?.items[0] ?? null;
+  const normalizedCaseStatus = caseQuery.data?.status === "open" ? "active" : caseQuery.data?.status;
 
   return (
     <div className="space-y-8">
@@ -153,6 +183,12 @@ export default function CaseDetail() {
         current={tabLabels[tab]}
         breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: caseQuery.data?.name || "Case", to: `/cases/${caseId}` }, { label: tabLabels[tab] }]}
       />
+      {normalizedCaseStatus === "archived" ? (
+        <div className="rounded-2xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">This case is archived. It is hidden from the default case list but evidence is preserved.</div>
+      ) : null}
+      {normalizedCaseStatus === "closed" ? (
+        <div className="rounded-2xl border border-line bg-panel/60 p-4 text-sm text-muted">This case is closed. Reopen it to continue active investigation.</div>
+      ) : null}
       <section className="rounded-[28px] border border-line bg-panel/60 p-6 shadow-panel">
         <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
           <div>
@@ -169,6 +205,17 @@ export default function CaseDetail() {
             ))}
           </div>
         </div>
+        <div className="mt-6 grid gap-3 rounded-3xl border border-line bg-abyss/60 p-4 md:grid-cols-4" data-testid="case-management-metadata">
+          <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Status</p><p className="mt-1 text-sm font-semibold text-ink">{normalizedCaseStatus || "active"}</p></div>
+          <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Priority</p><p className="mt-1 text-sm font-semibold text-ink">{caseQuery.data?.priority || "medium"}</p></div>
+          <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Tags</p><p className="mt-1 text-sm font-semibold text-ink">{(caseQuery.data?.tags || []).length ? caseQuery.data?.tags.join(", ") : "No tags"}</p></div>
+          <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Updated</p><p className="mt-1 text-sm font-semibold text-ink">{caseQuery.data?.updated_at ? new Date(caseQuery.data.updated_at).toLocaleString() : "-"}</p></div>
+          <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Created</p><p className="mt-1 text-sm font-semibold text-ink">{caseQuery.data?.created_at ? new Date(caseQuery.data.created_at).toLocaleString() : "-"}</p></div>
+          <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Evidence count</p><p className="mt-1 text-sm font-semibold text-ink">{caseQuery.data?.evidence_count ?? evidencesQuery.data?.length ?? 0}</p></div>
+          <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Host count</p><p className="mt-1 text-sm font-semibold text-ink">{caseQuery.data?.host_count ?? caseContext?.hosts?.length ?? 0}</p></div>
+          <div><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Processing summary</p><p className="mt-1 text-sm font-semibold text-ink">{processingSummaryLabel(processingQuery.data?.summary)}</p></div>
+          <div className="md:col-span-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Notes</p><p className="mt-1 whitespace-pre-wrap text-sm text-muted">{caseQuery.data?.case_notes || "No case notes yet."}</p></div>
+        </div>
         <div className="mt-6 flex flex-wrap gap-2">
           {tabs.map((item) => (
             <button
@@ -184,21 +231,15 @@ export default function CaseDetail() {
               {tabLabels[item]}
             </button>
           ))}
-          <button
-            onClick={() => {
-              if (deleteCaseMutation.isPending) return;
-              if (!window.confirm("Delete this case and all its evidences, artifacts and indexed events? This action cannot be undone.")) return;
-              deleteCaseMutation.mutate();
-            }}
-            className="rounded-full border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger"
-          >
-            {deleteCaseMutation.isPending ? "Deleting..." : "Delete case"}
-          </button>
+          <button onClick={() => setMetadataEditorOpen(true)} className="rounded-full border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Edit case</button>
+          {normalizedCaseStatus === "archived" ? <button onClick={() => caseStatusMutation.mutate("unarchive")} className="rounded-full border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Unarchive case</button> : <button onClick={() => window.confirm("Archive this case? Evidence and indexes are preserved.") && caseStatusMutation.mutate("archive")} className="rounded-full border border-line bg-white/5 px-4 py-2 text-sm text-muted">Archive case</button>}
+          {normalizedCaseStatus === "closed" ? <button onClick={() => caseStatusMutation.mutate("reopen")} className="rounded-full border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Reopen case</button> : <button onClick={() => window.confirm("Close this case? You can reopen it later.") && caseStatusMutation.mutate("close")} className="rounded-full border border-line bg-white/5 px-4 py-2 text-sm text-muted">Close case</button>}
           <button onClick={() => setDebugExportOpen(true)} className="rounded-full border border-line bg-white/5 px-4 py-2 text-sm text-muted">
             Export full case validation pack
           </button>
         </div>
-        {deleteCaseMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{deleteCaseMutation.error.message}</p> : null}
+        {caseStatusMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{caseStatusMutation.error.message}</p> : null}
+        {updateCaseMetadataMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{updateCaseMetadataMutation.error.message}</p> : null}
       </section>
 
       {tab === "overview" ? (
@@ -705,6 +746,32 @@ export default function CaseDetail() {
             </div>
           ))}
         </section>
+      ) : null}
+      {metadataEditorOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true" aria-label="Edit case">
+          <div className="w-full max-w-2xl rounded-3xl border border-line bg-panel p-6 shadow-panel">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Edit case</p>
+                <h2 className="mt-1 text-xl font-semibold">Case metadata</h2>
+              </div>
+              <button onClick={() => setMetadataEditorOpen(false)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Cancel</button>
+            </div>
+            <div className="mt-4 grid gap-3">
+              <label className="text-xs text-muted">Name<input value={editName} onChange={(event) => setEditName(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+              <label className="text-xs text-muted">Description<textarea value={editDescription} onChange={(event) => setEditDescription(event.target.value)} className="mt-1 h-24 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="text-xs text-muted">Priority<select value={editPriority} onChange={(event) => setEditPriority(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink"><option value="low">low</option><option value="medium">medium</option><option value="high">high</option><option value="critical">critical</option></select></label>
+                <label className="text-xs text-muted">Status<select value={editStatus} onChange={(event) => setEditStatus(event.target.value)} className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink"><option value="active">active</option><option value="closed">closed</option><option value="archived">archived</option><option value="on_hold">on_hold</option></select></label>
+              </div>
+              <label className="text-xs text-muted">Tags<input value={editTags} onChange={(event) => setEditTags(event.target.value)} placeholder="ctf, memory, windows" className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+              <label className="text-xs text-muted">Notes<textarea value={editNotes} onChange={(event) => setEditNotes(event.target.value)} className="mt-1 h-24 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+            </div>
+            <button onClick={() => updateCaseMetadataMutation.mutate()} disabled={updateCaseMetadataMutation.isPending || !editName.trim()} className="mt-5 rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50">
+              {updateCaseMetadataMutation.isPending ? "Saving..." : "Save case"}
+            </button>
+          </div>
+        </div>
       ) : null}
       <DebugExportDialog
         open={debugExportOpen}

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -17,6 +17,10 @@ const siemExternalLinksMock = vi.fn();
 const getCaseProcessingMock = vi.fn();
 const updateCaseMock = vi.fn();
 const deleteCaseMock = vi.fn();
+const archiveCaseMock = vi.fn();
+const unarchiveCaseMock = vi.fn();
+const closeCaseMock = vi.fn();
+const reopenCaseMock = vi.fn();
 const searchMock = vi.fn();
 const timelineMock = vi.fn();
 
@@ -33,6 +37,10 @@ vi.mock("../api/client", () => ({
     getCaseProcessing: (...args: unknown[]) => getCaseProcessingMock(...args),
     updateCase: (...args: unknown[]) => updateCaseMock(...args),
     deleteCase: (...args: unknown[]) => deleteCaseMock(...args),
+    archiveCase: (...args: unknown[]) => archiveCaseMock(...args),
+    unarchiveCase: (...args: unknown[]) => unarchiveCaseMock(...args),
+    closeCase: (...args: unknown[]) => closeCaseMock(...args),
+    reopenCase: (...args: unknown[]) => reopenCaseMock(...args),
     search: (...args: unknown[]) => searchMock(...args),
     timeline: (...args: unknown[]) => timelineMock(...args),
   },
@@ -108,7 +116,7 @@ function renderPage() {
 describe("CaseDetail Processing Queue", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    getCaseMock.mockResolvedValue({ id: "case-1", name: "Queue Case", description: "", status: "open", timezone: null, detections_count: 0, findings_count: 0 });
+    getCaseMock.mockResolvedValue({ id: "case-1", name: "Queue Case", description: "Queue description", status: "active", priority: "critical", tags: ["ctf", "memory"], case_notes: "Queue notes", timezone: null, evidence_count: 4, host_count: 3, processing_summary: { completed: 1, running: 1, failed: 1 }, detections_count: 0, findings_count: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-02T00:00:00Z" });
     listEvidencesMock.mockResolvedValue([]);
     listArtifactsMock.mockResolvedValue([]);
     listFindingsMock.mockResolvedValue([]);
@@ -162,5 +170,33 @@ describe("CaseDetail Processing Queue", () => {
     expect(screen.getByText("WS-02")).toBeInTheDocument();
     expect(screen.getByText("WS-03")).toBeInTheDocument();
     expect(getCaseProcessingMock).toHaveBeenCalledWith("case-1", { host_id: undefined, host: undefined });
+  });
+
+  it("shows case management metadata and saves edits", async () => {
+    updateCaseMock.mockResolvedValue({ id: "case-1", name: "Queue Case", description: "Updated", status: "active", priority: "high", tags: ["lab"], case_notes: "Updated notes", timezone: null, evidence_count: 4, host_count: 3, processing_summary: {}, detections_count: 0, findings_count: 0, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-02T00:00:00Z" });
+    renderPage();
+    const panel = await screen.findByTestId("case-management-metadata");
+    await waitFor(() => expect(panel).toHaveTextContent("critical"));
+    expect(panel).toHaveTextContent("ctf, memory");
+    expect(panel).toHaveTextContent("Queue notes");
+    await userEvent.click(screen.getByRole("button", { name: /Edit case/i }));
+    const dialog = screen.getByRole("dialog", { name: /Edit case/i });
+    await userEvent.selectOptions(within(dialog).getByLabelText(/Priority/i), "high");
+    await userEvent.clear(within(dialog).getByLabelText(/Tags/i));
+    await userEvent.type(within(dialog).getByLabelText(/Tags/i), "lab");
+    await userEvent.click(within(dialog).getByRole("button", { name: /Save case/i }));
+    await waitFor(() => expect(updateCaseMock).toHaveBeenCalledWith("case-1", expect.objectContaining({ priority: "high", tags: ["lab"] })));
+  });
+
+  it("archives and reopens via lifecycle actions", async () => {
+    archiveCaseMock.mockResolvedValue({ id: "case-1", name: "Queue Case", status: "archived" });
+    closeCaseMock.mockResolvedValue({ id: "case-1", name: "Queue Case", status: "closed" });
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    renderPage();
+    await screen.findByRole("heading", { name: "Queue Case" });
+    await userEvent.click(screen.getByRole("button", { name: /Archive case/i }));
+    await waitFor(() => expect(archiveCaseMock).toHaveBeenCalledWith("case-1"));
+    await userEvent.click(screen.getByRole("button", { name: /Close case/i }));
+    await waitFor(() => expect(closeCaseMock).toHaveBeenCalledWith("case-1"));
   });
 });

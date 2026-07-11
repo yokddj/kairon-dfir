@@ -363,6 +363,14 @@ def _ensure_compatible_schema() -> None:
                     connection.execute(text(f'ALTER TABLE rule_import_runs ADD COLUMN "{column_name}" {column_type}'))
         if "cases" in existing_tables:
             case_columns = {column["name"] for column in inspector.get_columns("cases")}
+            connection.execute(text("ALTER TABLE cases ALTER COLUMN status TYPE VARCHAR(32) USING status::text"))
+            connection.execute(text("UPDATE cases SET status = 'active' WHERE status = 'open' OR status IS NULL"))
+            if "priority" not in case_columns:
+                connection.execute(text("ALTER TABLE cases ADD COLUMN priority VARCHAR(32) NOT NULL DEFAULT 'medium'"))
+            if "case_notes" not in case_columns:
+                connection.execute(text("ALTER TABLE cases ADD COLUMN case_notes TEXT"))
+            if "management_tags" not in case_columns:
+                connection.execute(text("ALTER TABLE cases ADD COLUMN management_tags JSONB NOT NULL DEFAULT '[]'::jsonb"))
             if "timezone" not in case_columns:
                 connection.execute(text("ALTER TABLE cases ADD COLUMN timezone VARCHAR(128)"))
             if "mode" not in case_columns:
