@@ -16,7 +16,7 @@ import { MemoryExperimentalResultsPanel } from "../components/memory/MemoryExper
 import { MemoryPreparationCard } from "../components/memory/MemoryPreparationCard";
 import { MEMORY_TABS, isMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 import { memoryQueryKeys } from "../lib/memoryQueryKeys";
-import type { MemoryScanRun } from "../api/client";
+import type { CaseContextHostSummary, MemoryEvidenceLanding, MemoryEvidenceLandingItem, MemoryScanRun } from "../api/client";
 
 const ARTIFACT_FAMILY_FROM_TAB: Record<string, string> = {
   processes: "processes",
@@ -34,6 +34,27 @@ function familyForTab(tab: MemoryTab, _artifact?: string | null): string {
   return ARTIFACT_FAMILY_FROM_TAB[tab] || "processes";
 }
 
+function normalizeHostName(value: string | null | undefined): string {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized.endsWith(".local") ? normalized.slice(0, -6) : normalized;
+}
+
+function assignedHost(item: MemoryEvidenceLandingItem | null, hosts: CaseContextHostSummary[]): CaseContextHostSummary | null {
+  if (!item?.host_id) return null;
+  return hosts.find((host) => host.id === item.host_id) ?? null;
+}
+
+function hostAssignmentStatus(item: MemoryEvidenceLandingItem | null, hosts: CaseContextHostSummary[]): { label: string; tone: string } {
+  const host = assignedHost(item, hosts);
+  if (!item?.host_id) return { label: "Unassigned", tone: "border-line bg-panel/50 text-muted" };
+  const detected = normalizeHostName(item.detected_host);
+  if (!host || !detected) return { label: "Assigned", tone: "border-mint/30 bg-mint/10 text-mint" };
+  const names = [host.id, host.canonical_name, host.display_name, ...(host.aliases || []), ...(host.all_names || [])];
+  return names.some((name) => normalizeHostName(name) === detected)
+    ? { label: "Assigned", tone: "border-mint/30 bg-mint/10 text-mint" }
+    : { label: "Mismatch", tone: "border-amber/30 bg-amber/10 text-amber" };
+}
+
 export default function MemoryEvidencePage() {
   const { caseId = "", evidenceId = "", memoryTab = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -45,6 +66,11 @@ export default function MemoryEvidencePage() {
   const [confirmationOpen, setConfirmationOpen] = useState(false);
   const [confirmationError, setConfirmationError] = useState<string | null>(null);
   const [confirmationToast, setConfirmationToast] = useState<string | null>(null);
+  const [hostAssignmentMode, setHostAssignmentMode] = useState<"existing" | "create">("existing");
+  const [hostAssignmentId, setHostAssignmentId] = useState("");
+  const [hostAssignmentName, setHostAssignmentName] = useState("");
+  const [assignedHostOverrideId, setAssignedHostOverrideId] = useState<string | null | undefined>(undefined);
+  const [assignedHostDisplayOverride, setAssignedHostDisplayOverride] = useState<string | null | undefined>(undefined);
   const queryClient = useQueryClient();
   const submittingRef = useRef(false);
 
@@ -122,6 +148,13 @@ export default function MemoryEvidencePage() {
     refetchInterval: hasActiveRuns ? 3000 : false,
   });
 
+  const caseHostsQuery = useQuery({
+    queryKey: ["case-hosts", caseId],
+    queryFn: () => typeof api.getCaseHosts === "function" ? api.getCaseHosts(caseId) : Promise.resolve({ case_id: caseId, hosts: [], host_candidates: [] }),
+    enabled: Boolean(caseId),
+    refetchOnWindowFocus: false,
+  });
+
   const activeResultQuery = useQuery({
     queryKey: ["memory-active-result", caseId, evidenceId, family, historicalRunId],
     queryFn: () => api.getMemoryActiveResult(caseId, evidenceId, family, historicalRunId || undefined),
@@ -145,8 +178,61 @@ export default function MemoryEvidencePage() {
 
   const overview = overviewQuery.data;
   const evidence = landingQuery.data?.items?.find((item) => item.evidence_id === evidenceId) || null;
+  const caseHosts = caseHostsQuery.data?.hosts ?? [];
+  const displayedEvidence = evidence && assignedHostOverrideId !== undefined ? { ...evidence, host_id: assignedHostOverrideId } : evidence;
+  const currentAssignedHost = assignedHost(displayedEvidence, caseHosts);
+  const selectedAssignedHost = hostAssignmentId ? caseHosts.find((host) => host.id === hostAssignmentId) ?? null : null;
+  const currentHostStatus = hostAssignmentStatus(displayedEvidence, caseHosts);
   const volatilityBackend = backendQuery.data?.backends.find((b) => b.backend === "volatility3") || null;
   const canRun = Boolean(overview?.memory_analysis_enabled && volatilityBackend?.ready);
+
+  useEffect(() => {
+    setAssignedHostOverrideId(undefined);
+    setAssignedHostDisplayOverride(undefined);
+    setHostAssignmentId(evidence?.host_id || "");
+    setHostAssignmentMode("existing");
+  }, [evidence?.evidence_id]);
+
+  useEffect(() => {
+    if (assignedHostOverrideId !== undefined) return;
+    setHostAssignmentId(evidence?.host_id || "");
+  }, [assignedHostOverrideId, evidence?.host_id]);
+
+  const hostAssignmentMutation = useMutation({
+    mutationFn: async () => {
+      if (!evidence) throw new Error("Memory evidence is not loaded.");
+      if (hostAssignmentMode === "create") {
+        const name = hostAssignmentName.trim();
+        if (!name) throw new Error("Enter a host name.");
+        const created = await api.createCaseHost(caseId, { host_name: name, reason: "Created from Memory evidence" });
+        return api.updateEvidenceHost(caseId, evidence.evidence_id, { host_id: created.host.id, reason: "Assigned from Memory evidence" });
+      }
+      return api.updateEvidenceHost(caseId, evidence.evidence_id, { host_id: hostAssignmentId || null, reason: hostAssignmentId ? "Assigned from Memory evidence" : "Marked unassigned from Memory evidence" });
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData<MemoryEvidenceLanding | undefined>([...memoryQueryKeys.landing(caseId), activeHostId, activeHost], (current) => current ? {
+        ...current,
+        items: current.items.map((item) => item.evidence_id === evidenceId ? { ...item, host_id: updated.host_id ?? null } : item),
+      } : current);
+      setHostAssignmentName("");
+      setHostAssignmentMode("existing");
+      setHostAssignmentId(updated.host_id || "");
+      setAssignedHostOverrideId(updated.host_id ?? null);
+      setAssignedHostDisplayOverride(updated.host_id ? (caseHosts.find((host) => host.id === updated.host_id)?.display_name || updated.host_id) : null);
+      void queryClient.invalidateQueries({ queryKey: ["case-hosts", caseId] });
+      void queryClient.invalidateQueries({ queryKey: ["case-context", caseId] });
+      void queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });
+      void queryClient.invalidateQueries({ queryKey: memoryQueryKeys.landing(caseId) });
+    },
+  });
+
+  function saveHostAssignmentFromMemory() {
+    if (hostAssignmentMode === "existing") {
+      setAssignedHostOverrideId(hostAssignmentId || null);
+      setAssignedHostDisplayOverride(hostAssignmentId ? (caseHosts.find((host) => host.id === hostAssignmentId)?.display_name || hostAssignmentId) : null);
+    }
+    hostAssignmentMutation.mutate();
+  }
 
   const activeBatchQuery = useQuery({
     queryKey: ["memory-active-batch", caseId, evidenceId],
@@ -345,11 +431,71 @@ export default function MemoryEvidencePage() {
           caseId={caseId}
           selectedEvidenceId={evidenceId}
           evidences={landingItems}
+          hosts={caseHosts}
           onChange={(newEvidenceId) => {
             navigate(memoryViewPath(newEvidenceId));
           }}
         />
       ) : null}
+
+      <section className="rounded-[28px] border border-accent/30 bg-panel/70 p-5 shadow-panel" data-testid="memory-host-assignment-panel">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Host assignment</p>
+            <h2 className="mt-1 text-lg font-semibold text-ink">Assign this memory evidence to a case host</h2>
+            <p className="mt-2 max-w-3xl text-sm text-muted">Assigned host controls Memory host filters. Detected/provided host stays as evidence metadata.</p>
+          </div>
+          <span className={`rounded-full border px-3 py-1 text-xs ${currentHostStatus.tone}`} data-testid="memory-host-assignment-status">{currentHostStatus.label}</span>
+        </div>
+        {!displayedEvidence?.host_id ? (
+          <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-sm text-amber" role="alert">
+            This memory evidence is not assigned to a case host. Host filters may not include it until assigned.
+          </div>
+        ) : null}
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          <div className="rounded-2xl border border-line bg-abyss/60 px-4 py-3 text-sm text-muted">
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Detected/provided host</p>
+            <p className="mt-1 text-base font-semibold text-ink" data-testid="memory-detected-host">{evidence.detected_host || "Unknown"}</p>
+          </div>
+          <div className="rounded-2xl border border-line bg-abyss/60 px-4 py-3 text-sm text-muted">
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Assigned host</p>
+            <p className="mt-1 text-base font-semibold text-ink" data-testid="memory-assigned-host">{assignedHostDisplayOverride ?? selectedAssignedHost?.display_name ?? currentAssignedHost?.display_name ?? "Unassigned"}</p>
+          </div>
+          <div className="rounded-2xl border border-line bg-abyss/60 px-4 py-3 text-sm text-muted">
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Evidence details</p>
+            <Link to={`/evidences/${evidenceId}`} className="mt-2 inline-flex rounded-xl border border-line bg-panel/70 px-3 py-2 text-xs text-accent">
+              Open evidence details
+            </Link>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-[180px_1fr_auto] md:items-end">
+          <label className="block text-xs text-muted">
+            Change host
+            <select value={hostAssignmentMode} onChange={(event) => setHostAssignmentMode(event.target.value as "existing" | "create")} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink">
+              <option value="existing">Assign to existing host</option>
+              <option value="create">Create new host</option>
+            </select>
+          </label>
+          {hostAssignmentMode === "existing" ? (
+            <label className="block text-xs text-muted">
+              Assign to existing host
+              <select value={hostAssignmentId} onChange={(event) => setHostAssignmentId(event.target.value)} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink" data-testid="memory-host-assignment-select">
+                <option value="">Mark unassigned</option>
+                {caseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
+              </select>
+            </label>
+          ) : (
+            <label className="block text-xs text-muted">
+              Create new host
+              <input value={hostAssignmentName} onChange={(event) => setHostAssignmentName(event.target.value)} placeholder="WS-01" className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink" />
+            </label>
+          )}
+          <button type="button" onClick={saveHostAssignmentFromMemory} disabled={hostAssignmentMutation.isPending || (hostAssignmentMode === "create" && !hostAssignmentName.trim())} className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60" data-testid="memory-save-host-assignment">
+            {hostAssignmentMutation.isPending ? "Saving..." : hostAssignmentMode === "create" ? "Create new host" : hostAssignmentId ? "Change host" : "Mark unassigned"}
+          </button>
+        </div>
+        {hostAssignmentMutation.error instanceof Error ? <p className="mt-2 text-xs text-danger">{hostAssignmentMutation.error.message}</p> : null}
+      </section>
 
       <MemoryEvidenceHeader
         caseId={caseId}
