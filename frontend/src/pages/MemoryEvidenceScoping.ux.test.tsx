@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import MemoryAnalysisPage from "./MemoryAnalysisPage";
@@ -32,6 +33,16 @@ const listMemoryRunsMock = vi.fn();
 const getMemoryEvidenceLandingMock = vi.fn();
 const getMemoryActiveResultMock = vi.fn();
 const getMemoryAnalysisCatalogueMock = vi.fn();
+const getCaseHostsMock = vi.fn();
+const updateEvidenceHostMock = vi.fn();
+const createCaseHostMock = vi.fn();
+
+const { testHosts } = vi.hoisted(() => ({
+  testHosts: [
+    { id: "host-ws01", canonical_name: "WS01", display_name: "WS01", confidence: "manual", source: "manual", event_count: 0, evidence_count: 1, findings_count: 0, high_risk_count: 0, aliases: ["WS01"], alias_rows: [], all_names: ["WS01"], alias_count: 1 },
+    { id: "host-fs02", canonical_name: "FS02", display_name: "FS02", confidence: "manual", source: "manual", event_count: 0, evidence_count: 1, findings_count: 0, high_risk_count: 0, aliases: ["FS02"], alias_rows: [], all_names: ["FS02"], alias_count: 1 },
+  ],
+}));
 
 function makeArtifactList(overrides: Record<string, unknown> = {}) {
   return {
@@ -94,11 +105,22 @@ vi.mock("../api/client", () => ({
     getMemoryEvidenceLanding: (...args: unknown[]) => getMemoryEvidenceLandingMock(...args),
     getMemoryActiveResult: (...args: unknown[]) => getMemoryActiveResultMock(...args),
     getMemoryAnalysisCatalogue: (...args: unknown[]) => getMemoryAnalysisCatalogueMock(...args),
+    getCaseHosts: (...args: unknown[]) => getCaseHostsMock(...args),
+    updateEvidenceHost: (...args: unknown[]) => updateEvidenceHostMock(...args),
+    createCaseHost: (...args: unknown[]) => createCaseHostMock(...args),
   },
 }));
 
 vi.mock("../context/ActiveCaseContext", () => ({
-  useActiveCase: () => ({ setActiveCaseId: vi.fn() }),
+  useActiveCase: () => ({
+    setActiveCaseId: vi.fn(),
+    caseContext: { hosts: testHosts },
+    selectedHost: "",
+    selectedHostId: "",
+    setSelectedHost: vi.fn(),
+    setSelectedHostId: vi.fn(),
+    clearSelectedHost: vi.fn(),
+  }),
 }));
 
 function renderWorkspaceAt(initialPath: string) {
@@ -140,7 +162,7 @@ function multiEvidenceLanding() {
     items: [
       {
         evidence_id: "ev-A", case_id: "case-1", filename: "ws01.dmp",
-        detected_host: "WS01", size_bytes: 4255346688, created_at: "2026-06-15T00:00:00Z",
+        detected_host: "WS01", host_id: "host-ws01", size_bytes: 4255346688, created_at: "2026-06-15T00:00:00Z",
         processed_at: "2026-06-15T00:01:00Z", ingest_status: "completed",
         metadata: {}, run_count: 5, latest_run_id: "r-A-1", latest_run_status: "completed",
         families: [
@@ -156,7 +178,7 @@ function multiEvidenceLanding() {
       },
       {
         evidence_id: "ev-B", case_id: "case-1", filename: "fs01.dmp",
-        detected_host: "FS01", size_bytes: 8388608, created_at: "2026-06-16T00:00:00Z",
+        detected_host: "FS01", host_id: null, size_bytes: 8388608, created_at: "2026-06-16T00:00:00Z",
         processed_at: null, ingest_status: "completed",
         metadata: {}, run_count: 0, latest_run_id: null, latest_run_status: null,
         families: [
@@ -282,6 +304,20 @@ beforeEach(() => {
   getMemoryOverviewMock.mockImplementation(() => multiEvidenceOverview());
   getMemoryBackendOverviewMock.mockImplementation(() => backendReady());
   getMemoryEvidenceLandingMock.mockImplementation(() => multiEvidenceLanding());
+  getCaseHostsMock.mockImplementation(() => ({ case_id: "case-1", hosts: testHosts, host_candidates: [] }));
+  updateEvidenceHostMock.mockImplementation((_caseId: string, evidenceId: string, payload: { host_id?: string | null }) => ({
+    id: evidenceId,
+    case_id: "case-1",
+    original_filename: evidenceId === "ev-A" ? "ws01.dmp" : "fs01.dmp",
+    evidence_type: "memory_dump",
+    detected_host: evidenceId === "ev-A" ? "WS01" : "FS01",
+    host_id: payload.host_id ?? null,
+  }));
+  createCaseHostMock.mockImplementation((_caseId: string, payload: { host_name: string }) => ({
+    case_id: "case-1",
+    created: true,
+    host: { ...testHosts[0], id: `host-${payload.host_name.toLowerCase()}`, canonical_name: payload.host_name, display_name: payload.host_name, aliases: [payload.host_name], all_names: [payload.host_name] },
+  }));
   getMemoryActiveResultMock.mockImplementation(() => activeResultOk());
   getMemoryAnalysisCatalogueMock.mockImplementation(() => analysisCatalogue());
   getMemoryEvidenceReadinessMock.mockImplementation(() => ({
@@ -330,8 +366,36 @@ describe("Memory evidence scoping v1", () => {
     const cards = await screen.findAllByTestId("memory-evidence-card");
     expect(cards[0].textContent).toContain("ws01.dmp");
     expect(cards[0].textContent).toContain("WS01");
+    expect(cards[0].textContent).toContain("Assigned host");
+    expect(cards[0].textContent).toContain("Assigned");
     expect(cards[1].textContent).toContain("fs01.dmp");
     expect(cards[1].textContent).toContain("FS01");
+    expect(cards[1].textContent).toContain("Unassigned");
+    expect(cards[1].textContent).toContain("Open evidence details");
+    expect(cards[1].textContent).toContain("Assign host");
+  });
+
+  it("shows mismatch status when assigned host differs from detected host", async () => {
+    const landing = multiEvidenceLanding();
+    landing.items[1].host_id = "host-fs02";
+    getMemoryEvidenceLandingMock.mockImplementation(() => landing);
+    renderWorkspaceAt("/cases/case-1/memory/landing");
+    const cards = await screen.findAllByTestId("memory-evidence-card");
+    expect(cards[1].textContent).toContain("Assigned host");
+    expect(cards[1].textContent).toContain("FS02");
+    expect(cards[1].textContent).toContain("Mismatch");
+  });
+
+  it("landing keeps assigned memory visible when filtered by assigned host", async () => {
+    getMemoryEvidenceLandingMock.mockImplementation((_caseId: string, params?: { host_id?: string }) => {
+      const landing = multiEvidenceLanding();
+      return params?.host_id === "host-ws01" ? { ...landing, items: landing.items.filter((item) => item.host_id === "host-ws01") } : landing;
+    });
+    renderWorkspaceAt("/cases/case-1/memory/landing?host_id=host-ws01&host=WS01");
+    const cards = await screen.findAllByTestId("memory-evidence-card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].getAttribute("data-evidence-id")).toBe("ev-A");
+    await waitFor(() => expect(getMemoryEvidenceLandingMock).toHaveBeenCalledWith("case-1", expect.objectContaining({ host_id: "host-ws01" })));
   });
 
   it("shows per-family status on every evidence card", async () => {
@@ -352,6 +416,25 @@ describe("Memory evidence scoping v1", () => {
     expect(screen.getByTestId("memory-evidence-filename")).toHaveTextContent("ws01.dmp");
     expect(screen.getByTestId("memory-evidence-host")).toHaveTextContent("WS01");
     expect(screen.getByTestId("memory-evidence-size")).toHaveTextContent(/GiB/);
+  });
+
+  it("memory workspace shows host assignment actions and evidence details link", async () => {
+    renderWorkspaceAt("/cases/case-1/memory/ev-B");
+    expect(await screen.findByTestId("memory-host-assignment-panel")).toBeInTheDocument();
+    expect(screen.getByText(/This memory evidence is not assigned to a case host/i)).toBeInTheDocument();
+    expect(screen.getByText(/Open evidence details/i).getAttribute("href")).toBe("/evidences/ev-B");
+    expect(screen.getByLabelText(/Assign to existing host/i)).toBeInTheDocument();
+    expect(screen.getByTestId("memory-save-host-assignment")).toHaveTextContent("Mark unassigned");
+  });
+
+  it("changing host from Memory updates the visible assignment", async () => {
+    renderWorkspaceAt("/cases/case-1/memory/ev-B");
+    await screen.findByTestId("memory-host-assignment-panel");
+    await userEvent.selectOptions(screen.getByTestId("memory-host-assignment-select"), "host-ws01");
+    expect(screen.getByTestId("memory-save-host-assignment")).toHaveTextContent("Change host");
+    await userEvent.click(screen.getByTestId("memory-save-host-assignment"));
+    await waitFor(() => expect(updateEvidenceHostMock).toHaveBeenCalledWith("case-1", "ev-B", expect.objectContaining({ host_id: "host-ws01" })));
+    await waitFor(() => expect(screen.getByTestId("memory-assigned-host")).toHaveTextContent("WS01"));
   });
 
   it("shows not found for an invalid evidence URL and does not fall back to another evidence", async () => {

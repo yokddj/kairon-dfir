@@ -1,11 +1,31 @@
-import type { MemoryEvidenceLandingItem } from "../../api/client";
+import type { CaseContextHostSummary, MemoryEvidenceLandingItem } from "../../api/client";
 
 type Props = {
   caseId: string;
   selectedEvidenceId: string | undefined;
   evidences: MemoryEvidenceLandingItem[];
+  hosts?: CaseContextHostSummary[];
   onChange: (evidenceId: string) => void;
 };
+
+function normalizeHostName(value: string | null | undefined): string {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized.endsWith(".local") ? normalized.slice(0, -6) : normalized;
+}
+
+function assignedHost(item: MemoryEvidenceLandingItem, hosts: CaseContextHostSummary[]): CaseContextHostSummary | null {
+  if (!item.host_id) return null;
+  return hosts.find((host) => host.id === item.host_id) ?? null;
+}
+
+function hostAssignmentStatus(item: MemoryEvidenceLandingItem, hosts: CaseContextHostSummary[]): string {
+  const host = assignedHost(item, hosts);
+  if (!item.host_id) return "Unassigned";
+  const detected = normalizeHostName(item.detected_host);
+  if (!host || !detected) return "Assigned";
+  const names = [host.id, host.canonical_name, host.display_name, ...(host.aliases || []), ...(host.all_names || [])];
+  return names.some((name) => normalizeHostName(name) === detected) ? "Assigned" : "Mismatch";
+}
 
 function readinessBadge(item: MemoryEvidenceLandingItem): string | null {
   const detectionStatus = item.detection_status;
@@ -28,7 +48,7 @@ function shortId(id: string): string {
   return id.length > 12 ? id.slice(0, 8) : id;
 }
 
-export function MemoryEvidenceSelector({ caseId: _caseId, selectedEvidenceId, evidences, onChange }: Props) {
+export function MemoryEvidenceSelector({ caseId: _caseId, selectedEvidenceId, evidences, hosts = [], onChange }: Props) {
   if (evidences.length <= 1) return null;
 
   return (
@@ -47,9 +67,13 @@ export function MemoryEvidenceSelector({ caseId: _caseId, selectedEvidenceId, ev
         {evidences.map((item) => {
           const badge = readinessBadge(item);
           const hostname = item.detected_host;
+          const assigned = assignedHost(item, hosts);
+          const assignment = hostAssignmentStatus(item, hosts);
           const timestamp = formatTimestamp(item.created_at);
           const parts: string[] = [];
-          if (hostname) parts.push(hostname);
+          parts.push(`Detected: ${hostname || "Unknown"}`);
+          parts.push(`Assigned: ${assigned?.display_name || "Unassigned"}`);
+          parts.push(assignment);
           if (timestamp) parts.push(`${timestamp} UTC`);
           if (badge) parts.push(badge);
           const label = parts.length > 0
