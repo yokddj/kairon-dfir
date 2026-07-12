@@ -36,6 +36,11 @@ router = APIRouter(tags=["system"])
 def system_version() -> dict:
     import os
     return {
+        "app_version": settings.app_version,
+        "vendor_id": settings.app_vendor_id,
+        "build_channel": settings.app_build_channel,
+        "build_fingerprint": settings.app_build_fingerprint,
+        "notice": settings.build_notice,
         "version": settings.app_version,
         "git_commit": os.environ.get("KAIRON_COMMIT", "unknown"),
         "build_date": os.environ.get("BUILD_DATE", "unknown"),
@@ -43,6 +48,11 @@ def system_version() -> dict:
         "backend": settings.app_version,
         "frontend": settings.app_version,
     }
+
+
+@router.get("/api/system/health")
+def system_health() -> dict:
+    return {"status": "ok"}
 
 
 def _resolve_docs_root() -> Path:
@@ -64,6 +74,7 @@ DOCS_CATALOG = [
     {"slug": "feature-map", "title": "Feature map", "summary": "Capacidades actuales, estado, rutas, backends, limitaciones y próximos pasos.", "filename": "feature_map.md"},
     {"slug": "artifacts-matrix", "title": "Artifact support matrix", "summary": "Matriz de artefactos detectados, parseados, indexados, buscables y pendientes.", "filename": "artifacts_matrix.md"},
     {"slug": "parser-coverage", "title": "Parser coverage matrix", "summary": "Cobertura real por familia, formatos, campos normalizados, vistas y limitaciones.", "filename": "parser-coverage.md"},
+    {"slug": "evidence-platforms", "title": "Evidence platform selection", "summary": "Cómo se guardan provided/detected/effective platform y límites de Windows, Linux, macOS y Other.", "filename": "evidence-platforms.md"},
     {"slug": "investigation-workflow", "title": "Investigation workflow", "summary": "Flujo recomendado para pivotar entre caso, host, evidencia, búsqueda, artefactos, memoria y hallazgos.", "filename": "investigation-workflow.md"},
     {"slug": "parser-backends", "title": "Parser backends", "summary": "Backends estables, advanced, planned y tooling_missing.", "filename": "parser_backends.md"},
     {"slug": "api-summary", "title": "API summary", "summary": "Mapa de endpoints y workflows principales.", "filename": "api_summary.md"},

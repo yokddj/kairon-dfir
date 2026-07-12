@@ -88,6 +88,7 @@ export type EvidenceIntent = "raw" | "parsed" | "mounted" | "auto";
 export type EvidencePackaging = "single_file" | "archive" | "directory" | "mounted_path";
 export type IngestMode = "full_forensic" | "usable_search";
 export type EvtxProfile = "fast_high_value" | "full" | "custom";
+export type EvidencePlatform = "auto" | "windows" | "linux" | "macos" | "unknown" | "other";
 
 type UploadFormDataOptions = {
   onProgress?: (progress: UploadProgress) => void;
@@ -506,6 +507,9 @@ export type Evidence = {
   size_bytes: number | null;
   mime_type?: string | null;
   detected_type?: string | null;
+  provided_platform?: EvidencePlatform | string;
+  detected_platform?: EvidencePlatform | string;
+  effective_platform?: Exclude<EvidencePlatform, "auto"> | string;
   uploaded_by_user_id?: string | null;
   uploaded_at?: string | null;
   first_seen_at?: string | null;
@@ -832,6 +836,8 @@ export type MemoryEvidenceLandingItem = {
   probe_version?: string | null;
   probed_at?: string | null;
   can_analyze?: boolean;
+  effective_platform?: string | null;
+  detected_platform?: string | null;
 };
 
 export type MemoryEvidenceLanding = {
@@ -3454,6 +3460,7 @@ export type UploadOptions = {
   onProgress?: (progress: UploadProgress) => void;
   ingestMode?: IngestMode;
   providedHost?: string;
+  providedPlatform?: EvidencePlatform;
   evtxProfile?: EvtxProfile;
 };
 
@@ -6012,13 +6019,13 @@ export const api = {
     request<PathValidationResult>("/evidence/validate-path", { method: "POST", body: JSON.stringify(payload) }),
   registerEvidencePath: (
     caseId: string,
-    payload: { path: string; name?: string; copy_to_storage: boolean; start_ingest: boolean; storage_mode?: string; evidence_intent?: EvidenceIntent; packaging?: EvidencePackaging; ingest_mode?: IngestMode; provided_host?: string; host_id?: string; evtx_profile?: EvtxProfile },
+    payload: { path: string; name?: string; copy_to_storage: boolean; start_ingest: boolean; storage_mode?: string; evidence_intent?: EvidenceIntent; packaging?: EvidencePackaging; ingest_mode?: IngestMode; provided_host?: string; provided_platform?: EvidencePlatform; host_id?: string; evtx_profile?: EvtxProfile },
   ) =>
     request<Evidence>(`/cases/${caseId}/evidences/register-path`, { method: "POST", body: JSON.stringify(payload) }),
   uploadEvidence: async (
     caseId: string,
     file: File,
-    options?: UploadOptions & { evidenceIntent?: EvidenceIntent; packaging?: EvidencePackaging; folderName?: string; folderUpload?: boolean; ingestMode?: IngestMode; providedHost?: string; hostId?: string; evtxProfile?: EvtxProfile; memoryAuthorizationAcknowledged?: boolean; memoryUploadId?: string },
+    options?: UploadOptions & { evidenceIntent?: EvidenceIntent; packaging?: EvidencePackaging; folderName?: string; folderUpload?: boolean; ingestMode?: IngestMode; providedHost?: string; providedPlatform?: EvidencePlatform; hostId?: string; evtxProfile?: EvtxProfile; memoryAuthorizationAcknowledged?: boolean; memoryUploadId?: string },
   ) => {
     const formData = new FormData();
     formData.append("file", file);
@@ -6026,6 +6033,7 @@ export const api = {
     if (options?.packaging) formData.append("packaging", options.packaging);
     if (options?.ingestMode) formData.append("ingest_mode", options.ingestMode);
     if (options?.providedHost) formData.append("provided_host", options.providedHost);
+    if (options?.providedPlatform) formData.append("provided_platform", options.providedPlatform);
     if (options?.hostId) formData.append("host_id", options.hostId);
     if (options?.evtxProfile) formData.append("evtx_profile", options.evtxProfile);
     if (options?.memoryAuthorizationAcknowledged) formData.append("memory_authorization_acknowledged", "true");
@@ -6034,7 +6042,7 @@ export const api = {
     if (options?.folderName) formData.append("folder_name", options.folderName);
     return uploadFormData<Evidence>(`/cases/${caseId}/evidences/upload`, formData, { onProgress: options?.onProgress, transport: "xhr" });
   },
-  uploadEvidenceFolder: async (caseId: string, files: File[], options?: UploadOptions & { evidenceIntent?: EvidenceIntent; ingestMode?: IngestMode; providedHost?: string; hostId?: string; evtxProfile?: EvtxProfile }) => {
+  uploadEvidenceFolder: async (caseId: string, files: File[], options?: UploadOptions & { evidenceIntent?: EvidenceIntent; ingestMode?: IngestMode; providedHost?: string; providedPlatform?: EvidencePlatform; hostId?: string; evtxProfile?: EvtxProfile }) => {
     const folderName = ((files[0] as File & { webkitRelativePath?: string } | undefined)?.webkitRelativePath || files[0]?.name || "uploaded-folder")
       .split("/")[0]
       .trim() || "uploaded-folder";
@@ -6044,6 +6052,7 @@ export const api = {
       evidenceIntent: options?.evidenceIntent ?? "raw",
       ingestMode: options?.ingestMode,
       providedHost: options?.providedHost,
+      providedPlatform: options?.providedPlatform,
       hostId: options?.hostId,
       evtxProfile: options?.evtxProfile,
       packaging: "directory",
@@ -6056,6 +6065,7 @@ export const api = {
     formData.append("file", file);
     if (options?.ingestMode) formData.append("ingest_mode", options.ingestMode);
     if (options?.providedHost) formData.append("provided_host", options.providedHost);
+    if (options?.providedPlatform) formData.append("provided_platform", options.providedPlatform);
     if (options?.evtxProfile) formData.append("evtx_profile", options.evtxProfile);
     return uploadFormData<VelociraptorDiscoverResponse>(`/cases/${caseId}/velociraptor/discover-zip`, formData, { onProgress: options?.onProgress, transport: "xhr" });
   },
@@ -6068,6 +6078,7 @@ export const api = {
     formData.append("file", archive);
     if (options?.ingestMode) formData.append("ingest_mode", options.ingestMode);
     if (options?.providedHost) formData.append("provided_host", options.providedHost);
+    if (options?.providedPlatform) formData.append("provided_platform", options.providedPlatform);
     if (options?.evtxProfile) formData.append("evtx_profile", options.evtxProfile);
     return uploadFormData<VelociraptorDiscoverResponse>(`/cases/${caseId}/velociraptor/discover-zip`, formData, { onProgress: options?.onProgress, transport: "xhr" });
   },

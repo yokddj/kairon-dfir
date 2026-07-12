@@ -2317,3 +2317,22 @@ def _v27_finding_from_artifact_source(connection: Connection) -> None:
             connection.execute(text(f"ALTER TABLE findings ADD COLUMN {column_name} {column_type}"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_findings_linked_event_id ON findings (linked_event_id)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_findings_source_timestamp ON findings (source_timestamp)"))
+
+
+@register(28, "evidence_platform_selection")
+def _v28_evidence_platform_selection(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    if "evidences" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("evidences")}
+    column_defs = {
+        "provided_platform": "VARCHAR(32) NOT NULL DEFAULT 'auto'",
+        "detected_platform": "VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+        "effective_platform": "VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+    }
+    for column_name, column_type in column_defs.items():
+        if column_name not in existing:
+            connection.execute(text(f"ALTER TABLE evidences ADD COLUMN {column_name} {column_type}"))
+    connection.execute(text("UPDATE evidences SET provided_platform = 'auto' WHERE provided_platform IS NULL OR provided_platform = ''"))
+    connection.execute(text("UPDATE evidences SET detected_platform = 'unknown' WHERE detected_platform IS NULL OR detected_platform = '' OR detected_platform = 'auto'"))
+    connection.execute(text("UPDATE evidences SET effective_platform = CASE WHEN provided_platform IS NOT NULL AND provided_platform NOT IN ('', 'auto') THEN provided_platform WHEN detected_platform IS NOT NULL AND detected_platform NOT IN ('', 'auto') THEN detected_platform ELSE 'unknown' END WHERE effective_platform IS NULL OR effective_platform = '' OR effective_platform = 'auto'"))

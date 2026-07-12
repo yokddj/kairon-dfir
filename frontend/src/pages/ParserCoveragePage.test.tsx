@@ -35,12 +35,13 @@ describe("ParserCoveragePage", () => {
   it("filters by status and input format", async () => {
     renderPage();
 
-    await userEvent.selectOptions(screen.getByDisplayValue("All statuses"), "unsupported");
-    expect(screen.getByText("Linux/macOS triage placeholders")).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByDisplayValue("All statuses"), "partial");
+    const rows = screen.getAllByRole("row");
+    expect(rows.length).toBeGreaterThan(1);
     expect(screen.queryByText("Windows Event Logs / EVTX")).not.toBeInTheDocument();
 
     await userEvent.selectOptions(screen.getByDisplayValue("All formats"), "EVTX");
-    expect(screen.getByText(/No parser coverage entries match/i)).toBeInTheDocument();
+    expect(screen.getByText("Windows Event Logs / EVTX")).toBeInTheDocument();
   });
 
   it("shows columns required by the matrix", () => {

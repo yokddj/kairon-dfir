@@ -1,0 +1,14 @@
+Host *
+    ForwardAgent no
+    ForwardX11 no
+    StrictHostKeyChecking ask
+
+Host git.example.com
+    HostName git.example.com
+    User git
+    IdentityFile ~/.ssh/id_rsa
+
+Host internal-api
+    HostName 10.0.1.50
+    User apiuser
+    Port 2222

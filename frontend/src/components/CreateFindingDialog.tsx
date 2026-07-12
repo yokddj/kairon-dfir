@@ -93,9 +93,10 @@ export default function CreateFindingDialog({
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-abyss/70 px-4 backdrop-blur-sm">
-      <div className="w-full max-w-2xl rounded-[28px] border border-line bg-panel p-6 shadow-panel">
-        <div className="flex items-start justify-between gap-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-abyss/70 p-4 backdrop-blur-sm">
+      <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-[28px] border border-line bg-panel shadow-panel" role="dialog" aria-modal="true" aria-label="Create finding from source">
+        <div className="shrink-0 border-b border-line/70 p-6 pb-4">
+          <div className="flex items-start justify-between gap-4">
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Create finding</p>
             <h3 className="mt-2 text-xl font-semibold">Turn selected evidence into an investigative finding</h3>
@@ -104,9 +105,11 @@ export default function CreateFindingDialog({
           <button onClick={onClose} className="rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">
             Close
           </button>
+          </div>
         </div>
 
-        <div className="mt-5 grid gap-4 md:grid-cols-2">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-6" data-testid="create-finding-scroll-region">
+        <div className="grid gap-4 md:grid-cols-2">
           <label className="block md:col-span-2">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Title</span>
             <input
@@ -145,11 +148,11 @@ export default function CreateFindingDialog({
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               placeholder="Why is this relevant? What should be investigated next?"
-              className="h-36 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50"
+              className="max-h-48 min-h-28 w-full resize-y rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50"
             />
           </label>
           {prefill ? (
-            <details className="md:col-span-2 rounded-2xl border border-line bg-abyss/60 p-4" open>
+            <details className="md:col-span-2 rounded-2xl border border-line bg-abyss/60 p-4">
               <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source artifact/event</summary>
               <div className="mt-3 grid gap-3 text-sm text-muted md:grid-cols-2">
                 <div>Family: <span className="text-slate-100">{prefill.linked_artifact_family || "-"}</span></div>
@@ -158,7 +161,7 @@ export default function CreateFindingDialog({
                 <div>Source: <span className="text-slate-100">{prefill.source_view || "-"}</span></div>
                 <label className="block md:col-span-2">
                   <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source summary</span>
-                  <textarea value={sourceSummary} onChange={(event) => setSourceSummary(event.target.value)} className="h-20 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" />
+                  <textarea value={sourceSummary} onChange={(event) => setSourceSummary(event.target.value)} className="max-h-36 min-h-20 w-full resize-y rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" />
                 </label>
               </div>
             </details>
@@ -168,8 +171,10 @@ export default function CreateFindingDialog({
         {createMutation.error instanceof Error ? (
           <div className="mt-4 rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger">{createMutation.error.message}</div>
         ) : null}
+        </div>
 
-        <div className="mt-5 flex flex-wrap gap-3">
+        <div className="sticky bottom-0 shrink-0 border-t border-line/70 bg-panel/95 p-4 backdrop-blur" data-testid="create-finding-action-bar">
+        <div className="flex flex-wrap gap-3">
           <button
             onClick={() => createMutation.mutate()}
             disabled={!caseId || createMutation.isPending}
@@ -180,6 +185,7 @@ export default function CreateFindingDialog({
           <button onClick={onClose} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-muted">
             Cancel
           </button>
+        </div>
         </div>
       </div>
     </div>

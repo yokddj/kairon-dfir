@@ -20,6 +20,7 @@ from app.ingest.shellbags.helpers import looks_like_shellbags_artifact
 from app.ingest.usb.helpers import looks_like_usb_artifact
 from app.ingest.windows_ui.helpers import looks_like_windows_ui_artifact
 from app.ingest.wmi.helpers import looks_like_wmi_artifact
+from app.ingest.linux.helpers import looks_like_linux_artifact
 from app.models.evidence import EvidenceType
 
 
@@ -170,8 +171,21 @@ def detect_host_from_name(value: str | None) -> str | None:
 def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
     name = path.name
     lower_name = name.lower()
+    suffix = path.suffix.lower()
     header_blob = " ".join((headers or [])).lower()
     header_set = {str(header).strip().lower() for header in (headers or []) if header}
+    if suffix in {".raw", ".mem", ".dmp", ".vmem", ".lime", ".aff4"}:
+        platform_hint = "linux" if suffix == ".lime" or any(token in lower_name for token in ["linux", "lime"]) else None
+        result = {
+            "artifact_type": "memory_dump",
+            "profile": "memory",
+            "parser": "memory_raw",
+            "reason": "Detected raw memory image file; preserved but not analyzed directly.",
+        }
+        if platform_hint:
+            result["platform_hint"] = platform_hint
+            result["reason"] = f"Detected raw {platform_hint} memory image file; preserved but not analyzed directly."
+        return result
     if lower_name == "$mft":
         return {
             "artifact_type": "mft",
@@ -741,6 +755,17 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
     for token, (artifact_type, profile, parser) in KAPE_NAME_MAP.items():
         if token.lower() in name.lower():
             return {"artifact_type": artifact_type, "profile": profile, "parser": parser}
+    # Linux artifact detection
+    linux_result = looks_like_linux_artifact(path.name)
+    if linux_result:
+        family, artifact_type, parser = linux_result
+        return {
+            "artifact_type": family,
+            "profile": "linux_activity",
+            "parser": parser,
+            "linux_artifact_type": artifact_type,
+            "reason": "Linux parser coverage is partial",
+        }
     if "eventid" in header_blob:
         return {"artifact_type": "evtx", "profile": "account_usage", "parser": "generic_csv"}
     if "destinationip" in header_blob or "remoteaddress" in header_blob:

@@ -474,12 +474,13 @@ function buildGroupedSearchSummary(results: SearchV2Result[], query: string, tot
 function deduceArtifactView(results: SearchV2Result[], preferredArtifactTypes: string[]): ArtifactViewMode {
   const artifactHint = preferredArtifactTypes[0]?.toLowerCase() ?? "";
   if (artifactHint.includes("dns")) return "dns";
-  if (artifactHint.includes("process") || artifactHint.includes("powershell")) return "process";
+  if (artifactHint.includes("process") || artifactHint.includes("powershell") || artifactHint.includes("shell_history")) return "process";
   if (artifactHint.includes("browser") || artifactHint.includes("bits")) return "downloads";
   if (artifactHint.includes("defender") || artifactHint.includes("detection")) return "defender";
-  if (artifactHint.includes("autorun") || artifactHint.includes("scheduled_task") || artifactHint.includes("service") || artifactHint.includes("wmi")) return "persistence";
+  if (artifactHint.includes("autorun") || artifactHint.includes("scheduled_task") || artifactHint.includes("service") || artifactHint.includes("wmi") || artifactHint.includes("cron") || artifactHint.includes("systemd") || artifactHint.includes("sudoers")) return "persistence";
   if (artifactHint.includes("mft") || artifactHint.includes("recycle") || artifactHint.includes("filesystem")) return "files";
   if (artifactHint.includes("cloud") || artifactHint.includes("usb")) return "cloud_usb";
+  if (artifactHint.includes("linux_network") || artifactHint.includes("linux_ssh")) return "dns";
 
   const sample = results.find((item) => item.kind === "event");
   const raw = asRecord(sample?.raw);
@@ -535,6 +536,19 @@ function artifactLabel(value: string | null | undefined) {
   if (normalized === "windows_ui") return "Windows UI";
   if (normalized === "cloud_sync") return "Cloud Sync";
   if (normalized === "recycle_bin") return "Recycle Bin";
+  if (normalized === "linux_auth") return "Linux Auth";
+  if (normalized === "linux_syslog") return "Linux Syslog";
+  if (normalized === "linux_audit") return "Linux Audit";
+  if (normalized === "linux_shell_history") return "Linux Shell History";
+  if (normalized === "linux_cron") return "Linux Cron";
+  if (normalized === "linux_systemd") return "Linux Systemd";
+  if (normalized === "linux_ssh") return "Linux SSH";
+  if (normalized === "linux_identity") return "Linux Identity";
+  if (normalized === "linux_sudoers") return "Linux Sudoers";
+  if (normalized === "linux_packages") return "Linux Packages";
+  if (normalized === "linux_network") return "Linux Network";
+  if (normalized === "linux_os_info") return "Linux OS Info";
+  if (normalized === "linux_memory") return "Linux Memory";
   return humanizeToken(normalized);
 }
 

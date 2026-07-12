@@ -1,0 +1,39 @@
+import pytest
+from fastapi import HTTPException
+
+from app.api.routes_evidence import _resolve_requested_platform
+from app.models.evidence import detect_evidence_platform, resolve_evidence_platform
+
+
+def test_auto_platform_resolves_to_detected_windows() -> None:
+    detected = detect_evidence_platform(paths=["Windows/System32/winevt/Logs/Security.evtx"])
+
+    provided, detected, effective = resolve_evidence_platform("auto", detected)
+
+    assert provided == "auto"
+    assert detected == "windows"
+    assert effective == "windows"
+
+
+def test_effective_platform_never_auto_for_unknown_detection() -> None:
+    provided, detected, effective = resolve_evidence_platform(None, "unknown")
+
+    assert provided == "auto"
+    assert detected == "unknown"
+    assert effective == "unknown"
+
+
+def test_linux_override_is_preserved_with_limited_parser_coverage() -> None:
+    provided, detected, effective = _resolve_requested_platform("linux", filename="triage.tar.gz")
+
+    assert provided == "linux"
+    assert detected == "unknown"
+    assert effective == "linux"
+
+
+def test_macos_direct_selection_is_rejected() -> None:
+    with pytest.raises(HTTPException) as exc_info:
+        _resolve_requested_platform("macos", filename="macos_artifacts.zip")
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == "macOS artifacts are not supported yet"

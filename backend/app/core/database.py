@@ -607,6 +607,9 @@ def _ensure_compatible_schema() -> None:
                 "host_assignment_reason": "VARCHAR(512)",
                 "host_assignment_updated_at": "VARCHAR(64)",
                 "host_assignment_updated_by": "VARCHAR(128)",
+                "provided_platform": "VARCHAR(32) NOT NULL DEFAULT 'auto'",
+                "detected_platform": "VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+                "effective_platform": "VARCHAR(32) NOT NULL DEFAULT 'unknown'",
             }
             for column_name, column_type in additions.items():
                 if column_name not in evidence_columns:

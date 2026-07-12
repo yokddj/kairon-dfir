@@ -17,7 +17,7 @@ from app.core.storage import (
 )
 from app.ingest.velociraptor import discover_velociraptor_evidences, open_evidence_container
 from app.models.case import Case
-from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidenceType, IngestStatus
+from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidencePlatform, EvidenceType, IngestStatus, detect_evidence_platform, resolve_evidence_platform
 from app.models.user import User
 from app.schemas.evidence import EvidenceRead
 from app.services.evidence_runs import mark_opensearch_infrastructure_block, merge_evidence_metadata
@@ -64,6 +64,7 @@ class VelociraptorParseRequest(BaseModel):
 class VelociraptorDiscoverPathRequest(BaseModel):
     case_id: str
     collection_path: str
+    provided_platform: str | None = None
 
 
 def _apply_velociraptor_selection_metadata(metadata: dict, candidates: list[dict], selected: list[dict]) -> dict:
@@ -144,6 +145,13 @@ def _require_provided_host(value: str | None) -> str:
     return normalized
 
 
+def _resolve_requested_platform(value: str | None, *, filename: str | None = None, paths: list[str] | None = None) -> tuple[str, str, str]:
+    provided, detected, effective = resolve_evidence_platform(value, detect_evidence_platform(filename=filename, paths=paths))
+    if provided == EvidencePlatform.macos.value:
+        raise HTTPException(status_code=400, detail="macOS artifacts are not supported yet")
+    return provided, detected, effective
+
+
 def _ensure_browser_folder_upload_allowed(files: list[UploadFile]) -> None:
     if not settings.backend_enable_experimental_folder_upload:
         raise HTTPException(
@@ -181,6 +189,14 @@ def _finalize_discovery(db: Session, evidence: Evidence) -> dict:
     container = open_evidence_container(stored_path)
     inventory_entries = container.list_entries()
     discovery = discover_velociraptor_evidences(container).as_dict()
+    metadata_before = dict(evidence.metadata_json or {})
+    provided_platform, detected_platform, effective_platform = resolve_evidence_platform(
+        evidence.provided_platform or metadata_before.get("provided_platform"),
+        detect_evidence_platform(filename=evidence.original_filename, paths=[entry.path for entry in inventory_entries if not entry.is_dir]),
+    )
+    evidence.provided_platform = provided_platform
+    evidence.detected_platform = detected_platform
+    evidence.effective_platform = effective_platform
     manifest = default_manifest(evidence)
     manifest["files"] = [
         {
@@ -212,6 +228,9 @@ def _finalize_discovery(db: Session, evidence: Evidence) -> dict:
             "total_zip_entries": len(inventory_entries),
             "ignored_entries": sum(1 for entry in inventory_entries if entry.ignored),
             "candidate_files": discovery["summary"]["total_candidates"],
+            "provided_platform": provided_platform,
+            "detected_platform": detected_platform,
+            "effective_platform": effective_platform,
         }
     )
     recommended_ids = [str(candidate.get("id") or "") for candidate in discovery.get("candidates") or [] if candidate.get("supported")]
@@ -242,6 +261,9 @@ def _fallback_to_generic_archive(db: Session, evidence: Evidence, discovery: dic
     existing_source = dict(evidence.ingest_source or {})
     requested_ingest_mode = normalize_ingest_mode(existing_metadata.get("ingest_mode") or existing_source.get("ingest_mode"))
     requested_provided_host = _normalize_provided_host(existing_metadata.get("provided_host") or existing_source.get("provided_host"))
+    requested_provided_platform = str(existing_metadata.get("provided_platform") or existing_source.get("provided_platform") or "auto")
+    requested_detected_platform = str(existing_metadata.get("detected_platform") or existing_source.get("detected_platform") or evidence.detected_platform or "unknown")
+    resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = resolve_evidence_platform(requested_provided_platform, requested_detected_platform)
     evidence.evidence_type = EvidenceType.unknown
     evidence.source_tool = None
     evidence.metadata_json = _generic_archive_fallback_metadata(
@@ -251,12 +273,21 @@ def _fallback_to_generic_archive(db: Session, evidence: Evidence, discovery: dic
             "velociraptor_fallback": True,
             "velociraptor_fallback_reason": "not_a_velociraptor_zip",
             "provided_host": requested_provided_host,
+            "provided_platform": resolved_provided_platform,
+            "detected_platform": resolved_detected_platform,
+            "effective_platform": resolved_effective_platform,
         }
     )
+    evidence.provided_platform = resolved_provided_platform
+    evidence.detected_platform = resolved_detected_platform
+    evidence.effective_platform = resolved_effective_platform
     evidence.ingest_source = {
         **existing_source,
         "ingest_mode": requested_ingest_mode,
         "provided_host": requested_provided_host,
+        "provided_platform": resolved_provided_platform,
+        "detected_platform": resolved_detected_platform,
+        "effective_platform": resolved_effective_platform,
     }
     db.commit()
     db.refresh(evidence)
@@ -289,6 +320,7 @@ def discover_velociraptor_zip(
     file: UploadFile = File(...),
     ingest_mode: str | None = Form(None),
     provided_host: str | None = Form(None),
+    provided_platform: str | None = Form(None),
     evtx_profile: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_optional_user),
@@ -297,6 +329,7 @@ def discover_velociraptor_zip(
         raise HTTPException(status_code=404, detail="Case not found")
     normalized_provided_host = _require_provided_host(provided_host)
     evidence_id, stored_path, size, uploaded_sha256 = save_upload(case_id, file)
+    resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(provided_platform, filename=file.filename or stored_path.name)
     normalized_ingest_mode = normalize_ingest_mode(ingest_mode)
     normalized_evtx_profile = str(evtx_profile or "").strip() or None
     evidence = Evidence(
@@ -309,6 +342,9 @@ def discover_velociraptor_zip(
         size_bytes=size,
         mime_type=file.content_type,
         detected_type=EvidenceType.velociraptor_zip.value,
+        provided_platform=resolved_provided_platform,
+        detected_platform=resolved_detected_platform,
+        effective_platform=resolved_effective_platform,
         uploaded_by_user_id=_current_user_id(current_user),
         uploaded_at=utc_now_naive(),
         first_seen_at=utc_now_naive(),
@@ -322,9 +358,12 @@ def discover_velociraptor_zip(
             "copied": True,
             "ingest_mode": normalized_ingest_mode,
             "provided_host": normalized_provided_host,
+            "provided_platform": resolved_provided_platform,
+            "detected_platform": resolved_detected_platform,
+            "effective_platform": resolved_effective_platform,
             "evtx_profile": normalized_evtx_profile,
         },
-        metadata_json=_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "provided_host": normalized_provided_host, "evtx_profile": normalized_evtx_profile}),
+        metadata_json=_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform, "evtx_profile": normalized_evtx_profile}),
         error_log={},
     )
     db.add(evidence)
@@ -360,6 +399,7 @@ def discover_velociraptor_folder(
     files: list[UploadFile] = File(...),
     ingest_mode: str | None = Form(None),
     provided_host: str | None = Form(None),
+    provided_platform: str | None = Form(None),
     evtx_profile: str | None = Form(None),
     db: Session = Depends(get_db),
 ) -> dict:
@@ -368,6 +408,8 @@ def discover_velociraptor_folder(
         raise HTTPException(status_code=404, detail="Case not found")
     normalized_provided_host = _require_provided_host(provided_host)
     evidence_id, folder_path, total_size, folder_sha256, folder_entries, folder_label = save_folder_uploads(case_id, files)
+    entry_paths = [str(item.get("path") or "") for item in folder_entries]
+    resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(provided_platform, filename=folder_label, paths=entry_paths)
     normalized_ingest_mode = normalize_ingest_mode(ingest_mode)
     normalized_evtx_profile = str(evtx_profile or "").strip() or None
     evidence = Evidence(
@@ -378,6 +420,9 @@ def discover_velociraptor_folder(
         evidence_type=EvidenceType.velociraptor_zip,
         sha256=folder_sha256,
         size_bytes=total_size,
+        provided_platform=resolved_provided_platform,
+        detected_platform=resolved_detected_platform,
+        effective_platform=resolved_effective_platform,
         ingest_status=IngestStatus.pending,
         source_tool="velociraptor",
         ingest_source={
@@ -387,9 +432,12 @@ def discover_velociraptor_folder(
             "copied": True,
             "ingest_mode": normalized_ingest_mode,
             "provided_host": normalized_provided_host,
+            "provided_platform": resolved_provided_platform,
+            "detected_platform": resolved_detected_platform,
+            "effective_platform": resolved_effective_platform,
             "evtx_profile": normalized_evtx_profile,
         },
-        metadata_json=_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "folder_entries": folder_entries, "provided_host": normalized_provided_host, "evtx_profile": normalized_evtx_profile}),
+        metadata_json=_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "folder_entries": folder_entries, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform, "evtx_profile": normalized_evtx_profile}),
         error_log={},
     )
     db.add(evidence)
@@ -407,6 +455,10 @@ def discover_velociraptor_path(payload: VelociraptorDiscoverPathRequest, db: Ses
     source_path = Path(payload.collection_path)
     if not source_path.exists():
         raise HTTPException(status_code=404, detail="Collection path not found")
+    paths = []
+    if source_path.is_dir():
+        paths = [str(path.relative_to(source_path)) for path in source_path.rglob("*") if path.is_file()][:1000]
+    resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(payload.provided_platform, filename=source_path.name, paths=paths)
     evidence = Evidence(
         case_id=payload.case_id,
         original_filename=source_path.name,
@@ -414,9 +466,12 @@ def discover_velociraptor_path(payload: VelociraptorDiscoverPathRequest, db: Ses
         evidence_type=EvidenceType.velociraptor_zip,
         sha256=sha256_file(source_path) if source_path.is_file() else "folder",
         size_bytes=source_path.stat().st_size if source_path.is_file() else 0,
+        provided_platform=resolved_provided_platform,
+        detected_platform=resolved_detected_platform,
+        effective_platform=resolved_effective_platform,
         ingest_status=IngestStatus.pending,
         source_tool="velociraptor",
-        metadata_json=_initial_metadata(),
+        metadata_json=_initial_metadata({"provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform}),
         error_log={},
     )
     db.add(evidence)
