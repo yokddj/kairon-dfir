@@ -105,8 +105,7 @@ const PLATFORM_OPTIONS: Array<{ id: EvidencePlatform; label: string; description
   { id: "windows", label: "Windows", description: "Use for Windows endpoint artifacts such as EVTX, registry hives, prefetch, and user profiles." },
   { id: "linux", label: "Linux", description: "Accepted for Linux triage artifacts. Parser coverage is limited in this release." },
   { id: "macos", label: "macOS planned", description: "Visible for roadmap clarity. macOS artifacts are not supported yet.", disabled: true },
-  { id: "unknown", label: "Unknown / Other", description: "Use when the source platform is unclear." },
-  { id: "other", label: "Other", description: "Use for non-OS-specific evidence or custom logs." },
+  { id: "unknown", label: "Unknown / Other", description: "Use when the source platform is unclear or non-OS-specific." },
 ];
 
 function formatBytes(value: number) {

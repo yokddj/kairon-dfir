@@ -15,7 +15,7 @@ from app.core.config import get_settings
 from app.core.database import SessionLocal, utc_now_naive
 from app.core.manifest import default_manifest, write_manifest
 from app.core.storage import safe_display_filename, sha256_file
-from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidenceStorageMode, EvidenceType, IngestStatus
+from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidenceStorageMode, EvidenceType, EvidencePlatform, IngestStatus, detect_evidence_platform, normalize_evidence_platform, resolve_evidence_platform
 from app.services.evidence_integrity import record_evidence_event
 from app.models.memory import MemoryUpload
 from app.services.memory.upload_capacity import assert_memory_upload_capacity, release_memory_upload_slot_if_owner
@@ -387,6 +387,13 @@ def _build_evidence_from_upload(
     by the registration transaction.
     """
     metadata = dict(item.metadata_json or {})
+    extension = Path(item.display_name).suffix.lower() if item.display_name else ""
+    normalized_provided_platform = normalize_evidence_platform(metadata.get("provided_platform") or "auto")
+    detected_platform = detect_evidence_platform(filename=item.display_name)
+    provided_platform, _, effective_platform = resolve_evidence_platform(
+        normalized_provided_platform, detected_platform,
+    )
+    memory_os_hint = "linux" if extension == ".lime" or detected_platform == EvidencePlatform.linux.value else None
     return Evidence(
         id=item.evidence_id,
         case_id=item.case_id,
@@ -401,6 +408,9 @@ def _build_evidence_from_upload(
         size_bytes=int(item.expected_bytes),
         mime_type=None,
         detected_type=EvidenceType.memory_dump.value,
+        provided_platform=provided_platform,
+        detected_platform=detected_platform,
+        effective_platform=effective_platform,
         uploaded_by_user_id=metadata.get("uploaded_by_user_id"),
         uploaded_at=utc_now_naive(),
         first_seen_at=utc_now_naive(),
@@ -418,6 +428,10 @@ def _build_evidence_from_upload(
             "packaging": metadata.get("packaging", "single_file"),
             "ingest_mode": metadata.get("ingest_mode"),
             "provided_host": item.source_host,
+            "provided_platform": provided_platform,
+            "detected_platform": detected_platform,
+            "effective_platform": effective_platform,
+            "memory_os_hint": memory_os_hint,
             "evtx_profile": metadata.get("evtx_profile"),
             "upload_state": "completed",
             "memory_upload": True,
@@ -434,9 +448,10 @@ def _build_evidence_from_upload(
             "searchable_documents_count": 0,
             "events_indexed": 0,
             "indexed_events": 0,
-            "memory_analysis": {"status": "registered", "profile": "metadata_only"},
+            "memory_analysis": {"status": "registered", "profile": "metadata_only", "platform": effective_platform},
             "status_reason": "Memory dump registered metadata-only and isolated from disk ingest.",
             "provided_host": item.source_host,
+            "memory_os_hint": memory_os_hint,
         },
         error_log={},
         processed_at=utc_now_naive(),

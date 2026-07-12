@@ -178,6 +178,10 @@ describe("EvidenceUpload", () => {
     expect(platformSelect.value).toBe("auto");
     expect(screen.getByRole("option", { name: /macOS planned/i })).toBeDisabled();
 
+    const options = Array.from(platformSelect.options).map((opt) => opt.text);
+    expect(options.filter((t) => t === "Other").length).toBe(0);
+    expect(options.filter((t) => t?.includes("Unknown")).length).toBe(1);
+
     await userEvent.selectOptions(platformSelect, "linux");
     await selectPrimaryFile(makeFile("logs", "linux-triage.tar.gz"));
     await userEvent.click(screen.getByRole("button", { name: /Index evidence/i }));

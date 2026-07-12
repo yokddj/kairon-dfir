@@ -3620,6 +3620,37 @@ def normalize_network_row(document: dict, row: dict, artifact_meta: dict) -> dic
     return document
 
 
+def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact_type: str = "", detected_host: str | None = None) -> dict:
+    """Normalize a Linux artifact row into the base document."""
+    doc = dict(doc or {})
+    linux_data = dict(doc.get("linux") or {})
+
+    linux_data["artifact_family"] = row.get("artifact_family", "")
+    linux_data["artifact_type"] = row.get("artifact_type", source_path)
+    linux_data["source_file"] = row.get("source_file", source_path)
+    linux_data["message"] = row.get("message", "")
+    linux_data["username"] = row.get("username", "")
+    linux_data["process"] = row.get("process", "")
+    linux_data["pid"] = row.get("pid", None)
+    linux_data["command"] = row.get("command", "")
+    linux_data["event_action"] = row.get("event_action", "")
+    linux_data["auth_method"] = row.get("auth_method", "")
+    linux_data["source_ip"] = row.get("source_ip", "")
+
+    if detected_host:
+        doc["host"]["hostname"] = detected_host
+        linux_data["detected_host"] = detected_host
+
+    if row.get("timestamp"):
+        doc["@timestamp"] = row["timestamp"]
+
+    doc["message"] = row.get("message", row.get("raw_excerpt", ""))
+    doc["search_text"] = " ".join(str(v) for v in linux_data.values() if v)
+    doc["linux"] = linux_data
+
+    return doc
+
+
 def normalize_generic_row(document: dict, row: dict, artifact_meta: dict) -> dict:
     document["event"].update({"category": "unknown", "type": "generic_record", "message": first_value(row, ["Message", "Description", "Path", "Name"]) or artifact_meta["name"]})
     return document

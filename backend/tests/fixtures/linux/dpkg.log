@@ -1,0 +1,10 @@
+2024-07-10 14:23:01 install nginx:amd64 <none> 1.18.0-0ubuntu1.4
+2024-07-10 14:23:05 status half-installed nginx:amd64 1.18.0-0ubuntu1.4
+2024-07-10 14:23:05 status unpacked nginx:amd64 1.18.0-0ubuntu1.4
+2024-07-10 14:23:10 configure nginx:amd64 1.18.0-0ubuntu1.4 <none>
+2024-07-10 14:23:10 status unpacked nginx:amd64 1.18.0-0ubuntu1.4
+2024-07-10 14:23:10 status half-configured nginx:amd64 1.18.0-0ubuntu1.4
+2024-07-10 14:23:15 status installed nginx:amd64 1.18.0-0ubuntu1.4
+2024-07-12 08:15:00 upgrade libssl1.1:amd64 1.1.1f-1ubuntu2.20 1.1.1f-1ubuntu2.21
+2024-07-12 08:15:05 status half-configured libssl1.1:amd64 1.1.1f-1ubuntu2.21
+2024-07-12 08:15:05 status installed libssl1.1:amd64 1.1.1f-1ubuntu2.21

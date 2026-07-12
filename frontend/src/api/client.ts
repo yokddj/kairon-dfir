@@ -836,6 +836,8 @@ export type MemoryEvidenceLandingItem = {
   probe_version?: string | null;
   probed_at?: string | null;
   can_analyze?: boolean;
+  effective_platform?: string | null;
+  detected_platform?: string | null;
 };
 
 export type MemoryEvidenceLanding = {

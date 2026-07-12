@@ -34,6 +34,19 @@ const ARTIFACT_VIEW_LABELS: Record<string, string> = {
   email: "Email Artifacts",
   evtx: "Windows Events",
   jumplist: "Jump Lists",
+  linux_auth: "Linux Auth",
+  linux_audit: "Linux Audit",
+  linux_cron: "Linux Cron",
+  linux_identity: "Linux Identity",
+  linux_memory: "Linux Memory",
+  linux_network: "Linux Network",
+  linux_os_info: "Linux OS Info",
+  linux_packages: "Linux Packages",
+  linux_shell_history: "Linux Shell History",
+  linux_ssh: "Linux SSH",
+  linux_sudoers: "Linux Sudoers",
+  linux_syslog: "Linux Syslog",
+  linux_systemd: "Linux Systemd",
   lnk: "LNK / Shortcuts",
   mft: "MFT / Filesystem",
   motw: "MOTW / Downloaded Files",
@@ -688,13 +701,13 @@ export default function ArtifactExplorer() {
           ? "cloud_sync"
         : artifactType === "registry" || artifactType === "registry_event" || artifactType === "registry_command"
           ? "registry"
-          : artifactType === "browser"
+        : artifactType === "browser"
             ? "browser"
-            : artifactType === "network"
+            : artifactType === "network" || artifactType === "linux_network" || artifactType === "linux_ssh"
               ? "network"
-              : artifactType === "process" || artifactType === "prefetch"
+              : artifactType === "process" || artifactType === "prefetch" || artifactType === "linux_shell_history"
                 ? "execution"
-                : artifactType === "services" || artifactType === "scheduled_tasks" || artifactType === "scheduled_task"
+                : artifactType === "services" || artifactType === "scheduled_tasks" || artifactType === "scheduled_task" || artifactType === "linux_cron" || artifactType === "linux_systemd" || artifactType === "linux_sudoers"
                   ? "persistence"
                   : "auto";
   const payload = useMemo(

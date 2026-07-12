@@ -135,6 +135,7 @@ from app.ingest.artifact_normalizers import (
     normalize_evtx_row,
     normalize_generic_row,
     normalize_jumplist_row,
+    normalize_linux_row,
     normalize_lnk_row,
     normalize_mft_row,
     normalize_prefetch_row,
@@ -1384,7 +1385,20 @@ def base_document(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
         },
         "rule": {"engine": None, "name": None, "namespace": None, "severity": None, "tags": []},
         "memory": {"plugin": None, "process_offset": None, "virtual_address": None},
-        "linux": {},
+        "linux": {
+            "artifact_family": "",
+            "artifact_type": "",
+            "source_file": "",
+            "username": "",
+            "process": "",
+            "pid": None,
+            "command": "",
+            "event_action": "",
+            "auth_method": "",
+            "source_ip": "",
+            "hostname": "",
+            "message": "",
+        },
         "macos": {},
         "tags": [],
         "data_quality": [],
@@ -1864,6 +1878,10 @@ def normalize_row(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
         document = normalize_process_row(document, row, artifact_meta)
     elif artifact_type in {"network", "wlan", "dns"} or "netstat" in name or {"destinationip", "remoteaddress", "queryname", "recordtype"} & headers:
         document = normalize_network_artifact_row(document, row, artifact_meta)
+    elif artifact_meta.get("artifact_family", "").startswith("linux_"):
+        detected_host = document["host"]["hostname"]
+        document = normalize_linux_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
+        return document
     else:
         document = normalize_generic_row(document, row, artifact_meta)
 

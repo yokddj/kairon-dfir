@@ -26,9 +26,9 @@ The project is intended for trusted labs and controlled private beta deployments
 
 ## What It Does
 
-- Ingests Windows forensic evidence into case-centered investigations.
+- Ingests Windows and Linux forensic evidence into case-centered investigations.
 - Organizes investigations with case status, priority, tags, notes, archive/close lifecycle actions, and filters. See [docs/case-management.md](docs/case-management.md).
-- Normalizes a growing set of Windows and memory artifacts for search, triage, timelines, detections, findings, and reports. See [docs/parser-coverage.md](docs/parser-coverage.md) for exact parser support status.
+- Normalizes a growing set of Windows, Linux, and memory artifacts for search, triage, timelines, detections, findings, and reports. See [docs/parser-coverage.md](docs/parser-coverage.md) for exact parser support status.
 - Provides analyst workflows for Search, Artifact Views, Command History, Execution Stories, Incident Timeline, Findings, and Reports.
 - Records evidence SHA-256, size, upload metadata, integrity checks, custody events, and exportable JSON manifests. See [docs/evidence-integrity.md](docs/evidence-integrity.md).
 - Shows a per-case Evidence Processing Queue with parser status, errors, partial results, and navigation to evidence, artifacts, Search, and memory views. See [docs/processing-queue.md](docs/processing-queue.md).
@@ -210,6 +210,7 @@ Coverage depends on the artifacts present in the uploaded evidence and on parser
 | User activity | RecentDocs, UserAssist, OpenSaveMRU |
 | Persistence | Scheduled Tasks, Services, registry autoruns, startup folders |
 | Browser/email triage | Browser history/downloads, mail stores, webmail traces |
+| Linux artifacts | Authentication logs, syslog, audit logs, shell history, cron, systemd, SSH, identity, sudoers, packages, network config, OS info (partial) |
 | Memory analysis | Planned/experimental authorized RAM evidence upload and isolated Volatility metadata/process profiles, disabled by default |
 | Investigation outputs | Findings, Incident Timeline, Reports |
 
