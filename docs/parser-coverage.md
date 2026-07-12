@@ -2,7 +2,7 @@
 
 Kairon supports a growing set of Windows and memory artifacts. This page describes exact parser coverage. It is not a promise of complete forensic coverage.
 
-The structured source of truth is [`docs/data/parser-coverage.json`](data/parser-coverage.json).
+The structured source of truth is [`docs/data/parser-coverage.json`](data/parser-coverage.json). Evidence upload also records platform selection; see [`Evidence Platform Selection`](evidence-platforms.md).
 
 ## Status Meanings
 
@@ -85,7 +85,7 @@ Kairon documents compatible outputs, but does not redistribute third-party colle
 
 ## Not Supported Yet
 
-- Linux Artifact Support is not implemented.
+- Linux Artifact Support is limited. Linux can be selected at upload time, but full Linux parsers are not implemented.
 - Virtual Disk Upload is not implemented.
 - Complete macOS artifact support is not implemented.
 - Raw Shellbags hive parsing is not stable.

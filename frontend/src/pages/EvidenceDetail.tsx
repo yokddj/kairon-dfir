@@ -88,6 +88,14 @@ function formatEvtxBackend(value: string) {
   return value || "-";
 }
 
+function formatPlatform(value: string | null | undefined) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized) return "-";
+  if (normalized === "auto") return "Auto-detect";
+  if (normalized === "macos") return "macOS";
+  return normalized.replaceAll("_", " ").replace(/^./, (char) => char.toUpperCase());
+}
+
 function parseActiveBenchmarkConflict(message: string | null | undefined) {
   const raw = String(message || "").trim();
   if (!raw) return null;
@@ -758,6 +766,7 @@ export default function EvidenceDetail() {
   const evidenceHostLabel = data?.provided_host || data?.detected_host || "";
   const evidenceMatchesActiveHost = !hasHostFilter || (activeHostId && data?.host_id === activeHostId) || hostMatchesName(evidenceHostLabel);
   const assignmentMismatch = Boolean(data?.host_id && data?.detected_host && assignedHost && !assignedHostMatchesDetected(assignedHost, data.detected_host));
+  const platformMismatch = Boolean(data?.provided_platform && data.provided_platform !== "auto" && data.detected_platform && data.detected_platform !== "unknown" && data.provided_platform !== data.detected_platform);
   const isMemoryEvidence = String(data?.evidence_type || "").toLowerCase().includes("memory");
 
   useEffect(() => {
@@ -2209,7 +2218,7 @@ function formatReportStatus(status: string | null | undefined) {
           </div>
         </div>
 
-        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-7">
           <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
             <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Host</p>
             <p className="mt-1 truncate text-sm font-semibold text-ink" title={data?.provided_host || data?.detected_host || "-"}>{data?.provided_host || data?.detected_host || "-"}</p>
@@ -2233,10 +2242,20 @@ function formatReportStatus(status: string | null | undefined) {
             </p>
           </div>
           <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Platform</p>
+            <p className="mt-1 truncate text-sm font-semibold text-ink" title={`Provided: ${formatPlatform(data?.provided_platform)} · Detected: ${formatPlatform(data?.detected_platform)}`}>{formatPlatform(data?.effective_platform)}</p>
+          </div>
+          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
             <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">EVTX</p>
             <p className={`mt-1 text-sm font-semibold ${evtxCoverageIsFull ? "text-mint" : evtxDeferredCount || evtxPartialCount ? "text-amber" : "text-ink"}`}>{evtxCoverageLabel}</p>
           </div>
         </div>
+
+        {platformMismatch ? (
+          <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 px-4 py-3 text-sm text-amber">
+            Platform override differs from detection: provided {formatPlatform(data?.provided_platform)}, detected {formatPlatform(data?.detected_platform)}, effective {formatPlatform(data?.effective_platform)}.
+          </div>
+        ) : null}
 
         <div className="mt-5 rounded-3xl border border-accent/30 bg-abyss/60 p-4" data-testid="evidence-host-assignment-panel">
           <div className="flex flex-wrap items-start justify-between gap-3">

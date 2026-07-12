@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { CheckCircle2, LoaderCircle, UploadCloud } from "lucide-react";
-import { api, type Evidence, type EvidenceIntent, type EvidencePackaging, type EvtxProfile, type IngestMode, type VelociraptorDiscoverResponse } from "../api/client";
+import { api, type Evidence, type EvidenceIntent, type EvidencePackaging, type EvidencePlatform, type EvtxProfile, type IngestMode, type VelociraptorDiscoverResponse } from "../api/client";
 
 type Props = {
   caseId: string;
@@ -99,6 +99,15 @@ const FORMAT_OPTIONS: Record<EvidenceKind, Array<{ id: UploadFormat; title: stri
   ],
   server_path: [{ id: "server_path", title: "File or directory path", description: "A file, archive or directory already mounted or shared into the backend/worker." }],
 };
+
+const PLATFORM_OPTIONS: Array<{ id: EvidencePlatform; label: string; description: string; disabled?: boolean }> = [
+  { id: "auto", label: "Auto-detect", description: "Let Kairon infer Windows, Linux, or unknown from paths and filenames." },
+  { id: "windows", label: "Windows", description: "Use for Windows endpoint artifacts such as EVTX, registry hives, prefetch, and user profiles." },
+  { id: "linux", label: "Linux", description: "Accepted for Linux triage artifacts. Parser coverage is limited in this release." },
+  { id: "macos", label: "macOS planned", description: "Visible for roadmap clarity. macOS artifacts are not supported yet.", disabled: true },
+  { id: "unknown", label: "Unknown / Other", description: "Use when the source platform is unclear." },
+  { id: "other", label: "Other", description: "Use for non-OS-specific evidence or custom logs." },
+];
 
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0 B";
@@ -229,6 +238,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   const [showAdvancedProcessing, setShowAdvancedProcessing] = useState(false);
   const [showAdvancedUploadOptions, setShowAdvancedUploadOptions] = useState(false);
   const [providedHost, setProvidedHost] = useState("");
+  const [providedPlatform, setProvidedPlatform] = useState<EvidencePlatform>("auto");
   const [assignedHostId, setAssignedHostId] = useState("");
   const [newHostName, setNewHostName] = useState("");
   const [pathValidation, setPathValidation] = useState<Awaited<ReturnType<typeof api.validateEvidencePath>> | null>(null);
@@ -330,6 +340,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         onProgress,
         ingestMode,
         providedHost: providedHost.trim() || undefined,
+        providedPlatform,
         evtxProfile: effectiveEvtxProfile,
       });
     } catch {
@@ -375,6 +386,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
             packaging: "archive",
             ingestMode,
             providedHost: providedHost.trim() || undefined,
+            providedPlatform,
             hostId: uploadHostId,
             evtxProfile: effectiveEvtxProfile,
           });
@@ -395,6 +407,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
           packaging: intent === "parsed_archive" ? "archive" : "single_file",
           ingestMode,
           providedHost: providedHost.trim() || undefined,
+          providedPlatform,
           hostId: uploadHostId,
           evtxProfile: effectiveEvtxProfile,
           memoryAuthorizationAcknowledged: isMemoryImageFile(file) && memoryAuthorizationAcknowledged,
@@ -467,6 +480,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         evidenceIntent: selectedKind === "parsed_evidence" ? "parsed" : "raw",
         ingestMode,
         providedHost: providedHost.trim() || undefined,
+        providedPlatform,
         hostId: uploadHostId,
         evtxProfile: effectiveEvtxProfile,
       });
@@ -564,6 +578,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         packaging: selectedPackaging(),
         ingest_mode: ingestMode,
         provided_host: providedHost.trim() || undefined,
+        provided_platform: providedPlatform,
         host_id: uploadHostId,
         evtx_profile: effectiveEvtxProfile,
       });
@@ -583,6 +598,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   const currentFormatOption = FORMAT_OPTIONS[selectedKind].find((option) => option.id === selectedFormat);
   const caseHosts = caseHostsQuery.data?.hosts ?? [];
   const assignedHostLabel = assignedHostId === "__create__" ? `Create ${newHostName.trim() || "new host"}` : caseHosts.find((host) => host.id === assignedHostId)?.display_name || "Unassigned";
+  const platformLabel = PLATFORM_OPTIONS.find((option) => option.id === providedPlatform)?.label ?? providedPlatform;
   const progressPct = uploadBytes.total > 0 ? Math.round((uploadBytes.loaded / uploadBytes.total) * 100) : phase === "completed" ? 100 : 0;
   const statusTone = phase === "failed" ? "text-danger" : phase === "completed" ? "text-mint" : "text-accent";
   const showStatusPanel = phase !== "idle" || uploading || status !== "Choose an evidence type and a format to start.";
@@ -910,6 +926,15 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
               Detected/provided host hint
               <input value={providedHost} onChange={(event) => setProvidedHost(event.target.value)} placeholder="Optional hostname from evidence label" className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" />
             </label>
+            <label className="mt-3 block text-sm text-muted">
+              Evidence platform
+              <select value={providedPlatform} onChange={(event) => setProvidedPlatform(event.target.value as EvidencePlatform)} className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink">
+                {PLATFORM_OPTIONS.map((option) => (
+                  <option key={option.id} value={option.id} disabled={option.disabled}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <p className="mt-2 text-xs text-muted">{PLATFORM_OPTIONS.find((option) => option.id === providedPlatform)?.description}</p>
             <p className="mt-2 text-xs text-muted">Assigned host controls host filters. The detected/provided hint is preserved separately.</p>
           </div>
           <div className="rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
@@ -919,6 +944,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
                 {selectedKind === "raw_evidence" ? <li>EVTX: Full EVTX Indexing if EVTX is discovered</li> : null}
               <li>Packaging: {selectedPackaging().replaceAll("_", " ")}</li>
               <li>Intent: {selectedEvidenceIntent()}</li>
+              <li>Platform: {platformLabel}</li>
               <li>Assigned host: {assignedHostLabel}</li>
             </ul>
           </div>
@@ -973,6 +999,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
           <ul className="mt-3 space-y-1 text-xs text-muted">
             <li>Processing: Core indexing</li>
             <li>EVTX: Full coverage with EvtxECmd if event logs are found</li>
+            <li>Platform: {platformLabel}</li>
             <li>Rules/reports: on-demand after indexing</li>
           </ul>
           <button type="button" onClick={() => void startIndexing()} disabled={uploading || (assignedHostId === "__create__" && !newHostName.trim()) || (!pendingFile && selectedKind !== "server_path") || (Boolean(pendingFile && isMemoryImageFile(pendingFile)) && !memoryAuthorizationAcknowledged)} className="mt-4 w-full rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">

@@ -172,6 +172,25 @@ describe("EvidenceUpload", () => {
     expect(await screen.findByRole("button", { name: /Search evidence/i })).toBeInTheDocument();
   });
 
+  it("passes selected evidence platform and keeps macOS planned disabled", async () => {
+    renderComponent();
+    const platformSelect = screen.getByLabelText(/Evidence platform/i) as HTMLSelectElement;
+    expect(platformSelect.value).toBe("auto");
+    expect(screen.getByRole("option", { name: /macOS planned/i })).toBeDisabled();
+
+    await userEvent.selectOptions(platformSelect, "linux");
+    await selectPrimaryFile(makeFile("logs", "linux-triage.tar.gz"));
+    await userEvent.click(screen.getByRole("button", { name: /Index evidence/i }));
+
+    await waitFor(() =>
+      expect(uploadEvidenceMock).toHaveBeenCalledWith(
+        "case-1",
+        expect.any(File),
+        expect.objectContaining({ providedPlatform: "linux" }),
+      ),
+    );
+  });
+
   it("detects a memory image, shows privacy warning, and does not auto-run analysis", async () => {
     uploadEvidenceMock.mockResolvedValueOnce({ id: "ev-memory", evidence_type: "memory_dump", metadata_json: {}, ingest_status: "completed" });
     renderComponent();
