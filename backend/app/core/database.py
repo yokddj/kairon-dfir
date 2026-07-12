@@ -455,7 +455,13 @@ def _ensure_compatible_schema() -> None:
                 "linked_artifact_id": "UUID",
                 "linked_artifact_family": "VARCHAR(128)",
                 "linked_artifact_type": "VARCHAR(128)",
+                "linked_event_id": "VARCHAR(255)",
                 "source_view": "VARCHAR(128)",
+                "source_route": "VARCHAR(1024)",
+                "source_timestamp": "TIMESTAMP WITH TIME ZONE",
+                "source_label": "VARCHAR(255)",
+                "source_summary": "TEXT",
+                "source_snapshot_json": "JSONB",
                 "created_by": "VARCHAR(128)",
                 "archived_at": "TIMESTAMP WITH TIME ZONE",
             }

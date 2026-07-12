@@ -441,7 +441,7 @@ describe("ArtifactExplorer", () => {
     expect(screen.getByLabelText("Persistence source")).toHaveTextContent("Registry hive");
     expect(await screen.findByText("OneDriveUpdateTask")).toBeInTheDocument();
     expect(screen.getByText(/High 85/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Add to Finding/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Create finding from this/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Add to Incident Timeline/i })).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button", { name: "Details" })[0]);
     expect(await screen.findByText("Persistence detail")).toBeInTheDocument();

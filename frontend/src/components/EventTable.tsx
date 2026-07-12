@@ -43,6 +43,7 @@ type Props = {
   selectedIds?: string[];
   onToggleSelect?: (eventId: string) => void;
   onViewProcessTree?: (item: Record<string, unknown>) => void;
+  onCreateFinding?: (item: Record<string, unknown>) => void;
 };
 
 type Column = { key: string; label: string; render: (item: Record<string, unknown>) => string };
@@ -656,7 +657,7 @@ function hasProcessTreeContext(item: Record<string, unknown>): boolean {
   return Boolean(relatedProcessNodeIds.length || process.pid || process.name || process.entity_id || process.command_line);
 }
 
-export default function EventTable({ items, view = "generic", sortBy, sortOrder, onSortChange, selectedIds = [], onToggleSelect, onViewProcessTree }: Props) {
+export default function EventTable({ items, view = "generic", sortBy, sortOrder, onSortChange, selectedIds = [], onToggleSelect, onViewProcessTree, onCreateFinding }: Props) {
   const { effectiveTimezone } = useTimezonePreference();
   const [openId, setOpenId] = useState<string | null>(null);
   const [showColumnChooser, setShowColumnChooser] = useState(false);
@@ -793,6 +794,7 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                             {keyEntity && keyEntity !== "-" ? <button type="button" onClick={() => void copyToClipboard(keyEntity)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy key entity</button> : null}
                             {file.sha256 ? <button type="button" onClick={() => void copyToClipboard(String(file.sha256))} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy hash</button> : null}
                             {item.event_id ? <button type="button" onClick={() => void copyToClipboard(String(item.event_id))} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy event id</button> : null}
+                            {onCreateFinding ? <button type="button" onClick={() => onCreateFinding(item)} className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">Create finding from this</button> : null}
                             {onViewProcessTree && hasProcessTreeContext(item) ? <button type="button" onClick={() => onViewProcessTree(item)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">View process tree</button> : null}
                             <button type="button" onClick={() => void copyToClipboard(JSON.stringify(item, null, 2))} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy raw JSON</button>
                           </div>

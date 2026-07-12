@@ -16,6 +16,8 @@ import { MemorySystemTab } from "./memory/MemorySystemTab";
 import { MemoryRunsTab } from "./memory/MemoryRunsTab";
 import { MemoryRawTab } from "./memory/MemoryRawTab";
 import { MemoryAnalyzeAction } from "./memory/MemoryAnalyzeAction";
+import CreateFindingDialog from "./CreateFindingDialog";
+import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 
 type RunProfile = "processes_basic" | "processes_extended" | "metadata_only";
 
@@ -72,6 +74,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
   const [pidFilter, setPidFilter] = useState("");
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
   const [processMode, setProcessMode] = useState<"auto" | "basic" | "extended">("auto");
+  const [findingPrefill, setFindingPrefill] = useState<FindingPrefill | null>(null);
 
   useEffect(() => {
     setActiveCaseId(caseId);
@@ -306,6 +309,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             onPidFilter={setPidFilter}
             selectedEntityId={selectedEntityId}
             onSelectEntityId={setSelectedEntityId}
+            onCreateFinding={(entity) => setFindingPrefill(buildFindingPrefillFromArtifact({ ...entity, ...entity.process, plugin: (entity.sources || []).join(", ") }, { caseId, evidenceId: effectiveEvidenceId, sourceView: "memory", sourceRoute: window.location.pathname + window.location.search, artifactFamily: "memory", artifactType: "process", label: "Memory process" }))}
           />
         ) : null}
 
@@ -431,7 +435,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
           />
         ) : null}
 
-        {tab === "raw" ? (
+      {tab === "raw" ? (
           <MemoryRawTab
             caseId={caseId}
             evidenceId={effectiveEvidenceId ?? ""}
@@ -454,6 +458,13 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
           volatilityBackend={volatilityBackend ?? null}
         />
       ) : null}
+      <CreateFindingDialog
+        open={Boolean(findingPrefill)}
+        onClose={() => setFindingPrefill(null)}
+        caseId={caseId}
+        prefill={findingPrefill}
+        onCreated={() => setFindingPrefill(null)}
+      />
     </div>
   );
 }

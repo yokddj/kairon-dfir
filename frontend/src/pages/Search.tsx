@@ -8,8 +8,10 @@ import SearchBar from "../components/SearchBar";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { HostFilter } from "../components/HostFilter";
 import InvestigationContext from "../components/InvestigationContext";
+import CreateFindingDialog from "../components/CreateFindingDialog";
 import { useHostContext } from "../hooks/useHostContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
+import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 
 type Scope = "events" | "findings" | "all";
 type SortValue = "timestamp_desc" | "timestamp_asc" | "risk_desc" | "risk_asc" | "relevance";
@@ -1342,6 +1344,7 @@ export default function Search() {
   const [syntaxHelpOpen, setSyntaxHelpOpen] = useState(false);
   const [contextResponse, setContextResponse] = useState<SearchV2Response | null>(null);
   const [contextLabel, setContextLabel] = useState("");
+  const [findingPrefill, setFindingPrefill] = useState<FindingPrefill | null>(null);
   const [selectedId, setSelectedId] = useState(state.selected);
   const [density, setDensity] = useState<TableDensity>("compact");
   const [draftCondition, setDraftCondition] = useState<BuilderCondition>({ field: "artifact.type", operator: "is", value: "", negate: false });
@@ -1962,6 +1965,7 @@ export default function Search() {
       actions.push({ label: "Search related", onClick: () => void handleRelatedFinding(result), ariaLabel: "Search related finding events" });
     } else {
       const hasTimestamp = resultTimestampMs(result) !== null;
+      actions.push({ label: "Create finding from this", onClick: () => setFindingPrefill(buildFindingPrefillFromArtifact({ ...raw, ...result }, { caseId: resolvedCaseId, evidenceId: evidenceId || searchRequestState.evidence_id, hostId: searchRequestState.host_id, sourceView: "search", sourceRoute: window.location.pathname + window.location.search, artifactFamily: result.artifact_type, artifactType: result.event_type, label: "Search result" })), ariaLabel: "Create finding from this search result" });
       actions.push({ label: "Show ±30 sec", onClick: () => void handleAroundEvent(result, 30 * 1000), ariaLabel: "Show ±30 seconds around this event", disabled: !hasTimestamp });
       actions.push({ label: "Show ±5 min", onClick: () => void handleAroundEvent(result, 5 * 60 * 1000), ariaLabel: "Show ±5 minutes around this event", disabled: !hasTimestamp });
       actions.push({ label: "Show ±30 min", onClick: () => void handleAroundEvent(result, 30 * 60 * 1000), ariaLabel: "Show ±30 minutes around this event", disabled: !hasTimestamp });
@@ -1989,15 +1993,6 @@ export default function Search() {
           markEventMutation.mutate({ result, status: marking?.status ?? "important", labels });
         },
         ariaLabel: "Edit event labels",
-      });
-      actions.push({
-        label: "Add to finding",
-        onClick: () => {
-          const findingId = window.prompt("Finding ID to attach", marking?.finding_id ?? "");
-          if (!findingId) return;
-          markEventMutation.mutate({ result, status: marking?.status ?? "important", findingId });
-        },
-        ariaLabel: "Add to finding",
       });
       if (marking?.id) {
         actions.push({ label: "Clear marking", onClick: () => deleteMarkingMutation.mutate(marking.id), ariaLabel: "Clear event marking" });
@@ -2647,6 +2642,16 @@ export default function Search() {
           />
         </ResponsiveDetailPanel>
       ) : null}
+      <CreateFindingDialog
+        open={Boolean(findingPrefill)}
+        onClose={() => setFindingPrefill(null)}
+        caseId={resolvedCaseId}
+        prefill={findingPrefill}
+        onCreated={() => {
+          setFindingPrefill(null);
+          void queryClient.invalidateQueries({ queryKey: ["findings", resolvedCaseId] });
+        }}
+      />
     </div>
   );
 }
