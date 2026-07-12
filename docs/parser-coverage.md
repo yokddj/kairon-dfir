@@ -1,8 +1,8 @@
 # Parser Coverage Matrix
 
-Kairon supports a growing set of Windows and memory artifacts. This page describes exact parser coverage. It is not a promise of complete forensic coverage.
+Kairon supports a growing set of Windows, Linux, and memory artifacts. This page describes exact parser coverage. It is not a promise of complete forensic coverage.
 
-The structured source of truth is [`docs/data/parser-coverage.json`](data/parser-coverage.json).
+The structured source of truth is [`docs/data/parser-coverage.json`](data/parser-coverage.json). Evidence upload also records platform selection; see [`Evidence Platform Selection`](evidence-platforms.md).
 
 ## Status Meanings
 
@@ -47,7 +47,6 @@ The structured source of truth is [`docs/data/parser-coverage.json`](data/parser
 | Memory | experimental | RAW, DMP, VMEM, LIME, AFF4 | Volatility 3 optional external backend | Memory views, Process Graph | Isolated from global Search/Timeline/Detections. |
 | PCAP / network captures | experimental | PCAP, PCAPNG, Zeek-style outputs | manual collections, Zeek outputs | Artifact Explorer, Search | Not complete PCAP forensic coverage. |
 | Sigma/YARA rule files | stable | YAML, YML, YAR, YARA | manual rule upload | Detections, Rules | Rule files are detection content, not evidence artifacts. |
-| Linux/macOS triage placeholders | unsupported | ZIP, folder | manual collections | none | Not Linux Artifact Support or macOS Artifact Support. |
 
 ## Format Matrix
 
@@ -60,6 +59,30 @@ The structured source of truth is [`docs/data/parser-coverage.json`](data/parser
 | Raw registry hives | Scoped user activity and selected registry-derived families only. |
 | RAW / DMP / VMEM / LIME / AFF4 | Memory workflow only. |
 | PCAP / PCAPNG | Experimental network-capture handling only. |
+
+## Linux Artifact Support
+
+Linux artifacts are now supported with partial parser coverage. Evidence from Linux triage collections is ingested and searchable across 12 artifact families.
+
+See [docs/linux-artifacts.md](linux-artifacts.md) for detailed per-family documentation and collection layout.
+
+| Family | Status | Main sources | Key Fields |
+| --- | --- | --- | --- |
+| Linux Authentication | partial | auth.log, secure | timestamp, username, process, source_ip, auth_method, event_action |
+| Linux Syslog | partial | syslog, messages, kern.log | timestamp, detected_host, process, pid, severity, message |
+| Linux Audit | partial | audit.log | timestamp, audit_type, uid, pid, exe, command, success |
+| Linux Shell History | partial | .bash_history, .zsh_history | username, shell, command, source_file |
+| Linux Cron | partial | crontab, cron.d/* | schedule, username, command, source_file |
+| Linux Systemd Units | partial | *.service, *.timer | unit_name, unit_type, exec_start, wanted_by |
+| Linux SSH Artifacts | partial | authorized_keys, known_hosts, sshd_config | key_type, key_fingerprint, host_pattern, option, value |
+| Linux Identity | partial | passwd, group, shadow | username, uid, gid, home, shell, group_name |
+| Linux Sudoers | partial | sudoers, sudoers.d/* | principal, host_spec, run_as, command_spec, options |
+| Linux Package Logs | partial | dpkg.log, yum.log, dnf.log | timestamp, package_manager, action, package, version |
+| Linux Network Config | partial | hosts, resolv.conf, interfaces, netplan | config_type, interface, address, gateway, dns |
+| Linux OS Information | partial | os-release, hostname, /proc/version | hostname, os_name, os_version, kernel_version |
+| Linux Memory Images | experimental | .raw, .mem, .lime | filename, size_bytes, sha256, effective_platform |
+
+macOS artifact support remains unsupported.
 
 ## Collector Compatibility
 
@@ -85,9 +108,8 @@ Kairon documents compatible outputs, but does not redistribute third-party colle
 
 ## Not Supported Yet
 
-- Linux Artifact Support is not implemented.
+- macOS artifact support is not implemented.
 - Virtual Disk Upload is not implemented.
-- Complete macOS artifact support is not implemented.
 - Raw Shellbags hive parsing is not stable.
 - Raw SRUDB.dat parsing is not stable in the current Linux deployment.
 - Full PCAP forensics is not claimed.

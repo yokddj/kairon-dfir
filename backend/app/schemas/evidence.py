@@ -19,6 +19,9 @@ class EvidenceRead(BaseModel):
     size_bytes: int | None
     mime_type: str | None = None
     detected_type: str | None = None
+    provided_platform: str = "auto"
+    detected_platform: str = "unknown"
+    effective_platform: str = "unknown"
     uploaded_by_user_id: str | None = None
     uploaded_at: datetime | None = None
     first_seen_at: datetime | None = None
@@ -67,6 +70,14 @@ class EvidenceRead(BaseModel):
             data = {field: getattr(value, field, None) for field in cls.model_fields.keys() if hasattr(value, field)}
         metadata = dict(data.get("metadata_json") or {})
         error_log = dict(data.get("error_log") or {})
+        data["provided_platform"] = str(data.get("provided_platform") or metadata.get("provided_platform") or "auto").strip() or "auto"
+        data["detected_platform"] = str(data.get("detected_platform") or metadata.get("detected_platform") or "unknown").strip() or "unknown"
+        data["effective_platform"] = str(data.get("effective_platform") or metadata.get("effective_platform") or "unknown").strip() or "unknown"
+        if data["detected_platform"] == "auto":
+            data["detected_platform"] = "unknown"
+        if data["effective_platform"] == "auto":
+            data["effective_platform"] = data["detected_platform"] if data["detected_platform"] != "auto" else "unknown"
+        data["integrity_status"] = data.get("integrity_status") or "unknown"
         data["provided_host"] = str(metadata.get("provided_host") or "").strip() or None
         data["display_status"] = str(metadata.get("display_status") or "").strip() or None
         data["investigation_ready"] = bool(metadata.get("investigation_ready"))

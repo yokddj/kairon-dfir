@@ -1,0 +1,6 @@
+root:x:0:
+sudo:x:27:analyst,devops
+analyst:x:1000:
+dbadmin:x:1001:
+devops:x:1002:
+docker:x:999:devops

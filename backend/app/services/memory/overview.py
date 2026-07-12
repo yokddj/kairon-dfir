@@ -197,6 +197,8 @@ def get_evidence_landing(db: Session, case_id: str, *, host_id: str | None = Non
                 "processed_at": evidence.processed_at.isoformat() if evidence.processed_at else None,
                 "ingest_status": evidence.ingest_status.value if evidence.ingest_status else None,
                 "metadata": evidence.metadata_json or {},
+                "effective_platform": evidence.effective_platform,
+                "detected_platform": evidence.detected_platform,
                 "families": families,
                 "run_count": len(runs),
                 "latest_run_id": runs[0].id if runs else None,

@@ -387,14 +387,17 @@ export default function MemoryUploadPage() {
   }
 
   const summary = useMemo(() => {
-    if (!file) return "Select an authorized Windows memory image to begin.";
+    const isLime = extension === ".lime";
+    const platform = isLime ? "Linux" : "Windows";
+    if (!file) return "Select an authorized memory image to begin.";
     if (file.size <= 0) return "The selected file is empty or its browser file handle is no longer valid. Select the file again.";
     if (!extensionAllowed) return "This file extension is not supported for memory image upload.";
     if (!fileWithinLimit) return "This file exceeds the configured maximum memory upload size.";
     if (readiness && !readiness.can_accept_selected_size) return readiness.message;
     if (storedUpload?.uploadId && resumeSessionMatchesFile) return "A resumable upload session already exists for this file. Kairon will continue only the missing chunks.";
+    if (isLime) return `The selected ${platform} LiME memory image can be uploaded as isolated memory_dump evidence. Advanced memory analysis is not available in this release.`;
     return "The selected file can be uploaded as isolated memory_dump evidence.";
-  }, [extensionAllowed, file, fileWithinLimit, readiness, resumeSessionMatchesFile, storedUpload?.uploadId]);
+  }, [extensionAllowed, extension, file, fileWithinLimit, readiness, resumeSessionMatchesFile, storedUpload?.uploadId]);
 
   function handleActiveSessionConflict(error: unknown): boolean {
     const conflictError = error as { errorCode?: string | null; detail?: unknown };
@@ -723,7 +726,7 @@ export default function MemoryUploadPage() {
         <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
           <div>
             <h2 className="text-3xl font-semibold">Add memory image</h2>
-            <p className="mt-2 max-w-3xl text-sm text-muted">Upload authorized RAM evidence into isolated memory storage. It will not enter global disk Search, Timeline, Artifact Views or detections.</p>
+            <p className="mt-2 max-w-3xl text-sm text-muted">Upload authorized RAM evidence into isolated memory storage. Supports Windows memory images (.raw, .mem, .dmp, .vmem) and Linux LiME captures (.lime).</p>
           </div>
           <Link to={`/cases/${caseId}/memory`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Back to Memory Analysis</Link>
         </div>
@@ -886,7 +889,7 @@ export default function MemoryUploadPage() {
             void computeFileFingerprint(next).then((fp) => setFileFingerprint(fp));
           }
         }} />
-        {file ? <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm"><p className="truncate font-medium text-ink" title={file.name}>{file.name}</p><p className="mt-1 text-muted">Extension: {extension || "none"} · Size: {formatBytes(file.size)} · Detected type: {extensionAllowed ? "Memory image" : "Unsupported"}</p><p className={`mt-2 ${extensionAllowed && fileWithinLimit && readiness?.can_accept_selected_size ? "text-mint" : "text-warning"}`}>{summary}</p></div> : null}
+        {file ? <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm"><p className="truncate font-medium text-ink" title={file.name}>{file.name}</p><p className="mt-1 text-muted">Extension: {extension || "none"} · Size: {formatBytes(file.size)} · Detected type: {extensionAllowed ? (extension === ".lime" ? "Linux memory image (LiME)" : "Memory image") : "Unsupported"}</p>{extension === ".lime" ? <p className="mt-1 rounded-xl border border-emerald-400/30 bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-100">Linux memory will be accepted with platform=linux. Advanced memory analysis is not available in this release.</p> : null}<p className={`mt-2 ${extensionAllowed && fileWithinLimit && readiness?.can_accept_selected_size ? "text-mint" : "text-warning"}`}>{summary}</p></div> : null}
       </section>
 
       <section className="rounded-[28px] border border-line bg-panel/60 p-5">
