@@ -36,6 +36,11 @@ router = APIRouter(tags=["system"])
 def system_version() -> dict:
     import os
     return {
+        "app_version": settings.app_version,
+        "vendor_id": settings.app_vendor_id,
+        "build_channel": settings.app_build_channel,
+        "build_fingerprint": settings.app_build_fingerprint,
+        "notice": settings.build_notice,
         "version": settings.app_version,
         "git_commit": os.environ.get("KAIRON_COMMIT", "unknown"),
         "build_date": os.environ.get("BUILD_DATE", "unknown"),
@@ -43,6 +48,11 @@ def system_version() -> dict:
         "backend": settings.app_version,
         "frontend": settings.app_version,
     }
+
+
+@router.get("/api/system/health")
+def system_health() -> dict:
+    return {"status": "ok"}
 
 
 def _resolve_docs_root() -> Path:
