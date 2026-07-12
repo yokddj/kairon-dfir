@@ -209,8 +209,8 @@ def detect_evidence_platform(*, filename: str | None = None, paths: list[str] | 
     if any(
         marker in path
         for path in lowered
-        for marker in ("/etc/passwd", "/var/log/", "/home/", "/usr/bin/", "/proc/", "/sys/", "audit/audit.log")
-    ):
+        for marker in ("/etc/passwd", "/var/log/", "/home/", "/usr/bin/", "/proc/", "/sys/", "audit/audit.log",)
+    ) or any(path.endswith(".lime") or "lime" in path for path in lowered):
         return EvidencePlatform.linux.value
     if any(marker in path for path in lowered for marker in ("/users/", "/library/", ".plist", "/system/library/", "/private/var/")):
         return EvidencePlatform.macos.value

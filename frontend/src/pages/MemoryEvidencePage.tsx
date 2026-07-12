@@ -498,6 +498,26 @@ export default function MemoryEvidencePage() {
         {hostAssignmentMutation.error instanceof Error ? <p className="mt-2 text-xs text-danger">{hostAssignmentMutation.error.message}</p> : null}
       </section>
 
+      {evidence.effective_platform === "linux" ? (
+        <section className="rounded-[28px] border border-mint/30 bg-emerald-500/10 p-5 shadow-panel" data-testid="memory-linux-notice">
+          <div className="flex items-start gap-3">
+            <span className="mt-0.5 font-mono text-xs uppercase tracking-[0.18em] text-emerald-400">Linux</span>
+            <div>
+              <h3 className="text-lg font-semibold text-ink">Linux memory accepted</h3>
+              <p className="mt-2 max-w-3xl text-sm text-muted">
+                Advanced memory analysis is not available in this release. The image is
+                preserved and can be assigned to a host for investigation. Use the
+                Evidence Detail page to verify integrity and host assignment.
+              </p>
+              <p className="mt-2 text-sm text-muted">
+                Findings can still be created from this evidence for documentation and
+                tracking purposes.
+              </p>
+            </div>
+          </div>
+        </section>
+      ) : null}
+
       <MemoryEvidenceHeader
         caseId={caseId}
         evidence={evidence}

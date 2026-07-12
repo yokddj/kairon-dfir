@@ -1,0 +1,9 @@
+Jul 12 10:23:44 server01 systemd[1]: Starting System Logging Service...
+Jul 12 10:23:44 server01 systemd[1]: Started System Logging Service.
+Jul 12 10:23:44 server01 rsyslogd[567]: [origin software="rsyslogd" swVersion="8.2001.0"] start
+Jul 12 10:23:45 server01 kernel: [    0.000000] Linux version 5.15.0-91-generic (buildd@lcy02-amd64-101) (gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0, GNU ld (GNU Binutils for Ubuntu) 2.38) #101-Ubuntu SMP Tue Nov 14 14:50:15 UTC 2023
+Jul 12 10:25:00 server01 CRON[6789]: (root) CMD (   cd / && run-parts --report /etc/cron.hourly)
+Jul 12 10:30:00 server01 systemd[1]: Started Session 42 of user analyst.
+Jul 12 10:31:00 server01 kernel: [  436.123456] nf_conntrack: default automatic helper assignment has been turned off
+Jul 12 10:35:00 server01 NetworkManager[890]: <info>  [1720773300.1234] device (eth0): carrier: link connected
+Jul 12 10:40:00 server01 systemd-resolved[5678]: Server returned error NXDOMAIN

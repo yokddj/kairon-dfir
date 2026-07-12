@@ -51,6 +51,14 @@ function toneClasses(tone: "ok" | "warn" | "muted" | "danger" | "info"): string 
   }
 }
 
+function platformBadge(platform: string | null | undefined): { label: string; tone: "ok" | "warn" | "muted" | "danger" | "info" } {
+  const p = (platform || "").toLowerCase();
+  if (p === "linux") return { label: "Linux", tone: "ok" };
+  if (p === "windows") return { label: "Windows", tone: "info" };
+  if (p === "macos") return { label: "macOS", tone: "warn" };
+  return { label: platform || "Unknown", tone: "muted" };
+}
+
 function sizeLabel(bytes: number): string {
   if (!bytes) return "0 B";
   if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
@@ -210,6 +218,7 @@ export default function CaseMemoryLanding() {
                 </div>
                 <div className="flex flex-wrap gap-1.5">
                   <span className={`rounded-md border px-2 py-0.5 text-[10px] ${toneClasses(status.tone)}`}>{status.label}</span>
+                  <span className={`rounded-md border px-2 py-0.5 text-[10px] ${toneClasses(platformBadge(item.effective_platform).tone)}`}>{platformBadge(item.effective_platform).label}</span>
                   <span className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted">
                     {item.run_count} {item.run_count === 1 ? "run" : "runs"}
                   </span>
