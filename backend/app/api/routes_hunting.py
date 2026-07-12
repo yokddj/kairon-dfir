@@ -275,7 +275,7 @@ def hunting_get_finding(case_id: str, finding_id: str, db: Session = Depends(get
 @router.patch("/api/cases/{case_id}/findings/{finding_id}")
 def hunting_patch_finding(case_id: str, finding_id: str, payload: dict = Body(...), db: Session = Depends(get_db)) -> dict:
     finding = _finding_or_404(db, case_id, finding_id)
-    allowed = {"title", "description", "confidence", "severity", "tags", "evidence_id", "linked_evidence_id", "linked_host_id", "linked_artifact_id", "linked_artifact_family", "linked_artifact_type", "source_view", "created_by"}
+    allowed = {"title", "description", "confidence", "severity", "tags", "evidence_id", "linked_evidence_id", "linked_host_id", "linked_artifact_id", "linked_artifact_family", "linked_artifact_type", "linked_event_id", "source_view", "source_route", "source_timestamp", "source_label", "source_summary", "source_snapshot_json", "created_by"}
     if "body" in payload and "description" not in payload:
         payload["description"] = payload["body"]
     for evidence_key in ("evidence_id", "linked_evidence_id"):

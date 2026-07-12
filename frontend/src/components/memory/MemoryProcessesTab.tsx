@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { type MemoryRunSelector, api } from "../../api/client";
+import { type MemoryProcessEntity, type MemoryRunSelector, api } from "../../api/client";
 import { MemoryCanonicalView } from "../MemoryCanonicalView";
 import { ProcessDetailModal } from "./ProcessDetailModal";
 
@@ -22,6 +22,7 @@ type Props = {
   onPidFilter: (next: string) => void;
   selectedEntityId: string | null;
   onSelectEntityId: (next: string | null) => void;
+  onCreateFinding?: (entity: MemoryProcessEntity) => void;
 };
 
 export function MemoryProcessesTab({
@@ -40,6 +41,7 @@ export function MemoryProcessesTab({
   onPidFilter,
   selectedEntityId,
   onSelectEntityId,
+  onCreateFinding,
 }: Props) {
   const effectiveRunId = runId || selectedRunId || runOptions?.default_run_id || null;
   const detailQuery = useQuery({
@@ -63,6 +65,7 @@ export function MemoryProcessesTab({
           onPidFilter={onPidFilter}
           selectedEntityId={selectedEntityId}
           onSelectEntityId={onSelectEntityId}
+          onCreateFinding={onCreateFinding}
         />
       </div>
       <ProcessDetailModal

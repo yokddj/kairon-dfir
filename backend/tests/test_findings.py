@@ -178,6 +178,56 @@ def test_create_finding_with_case_evidence_host_and_normalized_tags():
     assert payload["linked_host_id"] == HOST_ID
 
 
+def test_create_finding_with_source_artifact_snapshot_fields():
+    db = _db_session()
+    _seed_case_graph(db)
+    client = _client(db)
+
+    response = client.post(
+        f"/api/cases/{CASE_ID}/findings",
+        json={
+            "title": "Suspicious PowerShell command",
+            "body": "Encoded command observed in Search.",
+            "severity": "medium",
+            "status": "draft",
+            "tags": ["Search", "PowerShell", "PowerShell"],
+            "linked_evidence_id": EVIDENCE_ID,
+            "linked_host_id": HOST_ID,
+            "linked_event_id": "evt-1",
+            "linked_artifact_family": "powershell",
+            "linked_artifact_type": "script_block",
+            "source_view": "search",
+            "source_route": f"/cases/{CASE_ID}/search?selected=evt-1",
+            "source_timestamp": "2026-05-15T10:00:00Z",
+            "source_label": "Search result",
+            "source_summary": "powershell.exe -EncodedCommand AAAA",
+            "source_snapshot_json": {"timestamp": "2026-05-15T10:00:00Z", "fields": {"command_line": "powershell.exe -EncodedCommand AAAA"}},
+        },
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["linked_event_id"] == "evt-1"
+    assert payload["source_view"] == "search"
+    assert payload["source_route"].endswith("selected=evt-1")
+    assert payload["source_summary"] == "powershell.exe -EncodedCommand AAAA"
+    assert payload["source_snapshot_json"]["fields"]["command_line"].startswith("powershell.exe")
+    assert payload["tags"] == ["search", "powershell"]
+
+
+def test_source_snapshot_too_large_is_rejected():
+    db = _db_session()
+    _seed_case_graph(db)
+    client = _client(db)
+
+    response = client.post(
+        f"/api/cases/{CASE_ID}/findings",
+        json={"title": "Huge snapshot", "source_snapshot_json": {"blob": "x" * 13000}},
+    )
+
+    assert response.status_code == 422
+
+
 def test_list_findings_filters_by_severity_status_tag_text_and_links():
     db = _db_session()
     _seed_case_graph(db)
@@ -197,7 +247,7 @@ def test_update_and_archive_finding_include_archived():
     db = _db_session()
     _seed_case_graph(db)
     client = _client(db)
-    created = client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Draft note"}).json()
+    created = client.post(f"/api/cases/{CASE_ID}/findings", json={"title": "Draft note", "source_snapshot_json": {"summary": "preserved"}}).json()
 
     updated = client.patch(f"/api/cases/{CASE_ID}/findings/{created['id']}", json={"title": "Confirmed finding", "severity": "critical", "status": "confirmed"})
     assert updated.status_code == 200
@@ -209,6 +259,7 @@ def test_update_and_archive_finding_include_archived():
     archived = client.get(f"/api/cases/{CASE_ID}/findings?include_archived=true").json()
     assert archived[0]["status"] == "archived"
     assert archived[0]["archived_at"] is not None
+    assert archived[0]["source_snapshot_json"] == {"summary": "preserved"}
 
 
 def test_linked_evidence_and_host_must_belong_to_case():

@@ -46,6 +46,7 @@ type MemoryCanonicalViewProps = {
   onPidFilter?: (next: string) => void;
   selectedEntityId?: string | null;
   onSelectEntityId?: (next: string | null) => void;
+  onCreateFinding?: (entity: MemoryProcessEntity) => void;
 };
 
 export function MemoryCanonicalView({
@@ -58,6 +59,7 @@ export function MemoryCanonicalView({
   onPidFilter: externalOnPidFilter,
   selectedEntityId: externalSelectedEntityId,
   onSelectEntityId: externalOnSelectEntityId,
+  onCreateFinding,
 }: MemoryCanonicalViewProps) {
   const queryClient = useQueryClient();
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -340,6 +342,7 @@ export function MemoryCanonicalView({
         onPage={setPage}
         page={page}
         pageSize={pageSize}
+        onCreateFinding={onCreateFinding}
       />
 
       {detail ? <ProcessDetailPanel detail={detail} onClose={() => setSelectedEntityId(null)} /> : null}
@@ -371,6 +374,7 @@ function ProcessTable({
   onPage,
   page,
   pageSize,
+  onCreateFinding,
 }: {
   list: MemoryProcessEntityList | undefined;
   isLoading: boolean;
@@ -378,6 +382,7 @@ function ProcessTable({
   onPage: (page: number) => void;
   page: number;
   pageSize: number;
+  onCreateFinding?: (entity: MemoryProcessEntity) => void;
 }) {
   if (isLoading) {
     return <p className="text-sm text-muted">Loading canonical processes...</p>;
@@ -454,6 +459,15 @@ function ProcessTable({
                 >
                   Inspect
                 </button>
+                {onCreateFinding ? (
+                  <button
+                    type="button"
+                    className="ml-2 rounded-xl border border-accent/40 bg-accent/10 px-3 py-1 text-xs text-accent"
+                    onClick={() => onCreateFinding(entity)}
+                  >
+                    Create finding from this
+                  </button>
+                ) : null}
               </td>
             </tr>
           ))}

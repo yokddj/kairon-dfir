@@ -1,4 +1,5 @@
 from datetime import datetime
+import json
 import re
 
 from pydantic import AliasChoices, BaseModel, Field, field_validator
@@ -7,6 +8,7 @@ from app.models.finding import FindingSeverity, FindingStatus
 
 
 TAG_PATTERN = re.compile(r"[^a-z0-9_.-]+")
+SOURCE_SNAPSHOT_MAX_BYTES = 12_000
 
 
 def normalize_finding_tags(values: list[str] | None) -> list[str]:
@@ -28,6 +30,20 @@ def normalize_finding_tags(values: list[str] | None) -> list[str]:
     return normalized
 
 
+def validate_source_snapshot(value: dict | None) -> dict | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("source_snapshot_json must be an object")
+    try:
+        size = len(json.dumps(value, default=str, ensure_ascii=False).encode("utf-8"))
+    except TypeError as exc:
+        raise ValueError("source_snapshot_json must be JSON serializable") from exc
+    if size > SOURCE_SNAPSHOT_MAX_BYTES:
+        raise ValueError("source_snapshot_json is too large")
+    return value
+
+
 class FindingCreate(BaseModel):
     title: str = Field(min_length=1, max_length=255)
     description: str | None = Field(default=None, validation_alias=AliasChoices("description", "body"), max_length=20000)
@@ -42,7 +58,13 @@ class FindingCreate(BaseModel):
     linked_artifact_id: str | None = None
     linked_artifact_family: str | None = Field(default=None, max_length=128)
     linked_artifact_type: str | None = Field(default=None, max_length=128)
+    linked_event_id: str | None = Field(default=None, max_length=255)
     source_view: str | None = Field(default=None, max_length=128)
+    source_route: str | None = Field(default=None, max_length=1024)
+    source_timestamp: datetime | None = None
+    source_label: str | None = Field(default=None, max_length=255)
+    source_summary: str | None = Field(default=None, max_length=4000)
+    source_snapshot_json: dict | None = None
     created_by: str | None = Field(default=None, max_length=128)
     finding_type: str | None = None
     confidence: str | None = None
@@ -73,6 +95,11 @@ class FindingCreate(BaseModel):
     def _normalize_tags(cls, value):
         return normalize_finding_tags(value or [])
 
+    @field_validator("source_snapshot_json")
+    @classmethod
+    def _validate_source_snapshot(cls, value):
+        return validate_source_snapshot(value)
+
 
 class FindingUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=255)
@@ -88,7 +115,13 @@ class FindingUpdate(BaseModel):
     linked_artifact_id: str | None = None
     linked_artifact_family: str | None = Field(default=None, max_length=128)
     linked_artifact_type: str | None = Field(default=None, max_length=128)
+    linked_event_id: str | None = Field(default=None, max_length=255)
     source_view: str | None = Field(default=None, max_length=128)
+    source_route: str | None = Field(default=None, max_length=1024)
+    source_timestamp: datetime | None = None
+    source_label: str | None = Field(default=None, max_length=255)
+    source_summary: str | None = Field(default=None, max_length=4000)
+    source_snapshot_json: dict | None = None
     created_by: str | None = Field(default=None, max_length=128)
     finding_type: str | None = None
     confidence: str | None = None
@@ -119,6 +152,11 @@ class FindingUpdate(BaseModel):
     def _normalize_tags(cls, value):
         return None if value is None else normalize_finding_tags(value)
 
+    @field_validator("source_snapshot_json")
+    @classmethod
+    def _validate_source_snapshot(cls, value):
+        return validate_source_snapshot(value)
+
 
 class FindingRead(BaseModel):
     id: str
@@ -137,7 +175,13 @@ class FindingRead(BaseModel):
     linked_artifact_id: str | None = None
     linked_artifact_family: str | None = None
     linked_artifact_type: str | None = None
+    linked_event_id: str | None = None
     source_view: str | None = None
+    source_route: str | None = None
+    source_timestamp: datetime | None = None
+    source_label: str | None = None
+    source_summary: str | None = None
+    source_snapshot_json: dict | None = None
     created_by: str | None = None
     finding_type: str | None
     confidence: str | None
