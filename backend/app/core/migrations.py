@@ -2294,3 +2294,26 @@ def _v26_findings_notes_v1(connection: Connection) -> None:
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_findings_linked_host_id ON findings (linked_host_id)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_findings_linked_artifact_id ON findings (linked_artifact_id)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_findings_archived_at ON findings (archived_at)"))
+
+
+@register(27, "finding_from_artifact_source")
+def _v27_finding_from_artifact_source(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    if "findings" not in inspector.get_table_names():
+        return
+    dialect = connection.dialect.name
+    existing = {c["name"] for c in inspector.get_columns("findings")}
+    json_type = "JSONB" if dialect == "postgresql" else "JSON"
+    column_defs = {
+        "linked_event_id": "VARCHAR(255)",
+        "source_route": "VARCHAR(1024)",
+        "source_timestamp": "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "TIMESTAMP",
+        "source_label": "VARCHAR(255)",
+        "source_summary": "TEXT",
+        "source_snapshot_json": json_type,
+    }
+    for column_name, column_type in column_defs.items():
+        if column_name not in existing:
+            connection.execute(text(f"ALTER TABLE findings ADD COLUMN {column_name} {column_type}"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_findings_linked_event_id ON findings (linked_event_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_findings_source_timestamp ON findings (source_timestamp)"))

@@ -2214,7 +2214,13 @@ export type Finding = {
   linked_artifact_id?: string | null;
   linked_artifact_family?: string | null;
   linked_artifact_type?: string | null;
+  linked_event_id?: string | null;
   source_view?: string | null;
+  source_route?: string | null;
+  source_timestamp?: string | null;
+  source_label?: string | null;
+  source_summary?: string | null;
+  source_snapshot_json?: Record<string, unknown> | null;
   created_by?: string | null;
   time_start?: string | null;
   time_end?: string | null;

@@ -533,6 +533,33 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
         <p className="break-words text-sm text-muted">{selectedFinding.summary || selectedFinding.description || "No summary available."}</p>
       </div>
 
+      {(selectedFinding.source_view || selectedFinding.source_summary || selectedFinding.source_snapshot_json) ? (
+        <div className="rounded-2xl border border-line bg-abyss/70 p-4" data-testid="finding-source-artifact">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source artifact/event</p>
+              <p className="mt-2 text-sm text-ink">{selectedFinding.source_label || selectedFinding.source_summary || "Source snapshot preserved"}</p>
+              {selectedFinding.source_summary ? <p className="mt-1 break-words text-sm text-muted">{selectedFinding.source_summary}</p> : null}
+            </div>
+            <button type="button" onClick={openFindingSource} className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
+              Open source
+            </button>
+          </div>
+          <div className="mt-3 grid gap-2 text-xs text-muted md:grid-cols-4">
+            <p>View: <span className="text-slate-100">{selectedFinding.source_view || "-"}</span></p>
+            <p>Family: <span className="text-slate-100">{selectedFinding.linked_artifact_family || "-"}</span></p>
+            <p>Type: <span className="text-slate-100">{selectedFinding.linked_artifact_type || "-"}</span></p>
+            <p>Timestamp: <span className="text-slate-100">{selectedFinding.source_timestamp || "-"}</span></p>
+          </div>
+          {selectedFinding.source_snapshot_json ? (
+            <details className="mt-3 rounded-2xl border border-line bg-panel/40 p-3">
+              <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source snapshot</summary>
+              <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-all text-xs leading-6 text-muted">{JSON.stringify(selectedFinding.source_snapshot_json, null, 2)}</pre>
+            </details>
+          ) : null}
+        </div>
+      ) : null}
+
       <IndicatorResolutionPanel
         data={findingIndicatorsQuery.data}
         loading={findingIndicatorsQuery.isPending}
@@ -741,6 +768,23 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     params.set("mode", "investigation");
     appendFindingScope(params);
     navigate(`/cases/${caseId}/timeline?${params.toString()}`);
+  }
+
+  function openFindingSource() {
+    if (!selectedFinding) return;
+    if (selectedFinding.source_route) {
+      navigate(selectedFinding.source_route);
+      return;
+    }
+    const params = new URLSearchParams();
+    if (selectedFinding.linked_evidence_id || selectedFinding.evidence_id) params.set("evidence_id", selectedFinding.linked_evidence_id || selectedFinding.evidence_id || "");
+    if (selectedFinding.linked_host_id) params.set("host_id", selectedFinding.linked_host_id);
+    if (selectedFinding.linked_artifact_type) params.set("artifact_type", selectedFinding.linked_artifact_type);
+    if (selectedFinding.linked_event_id) params.set("selected", selectedFinding.linked_event_id);
+    if (selectedFinding.source_view === "memory") navigate(`/cases/${caseId}/memory${selectedFinding.linked_evidence_id ? `/${selectedFinding.linked_evidence_id}` : ""}?${params.toString()}`);
+    else if (selectedFinding.source_view === "artifact_explorer") navigate(`/cases/${caseId}/artifacts?${params.toString()}`);
+    else if (selectedFinding.linked_evidence_id || selectedFinding.evidence_id) navigate(`/evidences/${selectedFinding.linked_evidence_id || selectedFinding.evidence_id}`);
+    else navigate(`/cases/${caseId}/search?${params.toString()}`);
   }
 
   return (

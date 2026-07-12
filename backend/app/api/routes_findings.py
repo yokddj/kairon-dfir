@@ -167,7 +167,13 @@ def _normalize_finding_create(case_id: str, payload: FindingCreate, db: Session)
         "linked_artifact_id": linked_artifact_id,
         "linked_artifact_family": payload.linked_artifact_family,
         "linked_artifact_type": payload.linked_artifact_type,
+        "linked_event_id": payload.linked_event_id,
         "source_view": payload.source_view,
+        "source_route": payload.source_route,
+        "source_timestamp": payload.source_timestamp,
+        "source_label": payload.source_label,
+        "source_summary": payload.source_summary,
+        "source_snapshot_json": payload.source_snapshot_json,
         "created_by": payload.created_by,
         "finding_type": payload.finding_type,
         "confidence": payload.confidence,
@@ -306,16 +312,16 @@ def create_finding(case_id: str, payload: FindingCreate, db: Session = Depends(g
         title="Finding created",
         message=f"Created finding {item.title}",
         case_id=case_id,
-        metadata={"finding_id": item.id, "event_count": len(item.event_ids), "detection_count": len(item.detection_ids), "linked_evidence_id": item.linked_evidence_id, "linked_host_id": item.linked_host_id, "linked_artifact_id": item.linked_artifact_id},
+        metadata={"finding_id": item.id, "event_count": len(item.event_ids), "detection_count": len(item.detection_ids), "linked_evidence_id": item.linked_evidence_id, "linked_host_id": item.linked_host_id, "linked_artifact_id": item.linked_artifact_id, "linked_event_id": item.linked_event_id},
     )
-    if item.linked_evidence_id or item.linked_host_id or item.linked_artifact_id:
+    if item.linked_evidence_id or item.linked_host_id or item.linked_artifact_id or item.linked_event_id:
         log_activity(
             db,
             activity_type="finding_linked",
             title="Finding linked",
             message=f"Linked finding {item.title}",
             case_id=case_id,
-            metadata={"finding_id": item.id, "linked_evidence_id": item.linked_evidence_id, "linked_host_id": item.linked_host_id, "linked_artifact_id": item.linked_artifact_id},
+            metadata={"finding_id": item.id, "linked_evidence_id": item.linked_evidence_id, "linked_host_id": item.linked_host_id, "linked_artifact_id": item.linked_artifact_id, "linked_event_id": item.linked_event_id},
         )
     return item
 

@@ -12,6 +12,7 @@ import PaginationControls from "../components/PaginationControls";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { useHostContext } from "../hooks/useHostContext";
+import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 
 const USER_ACTIVITY_TABS = [
   { value: "shellbag", label: "Shellbags" },
@@ -178,7 +179,7 @@ function StartupPersistenceView({
                       <div className="flex flex-wrap gap-2">
                         <button type="button" onClick={() => onSelectItem(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Details</button>
                         {item.search_url ? <Link to={item.search_url} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Open source evidence</Link> : null}
-                        <button type="button" disabled={!item.source_event_id} onClick={() => onCreateFinding(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink disabled:opacity-40">Add to Finding</button>
+                        <button type="button" onClick={() => onCreateFinding(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Create finding from this</button>
                         <button type="button" disabled={!item.source_event_id || timelinePending} onClick={() => onAddTimeline(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink disabled:opacity-40">Add to Incident Timeline</button>
                       </div>
                     </td>
@@ -213,7 +214,7 @@ function StartupPersistenceView({
           <div className="mt-4 flex flex-wrap gap-2">
             {selectedItem.search_url ? <Link to={selectedItem.search_url} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Open source evidence</Link> : null}
             {selectedItem.timeline_url ? <Link to={selectedItem.timeline_url} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Open Search around</Link> : null}
-            <button type="button" disabled={!selectedItem.source_event_id} onClick={() => onCreateFinding(selectedItem)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted disabled:opacity-40">Add to Finding</button>
+            <button type="button" onClick={() => onCreateFinding(selectedItem)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Create finding from this</button>
             <button type="button" disabled={!selectedItem.source_event_id || timelinePending} onClick={() => onAddTimeline(selectedItem)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted disabled:opacity-40">Add to Incident Timeline</button>
           </div>
           {timelineSuccess ? <p className="mt-3 text-sm text-emerald-300">Added as a key persistence event for timeline/report review.</p> : null}
@@ -325,7 +326,7 @@ function MotwArtifactView({
                       <div className="flex flex-wrap gap-2">
                         <button type="button" onClick={() => onSelectItem(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Details</button>
                         {item.linked?.base_file_search ? <Link to={item.linked.base_file_search} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Find this file</Link> : null}
-                        <button type="button" disabled={!item.source_event_id} onClick={() => onCreateFinding(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink disabled:opacity-40">Add to Finding</button>
+                        <button type="button" onClick={() => onCreateFinding(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Create finding from this</button>
                         <button type="button" disabled={!item.source_event_id || timelinePending} onClick={() => onAddTimeline(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink disabled:opacity-40">Add to Incident Timeline</button>
                       </div>
                     </td>
@@ -367,7 +368,7 @@ function MotwArtifactView({
             {selectedItem.linked?.timeline_around ? <Link to={selectedItem.linked.timeline_around} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">View activity around this time</Link> : null}
             {selectedItem.linked?.browser_search ? <Link to={selectedItem.linked.browser_search} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Open browser/download evidence</Link> : null}
             {selectedItem.linked?.user_activity_search ? <Link to={selectedItem.linked.user_activity_search} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Open user activity</Link> : null}
-            <button type="button" disabled={!selectedItem.source_event_id} onClick={() => onCreateFinding(selectedItem)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted disabled:opacity-40">Add to Finding</button>
+            <button type="button" onClick={() => onCreateFinding(selectedItem)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Create finding from this</button>
             <button type="button" disabled={!selectedItem.source_event_id || timelinePending} onClick={() => onAddTimeline(selectedItem)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted disabled:opacity-40">Add to Incident Timeline</button>
           </div>
           {timelineSuccess ? <p className="mt-3 text-sm text-emerald-300">Added as a downloaded-file evidence event for timeline/report review.</p> : null}
@@ -516,7 +517,7 @@ function EmailArtifactsView({
                         <button type="button" onClick={() => onSelectItem(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Details</button>
                         {item.search_url ? <Link to={item.search_url} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Resolve indicators</Link> : null}
                         {item.timeline_url ? <Link to={item.timeline_url} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">View activity around</Link> : null}
-                        <button type="button" disabled={!item.source_event_id} onClick={() => onCreateFinding(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink disabled:opacity-40">Add to Finding</button>
+                        <button type="button" onClick={() => onCreateFinding(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Create finding from this</button>
                         <button type="button" disabled={!item.source_event_id || timelinePending} onClick={() => onAddTimeline(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink disabled:opacity-40">Add to Incident Timeline</button>
                       </div>
                     </td>
@@ -588,7 +589,7 @@ function EmailArtifactsView({
           <div className="mt-4 flex flex-wrap gap-2">
             {selectedItem.search_url ? <Link to={selectedItem.search_url} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Resolve indicators</Link> : null}
             {selectedItem.timeline_url ? <Link to={selectedItem.timeline_url} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">View activity around this time</Link> : null}
-            <button type="button" disabled={!selectedItem.source_event_id} onClick={() => onCreateFinding(selectedItem)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted disabled:opacity-40">Add to Finding</button>
+            <button type="button" onClick={() => onCreateFinding(selectedItem)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Create finding from this</button>
             <button type="button" disabled={!selectedItem.source_event_id || timelinePending} onClick={() => onAddTimeline(selectedItem)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted disabled:opacity-40">Add to Incident Timeline</button>
           </div>
           {timelineSuccess ? <p className="mt-3 text-sm text-emerald-300">Added as email/download triage evidence for timeline/report review.</p> : null}
@@ -623,6 +624,7 @@ export default function ArtifactExplorer() {
   const [selectedEventIds, setSelectedEventIds] = useState<string[]>([]);
   const [findingDialogOpen, setFindingDialogOpen] = useState(false);
   const [persistenceFindingEventIds, setPersistenceFindingEventIds] = useState<string[]>([]);
+  const [findingPrefill, setFindingPrefill] = useState<FindingPrefill | null>(null);
   const [selectedPersistenceItem, setSelectedPersistenceItem] = useState<StartupPersistenceItem | null>(null);
   const [selectedMotwItem, setSelectedMotwItem] = useState<MotwItem | null>(null);
   const [selectedEmailItem, setSelectedEmailItem] = useState<EmailArtifactItem | null>(null);
@@ -908,6 +910,21 @@ export default function ArtifactExplorer() {
                     : USER_ACTIVITY_TYPES.has(artifactType)
                       ? "Search path, filename, command, program or user..."
                       : "Search within selected artifact";
+
+  function openFindingFromArtifact(item: Record<string, unknown>, label = "Artifact Explorer row") {
+    if (!caseId) return;
+    setFindingPrefill(buildFindingPrefillFromArtifact(item, {
+      caseId,
+      evidenceId: evidenceIdFilter || String(item.evidence_id ?? ""),
+      hostId: hostIdFilter || String(item.host_id ?? ""),
+      sourceView: "artifact_explorer",
+      sourceRoute: window.location.pathname + window.location.search,
+      artifactFamily: artifactType || String((item.artifact as Record<string, unknown> | undefined)?.type ?? ""),
+      artifactType: String((item.event as Record<string, unknown> | undefined)?.type ?? item.type ?? artifactType ?? ""),
+      label,
+    }));
+    setFindingDialogOpen(true);
+  }
 
   useEffect(() => {
     setCaseId((current) => current || activeCaseId);
@@ -1241,9 +1258,7 @@ export default function ArtifactExplorer() {
           onSelectItem={setSelectedPersistenceItem}
           indicatorData={persistenceIndicatorQuery.data ?? null}
           onCreateFinding={(item) => {
-            if (!item.source_event_id) return;
-            setPersistenceFindingEventIds([item.source_event_id]);
-            setFindingDialogOpen(true);
+            openFindingFromArtifact(item as unknown as Record<string, unknown>, "Startup and persistence item");
           }}
           onAddTimeline={(item) => addPersistenceTimeline.mutate(item)}
           timelinePending={addPersistenceTimeline.isPending}
@@ -1262,9 +1277,7 @@ export default function ArtifactExplorer() {
           onSelectItem={setSelectedMotwItem}
           indicatorData={motwIndicatorQuery.data ?? null}
           onCreateFinding={(item) => {
-            if (!item.source_event_id) return;
-            setPersistenceFindingEventIds([item.source_event_id]);
-            setFindingDialogOpen(true);
+            openFindingFromArtifact(item as unknown as Record<string, unknown>, "MOTW downloaded file");
           }}
           onAddTimeline={(item) => addMotwTimeline.mutate(item)}
           timelinePending={addMotwTimeline.isPending}
@@ -1283,9 +1296,7 @@ export default function ArtifactExplorer() {
           onSelectItem={setSelectedEmailItem}
           indicatorData={emailIndicatorQuery.data ?? null}
           onCreateFinding={(item) => {
-            if (!item.source_event_id) return;
-            setPersistenceFindingEventIds([item.source_event_id]);
-            setFindingDialogOpen(true);
+            openFindingFromArtifact(item as unknown as Record<string, unknown>, "Email artifact item");
           }}
           onAddTimeline={(item) => addEmailTimeline.mutate(item)}
           timelinePending={addEmailTimeline.isPending}
@@ -1295,7 +1306,7 @@ export default function ArtifactExplorer() {
       ) : (
         <>
           <PaginationControls page={page} totalPages={result.data?.total_pages ?? 0} total={result.data?.total ?? 0} totalRelation={result.data?.total_relation ?? "eq"} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
-          <EventTable items={result.data?.items ?? []} view={view} selectedIds={selectedEventIds} onToggleSelect={(eventId) => setSelectedEventIds((current) => (current.includes(eventId) ? current.filter((item) => item !== eventId) : [...current, eventId]))} />
+          <EventTable items={result.data?.items ?? []} view={view} selectedIds={selectedEventIds} onToggleSelect={(eventId) => setSelectedEventIds((current) => (current.includes(eventId) ? current.filter((item) => item !== eventId) : [...current, eventId]))} onCreateFinding={(item) => openFindingFromArtifact(item, "Artifact Explorer row")} />
         </>
       )}
       <CreateFindingDialog
@@ -1303,6 +1314,7 @@ export default function ArtifactExplorer() {
         onClose={() => {
           setFindingDialogOpen(false);
           setPersistenceFindingEventIds([]);
+          setFindingPrefill(null);
         }}
         caseId={caseId}
         eventIds={persistenceFindingEventIds.length ? persistenceFindingEventIds : selectedEventIds}
@@ -1310,9 +1322,11 @@ export default function ArtifactExplorer() {
         defaultDescription={persistenceFindingEventIds.length ? "Created from a focused Artifact View source event." : `Created from ${selectedEventIds.length} selected Artifact Views event(s).`}
         defaultSeverity="medium"
         query={query || null}
+        prefill={findingPrefill}
         onCreated={() => {
           setSelectedEventIds([]);
           setPersistenceFindingEventIds([]);
+          setFindingPrefill(null);
         }}
       />
       {caseId ? (
