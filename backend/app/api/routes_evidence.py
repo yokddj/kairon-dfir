@@ -47,7 +47,7 @@ from app.ingest.velociraptor.zip_inventory import is_supported_archive_container
 from app.models.artifact import Artifact
 from app.models.case import Case
 from app.models.detection_result import DetectionResult
-from app.models.evidence import Evidence, EvidenceCustodyEvent, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidenceStorageMode, EvidenceType, IngestStatus
+from app.models.evidence import Evidence, EvidenceCustodyEvent, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidencePlatform, EvidenceStorageMode, EvidenceType, IngestStatus, detect_evidence_platform, resolve_evidence_platform
 from app.models.memory import MemoryUpload
 from app.models.rule_run import RuleRun, RuleRunStatus
 from app.schemas.evidence import ArtifactRead, EvidenceRead, EvidenceRunQueuedResponse, EvidenceRunRead
@@ -190,6 +190,20 @@ def _record_upload_custody_events(db: Session, evidence: Evidence, *, actor_user
 def _current_user_id(current_user: User | None) -> str | None:
     value = getattr(current_user, "id", None)
     return str(value) if value else None
+
+
+def _resolve_requested_platform(value: str | None, *, filename: str | None = None, paths: list[str] | None = None) -> tuple[str, str, str]:
+    provided, detected, effective = resolve_evidence_platform(value, detect_evidence_platform(filename=filename, paths=paths))
+    if provided == EvidencePlatform.macos.value:
+        raise HTTPException(status_code=400, detail="macOS artifacts are not supported yet")
+    return provided, detected, effective
+
+
+def _drop_empty_runtime_action(metadata: dict) -> dict:
+    cleaned = dict(metadata)
+    if cleaned.get("current_action") is None:
+        cleaned.pop("current_action", None)
+    return cleaned
 
 
 def _actor_label(current_user: User | None, fallback: str | None = None) -> str:
@@ -1222,6 +1236,7 @@ class RegisterPathRequest(BaseModel):
     packaging: str | None = None
     ingest_mode: str | None = None
     provided_host: str | None = None
+    provided_platform: str | None = None
     host_id: str | None = None
     evtx_profile: str | None = None
 
@@ -2087,6 +2102,7 @@ def upload_evidence(
     packaging: str | None = Form(None),
     ingest_mode: str | None = Form(None),
     provided_host: str | None = Form(None),
+    provided_platform: str | None = Form(None),
     host_id: str | None = Form(None),
     evtx_profile: str | None = Form(None),
     memory_authorization_acknowledged: bool = Form(False),
@@ -2097,6 +2113,14 @@ def upload_evidence(
     if hasattr(ingest_mode, "get") and not hasattr(db, "get"):
         db = ingest_mode  # type: ignore[assignment]
         ingest_mode = None
+    if not isinstance(provided_host, str):
+        provided_host = None
+    if not isinstance(provided_platform, str):
+        provided_platform = None
+    if not isinstance(host_id, str):
+        host_id = None
+    if not isinstance(evtx_profile, str):
+        evtx_profile = None
     if not isinstance(memory_upload_id, str):
         memory_upload_id = None
     if not db.get(Case, case_id):
@@ -2253,11 +2277,17 @@ def upload_evidence(
                 },
             ) from exc
     else:
-        evidence_id, stored_path, size, uploaded_sha256 = save_upload(case_id, file)
+        upload_result = save_upload(case_id, file)
+        if len(upload_result) == 3:
+            evidence_id, stored_path, size = upload_result
+            uploaded_sha256 = sha256_file(stored_path)
+        else:
+            evidence_id, stored_path, size, uploaded_sha256 = upload_result
     raw_collection = False
     folder_entries: list[dict] = []
     file_count: int | None = None
     detected_type = detect_evidence_type(stored_path)
+    entry_paths: list[str] = []
     if is_supported_archive_container(stored_path):
         try:
             container = open_evidence_container(stored_path)
@@ -2273,6 +2303,11 @@ def upload_evidence(
             folder_entries = []
             file_count = None
     display_name = (folder_name or "").strip() or safe_memory_display_name or uploaded_name
+    resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(
+        provided_platform,
+        filename=display_name,
+        paths=entry_paths,
+    )
     detected_warnings = _evidence_intent_warnings(evidence_intent=normalized_intent, detected_type=detected_type, path=stored_path)
     source_tool = "raw_collection" if raw_collection else _source_tool_for_detected_evidence_type(detected_type)
     evidence = Evidence(
@@ -2289,6 +2324,9 @@ def upload_evidence(
         size_bytes=size,
         mime_type=file.content_type,
         detected_type=getattr(detected_type, "value", detected_type),
+        provided_platform=resolved_provided_platform,
+        detected_platform=resolved_detected_platform,
+        effective_platform=resolved_effective_platform,
         uploaded_by_user_id=_current_user_id(current_user),
         uploaded_at=utc_now_naive(),
         first_seen_at=utc_now_naive(),
@@ -2313,19 +2351,22 @@ def upload_evidence(
             "packaging": normalized_packaging,
             "ingest_mode": normalized_ingest_mode,
             "provided_host": normalized_provided_host,
+            "provided_platform": resolved_provided_platform,
+            "detected_platform": resolved_detected_platform,
+            "effective_platform": resolved_effective_platform,
             "evtx_profile": normalized_evtx_profile,
             "upload_state": "uploaded",
             "memory_upload": bool(memory_upload),
             "memory_authorization_acknowledged": bool(memory_upload and memory_authorization_acknowledged),
             "canonical_relative_path": str(stored_path.relative_to(settings.backend_data_dir)) if memory_upload and stored_path.is_relative_to(settings.backend_data_dir) else None,
         },
-        metadata_json=_raw_collection_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "folder_entries": folder_entries, "folder_upload": True, "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "evtx_profile": normalized_evtx_profile})
+        metadata_json=_raw_collection_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "folder_entries": folder_entries, "folder_upload": True, "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform, "evtx_profile": normalized_evtx_profile})
         if raw_collection and folder_upload
-        else _raw_collection_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "evtx_profile": normalized_evtx_profile})
+        else _raw_collection_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform, "evtx_profile": normalized_evtx_profile})
         if raw_collection
-        else _initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "folder_entries": folder_entries, "folder_upload": True, "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "evtx_profile": normalized_evtx_profile})
+        else _initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "folder_entries": folder_entries, "folder_upload": True, "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform, "evtx_profile": normalized_evtx_profile})
         if folder_upload
-        else _initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "evtx_profile": normalized_evtx_profile}),
+        else _initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform, "evtx_profile": normalized_evtx_profile}),
         error_log={},
     )
     db.add(evidence)
@@ -2392,12 +2433,20 @@ def upload_evidence(
 
 
 @router.post("/api/cases/{case_id}/evidences/upload-folder", response_model=EvidenceRead, status_code=status.HTTP_201_CREATED)
-def upload_evidence_folder(case_id: str, files: list[UploadFile] = File(...), db: Session = Depends(get_db), current_user: User | None = Depends(get_optional_user)) -> Evidence:
+def upload_evidence_folder(
+    case_id: str,
+    files: list[UploadFile] = File(...),
+    provided_platform: str | None = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
+) -> Evidence:
     _ensure_browser_folder_upload_allowed(files)
     if not db.get(Case, case_id):
         raise HTTPException(status_code=404, detail="Case not found")
     evidence_id, folder_path, total_size, folder_sha256, folder_entries, folder_label = save_folder_uploads(case_id, files)
-    raw_collection = _should_route_to_raw_collection_discovery(folder_path, [str(item.get("path") or "") for item in folder_entries])
+    entry_paths = [str(item.get("path") or "") for item in folder_entries]
+    raw_collection = _should_route_to_raw_collection_discovery(folder_path, entry_paths)
+    resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(provided_platform, filename=folder_label, paths=entry_paths)
     evidence = Evidence(
         id=evidence_id,
         case_id=case_id,
@@ -2411,6 +2460,9 @@ def upload_evidence_folder(case_id: str, files: list[UploadFile] = File(...), db
         sha256=folder_sha256,
         size_bytes=total_size,
         detected_type=(EvidenceType.velociraptor_zip if raw_collection else EvidenceType.parsed_folder).value,
+        provided_platform=resolved_provided_platform,
+        detected_platform=resolved_detected_platform,
+        effective_platform=resolved_effective_platform,
         uploaded_by_user_id=_current_user_id(current_user),
         uploaded_at=utc_now_naive(),
         first_seen_at=utc_now_naive(),
@@ -2419,8 +2471,8 @@ def upload_evidence_folder(case_id: str, files: list[UploadFile] = File(...), db
         ingest_status=IngestStatus.pending,
         source_tool="raw_collection" if raw_collection else None,
         path_validation={},
-        ingest_source={"mode": EvidenceStorageMode.uploaded.value, "original_path": str(folder_path), "storage_path": str(folder_path), "copied": True},
-        metadata_json=_raw_collection_initial_metadata({"folder_entries": folder_entries}) if raw_collection else _initial_metadata({"folder_entries": folder_entries}),
+        ingest_source={"mode": EvidenceStorageMode.uploaded.value, "original_path": str(folder_path), "storage_path": str(folder_path), "copied": True, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform},
+        metadata_json=_raw_collection_initial_metadata({"folder_entries": folder_entries, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform}) if raw_collection else _initial_metadata({"folder_entries": folder_entries, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform}),
         error_log={},
     )
     db.add(evidence)
@@ -2518,6 +2570,11 @@ def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Sessi
     raw_collection = _should_route_to_raw_collection_discovery(stored_path, entry_paths)
     detected_type = detect_evidence_type(stored_path, entry_paths)
     original_name = payload.name or resolved_path.name
+    resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(
+        payload.provided_platform,
+        filename=original_name,
+        paths=entry_paths or [],
+    )
     detected_warnings = _evidence_intent_warnings(evidence_intent=normalized_intent, detected_type=detected_type, path=stored_path)
     storage_meta = _storage_metadata(
         mode=storage_mode if is_external else EvidenceStorageMode.uploaded,
@@ -2533,12 +2590,15 @@ def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Sessi
     ingest_source["packaging"] = normalized_packaging
     ingest_source["ingest_mode"] = normalized_ingest_mode
     ingest_source["provided_host"] = normalized_provided_host
+    ingest_source["provided_platform"] = resolved_provided_platform
+    ingest_source["detected_platform"] = resolved_detected_platform
+    ingest_source["effective_platform"] = resolved_effective_platform
     ingest_source["evtx_profile"] = normalized_evtx_profile
 
     metadata = (
-        _raw_collection_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), **storage_meta, "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "evtx_profile": normalized_evtx_profile})
+        _raw_collection_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), **storage_meta, "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform, "evtx_profile": normalized_evtx_profile})
         if raw_collection
-        else _initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), **storage_meta, "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "evtx_profile": normalized_evtx_profile})
+        else _initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), **storage_meta, "warnings": detected_warnings, "evidence_intent": normalized_intent, "packaging": normalized_packaging, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform, "evtx_profile": normalized_evtx_profile})
     )
     evidence = Evidence(
         id=evidence_id,
@@ -2553,6 +2613,9 @@ def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Sessi
         sha256=sha256,
         size_bytes=size_bytes,
         detected_type=getattr(detected_type, "value", detected_type),
+        provided_platform=resolved_provided_platform,
+        detected_platform=resolved_detected_platform,
+        effective_platform=resolved_effective_platform,
         uploaded_by_user_id=_current_user_id(current_user),
         uploaded_at=utc_now_naive(),
         first_seen_at=utc_now_naive(),
@@ -3741,6 +3804,7 @@ def _queue_reprocess_request(
             },
         )
 
+    new_metadata = _drop_empty_runtime_action(new_metadata)
     new_metadata["reingest_baseline"] = _capture_reingest_baseline(item, existing_metadata, previous_manifest)
     item.ingest_status = IngestStatus.pending
     item.error_log = {}
