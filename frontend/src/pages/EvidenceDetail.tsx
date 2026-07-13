@@ -828,6 +828,7 @@ export default function EvidenceDetail() {
   const linuxDetectedArtifacts = linuxInventory?.detected_artifacts ?? [];
   const linuxUnsupportedArtifacts = linuxInventory?.unsupported ?? [];
   const linuxWarnings = linuxInventory?.warnings ?? [];
+  const diskImage = data?.disk_image ?? null;
   const artifactProgressDone = typeof metadata.artifacts_done === "number" ? (metadata.artifacts_done as number) : typeof metadata.artifacts_processed === "number" ? (metadata.artifacts_processed as number) : 0;
   const artifactProgressTotal = typeof metadata.artifacts_total === "number" ? (metadata.artifacts_total as number) : 0;
   const progressPct =
@@ -2394,6 +2395,53 @@ function formatReportStatus(status: string | null | undefined) {
                 <div className="flex justify-between gap-3 border-t border-line pt-2"><dt className="text-muted">Coverage</dt><dd className="font-semibold text-ink">{linuxCoverage?.coverage_percent ?? 0}%</dd></div>
               </dl>
               <p className="mt-3 text-xs text-muted">Calculated as supported detected artifacts divided by all detected artifacts. Not found artifacts are not counted as detected.</p>
+            </div>
+          </div>
+        ) : null}
+
+        {diskImage ? (
+          <div className="mt-5 rounded-3xl border border-cyan-400/25 bg-cyan-400/10 p-4" data-testid="disk-image-summary">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-cyan-200">Disk Image</p>
+                <h3 className="mt-1 text-xl font-semibold text-ink">{diskImage.original_filename}</h3>
+                <p className="mt-1 text-sm text-muted">Format <span className="font-semibold text-ink">{String(diskImage.format || "unknown").toUpperCase()}</span> · Segments <span className="font-semibold text-ink">{diskImage.segment_count}</span></p>
+              </div>
+              <span className="rounded-full border border-cyan-300/30 bg-abyss/60 px-3 py-1 text-xs text-cyan-100">{diskImage.status.replaceAll("_", " ")}</span>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">SHA-256</p><p className="mt-1 break-all font-mono text-xs text-ink">{diskImage.sha256 || "-"}</p></div>
+              <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Size</p><p className="mt-1 text-sm font-semibold text-ink">{formatBytes(diskImage.size_bytes)}</p></div>
+              <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Volumes</p><p className="mt-1 text-sm font-semibold text-ink">{diskImage.volumes?.length ?? 0}</p></div>
+              <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Warnings</p><p className="mt-1 text-sm font-semibold text-amber">{diskImage.warnings_json?.length ?? 0}</p></div>
+            </div>
+            <div className="mt-4 space-y-3">
+              {(diskImage.volumes ?? []).map((volume) => (
+                <div key={volume.id} className="rounded-2xl border border-line bg-abyss/60 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-ink">Volume {volume.partition_index}</p>
+                      <p className="mt-1 text-xs text-muted">Partition {volume.partition_type || "unknown"} · Filesystem {volume.filesystem_type || "unknown"} · Offset {volume.offset_bytes.toLocaleString()} · Length {volume.length_bytes.toLocaleString()}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      {volume.encrypted ? <span className="rounded-full border border-amber/30 bg-amber/10 px-2 py-1 text-amber">Encrypted</span> : null}
+                      <span className={`rounded-full border px-2 py-1 ${volume.readable ? "border-mint/30 bg-mint/10 text-mint" : "border-danger/30 bg-danger/10 text-danger"}`}>{volume.readable ? "Readable" : "Unreadable"}</span>
+                    </div>
+                  </div>
+                  {(volume.installations ?? []).length ? (
+                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      {volume.installations.map((installation) => (
+                        <div key={installation.id} className="rounded-2xl border border-line bg-panel/50 px-3 py-2 text-sm text-muted">
+                          <p className="font-semibold text-ink">{formatPlatform(installation.platform)}{installation.hostname ? ` · ${installation.hostname}` : ""}</p>
+                          <p className="mt-1 text-xs">{installation.distro || installation.version || "Unknown version"} · Root {installation.root_path}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <p className="mt-3 text-xs text-muted">No operating system installation detected on this volume.</p>}
+                  {volume.warnings_json?.length ? <p className="mt-2 text-xs text-amber">Warnings: {volume.warnings_json.join(" · ")}</p> : null}
+                  {Object.keys(volume.error_json || {}).length ? <p className="mt-2 text-xs text-danger">Error: {JSON.stringify(volume.error_json)}</p> : null}
+                </div>
+              ))}
             </div>
           </div>
         ) : null}

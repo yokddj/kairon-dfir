@@ -674,6 +674,7 @@ def base_document(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
         os_type = artifact_meta.get("os_type", "windows" if artifact_meta.get("parser") in {"velociraptor", "kape", "zimmerman", "hayabusa", "generic_csv"} else "unknown")
     artifact_type = artifact_meta.get("artifact_type") or "unknown"
     source_path = artifact_meta.get("source_path")
+    original_source_path = artifact_meta.get("original_source_path") or source_path
     artifact_name = artifact_meta.get("name") or Path(str(source_path or "")).name or artifact_type
     parser_name = artifact_meta.get("parser")
     ingest_run_id = str(artifact_meta.get("ingest_run_id") or artifact_meta.get("run_id") or "")
@@ -698,7 +699,16 @@ def base_document(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
             "type": artifact_type,
             "name": artifact_name,
             "source_path": source_path,
+            "original_source_path": original_source_path,
             "parser": parser_name,
+        },
+        "evidence_source": {
+            "disk_image_id": artifact_meta.get("disk_image_id"),
+            "disk_volume_id": artifact_meta.get("disk_volume_id"),
+            "os_installation_id": artifact_meta.get("os_installation_id"),
+            "original_path": original_source_path,
+            "logical_source_path": artifact_meta.get("logical_source_path") or source_path,
+            "acquisition_method": artifact_meta.get("acquisition_method"),
         },
         "event": {"category": "unknown", "type": "unknown", "action": artifact_type, "severity": "info", "message": artifact_name},
         "process": {

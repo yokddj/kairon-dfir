@@ -1408,6 +1408,57 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     expect(within(selectedSection).getByRole("button", { name: /Persistence & identity/i })).toBeInTheDocument();
   });
 
+  it("renders disk image inspection summary when disk image metadata is present", async () => {
+    setupMinimalEvidenceDetail({
+      evidence: {
+        evidence_type: "disk_image",
+        disk_image: {
+          id: "disk-1",
+          evidence_id: "evidence-1",
+          original_filename: "case.E01",
+          format: "ewf",
+          size_bytes: 1048576,
+          sha256: "d".repeat(64),
+          segment_count: 2,
+          status: "discovering_artifacts",
+          metadata_json: {},
+          tool_metadata: {},
+          warnings_json: ["ewf_export_used"],
+          error_json: {},
+          volumes: [
+            {
+              id: "vol-1",
+              disk_image_id: "disk-1",
+              partition_index: 1,
+              offset_bytes: 1048576,
+              length_bytes: 16777216,
+              partition_type: "fat32",
+              filesystem_type: "fat",
+              label: null,
+              uuid: null,
+              encrypted: false,
+              readable: true,
+              status: "readable",
+              warnings_json: [],
+              error_json: {},
+              metadata_json: {},
+              installations: [
+                { id: "os-1", disk_volume_id: "vol-1", platform: "linux", hostname: "ubuntu-lab", version: "Ubuntu 24.04 LTS", distro: "Ubuntu 24.04 LTS", root_path: "/", confidence: "high", detection_reasons: ["/etc/os-release"] },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    renderPage();
+
+    expect(await screen.findByTestId("disk-image-summary")).toBeInTheDocument();
+    expect(screen.getByText(/Format EWF/i)).toBeInTheDocument();
+    expect(screen.getByText(/Volume 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/ubuntu-lab/i)).toBeInTheDocument();
+  });
+
   it("selects shimcache without opening debug and queues shimcache-only parsing", async () => {
     renderPage();
     await screen.findByText("collection.zip");

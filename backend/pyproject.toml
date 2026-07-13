@@ -29,6 +29,7 @@ dependencies = [
   "reportlab>=4.2.2",
   "psutil>=6.0.0",
   "yara-python>=4.5.1",
+  "pytsk3>=20260702",
 ]
 
 [project.optional-dependencies]

@@ -46,6 +46,7 @@ from app.core.performance import build_resource_warnings, describe_ingest_parall
 from app.core.rules import load_builtin_detection_overrides
 from app.core.storage import build_evidence_root, evidence_manifest_path, evidence_staging_dir, reset_extracted_dir, reset_staging_dir, sanitize_relative_path
 from app.analysis.semi_auto import SemiAutoAnalysisCancelled, build_case_semi_auto_analysis
+from app.disk_images.service import disk_image_readiness, materialize_disk_image_sources
 from app.ingest.browser.normalizer import BrowserAudit, normalize_browser_event
 from app.ingest.browser.sqlite_chromium import parse_chromium_history_sqlite
 from app.ingest.browser.sqlite_firefox import parse_firefox_places_sqlite
@@ -1063,6 +1064,12 @@ def _create_artifact_row_isolated(
     source_path: str,
     parser: str,
     status: str,
+    disk_image_id: str | None = None,
+    disk_volume_id: str | None = None,
+    os_installation_id: str | None = None,
+    original_source_path: str | None = None,
+    logical_source_path: str | None = None,
+    acquisition_method: str | None = None,
 ) -> str:
     isolated_db: Session = SessionLocal()
     try:
@@ -1073,6 +1080,12 @@ def _create_artifact_row_isolated(
             name=name,
             artifact_type=artifact_type,
             source_path=source_path,
+            disk_image_id=disk_image_id,
+            disk_volume_id=disk_volume_id,
+            os_installation_id=os_installation_id,
+            original_source_path=original_source_path,
+            logical_source_path=logical_source_path,
+            acquisition_method=acquisition_method,
             parser=parser,
             status=status,
         )
@@ -2786,6 +2799,7 @@ def _schedule_parallel_artifact(
         source_path=artifact_info["source_path"],
         parser=artifact_info["parser"],
         status=initial_status,
+        **dict(artifact_info.get("source_provenance") or {}),
     )
     manifest_artifact = {
         "name": artifact_info["name"],
@@ -2876,7 +2890,7 @@ def _select_artifacts(evidence: Evidence, root: Path, progress_cb=None) -> list[
     evidence_type = evidence.evidence_type
     if evidence_type == EvidenceType.velociraptor_zip or _is_raw_collection_with_discovery(evidence):
         return list_velociraptor_artifacts(root, _selected_velociraptor_candidates(evidence), progress_cb=progress_cb)
-    if evidence_type in {EvidenceType.kape_archive, EvidenceType.parsed_folder, EvidenceType.linux_triage, EvidenceType.macos_triage}:
+    if evidence_type in {EvidenceType.kape_archive, EvidenceType.parsed_folder, EvidenceType.linux_triage, EvidenceType.macos_triage, EvidenceType.disk_image}:
         return list_kape_artifacts(root)
     if evidence_type == EvidenceType.evtx:
         selected = _selected_single_file_artifacts(evidence, root)
@@ -4403,7 +4417,18 @@ def ingest_evidence(evidence_id: str) -> None:
             managed_extract_dir = reset_extracted_dir(evidence.case_id, evidence.id)
             use_external_directory = bool(getattr(evidence, "is_external", False)) and stored_path.is_dir()
             extract_dir = stored_path if use_external_directory else managed_extract_dir
-            if stored_path.is_dir():
+            disk_image_materialization = None
+            if evidence.evidence_type == EvidenceType.disk_image:
+                disk_image_materialization = materialize_disk_image_sources(
+                    db,
+                    evidence,
+                    extract_dir=extract_dir,
+                    progress_cb=extraction_progress,
+                )
+                extracted_files = list(disk_image_materialization.extracted_files)
+                archive_entries = list(disk_image_materialization.manifest_entries)
+                extractor_used = "disk_image_pipeline"
+            elif stored_path.is_dir():
                 extracted_files, archive_entries = inventory_folder(stored_path, progress_cb=extraction_progress) if use_external_directory else copy_folder(stored_path, extract_dir, progress_cb=extraction_progress)
             elif is_supported_archive_container(stored_path):
                 extracted_files, archive_entries = extract_archive(stored_path, extract_dir, progress_cb=extraction_progress)
@@ -4424,6 +4449,7 @@ def ingest_evidence(evidence_id: str) -> None:
             artifacts = []
 
         extracted_files = [entry["path"] for entry in archive_entries if entry.get("status") == "extracted"]
+        disk_source_map = dict(((disk_image_materialization.source_map if 'disk_image_materialization' in locals() and disk_image_materialization else {}) or {}))
         if is_selected_velociraptor:
             manifest["stats"]["selected_files_total"] = selective_stats.get("selected_files_total", 0)
             manifest["stats"]["selected_files_extracted"] = selective_stats.get("selected_files_extracted", 0)
@@ -4524,7 +4550,7 @@ def ingest_evidence(evidence_id: str) -> None:
             # public classification anchored to raw_collection via source_tool/metadata.
             evidence.evidence_type = EvidenceType.velociraptor_zip
             evidence.source_tool = "raw_collection"
-        else:
+        elif evidence.evidence_type != EvidenceType.disk_image:
             evidence.evidence_type = detect_evidence_type(stored_path, extracted_files if not is_selected_velociraptor else [])
             if evidence.evidence_type == EvidenceType.velociraptor_zip:
                 evidence.source_tool = "velociraptor"
@@ -4532,6 +4558,8 @@ def ingest_evidence(evidence_id: str) -> None:
                 evidence.source_tool = "kape"
             elif evidence.evidence_type == EvidenceType.evtx:
                 evidence.source_tool = "windows_event_log"
+        else:
+            evidence.source_tool = "disk_image"
 
         def discovery_progress(extra: dict) -> None:
             elapsed_seconds = max(time.perf_counter() - started_monotonic, 0.001)
@@ -4556,6 +4584,11 @@ def ingest_evidence(evidence_id: str) -> None:
 
         if not is_selected_velociraptor:
             artifacts = _select_artifacts(evidence, extract_dir, progress_cb=discovery_progress if evidence.evidence_type == EvidenceType.velociraptor_zip else None)
+        for artifact_info in artifacts:
+            source_path = str(artifact_info.get("source_path") or "")
+            if source_path and source_path in disk_source_map:
+                artifact_info["source_provenance"] = dict(disk_source_map[source_path])
+                artifact_info.update(disk_source_map[source_path])
         processable_artifacts, skipped_mode_artifacts = _partition_artifacts_for_ingest_mode(artifacts, ingest_mode=ingest_mode)
         artifacts = processable_artifacts
         skipped_manifest_entries = [_build_skipped_artifact_entry(item, status=str(item.get("status") or "skipped_experimental")) for item in skipped_mode_artifacts]
@@ -4568,6 +4601,7 @@ def ingest_evidence(evidence_id: str) -> None:
                 source_path=str(skipped_item.get("source_path") or skipped_item.get("name") or ""),
                 parser=str(skipped_item.get("parser") or "unknown"),
                 status=str(skipped_item.get("status") or "skipped_experimental"),
+                **disk_source_map.get(str(skipped_item.get("source_path") or skipped_item.get("name") or ""), {}),
             )
             manifest["artifacts"].append(manifest_item)
         candidate_hosts: list[str] = []
@@ -4750,6 +4784,7 @@ def ingest_evidence(evidence_id: str) -> None:
                 source_path=artifact_info["source_path"],
                 parser=artifact_info["parser"],
                 status=initial_status,
+                **dict(artifact_info.get("source_provenance") or {}),
             )
             artifact_record_count = 0
 

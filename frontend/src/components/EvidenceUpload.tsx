@@ -136,11 +136,19 @@ function isArchiveFile(file: File) {
   return /\.(zip|7z|tar|tgz|gz|bz2|xz|txz|tbz2|rar)$/i.test(file.name);
 }
 
+function isDiskImageFile(file: File) {
+  return /\.(dd|img|raw|e01|ex01|e\d{2})$/i.test(file.name);
+}
+
+function isSegmentedEwfFile(file: File) {
+  return /\.(e01|ex01|e\d{2})$/i.test(file.name);
+}
+
 function isMemoryImageFile(file: File) {
   // .raw, .mem, .dmp, .dump, .bin, .img, .vmem, .lime, .aff4
   // The backend probe makes the final memory vs disk decision based
   // on content; this is only the candidate extension check.
-  return /\.(raw|mem|dmp|dump|bin|img|vmem|lime|aff4)$/i.test(file.name);
+  return /\.(mem|dmp|dump|bin|vmem|lime|aff4)$/i.test(file.name);
 }
 
 function isParsedStructuredFile(file: File) {
@@ -153,6 +161,13 @@ function buildDetectionPreview(file: File, intent: FileIntent): DetectionPreview
       title: "Detected: Memory image",
       detail: "This will be uploaded as isolated memory_dump evidence and will not enter normal disk ingest.",
       tone: "warning",
+    };
+  }
+  if (isDiskImageFile(file)) {
+    return {
+      title: "Detected: Disk image",
+      detail: isSegmentedEwfFile(file) ? "This looks like an EWF segment. Upload the complete segment set for full inspection." : "This will be inspected read-only as a disk image and existing Windows/Linux pipelines will be reused.",
+      tone: "info",
     };
   }
   if (isEvtxFile(file)) {
@@ -246,6 +261,8 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
+  const [fileInputMultiple, setFileInputMultiple] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
 
   const capabilities = capabilitiesQuery.data;
   const uploadLimit = capabilities?.max_upload_size ?? 0;
@@ -312,12 +329,14 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   function resetPickers() {
     if (fileInputRef.current) fileInputRef.current.value = "";
     if (folderInputRef.current) folderInputRef.current.value = "";
+    setFileInputMultiple(false);
   }
 
-  function openFilePicker(intent: FileIntent, accept: string) {
+  function openFilePicker(intent: FileIntent, accept: string, multiple = false) {
     if (uploading) return;
     setFileIntent(intent);
     setFileAccept(accept);
+    setFileInputMultiple(multiple);
     fileInputRef.current?.click();
   }
 
@@ -325,7 +344,12 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
     if (uploading) return;
     setFileIntent(null);
     setFileAccept(".zip,.7z,.rar,.tar,.gz,.bz2,.xz,.tgz,.tbz2,.txz,.evtx,.raw,.mem,.dmp,.dump,.bin,.img,.vmem,.lime,.aff4,.pf,.lnk,.reg,.dat,.db,.sqlite,.csv,.json,.jsonl,.log,.txt,.eml,.mbox,.pst,.ost,.xml");
+    setFileInputMultiple(false);
     fileInputRef.current?.click();
+  }
+
+  function openDiskImageSegmentPicker() {
+    openFilePicker("raw_single_file", ".dd,.img,.raw,.e01,.ex01,.e02,.e03,.e04,.e05", true);
   }
 
   async function uploadRawArchiveWithAutoDetection(file: File, onProgress: (progress: { loaded: number; total: number; lengthComputable: boolean }) => void) {
@@ -361,7 +385,18 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
     );
     try {
       let discoveryEvidenceId: string | null = null;
-      if (intent === "raw_archive") {
+      if (isDiskImageFile(file)) {
+        const evidence = await api.uploadDiskImage(caseId, [file], {
+          onProgress: buildProgressHandler(file.size),
+          ingestMode,
+          providedHost: providedHost.trim() || undefined,
+          providedPlatform,
+          hostId: uploadHostId,
+        });
+        setLatestEvidenceId(evidence.id);
+        setPhase("processing");
+        setStatus("Disk image accepted. Image inspection and volume discovery started.");
+      } else if (intent === "raw_archive") {
         const result: VelociraptorDiscoverResponse | null = await uploadRawArchiveWithAutoDetection(file, buildProgressHandler(file.size));
         if (result) {
           result.evidence = await assignCreatedDiscoveryEvidence(result.evidence, uploadHostId);
@@ -497,17 +532,50 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
     }
   }
 
+  async function handleUploadFiles(files: File[]) {
+    const uploadHostId = await resolveUploadHostId();
+    if (assignedHostId === "__create__" && !uploadHostId) return;
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    setUploading(true);
+    setCurrentItem(files.map((file) => file.name).join(", "));
+    setUploadBytes({ loaded: 0, total: totalBytes });
+    setPhase("uploading");
+    setStatus(`Uploading disk image set (${files.length} files)`);
+    try {
+      const evidence = await api.uploadDiskImage(caseId, files, {
+        onProgress: buildProgressHandler(totalBytes),
+        ingestMode,
+        providedHost: providedHost.trim() || undefined,
+        providedPlatform,
+        hostId: uploadHostId,
+      });
+      setLatestEvidenceId(evidence.id);
+      setPhase("processing");
+      setStatus("Disk image set accepted. Image inspection and volume discovery started.");
+      onUploaded?.();
+      navigate(`/evidences/${evidence.id}`);
+    } catch (error) {
+      setPhase("failed");
+      setStatus(error instanceof Error ? error.message : "Disk image upload failed.");
+    } finally {
+      resetPickers();
+      setUploading(false);
+    }
+  }
+
   async function onFileInputChange(files: FileList | null) {
     if (!files?.length) return;
-    const file = await snapshotSelectedFile(files[0]);
+    const selectedFiles = await Promise.all(Array.from(files).map((file) => snapshotSelectedFile(file)));
+    const file = selectedFiles[0];
     const inferredIntent: FileIntent = fileIntent ?? (isArchiveFile(file) ? "raw_archive" : "raw_single_file");
     setSelectedKind(inferredIntent.startsWith("parsed") ? "parsed_evidence" : "raw_evidence");
     setSelectedFormat(inferredIntent === "raw_archive" ? "raw_archive" : inferredIntent === "parsed_archive" ? "parsed_archive" : inferredIntent === "parsed_single_file" ? "parsed_single_file" : "raw_single_file");
     setFileIntent(inferredIntent);
     setPendingFile(file);
+    setPendingFiles(selectedFiles);
     setMemoryAuthorizationAcknowledged(false);
     setDetectionPreview(buildDetectionPreview(file, inferredIntent));
-    setStatus(`Ready to index: ${file.name}`);
+    setStatus(`Ready to index: ${selectedFiles.length > 1 ? `${selectedFiles.length} files selected` : file.name}`);
     resetPickers();
   }
 
@@ -525,6 +593,10 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
     }
     if (!pendingFile) {
       setStatus("Add an evidence file before indexing.");
+      return;
+    }
+    if (pendingFiles.length > 1) {
+      await handleUploadFiles(pendingFiles);
       return;
     }
     if (isMemoryImageFile(pendingFile) && !memoryAuthorizationAcknowledged) {
@@ -681,9 +753,12 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
       return (
         <div className="rounded-3xl border border-line bg-panel/70 p-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Recommended method</p>
-          <p className="mt-3 text-sm text-muted">Upload a RAW evidence file such as EVTX, EML, registry hive/export, database, log or similar artifact.</p>
+          <p className="mt-3 text-sm text-muted">Upload a RAW evidence file such as EVTX, EML, registry hive/export, database, log, or a supported disk image (.dd/.img/.raw/.E01).</p>
           <button type="button" disabled={uploading} onClick={() => openFilePicker("raw_single_file", ".evtx,.pf,.lnk,.reg,.dat,.db,.sqlite,.csv,.json,.jsonl,.log,.txt,.eml,.mbox,.pst,.ost,.xml")} className="mt-4 rounded-2xl bg-accent px-4 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
             Upload RAW evidence file
+          </button>
+          <button type="button" disabled={uploading} onClick={openDiskImageSegmentPicker} className="mt-3 rounded-2xl border border-line bg-panel/40 px-4 py-3 text-sm text-muted disabled:opacity-60">
+            Upload RAW/EWF disk image
           </button>
         </div>
       );
@@ -985,6 +1060,9 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
           <button type="button" onClick={openPrimaryFilePicker} disabled={uploading} className="mt-4 rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted disabled:opacity-60">
             {pendingFile ? "Change evidence file" : "Add evidence file"}
           </button>
+          <button type="button" onClick={openDiskImageSegmentPicker} disabled={uploading} className="mt-3 rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted disabled:opacity-60">
+            Add RAW/EWF disk image
+          </button>
         </div>
         <div className="rounded-3xl border border-accent/30 bg-accent/8 p-5">
           <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Step 4</p>
@@ -1149,7 +1227,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
         Browser folder upload is not recommended for forensic evidence. For many files, use ZIP/TAR/7z or server-mounted path.
       </div>
 
-      <input ref={fileInputRef} type="file" accept={fileAccept} className="hidden" disabled={uploading} onChange={(event) => void onFileInputChange(event.target.files)} />
+      <input ref={fileInputRef} type="file" accept={fileAccept} multiple={fileInputMultiple} className="hidden" disabled={uploading} onChange={(event) => void onFileInputChange(event.target.files)} />
       {experimentalFolderUploadEnabled ? (
         <input
           ref={folderInputRef}

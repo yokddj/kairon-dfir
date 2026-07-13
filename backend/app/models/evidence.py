@@ -15,6 +15,7 @@ class EvidenceType(str, enum.Enum):
     velociraptor_zip = "velociraptor_zip"
     kape_archive = "kape_archive"
     parsed_folder = "parsed_folder"
+    disk_image = "disk_image"
     csv = "csv"
     json = "json"
     jsonl = "jsonl"
@@ -126,6 +127,7 @@ class Evidence(UUIDMixin, Base):
     case = relationship("Case", back_populates="evidences")
     artifacts = relationship("Artifact", back_populates="evidence", cascade="all, delete-orphan")
     detections = relationship("DetectionResult", back_populates="evidence")
+    disk_image = relationship("DiskImage", uselist=False, cascade="all, delete-orphan", back_populates="evidence")
     activity_events = relationship("AppActivityEvent", back_populates="evidence")
     rule_runs = relationship("RuleRun", back_populates="evidence")
     memory_scan_runs = relationship("MemoryScanRun", back_populates="evidence", cascade="all, delete-orphan")
