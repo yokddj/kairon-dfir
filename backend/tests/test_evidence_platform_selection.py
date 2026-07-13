@@ -62,3 +62,9 @@ def test_mixed_collection_detection_and_profile_grouping() -> None:
     assert profile["platforms"] == ["windows", "linux"]
     assert any(group["platform"] == "windows" for group in profile["groups"])
     assert any(group["platform"] == "linux" for group in profile["groups"])
+
+
+def test_linux_collection_users_directory_does_not_false_positive_to_macos() -> None:
+    detected = detect_evidence_platform(paths=["filesystem/etc/passwd", "users/getent-passwd.txt", "logs/journal.export"])
+
+    assert detected == "linux"

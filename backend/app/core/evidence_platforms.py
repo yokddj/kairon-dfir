@@ -60,7 +60,6 @@ _LINUX_MARKERS = (
     ".zsh_history",
 )
 _MACOS_MARKERS = (
-    "/users/",
     "/library/",
     ".plist",
     "/system/library/",
