@@ -16,6 +16,7 @@ import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/fin
 type Scope = "events" | "findings" | "all";
 type SortValue = "timestamp_desc" | "timestamp_asc" | "risk_desc" | "risk_asc" | "relevance";
 type SourceCategory = "" | "Memory" | "Disk" | "Event Log" | "Registry" | "Browser" | "Other";
+type SearchPlatform = "" | "windows" | "linux" | "unknown" | "other";
 type SearchTab = "results" | "timeline" | "findings" | "artifact_views";
 type ArtifactViewMode = "auto" | "process" | "dns" | "downloads" | "defender" | "persistence" | "files" | "cloud_usb" | "generic";
 type TableDensity = "compact" | "comfortable" | "expanded";
@@ -69,6 +70,13 @@ const sourceCategoryOptions: Array<{ value: SourceCategory; label: string }> = [
   { value: "Registry", label: "Registry" },
   { value: "Browser", label: "Browser" },
   { value: "Other", label: "Other" },
+];
+const platformOptions: Array<{ value: SearchPlatform; label: string }> = [
+  { value: "", label: "All platforms" },
+  { value: "windows", label: "Windows" },
+  { value: "linux", label: "Linux" },
+  { value: "unknown", label: "Unknown" },
+  { value: "other", label: "Other" },
 ];
 const riskPresets = [
   { label: "Low", min: "0", max: "29" },
@@ -236,6 +244,7 @@ function buildState(searchParams: URLSearchParams) {
     marked_in_finding: searchParams.get("marked_in_finding") ?? "",
     include_filesystem_timeline: searchParams.get("include_filesystem_timeline") ?? "",
     evidence_id: searchParams.get("evidence_id") ?? "",
+    platform: (searchParams.get("platform") ?? "") as SearchPlatform,
     source_category: (searchParams.get("source_category") ?? searchParams.get("source") ?? "") as SourceCategory,
     time_from: searchParams.get("time_from") ?? "",
     time_to: searchParams.get("time_to") ?? "",
@@ -536,6 +545,7 @@ function artifactLabel(value: string | null | undefined) {
   if (normalized === "windows_ui") return "Windows UI";
   if (normalized === "cloud_sync") return "Cloud Sync";
   if (normalized === "recycle_bin") return "Recycle Bin";
+  if (normalized === "linux_journal") return "Linux Journal";
   if (normalized === "linux_auth") return "Linux Auth";
   if (normalized === "linux_syslog") return "Linux Syslog";
   if (normalized === "linux_audit") return "Linux Audit";
@@ -1442,6 +1452,7 @@ export default function Search() {
       marked_in_finding: state.marked_in_finding,
       include_filesystem_timeline: state.include_filesystem_timeline,
       evidence_id: state.evidence_id || selectedEvidenceId,
+      platform: state.platform,
       source_category: state.source_category,
       time_from: state.time_from,
       time_to: state.time_to,
@@ -1462,6 +1473,7 @@ export default function Search() {
         filters: serializeBuilderFilters(searchRequestState.filters) || undefined,
         scope: searchRequestState.scope,
         evidence_id: searchRequestState.evidence_id || undefined,
+        platform: searchRequestState.platform || undefined,
         source_category: searchRequestState.source_category || undefined,
         artifact_type: searchRequestState.artifact_type,
         parser: searchRequestState.parser,
@@ -1663,6 +1675,7 @@ export default function Search() {
     if (state.file_path) chips.push({ key: "file_path", label: `path: ${state.file_path}`, clear: { file_path: null } });
     if (state.file_name) chips.push({ key: "file_name", label: `file: ${state.file_name}`, clear: { file_name: null } });
     if (searchRequestState.evidence_id) chips.push({ key: "evidence_id", label: `evidence: ${searchRequestState.evidence_id.slice(0, 8)}`, clear: { evidence_id: null } });
+    if (searchRequestState.platform) chips.push({ key: "platform", label: `platform: ${searchRequestState.platform}`, clear: { platform: null } });
     if (searchRequestState.source_category) chips.push({ key: "source_category", label: `source: ${searchRequestState.source_category}`, clear: { source_category: null, source: null } });
     if (state.artifact_type.length) chips.push({ key: "artifact_type", label: `artifact: ${state.artifact_type.join(", ")}`, clear: { artifact_type: null } });
     if (state.exclude_artifact_type.length) chips.push({ key: "exclude_artifact_type", label: `NOT artifact: ${state.exclude_artifact_type.join(", ")}`, clear: { exclude_artifact_type: null } });
@@ -1671,7 +1684,7 @@ export default function Search() {
     if (state.status.length) chips.push({ key: "status", label: `status: ${state.status.join(", ")}`, clear: { status: null } });
     if (state.time_from || state.time_to) chips.push({ key: "time", label: `time: ${state.time_from || "…"} → ${state.time_to || "…"}`, clear: { time_from: null, time_to: null } });
     return chips;
-  }, [searchRequestState.evidence_id, searchRequestState.host, searchRequestState.host_id, searchRequestState.source_category, state]);
+  }, [searchRequestState.evidence_id, searchRequestState.host, searchRequestState.host_id, searchRequestState.platform, searchRequestState.source_category, state]);
   const querySyntaxChips = useMemo(
     () =>
       (response?.query_syntax?.applied_filters ?? []).map((item, index) => ({
@@ -2019,6 +2032,7 @@ export default function Search() {
         const params = new URLSearchParams();
         params.set("mode", modeValue);
         if (evidenceId) params.set("evidence_id", evidenceId);
+        if (searchRequestState.platform) params.set("platform", searchRequestState.platform);
         if (host && host !== "-") params.set("host", host);
         if (pid) params.set("pid", pid);
         if (processGuid) params.set("process_guid", processGuid);
@@ -2199,6 +2213,14 @@ export default function Search() {
         </div>
 
         <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Platform</span>
+            <select aria-label="Platform" value={state.platform} onChange={(event) => updateParams({ platform: event.target.value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-platform-filter">
+              {platformOptions.map((option) => (
+                <option key={option.label} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
           <label className="block">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source</span>
             <select aria-label="Source category" value={state.source_category} onChange={(event) => updateParams({ source_category: event.target.value, source: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-source-category-filter">

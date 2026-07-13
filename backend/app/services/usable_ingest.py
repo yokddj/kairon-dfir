@@ -27,6 +27,13 @@ TIER_1_ARTIFACT_TYPES = {
     "network",
     "dns",
     "wlan",
+    "linux_auth",
+    "linux_journal",
+    "linux_syslog",
+    "linux_audit",
+    "linux_shell_history",
+    "linux_cron",
+    "linux_packages",
 }
 
 TIER_1_PARSERS = {
@@ -63,6 +70,12 @@ TIER_2_ARTIFACT_TYPES = {
     "usn",
     "windows_ui",
     "wmi",
+    "linux_systemd",
+    "linux_ssh",
+    "linux_identity",
+    "linux_sudoers",
+    "linux_network",
+    "linux_os_info",
 }
 
 TIER_3_PARSERS = {
@@ -94,6 +107,19 @@ ARTIFACT_FILTER_FIELDS: dict[str, list[str]] = {
     "jumplist": ["target_path", "arguments", "source_file", "app_id"],
     "service": ["service_name", "image_path", "display_name"],
     "usb": ["vendor", "product", "serial", "device_instance_id"],
+    "linux_auth": ["linux.username", "linux.event_action", "linux.source_ip", "linux.hostname"],
+    "linux_journal": ["linux.username", "linux.process", "linux.hostname", "linux.event_action"],
+    "linux_syslog": ["linux.username", "linux.process", "linux.hostname"],
+    "linux_audit": ["linux.username", "linux.command", "linux.pid", "linux.event_action"],
+    "linux_shell_history": ["linux.command", "linux.username", "linux.hostname"],
+    "linux_cron": ["linux.command", "linux.username", "linux.hostname"],
+    "linux_systemd": ["linux.command", "linux.process", "linux.hostname"],
+    "linux_ssh": ["linux.username", "linux.event_action", "linux.hostname"],
+    "linux_identity": ["linux.username", "linux.hostname"],
+    "linux_sudoers": ["linux.username", "linux.command", "linux.hostname"],
+    "linux_packages": ["linux.command", "linux.hostname"],
+    "linux_network": ["linux.hostname", "linux.source_ip"],
+    "linux_os_info": ["linux.hostname", "host.name"],
 }
 
 

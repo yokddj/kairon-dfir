@@ -290,6 +290,16 @@ describe("Search page", () => {
     await waitFor(() => expect(searchCaseMock).toHaveBeenCalledWith("case-1", expect.objectContaining({ source_category: "Memory", evidence_id: "mem-1", q: "6996" })));
   });
 
+  it("passes platform filters from the url and selector", async () => {
+    renderPage(["/search?platform=linux"]);
+    await screen.findByTestId("results-table");
+    await waitFor(() => expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ platform: "linux" })));
+    expect(within(screen.getByTestId("active-filter-chips")).getByText(/platform: linux/i)).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByTestId("search-platform-filter"), "windows");
+    await waitFor(() => expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ platform: "windows" })));
+  });
+
   it("passes negative filters from the url and shows NOT chips", async () => {
     renderPage(["/search?exclude_q=defender&exclude_artifact_type=mft&exclude_parser=evtx_raw&exclude_source_file=Security.evtx&exclude_host=noise-host&exclude_user=svc"]);
     await screen.findByTestId("results-table");

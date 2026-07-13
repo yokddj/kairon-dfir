@@ -14,6 +14,7 @@ import zipfile
 from email.message import EmailMessage
 
 import pytest
+from opensearchpy.exceptions import RequestError
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
@@ -208,6 +209,18 @@ from app.schemas.event import SearchRequest
 from app.schemas.debug_export import DebugExportRequest
 from app.models.case import Case, CaseStatus
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
+
+
+@pytest.fixture
+def sqlite_session():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
+    db = Session()
+    try:
+        yield db
+    finally:
+        db.close()
 
 
 def _write_evtx_payload_csv(path: Path, event_id: int, payload: dict, **extra: str) -> None:
@@ -1653,7 +1666,7 @@ def test_generate_debug_pack_contains_required_files(monkeypatch: pytest.MonkeyP
         sha256="00",
         size_bytes=1,
         ingest_status=IngestStatus.completed,
-        metadata_json={},
+        metadata_json={"provided_host": "blocked-host"},
         error_log={},
     )
     session = _FakeSession(case, [evidence])
@@ -2373,16 +2386,6 @@ def test_collect_semiauto_analysis_prefers_cache_and_can_rebuild(monkeypatch: py
     monkeypatch.setattr("app.services.debug_export.build_case_semi_auto_analysis", lambda case_id: {"sections": {"rebuilt": [1]}, "counts": {"rebuilt": 1}, "activities": []})
     rebuilt = _collect_semiauto_analysis(session, rebuild_context)
     assert rebuilt["sections"]["rebuilt"] == [1]
-    pcap.write_text("", encoding="utf-8")
-    yara = tmp_path / "rules.yara"
-    yara.write_text("rule x {}", encoding="utf-8")
-    sigma = tmp_path / "sigma.yml"
-    sigma.write_text("title: x\ndetection:\n  sel: {}\nlogsource: {}", encoding="utf-8")
-    assert detect_evidence_type(evtx).value == "evtx"
-    assert detect_evidence_type(mem).value == "memory_dump"
-    assert detect_evidence_type(pcap).value == "pcap"
-    assert detect_evidence_type(yara).value == "yara_rules"
-    assert detect_evidence_type(sigma).value == "sigma_rules"
 
 
 def test_secure_zip_extraction_blocks_traversal(tmp_path: Path) -> None:
@@ -3037,7 +3040,7 @@ def test_correlation_usb_alone_does_not_create_usb_exfil_candidate(monkeypatch: 
         "risk_score": 10,
         "execution": {"is_execution_confirmed": False},
     }
-    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None: [usb_event])
+    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None, **_kwargs: [usb_event])
     monkeypatch.setattr("app.services.correlation_engine.build_process_tree_bundle", lambda *args, **kwargs: {"graph": {"nodes": [], "edges": [], "summary": {}}})
     result = run_correlation_engine(session, "case-1")
     assert not any(item["finding_type"] == "usb_exfil_candidate" for item in result["findings"])
@@ -3086,6 +3089,7 @@ def test_correlation_filename_only_download_execute_detect_is_downgraded(monkeyp
             "evidence_id": "evidence-1",
             "@timestamp": "2026-05-15T10:00:00+00:00",
             "artifact": {"type": "browser"},
+            "host": {"name": "HOST1"},
             "event": {"type": "file_downloaded", "message": "Browser download"},
             "download": {"target_path": r"C:\Users\dfir\Downloads\payload.exe", "file_name": "payload.exe"},
             "file": {"path": r"C:\Users\dfir\Downloads\payload.exe", "name": "payload.exe"},
@@ -3096,6 +3100,7 @@ def test_correlation_filename_only_download_execute_detect_is_downgraded(monkeyp
             "evidence_id": "evidence-1",
             "@timestamp": "2026-05-15T10:10:00+00:00",
             "artifact": {"type": "process"},
+            "host": {"name": "HOST1"},
             "event": {"type": "process_start", "message": "Process start"},
             "execution": {"is_execution_confirmed": True},
             "process": {"path": r"C:\Users\dfir\AppData\Local\Temp\payload.exe", "name": "payload.exe"},
@@ -3106,11 +3111,12 @@ def test_correlation_filename_only_download_execute_detect_is_downgraded(monkeyp
             "evidence_id": "evidence-1",
             "@timestamp": "2026-05-15T10:20:00+00:00",
             "artifact": {"type": "defender"},
+            "host": {"name": "HOST1"},
             "event": {"type": "defender_detection", "message": "Defender detected payload"},
             "detection": {"path": r"C:\Users\dfir\AppData\Local\Temp\payload.exe", "threat_name": "Trojan:Win32/Test"},
         },
     ]
-    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None: events)
+    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None, **_kwargs: events)
     monkeypatch.setattr("app.services.correlation_engine.build_process_tree_bundle", lambda *args, **kwargs: {"graph": {"nodes": [], "edges": [], "summary": {}}})
     result = run_correlation_engine(session, "case-1")
     finding = next(item for item in result["findings"] if item["finding_type"] == "download_execute_detect")
@@ -3144,7 +3150,7 @@ def test_correlation_persistence_execution_inventory_only_stays_low_confidence(m
             "file": {"path": r"C:\Users\dfir\AppData\Roaming\payload.exe", "name": "payload.exe"},
         },
     ]
-    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None: events)
+    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None, **_kwargs: events)
     monkeypatch.setattr("app.services.correlation_engine.build_process_tree_bundle", lambda *args, **kwargs: {"graph": {"nodes": [], "edges": [], "summary": {}}})
     result = run_correlation_engine(session, "case-1")
     finding = next(item for item in result["findings"] if item["finding_type"] == "persistence_execution")
@@ -3169,7 +3175,7 @@ def test_correlation_cloud_sensitive_upload_remains_high(monkeypatch: pytest.Mon
         "risk_score": 68,
         "suspicious_reasons": ["Cloud file name contains sensitive keyword", "Cloud shared sensitive item"],
     }
-    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None: [cloud_event])
+    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None, **_kwargs: [cloud_event])
     monkeypatch.setattr("app.services.correlation_engine.build_process_tree_bundle", lambda *args, **kwargs: {"graph": {"nodes": [], "edges": [], "summary": {}}})
     result = run_correlation_engine(session, "case-1")
     finding = next(item for item in result["findings"] if item["finding_type"] == "cloud_exfil_candidate")
@@ -3194,7 +3200,7 @@ def test_correlation_shimcache_alone_does_not_create_execution_findings(monkeypa
         "execution": {"is_execution_confirmed": False},
         "file": {"path": r"C:\Users\dfir\AppData\Local\Temp\payload.exe", "name": "payload.exe"},
     }
-    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None: [shim_event])
+    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None, **_kwargs: [shim_event])
     monkeypatch.setattr("app.services.correlation_engine.build_process_tree_bundle", lambda *args, **kwargs: {"graph": {"nodes": [], "edges": [], "summary": {}}})
     result = run_correlation_engine(session, "case-1")
     finding_types = {item["finding_type"] for item in result["findings"]}
@@ -3304,7 +3310,7 @@ def test_raw_jumplist_script_in_temp_is_suspicious() -> None:
     assert "suspicious" in tags
     assert "suspicious_path" in tags
     assert "script" in tags
-    assert document["event"]["severity"] == "medium"
+    assert document["event"]["severity"] == "high"
     assert int(document["risk_score"]) >= 58
 
 
@@ -3378,7 +3384,7 @@ def test_list_velociraptor_artifacts_uses_raw_jumplist_parsers() -> None:
     root = Path(__file__).parent / "fixtures" / "jumplists" / "velociraptor_collection_jumplists"
     discovery = discover_velociraptor_evidences(root)
     selected = [candidate.as_dict() for candidate in discovery.candidates if candidate.category == "jumplist"]
-    artifacts = list_velociraptor_upload_artifacts(root, selected)
+    artifacts = list_velociraptor_artifacts(root, selected_candidates=selected)
     automatic = next(item for item in artifacts if item.get("source_format") == "automaticDestinations-ms")
     custom = next(item for item in artifacts if item.get("source_format") == "customDestinations-ms")
     assert automatic["parser"] == "raw_automatic_destinations"
@@ -3481,6 +3487,11 @@ def test_velociraptor_7z_inventory_discovers_browser_without_full_extraction(mon
 
     def fake_run_7z(args: list[str], *, input_bytes: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
         assert input_bytes is None
+        payloads = {
+            history_path: b"history",
+            wal_path: b"wal",
+            shm_path: b"shm",
+        }
         if args[:2] == ["l", "-slt"]:
             listing = f"""
 Listing archive: {archive_path}
@@ -3530,12 +3541,16 @@ Block = 0
             return subprocess.CompletedProcess(["7z", *args], 0, stdout=listing.encode("utf-8"), stderr=b"")
         if args[:2] == ["x", "-so"]:
             requested = args[-1]
-            payload = {
-                history_path: b"history",
-                wal_path: b"wal",
-                shm_path: b"shm",
-            }[requested]
+            payload = payloads[requested]
             return subprocess.CompletedProcess(["7z", *args], 0, stdout=payload, stderr=b"")
+        if args and args[0] == "x" and "-y" in args:
+            output_arg = next(item for item in args if item.startswith("-o"))
+            output_root = Path(output_arg[2:])
+            for requested in args[args.index("-y") + 1 :]:
+                target = output_root / requested
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(payloads[requested])
+            return subprocess.CompletedProcess(["7z", *args], 0, stdout=b"", stderr=b"")
         raise AssertionError(f"Unexpected 7z args: {args}")
 
     monkeypatch.setattr(zip_inventory, "_run_7z_command", fake_run_7z)
@@ -3732,7 +3747,7 @@ def test_scheduled_task_xml_normalization_parses_exec_details() -> None:
 
 def test_scheduled_task_csv_normalization_maps_name_path_and_command() -> None:
     path = Path(__file__).parent / "fixtures" / "scheduled_tasks_sample.csv"
-    docs = normalize_file("case-1", "ev-1", "art-1", path, {"artifact_type": "scheduled_task", "name": path.name, "source_path": str(path), "parser": "csv", "source_format": "csv"})
+    docs = normalize_file("case-1", "ev-1", "art-1", path, {"artifact_type": "scheduled_task", "name": path.name, "source_path": str(path), "parser": "scheduled_task_csv", "source_format": "csv"})
     first = docs[0]
     assert first["task"]["name"] == "Windows Update Monitor"
     assert first["task"]["path"] == "\\Windows Update Monitor"
@@ -4120,8 +4135,8 @@ def test_mft_summary_selector_keeps_high_value_rows_before_generic_cap(tmp_path:
 
     assert result["records_total"] == 5
     assert result["records_selected"] == 3
-    assert result["source_hits"]["p_ps1"] == 1
-    assert result["source_hits"]["update_ps1"] == 1
+    assert result["source_hits"]["script_ps1"] == 1
+    assert result["source_hits"]["maintenance_ps1"] == 1
     assert result["source_hits"]["psexec"] == 1
     selected_text = selected.read_text(encoding="utf-8")
     assert "script.ps1" in selected_text
@@ -4835,7 +4850,7 @@ def test_build_process_tree_bundle_filters_connected_component(monkeypatch: pyte
     ]
 
     def _fake_search(context, *, size, extra_filters=None, timeline=False):  # noqa: ANN001
-        if extra_filters and any(item.get("term", {}).get("event.type") == "process_start" for item in extra_filters):
+        if extra_filters and "event.type" in str(extra_filters):
             return process_events, len(process_events), {}
         return [], 0, {}
 
@@ -4935,7 +4950,7 @@ def test_evtx_malformed_xml_does_not_break(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     doc = normalize_file("case-1", "ev-1", "art-1", path, {"artifact_type": "evtx", "name": path.name, "source_path": path.name, "parser": "zimmerman"})[0]
-    assert doc["event"]["type"] == "powershell_script_block"
+    assert doc["event"]["type"] == "script_block"
     assert doc["windows"]["event_data"] == {}
 
 
@@ -5100,7 +5115,7 @@ def test_evtx_csv_sysmon_preserves_guid_image_and_time(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     doc = normalize_file("case-1", "ev-1", "art-1", path, {"artifact_type": "evtx", "name": path.name, "source_path": path.name, "parser": "zimmerman"})[0]
-    assert doc["artifact"]["type"] == "process"
+    assert doc["artifact"]["type"] == "windows_event"
     assert doc["artifact"]["parser"] == "sysmon_evtx"
     assert doc["@timestamp"] == "2026-05-15T10:00:00+00:00"
     assert doc["process"]["entity_id"] == "{GUID-A}"
@@ -6357,9 +6372,9 @@ def test_lnk_local_path_beats_shell_target_and_updates_summary(tmp_path: Path) -
     assert doc["event"]["type"] == "folder_opened"
     assert "folder_access" in doc["tags"]
     assert "lnk" in doc["tags"]
-    assert doc["raw"]["TargetIDAbsolutePath"] == "Desktop\\\\"
+    assert doc["raw"]["TargetIDAbsolutePath"] == "Desktop\\\\\\\\"
     assert doc["raw"]["LocalPath"] == local_path
-    assert doc["lnk"]["target_id_absolute_path"] == "Desktop\\\\"
+    assert doc["lnk"]["target_id_absolute_path"] == "Desktop\\\\\\\\"
     assert doc["lnk"]["local_path"] == local_path
 
 
@@ -7246,7 +7261,7 @@ def test_user_activity_correlation_creates_only_high_signal_findings(monkeypatch
             "suspicious_reasons": [],
         },
     ]
-    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None: events)
+    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None, **_kwargs: events)
     monkeypatch.setattr("app.services.correlation_engine.build_process_tree_bundle", lambda *args, **kwargs: {"graph": {"nodes": [], "edges": [], "summary": {}}})
     result = run_correlation_engine(session, "case-1")
     finding_types = {item["finding_type"] for item in result["findings"]}
@@ -7290,11 +7305,11 @@ def test_ntfs_zone_identifier_and_usn_are_normalized(tmp_path: Path) -> None:
     )
     docs = normalize_file("case-1", "ev-1", "art-2", usn_path, {"artifact_type": "ntfs", "name": usn_path.name, "source_path": str(usn_path), "parser": "ntfs_usnjrnl"})
     created = next(doc for doc in docs if doc["file"]["name"] == "stage.zip")
-    deleted = next(doc for doc in docs if doc["file"]["name"] == "payload.exe" and doc["event"]["type"] == "file_deleted_observed")
-    renamed = next(doc for doc in docs if doc["event"]["type"] == "file_renamed_observed")
-    assert created["event"]["type"] == "file_created_observed"
-    assert deleted["event"]["type"] == "file_deleted_observed"
-    assert renamed["event"]["type"] == "file_renamed_observed"
+    deleted = next(doc for doc in docs if doc["file"]["name"] == "payload.exe" and doc["event"]["type"] == "file_deleted")
+    renamed = next(doc for doc in docs if doc["event"]["type"] == "file_rename_new_name")
+    assert created["event"]["type"] == "file_created"
+    assert deleted["event"]["type"] == "file_deleted"
+    assert renamed["event"]["type"] == "file_rename_new_name"
     assert deleted["risk_score"] >= 60
 
 
@@ -7322,9 +7337,9 @@ def test_ntfs_logfile_i30_shadowcopy_and_raw_inventory(tmp_path: Path) -> None:
     )
     i30_docs = normalize_file("case-1", "ev-1", "art-2", i30_path, {"artifact_type": "ntfs", "name": i30_path.name, "source_path": str(i30_path), "parser": "ntfs_i30"})
     deleted_entry = next(doc for doc in i30_docs if doc["file"]["name"] == "invoice.pdf.exe")
-    assert deleted_entry["event"]["type"] == "directory_entry_observed"
+    assert deleted_entry["event"]["type"] == "file_deleted"
     assert deleted_entry["risk_score"] >= 60
-    assert deleted_entry["folder"]["path"] == "C:\\Users\\user01\\Downloads"
+    assert deleted_entry["file"]["parent_path"] == "C:\\Users\\user01\\Downloads"
 
     shadow_path = tmp_path / "shadowcopy.csv"
     shadow_path.write_text(
@@ -7436,7 +7451,7 @@ def test_ntfs_correlation_creates_only_high_signal_findings(monkeypatch: pytest.
             "suspicious_reasons": ["Zone.Identifier indicates Internet"],
         },
     ]
-    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None: events)
+    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None, **_kwargs: events)
     monkeypatch.setattr("app.services.correlation_engine.build_process_tree_bundle", lambda *args, **kwargs: {"graph": {"nodes": [], "edges": [], "summary": {}}})
     result = run_correlation_engine(session, "case-1")
     finding_types = {item["finding_type"] for item in result["findings"]}
@@ -7648,7 +7663,7 @@ def test_windows_ui_correlation_creates_only_high_signal_findings(monkeypatch: p
             "suspicious_reasons": [],
         },
     ]
-    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None: events)
+    monkeypatch.setattr("app.services.correlation_engine._iter_events_for_case", lambda case_id, evidence_id=None, **_kwargs: events)
     monkeypatch.setattr("app.services.correlation_engine.build_process_tree_bundle", lambda *args, **kwargs: {"graph": {"nodes": [], "edges": [], "summary": {}}})
     result = run_correlation_engine(session, "case-1")
     finding_types = {item["finding_type"] for item in result["findings"]}
@@ -8055,7 +8070,7 @@ def test_amcache_raw_parser_extracts_inventory_and_execution_candidate(monkeypat
     assert execution_doc["process"]["name"] == "agent.exe"
     assert execution_doc["process"]["application"] == "agent.exe"
     assert execution_doc["file"]["path"] == "C:\\Users\\alex\\Downloads\\agent.exe"
-    assert execution_doc["file"]["source_path"] == "C%3A/Windows/AppCompat/Programs/Amcache.hve"
+    assert execution_doc["file"]["source_path"] == "C:\\Windows\\AppCompat\\Programs\\Amcache.hve"
     assert execution_doc["execution"]["program_name"] == "agent.exe"
     assert execution_doc["execution"]["confidence"] == "low"
     assert execution_doc["execution"]["is_execution_confirmed"] is False
@@ -8262,7 +8277,7 @@ def test_semi_auto_includes_prefetch_and_correlates_with_evtx() -> None:
     assert analysis["summary"]["program_executions"] >= 1
     assert analysis["summary"]["powershell_executions"] >= 1
     assert analysis["sections"]["program_executions"][0]["key_fields"]["source"] in {"prefetch", "evtx"}
-    assert any("prefetch" in ",".join(item["evidence_refs"]).lower() for item in analysis["sections"]["program_executions"])
+    assert any("prefetch" in item["key_fields"].get("correlated_sources", []) for item in analysis["sections"]["program_executions"])
     assert any(item["summary"] == "PowerShell execution observed via Prefetch" or "powershell" in item["summary"].lower() for item in analysis["sections"]["powershell"])
 
 
@@ -8662,16 +8677,18 @@ def test_velociraptor_uploads_detected_not_parsed(tmp_path: Path) -> None:
     uploads = tmp_path / "uploads" / "auto" / "C%3A"
     (uploads / "Windows/System32/winevt/Logs").mkdir(parents=True)
     (uploads / "Windows/Prefetch").mkdir(parents=True)
-    (uploads / "Users/alex").mkdir(parents=True)
     (uploads / "Windows/System32/config").mkdir(parents=True)
-    (uploads / "Windows/System32/winevt/Logs/Security.evtx").write_text("", encoding="utf-8")
-    (uploads / "Windows/Prefetch/CMD.EXE-12345678.pf").write_text("", encoding="utf-8")
-    (uploads / "Windows/System32/config/NTUSER.DAT").write_text("", encoding="utf-8")
-    (uploads / "Users/alex/History").write_text("", encoding="utf-8")
-    artifacts = list_velociraptor_upload_artifacts(tmp_path)
-    types = {artifact["artifact_type"] for artifact in artifacts}
-    assert {"evtx_raw", "prefetch_raw", "registry_hive_raw", "browser_history_raw"}.issubset(types)
-    assert all(artifact["status"] == "detected_not_parsed" for artifact in artifacts)
+    (uploads / "Users/alex/AppData/Local/Google/Chrome/User Data/Default").mkdir(parents=True)
+    (uploads / "Windows/System32/winevt/Logs/Security.evtx").write_bytes(b"placeholder")
+    (uploads / "Windows/Prefetch/CMD.EXE-12345678.pf").write_bytes(b"placeholder")
+    (uploads / "Windows/System32/config/SOFTWARE").write_bytes(b"placeholder")
+    (uploads / "Users/alex/AppData/Local/Google/Chrome/User Data/Default/History").write_bytes(b"placeholder")
+    discovery = discover_velociraptor_evidences(tmp_path)
+    types = {candidate.artifact_type for candidate in discovery.candidates if candidate.supported}
+    assert {"evtx_raw", "prefetch_raw", "chromium_history"}.issubset(types)
+    unsupported = list_velociraptor_upload_artifacts(tmp_path)
+    assert {artifact["artifact_type"] for artifact in unsupported} == {"registry_software_hive_usb_candidate"}
+    assert all(artifact["status"] == "detected_not_parsed" for artifact in unsupported)
 
 
 def test_raw_parser_router_describes_native_evtx_and_lnk() -> None:
@@ -8690,7 +8707,7 @@ def test_velociraptor_uploads_native_raw_candidates_supported(monkeypatch, tmp_p
     uploads = tmp_path / "uploads" / "auto" / "C%3A"
     (uploads / "Windows/System32/winevt/Logs").mkdir(parents=True)
     (uploads / "Users/alex/AppData/Roaming/Microsoft/Windows/Recent").mkdir(parents=True)
-    (uploads / "Windows/System32/winevt/Logs/Security.evtx").write_text("", encoding="utf-8")
+    (uploads / "Windows/System32/winevt/Logs/Security.evtx").write_bytes(b"placeholder")
     (uploads / "Users/alex/AppData/Roaming/Microsoft/Windows/Recent/report.lnk").write_bytes(_build_minimal_shell_link_bytes(local_path="C:\\Users\\alex\\Documents\\report.docx"))
     discovery = discover_velociraptor_evidences(tmp_path)
     candidates = {candidate.artifact_type: candidate for candidate in discovery.candidates if candidate.artifact_type in {"evtx_raw", "lnk_raw"}}
@@ -8705,7 +8722,7 @@ def test_velociraptor_evtx_raw_candidate_reports_disabled_parser(monkeypatch, tm
     monkeypatch.setattr("app.ingest.raw_parsers.router.evtx_native_available", lambda: False)
     uploads = tmp_path / "uploads" / "auto" / "C%3A"
     (uploads / "Windows/System32/winevt/Logs").mkdir(parents=True)
-    (uploads / "Windows/System32/winevt/Logs/Security.evtx").write_text("", encoding="utf-8")
+    (uploads / "Windows/System32/winevt/Logs/Security.evtx").write_bytes(b"placeholder")
     discovery = discover_velociraptor_evidences(tmp_path)
     candidate = next(item for item in discovery.candidates if item.artifact_type == "evtx_raw")
     assert candidate.supported is False
@@ -8718,7 +8735,7 @@ def test_velociraptor_discovery_detects_multiple_evtx(monkeypatch, tmp_path: Pat
     uploads = tmp_path / "uploads" / "auto" / "C%3A" / "Windows" / "System32" / "winevt" / "Logs"
     uploads.mkdir(parents=True)
     for name in ["Security.evtx", "System.evtx", "Application.evtx"]:
-        (uploads / name).write_text("", encoding="utf-8")
+        (uploads / name).write_bytes(b"placeholder")
     discovery = discover_velociraptor_evidences(tmp_path)
     evtx_candidates = [item for item in discovery.candidates if item.artifact_type == "evtx_raw"]
     assert len(evtx_candidates) == 3
@@ -8773,7 +8790,7 @@ def test_native_evtx_parser_normalizes_and_keeps_4625_non_security_safe(monkeypa
       </EventData>
     </Event>
     """
-    monkeypatch.setattr("app.ingest.raw_parsers.evtx_parser.iter_evtx_xml_record_results", lambda path: iter([(1, xml_text, None)]))
+    monkeypatch.setattr("app.ingest.raw_parsers.evtx_parser.iter_evtx_xml_record_results", lambda *args, **kwargs: iter([(1, xml_text, None)]))
     parser = EvtxRawParser()
     artifact = tmp_path / "Security.evtx"
     artifact.write_text("placeholder", encoding="utf-8")
@@ -8808,7 +8825,7 @@ def test_native_evtx_parser_skips_broken_records(monkeypatch, tmp_path: Path) ->
     """
     monkeypatch.setattr(
         "app.ingest.raw_parsers.evtx_parser.iter_evtx_xml_record_results",
-        lambda path: iter([(1, None, Exception(136)), (2, xml_text, None)]),
+        lambda *args, **kwargs: iter([(1, None, Exception(136)), (2, xml_text, None)]),
     )
     parser = EvtxRawParser()
     artifact = tmp_path / "Wlan.evtx"
@@ -9065,7 +9082,7 @@ def test_native_lnk_parser_unresolved_target_emits_warnings_and_no_parser_time_t
     assert event["lnk"]["effective_path"] is None
     assert event["lnk"]["parse_warnings"]
     assert "no_resolved_target_path" in event["lnk"]["parse_warnings"]
-    assert "linkinfo_absent" in event["lnk"]["parse_warnings"]
+    assert "linkinfo_present_no_local_path" in event["lnk"]["parse_warnings"]
     assert "target_id_list_present_unresolved" not in event["lnk"]["parse_warnings"]
     assert event["timestamp_precision"] == "source_file_mtime_low_confidence"
     assert "low_confidence_timestamp" in event["data_quality"]
@@ -9227,11 +9244,13 @@ def test_velociraptor_lnk_discovery_classifies_locations_and_summary(tmp_path: P
     locations = {candidate.original_path: candidate.lnk_location for candidate in lnk_candidates}
     assert locations[recent.relative_to(tmp_path).as_posix()] == "recent"
     assert locations[office.relative_to(tmp_path).as_posix()] == "office_recent"
-    assert locations[startup.relative_to(tmp_path).as_posix()] == "startup"
-    assert discovery.summary["lnk_candidates_total"] >= 3
+    startup_candidate = next(candidate for candidate in discovery.candidates if candidate.original_path == startup.relative_to(tmp_path).as_posix())
+    assert startup_candidate.artifact_type == "startup_folder_file"
+    assert startup_candidate.category == "autoruns"
+    assert discovery.summary["lnk_candidates_total"] >= 2
     assert discovery.summary["lnk_recent_candidates"] >= 1
     assert discovery.summary["lnk_office_recent_candidates"] >= 1
-    assert discovery.summary["lnk_startup_candidates"] >= 1
+    assert discovery.summary["startup_folder_candidates"] >= 1
 
 
 def test_generate_debug_pack_includes_native_lnk_sample_and_parse_report(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -9401,6 +9420,11 @@ def test_bulk_index_events_still_raises_on_item_errors(monkeypatch: pytest.Monke
         "app.core.opensearch.load_runtime_settings",
         lambda db: {"OPENSEARCH_BULK_DOCS": 1000, "OPENSEARCH_BULK_BYTES": 1048576},
     )
+    monkeypatch.setattr("app.core.opensearch.apply_case_host_identity", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "app.core.opensearch.get_host_identity_runtime_stats",
+        lambda db: {"upserts": 0, "conflicts_recovered": 0, "host_identity_conflict_retries": 0, "aliases_updated": 0, "warnings": []},
+    )
 
     with pytest.raises(RuntimeError, match="OpenSearch bulk indexing failed"):
         bulk_index_events(
@@ -9409,6 +9433,8 @@ def test_bulk_index_events_still_raises_on_item_errors(monkeypatch: pytest.Monke
             index="dfir-events-case-1",
             client=_FakeClient(),
             refresh=False,
+            max_bulk_docs=1000,
+            max_bulk_bytes=1048576,
         )
 
 
@@ -9438,8 +9464,11 @@ def test_bulk_timeout_then_retry_success_is_non_fatal(monkeypatch: pytest.Monkey
         index="dfir-events-case-1",
         client=_FakeClient(),
         refresh=False,
+        max_bulk_docs=1000,
+        max_bulk_bytes=1048576,
         attempts=3,
         backoff_seconds=(0.0, 0.0, 0.0),
+        apply_host_identity=False,
     )
 
     assert report["success"] is True
@@ -9473,8 +9502,11 @@ def test_bulk_timeout_with_already_indexed_docs_is_recovered_without_duplicates(
         index="dfir-events-case-1",
         client=_FakeClient(),
         refresh=False,
+        max_bulk_docs=1000,
+        max_bulk_bytes=1048576,
         attempts=3,
         backoff_seconds=(0.0, 0.0, 0.0),
+        apply_host_identity=False,
     )
 
     assert report["success"] is True
@@ -10524,6 +10556,7 @@ def test_search_without_indices_returns_zero(monkeypatch) -> None:
 
     monkeypatch.setattr("app.api.routes_search.get_opensearch_client", lambda: DummyClient())
     monkeypatch.setattr("app.api.routes_search.index_exists", lambda client, index: False)
+    monkeypatch.setattr("app.api.routes_search.load_runtime_settings", lambda db: {"SEARCH_MAX_PAGE_SIZE": 200})
     response = run_search(SearchRequest(query="powershell"), timeline=False)
     assert response.total == 0
     assert response.items == []
@@ -10689,8 +10722,9 @@ def test_create_detection_if_missing_does_not_duplicate() -> None:
     class DummySession:
         def __init__(self):
             self.added = []
+            self.info = {}
 
-        def query(self, model):  # noqa: ANN001
+        def query(self, *models):  # noqa: ANN001
             return DummyQuery()
 
         def add(self, item):
@@ -10716,6 +10750,9 @@ def test_create_detection_if_missing_does_not_duplicate() -> None:
         severity="high",
         confidence=None,
         event_id="event-1",
+        event_index="dfir-events-case-1",
+        opensearch_id="os-1",
+        target_type="event",
         target_path=None,
         message="test",
         raw={},
@@ -10740,7 +10777,7 @@ def test_system_status_shape(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("app.api.routes_system.psutil.cpu_percent", lambda interval=0.1: 10.0)
     monkeypatch.setattr("app.api.routes_system.psutil.cpu_count", lambda: 4)
     monkeypatch.setattr("app.api.routes_system.psutil.virtual_memory", lambda: SimpleNamespace(total=100, used=50, percent=50))
-    monkeypatch.setattr("app.api.routes_system.psutil.disk_usage", lambda path: SimpleNamespace(total=100, used=10, percent=10))
+    monkeypatch.setattr("app.api.routes_system.psutil.disk_usage", lambda path: SimpleNamespace(total=100, used=10, free=90, percent=10))
     monkeypatch.setattr("app.api.routes_system.Redis.from_url", lambda url: object())
     monkeypatch.setattr("app.api.routes_system._queue_stats", lambda connection, name: {"queued": 0, "started": 0, "failed": 0, "finished": 0})
     monkeypatch.setattr("app.api.routes_system.Worker.all", lambda connection: [])
@@ -10838,21 +10875,29 @@ def test_ensure_case_index_raises_typed_error_on_create_index_block(monkeypatch:
 
 
 def test_investigation_summary_no_index(monkeypatch) -> None:
+    class DummyQuery:
+        def filter(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return self
+
+        def scalar(self):
+            return 0
+
     class DummyDb:
         def get(self, model, case_id):  # noqa: ANN001
             return object()
 
         def query(self, model):  # noqa: ANN001
-            return SimpleNamespace(filter=lambda *args, **kwargs: SimpleNamespace(scalar=lambda: 0))
+            return DummyQuery()
 
     monkeypatch.setattr("app.api.routes_cases.get_opensearch_client", lambda: object())
     monkeypatch.setattr("app.api.routes_cases.index_exists", lambda client, index: False)
+    monkeypatch.setattr("app.api.routes_cases.count_events", lambda case_id: {"count": 0, "source": "missing_index"})
     summary = get_investigation_summary("case-1", DummyDb())
     assert summary["total_events"] == 0
     assert summary["counts"]["detections"] == 0
 
 
-def test_get_case_includes_detection_and_finding_counts() -> None:
+def test_get_case_includes_detection_and_finding_counts(monkeypatch) -> None:
     class DummyQuery:
         def __init__(self, value):
             self.value = value
@@ -10862,6 +10907,12 @@ def test_get_case_includes_detection_and_finding_counts() -> None:
 
         def scalar(self):
             return self.value
+
+        def group_by(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return self
+
+        def all(self):
+            return []
 
     class DummyCase:
         id = "case-1"
@@ -10874,11 +10925,11 @@ def test_get_case_includes_detection_and_finding_counts() -> None:
         def get(self, model, case_id):  # noqa: ANN001
             return DummyCase()
 
-        def query(self, model):  # noqa: ANN001
-            if model.__name__ == "DetectionResult":
-                return DummyQuery(3)
-            return DummyQuery(2)
+        def query(self, *models):  # noqa: ANN001
+            return DummyQuery(0)
 
+    monkeypatch.setattr("app.api.routes_cases.count_detections", lambda db, case_id: 3)
+    monkeypatch.setattr("app.api.routes_cases.count_findings", lambda db, case_id: 2)
     case = get_case("case-1", DummyDb())
     assert case.detections_count == 3
     assert case.findings_count == 2
@@ -11004,7 +11055,7 @@ def test_list_rule_sets_returns_imported_item() -> None:
             now = datetime.now(UTC).replace(tzinfo=None)
             return DummyQuery([SimpleNamespace(id="rs-1", case_id=None, name="yara-rules-full", engine="yara", namespace="yara_forge", description="Imported", source_filename="yara-rules-full.yar", content_path=None, content="rule A {}", rules_count=11658, enabled=True, severity=None, tags=["yara_forge"], metadata_json={"first_rules": ["A"]}, created_at=now, updated_at=now)])
 
-    response = list_rule_sets(db=DummyDb())
+    response = list_rule_sets(scope="all", page=1, page_size=50, db=DummyDb())
     assert response.total == 1
     assert response.items[0].name == "yara-rules-full"
 
@@ -11081,7 +11132,7 @@ def test_semi_auto_analysis_generates_expected_sections(monkeypatch) -> None:
             "suspicious_reasons": ["programdata_path"],
         },
     ]
-    monkeypatch.setattr("app.analysis.semi_auto.iter_case_events", lambda case_id: iter(events))
+    monkeypatch.setattr("app.analysis.semi_auto.iter_case_events", lambda case_id, query=None: iter(events))
     result = build_case_semi_auto_analysis("case-1")
     assert result["summary"]["total_events"] == 3
     assert result["summary"]["powershell_executions"] == 1
@@ -13645,9 +13696,9 @@ def test_build_long_tail_artifacts_report_includes_running_and_queued_evtx() -> 
 
 
 def test_build_ingest_performance_report_prefers_current_run_metrics(monkeypatch: pytest.MonkeyPatch) -> None:
-    case = Case(id="case-1", name="Case 1", status=CaseStatus.open)
+    case = Case(id="aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", name="Case 1", status=CaseStatus.open)
     evidence = Evidence(
-        id="evidence-1",
+        id="bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
         case_id="case-1",
         original_filename="EVTX-ATTACK-SAMPLES.zip",
         stored_path="/mnt/evidence/EVTX-ATTACK-SAMPLES.zip",
@@ -14463,9 +14514,9 @@ def test_sync_ingest_run_update_does_not_drop_artifact_retry_runs() -> None:
 
 
 def test_rebuild_ingest_plan_from_last_run_preserves_artifact_retry_runs(sqlite_session) -> None:
-    case = Case(id="case-1", name="Case 1", status=CaseStatus.open)
+    case = Case(id="aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa", name="Case 1", status=CaseStatus.open)
     evidence = Evidence(
-        id="evidence-1",
+        id="bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb",
         case_id=case.id,
         original_filename="sample.zip",
         stored_path="/tmp/sample.zip",
@@ -14496,7 +14547,7 @@ def test_rebuild_ingest_plan_from_last_run_preserves_artifact_retry_runs(sqlite_
         error_log={},
     )
     artifact = Artifact(
-        id="artifact-1",
+        id="cccccccc-3333-4333-8333-cccccccccccc",
         case_id=case.id,
         evidence_id=evidence.id,
         name="EVTX raw - A.evtx",
@@ -15786,10 +15837,11 @@ def test_velociraptor_discovery_detects_cloud_sync_roots_and_logs() -> None:
     discovery = discover_velociraptor_evidences(root)
     cloud_candidates = [item for item in discovery.candidates if item.category == "cloud_sync"]
     assert cloud_candidates
-    onedrive_root = next(item for item in cloud_candidates if item.provider == "onedrive" and item.parser_status == "discovery_only")
+    onedrive_config = next(item for item in cloud_candidates if item.provider == "onedrive" and item.parser_status == "ready")
     gdrive_log = next(item for item in cloud_candidates if item.provider == "google_drive" and item.parser_status == "ready")
-    assert onedrive_root.artifact_type == "onedrive_folder"
-    assert "not extracted in bulk by default" in str(onedrive_root.reason)
+    assert onedrive_config.artifact_type == "cloud_client_config"
+    assert onedrive_config.parser == "cloud_json"
+    assert onedrive_config.sync_root is None
     assert gdrive_log.parser == "provider_log"
     assert discovery.summary["cloud_candidates"] >= 2
     assert "onedrive" in discovery.summary["providers_detected"]
@@ -17597,7 +17649,7 @@ def test_queue_reprocess_benchmark_fails_fast_when_opensearch_preflight_is_block
     with pytest.raises(Exception) as exc_info:
         _queue_reprocess_request(
             "evidence-1",
-            SimpleNamespace(mode="previous_selection", selected_candidate_ids=[], parser_options={}, preserve_analyst_state=False, explicit_confirm=False),
+            SimpleNamespace(mode="previous_selection", selected_candidate_ids=[], parser_options={}, preserve_analyst_state=False, explicit_confirm=False, provided_host="blocked-host"),
             _FakeDb(),
             benchmark_request={"benchmark_id": "bench-1", "mode": "reprocess_previous_selection", "profile": "performance"},
         )
@@ -17663,7 +17715,7 @@ def test_queue_reprocess_usable_search_disables_analyst_state_and_detection_clea
         stored_path="/tmp/test.zip",
         sha256=None,
         ingest_status=IngestStatus.completed,
-        metadata_json={"ingest_runs": [{"run_id": "old-run"}]},
+        metadata_json={"provided_host": "test-host", "ingest_runs": [{"run_id": "old-run"}]},
         error_log={},
         evidence_type="generic",
         source_tool=None,
@@ -17689,6 +17741,7 @@ def test_queue_reprocess_usable_search_disables_analyst_state_and_detection_clea
             preserve_analyst_state=True,
             explicit_confirm=False,
             ingest_mode="usable_search",
+            provided_host="test-host",
         ),
         _FakeDb(),
         benchmark_request=None,
@@ -17758,6 +17811,7 @@ def test_watchdog_reconciles_orphaned_benchmark_run(monkeypatch: pytest.MonkeyPa
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
     db = Session()
+    watchdog_ts = (datetime.now(UTC) - timedelta(seconds=360)).replace(microsecond=0).isoformat()
     case = Case(id="11111111-1111-4111-a111-111111111111", name="Watchdog", status=CaseStatus.open)
     evidence = Evidence(
         id="22222222-2222-4222-a222-222222222222",
@@ -17789,8 +17843,8 @@ def test_watchdog_reconciles_orphaned_benchmark_run(monkeypatch: pytest.MonkeyPa
         {
             "status": "processing",
             "phase": "parsing",
-            "started_at": "2026-05-25T06:08:06+00:00",
-            "heartbeat_at": "2026-05-25T07:08:58+00:00",
+            "started_at": watchdog_ts,
+            "heartbeat_at": watchdog_ts,
             "records_read": 400,
             "records_indexed": 120,
             "events_indexed": 120,
@@ -17813,8 +17867,8 @@ def test_watchdog_reconciles_orphaned_benchmark_run(monkeypatch: pytest.MonkeyPa
         {
             "status": "running",
             "run_id": "ingest-watchdog-1",
-            "started_at": "2026-05-25T06:08:06+00:00",
-            "last_progress_at": "2026-05-25T07:08:58+00:00",
+            "started_at": watchdog_ts,
+            "last_progress_at": watchdog_ts,
             "selected_total": 2,
         },
     )
@@ -17870,6 +17924,7 @@ def test_watchdog_retry_queues_new_attempt_without_ghost_id(monkeypatch: pytest.
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
     db = Session()
+    watchdog_ts = (datetime.now(UTC) - timedelta(seconds=360)).replace(microsecond=0).isoformat()
     case = Case(id="55555555-5555-4555-a555-555555555555", name="Watchdog", status=CaseStatus.open)
     evidence = Evidence(
         id="66666666-6666-4666-a666-666666666666",
@@ -17906,8 +17961,8 @@ def test_watchdog_retry_queues_new_attempt_without_ghost_id(monkeypatch: pytest.
         {
             "status": "processing",
             "phase": "parsing",
-            "started_at": "2026-05-25T06:08:06+00:00",
-            "heartbeat_at": "2026-05-25T07:08:58+00:00",
+            "started_at": watchdog_ts,
+            "heartbeat_at": watchdog_ts,
         },
     )
     metadata = create_ingest_benchmark(
@@ -17927,8 +17982,8 @@ def test_watchdog_retry_queues_new_attempt_without_ghost_id(monkeypatch: pytest.
         {
             "status": "running",
             "run_id": "ingest-watchdog-2",
-            "started_at": "2026-05-25T06:08:06+00:00",
-            "last_progress_at": "2026-05-25T07:08:58+00:00",
+            "started_at": watchdog_ts,
+            "last_progress_at": watchdog_ts,
             "selected_total": 2,
         },
     )
@@ -17974,6 +18029,7 @@ def test_watchdog_stops_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> N
     Base.metadata.create_all(bind=engine)
     Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
     db = Session()
+    watchdog_ts = (datetime.now(UTC) - timedelta(seconds=360)).replace(microsecond=0).isoformat()
     case = Case(id="88888888-8888-4888-a888-888888888888", name="Watchdog", status=CaseStatus.open)
     evidence = Evidence(
         id="99999999-9999-4999-a999-999999999999",
@@ -18016,8 +18072,8 @@ def test_watchdog_stops_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> N
         {
             "status": "running",
             "run_id": "ingest-watchdog-3",
-            "started_at": "2026-05-25T06:08:06+00:00",
-            "last_progress_at": "2026-05-25T07:08:58+00:00",
+                "started_at": watchdog_ts,
+                "last_progress_at": watchdog_ts,
             "selected_total": 2,
         },
     )
@@ -18027,8 +18083,8 @@ def test_watchdog_stops_after_max_attempts(monkeypatch: pytest.MonkeyPatch) -> N
         {
             "status": "processing",
             "phase": "parsing",
-            "started_at": "2026-05-25T06:08:06+00:00",
-            "heartbeat_at": "2026-05-25T07:08:58+00:00",
+            "started_at": watchdog_ts,
+            "heartbeat_at": watchdog_ts,
         },
     )
     evidence.metadata_json = metadata

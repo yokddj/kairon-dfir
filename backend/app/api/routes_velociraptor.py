@@ -145,8 +145,12 @@ def _require_provided_host(value: str | None) -> str:
     return normalized
 
 
-def _resolve_requested_platform(value: str | None, *, filename: str | None = None, paths: list[str] | None = None) -> tuple[str, str, str]:
-    provided, detected, effective = resolve_evidence_platform(value, detect_evidence_platform(filename=filename, paths=paths))
+def _resolve_requested_platform(value: str | None, *, filename: str | None = None, paths: list[str] | None = None, evidence_type: str | None = None) -> tuple[str, str, str]:
+    provided, detected, effective = resolve_evidence_platform(
+        value,
+        detect_evidence_platform(filename=filename, paths=paths, evidence_type=evidence_type),
+        evidence_type=evidence_type,
+    )
     if provided == EvidencePlatform.macos.value:
         raise HTTPException(status_code=400, detail="macOS artifacts are not supported yet")
     return provided, detected, effective

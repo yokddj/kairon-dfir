@@ -5,6 +5,9 @@ from sqlalchemy import BigInteger, Enum, ForeignKey, String
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, JSONVariant, UUIDMixin, utc_now_naive
+from app.core.evidence_platforms import EvidencePlatform, detect_evidence_platform as core_detect_evidence_platform
+from app.core.evidence_platforms import normalize_evidence_platform as core_normalize_evidence_platform
+from app.core.evidence_platforms import resolve_evidence_platform as core_resolve_evidence_platform
 
 
 class EvidenceType(str, enum.Enum):
@@ -39,15 +42,6 @@ class EvidenceStorageMode(str, enum.Enum):
     mounted_path = "mounted_path"
     shared_path = "shared_path"
     external_reference = "external_reference"
-
-
-class EvidencePlatform(str, enum.Enum):
-    auto = "auto"
-    windows = "windows"
-    linux = "linux"
-    macos = "macos"
-    unknown = "unknown"
-    other = "other"
 
 
 class EvidenceIntegrityStatus(str, enum.Enum):
@@ -182,50 +176,20 @@ def resolve_public_evidence_type(
 
 
 def normalize_evidence_platform(value: EvidencePlatform | str | None) -> str:
-    normalized = str(value.value if isinstance(value, EvidencePlatform) else value or "auto").strip().lower()
-    if normalized in {item.value for item in EvidencePlatform}:
-        return normalized
-    return EvidencePlatform.auto.value
+    return core_normalize_evidence_platform(value)
 
 
-def detect_evidence_platform(*, filename: str | None = None, paths: list[str] | None = None) -> str:
-    candidates = [str(filename or ""), *[str(path or "") for path in (paths or [])]]
-    lowered = [item.replace("\\", "/").lower() for item in candidates if item]
-    if any(
-        marker in path
-        for path in lowered
-        for marker in (
-            "windows/system32/",
-            "windows/syswow64/",
-            "windows/prefetch/",
-            "windows/system32/winevt/logs/",
-            "programdata/microsoft/",
-            "documents and settings/",
-            "ntuser.dat",
-            "usrclass.dat",
-        )
-    ) or any(path.endswith(".evtx") or path.endswith(".pf") or path.endswith(".lnk") for path in lowered):
-        return EvidencePlatform.windows.value
-    if any(
-        marker in path
-        for path in lowered
-        for marker in ("/etc/passwd", "/var/log/", "/home/", "/usr/bin/", "/proc/", "/sys/", "audit/audit.log",)
-    ) or any(path.endswith(".lime") or "lime" in path for path in lowered):
-        return EvidencePlatform.linux.value
-    if any(marker in path for path in lowered for marker in ("/users/", "/library/", ".plist", "/system/library/", "/private/var/")):
-        return EvidencePlatform.macos.value
-    return EvidencePlatform.unknown.value
+def detect_evidence_platform(*, filename: str | None = None, paths: list[str] | None = None, evidence_type: str | None = None) -> str:
+    return core_detect_evidence_platform(filename=filename, paths=paths, evidence_type=evidence_type)
 
 
-def resolve_evidence_platform(provided_platform: EvidencePlatform | str | None, detected_platform: EvidencePlatform | str | None) -> tuple[str, str, str]:
-    provided = normalize_evidence_platform(provided_platform)
-    detected = normalize_evidence_platform(detected_platform)
-    if detected == EvidencePlatform.auto.value:
-        detected = EvidencePlatform.unknown.value
-    effective = detected if provided == EvidencePlatform.auto.value else provided
-    if effective == EvidencePlatform.auto.value:
-        effective = EvidencePlatform.unknown.value
-    return provided, detected, effective
+def resolve_evidence_platform(
+    provided_platform: EvidencePlatform | str | None,
+    detected_platform: EvidencePlatform | str | None,
+    *,
+    evidence_type: str | None = None,
+) -> tuple[str, str, str]:
+    return core_resolve_evidence_platform(provided_platform, detected_platform, evidence_type=evidence_type)
 
 
 from app.models import memory as _memory_models  # noqa: E402,F401
