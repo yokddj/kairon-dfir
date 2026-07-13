@@ -164,6 +164,44 @@ def test_evidence_read_prefers_problematic_summary_counts_over_historical_error_
     assert read.error_count == 2
 
 
+def test_evidence_read_exposes_platform_profile_for_linux_evidence():
+    evidence = Evidence(
+        id="evidence-linux",
+        case_id="case-1",
+        original_filename="linux.tar.gz",
+        stored_path="/tmp/linux.tar.gz",
+        evidence_type=EvidenceType.raw_collection,
+        storage_mode=EvidenceStorageMode.uploaded,
+        is_external=False,
+        copy_to_storage=True,
+        sha256="d" * 64,
+        size_bytes=1,
+        ingest_status=IngestStatus.completed,
+        provided_platform="auto",
+        detected_platform="linux",
+        effective_platform="linux",
+        path_validation={},
+        ingest_source={},
+        metadata_json={
+            "velociraptor_discovery": {
+                "candidates": [
+                    {"category": "linux_journal"},
+                    {"category": "linux_auth"},
+                    {"category": "linux_systemd"},
+                ]
+            }
+        },
+        error_log={},
+        created_at=datetime.now(UTC),
+    )
+
+    read = EvidenceRead.model_validate(evidence)
+
+    assert read.platform_profile["platform"] == "linux"
+    assert any(category["id"] == "linux_journal" for category in read.platform_profile["categories"])
+    assert any(quick_select["id"] == "core_logs" for quick_select in read.platform_profile["quick_selects"])
+
+
 def test_problematic_retry_candidates_include_only_real_retryable_failures():
     report = {
         "summary": {"problematic_count": 4},

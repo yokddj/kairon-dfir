@@ -88,7 +88,38 @@ export type EvidenceIntent = "raw" | "parsed" | "mounted" | "auto";
 export type EvidencePackaging = "single_file" | "archive" | "directory" | "mounted_path";
 export type IngestMode = "full_forensic" | "usable_search";
 export type EvtxProfile = "fast_high_value" | "full" | "custom";
-export type EvidencePlatform = "auto" | "windows" | "linux" | "macos" | "unknown" | "other";
+export type EvidencePlatform = "auto" | "windows" | "linux" | "macos" | "memory" | "mixed" | "unknown";
+
+export type EvidencePlatformCategory = {
+  id: string;
+  label: string;
+  group_id: string;
+  group_label: string;
+  platform: EvidencePlatform | string;
+};
+
+export type EvidencePlatformGroup = {
+  id: string;
+  label: string;
+  platform: EvidencePlatform | string;
+  categories: EvidencePlatformCategory[];
+};
+
+export type EvidencePlatformQuickSelect = {
+  id: string;
+  label: string;
+  platform: EvidencePlatform | string;
+  category_ids: string[];
+};
+
+export type EvidencePlatformProfile = {
+  platform: EvidencePlatform | string;
+  platforms: Array<EvidencePlatform | string>;
+  groups: EvidencePlatformGroup[];
+  quick_selects: EvidencePlatformQuickSelect[];
+  categories: EvidencePlatformCategory[];
+  available_categories: string[];
+};
 
 type UploadFormDataOptions = {
   onProgress?: (progress: UploadProgress) => void;
@@ -510,6 +541,7 @@ export type Evidence = {
   provided_platform?: EvidencePlatform | string;
   detected_platform?: EvidencePlatform | string;
   effective_platform?: Exclude<EvidencePlatform, "auto"> | string;
+  platform_profile?: EvidencePlatformProfile;
   uploaded_by_user_id?: string | null;
   uploaded_at?: string | null;
   first_seen_at?: string | null;
@@ -618,6 +650,7 @@ export type ProcessingEvidenceItem = {
   last_error: string | null;
   runs: ProcessingRun[];
   parser_runs: ProcessingParserRun[];
+  linux_artifacts?: Array<{ name: string; family: string; status: string; paths?: string[]; records?: number }>;
   errors: Array<{ parser: string; summary: string | null; details: Record<string, unknown> }>;
   links: { evidence: string; artifacts: string; search: string; memory?: string | null };
 };
@@ -6413,6 +6446,7 @@ export const api = {
       filters?: string;
       scope?: "events" | "findings" | "all";
       evidence_id?: string;
+      platform?: string;
       source_category?: string;
       source?: string;
       artifact_type?: string[];

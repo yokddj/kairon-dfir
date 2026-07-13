@@ -5,6 +5,10 @@ from pathlib import Path
 from typing import Optional
 
 _LINUX_ARTIFACT_MAP: dict[str, tuple[str, str, str]] = {
+    "journal.export": ("linux_journal", "journal_export", "linux_journal_raw"),
+    "journal.json": ("linux_journal", "journal_json", "linux_journal_raw"),
+    "journal.ndjson": ("linux_journal", "journal_json", "linux_journal_raw"),
+    "journalctl.json": ("linux_journal", "journal_json", "linux_journal_raw"),
     "auth.log": ("linux_auth", "auth_log", "linux_auth_raw"),
     "secure": ("linux_auth", "auth_log", "linux_auth_raw"),
     "syslog": ("linux_syslog", "syslog", "linux_syslog_raw"),

@@ -2,6 +2,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, model_validator
 
+from app.core.evidence_platforms import build_evidence_platform_profile
 from app.models.evidence import EvidenceStorageMode, EvidenceType, IngestStatus, resolve_public_evidence_type
 
 
@@ -22,6 +23,7 @@ class EvidenceRead(BaseModel):
     provided_platform: str = "auto"
     detected_platform: str = "unknown"
     effective_platform: str = "unknown"
+    platform_profile: dict = {}
     uploaded_by_user_id: str | None = None
     uploaded_at: datetime | None = None
     first_seen_at: datetime | None = None
@@ -103,6 +105,16 @@ class EvidenceRead(BaseModel):
             data.get("evidence_type"),
             source_tool=data.get("source_tool"),
             metadata=metadata,
+        )
+        available_categories = []
+        discovery = metadata.get("velociraptor_discovery") if isinstance(metadata.get("velociraptor_discovery"), dict) else {}
+        for candidate in discovery.get("candidates") or []:
+            if isinstance(candidate, dict) and candidate.get("category"):
+                available_categories.append(str(candidate.get("category")))
+        data["platform_profile"] = build_evidence_platform_profile(
+            data.get("effective_platform"),
+            evidence_type=getattr(data.get("evidence_type"), "value", data.get("evidence_type")),
+            available_categories=available_categories,
         )
         data["ingest_metadata"] = metadata
         parser_errors = error_log.get("errors") if isinstance(error_log.get("errors"), list) else []

@@ -53,6 +53,7 @@ from app.ingest.archive import copy_folder, extract_archive, inventory_folder, w
 from app.ingest.csv_json import list_generic_artifacts
 from app.ingest.detector import detect_evidence_type
 from app.ingest.host_detection import detect_host_from_artifacts, detect_host_from_velociraptor_collection, normalize_hostname
+from app.ingest.linux.discovery import build_linux_inventory
 from app.ingest.normalizer import base_document, build_raw_summary
 from app.ingest.raw_parsers.evtxecmd_backend import EVTXECMD_BACKEND_CSV, EVTX_RAW_PYTHON_BACKEND, EvtxECmdCsvBackend, select_evtx_parser_backend
 from app.ingest.raw_parsers.defender_evtx_backend import DEFENDER_EVTX_BACKEND, build_defender_documents_from_sources, iter_defender_evtx_source_docs
@@ -65,11 +66,12 @@ from app.ingest.eztools.mftecmd import iter_mftecmd_batches
 from app.ingest.kape import list_kape_artifacts
 from app.ingest.normalizer import normalize_file
 from app.ingest.velociraptor import list_velociraptor_artifacts, open_evidence_container
+from app.ingest.velociraptor.zip_inventory import is_supported_archive_container
 from app.models.artifact import Artifact
 from app.models.case_analysis_job import CaseAnalysisJob, CaseAnalysisJobStatus
 from app.models.detection_result import DetectionResult
 from app.models.rule_run import RuleRun, RuleRunStatus
-from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceType, IngestStatus, resolve_public_evidence_type
+from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceType, IngestStatus, detect_evidence_platform, resolve_evidence_platform, resolve_public_evidence_type
 from app.models.rule import Rule
 from app.models.rule_set import RuleSet
 from app.rules_engine.heuristic import build_heuristic_query, load_heuristic_rule
@@ -2883,6 +2885,31 @@ def _select_artifacts(evidence: Evidence, root: Path, progress_cb=None) -> list[
     return list_generic_artifacts(root)
 
 
+def _unwrap_nested_archive(
+    extract_dir: Path,
+    extracted_files: list[str],
+    archive_entries: list[dict],
+    *,
+    progress_cb=None,
+) -> tuple[Path, list[str], list[dict]]:
+    current_dir = extract_dir
+    current_files = list(extracted_files)
+    current_entries = list(archive_entries)
+    for depth in range(2):
+        if len(current_files) != 1:
+            break
+        candidate = current_dir / current_files[0]
+        if not candidate.is_file() or not is_supported_archive_container(candidate):
+            break
+        nested_dir = current_dir.parent / f"{current_dir.name}_nested_{depth + 1}"
+        if nested_dir.exists():
+            shutil.rmtree(nested_dir, ignore_errors=True)
+        nested_dir.mkdir(parents=True, exist_ok=True)
+        current_files, current_entries = extract_archive(candidate, nested_dir, progress_cb=progress_cb)
+        current_dir = nested_dir
+    return current_dir, current_files, current_entries
+
+
 def _candidate_required_paths(candidate: dict) -> list[str]:
     paths = [str(candidate.get("original_path") or "")]
     paths.extend(str(item) for item in (candidate.get("companion_files") or []) if item)
@@ -4378,13 +4405,20 @@ def ingest_evidence(evidence_id: str) -> None:
             extract_dir = stored_path if use_external_directory else managed_extract_dir
             if stored_path.is_dir():
                 extracted_files, archive_entries = inventory_folder(stored_path, progress_cb=extraction_progress) if use_external_directory else copy_folder(stored_path, extract_dir, progress_cb=extraction_progress)
-            elif stored_path.suffix.lower() in {".zip", ".7z"}:
+            elif is_supported_archive_container(stored_path):
                 extracted_files, archive_entries = extract_archive(stored_path, extract_dir, progress_cb=extraction_progress)
             else:
                 target = extract_dir / stored_path.name
                 target.write_bytes(stored_path.read_bytes())
                 extracted_files = [target.name]
                 archive_entries = [{"path": target.name, "ignored": False, "reason": None, "size": target.stat().st_size, "status": "extracted", "local_path": str(target)}]
+            if archive_entries:
+                extract_dir, extracted_files, archive_entries = _unwrap_nested_archive(
+                    extract_dir,
+                    extracted_files,
+                    archive_entries,
+                    progress_cb=extraction_progress,
+                )
             selected_candidates = None
             selective_stats = {}
             artifacts = []
@@ -4426,6 +4460,34 @@ def ingest_evidence(evidence_id: str) -> None:
             "selected_extraction_stats": selective_stats if is_selected_velociraptor else {},
         }
         metadata["extraction_diagnostics"] = extraction_diagnostics
+        provided_platform = str(metadata.get("provided_platform") or evidence.provided_platform or "auto")
+        provided, detected, effective = resolve_evidence_platform(
+            provided_platform,
+            detect_evidence_platform(
+                filename=evidence.original_filename,
+                paths=extracted_files,
+                evidence_type=getattr(evidence.evidence_type, "value", evidence.evidence_type),
+            ),
+            evidence_type=getattr(evidence.evidence_type, "value", evidence.evidence_type),
+        )
+        evidence.provided_platform = provided
+        evidence.detected_platform = detected
+        evidence.effective_platform = effective
+        metadata["provided_platform"] = provided
+        metadata["detected_platform"] = detected
+        metadata["effective_platform"] = effective
+        linux_inventory = build_linux_inventory(extract_dir, extracted_files)
+        if linux_inventory:
+            metadata["linux_inventory"] = linux_inventory
+            metadata["linux_collection_summary"] = {
+                "distribution": linux_inventory.get("distribution"),
+                "hostname": linux_inventory.get("hostname"),
+                "kernel": linux_inventory.get("kernel"),
+                "coverage": linux_inventory.get("coverage") or {},
+                "warnings": linux_inventory.get("warnings") or [],
+            }
+            if linux_inventory.get("hostname") and not metadata.get("provided_host"):
+                metadata.setdefault("linux_detected_hostname", linux_inventory.get("hostname"))
         evidence.metadata_json = metadata
         db.add(evidence)
         db.commit()
@@ -4517,6 +4579,10 @@ def ingest_evidence(evidence_id: str) -> None:
                 collection_host_candidate = velo_host
                 candidate_hosts.append(velo_host)
                 detected_host_counts[velo_host] += 1
+        linux_hostname = str(((evidence.metadata_json or {}).get("linux_inventory") or {}).get("hostname") or "").strip()
+        if linux_hostname:
+            candidate_hosts.append(linux_hostname)
+            detected_host_counts[linux_hostname] += 1
         artifact_host = detect_host_from_artifacts(artifacts)
         if artifact_host:
             candidate_hosts.append(artifact_host)

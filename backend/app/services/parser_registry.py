@@ -183,6 +183,20 @@ _REGISTRY: dict[str, dict[str, Any]] = {
         "notes": ["Filesystem timeline artifacts remain searchable with partial coverage depending on parser output."],
     },
     # Linux artifact entries
+    "linux_journal": {
+        "artifact_type": "linux_journal",
+        "parser_name": "linux_journal_raw",
+        "supported_extensions": [".export", ".json", ".ndjson"],
+        "source_patterns": ["*journal.export", "*journal.json", "*journal.ndjson", "*journalctl.json"],
+        "enabled_for_usable_search": True,
+        "searchable": True,
+        "maturity": "partial",
+        "output_contract_version": SEARCHABLE_CONTRACT_VERSION,
+        "primary_timestamp_field": "@timestamp",
+        "searchable_fields": ["message", "linux.username", "linux.process", "linux.hostname", "event.action"],
+        "filter_fields": COMMON_SEARCH_FILTER_FIELDS + ["linux.artifact_family", "linux.username", "linux.hostname", "event.action"],
+        "notes": ["systemd journal export and JSON lines parsing for Linux host activity and services."],
+    },
     "linux_auth": {
         "artifact_type": "linux_auth",
         "parser_name": "linux_auth_raw",

@@ -22,7 +22,7 @@
 
 Kairon DFIR supports the analyst; it does not replace them. It provides a clear lens over forensic evidence so critical moments can be interpreted faster and with more context.
 
-The project is intended for trusted labs and controlled private beta deployments. Evidence can contain highly sensitive data. Do not expose Kairon DFIR directly to the internet without authentication, VPN, or a protected reverse proxy.
+The project is intended for trusted labs and controlled private-beta deployments. Evidence can contain highly sensitive data. Do not expose Kairon DFIR directly to the internet without authentication, VPN, or a protected reverse proxy.
 
 ## What It Does
 
@@ -55,6 +55,8 @@ cd kairon-dfir
 ```
 
 The setup wizard generates configuration, builds Docker images, and starts all services. Open the URL shown at the end — the first-run wizard creates your admin account in the browser.
+
+Configuration defaults are documented in `.env.example`; never commit a real `.env` file.
 
 ### Manual Commands (Alternative)
 
@@ -213,6 +215,28 @@ Coverage depends on the artifacts present in the uploaded evidence and on parser
 | Linux artifacts | Authentication logs, syslog, audit logs, shell history, cron, systemd, SSH, identity, sudoers, packages, network config, OS info (partial) |
 | Memory analysis | Planned/experimental authorized RAM evidence upload and isolated Volatility metadata/process profiles, disabled by default |
 | Investigation outputs | Findings, Incident Timeline, Reports |
+
+## Linux Support
+
+Kairon accepts Linux collections in common archive and folder formats, including ZIP, TAR, TAR.GZ, TGZ, uploaded folders, manual triage folders, and Velociraptor-style exports.
+
+Linux auto-discovery can detect and inventory:
+
+- auth logs;
+- syslog/messages;
+- shell history;
+- cron;
+- systemd units;
+- SSH artifacts;
+- passwd/group/shadow presence;
+- sudoers;
+- package manager logs;
+- network configuration;
+- OS release, hostname, kernel, and users.
+
+Evidence Detail shows Linux collection summary and coverage. Artifact Explorer exposes Linux Auth, Syslog, Audit, Shell History, Cron, Systemd, SSH, Identity, Packages, Network, and OS views.
+
+Linux memory uploads are accepted and preserved for host assignment and findings, but Kairon does not provide full advanced Linux memory analysis yet.
 
 ## Security Warning
 

@@ -139,8 +139,18 @@ def detect_evidence_type(path: Path, extracted_files: list[str] | None = None) -
                 return EvidenceType.sigma_rules
         except Exception:  # noqa: BLE001
             pass
-    if any(token in lower_name for token in ["linux", "triage-linux"]):
+    if any(token in lower_name for token in ["linux", "triage-linux", "ctf_manifest"]):
         return EvidenceType.linux_triage
+    if path.is_dir():
+        # Heuristic: detect Linux collection by directory structure
+        try:
+            dir_entries = list(path.rglob("*"))
+            lower_entries = {str(e.relative_to(path)).lower() for e in dir_entries if e.is_file()}
+            linux_markers = {"etc/passwd", "etc/group", "etc/hostname", "etc/os-release", "etc/sudoers", "etc/crontab", "var/log/auth.log", "var/log/syslog", "var/log/journal", "etc/systemd", "lib/systemd"}
+            if sum(1 for m in linux_markers if any(m in entry for entry in lower_entries)) >= 2:
+                return EvidenceType.linux_triage
+        except OSError:
+            pass
     if any(token in lower_name for token in ["macos", "osx", "mac_triage"]):
         return EvidenceType.macos_triage
     if suffix == ".csv":
@@ -228,6 +238,31 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
             "parser": "not_implemented",
             "reason": "Detected EZ Tools console log; preserved but not indexed as forensic event content.",
         }
+    if "reason" in header_set and "usn" in header_set and "filereference" in header_set:
+        parser = (
+            "usn_jsonl" if path.suffix.lower() == ".jsonl"
+            else "usn_json" if path.suffix.lower() == ".json"
+            else "zimmerman" if path.suffix.lower() == ".csv"
+            else "ntfs_usnjrnl"
+        )
+        return {
+            "artifact_type": "usn",
+            "profile": "filesystem",
+            "parser": parser,
+        }
+    if {"entrynumber", "sequencenumber"} <= header_set and {"fullpath", "path", "filename"} & header_set:
+        parser = (
+            "zimmerman" if "mftecmd" in lower_name
+            else "mft_jsonl" if path.suffix.lower() == ".jsonl"
+            else "mft_json" if path.suffix.lower() == ".json"
+            else "mft_csv" if path.suffix.lower() == ".csv"
+            else "mft_raw"
+        )
+        return {
+            "artifact_type": "mft",
+            "profile": "filesystem",
+            "parser": parser,
+        }
     if looks_like_ntfs_artifact(path, headers):
         parser = "ntfs_generic_raw"
         if {"zoneid", "hosturl", "referrerurl"} & header_set:
@@ -244,6 +279,12 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
             "artifact_type": "ntfs",
             "profile": "filesystem",
             "parser": parser,
+        }
+    if looks_like_scheduled_task_artifact(path, headers):
+        return {
+            "artifact_type": "scheduled_task",
+            "profile": "persistence",
+            "parser": "scheduled_task_xml" if path.suffix.lower() == ".xml" or path.suffix == "" else "csv",
         }
     if looks_like_windows_ui_artifact(path, headers):
         parser = "windows_ui_generic_raw"
@@ -269,6 +310,12 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
             "artifact_type": "windows_ui",
             "profile": "user_activity",
             "parser": parser,
+        }
+    if "recentfilecache" in lower_name:
+        return {
+            "artifact_type": "appcompat",
+            "profile": "execution_artifact",
+            "parser": "zimmerman",
         }
     eztools_match = detect_eztool_output(path, headers)
     if eztools_match:
@@ -722,6 +769,12 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
             "profile": "registry",
             "parser": "user_activity_registry_raw",
         }
+    if "recentfilecache" in lower_name:
+        return {
+            "artifact_type": "appcompat",
+            "profile": "execution_artifact",
+            "parser": "zimmerman",
+        }
     if looks_like_jumplist_artifact(path, headers):
         lower_name = name.lower()
         jumplist_subtype = (
@@ -749,23 +802,25 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
             "parser": parser,
             "shellbag_artifact_type": shellbag_subtype,
         }
+    # Linux artifact detection — moved BEFORE Velociraptor/KAPE/tool fallbacks
+    linux_result = looks_like_linux_artifact(path)
+    if linux_result:
+        family, artifact_type, parser = linux_result
+        return {
+            "artifact_type": family,
+            "artifact_family": family,
+            "profile": "linux_activity",
+            "parser": parser,
+            "linux_artifact_type": artifact_type,
+            "reason": "Detected Linux artifact",
+        }
+    # Generic CSV header fallbacks (Linux-unrelated)
     for token, (artifact_type, profile, parser) in VELOCI_ARTIFACT_MAP.items():
         if token.lower() in name.lower():
             return {"artifact_type": artifact_type, "profile": profile, "parser": parser}
     for token, (artifact_type, profile, parser) in KAPE_NAME_MAP.items():
         if token.lower() in name.lower():
             return {"artifact_type": artifact_type, "profile": profile, "parser": parser}
-    # Linux artifact detection
-    linux_result = looks_like_linux_artifact(path.name)
-    if linux_result:
-        family, artifact_type, parser = linux_result
-        return {
-            "artifact_type": family,
-            "profile": "linux_activity",
-            "parser": parser,
-            "linux_artifact_type": artifact_type,
-            "reason": "Linux parser coverage is partial",
-        }
     if "eventid" in header_blob:
         return {"artifact_type": "evtx", "profile": "account_usage", "parser": "generic_csv"}
     if "destinationip" in header_blob or "remoteaddress" in header_blob:

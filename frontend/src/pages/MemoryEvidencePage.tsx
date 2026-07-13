@@ -178,6 +178,7 @@ export default function MemoryEvidencePage() {
 
   const overview = overviewQuery.data;
   const evidence = landingQuery.data?.items?.find((item) => item.evidence_id === evidenceId) || null;
+  const linuxMemoryHint = evidence?.detected_platform === "linux" || evidence?.metadata?.memory_os_hint === "linux";
   const caseHosts = caseHostsQuery.data?.hosts ?? [];
   const displayedEvidence = evidence && assignedHostOverrideId !== undefined ? { ...evidence, host_id: assignedHostOverrideId } : evidence;
   const currentAssignedHost = assignedHost(displayedEvidence, caseHosts);
@@ -498,7 +499,7 @@ export default function MemoryEvidencePage() {
         {hostAssignmentMutation.error instanceof Error ? <p className="mt-2 text-xs text-danger">{hostAssignmentMutation.error.message}</p> : null}
       </section>
 
-      {evidence.effective_platform === "linux" ? (
+      {linuxMemoryHint ? (
         <section className="rounded-[28px] border border-mint/30 bg-emerald-500/10 p-5 shadow-panel" data-testid="memory-linux-notice">
           <div className="flex items-start gap-3">
             <span className="mt-0.5 font-mono text-xs uppercase tracking-[0.18em] text-emerald-400">Linux</span>

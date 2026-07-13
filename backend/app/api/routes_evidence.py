@@ -192,8 +192,12 @@ def _current_user_id(current_user: User | None) -> str | None:
     return str(value) if value else None
 
 
-def _resolve_requested_platform(value: str | None, *, filename: str | None = None, paths: list[str] | None = None) -> tuple[str, str, str]:
-    provided, detected, effective = resolve_evidence_platform(value, detect_evidence_platform(filename=filename, paths=paths))
+def _resolve_requested_platform(value: str | None, *, filename: str | None = None, paths: list[str] | None = None, evidence_type: str | None = None) -> tuple[str, str, str]:
+    provided, detected, effective = resolve_evidence_platform(
+        value,
+        detect_evidence_platform(filename=filename, paths=paths, evidence_type=evidence_type),
+        evidence_type=evidence_type,
+    )
     if provided == EvidencePlatform.macos.value:
         raise HTTPException(status_code=400, detail="macOS artifacts are not supported yet")
     return provided, detected, effective

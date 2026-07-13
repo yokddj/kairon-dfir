@@ -5,6 +5,7 @@ from pathlib import Path
 from app.ingest.browser.detector import looks_like_browser_artifact
 from app.ingest.detector import classify_artifact
 from app.ingest.eztools.base import ensure_csv_field_limit
+from app.ingest.linux.helpers import looks_like_linux_artifact
 from app.ingest.ntfs.helpers import is_ntfs_raw_candidate
 from app.ingest.scheduled_tasks.helpers import looks_like_scheduled_task_xml_path
 from app.ingest.windows_ui.helpers import is_windows_ui_raw_candidate
@@ -79,6 +80,8 @@ def list_generic_artifacts(root: Path) -> list[dict]:
                 "artifact_type": classification["artifact_type"],
                 "parser": classification["parser"],
                 "profile": classification["profile"],
+                "artifact_family": classification.get("artifact_family"),
+                "linux_artifact_type": classification.get("linux_artifact_type"),
                 "reason": classification.get("reason"),
                 "path": path,
             }
@@ -95,6 +98,7 @@ def list_generic_artifacts(root: Path) -> list[dict]:
             or is_windows_ui_raw_candidate(item)
             or looks_like_scheduled_task_xml_path(item)
             or looks_like_browser_artifact(item)
+            or looks_like_linux_artifact(item.relative_to(root)) is not None
         )
         if item.is_file() and "__macosx" not in normalized_parts and not item.name.startswith("._") and eligible:
             classification = classify_artifact(item, _read_structured_headers(item))
@@ -105,6 +109,8 @@ def list_generic_artifacts(root: Path) -> list[dict]:
                     "artifact_type": classification["artifact_type"],
                     "parser": classification["parser"],
                     "profile": classification["profile"],
+                    "artifact_family": classification.get("artifact_family"),
+                    "linux_artifact_type": classification.get("linux_artifact_type"),
                     "reason": classification.get("reason"),
                     "path": item,
                 }

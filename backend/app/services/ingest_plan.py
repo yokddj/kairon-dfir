@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.ingest.csv_json import list_generic_artifacts
+from app.ingest.velociraptor.zip_inventory import is_supported_archive_container
 from app.models.artifact import Artifact
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
 from app.services.evidence_runs import merge_evidence_metadata
@@ -45,8 +46,8 @@ def source_kind_for_evidence(evidence: Evidence, metadata: dict[str, Any] | None
         return "raw_archive"
     if evidence.evidence_type in {EvidenceType.evtx, EvidenceType.txt, EvidenceType.unknown}:
         return "raw_file"
-    if evidence.evidence_type in {EvidenceType.parsed_folder, EvidenceType.kape_archive, EvidenceType.csv, EvidenceType.json, EvidenceType.jsonl}:
-        return "parsed_archive" if Path(str(evidence.stored_path or "")).suffix.lower() in {".zip", ".7z", ".tar", ".gz", ".bz2", ".xz"} else "parsed_file"
+    if evidence.evidence_type in {EvidenceType.parsed_folder, EvidenceType.kape_archive, EvidenceType.csv, EvidenceType.json, EvidenceType.jsonl, EvidenceType.linux_triage, EvidenceType.macos_triage}:
+        return "parsed_archive" if is_supported_archive_container(Path(str(evidence.stored_path or ""))) else "parsed_file"
     return "parsed_file"
 
 

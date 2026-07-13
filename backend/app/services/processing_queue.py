@@ -250,25 +250,61 @@ def _parser_rows(artifacts: list[Artifact], errors: list[dict], memory_runs: lis
     return sorted(grouped.values(), key=lambda item: (item["family"], item["parser"]))
 
 
+def _linux_processing_rows(evidence: Evidence, artifacts: list[Artifact]) -> list[dict]:
+    inventory = dict((evidence.metadata_json or {}).get("linux_inventory") or {})
+    if not inventory:
+        return []
+    by_family = {str(artifact.artifact_type or ""): artifact for artifact in artifacts if str(artifact.artifact_type or "").startswith("linux_")}
+    rows: list[dict] = []
+    for item in inventory.get("processing") or []:
+        family = str(item.get("family") or item.get("key") or "")
+        artifact = by_family.get(family)
+        raw_status = str(getattr(artifact, "status", None) or item.get("status") or "Detected")
+        status_map = {
+            "completed": "Parsed",
+            "partial": "Parsed",
+            "processing": "Detected",
+            "queued_parallel": "Detected",
+            "detected_not_parsed": "Unsupported",
+            "skipped_unsupported": "Unsupported",
+            "skipped_sensitive": "Skipped",
+            "failed": "Failed",
+        }
+        rows.append(
+            {
+                "name": str(item.get("name") or family or "Linux artifact"),
+                "family": family,
+                "status": status_map.get(raw_status.lower(), raw_status.replace("_", " ").title() or "Detected"),
+                "paths": item.get("paths") or [],
+                "records": int(getattr(artifact, "record_count", 0) or 0) if artifact else 0,
+            }
+        )
+    return rows
+
+
 def build_processing_item(evidence: Evidence, artifacts: list[Artifact], memory_runs: list[MemoryScanRun]) -> dict:
     errors = _error_items(evidence)
     runs = _runs_for_evidence(evidence, memory_runs)
     parser_rows = _parser_rows(artifacts, errors, memory_runs)
+    linux_artifacts = _linux_processing_rows(evidence, artifacts)
     parser_statuses = Counter(row["status"] for row in parser_rows)
     warning_count = sum(int(run.get("warning_count") or 0) for run in runs) + len([row for row in errors if row.get("details", {}).get("warning")])
     failed_parser_count = sum(1 for row in parser_rows if row["status"] in {"failed", "timed_out", "error"})
     status = _public_status(evidence, runs, warning_count, failed_parser_count)
     latest = runs[0] if runs else None
     assigned_host = getattr(getattr(evidence, "host", None), "display_name", None) or getattr(getattr(evidence, "host", None), "canonical_name", None)
+    metadata = evidence.metadata_json or {}
+    provided_host = metadata.get("provided_host") if isinstance(metadata, dict) else None
+    observed_host = provided_host or evidence.detected_host
     artifact_count = len(artifacts) + sum(int(plugin.row_count or 0) for run in memory_runs for plugin in run.plugin_runs)
     return {
         "evidence_id": evidence.id,
         "case_id": evidence.case_id,
         "filename": evidence.original_filename,
         "evidence_type": _status_value(evidence.evidence_type) or str(evidence.evidence_type or "unknown"),
-        "host": assigned_host or "Unassigned",
+        "host": assigned_host or observed_host or "Unassigned",
         "host_id": evidence.host_id,
-        "detected_host": evidence.detected_host or (evidence.metadata_json or {}).get("provided_host"),
+        "detected_host": observed_host,
         "uploaded_at": _iso(getattr(evidence, "uploaded_at", None) or evidence.created_at),
         "processing_status": status,
         "last_run_status": latest.get("status") if latest else status,
@@ -283,6 +319,7 @@ def build_processing_item(evidence: Evidence, artifacts: list[Artifact], memory_
         "last_error": errors[0]["summary"] if errors else (latest.get("error_summary") if latest else None),
         "runs": runs,
         "parser_runs": parser_rows,
+        "linux_artifacts": linux_artifacts,
         "errors": errors,
         "links": {
             "evidence": f"/evidences/{evidence.id}",

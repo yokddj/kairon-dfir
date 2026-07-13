@@ -38,6 +38,7 @@ const ARTIFACT_VIEW_LABELS: Record<string, string> = {
   linux_audit: "Linux Audit",
   linux_cron: "Linux Cron",
   linux_identity: "Linux Identity",
+  linux_journal: "Linux Journal",
   linux_memory: "Linux Memory",
   linux_network: "Linux Network",
   linux_os_info: "Linux OS Info",
@@ -74,6 +75,7 @@ const ARTIFACT_VIEW_LABELS: Record<string, string> = {
   wmi: "WMI",
   zone_identifier: "MOTW / Downloaded Files",
 };
+const LINUX_ARTIFACT_VIEWS = ["linux_journal", "linux_auth", "linux_syslog", "linux_audit", "linux_shell_history", "linux_cron", "linux_systemd", "linux_ssh", "linux_identity", "linux_packages", "linux_network", "linux_os_info"];
 const EZ_BACKENDS: Record<string, { tool: string; backend: string; note: string }> = {
   lnk: { tool: "LECmd", backend: "lecmd_csv", note: "Lower coverage on HOSTA benchmark, richer target and argument fields." },
   jumplist: { tool: "JLECmd", backend: "jlecmd_csv", note: "Lower coverage on HOSTA benchmark, richer AppId, MRU and target fields." },
@@ -667,6 +669,7 @@ export default function ArtifactExplorer() {
     options.add("evtx");
     options.add("motw");
     options.add("email");
+    LINUX_ARTIFACT_VIEWS.forEach((option) => options.add(option));
     return Array.from(options).sort((left, right) => artifactViewLabel(left).localeCompare(artifactViewLabel(right)));
   }, [artifactTypeOptions]);
   const artifactNameOptions = Object.keys(facetsQuery.data?.["artifact.name"] ?? {});
@@ -995,6 +998,22 @@ export default function ArtifactExplorer() {
             )}
             .
           </p>
+        </div>
+        <div className="mt-4 rounded-2xl border border-mint/25 bg-mint/10 p-4" data-testid="linux-artifacts-view">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mint">Linux Artifacts</p>
+              <p className="mt-1 text-sm text-muted">Jump to supported Linux artifact families discovered from Linux collections.</p>
+            </div>
+            <span className="rounded-full border border-mint/30 bg-abyss/60 px-3 py-1 text-xs text-mint">Auto-discovery aware</span>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {LINUX_ARTIFACT_VIEWS.map((viewName) => (
+              <button key={viewName} type="button" onClick={() => setArtifactType(viewName)} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted hover:border-mint/40 hover:text-mint">
+                {artifactViewLabel(viewName)}
+              </button>
+            ))}
+          </div>
         </div>
         {!caseId ? <p className="mt-2 text-sm text-amber-300">Artifact Views are available after selecting a case.</p> : null}
           {hostFilter || evidenceIdFilter ? (

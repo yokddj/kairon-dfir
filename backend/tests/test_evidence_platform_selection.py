@@ -2,6 +2,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.routes_evidence import _resolve_requested_platform
+from app.core.evidence_platforms import build_evidence_platform_profile, infer_platform_from_categories
 from app.models.evidence import detect_evidence_platform, resolve_evidence_platform
 
 
@@ -37,3 +38,27 @@ def test_macos_direct_selection_is_rejected() -> None:
 
     assert exc_info.value.status_code == 400
     assert exc_info.value.detail == "macOS artifacts are not supported yet"
+
+
+def test_memory_evidence_resolves_to_memory_platform() -> None:
+    detected = detect_evidence_platform(filename="memory.lime", evidence_type="memory_dump")
+
+    provided, detected, effective = resolve_evidence_platform("linux", detected, evidence_type="memory_dump")
+
+    assert provided == "linux"
+    assert detected == "memory"
+    assert effective == "memory"
+
+
+def test_mixed_collection_detection_and_profile_grouping() -> None:
+    detected = detect_evidence_platform(paths=["Windows/System32/winevt/Logs/Security.evtx", "etc/passwd"])
+
+    assert detected == "mixed"
+    assert infer_platform_from_categories(["evtx", "linux_auth"]) == "mixed"
+
+    profile = build_evidence_platform_profile("mixed", available_categories=["evtx", "linux_auth", "linux_journal"])
+
+    assert profile["platform"] == "mixed"
+    assert profile["platforms"] == ["windows", "linux"]
+    assert any(group["platform"] == "windows" for group in profile["groups"])
+    assert any(group["platform"] == "linux" for group in profile["groups"])
