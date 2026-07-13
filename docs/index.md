@@ -8,6 +8,7 @@ Esta documentación describe el estado real de la plataforma. Las capacidades pa
 - [artifacts_matrix.md](artifacts_matrix.md): matriz de artefactos detectados/parseados/indexados.
 - [parser-coverage.md](parser-coverage.md): matriz estructurada de familias de parsers, formatos, campos, vistas y limitaciones.
 - [platform-architecture.md](platform-architecture.md): arquitectura multiplataforma, capabilities, registry de artefactos y flujo de UI.
+- [disk-image-ingestion.md](disk-image-ingestion.md): ingestión read-only de imágenes RAW/EWF, volúmenes, OS detection y trazabilidad.
 - [parser_backends.md](parser_backends.md): backends activos, advanced y faltantes.
 - [project_status.md](project_status.md): resumen de madurez del proyecto.
 

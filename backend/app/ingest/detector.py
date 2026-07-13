@@ -21,6 +21,7 @@ from app.ingest.usb.helpers import looks_like_usb_artifact
 from app.ingest.windows_ui.helpers import looks_like_windows_ui_artifact
 from app.ingest.wmi.helpers import looks_like_wmi_artifact
 from app.ingest.linux.helpers import looks_like_linux_artifact
+from app.disk_images.service import detect_disk_image_format
 from app.models.evidence import EvidenceType
 
 
@@ -126,8 +127,13 @@ def detect_evidence_type(path: Path, extracted_files: list[str] | None = None) -
         return EvidenceType.parsed_folder
     if suffix == ".evtx":
         return EvidenceType.evtx
-    if suffix in {".raw", ".mem", ".dmp", ".vmem", ".lime", ".aff4"}:
+    disk_image_probe = detect_disk_image_format(path)
+    if suffix in {".raw", ".img"} and disk_image_probe:
+        return EvidenceType.disk_image
+    if suffix in {".mem", ".dmp", ".vmem", ".lime", ".aff4"}:
         return EvidenceType.memory_dump
+    if disk_image_probe:
+        return EvidenceType.disk_image
     if suffix in {".pcap", ".pcapng"}:
         return EvidenceType.pcap
     if suffix in {".yar", ".yara"}:

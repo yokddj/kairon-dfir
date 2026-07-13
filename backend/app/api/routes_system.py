@@ -23,6 +23,7 @@ from app.core.performance import (
     save_performance_profile,
 )
 from app.ingest.raw_parsers.evtxecmd_backend import detect_evtx_parser_backends
+from app.disk_images.service import disk_image_readiness
 from app.services.parser_backend_evaluation import build_core_parser_backend_evaluation, detect_ez_tools
 from app.services.opensearch_dashboards import bootstrap_dashboards_data_view, dashboards_admin_status
 from app.services.task_registry import build_task_health_snapshot, build_task_registry_summary
@@ -75,6 +76,8 @@ DOCS_CATALOG = [
     {"slug": "artifacts-matrix", "title": "Artifact support matrix", "summary": "Matriz de artefactos detectados, parseados, indexados, buscables y pendientes.", "filename": "artifacts_matrix.md"},
     {"slug": "parser-coverage", "title": "Parser coverage matrix", "summary": "Cobertura real por familia, formatos, campos normalizados, vistas y limitaciones.", "filename": "parser-coverage.md"},
     {"slug": "evidence-platforms", "title": "Evidence platform selection", "summary": "Cómo se guardan provided/detected/effective platform y límites de Windows, Linux, macOS y Other.", "filename": "evidence-platforms.md"},
+    {"slug": "linux-support", "title": "Linux support", "summary": "Colecciones Linux aceptadas, auto-discovery, inventario, cobertura, parsers y límites actuales.", "filename": "linux-support.md"},
+    {"slug": "disk-image-ingestion", "title": "Disk image ingestion", "summary": "Soporte actual de RAW/EWF, volúmenes, OS detection, read-only y trazabilidad.", "filename": "disk-image-ingestion.md"},
     {"slug": "investigation-workflow", "title": "Investigation workflow", "summary": "Flujo recomendado para pivotar entre caso, host, evidencia, búsqueda, artefactos, memoria y hallazgos.", "filename": "investigation-workflow.md"},
     {"slug": "parser-backends", "title": "Parser backends", "summary": "Backends estables, advanced, planned y tooling_missing.", "filename": "parser_backends.md"},
     {"slug": "api-summary", "title": "API summary", "summary": "Mapa de endpoints y workflows principales.", "filename": "api_summary.md"},
@@ -242,6 +245,7 @@ def system_status(db: Session = Depends(get_db)) -> dict:
         "evtx_parser_backends": detect_evtx_parser_backends(),
         "ez_parser_tools": detect_ez_tools(),
         "core_parser_backend_evaluation": build_core_parser_backend_evaluation(),
+        "disk_image_adapters": disk_image_readiness(),
         "workers": {"active": len(workers), "known": [worker.name for worker in workers]},
         "settings": {
             "ingest_batch_size": effective["INGEST_BATCH_SIZE"],

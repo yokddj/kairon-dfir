@@ -610,6 +610,12 @@ def _ensure_compatible_schema() -> None:
                 "provided_platform": "VARCHAR(32) NOT NULL DEFAULT 'auto'",
                 "detected_platform": "VARCHAR(32) NOT NULL DEFAULT 'unknown'",
                 "effective_platform": "VARCHAR(32) NOT NULL DEFAULT 'unknown'",
+                "disk_image_id": "UUID REFERENCES disk_images(id) ON DELETE SET NULL",
+                "disk_volume_id": "UUID REFERENCES disk_volumes(id) ON DELETE SET NULL",
+                "os_installation_id": "UUID REFERENCES os_installations(id) ON DELETE SET NULL",
+                "original_source_path": "VARCHAR(4096)",
+                "logical_source_path": "VARCHAR(4096)",
+                "acquisition_method": "VARCHAR(128)",
             }
             for column_name, column_type in additions.items():
                 if column_name not in evidence_columns:

@@ -258,6 +258,18 @@ class Settings(BaseSettings):
     backend_multipart_max_part_size: int = 1048576
     backend_enable_experimental_folder_upload: bool = False
     backend_experimental_folder_upload_max_files: int = 2000
+    disk_image_ingest_enabled: bool = True
+    disk_image_max_bytes: int = 1099511627776
+    disk_image_max_segments: int = 64
+    disk_image_max_partitions: int = 64
+    disk_image_max_files_per_volume: int = 50000
+    disk_image_max_bytes_per_volume: int = 10737418240
+    disk_image_max_directory_depth: int = 16
+    disk_image_max_path_length: int = 4096
+    disk_image_job_timeout_seconds: int = 14400
+    disk_image_inspection_timeout_seconds: int = 900
+    disk_image_export_timeout_seconds: int = 7200
+    disk_image_allowed_extensions: str = ".dd,.img,.raw,.e01,.ex01,.e02,.e03,.e04,.e05"
     backend_experimental_folder_upload_max_total_bytes: int = 2147483648
     # Experimental Mismatched-Symbol Analysis v1.  When ``False``
     # (the default) the experimental endpoints return 404, the

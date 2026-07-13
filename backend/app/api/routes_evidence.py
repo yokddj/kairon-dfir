@@ -36,6 +36,7 @@ from app.core.storage import (
     reset_extracted_dir,
     reset_staging_dir,
     safe_remove,
+    save_segmented_uploads,
     save_folder_uploads,
     save_memory_upload,
     save_upload,
@@ -47,9 +48,11 @@ from app.ingest.velociraptor.zip_inventory import is_supported_archive_container
 from app.models.artifact import Artifact
 from app.models.case import Case
 from app.models.detection_result import DetectionResult
+from app.models.disk_image import DiskImage
 from app.models.evidence import Evidence, EvidenceCustodyEvent, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidencePlatform, EvidenceStorageMode, EvidenceType, IngestStatus, detect_evidence_platform, resolve_evidence_platform
 from app.models.memory import MemoryUpload
 from app.models.rule_run import RuleRun, RuleRunStatus
+from app.schemas.disk_image import DiskImageRead
 from app.schemas.evidence import ArtifactRead, EvidenceRead, EvidenceRunQueuedResponse, EvidenceRunRead
 from app.schemas.evidence import EvidenceBenchmarkQueuedResponse, EvidenceBenchmarkRead
 from app.schemas.rule import DetectionRead, RuleRunRead, RulesRunRequest
@@ -114,6 +117,7 @@ from app.services.usable_ingest import FULL_FORENSIC_MODE, USABLE_INGEST_MODE, i
 from app.models.user import User
 from app.models.assignment_history import AssignmentHistory
 from datetime import UTC, datetime
+from app.disk_images.service import detect_disk_image_format
 from app.services.reassignment import execute_host_reassignment, backfill_evidence_documents, invalidate_host_caches
 from app.services.reconciliation import capture_reprocess_baseline
 from app.workers.tasks import _resolve_retry_profile, enqueue_core_ez_rebuild, enqueue_defender_evtx_index, enqueue_ingest, enqueue_mft_full_index, enqueue_mft_summary_index, enqueue_problematic_artifact_retry, enqueue_recmd_user_activity_index, enqueue_registry_persistence_summary_index, enqueue_srum_index
@@ -1171,6 +1175,8 @@ def _recompute_evidence_status(item: Evidence, db: Session) -> dict[str, Any]:
 def _source_tool_for_detected_evidence_type(evidence_type: EvidenceType) -> str | None:
     if evidence_type == EvidenceType.evtx:
         return "windows_event_log"
+    if evidence_type == EvidenceType.disk_image:
+        return "disk_image"
     return None
 
 
@@ -2434,6 +2440,126 @@ def upload_evidence(
     except OpenSearchIngestBlockedError as exc:
         _mark_evidence_blocked_before_ingest(db, evidence, exc=exc)
     return evidence
+
+
+@router.post("/api/cases/{case_id}/disk-images/upload", response_model=EvidenceRead, status_code=status.HTTP_201_CREATED)
+def upload_disk_image(
+    case_id: str,
+    files: list[UploadFile] = File(...),
+    ingest_mode: str | None = Form(None),
+    provided_host: str | None = Form(None),
+    provided_platform: str | None = Form(None),
+    host_id: str | None = Form(None),
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
+) -> Evidence:
+    if not settings.disk_image_ingest_enabled:
+        raise HTTPException(status_code=403, detail="Disk image ingestion is disabled by server configuration.")
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded.")
+    if len(files) > settings.disk_image_max_segments:
+        raise HTTPException(status_code=400, detail=f"Too many segments: {len(files)} > {settings.disk_image_max_segments}")
+    if not db.get(Case, case_id):
+        raise HTTPException(status_code=404, detail="Case not found")
+    normalized_provided_host = _normalize_provided_host(provided_host)
+    assigned_host_id = _validated_case_host_id(db, case_id, host_id)
+    normalized_ingest_mode = normalize_ingest_mode(ingest_mode)
+    try:
+        if len(files) == 1:
+            evidence_id, stored_path, size_bytes, combined_sha256 = save_upload(case_id, files[0])
+            storage_root = stored_path.parent
+            original_name = files[0].filename or stored_path.name
+            segment_entries = [{"path": stored_path.name, "ignored": False, "reason": None, "sha256": combined_sha256, "size": size_bytes}]
+        else:
+            evidence_id, storage_root, size_bytes, combined_sha256, segment_entries, original_name = save_segmented_uploads(case_id, files)
+            stored_path = storage_root / Path(original_name).name
+        format_probe = detect_disk_image_format(stored_path if stored_path.exists() else storage_root / Path(original_name).name, [storage_root / entry["path"] for entry in segment_entries if not entry.get("ignored")])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not format_probe:
+        raise HTTPException(status_code=400, detail={"error_code": "unknown_format", "message": "Kairon could not recognize this disk image format."})
+    if str(format_probe.get("format") or "") not in {"raw", "ewf"}:
+        raise HTTPException(status_code=400, detail={"error_code": "unsupported_format", "message": f"{format_probe.get('format')} is recognized but not supported in this release."})
+    resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(
+        provided_platform,
+        filename=original_name,
+        evidence_type=EvidenceType.disk_image.value,
+    )
+    evidence = Evidence(
+        id=evidence_id,
+        case_id=case_id,
+        original_filename=Path(original_name).name,
+        stored_path=str(stored_path if len(files) == 1 else storage_root / Path(original_name).name),
+        original_path=str(storage_root),
+        storage_mode=EvidenceStorageMode.uploaded,
+        is_external=False,
+        copy_to_storage=True,
+        evidence_type=EvidenceType.disk_image,
+        sha256=combined_sha256,
+        size_bytes=size_bytes,
+        detected_type=EvidenceType.disk_image.value,
+        provided_platform=resolved_provided_platform,
+        detected_platform=resolved_detected_platform,
+        effective_platform=resolved_effective_platform,
+        uploaded_by_user_id=_current_user_id(current_user),
+        uploaded_at=utc_now_naive(),
+        first_seen_at=utc_now_naive(),
+        integrity_status=EvidenceIntegrityStatus.unknown,
+        file_count=len(segment_entries),
+        ingest_status=IngestStatus.pending,
+        host_id=assigned_host_id,
+        host_assignment_status="confirmed" if assigned_host_id else None,
+        host_assignment_method="upload_assignment" if assigned_host_id else None,
+        host_assignment_confidence="high" if assigned_host_id else None,
+        host_assignment_reason="Assigned during upload" if assigned_host_id else None,
+        host_assignment_updated_at=utc_now().isoformat() if assigned_host_id else None,
+        host_assignment_updated_by=_actor_label(current_user) if assigned_host_id else None,
+        source_tool="disk_image",
+        path_validation={},
+        ingest_source={
+            "mode": EvidenceStorageMode.uploaded.value,
+            "original_path": str(storage_root),
+            "storage_path": str(stored_path if len(files) == 1 else storage_root),
+            "copied": True,
+            "provided_host": normalized_provided_host,
+            "provided_platform": resolved_provided_platform,
+            "detected_platform": resolved_detected_platform,
+            "effective_platform": resolved_effective_platform,
+            "ingest_mode": normalized_ingest_mode,
+            "disk_image": True,
+            "format_probe": format_probe,
+            "segment_count": len(segment_entries),
+        },
+        metadata_json=_initial_metadata({**ingest_mode_metadata(normalized_ingest_mode), "disk_image": {"format_probe": format_probe, "segments": segment_entries}, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform}),
+        error_log={},
+    )
+    db.add(evidence)
+    _record_upload_custody_events(db, evidence, actor_user_id=_current_user_id(current_user))
+    db.commit()
+    db.refresh(evidence)
+    _write_initial_manifest(evidence)
+    log_activity(
+        db,
+        activity_type="evidence_uploaded",
+        title="Disk image uploaded",
+        message=f"Uploaded disk image evidence {evidence.original_filename}",
+        case_id=case_id,
+        evidence_id=evidence.id,
+        metadata={"evidence_type": evidence.evidence_type.value, "format_probe": format_probe, "segment_count": len(segment_entries)},
+    )
+    try:
+        enqueue_ingest(evidence.id)
+    except OpenSearchIngestBlockedError as exc:
+        _mark_evidence_blocked_before_ingest(db, evidence, exc=exc)
+    return evidence
+
+
+@router.get("/api/evidences/{evidence_id}/disk-image", response_model=DiskImageRead)
+def get_evidence_disk_image(evidence_id: str, db: Session = Depends(get_db)) -> DiskImage:
+    disk_image = db.query(DiskImage).filter(DiskImage.evidence_id == evidence_id).one_or_none()
+    if disk_image is None:
+        raise HTTPException(status_code=404, detail="Disk image details not found")
+    return disk_image
 
 
 @router.post("/api/cases/{case_id}/evidences/upload-folder", response_model=EvidenceRead, status_code=status.HTTP_201_CREATED)
