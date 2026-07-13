@@ -2344,14 +2344,15 @@ def _v29_disk_image_ingestion(connection: Connection) -> None:
     dialect = connection.dialect.name
     json_type = "JSONB" if dialect == "postgresql" else "JSON"
     timestamp_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "TIMESTAMP"
+    id_type = "UUID" if dialect == "postgresql" else "VARCHAR(36)"
     tables = set(inspector.get_table_names())
     if "disk_images" not in tables:
         connection.execute(
             text(
                 f"""
                 CREATE TABLE disk_images (
-                    id VARCHAR(36) PRIMARY KEY,
-                    evidence_id VARCHAR(36) NOT NULL REFERENCES evidences(id) ON DELETE CASCADE,
+                    id {id_type} PRIMARY KEY,
+                    evidence_id {id_type} NOT NULL REFERENCES evidences(id) ON DELETE CASCADE,
                     original_filename VARCHAR(512) NOT NULL,
                     format VARCHAR(64) NOT NULL,
                     size_bytes BIGINT NOT NULL DEFAULT 0,
@@ -2376,8 +2377,8 @@ def _v29_disk_image_ingestion(connection: Connection) -> None:
             text(
                 f"""
                 CREATE TABLE disk_volumes (
-                    id VARCHAR(36) PRIMARY KEY,
-                    disk_image_id VARCHAR(36) NOT NULL REFERENCES disk_images(id) ON DELETE CASCADE,
+                    id {id_type} PRIMARY KEY,
+                    disk_image_id {id_type} NOT NULL REFERENCES disk_images(id) ON DELETE CASCADE,
                     partition_index INTEGER NOT NULL DEFAULT 0,
                     offset_bytes BIGINT NOT NULL DEFAULT 0,
                     length_bytes BIGINT NOT NULL DEFAULT 0,
@@ -2404,8 +2405,8 @@ def _v29_disk_image_ingestion(connection: Connection) -> None:
             text(
                 f"""
                 CREATE TABLE os_installations (
-                    id VARCHAR(36) PRIMARY KEY,
-                    disk_volume_id VARCHAR(36) NOT NULL REFERENCES disk_volumes(id) ON DELETE CASCADE,
+                    id {id_type} PRIMARY KEY,
+                    disk_volume_id {id_type} NOT NULL REFERENCES disk_volumes(id) ON DELETE CASCADE,
                     platform VARCHAR(32) NOT NULL,
                     hostname VARCHAR(255),
                     version VARCHAR(255),
@@ -2425,9 +2426,9 @@ def _v29_disk_image_ingestion(connection: Connection) -> None:
     if "artifacts" in tables:
         existing = {c["name"] for c in inspector.get_columns("artifacts")}
         additions = {
-            "disk_image_id": "VARCHAR(36) REFERENCES disk_images(id) ON DELETE SET NULL",
-            "disk_volume_id": "VARCHAR(36) REFERENCES disk_volumes(id) ON DELETE SET NULL",
-            "os_installation_id": "VARCHAR(36) REFERENCES os_installations(id) ON DELETE SET NULL",
+            "disk_image_id": f"{id_type} REFERENCES disk_images(id) ON DELETE SET NULL",
+            "disk_volume_id": f"{id_type} REFERENCES disk_volumes(id) ON DELETE SET NULL",
+            "os_installation_id": f"{id_type} REFERENCES os_installations(id) ON DELETE SET NULL",
             "original_source_path": "VARCHAR(4096)",
             "logical_source_path": "VARCHAR(4096)",
             "acquisition_method": "VARCHAR(128)",
