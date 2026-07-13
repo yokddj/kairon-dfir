@@ -9,6 +9,7 @@ import ResponsiveDetailPanel from "../components/ResponsiveDetailPanel";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { HostFilter } from "../components/HostFilter";
 import { useTimezonePreference } from "../context/TimezoneContext";
+import { artifactLabel } from "../lib/artifactRegistry";
 import { compareValues, nextSortDirection, type SortDirection } from "../lib/sorting";
 import { formatTimestamp } from "../lib/time";
 
@@ -31,18 +32,6 @@ function humanizeToken(value: string | null | undefined, fallback = "—") {
     .filter(Boolean)
     .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
     .join(" ");
-}
-
-function artifactLabel(value: string | null | undefined) {
-  const normalized = (value || "").trim().toLowerCase();
-  if (!normalized) return "—";
-  if (normalized === "user_activity") return "User Activity";
-  if (normalized === "email") return "Email";
-  if (normalized === "ntfs") return "NTFS";
-  if (normalized === "windows_ui") return "Windows UI";
-  if (normalized === "cloud_sync") return "Cloud Sync";
-  if (normalized === "recycle_bin") return "Recycle Bin";
-  return humanizeToken(normalized);
 }
 
 function paramValues(params: URLSearchParams, key: string) {

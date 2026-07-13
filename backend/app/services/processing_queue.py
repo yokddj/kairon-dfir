@@ -7,6 +7,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session, selectinload
 
+from app.core.artifact_registry import artifact_registry_entry
 from app.models.artifact import Artifact
 from app.models.evidence import Evidence, IngestStatus
 from app.models.memory import MemoryPluginRun, MemoryScanRun
@@ -254,7 +255,11 @@ def _linux_processing_rows(evidence: Evidence, artifacts: list[Artifact]) -> lis
     inventory = dict((evidence.metadata_json or {}).get("linux_inventory") or {})
     if not inventory:
         return []
-    by_family = {str(artifact.artifact_type or ""): artifact for artifact in artifacts if str(artifact.artifact_type or "").startswith("linux_")}
+    by_family = {
+        str(artifact.artifact_type or ""): artifact
+        for artifact in artifacts
+        if "linux" in set(artifact_registry_entry(artifact.artifact_type).get("platforms") or [])
+    }
     rows: list[dict] = []
     for item in inventory.get("processing") or []:
         family = str(item.get("family") or item.get("key") or "")

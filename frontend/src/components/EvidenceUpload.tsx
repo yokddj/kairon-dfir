@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { CheckCircle2, LoaderCircle, UploadCloud } from "lucide-react";
 import { api, type Evidence, type EvidenceIntent, type EvidencePackaging, type EvidencePlatform, type EvtxProfile, type IngestMode, type VelociraptorDiscoverResponse } from "../api/client";
+import { platformUploadOptions } from "../lib/platformRegistry";
 
 type Props = {
   caseId: string;
@@ -100,13 +101,7 @@ const FORMAT_OPTIONS: Record<EvidenceKind, Array<{ id: UploadFormat; title: stri
   server_path: [{ id: "server_path", title: "File or directory path", description: "A file, archive or directory already mounted or shared into the backend/worker." }],
 };
 
-const PLATFORM_OPTIONS: Array<{ id: EvidencePlatform; label: string; description: string; disabled?: boolean }> = [
-  { id: "auto", label: "Auto-detect", description: "Let Kairon infer Windows, Linux, or unknown from paths and filenames." },
-  { id: "windows", label: "Windows", description: "Use for Windows endpoint artifacts such as EVTX, registry hives, prefetch, and user profiles." },
-  { id: "linux", label: "Linux", description: "Accepted for Linux triage artifacts. Parser coverage is limited in this release." },
-  { id: "macos", label: "macOS planned", description: "Visible for roadmap clarity. macOS artifacts are not supported yet.", disabled: true },
-  { id: "unknown", label: "Unknown / Other", description: "Use when the source platform is unclear or non-OS-specific." },
-];
+const PLATFORM_OPTIONS: Array<{ id: EvidencePlatform; label: string; description: string; disabled?: boolean }> = platformUploadOptions() as Array<{ id: EvidencePlatform; label: string; description: string; disabled?: boolean }>;
 
 function formatBytes(value: number) {
   if (!Number.isFinite(value) || value <= 0) return "0 B";

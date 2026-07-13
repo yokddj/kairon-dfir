@@ -2,6 +2,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.core.evidence_platforms import build_evidence_platform_profile
 from app.core.opensearch import count_documents, get_events_index
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryArtifactSummary, MemoryScanRun
@@ -199,6 +200,7 @@ def get_evidence_landing(db: Session, case_id: str, *, host_id: str | None = Non
                 "metadata": evidence.metadata_json or {},
                 "effective_platform": evidence.effective_platform,
                 "detected_platform": evidence.detected_platform,
+                "platform_capabilities": build_evidence_platform_profile(evidence.effective_platform, evidence_type=getattr(evidence.evidence_type, "value", evidence.evidence_type)).get("capabilities", {}),
                 "families": families,
                 "run_count": len(runs),
                 "latest_run_id": runs[0].id if runs else None,
