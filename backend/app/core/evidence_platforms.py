@@ -3,6 +3,8 @@ from __future__ import annotations
 import enum
 from typing import Any, Iterable
 
+from app.core.artifact_registry import CAPABILITY_KEYS, artifact_registry_entries, artifact_registry_entry
+
 
 class EvidencePlatform(str, enum.Enum):
     auto = "auto"
@@ -66,125 +68,44 @@ _MACOS_MARKERS = (
     "/private/var/",
 )
 
-_WINDOWS_CATEGORY_IDS = {
-    "evtx",
-    "windows_event",
-    "powershell",
-    "prefetch",
-    "shimcache",
-    "service",
-    "scheduled_task",
-    "browser",
-    "defender",
-    "lnk",
-    "jumplist",
-    "recycle_bin",
-    "usb",
-    "amcache",
-    "registry",
-    "bits",
-    "shellbags",
-    "autoruns",
-    "wmi",
-    "network",
-    "mft",
-    "srum",
-    "startup_persistence",
-}
-_MEMORY_CATEGORY_IDS = {"process", "vad", "vads", "dll", "dlls", "handles", "network", "registry"}
-
-PLATFORM_UI_GROUPS: dict[str, list[dict[str, Any]]] = {
-    EvidencePlatform.windows.value: [
-        {
-            "id": "windows_core",
-            "label": "Windows Core",
-            "categories": [
-                {"id": "evtx", "label": "Event Logs"},
-                {"id": "powershell", "label": "PowerShell"},
-                {"id": "prefetch", "label": "Prefetch"},
-                {"id": "shimcache", "label": "Shimcache"},
-                {"id": "amcache", "label": "Amcache"},
-                {"id": "lnk", "label": "LNK"},
-                {"id": "jumplist", "label": "Jump Lists"},
-                {"id": "browser", "label": "Browser"},
-            ],
-        },
-        {
-            "id": "windows_persistence",
-            "label": "Windows Persistence",
-            "categories": [
-                {"id": "service", "label": "Services"},
-                {"id": "scheduled_task", "label": "Scheduled Tasks"},
-                {"id": "registry", "label": "Registry"},
-                {"id": "defender", "label": "Defender"},
-                {"id": "usb", "label": "USB"},
-                {"id": "recycle_bin", "label": "Recycle Bin"},
-            ],
-        },
-    ],
-    EvidencePlatform.linux.value: [
-        {
-            "id": "linux_logs",
-            "label": "Linux Logs",
-            "categories": [
-                {"id": "linux_journal", "label": "Journal"},
-                {"id": "linux_auth", "label": "Auth logs"},
-                {"id": "linux_syslog", "label": "Syslog"},
-                {"id": "linux_audit", "label": "Audit logs"},
-                {"id": "linux_shell_history", "label": "Bash History"},
-            ],
-        },
-        {
-            "id": "linux_persistence",
-            "label": "Linux Persistence",
-            "categories": [
-                {"id": "linux_cron", "label": "Cron"},
-                {"id": "linux_systemd", "label": "Systemd Units"},
-                {"id": "linux_sudoers", "label": "Sudoers"},
-                {"id": "linux_ssh", "label": "SSH"},
-            ],
-        },
-        {
-            "id": "linux_inventory",
-            "label": "Linux Inventory",
-            "categories": [
-                {"id": "linux_identity", "label": "Users / Groups"},
-                {"id": "linux_packages", "label": "Packages"},
-                {"id": "linux_network", "label": "Network"},
-                {"id": "linux_os_info", "label": "OS Info"},
-            ],
-        },
-    ],
-    EvidencePlatform.memory.value: [
-        {
-            "id": "memory_core",
-            "label": "Memory Core",
-            "categories": [
-                {"id": "process", "label": "Processes"},
-                {"id": "vads", "label": "VADs"},
-                {"id": "dlls", "label": "DLLs"},
-                {"id": "handles", "label": "Handles"},
-                {"id": "network", "label": "Network"},
-                {"id": "registry", "label": "Registry"},
-            ],
-        }
-    ],
-}
-
-PLATFORM_QUICK_SELECTS: dict[str, list[dict[str, Any]]] = {
-    EvidencePlatform.windows.value: [
-        {"id": "event_logs", "label": "Event logs only", "category_ids": ["evtx", "windows_event"]},
-        {"id": "execution", "label": "Execution artifacts", "category_ids": ["evtx", "windows_event", "prefetch", "shimcache", "amcache", "lnk", "jumplist"]},
-        {"id": "persistence", "label": "Persistence artifacts", "category_ids": ["scheduled_task", "service", "registry", "autoruns", "startup", "startup_folder", "wmi", "defender"]},
-    ],
-    EvidencePlatform.linux.value: [
-        {"id": "core_logs", "label": "Journal & logs", "category_ids": ["linux_journal", "linux_auth", "linux_syslog", "linux_audit"]},
-        {"id": "execution", "label": "Execution artifacts", "category_ids": ["linux_journal", "linux_auth", "linux_syslog", "linux_audit", "linux_shell_history"]},
-        {"id": "persistence", "label": "Persistence & identity", "category_ids": ["linux_cron", "linux_systemd", "linux_identity", "linux_ssh", "linux_sudoers"]},
-    ],
-    EvidencePlatform.memory.value: [
-        {"id": "memory_core", "label": "Memory core", "category_ids": ["process", "vads", "dlls", "handles", "network", "registry"]},
-    ],
+PLATFORM_REGISTRY: dict[str, dict[str, Any]] = {
+    EvidencePlatform.windows.value: {
+        "id": EvidencePlatform.windows.value,
+        "label": "Windows",
+        "upload_label": "Windows",
+        "upload_description": "Use for Windows endpoint artifacts such as EVTX, registry hives, prefetch, and user profiles.",
+    },
+    EvidencePlatform.linux.value: {
+        "id": EvidencePlatform.linux.value,
+        "label": "Linux",
+        "upload_label": "Linux",
+        "upload_description": "Use for Linux triage artifacts, logs, inventory, persistence and memory-supporting collections.",
+    },
+    EvidencePlatform.macos.value: {
+        "id": EvidencePlatform.macos.value,
+        "label": "macOS",
+        "upload_label": "macOS planned",
+        "upload_description": "Visible for roadmap clarity. macOS artifacts are not supported yet.",
+        "disabled": True,
+    },
+    EvidencePlatform.memory.value: {
+        "id": EvidencePlatform.memory.value,
+        "label": "Memory",
+        "upload_label": "Memory",
+        "upload_description": "Memory images are registered separately and expose memory-specific analysis capabilities.",
+    },
+    EvidencePlatform.mixed.value: {
+        "id": EvidencePlatform.mixed.value,
+        "label": "Mixed",
+        "upload_label": "Mixed",
+        "upload_description": "A single evidence source containing multiple platform families.",
+    },
+    EvidencePlatform.unknown.value: {
+        "id": EvidencePlatform.unknown.value,
+        "label": "Unknown",
+        "upload_label": "Unknown / Other",
+        "upload_description": "Use when the source platform is unclear or non-OS-specific.",
+    },
 }
 
 
@@ -264,15 +185,10 @@ def resolve_evidence_platform(
 
 
 def category_platform(category: str | None) -> str:
-    normalized = str(category or "").strip().lower()
-    if not normalized:
-        return EvidencePlatform.unknown.value
-    if normalized.startswith("linux_"):
-        return EvidencePlatform.linux.value
-    if normalized in _WINDOWS_CATEGORY_IDS:
-        return EvidencePlatform.windows.value
-    if normalized in _MEMORY_CATEGORY_IDS:
-        return EvidencePlatform.memory.value
+    entry = artifact_registry_entry(category)
+    platforms = list(entry.get("platforms") or [])
+    if len(platforms) == 1:
+        return str(platforms[0])
     return EvidencePlatform.unknown.value
 
 
@@ -286,15 +202,85 @@ def infer_platform_from_categories(categories: Iterable[str] | None) -> str:
     return EvidencePlatform.mixed.value
 
 
-def _category_ids_for_platform(platform: str, available_categories: set[str]) -> list[str]:
-    category_ids: list[str] = []
-    for group in PLATFORM_UI_GROUPS.get(platform, []):
-        for category in group.get("categories") or []:
-            category_id = str(category.get("id") or "").strip().lower()
-            if category_id and category_id not in category_ids:
-                if not available_categories or category_id in available_categories:
-                    category_ids.append(category_id)
-    return category_ids
+def build_platform_capabilities(platforms: Iterable[str] | None) -> dict[str, bool]:
+    selected_platforms = {normalize_evidence_platform(item) for item in (platforms or []) if normalize_evidence_platform(item) not in {EvidencePlatform.auto.value, EvidencePlatform.unknown.value, EvidencePlatform.mixed.value}}
+    flags = {key: False for key in CAPABILITY_KEYS}
+    for entry in artifact_registry_entries(platforms=sorted(selected_platforms)):
+        for key, enabled in dict(entry.get("capabilities") or {}).items():
+            if enabled:
+                flags[key] = True
+    if EvidencePlatform.memory.value in selected_platforms:
+        flags["supportsMemory"] = True
+    return flags
+
+
+def build_platform_groups(platforms: Iterable[str] | None, available_categories: set[str]) -> list[dict[str, Any]]:
+    selected_platforms = {normalize_evidence_platform(item) for item in (platforms or []) if normalize_evidence_platform(item) not in {EvidencePlatform.auto.value, EvidencePlatform.unknown.value, EvidencePlatform.mixed.value}}
+    groups: dict[tuple[str, str], dict[str, Any]] = {}
+    for entry in artifact_registry_entries(platforms=sorted(selected_platforms)):
+        category_id = str(entry.get("id") or "")
+        if available_categories and category_id not in available_categories and not any(alias in available_categories for alias in entry.get("aliases") or []):
+            continue
+        platform = str((entry.get("platforms") or [EvidencePlatform.unknown.value])[0])
+        key = (platform, str(entry.get("group_id") or "other"))
+        group = groups.setdefault(
+            key,
+            {
+                "id": str(entry.get("group_id") or "other"),
+                "label": str(entry.get("group_label") or "Other"),
+                "platform": platform,
+                "categories": [],
+            },
+        )
+        group["categories"].append(
+            {
+                "id": category_id,
+                "label": str(entry.get("label") or category_id),
+                "group_id": group["id"],
+                "group_label": group["label"],
+                "platform": platform,
+                "icon": entry.get("icon"),
+                "view": entry.get("view"),
+                "searchable": bool(entry.get("searchable")),
+                "timeline_capable": bool(entry.get("timeline_capable")),
+                "severity_support": bool(entry.get("severity_support")),
+                "aliases": list(entry.get("aliases") or []),
+            }
+        )
+    return [groups[key] for key in sorted(groups)]
+
+
+def build_platform_quick_selects(platforms: Iterable[str] | None, available_categories: set[str]) -> list[dict[str, Any]]:
+    selected_platforms = {normalize_evidence_platform(item) for item in (platforms or []) if normalize_evidence_platform(item) not in {EvidencePlatform.auto.value, EvidencePlatform.unknown.value, EvidencePlatform.mixed.value}}
+    quick_selects: dict[tuple[str, str], dict[str, Any]] = {}
+    labels = {
+        "event_logs": "Event logs only",
+        "execution": "Execution artifacts",
+        "persistence": "Persistence artifacts",
+        "core_logs": "Journal & logs",
+        "memory_core": "Memory core",
+    }
+    for entry in artifact_registry_entries(platforms=sorted(selected_platforms)):
+        category_id = str(entry.get("id") or "")
+        aliases = [str(alias) for alias in entry.get("aliases") or []]
+        if available_categories and category_id not in available_categories and not any(alias in available_categories for alias in aliases):
+            continue
+        platform = str((entry.get("platforms") or [EvidencePlatform.unknown.value])[0])
+        for quick_select_id in entry.get("quick_selects") or []:
+            key = (platform, str(quick_select_id))
+            quick_select = quick_selects.setdefault(
+                key,
+                {
+                    "id": str(quick_select_id),
+                    "label": labels.get(str(quick_select_id), str(quick_select_id).replace("_", " ").title()),
+                    "platform": platform,
+                    "category_ids": [],
+                },
+            )
+            for value in [category_id, *aliases]:
+                if value not in quick_select["category_ids"]:
+                    quick_select["category_ids"].append(value)
+    return [quick_selects[key] for key in sorted(quick_selects)]
 
 
 def build_evidence_platform_profile(
@@ -312,48 +298,29 @@ def build_evidence_platform_profile(
         normalized = inferred
     selected_platforms = [normalized]
     if normalized == EvidencePlatform.mixed.value:
-        selected_platforms = [platform for platform in (EvidencePlatform.windows.value, EvidencePlatform.linux.value, EvidencePlatform.memory.value) if _category_ids_for_platform(platform, available)]
-        if not selected_platforms:
-            selected_platforms = [EvidencePlatform.windows.value, EvidencePlatform.linux.value]
+        preferred_order = [EvidencePlatform.windows.value, EvidencePlatform.linux.value, EvidencePlatform.memory.value, EvidencePlatform.macos.value]
+        seen_platforms = {category_platform(category) for category in available}
+        category_platforms = []
+        for candidate in preferred_order:
+            if candidate not in {EvidencePlatform.unknown.value, EvidencePlatform.mixed.value}:
+                if candidate in seen_platforms:
+                    category_platforms.append(candidate)
+        selected_platforms = category_platforms or [EvidencePlatform.windows.value, EvidencePlatform.linux.value, EvidencePlatform.memory.value]
     elif normalized == EvidencePlatform.unknown.value:
         selected_platforms = []
-    groups: list[dict[str, Any]] = []
-    quick_selects: list[dict[str, Any]] = []
-    categories: list[dict[str, Any]] = []
-    for selected in selected_platforms:
-        for group in PLATFORM_UI_GROUPS.get(selected, []):
-            category_entries = []
-            for category in group.get("categories") or []:
-                category_id = str(category.get("id") or "").strip().lower()
-                if not category_id:
-                    continue
-                entry = {
-                    "id": category_id,
-                    "label": str(category.get("label") or category_id.replace("_", " ").title()),
-                    "group_id": group["id"],
-                    "group_label": group["label"],
-                    "platform": selected,
-                }
-                category_entries.append(entry)
-                categories.append(entry)
-            groups.append({
-                "id": group["id"],
-                "label": group["label"],
-                "platform": selected,
-                "categories": category_entries,
-            })
-        for quick_select in PLATFORM_QUICK_SELECTS.get(selected, []):
-            quick_selects.append({
-                "id": quick_select["id"],
-                "label": quick_select["label"],
-                "platform": selected,
-                "category_ids": list(dict.fromkeys(str(item).strip().lower() for item in quick_select.get("category_ids") or [] if str(item).strip())),
-            })
+    groups = build_platform_groups(selected_platforms, available)
+    quick_selects = build_platform_quick_selects(selected_platforms, available)
+    categories = [category for group in groups for category in group["categories"]]
+    artifacts = artifact_registry_entries(platforms=selected_platforms)
+    capabilities = build_platform_capabilities(selected_platforms)
     return {
         "platform": normalized if normalized != EvidencePlatform.auto.value else EvidencePlatform.unknown.value,
         "platforms": selected_platforms,
+        "platform_meta": [PLATFORM_REGISTRY.get(item, {"id": item, "label": item.title()}) for item in selected_platforms],
+        "capabilities": capabilities,
         "groups": groups,
         "quick_selects": quick_selects,
         "categories": categories,
+        "artifacts": artifacts,
         "available_categories": sorted(available),
     }

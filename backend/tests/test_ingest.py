@@ -15452,8 +15452,7 @@ def test_wmi_frontend_routes_to_wmi_view() -> None:
         pytest.skip("frontend sources are not available in this test environment")
     artifact_explorer = (repo_root / "frontend" / "src" / "pages" / "ArtifactExplorer.tsx").read_text(encoding="utf-8")
     event_table = (repo_root / "frontend" / "src" / "components" / "EventTable.tsx").read_text(encoding="utf-8")
-    assert 'artifactType === "wmi"' in artifact_explorer
-    assert '? "wmi"' in artifact_explorer or ': "wmi"' in artifact_explorer
+    assert 'artifactEventView' in artifact_explorer
     assert 'if (artifactType === "wmi") return "wmi";' in event_table
 
 
@@ -16327,9 +16326,9 @@ def test_cloud_frontend_routes_to_cloud_view() -> None:
     event_table = (frontend_root / "src" / "components" / "EventTable.tsx").read_text(encoding="utf-8")
     search_page = (frontend_root / "src" / "pages" / "Search.tsx").read_text(encoding="utf-8")
     semi_auto = (frontend_root / "src" / "pages" / "SemiAutoAnalysis.tsx").read_text(encoding="utf-8")
-    assert 'artifactType === "cloud_sync"' in artifact_explorer
+    assert 'artifactEventView' in artifact_explorer
     assert 'if (artifactType === "cloud_sync") return "cloud_sync";' in event_table
-    assert '"cloud_sync"' in search_page
+    assert 'artifactLabel' in search_page
     assert "cloud_sync_roots" in semi_auto
     assert "possible_cloud_staging" in semi_auto
     assert "possible_cloud_exfiltration" in semi_auto
@@ -16626,7 +16625,7 @@ def test_network_frontend_routes_and_sections_exist() -> None:
     event_table = (frontend_root / "components" / "EventTable.tsx").read_text(encoding="utf-8")
     semi_auto = (frontend_root / "pages" / "SemiAutoAnalysis.tsx").read_text(encoding="utf-8")
     evidence_detail = (frontend_root / "pages" / "EvidenceDetail.tsx").read_text(encoding="utf-8")
-    assert 'artifactType === "network"' in artifact_explorer
+    assert 'artifactEventView' in artifact_explorer
     assert 'if (artifactType === "network") return "network";' in event_table
     assert "wlan_profiles" in semi_auto
     assert "hosts_entries" in semi_auto

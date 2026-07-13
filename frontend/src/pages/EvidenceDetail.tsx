@@ -1344,9 +1344,27 @@ export default function EvidenceDetail() {
   const platformProfile: EvidencePlatformProfile = data?.platform_profile ?? {
     platform: (data?.effective_platform ?? "unknown") as string,
     platforms: [],
+    capabilities: {
+      supportsTimeline: false,
+      supportsSearch: false,
+      supportsProcesses: false,
+      supportsNetwork: false,
+      supportsPersistence: false,
+      supportsRegistry: false,
+      supportsJournal: false,
+      supportsMemory: false,
+      supportsPackages: false,
+      supportsServices: false,
+      supportsUsers: false,
+      supportsFilesystem: false,
+      supportsBrowser: false,
+      supportsCloud: false,
+      supportsEmail: false,
+    },
     groups: [],
     quick_selects: [],
     categories: [],
+    artifacts: [],
     available_categories: [],
   };
   const categoryLabelLookup = useMemo(

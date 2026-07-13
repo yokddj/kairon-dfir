@@ -112,12 +112,54 @@ export type EvidencePlatformQuickSelect = {
   category_ids: string[];
 };
 
+export type EvidencePlatformCapabilities = {
+  supportsTimeline: boolean;
+  supportsSearch: boolean;
+  supportsProcesses: boolean;
+  supportsNetwork: boolean;
+  supportsPersistence: boolean;
+  supportsRegistry: boolean;
+  supportsJournal: boolean;
+  supportsMemory: boolean;
+  supportsPackages: boolean;
+  supportsServices: boolean;
+  supportsUsers: boolean;
+  supportsFilesystem: boolean;
+  supportsBrowser: boolean;
+  supportsCloud: boolean;
+  supportsEmail: boolean;
+};
+
+export type EvidencePlatformArtifact = {
+  id: string;
+  label: string;
+  platforms: Array<EvidencePlatform | string>;
+  aliases: string[];
+  category: string;
+  group_id: string;
+  group_label: string;
+  icon: string;
+  parser: string | null;
+  normalizer: string | null;
+  view: string;
+  searchable: boolean;
+  timeline_capable: boolean;
+  severity_support: boolean;
+  usable_tier: string;
+  filter_fields: string[];
+  quick_selects: string[];
+  capabilities: EvidencePlatformCapabilities;
+};
+
 export type EvidencePlatformProfile = {
   platform: EvidencePlatform | string;
   platforms: Array<EvidencePlatform | string>;
+  platform_meta?: Array<{ id: EvidencePlatform | string; label: string; upload_label?: string; upload_description?: string; disabled?: boolean }>;
+  capabilities: EvidencePlatformCapabilities;
   groups: EvidencePlatformGroup[];
   quick_selects: EvidencePlatformQuickSelect[];
   categories: EvidencePlatformCategory[];
+  artifacts: EvidencePlatformArtifact[];
   available_categories: string[];
 };
 
@@ -871,6 +913,7 @@ export type MemoryEvidenceLandingItem = {
   can_analyze?: boolean;
   effective_platform?: string | null;
   detected_platform?: string | null;
+  platform_capabilities?: Partial<EvidencePlatformCapabilities>;
 };
 
 export type MemoryEvidenceLanding = {

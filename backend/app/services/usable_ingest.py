@@ -3,38 +3,13 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from app.core.artifact_registry import artifact_registry_entries, canonical_artifact_family
 from app.services.parser_registry import get_parser_registry_entry
 
 USABLE_INGEST_MODE = "usable_search"
 FULL_FORENSIC_MODE = "full_forensic"
 
-TIER_1_ARTIFACT_TYPES = {
-    "windows_event",
-    "evtx",
-    "prefetch",
-    "lnk",
-    "scheduled_task",
-    "powershell",
-    "browser",
-    "usb",
-    "service",
-    "amcache",
-    "shimcache",
-    "jumplist",
-    "registry",
-    "jsonl",
-    "csv",
-    "network",
-    "dns",
-    "wlan",
-    "linux_auth",
-    "linux_journal",
-    "linux_syslog",
-    "linux_audit",
-    "linux_shell_history",
-    "linux_cron",
-    "linux_packages",
-}
+TIER_1_ARTIFACT_TYPES = {entry["id"] for entry in artifact_registry_entries() if entry.get("usable_tier") == "tier1"}
 
 TIER_1_PARSERS = {
     "evtx_raw",
@@ -56,27 +31,7 @@ TIER_1_PARSERS = {
     "jumplist_custom",
 }
 
-TIER_2_ARTIFACT_TYPES = {
-    "autorun",
-    "bits",
-    "cloud",
-    "cloud_sync",
-    "email",
-    "mft",
-    "ntfs",
-    "recycle_bin",
-    "shellbags",
-    "srum",
-    "usn",
-    "windows_ui",
-    "wmi",
-    "linux_systemd",
-    "linux_ssh",
-    "linux_identity",
-    "linux_sudoers",
-    "linux_network",
-    "linux_os_info",
-}
+TIER_2_ARTIFACT_TYPES = {entry["id"] for entry in artifact_registry_entries() if entry.get("usable_tier") == "tier2"}
 
 TIER_3_PARSERS = {
     "unsupported_sensitive_artifact",
@@ -94,32 +49,9 @@ COMMON_FILTER_FIELDS = [
 ]
 
 ARTIFACT_FILTER_FIELDS: dict[str, list[str]] = {
-    "windows_event": ["event_id", "provider", "channel", "computer"],
-    "evtx": ["event_id", "provider", "channel", "computer"],
-    "prefetch": ["executable", "run_count", "path"],
-    "lnk": ["target_path", "arguments", "working_dir"],
-    "browser": ["url", "domain", "title", "profile"],
-    "registry": ["hive", "key_path", "value_name"],
-    "scheduled_task": ["task_name", "command", "arguments"],
-    "amcache": ["path", "program", "hash"],
-    "shimcache": ["path", "program", "hash"],
-    "powershell": ["command", "source_file", "artifact_type"],
-    "jumplist": ["target_path", "arguments", "source_file", "app_id"],
-    "service": ["service_name", "image_path", "display_name"],
-    "usb": ["vendor", "product", "serial", "device_instance_id"],
-    "linux_auth": ["linux.username", "linux.event_action", "linux.source_ip", "linux.hostname"],
-    "linux_journal": ["linux.username", "linux.process", "linux.hostname", "linux.event_action"],
-    "linux_syslog": ["linux.username", "linux.process", "linux.hostname"],
-    "linux_audit": ["linux.username", "linux.command", "linux.pid", "linux.event_action"],
-    "linux_shell_history": ["linux.command", "linux.username", "linux.hostname"],
-    "linux_cron": ["linux.command", "linux.username", "linux.hostname"],
-    "linux_systemd": ["linux.command", "linux.process", "linux.hostname"],
-    "linux_ssh": ["linux.username", "linux.event_action", "linux.hostname"],
-    "linux_identity": ["linux.username", "linux.hostname"],
-    "linux_sudoers": ["linux.username", "linux.command", "linux.hostname"],
-    "linux_packages": ["linux.command", "linux.hostname"],
-    "linux_network": ["linux.hostname", "linux.source_ip"],
-    "linux_os_info": ["linux.hostname", "host.name"],
+    entry["id"]: list(entry.get("filter_fields") or [])
+    for entry in artifact_registry_entries()
+    if entry.get("filter_fields")
 }
 
 
@@ -195,7 +127,7 @@ def build_mode_effective_plan(
 
 def parser_capability_profile(parser_name: object | None, artifact_type: object | None) -> dict[str, Any]:
     parser_key = str(parser_name or "").strip().lower()
-    artifact_key = str(artifact_type or "").strip().lower()
+    artifact_key = canonical_artifact_family(artifact_type)
     registry_entry = get_parser_registry_entry(artifact_type=artifact_key, parser_name=parser_key)
     if parser_key in TIER_3_PARSERS:
         tier = "tier3"
@@ -311,7 +243,7 @@ def build_search_filter_coverage(artifacts: list[dict[str, Any]]) -> dict[str, A
     filters = {
         artifact_type: {
             "common_fields": list(COMMON_FILTER_FIELDS),
-            "artifact_specific_fields": list(ARTIFACT_FILTER_FIELDS.get(artifact_type, [])),
+            "artifact_specific_fields": list(ARTIFACT_FILTER_FIELDS.get(canonical_artifact_family(artifact_type), [])),
         }
         for artifact_type in artifact_types
     }

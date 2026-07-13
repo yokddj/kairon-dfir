@@ -12,11 +12,13 @@ import CreateFindingDialog from "../components/CreateFindingDialog";
 import { useHostContext } from "../hooks/useHostContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
+import { artifactLabel } from "../lib/artifactRegistry";
+import { UI_PLATFORM_REGISTRY } from "../lib/platformRegistry";
 
 type Scope = "events" | "findings" | "all";
 type SortValue = "timestamp_desc" | "timestamp_asc" | "risk_desc" | "risk_asc" | "relevance";
 type SourceCategory = "" | "Memory" | "Disk" | "Event Log" | "Registry" | "Browser" | "Other";
-type SearchPlatform = "" | "windows" | "linux" | "unknown" | "other";
+type SearchPlatform = "" | "windows" | "linux" | "memory" | "mixed" | "unknown";
 type SearchTab = "results" | "timeline" | "findings" | "artifact_views";
 type ArtifactViewMode = "auto" | "process" | "dns" | "downloads" | "defender" | "persistence" | "files" | "cloud_usb" | "generic";
 type TableDensity = "compact" | "comfortable" | "expanded";
@@ -73,10 +75,7 @@ const sourceCategoryOptions: Array<{ value: SourceCategory; label: string }> = [
 ];
 const platformOptions: Array<{ value: SearchPlatform; label: string }> = [
   { value: "", label: "All platforms" },
-  { value: "windows", label: "Windows" },
-  { value: "linux", label: "Linux" },
-  { value: "unknown", label: "Unknown" },
-  { value: "other", label: "Other" },
+  ...UI_PLATFORM_REGISTRY.filter((platform) => platform.id !== "auto" && platform.id !== "macos").map((platform) => ({ value: platform.id as SearchPlatform, label: platform.label })),
 ];
 const riskPresets = [
   { label: "Low", min: "0", max: "29" },
@@ -534,32 +533,6 @@ function humanizeToken(value: string | null | undefined) {
     .filter(Boolean)
     .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
     .join(" ");
-}
-
-function artifactLabel(value: string | null | undefined) {
-  const normalized = asString(value).trim().toLowerCase();
-  if (!normalized) return "-";
-  if (normalized === "user_activity") return "User Activity";
-  if (normalized === "email") return "Email";
-  if (normalized === "ntfs") return "NTFS";
-  if (normalized === "windows_ui") return "Windows UI";
-  if (normalized === "cloud_sync") return "Cloud Sync";
-  if (normalized === "recycle_bin") return "Recycle Bin";
-  if (normalized === "linux_journal") return "Linux Journal";
-  if (normalized === "linux_auth") return "Linux Auth";
-  if (normalized === "linux_syslog") return "Linux Syslog";
-  if (normalized === "linux_audit") return "Linux Audit";
-  if (normalized === "linux_shell_history") return "Linux Shell History";
-  if (normalized === "linux_cron") return "Linux Cron";
-  if (normalized === "linux_systemd") return "Linux Systemd";
-  if (normalized === "linux_ssh") return "Linux SSH";
-  if (normalized === "linux_identity") return "Linux Identity";
-  if (normalized === "linux_sudoers") return "Linux Sudoers";
-  if (normalized === "linux_packages") return "Linux Packages";
-  if (normalized === "linux_network") return "Linux Network";
-  if (normalized === "linux_os_info") return "Linux OS Info";
-  if (normalized === "linux_memory") return "Linux Memory";
-  return humanizeToken(normalized);
 }
 
 function renderActions(actions: RowAction[]) {

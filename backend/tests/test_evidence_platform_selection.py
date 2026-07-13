@@ -2,7 +2,7 @@ import pytest
 from fastapi import HTTPException
 
 from app.api.routes_evidence import _resolve_requested_platform
-from app.core.evidence_platforms import build_evidence_platform_profile, infer_platform_from_categories
+from app.core.evidence_platforms import build_evidence_platform_profile, build_platform_capabilities, infer_platform_from_categories
 from app.models.evidence import detect_evidence_platform, resolve_evidence_platform
 
 
@@ -68,3 +68,21 @@ def test_linux_collection_users_directory_does_not_false_positive_to_macos() -> 
     detected = detect_evidence_platform(paths=["filesystem/etc/passwd", "users/getent-passwd.txt", "logs/journal.export"])
 
     assert detected == "linux"
+
+
+def test_platform_capabilities_are_aggregated_from_registry() -> None:
+    capabilities = build_platform_capabilities(["linux", "memory"])
+
+    assert capabilities["supportsJournal"] is True
+    assert capabilities["supportsPackages"] is True
+    assert capabilities["supportsMemory"] is True
+    assert capabilities["supportsRegistry"] is True
+
+
+def test_platform_profile_exposes_capabilities_and_artifact_metadata() -> None:
+    profile = build_evidence_platform_profile("linux", available_categories=["linux_journal", "linux_auth", "linux_systemd"])
+
+    assert profile["capabilities"]["supportsJournal"] is True
+    assert profile["capabilities"]["supportsPersistence"] is True
+    assert any(artifact["id"] == "linux_journal" for artifact in profile["artifacts"])
+    assert any(group["id"] == "linux_logs" for group in profile["groups"])
