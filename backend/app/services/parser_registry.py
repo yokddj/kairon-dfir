@@ -257,7 +257,7 @@ _REGISTRY: dict[str, dict[str, Any]] = {
         "artifact_type": "linux_cron",
         "parser_name": "linux_cron_raw",
         "supported_extensions": ["crontab"],
-        "source_patterns": ["*/etc/crontab", "*/var/spool/cron/*"],
+        "source_patterns": ["*/etc/crontab", "*/etc/cron.d/*", "*/etc/cron.daily/*", "*/etc/cron.hourly/*", "*/etc/cron.weekly/*", "*/etc/cron.monthly/*", "*/var/spool/cron/*", "*/etc/anacrontab"],
         "enabled_for_usable_search": True,
         "searchable": True,
         "maturity": "experimental",

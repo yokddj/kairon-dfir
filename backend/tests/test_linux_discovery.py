@@ -55,6 +55,8 @@ def test_generic_artifact_listing_includes_linux_files_without_extensions(tmp_pa
     (tmp_path / "etc").mkdir()
     (tmp_path / "etc/passwd").write_text("root:x:0:0:root:/root:/bin/bash\n", encoding="utf-8")
     (tmp_path / "etc/sudoers").write_text("root ALL=(ALL:ALL) ALL\n", encoding="utf-8")
+    (tmp_path / "etc/cron.d").mkdir(parents=True)
+    (tmp_path / "etc/cron.d/kairon").write_text("* * * * * root /usr/local/bin/check.sh\n", encoding="utf-8")
 
     artifacts = list_generic_artifacts(tmp_path)
 
@@ -62,6 +64,7 @@ def test_generic_artifact_listing_includes_linux_files_without_extensions(tmp_pa
     assert by_name["passwd"]["artifact_type"] == "linux_identity"
     assert by_name["passwd"]["artifact_family"] == "linux_identity"
     assert by_name["sudoers"]["artifact_type"] == "linux_sudoers"
+    assert by_name["kairon"]["artifact_type"] == "linux_cron"
 
 
 def test_linux_inventory_and_generic_listing_include_journal_exports(tmp_path: Path) -> None:
