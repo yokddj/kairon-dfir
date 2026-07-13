@@ -71,6 +71,7 @@ from app.ingest.velociraptor.zip_inventory import is_supported_archive_container
 from app.models.artifact import Artifact
 from app.models.case_analysis_job import CaseAnalysisJob, CaseAnalysisJobStatus
 from app.models.detection_result import DetectionResult
+from app.models.disk_image import DiskImage
 from app.models.rule_run import RuleRun, RuleRunStatus
 from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceType, IngestStatus, detect_evidence_platform, resolve_evidence_platform, resolve_public_evidence_type
 from app.models.rule import Rule
@@ -3573,6 +3574,19 @@ def _create_builtin_detections_isolated(*, case_id: str, evidence_id: str, artif
         isolated_db.close()
 
 
+def _sync_disk_image_status(evidence_id: str, status: str) -> bool:
+    isolated_db: Session = SessionLocal()
+    try:
+        disk_image = isolated_db.query(DiskImage).filter(DiskImage.evidence_id == evidence_id).one_or_none()
+        if disk_image is None:
+            return False
+        disk_image.status = status
+        isolated_db.commit()
+        return True
+    finally:
+        isolated_db.close()
+
+
 def _safe_create_builtin_detections_isolated(
     *,
     case_id: str,
@@ -5791,6 +5805,14 @@ def ingest_evidence(evidence_id: str) -> None:
         evidence.metadata_json = merge_evidence_metadata(evidence.metadata_json or {}, metadata)
         evidence.error_log = {"errors": errors, "warnings": detection_warnings}
         db.commit()
+        _sync_disk_image_status(
+            evidence.id,
+            "completed_with_errors"
+            if evidence.ingest_status == IngestStatus.completed_with_errors
+            else "failed"
+            if evidence.ingest_status == IngestStatus.failed
+            else "completed",
+        )
         final_phase = "completed" if evidence.ingest_status == IngestStatus.completed else "completed_with_errors" if evidence.ingest_status == IngestStatus.completed_with_errors else "failed"
         final_metadata = dict(evidence.metadata_json or {})
         run_id = str(final_metadata.get("current_ingest_run_id") or "")

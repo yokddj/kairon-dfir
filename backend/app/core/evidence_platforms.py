@@ -155,7 +155,9 @@ def detect_evidence_platform(
 ) -> str:
     normalized_evidence_type = str(evidence_type or "").strip().lower()
     lowered = _lowered_candidates(filename=filename, paths=paths)
-    if normalized_evidence_type in MEMORY_EVIDENCE_TYPES or any(path.endswith(tuple(MEMORY_EXTENSIONS)) for path in lowered):
+    if normalized_evidence_type in MEMORY_EVIDENCE_TYPES:
+        return EvidencePlatform.memory.value
+    if normalized_evidence_type != "disk_image" and any(path.endswith((".lime", ".aff4", ".vmem", ".mem", ".dmp", ".dump")) for path in lowered):
         return EvidencePlatform.memory.value
     hits = _count_platform_hits(lowered)
     present = [platform for platform, count in hits.items() if count > 0]
