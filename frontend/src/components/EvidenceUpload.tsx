@@ -349,7 +349,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
   }
 
   function openDiskImageSegmentPicker() {
-    openFilePicker("raw_single_file", ".dd,.img,.raw,.e01,.ex01,.e02,.e03,.e04,.e05", true);
+    openFilePicker("raw_single_file", ".dd,.img,.raw,.e01,.ex01,.e02,.e03,.e04,.e05,.vmdk,.vhd,.vhdx,.qcow,.qcow2,.vdi", true);
   }
 
   async function uploadRawArchiveWithAutoDetection(file: File, onProgress: (progress: { loaded: number; total: number; lengthComputable: boolean }) => void) {

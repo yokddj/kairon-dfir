@@ -106,14 +106,18 @@ def get_image_format_registry() -> ImageFormatRegistry:
         return _REGISTRY
     from app.disk_images.raw import RawImageAdapter
     from app.disk_images.ewf import EwfImageAdapter
+    from app.disk_images.vmdk import VmdkImageAdapter
+    from app.disk_images.vhd import VhdImageAdapter
+    from app.disk_images.qcow import QcowImageAdapter
+    from app.disk_images.vdi import VdiImageAdapter
 
     registry = ImageFormatRegistry()
     registry.register(RawImageAdapter())
     registry.register(EwfImageAdapter())
-    registry.register(UnsupportedImageFormatAdapter("vmdk", (".vmdk",), "VMware VMDK is not implemented yet."))
-    registry.register(UnsupportedImageFormatAdapter("vhd", (".vhd", ".vhdx"), "Hyper-V VHD/VHDX is not implemented yet."))
-    registry.register(UnsupportedImageFormatAdapter("qcow2", (".qcow", ".qcow2"), "QEMU QCOW/QCOW2 is not implemented yet."))
-    registry.register(UnsupportedImageFormatAdapter("vdi", (".vdi",), "VirtualBox VDI is not implemented yet."))
+    registry.register(VmdkImageAdapter())
+    registry.register(VhdImageAdapter())
+    registry.register(QcowImageAdapter())
+    registry.register(VdiImageAdapter())
     registry.register(UnsupportedImageFormatAdapter("aff", (".aff", ".aff4"), "AFF/AFF4 is not implemented yet."))
     _REGISTRY = registry
     return registry
