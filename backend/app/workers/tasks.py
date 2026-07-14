@@ -12,6 +12,7 @@ import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 import threading
 
 import psutil
@@ -47,6 +48,7 @@ from app.core.rules import load_builtin_detection_overrides
 from app.core.storage import build_evidence_root, evidence_manifest_path, evidence_staging_dir, reset_extracted_dir, reset_staging_dir, sanitize_relative_path
 from app.analysis.semi_auto import SemiAutoAnalysisCancelled, build_case_semi_auto_analysis
 from app.disk_images.service import disk_image_readiness, materialize_disk_image_sources
+from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classifier
 from app.ingest.browser.normalizer import BrowserAudit, normalize_browser_event
 from app.ingest.browser.sqlite_chromium import parse_chromium_history_sqlite
 from app.ingest.browser.sqlite_firefox import parse_firefox_places_sqlite
@@ -2925,6 +2927,165 @@ def _unwrap_nested_archive(
     return current_dir, current_files, current_entries
 
 
+def _classify_and_dispatch_extracted(
+    *,
+    db: Session,
+    evidence: Evidence,
+    extract_dir: Path,
+    extracted_files: list[str],
+    archive_entries: list[dict],
+    archive_depth: int = 0,
+    progress_cb=None,
+) -> tuple[list[str], list[dict], Any | None]:
+    max_depth = settings.max_archive_depth
+    classifier = get_evidence_classifier()
+
+    result_extracted: list[str] = []
+    result_entries: list[dict] = []
+    merged_disk_mat = None
+
+    for entry in archive_entries:
+        if entry.get("ignored") or entry.get("status") != "extracted":
+            result_entries.append(entry)
+            continue
+
+        rel_path = entry["path"]
+        file_path = extract_dir / rel_path
+
+        if not file_path.exists():
+            result_entries.append(entry)
+            result_extracted.append(rel_path)
+            continue
+
+        result = classifier.classify(file_path)
+
+        logger.info(
+            "Extracted: %s | Classification: %s(%s)",
+            rel_path,
+            result.category.value,
+            result.format_key or "",
+        )
+
+        if result.category == EvidenceCategory.DISK_IMAGE:
+            logger.info("Dispatch: DiskImageService for %s", rel_path)
+            try:
+                mat = materialize_disk_image_sources(
+                    db,
+                    evidence,
+                    extract_dir=extract_dir,
+                    image_path=file_path,
+                    progress_cb=progress_cb,
+                )
+                result_extracted.extend(mat.extracted_files)
+                result_entries.extend(mat.manifest_entries)
+                if merged_disk_mat is None:
+                    merged_disk_mat = mat
+                else:
+                    merged_disk_mat.extracted_files.extend(mat.extracted_files)
+                    merged_disk_mat.manifest_entries.extend(mat.manifest_entries)
+                    merged_disk_mat.source_map.update(mat.source_map)
+                    merged_disk_mat.volumes.extend(mat.volumes)
+                    merged_disk_mat.installations.extend(mat.installations)
+                    merged_disk_mat.warnings.extend(mat.warnings)
+
+                platforms = [i.platform for i in mat.installations]
+                platform_str = ", ".join(sorted(set(platforms))) if platforms else "Unknown"
+                artifacts_count = sum(
+                    1
+                    for mf in mat.manifest_entries
+                    if not mf.get("ignored")
+                )
+                logger.info(
+                    "OS detected: %s | Volumes: %d | Artifacts: %d",
+                    platform_str,
+                    len(mat.volumes),
+                    artifacts_count,
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Disk image materialization failed for %s: %s",
+                    rel_path,
+                    exc,
+                )
+                result_entries.append(entry)
+                result_extracted.append(rel_path)
+
+        elif result.category == EvidenceCategory.ARCHIVE:
+            if archive_depth >= max_depth:
+                logger.warning(
+                    "Max archive depth (%d) reached, skipping nested archive: %s",
+                    max_depth,
+                    rel_path,
+                )
+                result_entries.append(entry)
+                result_extracted.append(rel_path)
+                continue
+
+            logger.info(
+                "Dispatch: recursive archive extraction (depth %d) for %s",
+                archive_depth + 1,
+                rel_path,
+            )
+            try:
+                sub_name = f"_nested_{archive_depth}_{Path(rel_path).stem}"
+                sub_dir = extract_dir / sub_name
+                sub_dir.mkdir(parents=True, exist_ok=True)
+
+                nested_files, nested_entries = extract_archive(
+                    file_path,
+                    sub_dir,
+                    progress_cb=progress_cb,
+                )
+
+                nf, ne, ndm = _classify_and_dispatch_extracted(
+                    db=db,
+                    evidence=evidence,
+                    extract_dir=sub_dir,
+                    extracted_files=nested_files,
+                    archive_entries=nested_entries,
+                    archive_depth=archive_depth + 1,
+                    progress_cb=progress_cb,
+                )
+
+                for nested_rel in nf:
+                    result_extracted.append(f"{sub_name}/{nested_rel}")
+                for ne_entry in ne:
+                    adjusted = dict(ne_entry)
+                    if adjusted.get("path"):
+                        adjusted["path"] = f"{sub_name}/{adjusted['path']}"
+                    result_entries.append(adjusted)
+
+                if ndm is not None:
+                    prefix = f"{sub_name}/"
+                    adjusted_source_map = {}
+                    for key, value in ndm.source_map.items():
+                        adjusted_source_map[f"{prefix}{key}"] = value
+                    ndm.source_map = adjusted_source_map
+                    if merged_disk_mat is None:
+                        merged_disk_mat = ndm
+                    else:
+                        merged_disk_mat.extracted_files.extend(ndm.extracted_files)
+                        merged_disk_mat.manifest_entries.extend(ndm.manifest_entries)
+                        merged_disk_mat.source_map.update(ndm.source_map)
+                        merged_disk_mat.volumes.extend(ndm.volumes)
+                        merged_disk_mat.installations.extend(ndm.installations)
+                        merged_disk_mat.warnings.extend(ndm.warnings)
+            except Exception as exc:
+                logger.warning(
+                    "Nested archive extraction failed for %s: %s",
+                    rel_path,
+                    exc,
+                )
+                result_entries.append(entry)
+                result_extracted.append(rel_path)
+
+        else:
+            result_entries.append(entry)
+            result_extracted.append(rel_path)
+
+    return result_extracted, result_entries, merged_disk_mat
+
+
 def _candidate_required_paths(candidate: dict) -> list[str]:
     paths = [str(candidate.get("original_path") or "")]
     paths.extend(str(item) for item in (candidate.get("companion_files") or []) if item)
@@ -4446,18 +4607,20 @@ def ingest_evidence(evidence_id: str) -> None:
                 extracted_files, archive_entries = inventory_folder(stored_path, progress_cb=extraction_progress) if use_external_directory else copy_folder(stored_path, extract_dir, progress_cb=extraction_progress)
             elif is_supported_archive_container(stored_path):
                 extracted_files, archive_entries = extract_archive(stored_path, extract_dir, progress_cb=extraction_progress)
+                if archive_entries:
+                    extracted_files, archive_entries, disk_image_materialization = _classify_and_dispatch_extracted(
+                        db=db,
+                        evidence=evidence,
+                        extract_dir=extract_dir,
+                        extracted_files=extracted_files,
+                        archive_entries=archive_entries,
+                        progress_cb=extraction_progress,
+                    )
             else:
                 target = extract_dir / stored_path.name
                 target.write_bytes(stored_path.read_bytes())
                 extracted_files = [target.name]
                 archive_entries = [{"path": target.name, "ignored": False, "reason": None, "size": target.stat().st_size, "status": "extracted", "local_path": str(target)}]
-            if archive_entries:
-                extract_dir, extracted_files, archive_entries = _unwrap_nested_archive(
-                    extract_dir,
-                    extracted_files,
-                    archive_entries,
-                    progress_cb=extraction_progress,
-                )
             selected_candidates = None
             selective_stats = {}
             artifacts = []
