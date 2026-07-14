@@ -97,6 +97,44 @@ This EWF export is a current limitation, not the final long-term architecture.
 - path materialization uses sanitization and destination-root checks
 - segment grouping rejects inconsistent or incomplete sets
 
+### Authorized File Set
+
+Backing files, parent images, and VMDK extents are validated against an explicit authorized set derived from the upload contents.
+
+- VMDK extents: descriptor-parsed paths are checked against the upload directory and explicit companion list
+- VHD/VHDX parents: backing file references are resolved and verified against authorized paths
+- QCOW/QCOW2 backing files: same authorization check
+- absolute paths, `../` traversal, and files outside the upload are explicitly rejected
+- symlink escape is prevented via `resolve() == absolute()` check
+
+### Resource Limits
+
+Before `qemu-img convert`:
+
+- virtual size is checked against `disk_image_virtual_size_max_bytes` (default 1 TiB)
+- sparse ratio (virtual/physical) is checked against `disk_image_virtual_physical_ratio_max` (default 100x, for images > 10 MB physical)
+- free disk space is verified against estimated conversion needs plus `disk_image_min_free_space_reserve`
+
+### Chain Depth and Loop Detection
+
+- VHD/VHDX parent chains are traversed up to `disk_image_max_chain_depth` (default 3)
+- QCOW/QCOW2 backing chains are traversed similarly
+- Chain loops (a parent pointing back to current) are detected and rejected
+- Depth exceeded returns an explicit `chain_depth_exceeded` error
+
+### Integrity
+
+- `qemu-img check` runs before conversion, reporting errors and warnings
+- Failed checks with errors block conversion (not silent continuation)
+- Check with warnings only proceeds but logs the warnings
+
+### Read-only Verification
+
+- The original evidence file hash is verified unchanged after adapter operations
+- `qemu-img convert` treats the source as read-only input
+- No write flags are used on the original
+- No `shell=True` in any subprocess calls
+
 ## States
 
 The ingest flow reports detailed disk-image actions through progress metadata, including:

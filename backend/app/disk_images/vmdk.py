@@ -1,21 +1,22 @@
 from __future__ import annotations
 
 from pathlib import Path
-import shutil
 from typing import Any
 
 from app.disk_images.qemu import (
+    _build_authorized_set,
+    _check_space_before_convert,
     _format_from_info,
     _format_size,
     _parse_vmdk_descriptor,
-    _qemu_img_exists,
     _read_header,
+    _tool_functional,
+    _validate_resource_limits,
     _validate_vmdk_extents,
     qemu_img_check,
     qemu_img_convert_to_raw,
     qemu_img_info,
 )
-
 
 _VMDK_MAGICS = (b"KDMV", b"VMDK", b"# Disk DescriptorFile")
 
@@ -42,6 +43,7 @@ class VmdkImageAdapter:
         info = qemu_img_info(path)
         physical, virtual, allocation = _format_size(info)
         validation = self.validate_segments(path, companions)
+        descriptor = _parse_vmdk_descriptor(path) if path.suffix.lower() == ".vmdk" else {"extents": []}
         return {
             "format": self.key,
             "supported": self.readiness()["ready"],
@@ -49,6 +51,8 @@ class VmdkImageAdapter:
             "physical_size": physical,
             "virtual_size": virtual,
             "allocation_type": allocation,
+            "extents": descriptor.get("extents", []),
+            "descriptor_errors": descriptor.get("errors", []),
             "validation": validation,
         }
 
@@ -64,12 +68,15 @@ class VmdkImageAdapter:
         readiness = self.readiness()
         if not readiness["ready"]:
             return {"format": self.key, "supported": False, "error": "missing_dependency", "reason": readiness["reason"]}
+        authorized = _build_authorized_set(path.parent, companions)
         descriptor_parse = _parse_vmdk_descriptor(path)
         if descriptor_parse.get("extents"):
-            extent_validation = _validate_vmdk_extents(path.parent, descriptor_parse["extents"])
+            extent_validation = _validate_vmdk_extents(path.parent, descriptor_parse["extents"], authorized_paths=authorized)
             if not extent_validation["valid"]:
                 if extent_validation.get("external"):
                     return {"format": self.key, "supported": False, "error": "external_extent_rejected", "external_extents": extent_validation["external"]}
+                if extent_validation.get("unauthorized"):
+                    return {"format": self.key, "supported": False, "error": "extent_not_in_authorized_set", "extents": extent_validation["unauthorized"]}
                 if extent_validation.get("missing"):
                     return {"format": self.key, "supported": False, "error": "missing_extent", "missing_extents": extent_validation["missing"]}
         if descriptor_parse.get("errors"):
@@ -78,9 +85,13 @@ class VmdkImageAdapter:
         if not check_result.get("valid") and check_result.get("errors"):
             return {"format": self.key, "supported": False, "error": "image_check_failed", "check_result": check_result}
         info = qemu_img_info(path)
-        _, virtual_size, _ = _format_size(info)
-        if virtual_size > 1099511627776:
-            return {"format": self.key, "supported": False, "error": "virtual_size_limit_exceeded", "virtual_size": virtual_size}
+        physical, virtual_size, _ = _format_size(info)
+        limits = _validate_resource_limits(virtual_size=virtual_size, physical_size=physical)
+        if not limits["valid"]:
+            return {"format": self.key, "supported": False, **limits}
+        space_check = _check_space_before_convert(virtual_size, workspace)
+        if not space_check["sufficient"]:
+            return {"format": self.key, "supported": False, **space_check}
         output_path = workspace / f"{evidence_id}-vmdk-export.raw"
         result = qemu_img_convert_to_raw(input_path=path, output_path=output_path, evidence_id=evidence_id)
         return {
@@ -97,5 +108,11 @@ class VmdkImageAdapter:
             raw_path.unlink(missing_ok=True)
 
     def readiness(self) -> dict[str, Any]:
-        ready = _qemu_img_exists()
-        return {"key": self.key, "ready": ready, "supported": True, "reason": None if ready else "qemu-img missing"}
+        functional = _tool_functional("qemu-img")
+        return {
+            "key": self.key,
+            "ready": functional,
+            "degraded": False,
+            "supported": True,
+            "reason": None if functional else "qemu-img not functional",
+        }

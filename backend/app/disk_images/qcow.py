@@ -4,18 +4,20 @@ from pathlib import Path
 from typing import Any
 
 from app.disk_images.qemu import (
+    _build_authorized_set,
+    _check_space_before_convert,
     _format_from_info,
     _format_size,
-    _qemu_img_exists,
     _read_header,
+    _tool_functional,
     _validate_backing_file,
+    _validate_resource_limits,
     qemu_img_check,
     qemu_img_convert_to_raw,
     qemu_img_info,
 )
 
-
-_QCOW_MAGICS = (b"QFI\xfb", b"QFI\xfe")
+_MAX_CHAIN_DEPTH = 3
 
 
 class QcowImageAdapter:
@@ -77,16 +79,26 @@ class QcowImageAdapter:
         readiness = self.readiness()
         if not readiness["ready"]:
             return {"format": self.key, "supported": False, "error": "missing_dependency", "reason": readiness["reason"]}
+        authorized = _build_authorized_set(path.parent, companions)
         info = qemu_img_info(path)
-        backing = _validate_backing_file(info, path.parent)
+        backing = _validate_backing_file(info, path.parent, authorized_paths=authorized)
         if not backing["valid"]:
             return {"format": self.key, "supported": False, "error": backing.get("error"), "backing_file": backing.get("backing_file")}
+        if backing.get("has_backing") and not backing.get("present"):
+            return {"format": self.key, "supported": False, "error": "missing_backing_file", "backing_file": backing.get("backing_file")}
+        chain_check = self._check_chain_depth(path, authorized, 0)
+        if chain_check:
+            return chain_check
         check_result = qemu_img_check(path)
         if not check_result.get("valid") and check_result.get("errors"):
             return {"format": self.key, "supported": False, "error": "image_check_failed", "check_result": check_result}
-        _, virtual_size, _ = _format_size(info)
-        if virtual_size > 1099511627776:
-            return {"format": self.key, "supported": False, "error": "virtual_size_limit_exceeded", "virtual_size": virtual_size}
+        physical, virtual_size, _ = _format_size(info)
+        limits = _validate_resource_limits(virtual_size=virtual_size, physical_size=physical)
+        if not limits["valid"]:
+            return {"format": self.key, "supported": False, **limits}
+        space_check = _check_space_before_convert(virtual_size, workspace)
+        if not space_check["sufficient"]:
+            return {"format": self.key, "supported": False, **space_check}
         output_path = workspace / f"{evidence_id}-qcow2-export.raw"
         result = qemu_img_convert_to_raw(input_path=path, output_path=output_path, evidence_id=evidence_id)
         return {
@@ -97,11 +109,29 @@ class QcowImageAdapter:
             "workspace": str(workspace),
         }
 
+    def _check_chain_depth(self, path: Path, authorized: set[str], depth: int) -> dict[str, Any] | None:
+        if depth >= _MAX_CHAIN_DEPTH:
+            return {"format": self.key, "supported": False, "error": "chain_depth_exceeded", "depth": depth}
+        info = qemu_img_info(path)
+        backing = _validate_backing_file(info, path.parent, authorized_paths=authorized)
+        if not backing.get("has_backing") or not backing.get("present"):
+            return None
+        backing_path = path.parent / Path(backing["backing_file"])
+        if str(backing_path.resolve()) == str(path.resolve()):
+            return {"format": self.key, "supported": False, "error": "chain_loop_detected", "path": str(path)}
+        return self._check_chain_depth(backing_path, authorized, depth + 1)
+
     def cleanup(self, context: dict[str, Any]) -> None:
         raw_path = Path(str(context.get("exported_raw_path") or ""))
         if raw_path.exists() and raw_path.is_file():
             raw_path.unlink(missing_ok=True)
 
     def readiness(self) -> dict[str, Any]:
-        ready = _qemu_img_exists()
-        return {"key": self.key, "ready": ready, "supported": True, "reason": None if ready else "qemu-img missing"}
+        functional = _tool_functional("qemu-img")
+        return {
+            "key": self.key,
+            "ready": functional,
+            "degraded": False,
+            "supported": True,
+            "reason": None if functional else "qemu-img not functional",
+        }

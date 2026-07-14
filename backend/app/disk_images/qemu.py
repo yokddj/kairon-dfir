@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
+
+from app.core.config import get_settings
+
+
+settings = get_settings()
 
 
 def _qemu_img_exists() -> bool:
@@ -78,12 +84,52 @@ def qemu_img_check(path: Path) -> dict[str, Any]:
     valid = completed.returncode == 0
     lines = (completed.stdout + completed.stderr).splitlines()
     errors = [line for line in lines if "error" in line.lower() or "leaked" in line.lower()]
+    warnings = [line for line in lines if "warning" in line.lower()]
     return {
         "valid": valid,
         "returncode": completed.returncode,
         "errors": errors[:20],
+        "warnings": warnings[:20],
         "output_tail": "\n".join(lines[-20:]),
     }
+
+
+def _check_space_before_convert(virtual_size: int, workspace_dir: Path) -> dict[str, Any]:
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        stat = os.statvfs(str(workspace_dir))
+        free = stat.f_frsize * stat.f_bavail
+    except OSError:
+        free = 0
+    estimated_needed = max(virtual_size, 256 * 1024 * 1024)
+    reserve = max(getattr(settings, "disk_image_min_free_space_reserve", 0), 256 * 1024 * 1024)
+    if free < estimated_needed + reserve:
+        return {
+            "sufficient": False,
+            "free_bytes": free,
+            "needed_bytes": estimated_needed,
+            "reserve_bytes": reserve,
+            "error": "insufficient_free_space",
+        }
+    return {"sufficient": True, "free_bytes": free, "needed_bytes": estimated_needed}
+
+
+def _validate_resource_limits(
+    *,
+    virtual_size: int,
+    physical_size: int,
+    max_virtual: int | None = None,
+    max_ratio: int | None = None,
+) -> dict[str, Any]:
+    max_v = max_virtual or getattr(settings, "disk_image_virtual_size_max_bytes", 1099511627776)
+    max_r = max_ratio or getattr(settings, "disk_image_virtual_physical_ratio_max", 100)
+    if virtual_size > max_v:
+        return {"valid": False, "error": "virtual_size_limit_exceeded", "virtual_size": virtual_size, "limit": max_v}
+    if physical_size > 10_485_760 and virtual_size > 0:
+        ratio = virtual_size // max(physical_size, 1)
+        if ratio > max_r:
+            return {"valid": False, "error": "virtual_physical_ratio_exceeded", "ratio": ratio, "limit": max_r, "physical": physical_size, "virtual": virtual_size}
+    return {"valid": True}
 
 
 def qemu_img_convert_to_raw(
@@ -120,7 +166,15 @@ def _tool_version(name: str) -> str | None:
     return text[0] if text else None
 
 
-_VMDK_EXTENT_LINE_PREFIXES = ("RW", "RDONLY", "NOACCESS")
+def _tool_functional(name: str) -> bool:
+    """Check that a tool is available AND can execute a basic command."""
+    if not shutil.which(name):
+        return False
+    try:
+        completed = subprocess.run([name, "--version"], capture_output=True, text=True, shell=False, timeout=10)
+        return completed.returncode == 0
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return False
 
 
 def _parse_vmdk_descriptor(descriptor_path: Path) -> dict[str, Any]:
@@ -155,22 +209,39 @@ def _parse_vmdk_descriptor(descriptor_path: Path) -> dict[str, Any]:
     return {"valid": len(errors) == 0, "extents": extents, "errors": errors}
 
 
-def _validate_vmdk_extents(descriptor_dir: Path, extents: list[str]) -> dict[str, Any]:
+def _validate_vmdk_extents(
+    descriptor_dir: Path,
+    extents: list[str],
+    *,
+    authorized_paths: set[str] | None = None,
+) -> dict[str, Any]:
     missing = []
     external = []
+    unauthorized = []
     valid = True
     for extent_path in extents:
         full = descriptor_dir / extent_path
-        if full.resolve() != full.absolute():
+        resolved = full.resolve()
+        if resolved != full.absolute():
             external.append(extent_path)
             valid = False
-        elif not full.exists() or not full.is_file():
+            continue
+        if authorized_paths is not None and str(resolved) not in authorized_paths:
+            unauthorized.append(extent_path)
+            valid = False
+            continue
+        if not resolved.exists() or not resolved.is_file():
             missing.append(extent_path)
             valid = False
-    return {"valid": valid, "missing": missing, "external": external}
+    return {"valid": valid, "missing": missing, "external": external, "unauthorized": unauthorized}
 
 
-def _validate_backing_file(info: dict[str, Any] | None, parent_dir: Path) -> dict[str, Any]:
+def _validate_backing_file(
+    info: dict[str, Any] | None,
+    parent_dir: Path,
+    *,
+    authorized_paths: set[str] | None = None,
+) -> dict[str, Any]:
     if not info:
         return {"valid": True, "has_backing": False}
     backing = info.get("backing-filename") or info.get("full-backing-filename") or info.get("backing file")
@@ -180,8 +251,23 @@ def _validate_backing_file(info: dict[str, Any] | None, parent_dir: Path) -> dic
     if backing_path.is_absolute():
         return {"valid": False, "error": "external_parent_rejected", "backing_file": str(backing_path)}
     candidate = parent_dir / backing_path
-    if candidate.resolve() != candidate.absolute():
+    resolved = candidate.resolve()
+    if resolved != candidate.absolute():
         return {"valid": False, "error": "external_parent_rejected", "backing_file": str(backing_path)}
-    if not candidate.exists() or not candidate.is_file():
+    if authorized_paths is not None and str(resolved) not in authorized_paths:
+        return {"valid": False, "error": "parent_not_in_authorized_set", "backing_file": str(backing_path)}
+    if not resolved.exists() or not resolved.is_file():
         return {"valid": True, "has_backing": True, "backing_file": str(backing_path), "present": False}
     return {"valid": True, "has_backing": True, "backing_file": str(backing_path), "present": True}
+
+
+def _build_authorized_set(upload_dir: Path, companions: list[Path] | None = None) -> set[str]:
+    authorized = {str(p.resolve()) for p in [upload_dir, *(companions or [])] if p.exists()}
+    for p in [upload_dir, *(companions or [])]:
+        try:
+            for candidate in p.parent.glob("*"):
+                if candidate.is_file():
+                    authorized.add(str(candidate.resolve()))
+        except OSError:
+            pass
+    return authorized

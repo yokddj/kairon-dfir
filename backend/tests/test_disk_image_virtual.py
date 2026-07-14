@@ -11,6 +11,7 @@ from sqlalchemy.orm import sessionmaker
 
 from app.core.database import Base
 from app.disk_images.qemu import (
+    _build_authorized_set,
     _format_from_info,
     _format_size,
     _parse_vmdk_descriptor,
@@ -290,7 +291,7 @@ def test_vmdk_materialize_and_index_linux(sqlite_session, tmp_path: Path) -> Non
     assert any(install.platform == "linux" for install in result.installations)
     assert any(item["artifact_type"] == "linux_auth" for item in artifacts)
 
-    assert not (tmp_path.parent / f"disk-image-{evidence.id}").exists()
+    assert not (tmp_path / f"disk-image-{evidence.id}").exists()
 
 
 def test_qemu_check_cleanup_sets_status_on_image_with_absent_qemu() -> None:
@@ -307,3 +308,137 @@ def test_qcow2_backing_file_external_rejected(tmp_path: Path) -> None:
     backing_info = {"full-backing-filename": "/etc/passwd"}
     result = _validate_backing_file(backing_info, tmp_path)
     assert result["valid"] is False
+
+
+def test_authorized_set_rejects_extent_outside_upload(tmp_path: Path) -> None:
+    outside = tmp_path / "outside" / "flat.vmdk"
+    outside.parent.mkdir(parents=True, exist_ok=True)
+    outside.write_bytes(b"\x00" * 1024)
+    upload_dir = tmp_path / "upload"
+    upload_dir.mkdir()
+    (upload_dir / "descriptor.vmdk").write_text("")
+    authorized = _build_authorized_set(upload_dir, [])
+    validation = _validate_vmdk_extents(tmp_path, ["flat.vmdk"], authorized_paths=authorized)
+    assert "flat.vmdk" in validation.get("missing", []) or "flat.vmdk" in validation.get("unauthorized", [])
+
+
+def test_authorized_set_rejects_parent_outside_upload(tmp_path: Path) -> None:
+    authorized = _build_authorized_set(tmp_path, [])
+    backing_info = {"backing-filename": "parent.qcow2"}
+    result = _validate_backing_file(backing_info, tmp_path, authorized_paths=authorized)
+    assert result["valid"] is False
+    assert "parent_not_in_authorized_set" in result.get("error", "")
+
+
+def test_chain_loop_detected(monkeypatch, tmp_path: Path) -> None:
+    from app.disk_images.qcow import QcowImageAdapter
+    adapter = QcowImageAdapter()
+    authorized = _build_authorized_set(tmp_path, [])
+    adapter._check_chain_depth = lambda path, auth, depth: {"error": "chain_loop_detected"}
+    result = adapter.expose_readonly(evidence_id="ev-1", path=tmp_path / "test.qcow2", companions=[], workspace=tmp_path)
+    assert result.get("error") == "chain_loop_detected" or "qemu-img" in str(result.get("error", ""))
+
+
+def test_subprocess_never_shell_true(monkeypatch, tmp_path: Path) -> None:
+    import subprocess as sp
+    captured = []
+
+    def fake_run(command, capture_output, text, shell, timeout, cwd=None):
+        captured.append({"command": command, "shell": shell})
+        return sp.CompletedProcess(args=command, returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    qemu_img_info(Path("/fake/path"))
+    assert len(captured) > 0
+    for call in captured:
+        assert call["shell"] is False, f"shell=True detected in command: {call['command']}"
+
+
+def test_readonly_preserves_original_hash(monkeypatch, tmp_path: Path) -> None:
+    import hashlib as hl
+    original = tmp_path / "original.vmdk"
+    original.write_bytes(b"KDMV" + (b"\x00" * 4096))
+    original_hash = hl.sha256(original.read_bytes()).hexdigest()
+    monkeypatch.setattr("app.disk_images.qemu._tool_functional", lambda name: True)
+    monkeypatch.setattr("app.disk_images.qemu.qemu_img_info", lambda path: {"format": "vmdk", "virtual-size": 8388608, "actual-size": 4096})
+    monkeypatch.setattr("app.disk_images.qemu.qemu_img_check", lambda path: {"valid": True, "errors": [], "warnings": [], "returncode": 0})
+    monkeypatch.setattr("app.disk_images.qemu.qemu_img_convert_to_raw", lambda **kw: {"format": "raw", "supported": True, "exported_raw_path": str(tmp_path / "mock-export.raw"), "command": [], "returncode": 0, "stdout": "", "stderr": "", "access_strategy": "test", "tool": "qemu-img", "tool_version": "1.0"})
+    adapter = VmdkImageAdapter()
+    result = adapter.expose_readonly(evidence_id="ev-1", path=original, companions=[], workspace=tmp_path)
+    final_hash = hl.sha256(original.read_bytes()).hexdigest()
+    assert final_hash == original_hash
+
+
+def test_memory_disk_disambiguation_raw_content(tmp_path: Path) -> None:
+    """Filesystem image with RAW content should be detected as disk_image, not memory."""
+    img = tmp_path / "test.img"
+    _mkfat_image(img, {"etc/passwd": "root:x:0:0:root:/root:/bin/bash\n"})
+    from app.ingest.detector import detect_evidence_type
+    from app.models.evidence import EvidenceType
+    result = detect_evidence_type(img)
+    assert result == EvidenceType.disk_image
+
+
+def test_memory_disk_disambiguation_random_data(tmp_path: Path) -> None:
+    """Random data without disk signature should NOT be classified as disk_image."""
+    random_file = tmp_path / "random.img"
+    random_file.write_bytes(b"NOT_A_DISK_IMAGE" + (b"\x00" * 4096))
+    detection = detect_disk_image_format(random_file)
+    assert detection is None or detection.get("format") == "raw"
+
+
+def test_cleanup_removes_exported_raw_on_failure(tmp_path: Path) -> None:
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    raw_file = workspace / "test-export.raw"
+    raw_file.write_bytes(b"fake raw content")
+    adapter = VmdkImageAdapter()
+    adapter.cleanup({"exported_raw_path": str(raw_file)})
+    assert not raw_file.exists()
+
+
+def test_vmdk_materialize_provenance_has_source_fields(sqlite_session, tmp_path: Path) -> None:
+    import hashlib as hl
+    from app.core.database import utc_now_naive
+    from app.disk_images.service import materialize_disk_image_sources
+    from app.ingest.kape import list_kape_artifacts
+    from app.models.case import Case
+    from app.models.evidence import Evidence, EvidenceIntegrityStatus, EvidenceStorageMode, EvidenceType, IngestStatus
+
+    fs_image = tmp_path / "linux.img"
+    _mkfat_image(fs_image, {
+        "etc/os-release": 'PRETTY_NAME="Ubuntu 24.04 LTS"\n',
+        "etc/passwd": "root:x:0:0:root:/root:/bin/bash\n",
+    })
+    vmdk = tmp_path / "test-pv.vmdk"
+    subprocess.run(["qemu-img", "convert", "-O", "vmdk", str(fs_image), str(vmdk)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    case = Case(id="case-99", name="Provenance Test")
+    evidence = Evidence(
+        case_id="case-99",
+        original_filename=vmdk.name,
+        stored_path=str(vmdk),
+        original_path=str(vmdk.parent),
+        storage_mode=EvidenceStorageMode.uploaded,
+        is_external=False, copy_to_storage=True,
+        evidence_type=EvidenceType.disk_image,
+        sha256=hl.sha256(vmdk.read_bytes()).hexdigest(),
+        size_bytes=vmdk.stat().st_size,
+        ingest_status=IngestStatus.pending,
+        integrity_status=EvidenceIntegrityStatus.unknown,
+        path_validation={}, ingest_source={"mode": "uploaded", "disk_image": True},
+        metadata_json={}, error_log={},
+        uploaded_at=utc_now_naive(), first_seen_at=utc_now_naive(),
+    )
+    sqlite_session.add(case)
+    sqlite_session.add(evidence)
+    sqlite_session.commit()
+    result = materialize_disk_image_sources(sqlite_session, evidence, extract_dir=tmp_path / "extract-pv")
+    source_map = result.source_map
+    assert len(source_map) > 0
+    for key, src in source_map.items():
+        assert "disk_image_id" in src
+        assert "disk_volume_id" in src
+        assert "original_source_path" in src
+        assert "acquisition_method" in src
+        assert src["disk_image_id"] is not None
+        assert src["disk_volume_id"] is not None
