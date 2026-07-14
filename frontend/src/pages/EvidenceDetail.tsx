@@ -2415,6 +2415,20 @@ function formatReportStatus(status: string | null | undefined) {
               <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Volumes</p><p className="mt-1 text-sm font-semibold text-ink">{diskImage.volumes?.length ?? 0}</p></div>
               <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Warnings</p><p className="mt-1 text-sm font-semibold text-amber">{diskImage.warnings_json?.length ?? 0}</p></div>
             </div>
+            {(diskImage.metadata_json?.virtual_size || diskImage.tool_metadata?.adapter) ? (
+              <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">
+                <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-accent">Image metadata</p>
+                <div className="mt-2 grid gap-1 md:grid-cols-3">
+                  {diskImage.metadata_json?.virtual_size ? <p>Virtual: <span className="text-ink">{formatBytes(diskImage.metadata_json.virtual_size as number)}</span></p> : null}
+                  {diskImage.metadata_json?.physical_size ? <p>Physical: <span className="text-ink">{formatBytes(diskImage.metadata_json.physical_size as number)}</span></p> : null}
+                  {diskImage.metadata_json?.allocation_type ? <p>Allocation: <span className="text-ink">{diskImage.metadata_json.allocation_type as string}</span></p> : null}
+                  {diskImage.metadata_json?.variant ? <p>Variant: <span className="text-ink">{diskImage.metadata_json.variant as string}</span></p> : null}
+                  {diskImage.metadata_json?.backing_file ? <p>Backing: <span className="text-ink">{diskImage.metadata_json.backing_file as string}</span></p> : null}
+                  {diskImage.metadata_json?.extents ? <p>Extents: <span className="text-ink">{(diskImage.metadata_json.extents as string[]).join(", ")}</span></p> : null}
+                  {diskImage.tool_metadata?.adapter ? <p>Tool: <span className="text-ink">{diskImage.tool_metadata.adapter as string}</span></p> : null}
+                </div>
+              </div>
+            ) : null}
             <div className="mt-4 space-y-3">
               {(diskImage.volumes ?? []).map((volume) => (
                 <div key={volume.id} className="rounded-2xl border border-line bg-abyss/60 p-4">
