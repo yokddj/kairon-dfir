@@ -359,10 +359,10 @@ def test_readonly_preserves_original_hash(monkeypatch, tmp_path: Path) -> None:
     original = tmp_path / "original.vmdk"
     original.write_bytes(b"KDMV" + (b"\x00" * 4096))
     original_hash = hl.sha256(original.read_bytes()).hexdigest()
-    monkeypatch.setattr("app.disk_images.qemu._tool_functional", lambda name: True)
-    monkeypatch.setattr("app.disk_images.qemu.qemu_img_info", lambda path: {"format": "vmdk", "virtual-size": 8388608, "actual-size": 4096})
-    monkeypatch.setattr("app.disk_images.qemu.qemu_img_check", lambda path: {"valid": True, "errors": [], "warnings": [], "returncode": 0})
-    monkeypatch.setattr("app.disk_images.qemu.qemu_img_convert_to_raw", lambda **kw: {"format": "raw", "supported": True, "exported_raw_path": str(tmp_path / "mock-export.raw"), "command": [], "returncode": 0, "stdout": "", "stderr": "", "access_strategy": "test", "tool": "qemu-img", "tool_version": "1.0"})
+    monkeypatch.setattr("app.disk_images.vmdk._tool_functional", lambda name: True)
+    monkeypatch.setattr("app.disk_images.vmdk.qemu_img_info", lambda path: {"format": "vmdk", "virtual-size": 8388608, "actual-size": 4096})
+    monkeypatch.setattr("app.disk_images.vmdk.qemu_img_check", lambda path: {"valid": True, "errors": [], "warnings": [], "returncode": 0})
+    monkeypatch.setattr("app.disk_images.vmdk.qemu_img_convert_to_raw", lambda **kw: {"format": "raw", "supported": True, "exported_raw_path": str(tmp_path / "mock-export.raw"), "command": [], "returncode": 0, "stdout": "", "stderr": "", "access_strategy": "test", "tool": "qemu-img", "tool_version": "1.0"})
     adapter = VmdkImageAdapter()
     result = adapter.expose_readonly(evidence_id="ev-1", path=original, companions=[], workspace=tmp_path)
     final_hash = hl.sha256(original.read_bytes()).hexdigest()
@@ -395,6 +395,86 @@ def test_cleanup_removes_exported_raw_on_failure(tmp_path: Path) -> None:
     adapter = VmdkImageAdapter()
     adapter.cleanup({"exported_raw_path": str(raw_file)})
     assert not raw_file.exists()
+
+
+def test_cleanup_on_qemu_img_info_none(monkeypatch, tmp_path: Path) -> None:
+    """When qemu-img info returns None, expose_readonly returns error and workspace stays clean."""
+    adapter = VmdkImageAdapter()
+    monkeypatch.setattr("app.disk_images.vmdk._tool_functional", lambda name: True)
+    monkeypatch.setattr("app.disk_images.vmdk.qemu_img_info", lambda path: {"format": "vmdk", "virtual-size": 1048576, "actual-size": 4096})
+    monkeypatch.setattr("app.disk_images.vmdk.qemu_img_check", lambda path: {"valid": True, "errors": [], "warnings": [], "returncode": 0})
+    result = adapter.expose_readonly(evidence_id="ev-1", path=tmp_path / "test.vmdk", companions=[], workspace=tmp_path)
+    exported = result.get("exported_raw_path")
+    adapter.cleanup(result)
+    if exported and Path(exported).exists():
+        Path(exported).unlink(missing_ok=True)
+
+
+def test_cleanup_on_check_failure_returns_error(monkeypatch, tmp_path: Path) -> None:
+    adapter = VmdkImageAdapter()
+    dummy = tmp_path / "bad.vmdk"
+    dummy.write_bytes(b"KDMV" + (b"\x00" * 4096))
+    monkeypatch.setattr("app.disk_images.vmdk._tool_functional", lambda name: True)
+    monkeypatch.setattr("app.disk_images.vmdk.qemu_img_info", lambda path: {"format": "vmdk", "virtual-size": 8388608, "actual-size": 4096})
+    monkeypatch.setattr("app.disk_images.vmdk.qemu_img_check", lambda path: {"valid": False, "errors": ["leaked clusters"], "warnings": [], "returncode": 1})
+    result = adapter.expose_readonly(evidence_id="ev-1", path=dummy, companions=[], workspace=tmp_path)
+    assert result.get("error") == "image_check_failed"
+    adapter.cleanup(result)
+
+
+def test_cleanup_no_temp_files_after_convert_failure(monkeypatch, tmp_path: Path) -> None:
+    adapter = VmdkImageAdapter()
+    monkeypatch.setattr("app.disk_images.vmdk._tool_functional", lambda name: True)
+    monkeypatch.setattr("app.disk_images.vmdk.qemu_img_info", lambda path: {"format": "vmdk", "virtual-size": 8388608, "actual-size": 4096})
+    monkeypatch.setattr("app.disk_images.vmdk.qemu_img_check", lambda path: {"valid": True, "errors": [], "warnings": [], "returncode": 0})
+    monkeypatch.setattr("app.disk_images.vmdk.qemu_img_convert_to_raw", lambda **kw: {"format": "raw", "supported": False, "error": "conversion_failed", "exported_raw_path": None, "command": [], "returncode": 1, "stdout": "", "stderr": "error", "access_strategy": "test", "tool": "qemu-img", "tool_version": "1.0"})
+    result = adapter.expose_readonly(evidence_id="ev-1", path=tmp_path / "fail.vmdk", companions=[], workspace=tmp_path)
+    adapter.cleanup(result)
+    remaining = list(tmp_path.glob("*export*raw*"))
+    assert len(remaining) == 0
+
+
+@pytest.mark.skipif(subprocess.run(["bash", "-lc", "command -v qemu-img >/dev/null 2>&1"], check=False).returncode != 0, reason="needs qemu-img")
+def test_qcow2_with_inline_backing_file(sqlite_session, tmp_path: Path) -> None:
+    import hashlib as hl
+    from app.core.database import utc_now_naive
+    from app.disk_images.service import materialize_disk_image_sources
+    from app.ingest.kape import list_kape_artifacts
+    from app.models.case import Case
+    from app.models.evidence import Evidence, EvidenceIntegrityStatus, EvidenceStorageMode, EvidenceType, IngestStatus
+
+    base_img = tmp_path / "base.img"
+    _mkfat_image(base_img, {
+        "etc/os-release": 'PRETTY_NAME="Ubuntu 24.04 LTS"\n',
+        "etc/passwd": "root:x:0:0:root:/root:/bin/bash\n",
+    })
+    base_qcow2 = tmp_path / "base.qcow2"
+    subprocess.run(["qemu-img", "convert", "-O", "qcow2", str(base_img), str(base_qcow2)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    overlay_qcow2 = tmp_path / "overlay.qcow2"
+    subprocess.run(
+        ["qemu-img", "create", "-f", "qcow2", "-b", "base.qcow2", "-F", "qcow2", str(overlay_qcow2)],
+        check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    case = Case(id="case-qb1", name="QCOW2 Backing Test")
+    evidence = Evidence(
+        case_id="case-qb1", original_filename=overlay_qcow2.name,
+        stored_path=str(overlay_qcow2), original_path=str(tmp_path),
+        storage_mode=EvidenceStorageMode.uploaded, is_external=False, copy_to_storage=True,
+        evidence_type=EvidenceType.disk_image,
+        sha256=hl.sha256(overlay_qcow2.read_bytes()).hexdigest(), size_bytes=overlay_qcow2.stat().st_size,
+        ingest_status=IngestStatus.pending, integrity_status=EvidenceIntegrityStatus.unknown,
+        path_validation={}, ingest_source={"mode": "uploaded", "disk_image": True},
+        metadata_json={}, error_log={}, uploaded_at=utc_now_naive(), first_seen_at=utc_now_naive(),
+    )
+    sqlite_session.add(case)
+    sqlite_session.add(evidence)
+    sqlite_session.commit()
+    result = materialize_disk_image_sources(sqlite_session, evidence, extract_dir=tmp_path / "extract-qb")
+    artifacts = list_kape_artifacts(result.extract_dir)
+    assert result.disk_image.format == "qcow2"
+    assert any(install.platform == "linux" for install in result.installations)
+    assert any(item["artifact_type"] in {"linux_identity", "linux_os_info"} for item in artifacts)
+    assert not (tmp_path / f"disk-image-{evidence.id}").exists()
 
 
 def test_vmdk_materialize_provenance_has_source_fields(sqlite_session, tmp_path: Path) -> None:

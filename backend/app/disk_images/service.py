@@ -492,6 +492,9 @@ def materialize_disk_image_sources(db: Session, evidence: Evidence, *, extract_d
     db.flush()
     workspace = extract_dir.parent / f"disk-image-{evidence.id}"
     workspace.mkdir(parents=True, exist_ok=True)
+    inspect_metadata = adapter.inspect(stored_path, companions)
+    if isinstance(inspect_metadata, dict):
+        disk_image.metadata_json = {**(disk_image.metadata_json or {}), **{k: v for k, v in inspect_metadata.items() if k not in {"format", "supported", "path", "validation", "segments"}}}
     context: dict[str, Any] | None = None
     if progress_cb:
         progress_cb({"current_action": "inspecting_image"})
