@@ -439,8 +439,8 @@ def upsert_disk_image_record(db: Session, evidence: Evidence, *, format_key: str
     return disk_image
 
 
-def materialize_disk_image_sources(db: Session, evidence: Evidence, *, extract_dir: Path, progress_cb=None) -> MaterializedDiskImage:
-    stored_path = Path(evidence.stored_path)
+def materialize_disk_image_sources(db: Session, evidence: Evidence, *, extract_dir: Path, image_path: Path | None = None, progress_cb=None) -> MaterializedDiskImage:
+    stored_path = image_path or Path(evidence.stored_path)
     extract_dir.mkdir(parents=True, exist_ok=True)
     registry = get_image_format_registry()
     companions = _ewf_companions(stored_path)

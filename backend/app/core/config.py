@@ -329,6 +329,7 @@ class Settings(BaseSettings):
         return value if value else "memory-native-probe"
     backend_max_extracted_files: int = 50000
     backend_max_extracted_bytes: int = 10737418240
+    max_archive_depth: int = 5
     backend_data_dir: Path = Path("/app/data")
     backend_temp_dir: Path = Path("/app/data/tmp")
     backend_log_level: str = "INFO"
