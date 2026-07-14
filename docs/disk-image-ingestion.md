@@ -1,12 +1,16 @@
 # Disk Image Ingestion
 
-## Scope in this phase
+## Scope
 
 Implemented now:
 
 - RAW disk images: `.dd`, `.img`, `.raw`
 - RAW detection by content where possible
 - EWF uploads: `.E01`, `.Ex01`, segmented `E01/E02/E03/...`
+- VMware VMDK: monolithic flat/sparse, descriptor+extents
+- Hyper-V VHD/VHDX: fixed, dynamic
+- QEMU/KVM QCOW/QCOW2: with backing file validation
+- VirtualBox VDI: fixed, dynamic
 - MBR partition discovery
 - GPT partition discovery
 - Filesystem-image without partition table
@@ -16,10 +20,6 @@ Implemented now:
 
 Prepared but not supported yet:
 
-- VMDK
-- VHD/VHDX
-- QCOW/QCOW2
-- VDI
 - AFF/AFF4
 - L01
 - AD1
@@ -151,7 +151,93 @@ Current EWF behavior:
 - use `ewfexport` to a temporary RAW representation
 - process the exported RAW through the common RAW pipeline
 
-## Filesystem and OS discovery
+## VMDK
+
+Current VMDK behavior:
+
+- detect by signature (`KDMV`, `VMDK`) or `qemu-img info` format field
+- parse descriptor text for extent references
+- reject absolute extent paths
+- reject path traversal (`../`)
+- reject extents outside the upload directory
+- use `qemu-img convert` to a temporary RAW
+- process the exported RAW through the common RAW pipeline
+
+Variants supported:
+
+- monolithicFlat
+- monolithicSparse
+- twoGbMaxExtentFlat (when all extents are within upload directory)
+- streamingOptimized
+
+VMDK delta/snapshot chains are detected and reported as diagnostics, but the pipeline follows only the primary image through qemu-img conversion.
+
+## VHD/VHDX
+
+Current VHD/VHDX behavior:
+
+- detect by signature (`conectix`, `vhdxfile`) or `qemu-img info` format field
+- validate backing file/parent chain where present
+- reject external parents (outside the upload directory)
+- use `qemu-img convert` to a temporary RAW
+- process the exported RAW through the common RAW pipeline
+
+Variants supported:
+
+- VHD: fixed, dynamic
+- VHDX: fixed, dynamic
+
+VHD differencing chains with parents in the same upload directory are processed through qemu-img. External parents are rejected explicitly.
+
+## QCOW/QCOW2
+
+Current QCOW/QCOW2 behavior:
+
+- detect by magic (`QFI\xfb`, `QFI\xfe`) or `qemu-img info` format field
+- validate backing file chain where present
+- reject external backing files (outside the upload directory)
+- accept backing files present in the same upload directory
+- use `qemu-img convert` to a temporary RAW
+- process the exported RAW through the common RAW pipeline
+
+Snapshots are detected and reported via inspect() but not processed individually.
+
+## VDI
+
+Current VDI behavior:
+
+- detect by signature or `qemu-img info` format field
+- validate via `qemu-img check`
+- use `qemu-img convert` to a temporary RAW
+- process the exported RAW through the common RAW pipeline
+
+Variants supported:
+
+- fixed
+- dynamic
+
+## Common virtual format infrastructure
+
+The VMDK, VHD/VHDX, QCOW/QCOW2, and VDI adapters share the same infrastructure:
+
+- `qemu-img info --output=json` for metadata inspection
+- `qemu-img check` for integrity validation
+- `qemu-img convert -O raw` for temporary RAW conversion
+- All conversions produce a temporary RAW file which is cleaned up after ingestion
+
+Virtual size is checked against the configured limit (1 TiB by default) before conversion begins. Physical and virtual sizes are reported in inspect metadata.
+
+## Readiness
+
+`/api/system/status` now reports disk image adapter readiness and tool visibility.
+
+Examples:
+
+- RAW adapter ready when `pytsk3` is available
+- EWF adapter ready when `ewfinfo` and `ewfexport` are available
+- VMDK/VHD/VHDX/QCOW/QCOW2/VDI adapters ready when `qemu-img` is available
+
+Optional dependencies do not mark the whole system unhealthy.
 
 The current volume layer supports:
 

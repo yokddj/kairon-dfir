@@ -269,7 +269,9 @@ class Settings(BaseSettings):
     disk_image_job_timeout_seconds: int = 14400
     disk_image_inspection_timeout_seconds: int = 900
     disk_image_export_timeout_seconds: int = 7200
-    disk_image_allowed_extensions: str = ".dd,.img,.raw,.e01,.ex01,.e02,.e03,.e04,.e05"
+    disk_image_allowed_extensions: str = ".dd,.img,.raw,.e01,.ex01,.e02,.e03,.e04,.e05,.vmdk,.vhd,.vhdx,.qcow,.qcow2,.vdi"
+    disk_image_virtual_size_max_bytes: int = 1099511627776
+    disk_image_virtual_physical_ratio_max: int = 100
     backend_experimental_folder_upload_max_total_bytes: int = 2147483648
     # Experimental Mismatched-Symbol Analysis v1.  When ``False``
     # (the default) the experimental endpoints return 404, the

@@ -91,6 +91,7 @@ def disk_image_readiness() -> dict[str, Any]:
             "mmls": _tool_version("mmls", ["-V"]),
             "fls": _tool_version("fls", ["-V"]),
             "icat": _tool_version("icat", ["-V"]),
+            "qemu_img": _tool_version("qemu-img"),
         },
     }
 

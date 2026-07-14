@@ -1,0 +1,187 @@
+from __future__ import annotations
+
+import json
+import shutil
+import subprocess
+from pathlib import Path
+from typing import Any
+
+
+def _qemu_img_exists() -> bool:
+    return shutil.which("qemu-img") is not None
+
+
+def _read_header(path: Path, size: int = 4096) -> bytes:
+    try:
+        with path.open("rb") as handle:
+            return handle.read(size)
+    except OSError:
+        return b""
+
+
+def qemu_img_info(path: Path) -> dict[str, Any] | None:
+    if not _qemu_img_exists():
+        return None
+    completed = subprocess.run(
+        ["qemu-img", "info", "--output=json", str(path)],
+        capture_output=True, text=True, shell=False, timeout=60,
+    )
+    if completed.returncode != 0:
+        return None
+    try:
+        return json.loads(completed.stdout)
+    except json.JSONDecodeError:
+        return None
+
+
+def _format_from_info(info: dict[str, Any] | None, path: Path) -> str | None:
+    if info and info.get("format"):
+        return str(info["format"]).lower()
+    header = _read_header(path, 65536)
+    if header:
+        if b"KDMV" in header[:4096]:
+            return "vmdk"
+        if b"conectix" in header[:4096]:
+            return "vhd"
+        if header[:8] == b"vhdxfile":
+            return "vhdx"
+        if header[:4] == b"QFI\xfb":
+            return "qcow2"
+        if header[:4] == b"QFI\xfe":
+            return "qcow"
+        if b"<<< Oracle VM VirtualBox Disk Image >>>" in header[:4096]:
+            return "vdi"
+        if b"VMDK" in header[:8192]:
+            return "vmdk"
+    return None
+
+
+def _format_size(info: dict[str, Any] | None) -> tuple[int, int, str]:
+    physical = 0
+    virtual = 0
+    allocation = "unknown"
+    if info:
+        physical = int(info.get("actual-size") or 0)
+        virtual = int(info.get("virtual-size") or 0)
+        fmt_specific = info.get("format-specific", {}).get("data") or info.get("format-specific") or {}
+        allocation = str(fmt_specific.get("allocation-type") or fmt_specific.get("create-type") or "unknown").lower()
+    return physical, virtual, allocation
+
+
+def qemu_img_check(path: Path) -> dict[str, Any]:
+    if not _qemu_img_exists():
+        return {"valid": False, "error": "missing_dependency", "reason": "qemu-img missing"}
+    completed = subprocess.run(
+        ["qemu-img", "check", str(path)],
+        capture_output=True, text=True, shell=False, timeout=600,
+    )
+    valid = completed.returncode == 0
+    lines = (completed.stdout + completed.stderr).splitlines()
+    errors = [line for line in lines if "error" in line.lower() or "leaked" in line.lower()]
+    return {
+        "valid": valid,
+        "returncode": completed.returncode,
+        "errors": errors[:20],
+        "output_tail": "\n".join(lines[-20:]),
+    }
+
+
+def qemu_img_convert_to_raw(
+    *,
+    input_path: Path,
+    output_path: Path,
+    evidence_id: str,
+    timeout: int = 3600,
+) -> dict[str, Any]:
+    if not _qemu_img_exists():
+        return {"supported": False, "error": "missing_dependency", "reason": "qemu-img missing"}
+    command = ["qemu-img", "convert", "-O", "raw", str(input_path), str(output_path)]
+    completed = subprocess.run(command, capture_output=True, text=True, shell=False, timeout=timeout)
+    return {
+        "format": "raw",
+        "supported": completed.returncode == 0,
+        "exported_raw_path": str(output_path) if completed.returncode == 0 else None,
+        "command": command,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout[-2000:],
+        "stderr": completed.stderr[-2000:],
+        "access_strategy": "qemu_img_convert_to_temporary_raw_readonly",
+        "tool": "qemu-img",
+        "tool_version": _tool_version("qemu-img") if _qemu_img_exists() else None,
+    }
+
+
+def _tool_version(name: str) -> str | None:
+    try:
+        completed = subprocess.run([name, "--version"], capture_output=True, text=True, shell=False, timeout=15)
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return None
+    text = (completed.stdout or completed.stderr or "").strip().splitlines()
+    return text[0] if text else None
+
+
+_VMDK_EXTENT_LINE_PREFIXES = ("RW", "RDONLY", "NOACCESS")
+
+
+def _parse_vmdk_descriptor(descriptor_path: Path) -> dict[str, Any]:
+    try:
+        content = descriptor_path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {"valid": False, "error": "cannot_read_descriptor"}
+    lines = content.splitlines()
+    extents = []
+    errors = []
+    for line in lines:
+        parts = line.strip().split()
+        if not parts or parts[0].upper() not in {"RW", "RDONLY", "NOACCESS"}:
+            continue
+        if len(parts) < 3:
+            continue
+        extent_type = parts[2].upper()
+        if extent_type in {"ZERO"}:
+            continue
+        if len(parts) < 4:
+            continue
+        raw_path = parts[3].strip('"').strip("'")
+        if not raw_path:
+            continue
+        if raw_path.startswith("/"):
+            errors.append(f"absolute_extent_path_rejected:{raw_path}")
+            continue
+        if ".." in raw_path.split("/"):
+            errors.append(f"path_traversal_rejected:{raw_path}")
+            continue
+        extents.append(raw_path)
+    return {"valid": len(errors) == 0, "extents": extents, "errors": errors}
+
+
+def _validate_vmdk_extents(descriptor_dir: Path, extents: list[str]) -> dict[str, Any]:
+    missing = []
+    external = []
+    valid = True
+    for extent_path in extents:
+        full = descriptor_dir / extent_path
+        if full.resolve() != full.absolute():
+            external.append(extent_path)
+            valid = False
+        elif not full.exists() or not full.is_file():
+            missing.append(extent_path)
+            valid = False
+    return {"valid": valid, "missing": missing, "external": external}
+
+
+def _validate_backing_file(info: dict[str, Any] | None, parent_dir: Path) -> dict[str, Any]:
+    if not info:
+        return {"valid": True, "has_backing": False}
+    backing = info.get("backing-filename") or info.get("full-backing-filename") or info.get("backing file")
+    if not backing:
+        return {"valid": True, "has_backing": False}
+    backing_path = Path(backing)
+    if backing_path.is_absolute():
+        return {"valid": False, "error": "external_parent_rejected", "backing_file": str(backing_path)}
+    candidate = parent_dir / backing_path
+    if candidate.resolve() != candidate.absolute():
+        return {"valid": False, "error": "external_parent_rejected", "backing_file": str(backing_path)}
+    if not candidate.exists() or not candidate.is_file():
+        return {"valid": True, "has_backing": True, "backing_file": str(backing_path), "present": False}
+    return {"valid": True, "has_backing": True, "backing_file": str(backing_path), "present": True}
