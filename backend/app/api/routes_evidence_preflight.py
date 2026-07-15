@@ -1,128 +1,159 @@
-"""Preflight Inspection endpoint for the Unified Evidence Ingestion wizard.
+"""Preflight Inspection + Temporary Upload Session endpoints for the
+Unified Evidence Ingestion wizard.
 
-This router is intentionally separate from routes_evidence.py: it never
-creates an Evidence row, never calls enqueue_ingest, and never writes to
-the database. Its only job is to stage an upload (or point at an existing
-server path / folder) into a disposable temp directory, run the read-only
-app.services.evidence_preflight.run_preflight() inspection, and clean up.
+Two concerns live here, both DB-write-free until the analyst explicitly
+confirms:
 
-The wizard's actual "Start Processing" step calls the existing, unchanged
-upload endpoints in routes_evidence.py (upload_evidence / upload_disk_image /
-upload_evidence_folder) with the same file — this router does not duplicate
-or replace that logic.
+- Server Health Check (Step 0): a read-only readiness probe.
+- Upload sessions: stage a file/folder/server-path ONCE, run Preflight
+  Inspection against the staged copy (possibly more than once), and only
+  promote it into a real Evidence when the analyst confirms Start
+  Processing - see app.services.evidence_upload_session for how promotion
+  reuses the already-staged bytes without a second network transfer.
 """
 from __future__ import annotations
 
 import logging
-import shutil
-from pathlib import Path
-from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
-from app.core.config import get_settings
 from app.core.database import get_db
-from app.core.evidence_paths import validate_external_path
-from app.core.storage import ensure_within_directory, sanitize_relative_path
-from app.models.case import Case
+from app.models.evidence_upload_session import EvidenceUploadSession
+from app.models.user import User
+from app.schemas.evidence import EvidenceRead
+from app.services.auth_dependencies import get_optional_user
 from app.schemas.evidence_preflight import PreflightReport
-from app.services.evidence_preflight import run_preflight
+from app.schemas.evidence_upload_session import (
+    EvidenceUploadSessionCreateResponse,
+    EvidenceUploadSessionRead,
+    PreflightRerunRequest,
+    PromoteUploadSessionRequest,
+)
+from app.services.evidence_upload_session import (
+    UploadSessionError,
+    cancel_upload_session,
+    create_upload_session,
+    get_active_session,
+    promote_upload_session,
+    rerun_preflight,
+)
+from app.services.ingestion_health import check_ingestion_readiness
 
 router = APIRouter(prefix="/api/cases", tags=["evidence-preflight"])
 logger = logging.getLogger(__name__)
 
 
-def _stage_single_file(upload: UploadFile, tmp_dir: Path) -> Path:
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    filename = Path(upload.filename or "upload.bin").name
-    target = tmp_dir / filename
-    with target.open("wb") as buffer:
-        while chunk := upload.file.read(1024 * 1024):
-            buffer.write(chunk)
-    return target
+def _session_to_read(session: EvidenceUploadSession) -> EvidenceUploadSessionRead:
+    return EvidenceUploadSessionRead(
+        id=session.id,
+        case_id=session.case_id,
+        status=session.status,
+        original_filename=session.original_filename,
+        is_folder=session.is_folder,
+        is_server_path=session.is_server_path,
+        size_bytes=session.size_bytes,
+        sha256=session.sha256,
+        client_sha256=session.client_sha256,
+        client_sha256_mismatch=bool((session.metadata_json or {}).get("client_sha256_mismatch")),
+        declared_platform=session.declared_platform,
+        expires_at=session.expires_at,
+        created_at=session.created_at,
+    )
 
 
-def _stage_folder(files: list[UploadFile], tmp_dir: Path) -> Path:
-    root = tmp_dir / "folder"
-    root.mkdir(parents=True, exist_ok=True)
-    for upload in files:
-        relative = sanitize_relative_path(upload.filename or "file.bin")
-        target = root / relative
-        ensure_within_directory(root, target)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("wb") as buffer:
-            while chunk := upload.file.read(1024 * 1024):
-                buffer.write(chunk)
-    return root
+@router.get("/{case_id}/ingestion-readiness")
+def ingestion_readiness(case_id: str, db: Session = Depends(get_db)) -> dict:
+    return check_ingestion_readiness(db)
 
 
-@router.post("/{case_id}/evidence-preflight", response_model=PreflightReport)
-def preflight_evidence(
+@router.post("/{case_id}/evidence-uploads", response_model=EvidenceUploadSessionCreateResponse)
+def create_evidence_upload(
     case_id: str,
     files: list[UploadFile] | None = File(None),
     folder_upload: bool = Form(False),
     server_path: str | None = Form(None),
     declared_platform: str | None = Form(None),
+    client_sha256: str | None = Form(None),
     db: Session = Depends(get_db),
-) -> PreflightReport:
-    if not db.get(Case, case_id):
-        raise HTTPException(status_code=404, detail="Case not found")
-    if not files and not server_path:
-        raise HTTPException(status_code=400, detail="No file, folder, or server path was provided for preflight inspection.")
-
-    settings = get_settings()
-    token = str(uuid4())
-    tmp_dir = settings.backend_temp_dir / "preflight" / token
+) -> EvidenceUploadSessionCreateResponse:
     declared = declared_platform if declared_platform and declared_platform != "auto" else None
-
     try:
-        if server_path:
-            validation = validate_external_path(server_path)
-            if not validation.get("valid"):
-                raise HTTPException(
-                    status_code=400,
-                    detail=validation.get("message") or "The server path could not be validated for ingestion.",
-                )
-            target_path = Path(str(validation["resolved_path"]))
-            original_filename = target_path.name
-            report = run_preflight(
-                target_path,
-                token=token,
-                original_filename=original_filename,
-                declared_platform=declared,
-                tmp_dir=tmp_dir,
-            )
-        elif folder_upload and files and len(files) > 1:
-            staged_root = _stage_folder(files, tmp_dir)
-            report = run_preflight(
-                staged_root,
-                token=token,
-                original_filename=f"{len(files)} files",
-                declared_platform=declared,
-                tmp_dir=tmp_dir,
-            )
-        else:
-            assert files is not None
-            staged_path = _stage_single_file(files[0], tmp_dir)
-            report = run_preflight(
-                staged_path,
-                token=token,
-                original_filename=files[0].filename or staged_path.name,
-                declared_platform=declared,
-                tmp_dir=tmp_dir,
-            )
-    except HTTPException:
-        raise
+        session, report = create_upload_session(
+            db,
+            case_id,
+            files=files,
+            is_folder=folder_upload,
+            server_path=server_path,
+            declared_platform=declared,
+            client_sha256=client_sha256,
+        )
+    except UploadSessionError as exc:
+        status_code = 404 if exc.code == "case_not_found" else 400
+        raise HTTPException(status_code=status_code, detail=exc.message) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("Preflight inspection failed for case %s", case_id)
         raise HTTPException(status_code=500, detail=f"Preflight inspection failed: {exc.__class__.__name__}") from exc
-    finally:
-        # tmp_dir may hold staged upload bytes (file/folder branches) and/or
-        # scratch files run_preflight wrote for itself (disk image workspace,
-        # hostname/os-release peek extraction) - always clean it up. The
-        # server_path branch never stages the source file itself here, but
-        # run_preflight may still have used tmp_dir as scratch space.
-        shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    return report
+    return EvidenceUploadSessionCreateResponse(session=_session_to_read(session), preflight=report, health=check_ingestion_readiness(db))
+
+
+@router.post("/{case_id}/evidence-uploads/{session_id}/preflight", response_model=PreflightReport)
+def rerun_evidence_upload_preflight(
+    case_id: str,
+    session_id: str,
+    payload: PreflightRerunRequest,
+    db: Session = Depends(get_db),
+) -> PreflightReport:
+    try:
+        session = get_active_session(db, case_id, session_id)
+    except UploadSessionError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    declared = payload.declared_platform if payload.declared_platform and payload.declared_platform != "auto" else None
+    return rerun_preflight(session, declared_platform=declared)
+
+
+@router.post("/{case_id}/evidence-uploads/{session_id}/promote", response_model=EvidenceRead)
+def promote_evidence_upload(
+    case_id: str,
+    session_id: str,
+    payload: PromoteUploadSessionRequest,
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
+):
+    try:
+        session = get_active_session(db, case_id, session_id)
+    except UploadSessionError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+
+    declared = payload.provided_platform if payload.provided_platform and payload.provided_platform != "auto" else None
+    try:
+        evidence = promote_upload_session(
+            db,
+            session,
+            provided_platform=declared,
+            host_id=payload.host_id,
+            provided_host=payload.provided_host,
+            evtx_profile=payload.evtx_profile,
+            memory_authorization_acknowledged=payload.memory_authorization_acknowledged,
+            folder_name=payload.folder_name,
+            labels=payload.labels,
+            notes=payload.notes,
+            current_user=current_user,
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Promoting upload session %s failed for case %s", session_id, case_id)
+        raise HTTPException(status_code=500, detail=f"Could not start processing: {exc.__class__.__name__}") from exc
+    return evidence
+
+
+@router.delete("/{case_id}/evidence-uploads/{session_id}")
+def cancel_evidence_upload(case_id: str, session_id: str, db: Session = Depends(get_db)) -> dict:
+    try:
+        session = get_active_session(db, case_id, session_id)
+    except UploadSessionError as exc:
+        raise HTTPException(status_code=404, detail=exc.message) from exc
+    cancel_upload_session(db, session)
+    return {"status": "cancelled", "session_id": session_id}
