@@ -19,6 +19,8 @@ const docSlugByHref: Record<string, string> = {
   "parser-coverage.md": "parser-coverage",
   "platform-architecture.md": "platform-architecture",
   "disk-image-ingestion.md": "disk-image-ingestion",
+  "unified-evidence-ingestion.md": "unified-evidence-ingestion",
+  "preflight-inspection.md": "preflight-inspection",
   "evidence-platforms.md": "evidence-platforms",
   "case-management.md": "case-management",
   "findings-notes.md": "findings-notes",

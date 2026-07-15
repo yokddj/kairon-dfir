@@ -26,7 +26,7 @@ The project is intended for trusted labs and controlled private-beta deployments
 
 ## What It Does
 
-- Ingests Windows and Linux forensic evidence into case-centered investigations.
+- Ingests Windows and Linux forensic evidence into case-centered investigations through a guided, plain-language wizard that classifies evidence and previews the exact processing pipeline before anything runs. See [docs/unified-evidence-ingestion.md](docs/unified-evidence-ingestion.md) and [docs/preflight-inspection.md](docs/preflight-inspection.md).
 - Accepts read-only disk image ingestion for RAW (`.dd`/`.img`/`.raw`), EWF (`.E01`/`.Ex01`), and the VMDK, VHD/VHDX, QCOW/QCOW2, and VDI virtualization formats, reusing existing Windows/Linux pipelines after partition and filesystem discovery. See [docs/disk-image-ingestion.md](docs/disk-image-ingestion.md).
 - Organizes investigations with case status, priority, tags, notes, archive/close lifecycle actions, and filters. See [docs/case-management.md](docs/case-management.md).
 - Normalizes a growing set of Windows, Linux, and memory artifacts for search, triage, timelines, detections, findings, and reports. See [docs/parser-coverage.md](docs/parser-coverage.md) for exact parser support status.
@@ -286,6 +286,8 @@ default route. See [its security model](docs/symbol_fetcher_security.md).
 - [Evidence platform selection](docs/evidence-platforms.md)
 - [Linux support](docs/linux-support.md)
 - [Disk image ingestion](docs/disk-image-ingestion.md)
+- [Unified evidence ingestion](docs/unified-evidence-ingestion.md)
+- [Preflight inspection](docs/preflight-inspection.md)
 - [Memory Analysis](docs/memory_analysis.md)
 - [Memory Upload](docs/memory_upload.md)
 - [Memory Upload UX](docs/memory_upload_ux.md)
