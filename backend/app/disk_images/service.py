@@ -657,3 +657,50 @@ def materialize_disk_image_sources(db: Session, evidence: Evidence, *, extract_d
         warnings=warnings,
         errors=[],
     )
+
+
+def inspect_disk_image_readonly(path: Path, *, workspace: Path) -> dict[str, Any]:
+    """Read-only preview of a disk image: format, volumes, and OS installations.
+
+    Mirrors the first half of materialize_disk_image_sources (detect -> validate
+    -> inspect -> expose_readonly -> discover volumes) but never touches the
+    database and never persists a DiskImage/DiskVolume/OSInstallation row. Used
+    by the evidence preflight inspection so the wizard can preview a disk image
+    before any processing job exists. Caller owns workspace and must remove it
+    after use; this function always calls adapter.cleanup() on its own context.
+    """
+    companions = _ewf_companions(path)
+    registry = get_image_format_registry()
+    detected = registry.detect(path, companions)
+    if not detected:
+        return {"supported": False, "error": "unknown_format"}
+    adapter = registry.get(str(detected.get("format") or ""))
+    if adapter is None:
+        return {"supported": False, "error": "unknown_format"}
+    validation = adapter.validate_segments(path, companions)
+    if not validation.get("valid", True):
+        return {"supported": False, "format": adapter.key, "error": validation.get("error"), "validation": validation}
+    inspect_metadata = adapter.inspect(path, companions)
+    workspace.mkdir(parents=True, exist_ok=True)
+    context: dict[str, Any] = {}
+    try:
+        context = adapter.expose_readonly(evidence_id="preflight", path=path, companions=companions, workspace=workspace)
+        if not context.get("supported", True):
+            return {"supported": False, "format": adapter.key, "error": context.get("error") or "missing_dependency", "context": context}
+        raw_path = Path(str(context.get("exported_raw_path") or context.get("image_path") or path))
+        volumes, installs, warnings = _discover_raw_volumes(raw_path)
+        return {
+            "supported": True,
+            "format": adapter.key,
+            "inspect_metadata": inspect_metadata,
+            "volumes": volumes,
+            "installations": installs,
+            "warnings": warnings,
+        }
+    finally:
+        if context:
+            try:
+                adapter.cleanup(context)
+            except Exception:  # noqa: BLE001
+                pass
+        shutil.rmtree(workspace, ignore_errors=True)
