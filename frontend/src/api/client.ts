@@ -88,7 +88,128 @@ export type EvidenceIntent = "raw" | "parsed" | "mounted" | "auto";
 export type EvidencePackaging = "single_file" | "archive" | "directory" | "mounted_path";
 export type IngestMode = "full_forensic" | "usable_search";
 export type EvtxProfile = "fast_high_value" | "full" | "custom";
-export type EvidencePlatform = "auto" | "windows" | "linux" | "macos" | "unknown" | "other";
+export type EvidencePlatform = "auto" | "windows" | "linux" | "macos" | "memory" | "mixed" | "unknown";
+
+export type EvidencePlatformCategory = {
+  id: string;
+  label: string;
+  group_id: string;
+  group_label: string;
+  platform: EvidencePlatform | string;
+};
+
+export type EvidencePlatformGroup = {
+  id: string;
+  label: string;
+  platform: EvidencePlatform | string;
+  categories: EvidencePlatformCategory[];
+};
+
+export type EvidencePlatformQuickSelect = {
+  id: string;
+  label: string;
+  platform: EvidencePlatform | string;
+  category_ids: string[];
+};
+
+export type EvidencePlatformCapabilities = {
+  supportsTimeline: boolean;
+  supportsSearch: boolean;
+  supportsProcesses: boolean;
+  supportsNetwork: boolean;
+  supportsPersistence: boolean;
+  supportsRegistry: boolean;
+  supportsJournal: boolean;
+  supportsMemory: boolean;
+  supportsPackages: boolean;
+  supportsServices: boolean;
+  supportsUsers: boolean;
+  supportsFilesystem: boolean;
+  supportsBrowser: boolean;
+  supportsCloud: boolean;
+  supportsEmail: boolean;
+};
+
+export type EvidencePlatformArtifact = {
+  id: string;
+  label: string;
+  platforms: Array<EvidencePlatform | string>;
+  aliases: string[];
+  category: string;
+  group_id: string;
+  group_label: string;
+  icon: string;
+  parser: string | null;
+  normalizer: string | null;
+  view: string;
+  searchable: boolean;
+  timeline_capable: boolean;
+  severity_support: boolean;
+  usable_tier: string;
+  filter_fields: string[];
+  quick_selects: string[];
+  capabilities: EvidencePlatformCapabilities;
+};
+
+export type EvidencePlatformProfile = {
+  platform: EvidencePlatform | string;
+  platforms: Array<EvidencePlatform | string>;
+  platform_meta?: Array<{ id: EvidencePlatform | string; label: string; upload_label?: string; upload_description?: string; disabled?: boolean }>;
+  capabilities: EvidencePlatformCapabilities;
+  groups: EvidencePlatformGroup[];
+  quick_selects: EvidencePlatformQuickSelect[];
+  categories: EvidencePlatformCategory[];
+  artifacts: EvidencePlatformArtifact[];
+  available_categories: string[];
+};
+
+export type OSInstallation = {
+  id: string;
+  disk_volume_id: string;
+  platform: string;
+  hostname?: string | null;
+  version?: string | null;
+  distro?: string | null;
+  root_path: string;
+  confidence: string;
+  detection_reasons: string[];
+  metadata_json?: Record<string, unknown>;
+};
+
+export type DiskVolume = {
+  id: string;
+  disk_image_id: string;
+  partition_index: number;
+  offset_bytes: number;
+  length_bytes: number;
+  partition_type?: string | null;
+  filesystem_type?: string | null;
+  label?: string | null;
+  uuid?: string | null;
+  encrypted: boolean;
+  readable: boolean;
+  status: string;
+  warnings_json: string[];
+  error_json: Record<string, unknown>;
+  metadata_json?: Record<string, unknown>;
+  installations: OSInstallation[];
+};
+
+export type DiskImage = {
+  id: string;
+  evidence_id: string;
+  original_filename: string;
+  format: string;
+  size_bytes: number;
+  sha256?: string | null;
+  segment_count: number;
+  status: string;
+  metadata_json?: Record<string, unknown>;
+  tool_metadata?: Record<string, unknown>;
+  warnings_json: string[];
+  error_json: Record<string, unknown>;
+  volumes: DiskVolume[];
+};
 
 type UploadFormDataOptions = {
   onProgress?: (progress: UploadProgress) => void;
@@ -510,6 +631,8 @@ export type Evidence = {
   provided_platform?: EvidencePlatform | string;
   detected_platform?: EvidencePlatform | string;
   effective_platform?: Exclude<EvidencePlatform, "auto"> | string;
+  platform_profile?: EvidencePlatformProfile;
+  disk_image?: DiskImage | null;
   uploaded_by_user_id?: string | null;
   uploaded_at?: string | null;
   first_seen_at?: string | null;
@@ -618,6 +741,7 @@ export type ProcessingEvidenceItem = {
   last_error: string | null;
   runs: ProcessingRun[];
   parser_runs: ProcessingParserRun[];
+  linux_artifacts?: Array<{ name: string; family: string; status: string; paths?: string[]; records?: number }>;
   errors: Array<{ parser: string; summary: string | null; details: Record<string, unknown> }>;
   links: { evidence: string; artifacts: string; search: string; memory?: string | null };
 };
@@ -838,6 +962,7 @@ export type MemoryEvidenceLandingItem = {
   can_analyze?: boolean;
   effective_platform?: string | null;
   detected_platform?: string | null;
+  platform_capabilities?: Partial<EvidencePlatformCapabilities>;
 };
 
 export type MemoryEvidenceLanding = {
@@ -2179,6 +2304,12 @@ export type Artifact = {
   name: string;
   artifact_type: string;
   source_path: string;
+  disk_image_id?: string | null;
+  disk_volume_id?: string | null;
+  os_installation_id?: string | null;
+  original_source_path?: string | null;
+  logical_source_path?: string | null;
+  acquisition_method?: string | null;
   parser: string;
   record_count: number;
   status: string;
@@ -4257,6 +4388,10 @@ export type SystemStatus = {
     blocking_reasons?: string[];
   };
   workers: { active: number; known: string[] };
+  disk_image_adapters?: {
+    formats: Array<{ key: string; ready: boolean; supported: boolean; reason?: string | null }>;
+    tools: Record<string, string | null>;
+  };
   evtx_parser_backends?: {
     evtxecmd?: { available?: boolean; version?: string; path?: string; supports_csv?: boolean; supports_json?: boolean };
     evtx_raw_python?: { available?: boolean; role?: string };
@@ -6060,6 +6195,16 @@ export const api = {
       folderName,
     });
   },
+  uploadDiskImage: async (caseId: string, files: File[], options?: UploadOptions & { ingestMode?: IngestMode; providedHost?: string; providedPlatform?: EvidencePlatform; hostId?: string }) => {
+    const formData = new FormData();
+    files.forEach((file) => formData.append("files", file, file.name));
+    if (options?.ingestMode) formData.append("ingest_mode", options.ingestMode);
+    if (options?.providedHost) formData.append("provided_host", options.providedHost);
+    if (options?.providedPlatform) formData.append("provided_platform", options.providedPlatform);
+    if (options?.hostId) formData.append("host_id", options.hostId);
+    return uploadFormData<Evidence>(`/cases/${caseId}/disk-images/upload`, formData, { onProgress: options?.onProgress, transport: "xhr" });
+  },
+  getEvidenceDiskImage: (evidenceId: string) => request<DiskImage>(`/evidences/${evidenceId}/disk-image`),
   discoverVelociraptorZip: async (caseId: string, file: File, options?: UploadOptions) => {
     const formData = new FormData();
     formData.append("file", file);
@@ -6413,6 +6558,7 @@ export const api = {
       filters?: string;
       scope?: "events" | "findings" | "all";
       evidence_id?: string;
+      platform?: string;
       source_category?: string;
       source?: string;
       artifact_type?: string[];

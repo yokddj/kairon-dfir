@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams, useNavigate } from "react-router-dom";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "../api/client";
+import { api, type EvidencePlatformCapabilities } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { MemoryWorkspace } from "../components/MemoryWorkspace";
 import InvestigationContext from "../components/InvestigationContext";
@@ -14,6 +14,7 @@ import { MemoryTypeConfirmationModal } from "../components/memory/MemoryTypeConf
 import { MemorySymbolResolutionPanel } from "../components/memory/MemorySymbolResolutionPanel";
 import { MemoryExperimentalResultsPanel } from "../components/memory/MemoryExperimentalResultsPanel";
 import { MemoryPreparationCard } from "../components/memory/MemoryPreparationCard";
+import { capabilityEnabled } from "../lib/platformRegistry";
 import { MEMORY_TABS, isMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 import { memoryQueryKeys } from "../lib/memoryQueryKeys";
 import type { CaseContextHostSummary, MemoryEvidenceLanding, MemoryEvidenceLandingItem, MemoryScanRun } from "../api/client";
@@ -178,6 +179,8 @@ export default function MemoryEvidencePage() {
 
   const overview = overviewQuery.data;
   const evidence = landingQuery.data?.items?.find((item) => item.evidence_id === evidenceId) || null;
+  const evidencePlatformProfile = evidence?.platform_capabilities ? { capabilities: evidence.platform_capabilities as EvidencePlatformCapabilities } : null;
+  const linuxMemoryHint = capabilityEnabled(evidencePlatformProfile, "supportsJournal") || capabilityEnabled(evidencePlatformProfile, "supportsPackages") || capabilityEnabled(evidencePlatformProfile, "supportsUsers");
   const caseHosts = caseHostsQuery.data?.hosts ?? [];
   const displayedEvidence = evidence && assignedHostOverrideId !== undefined ? { ...evidence, host_id: assignedHostOverrideId } : evidence;
   const currentAssignedHost = assignedHost(displayedEvidence, caseHosts);
@@ -498,7 +501,7 @@ export default function MemoryEvidencePage() {
         {hostAssignmentMutation.error instanceof Error ? <p className="mt-2 text-xs text-danger">{hostAssignmentMutation.error.message}</p> : null}
       </section>
 
-      {evidence.effective_platform === "linux" ? (
+      {linuxMemoryHint ? (
         <section className="rounded-[28px] border border-mint/30 bg-emerald-500/10 p-5 shadow-panel" data-testid="memory-linux-notice">
           <div className="flex items-start gap-3">
             <span className="mt-0.5 font-mono text-xs uppercase tracking-[0.18em] text-emerald-400">Linux</span>

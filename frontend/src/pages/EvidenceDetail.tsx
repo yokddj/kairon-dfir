@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, type CaseReport, type EvidenceBenchmark, type EvidenceIndexingPlan, type EvidenceIndexingStep, type EvidenceRun, type EvtxHealthCheckResult, type EvtxProfile, type IngestPlanCandidate, type OnDemandModule, type ProblematicArtifact, type RuleRun, type VelociraptorCandidate } from "../api/client";
+import { api, type CaseReport, type EvidenceBenchmark, type EvidenceIndexingPlan, type EvidenceIndexingStep, type EvidencePlatformProfile, type EvidenceRun, type EvtxHealthCheckResult, type EvtxProfile, type IngestPlanCandidate, type OnDemandModule, type ProblematicArtifact, type RuleRun, type VelociraptorCandidate } from "../api/client";
 import DebugExportDialog from "../components/DebugExportDialog";
 import InvestigationContext from "../components/InvestigationContext";
 import { useNotifications } from "../context/NotificationsContext";
@@ -13,6 +13,23 @@ type ArtifactFilters = {
   parser: string;
   sourcePath: string;
 };
+
+type LinuxInventoryArtifact = { key?: string; label?: string; family?: string; status?: string; paths?: string[]; reason?: string };
+type LinuxInventory = {
+  distribution?: string | null;
+  hostname?: string | null;
+  kernel?: string | null;
+  detected_artifacts?: LinuxInventoryArtifact[];
+  not_detected?: LinuxInventoryArtifact[];
+  unsupported?: LinuxInventoryArtifact[];
+  warnings?: string[];
+  coverage?: { detected?: number; total_detected?: number; supported?: number; unsupported?: number; coverage_percent?: number };
+};
+
+function asLinuxInventory(value: unknown): LinuxInventory | null {
+  if (!value || typeof value !== "object") return null;
+  return value as LinuxInventory;
+}
 
 function matchesArtifactFilter(artifact: { status: string; artifact_type: string; parser: string; source_path: string }, filters: ArtifactFilters) {
   return (
@@ -806,6 +823,12 @@ export default function EvidenceDetail() {
   const compareableBenchmarks = completedBenchmarks.slice(0, 2);
   const benchmarkComparison = benchmarkCompareMutation.data as { speedup_duration?: number; speedup_records_per_sec?: number; profile_recommendation?: string; reason?: string } | undefined;
   const metadata = data?.metadata_json ?? {};
+  const linuxInventory = asLinuxInventory(metadata.linux_inventory);
+  const linuxCoverage = linuxInventory?.coverage ?? null;
+  const linuxDetectedArtifacts = linuxInventory?.detected_artifacts ?? [];
+  const linuxUnsupportedArtifacts = linuxInventory?.unsupported ?? [];
+  const linuxWarnings = linuxInventory?.warnings ?? [];
+  const diskImage = data?.disk_image ?? null;
   const artifactProgressDone = typeof metadata.artifacts_done === "number" ? (metadata.artifacts_done as number) : typeof metadata.artifacts_processed === "number" ? (metadata.artifacts_processed as number) : 0;
   const artifactProgressTotal = typeof metadata.artifacts_total === "number" ? (metadata.artifacts_total as number) : 0;
   const progressPct =
@@ -1319,18 +1342,52 @@ export default function EvidenceDetail() {
   }, [reprocessPreview]);
   const reprocessHasEvtx = Boolean(previewSelectedByArtifactType.windows_event || previewSelectedByParser.evtx_raw);
   const selectedSupportedCandidateCount = selectedCandidateIds.filter((candidateId) => discoveryCandidates.some((candidate) => candidate.id === candidateId && candidate.supported)).length;
+  const platformProfile: EvidencePlatformProfile = data?.platform_profile ?? {
+    platform: (data?.effective_platform ?? "unknown") as string,
+    platforms: [],
+    capabilities: {
+      supportsTimeline: false,
+      supportsSearch: false,
+      supportsProcesses: false,
+      supportsNetwork: false,
+      supportsPersistence: false,
+      supportsRegistry: false,
+      supportsJournal: false,
+      supportsMemory: false,
+      supportsPackages: false,
+      supportsServices: false,
+      supportsUsers: false,
+      supportsFilesystem: false,
+      supportsBrowser: false,
+      supportsCloud: false,
+      supportsEmail: false,
+    },
+    groups: [],
+    quick_selects: [],
+    categories: [],
+    artifacts: [],
+    available_categories: [],
+  };
+  const categoryLabelLookup = useMemo(
+    () =>
+      platformProfile.categories.reduce<Record<string, string>>((accumulator, category) => {
+        accumulator[category.id] = category.label;
+        return accumulator;
+      }, {}),
+    [platformProfile.categories],
+  );
   const supportedCategoryOptions = useMemo(
     () =>
       candidatesByCategory
         .map(([category, candidates]) => ({
           category,
-          label: formatCategoryLabel(category),
+          label: categoryLabelLookup[category] ?? formatCategoryLabel(category),
           supportedIds: candidates.filter((candidate) => candidate.supported).map((candidate) => candidate.id),
           parseableCount: candidates.filter((candidate) => candidate.supported && candidate.parser_status !== "partial").length,
           partialCount: candidates.filter((candidate) => candidate.supported && candidate.parser_status === "partial").length,
         }))
         .filter((entry) => entry.supportedIds.length > 0),
-    [candidatesByCategory],
+    [candidatesByCategory, categoryLabelLookup],
   );
   const storageMode = data?.storage_mode ?? "uploaded";
   const storagePath = data?.stored_path ?? "-";
@@ -1341,6 +1398,31 @@ export default function EvidenceDetail() {
     .filter((option) => option.supportedIds.some((id) => selectedCandidateIds.includes(id)))
     .map((option) => option.label);
   const manualSelectionActive = selectedCandidateIds.length > 0;
+  const selectedIndexingLocked = activeIndexingJob;
+  const platformCategoryOptions = useMemo(() => {
+    const seen = new Set<string>();
+    return platformProfile.categories
+      .filter((option) => {
+        if (seen.has(option.id)) return false;
+        seen.add(option.id);
+        return true;
+      })
+      .map((option) => {
+        const supported = supportedCategoryOptions.find((entry) => entry.category === option.id);
+        const selectedCount = supported?.supportedIds.filter((id) => selectedCandidateIds.includes(id)).length ?? 0;
+        return { ...option, supported, selectedCount, disabled: !supported || selectedIndexingLocked };
+      });
+  }, [platformProfile.categories, supportedCategoryOptions, selectedCandidateIds, selectedIndexingLocked]);
+  const platformQuickSelects = useMemo(
+    () =>
+      (platformProfile.quick_selects ?? [])
+        .map((quickSelect) => ({
+          ...quickSelect,
+          category_ids: quickSelect.category_ids.filter((categoryId) => supportedCategoryOptions.some((option) => option.category === categoryId)),
+        }))
+        .filter((quickSelect) => quickSelect.category_ids.length > 0),
+    [platformProfile.quick_selects, supportedCategoryOptions],
+  );
   const enabledArtifactCategories = modeEffectivePlan?.enabled_artifact_categories ?? [];
   const activeRunCategoryNames = useMemo(() => {
     const parserCategoryMap: Record<string, string> = {
@@ -1394,7 +1476,6 @@ export default function EvidenceDetail() {
       return leftIndex - rightIndex;
     });
   }, [enabledArtifactCategories, ingestPlan, metadata.velociraptor_selected_categories]);
-  const selectedIndexingLocked = activeIndexingJob;
   const selectedIndexingAvailable = supportsGranularReprocess && supportedCategoryOptions.length > 0;
   const skippedFeatures = modeEffectivePlan?.skipped_features ?? [];
   const currentBottleneck = parallelIngest?.running_artifact_types?.includes("windows_event")
@@ -1431,21 +1512,9 @@ export default function EvidenceDetail() {
     setSelectedCandidateIds(discoveryCandidates.filter((candidate) => candidate.supported).map((candidate) => candidate.id));
   }
 
-  function selectEventLogsOnly() {
-    setSelectedCandidateIds(discoveryCandidates.filter((candidate) => (candidate.category === "evtx" || candidate.category === "windows_event") && candidate.supported).map((candidate) => candidate.id));
-  }
-
   function selectCategories(categories: string[]) {
     const categorySet = new Set(categories);
     setSelectedCandidateIds(discoveryCandidates.filter((candidate) => categorySet.has(candidate.category) && candidate.supported).map((candidate) => candidate.id));
-  }
-
-  function selectExecutionArtifacts() {
-    selectCategories(["evtx", "windows_event", "prefetch", "shimcache", "amcache", "lnk", "jumplist"]);
-  }
-
-  function selectPersistenceArtifacts() {
-    selectCategories(["scheduled_task", "service", "registry_autoruns", "autoruns", "startup", "startup_folder", "wmi", "defender"]);
   }
 
   function scrollToParseSelection() {
@@ -1680,25 +1749,47 @@ function formatReportStatus(status: string | null | undefined) {
   const progressRecordsRead = retryActive ? Number(latestRetryRun?.records_read ?? 0) : activeIndexingJob ? Number(activeRun?.records_read ?? currentArtifactRecordsRead ?? tailRecordsRead ?? data?.metadata_json?.records_read ?? 0) : Number(latestRetryRun?.records_read ?? 0);
   const progressRecordsIndexed = retryActive ? Number(latestRetryRun?.records_indexed ?? latestRetryRun?.events_indexed ?? 0) : activeIndexingJob ? Number(activeRun?.records_indexed ?? currentArtifactRecordsIndexed ?? tailRecordsIndexed ?? displayCounts.indexedDocs ?? 0) : Number(latestRetryRun?.records_indexed ?? latestRetryRun?.events_indexed ?? 0);
   const progressCurrentArtifact = retryActive ? latestRetryRun?.current_artifact : currentDisplayArtifact;
-  const minimalCategoryOptions = [
-    { id: "evtx", label: "Event logs" },
-    { id: "powershell", label: "PowerShell" },
-    { id: "prefetch", label: "Prefetch" },
-    { id: "shimcache", label: "Shimcache" },
-    { id: "service", label: "Services" },
-    { id: "scheduled_task", label: "Scheduled Tasks" },
-    { id: "browser", label: "Browser" },
-    { id: "defender", label: "Defender" },
-    { id: "lnk", label: "LNK" },
-    { id: "jumplist", label: "Jump Lists" },
-    { id: "recycle_bin", label: "Recycle Bin" },
-    { id: "usb", label: "USB" },
-    { id: "amcache", label: "Amcache" },
-  ].map((option) => {
-    const supported = supportedCategoryOptions.find((entry) => entry.category === option.id);
-    const selectedCount = supported?.supportedIds.filter((id) => selectedCandidateIds.includes(id)).length ?? 0;
-    return { ...option, supported, selectedCount, disabled: !supported || selectedIndexingLocked };
-  });
+  type SupportedCategoryOption = (typeof supportedCategoryOptions)[number];
+  type MinimalCategoryOption = {
+    id: string;
+    label: string;
+    group_id: string;
+    group_label: string;
+    platform: string;
+    supported?: SupportedCategoryOption;
+    selectedCount: number;
+    disabled: boolean;
+  };
+  const minimalCategoryOptions: MinimalCategoryOption[] = platformCategoryOptions.length
+    ? platformCategoryOptions
+    : supportedCategoryOptions.map((option) => {
+        const selectedCount = option.supportedIds.filter((id) => selectedCandidateIds.includes(id)).length;
+        return { id: option.category, label: option.label, supported: option, disabled: selectedIndexingLocked, selectedCount, group_id: "discovered", group_label: "Discovered", platform: String(platformProfile.platform || "unknown") };
+      });
+  const minimalCategoryGroups = useMemo(() => {
+    const groups = new Map<string, { id: string; label: string; items: MinimalCategoryOption[] }>();
+    minimalCategoryOptions.forEach((option) => {
+      const key = String(option.group_id || option.group_label || "discovered");
+      const existing = groups.get(key) ?? { id: key, label: String(option.group_label || "Discovered"), items: [] };
+      existing.items.push(option);
+      groups.set(key, existing);
+    });
+    return Array.from(groups.values());
+  }, [minimalCategoryOptions]);
+  const supportedCategoryGroups = useMemo(() => {
+    const lookup = new Map(supportedCategoryOptions.map((option) => [option.category, option]));
+    const groups = platformProfile.groups
+      .map((group) => ({
+        id: group.id,
+        label: group.label,
+        items: group.categories.map((category) => lookup.get(category.id)).filter((option): option is (typeof supportedCategoryOptions)[number] => Boolean(option)),
+      }))
+      .filter((group) => group.items.length > 0);
+    const groupedIds = new Set(groups.flatMap((group) => group.items.map((item) => item.category)));
+    const remaining = supportedCategoryOptions.filter((option) => !groupedIds.has(option.category));
+    if (remaining.length) groups.push({ id: "detected", label: "Detected", items: remaining });
+    return groups;
+  }, [platformProfile.groups, supportedCategoryOptions]);
   const commandHistoryHref = data?.case_id ? `/cases/${data.case_id}/command-history?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
   const findingsHref = data?.case_id ? `/cases/${data.case_id}/findings?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
   const addFindingHref = data?.case_id ? `/cases/${data.case_id}/findings?create=1&evidence_id=${encodeURIComponent(evidenceId)}&title=${encodeURIComponent("Evidence note")}&source_view=evidence${data.host_id ? `&host_id=${encodeURIComponent(data.host_id)}` : ""}` : "#";
@@ -1829,15 +1920,22 @@ function formatReportStatus(status: string | null | undefined) {
                   {parseVelociraptorMutation.isPending ? "Queueing..." : "Start selected parsing"}
                 </button>
               </div>
-              <div className="mt-4 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                {minimalCategoryOptions.map((option) => (
-                  <label key={option.id} className={`flex min-h-[70px] items-start gap-3 rounded-2xl border px-3 py-3 ${option.selectedCount ? "border-accent/40 bg-accent/10" : "border-line bg-panel/40"} ${option.disabled ? "opacity-50" : "cursor-pointer"}`}>
-                    <input type="checkbox" className="mt-1" disabled={option.disabled} checked={Boolean(option.supported && option.selectedCount === option.supported.supportedIds.length)} onChange={() => toggleCategorySelection(option.id)} />
-                    <span>
-                      <span className="block text-sm font-semibold text-ink">{option.label}</span>
-                      <span className="mt-1 block text-xs text-muted">{option.supported ? `${option.supported.supportedIds.length} candidates` : "Not detected"}</span>
-                    </span>
-                  </label>
+              <div className="mt-4 space-y-4">
+                {minimalCategoryGroups.map((group) => (
+                  <div key={group.id}>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{group.label}</p>
+                    <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                      {group.items.map((option) => (
+                        <label key={option.id} className={`flex min-h-[70px] items-start gap-3 rounded-2xl border px-3 py-3 ${option.selectedCount ? "border-accent/40 bg-accent/10" : "border-line bg-panel/40"} ${option.disabled ? "opacity-50" : "cursor-pointer"}`}>
+                          <input type="checkbox" className="mt-1" disabled={option.disabled} checked={Boolean(option.supported && option.selectedCount === option.supported.supportedIds.length)} onChange={() => toggleCategorySelection(option.id)} />
+                          <span>
+                            <span className="block text-sm font-semibold text-ink">{option.label}</span>
+                            <span className="mt-1 block text-xs text-muted">{option.supported ? `${option.supported.supportedIds.length} candidates` : "Not detected"}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
               {mftVisibleInParseMode ? (
@@ -1988,8 +2086,9 @@ function formatReportStatus(status: string | null | undefined) {
                 <div className="mt-3 flex flex-wrap gap-2">
                   <button type="button" onClick={selectAllSupported} disabled={!selectedIndexingAvailable || selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Select all supported</button>
                   <button type="button" onClick={clearSelection} disabled={!selectedIndexingAvailable || selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Clear selection</button>
-                  <button type="button" onClick={selectExecutionArtifacts} disabled={selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Execution artifacts</button>
-                  <button type="button" onClick={selectPersistenceArtifacts} disabled={selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Persistence artifacts</button>
+                  {platformQuickSelects.map((quickSelect) => (
+                    <button key={quickSelect.id} type="button" onClick={() => selectCategories(quickSelect.category_ids)} disabled={selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">{quickSelect.label}</button>
+                  ))}
                 </div>
               </details>
             </div>
@@ -2254,6 +2353,110 @@ function formatReportStatus(status: string | null | undefined) {
         {platformMismatch ? (
           <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 px-4 py-3 text-sm text-amber">
             Platform override differs from detection: provided {formatPlatform(data?.provided_platform)}, detected {formatPlatform(data?.detected_platform)}, effective {formatPlatform(data?.effective_platform)}.
+          </div>
+        ) : null}
+
+        {linuxInventory ? (
+          <div className="mt-5 grid gap-4 xl:grid-cols-[1.4fr_0.8fr]" data-testid="linux-collection-summary">
+            <div className="rounded-3xl border border-mint/25 bg-mint/10 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-mint">Linux Collection Summary</p>
+                  <h3 className="mt-1 text-xl font-semibold text-ink">{linuxInventory.distribution || "Linux collection"}</h3>
+                  <p className="mt-1 text-sm text-muted">Host <span className="font-semibold text-ink">{linuxInventory.hostname || data?.detected_host || "Unknown"}</span> · Kernel <span className="font-semibold text-ink">{linuxInventory.kernel || "Unknown"}</span></p>
+                </div>
+                <span className="rounded-full border border-mint/30 bg-mint/10 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-mint">{formatPlatform(data?.effective_platform)}</span>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Artifacts detected</p>
+                  <p className="mt-1 text-lg font-semibold text-ink">{linuxCoverage?.detected ?? linuxCoverage?.total_detected ?? linuxDetectedArtifacts.length + linuxUnsupportedArtifacts.length}</p>
+                </div>
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Artifacts parsed</p>
+                  <p className="mt-1 text-lg font-semibold text-ink">{linuxCoverage?.supported ?? linuxDetectedArtifacts.length}</p>
+                </div>
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Unsupported</p>
+                  <p className="mt-1 text-lg font-semibold text-amber">{linuxCoverage?.unsupported ?? linuxUnsupportedArtifacts.length}</p>
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-2">
+                {linuxDetectedArtifacts.slice(0, 12).map((artifact) => <span key={artifact.key || artifact.label} className="rounded-full border border-mint/25 bg-abyss/60 px-2 py-1 text-xs text-mint">{artifact.label || artifact.key}</span>)}
+              </div>
+              {linuxWarnings.length ? <div className="mt-4 rounded-2xl border border-amber/30 bg-amber/10 px-3 py-2 text-xs text-amber">Warnings: {linuxWarnings.slice(0, 4).join(" · ")}</div> : null}
+            </div>
+            <div className="rounded-3xl border border-line bg-abyss/70 p-4" data-testid="linux-coverage-card">
+              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Linux Coverage</p>
+              <dl className="mt-3 space-y-2 text-sm">
+                <div className="flex justify-between gap-3"><dt className="text-muted">Detected artifacts</dt><dd className="font-semibold text-ink">{linuxCoverage?.detected ?? linuxCoverage?.total_detected ?? 0}</dd></div>
+                <div className="flex justify-between gap-3"><dt className="text-muted">Supported</dt><dd className="font-semibold text-mint">{linuxCoverage?.supported ?? 0}</dd></div>
+                <div className="flex justify-between gap-3"><dt className="text-muted">Unsupported</dt><dd className="font-semibold text-amber">{linuxCoverage?.unsupported ?? 0}</dd></div>
+                <div className="flex justify-between gap-3 border-t border-line pt-2"><dt className="text-muted">Coverage</dt><dd className="font-semibold text-ink">{linuxCoverage?.coverage_percent ?? 0}%</dd></div>
+              </dl>
+              <p className="mt-3 text-xs text-muted">Calculated as supported detected artifacts divided by all detected artifacts. Not found artifacts are not counted as detected.</p>
+            </div>
+          </div>
+        ) : null}
+
+        {diskImage ? (
+          <div className="mt-5 rounded-3xl border border-cyan-400/25 bg-cyan-400/10 p-4" data-testid="disk-image-summary">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-cyan-200">Disk Image</p>
+                <h3 className="mt-1 text-xl font-semibold text-ink">{diskImage.original_filename}</h3>
+                <p className="mt-1 text-sm text-muted">Format <span className="font-semibold text-ink">{String(diskImage.format || "unknown").toUpperCase()}</span> · Segments <span className="font-semibold text-ink">{diskImage.segment_count}</span></p>
+              </div>
+              <span className="rounded-full border border-cyan-300/30 bg-abyss/60 px-3 py-1 text-xs text-cyan-100">{diskImage.status.replaceAll("_", " ")}</span>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-4">
+              <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">SHA-256</p><p className="mt-1 break-all font-mono text-xs text-ink">{diskImage.sha256 || "-"}</p></div>
+              <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Size</p><p className="mt-1 text-sm font-semibold text-ink">{formatBytes(diskImage.size_bytes)}</p></div>
+              <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Volumes</p><p className="mt-1 text-sm font-semibold text-ink">{diskImage.volumes?.length ?? 0}</p></div>
+              <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Warnings</p><p className="mt-1 text-sm font-semibold text-amber">{diskImage.warnings_json?.length ?? 0}</p></div>
+            </div>
+            {(diskImage.metadata_json?.virtual_size || diskImage.tool_metadata?.adapter) ? (
+              <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">
+                <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-accent">Image metadata</p>
+                <div className="mt-2 grid gap-1 md:grid-cols-3">
+                  {diskImage.metadata_json?.virtual_size ? <p>Virtual: <span className="text-ink">{formatBytes(diskImage.metadata_json.virtual_size as number)}</span></p> : null}
+                  {diskImage.metadata_json?.physical_size ? <p>Physical: <span className="text-ink">{formatBytes(diskImage.metadata_json.physical_size as number)}</span></p> : null}
+                  {diskImage.metadata_json?.allocation_type ? <p>Allocation: <span className="text-ink">{diskImage.metadata_json.allocation_type as string}</span></p> : null}
+                  {diskImage.metadata_json?.variant ? <p>Variant: <span className="text-ink">{diskImage.metadata_json.variant as string}</span></p> : null}
+                  {diskImage.metadata_json?.backing_file ? <p>Backing: <span className="text-ink">{diskImage.metadata_json.backing_file as string}</span></p> : null}
+                  {diskImage.metadata_json?.extents ? <p>Extents: <span className="text-ink">{(diskImage.metadata_json.extents as string[]).join(", ")}</span></p> : null}
+                  {diskImage.tool_metadata?.adapter ? <p>Tool: <span className="text-ink">{diskImage.tool_metadata.adapter as string}</span></p> : null}
+                </div>
+              </div>
+            ) : null}
+            <div className="mt-4 space-y-3">
+              {(diskImage.volumes ?? []).map((volume) => (
+                <div key={volume.id} className="rounded-2xl border border-line bg-abyss/60 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-semibold text-ink">Volume {volume.partition_index}</p>
+                      <p className="mt-1 text-xs text-muted">Partition {volume.partition_type || "unknown"} · Filesystem {volume.filesystem_type || "unknown"} · Offset {volume.offset_bytes.toLocaleString()} · Length {volume.length_bytes.toLocaleString()}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2 text-xs">
+                      {volume.encrypted ? <span className="rounded-full border border-amber/30 bg-amber/10 px-2 py-1 text-amber">Encrypted</span> : null}
+                      <span className={`rounded-full border px-2 py-1 ${volume.readable ? "border-mint/30 bg-mint/10 text-mint" : "border-danger/30 bg-danger/10 text-danger"}`}>{volume.readable ? "Readable" : "Unreadable"}</span>
+                    </div>
+                  </div>
+                  {(volume.installations ?? []).length ? (
+                    <div className="mt-3 grid gap-2 md:grid-cols-2">
+                      {volume.installations.map((installation) => (
+                        <div key={installation.id} className="rounded-2xl border border-line bg-panel/50 px-3 py-2 text-sm text-muted">
+                          <p className="font-semibold text-ink">{formatPlatform(installation.platform)}{installation.hostname ? ` · ${installation.hostname}` : ""}</p>
+                          <p className="mt-1 text-xs">{installation.distro || installation.version || "Unknown version"} · Root {installation.root_path}</p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : <p className="mt-3 text-xs text-muted">No operating system installation detected on this volume.</p>}
+                  {volume.warnings_json?.length ? <p className="mt-2 text-xs text-amber">Warnings: {volume.warnings_json.join(" · ")}</p> : null}
+                  {Object.keys(volume.error_json || {}).length ? <p className="mt-2 text-xs text-danger">Error: {JSON.stringify(volume.error_json)}</p> : null}
+                </div>
+              ))}
+            </div>
           </div>
         ) : null}
 
@@ -2556,43 +2759,44 @@ function formatReportStatus(status: string | null | undefined) {
           {selectedIndexingAvailable ? (
             <>
               <div className="mt-4 flex flex-wrap gap-2">
-                {hasEvtxCategory ? (
-                  <button type="button" onClick={selectEventLogsOnly} disabled={selectedIndexingLocked} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-muted disabled:opacity-60">
-                    Event logs only
+                {platformQuickSelects.map((quickSelect) => (
+                  <button key={quickSelect.id} type="button" onClick={() => selectCategories(quickSelect.category_ids)} disabled={selectedIndexingLocked} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-muted disabled:opacity-60">
+                    {quickSelect.label}
                   </button>
-                ) : null}
-                <button type="button" onClick={selectExecutionArtifacts} disabled={selectedIndexingLocked} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-muted disabled:opacity-60">
-                  Execution artifacts
-                </button>
-                <button type="button" onClick={selectPersistenceArtifacts} disabled={selectedIndexingLocked} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-muted disabled:opacity-60">
-                  Persistence artifacts
-                </button>
+                ))}
               </div>
 
-              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                {supportedCategoryOptions.map((option) => {
-                  const selectedCount = option.supportedIds.filter((id) => selectedCandidateIds.includes(id)).length;
-                  const fullySelected = selectedCount === option.supportedIds.length;
-                  return (
-                    <label key={option.category} className={`flex min-h-[96px] cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 transition ${fullySelected ? "border-accent/40 bg-accent/10" : "border-line bg-abyss/60 hover:border-accent/20"} ${selectedIndexingLocked ? "cursor-not-allowed opacity-60" : ""}`}>
-                      <input
-                        type="checkbox"
-                        className="mt-1"
-                        checked={fullySelected}
-                        disabled={selectedIndexingLocked}
-                        onChange={() => toggleCategorySelection(option.category)}
-                      />
-                      <div className="min-w-0">
-                        <p className="text-sm font-semibold text-ink">{option.label}</p>
-                        <p className="mt-1 text-xs text-muted">
-                          {option.parseableCount} parseable
-                          {option.partialCount ? ` · ${option.partialCount} partial` : ""}
-                          {` · ${option.supportedIds.length} selectable`}
-                        </p>
-                      </div>
-                    </label>
-                  );
-                })}
+              <div className="mt-4 space-y-4">
+                {supportedCategoryGroups.map((group) => (
+                  <div key={group.id}>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{group.label}</p>
+                    <div className="mt-2 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                      {group.items.map((option) => {
+                        const selectedCount = option.supportedIds.filter((id) => selectedCandidateIds.includes(id)).length;
+                        const fullySelected = selectedCount === option.supportedIds.length;
+                        return (
+                          <label key={option.category} className={`flex min-h-[96px] cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 transition ${fullySelected ? "border-accent/40 bg-accent/10" : "border-line bg-abyss/60 hover:border-accent/20"} ${selectedIndexingLocked ? "cursor-not-allowed opacity-60" : ""}`}>
+                            <input
+                              type="checkbox"
+                              className="mt-1"
+                              checked={fullySelected}
+                              disabled={selectedIndexingLocked}
+                              onChange={() => toggleCategorySelection(option.category)}
+                            />
+                            <div className="min-w-0">
+                              <p className="text-sm font-semibold text-ink">{option.label}</p>
+                              <p className="mt-1 text-xs text-muted">
+                                {option.parseableCount} parseable
+                                {option.partialCount ? ` · ${option.partialCount} partial` : ""}
+                                {` · ${option.supportedIds.length} selectable`}
+                              </p>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
               </div>
 
               {manualSelectionActive ? (
@@ -4323,7 +4527,7 @@ function formatReportStatus(status: string | null | undefined) {
                     onClick={() => setReprocessMode("previous_selection")}
                     className={`rounded-2xl border px-4 py-4 text-left ${reprocessMode === "previous_selection" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}
                   >
-                    <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Re-index evidence</p>
+                    <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Use previous parser selection</p>
                     <p className="mt-2 text-sm">Recommended. Use core indexing with the same supported artifacts that were used last time.</p>
                   </button>
                   <details className="rounded-2xl border border-line bg-abyss/70 px-4 py-4 text-muted md:col-span-2 xl:col-span-2">

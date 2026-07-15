@@ -733,10 +733,10 @@ class TestPlatformDetection:
         platform = detect_evidence_platform(paths=["/tmp/some_random.log"])
         assert platform == "unknown"
 
-    def test_lime_memory_detected_as_linux(self):
+    def test_lime_memory_detected_as_memory(self):
         from app.models.evidence import detect_evidence_platform
         platform = detect_evidence_platform(paths=["memory.lime"])
-        assert platform == "linux"
+        assert platform == "memory"
 
 
 class TestSecretsAreNeverStored:

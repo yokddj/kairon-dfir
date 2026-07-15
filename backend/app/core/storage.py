@@ -336,6 +336,37 @@ def save_folder_uploads(case_id: str, uploads: list[UploadFile]) -> tuple[str, P
     )
 
 
+def save_segmented_uploads(case_id: str, uploads: list[UploadFile]) -> tuple[str, Path, int, str, list[dict], str]:
+    evidence_id = str(uuid4())
+    root = build_evidence_root(case_id, evidence_id)
+    original_dir = root / "original"
+    original_dir.mkdir(parents=True, exist_ok=True)
+    total_size = 0
+    manifest_files: list[dict] = []
+    display_name = "disk-image-set"
+    for upload in uploads:
+        filename = Path(upload.filename or "upload.bin").name
+        if display_name == "disk-image-set":
+            display_name = filename
+        stored_path = original_dir / filename
+        if stored_path.exists():
+            raise ValueError(f"Duplicate segment filename: {filename}")
+        size = 0
+        digest = hashlib.sha256()
+        with stored_path.open("wb") as buffer:
+            while chunk := upload.file.read(1024 * 1024):
+                size += len(chunk)
+                total_size += len(chunk)
+                digest.update(chunk)
+                buffer.write(chunk)
+        manifest_files.append({"path": filename, "ignored": False, "reason": None, "sha256": digest.hexdigest(), "size": size})
+    combined = hashlib.sha256()
+    for entry in sorted(manifest_files, key=lambda item: item["path"]):
+        combined.update(entry["path"].encode("utf-8"))
+        combined.update(str(entry.get("sha256", "")).encode("utf-8"))
+    return evidence_id, original_dir, total_size, combined.hexdigest(), manifest_files, display_name
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:

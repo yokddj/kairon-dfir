@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.core.activity import log_activity
 from app.core.config import get_settings
 from app.core.database import SessionLocal, utc_now_naive
+from app.core.evidence_platforms import detect_memory_os_hint
 from app.core.manifest import default_manifest, write_manifest
 from app.core.storage import safe_display_filename, sha256_file
 from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidenceStorageMode, EvidenceType, EvidencePlatform, IngestStatus, detect_evidence_platform, normalize_evidence_platform, resolve_evidence_platform
@@ -389,11 +390,12 @@ def _build_evidence_from_upload(
     metadata = dict(item.metadata_json or {})
     extension = Path(item.display_name).suffix.lower() if item.display_name else ""
     normalized_provided_platform = normalize_evidence_platform(metadata.get("provided_platform") or "auto")
-    detected_platform = detect_evidence_platform(filename=item.display_name)
+    detected_platform = detect_evidence_platform(filename=item.display_name, evidence_type=EvidenceType.memory_dump.value)
     provided_platform, _, effective_platform = resolve_evidence_platform(
         normalized_provided_platform, detected_platform,
+        evidence_type=EvidenceType.memory_dump.value,
     )
-    memory_os_hint = "linux" if extension == ".lime" or detected_platform == EvidencePlatform.linux.value else None
+    memory_os_hint = detect_memory_os_hint(filename=item.display_name) or (EvidencePlatform.linux.value if extension == ".lime" else None)
     return Evidence(
         id=item.evidence_id,
         case_id=item.case_id,
@@ -478,10 +480,19 @@ def _persist_evidence_minimal(
     secure_uploaded_memory_permissions(canonical, settings=get_settings())
     evidence = _build_evidence_from_upload(item, canonical)
     db.add(evidence)
-    record_evidence_event(db, evidence, EvidenceCustodyEventType.uploaded, "Memory evidence uploaded and registered.", actor_user_id=evidence.uploaded_by_user_id, details={"original_filename": evidence.original_filename, "size_bytes": evidence.size_bytes, "evidence_type": evidence.evidence_type.value})
-    if evidence.sha256:
-        record_evidence_event(db, evidence, EvidenceCustodyEventType.hash_computed, "SHA-256 computed for uploaded memory evidence.", actor_user_id=evidence.uploaded_by_user_id, details={"sha256": evidence.sha256, "size_bytes": evidence.size_bytes})
     db.commit()
+    db.refresh(evidence)
+    try:
+        record_evidence_event(db, evidence, EvidenceCustodyEventType.uploaded, "Memory evidence uploaded and registered.", actor_user_id=evidence.uploaded_by_user_id, details={"original_filename": evidence.original_filename, "size_bytes": evidence.size_bytes, "evidence_type": evidence.evidence_type.value})
+        if evidence.sha256:
+            record_evidence_event(db, evidence, EvidenceCustodyEventType.hash_computed, "SHA-256 computed for uploaded memory evidence.", actor_user_id=evidence.uploaded_by_user_id, details={"sha256": evidence.sha256, "size_bytes": evidence.size_bytes})
+        db.commit()
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception(
+            "memory evidence custody audit failed upload_id=%s evidence_id=%s",
+            item.id, evidence.id,
+        )
     db.refresh(evidence)
     return evidence
 

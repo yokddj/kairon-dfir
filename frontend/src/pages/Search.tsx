@@ -12,10 +12,13 @@ import CreateFindingDialog from "../components/CreateFindingDialog";
 import { useHostContext } from "../hooks/useHostContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
+import { artifactLabel } from "../lib/artifactRegistry";
+import { UI_PLATFORM_REGISTRY } from "../lib/platformRegistry";
 
 type Scope = "events" | "findings" | "all";
 type SortValue = "timestamp_desc" | "timestamp_asc" | "risk_desc" | "risk_asc" | "relevance";
 type SourceCategory = "" | "Memory" | "Disk" | "Event Log" | "Registry" | "Browser" | "Other";
+type SearchPlatform = "" | "windows" | "linux" | "memory" | "mixed" | "unknown";
 type SearchTab = "results" | "timeline" | "findings" | "artifact_views";
 type ArtifactViewMode = "auto" | "process" | "dns" | "downloads" | "defender" | "persistence" | "files" | "cloud_usb" | "generic";
 type TableDensity = "compact" | "comfortable" | "expanded";
@@ -69,6 +72,10 @@ const sourceCategoryOptions: Array<{ value: SourceCategory; label: string }> = [
   { value: "Registry", label: "Registry" },
   { value: "Browser", label: "Browser" },
   { value: "Other", label: "Other" },
+];
+const platformOptions: Array<{ value: SearchPlatform; label: string }> = [
+  { value: "", label: "All platforms" },
+  ...UI_PLATFORM_REGISTRY.filter((platform) => platform.id !== "auto" && platform.id !== "macos").map((platform) => ({ value: platform.id as SearchPlatform, label: platform.label })),
 ];
 const riskPresets = [
   { label: "Low", min: "0", max: "29" },
@@ -236,6 +243,7 @@ function buildState(searchParams: URLSearchParams) {
     marked_in_finding: searchParams.get("marked_in_finding") ?? "",
     include_filesystem_timeline: searchParams.get("include_filesystem_timeline") ?? "",
     evidence_id: searchParams.get("evidence_id") ?? "",
+    platform: (searchParams.get("platform") ?? "") as SearchPlatform,
     source_category: (searchParams.get("source_category") ?? searchParams.get("source") ?? "") as SourceCategory,
     time_from: searchParams.get("time_from") ?? "",
     time_to: searchParams.get("time_to") ?? "",
@@ -525,31 +533,6 @@ function humanizeToken(value: string | null | undefined) {
     .filter(Boolean)
     .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
     .join(" ");
-}
-
-function artifactLabel(value: string | null | undefined) {
-  const normalized = asString(value).trim().toLowerCase();
-  if (!normalized) return "-";
-  if (normalized === "user_activity") return "User Activity";
-  if (normalized === "email") return "Email";
-  if (normalized === "ntfs") return "NTFS";
-  if (normalized === "windows_ui") return "Windows UI";
-  if (normalized === "cloud_sync") return "Cloud Sync";
-  if (normalized === "recycle_bin") return "Recycle Bin";
-  if (normalized === "linux_auth") return "Linux Auth";
-  if (normalized === "linux_syslog") return "Linux Syslog";
-  if (normalized === "linux_audit") return "Linux Audit";
-  if (normalized === "linux_shell_history") return "Linux Shell History";
-  if (normalized === "linux_cron") return "Linux Cron";
-  if (normalized === "linux_systemd") return "Linux Systemd";
-  if (normalized === "linux_ssh") return "Linux SSH";
-  if (normalized === "linux_identity") return "Linux Identity";
-  if (normalized === "linux_sudoers") return "Linux Sudoers";
-  if (normalized === "linux_packages") return "Linux Packages";
-  if (normalized === "linux_network") return "Linux Network";
-  if (normalized === "linux_os_info") return "Linux OS Info";
-  if (normalized === "linux_memory") return "Linux Memory";
-  return humanizeToken(normalized);
 }
 
 function renderActions(actions: RowAction[]) {
@@ -1442,6 +1425,7 @@ export default function Search() {
       marked_in_finding: state.marked_in_finding,
       include_filesystem_timeline: state.include_filesystem_timeline,
       evidence_id: state.evidence_id || selectedEvidenceId,
+      platform: state.platform,
       source_category: state.source_category,
       time_from: state.time_from,
       time_to: state.time_to,
@@ -1462,6 +1446,7 @@ export default function Search() {
         filters: serializeBuilderFilters(searchRequestState.filters) || undefined,
         scope: searchRequestState.scope,
         evidence_id: searchRequestState.evidence_id || undefined,
+        platform: searchRequestState.platform || undefined,
         source_category: searchRequestState.source_category || undefined,
         artifact_type: searchRequestState.artifact_type,
         parser: searchRequestState.parser,
@@ -1663,6 +1648,7 @@ export default function Search() {
     if (state.file_path) chips.push({ key: "file_path", label: `path: ${state.file_path}`, clear: { file_path: null } });
     if (state.file_name) chips.push({ key: "file_name", label: `file: ${state.file_name}`, clear: { file_name: null } });
     if (searchRequestState.evidence_id) chips.push({ key: "evidence_id", label: `evidence: ${searchRequestState.evidence_id.slice(0, 8)}`, clear: { evidence_id: null } });
+    if (searchRequestState.platform) chips.push({ key: "platform", label: `platform: ${searchRequestState.platform}`, clear: { platform: null } });
     if (searchRequestState.source_category) chips.push({ key: "source_category", label: `source: ${searchRequestState.source_category}`, clear: { source_category: null, source: null } });
     if (state.artifact_type.length) chips.push({ key: "artifact_type", label: `artifact: ${state.artifact_type.join(", ")}`, clear: { artifact_type: null } });
     if (state.exclude_artifact_type.length) chips.push({ key: "exclude_artifact_type", label: `NOT artifact: ${state.exclude_artifact_type.join(", ")}`, clear: { exclude_artifact_type: null } });
@@ -1671,7 +1657,7 @@ export default function Search() {
     if (state.status.length) chips.push({ key: "status", label: `status: ${state.status.join(", ")}`, clear: { status: null } });
     if (state.time_from || state.time_to) chips.push({ key: "time", label: `time: ${state.time_from || "…"} → ${state.time_to || "…"}`, clear: { time_from: null, time_to: null } });
     return chips;
-  }, [searchRequestState.evidence_id, searchRequestState.host, searchRequestState.host_id, searchRequestState.source_category, state]);
+  }, [searchRequestState.evidence_id, searchRequestState.host, searchRequestState.host_id, searchRequestState.platform, searchRequestState.source_category, state]);
   const querySyntaxChips = useMemo(
     () =>
       (response?.query_syntax?.applied_filters ?? []).map((item, index) => ({
@@ -2019,6 +2005,7 @@ export default function Search() {
         const params = new URLSearchParams();
         params.set("mode", modeValue);
         if (evidenceId) params.set("evidence_id", evidenceId);
+        if (searchRequestState.platform) params.set("platform", searchRequestState.platform);
         if (host && host !== "-") params.set("host", host);
         if (pid) params.set("pid", pid);
         if (processGuid) params.set("process_guid", processGuid);
@@ -2199,6 +2186,14 @@ export default function Search() {
         </div>
 
         <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Platform</span>
+            <select aria-label="Platform" value={state.platform} onChange={(event) => updateParams({ platform: event.target.value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-platform-filter">
+              {platformOptions.map((option) => (
+                <option key={option.label} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
           <label className="block">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source</span>
             <select aria-label="Source category" value={state.source_category} onChange={(event) => updateParams({ source_category: event.target.value, source: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-source-category-filter">
