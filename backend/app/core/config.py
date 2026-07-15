@@ -332,6 +332,7 @@ class Settings(BaseSettings):
     max_archive_depth: int = 5
     backend_data_dir: Path = Path("/app/data")
     backend_temp_dir: Path = Path("/app/data/tmp")
+    evidence_upload_session_ttl_seconds: int = 7200
     backend_log_level: str = "INFO"
     auto_create_heuristic_detections: bool = True
     mft_fast_path: bool = True

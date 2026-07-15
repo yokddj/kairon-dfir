@@ -1,10 +1,16 @@
 """Preflight Inspection coverage.
 
-Exercises app.services.evidence_preflight.run_preflight() directly (unit
-level) and POST /api/cases/{case_id}/evidence-preflight (API level),
-verifying: no worker job is started, no Artifact/Evidence/processing-queue
-row is created, classification and resource estimation are correct, and
-configuration-aware diagnostics are produced for each blocking condition.
+Exercises app.services.evidence_preflight.run_preflight() directly: no
+worker job is started (it never enqueues anything), no Artifact/Evidence
+row is created (it never imports a DB Session), classification and
+resource estimation are correct, and configuration-aware diagnostics are
+produced for each blocking condition.
+
+API-level coverage (creating an upload session, promoting it, cancelling
+it, the health check endpoint) lives in test_evidence_upload_session.py,
+which exercises the current app.api.routes_evidence_preflight endpoints -
+the old ephemeral-only POST .../evidence-preflight endpoint this file used
+to test was superseded by the session-based endpoints in v2.1.
 """
 from __future__ import annotations
 
@@ -13,49 +19,17 @@ import zipfile
 from pathlib import Path
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-from app.api import routes_evidence_preflight
-from app.core.database import Base, get_db
 from app.core.config import get_settings
-from app.models.artifact import Artifact
-from app.models.case import Case
-from app.models.evidence import Evidence
 from app.services.evidence_preflight import run_preflight
 
 settings = get_settings()
-
-CASE_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 
 
 def _require_tools(*names: str) -> None:
     missing = [name for name in names if subprocess.run(["bash", "-lc", f"command -v {name} >/dev/null 2>&1"], check=False).returncode != 0]
     if missing:
         pytest.skip(f"Missing required tool(s): {', '.join(missing)}")
-
-
-def _db():
-    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool, future=True)
-    Base.metadata.create_all(engine)
-    return sessionmaker(bind=engine, future=True)()
-
-
-def _client(db):
-    test_app = FastAPI()
-    test_app.include_router(routes_evidence_preflight.router)
-    test_app.dependency_overrides[get_db] = lambda: db
-    return TestClient(test_app)
-
-
-def _case(db, *, case_id=CASE_ID):
-    item = Case(id=case_id, name="Preflight Case", description="", status="active", priority="medium", management_tags=[])
-    db.add(item)
-    db.commit()
-    return item
 
 
 def _make_linux_zip(path: Path) -> None:
@@ -205,77 +179,72 @@ def test_disk_image_volume_discovery(tmp_path):
     assert report.classification.category == "disk_image"
     assert report.classification.format_key == "raw"
     assert report.classification.volumes == 1
+    assert report.classification.partitions == 1
+    assert report.classification.container == "RAW disk image"
+    assert report.classification.contained_object and "volume" in report.classification.contained_object
+    assert len(report.classification.filesystems) == 1
     assert report.resource_check.estimated_extracted_bytes and report.resource_check.estimated_extracted_bytes > 0
 
 
 # ---------------------------------------------------------------------------
-# API-level: no side effects, correct HTTP behavior
+# v2.1 refinement: richer report fields (container, contained object,
+# duration bucket, warning/diagnostic severity)
 # ---------------------------------------------------------------------------
 
-def test_preflight_endpoint_creates_no_evidence_artifact_or_queue_entry(monkeypatch, tmp_path):
-    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
-    enqueue_calls = []
-    monkeypatch.setattr("app.workers.tasks.enqueue_ingest", lambda *args, **kwargs: enqueue_calls.append((args, kwargs)))
-
-    db = _db()
-    _case(db)
-    client = _client(db)
-
-    zip_path = tmp_path / "upload.zip"
-    _make_linux_zip(zip_path)
-    with zip_path.open("rb") as fh:
-        response = client.post(f"/api/cases/{CASE_ID}/evidence-preflight", files={"files": ("upload.zip", fh, "application/zip")})
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "ready"
-    assert payload["classification"]["hostname"] == "web01"
-    assert db.query(Evidence).count() == 0
-    assert db.query(Artifact).count() == 0
-    assert enqueue_calls == []
-    # The staged upload must be cleaned up, not left behind.
-    assert not (tmp_path / "preflight").exists() or not any((tmp_path / "preflight").iterdir())
-
-
-def test_preflight_endpoint_missing_case_returns_404(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
-    db = _db()
-    client = _client(db)
-    zip_path = tmp_path / "upload.zip"
-    _make_linux_zip(zip_path)
-    with zip_path.open("rb") as fh:
-        response = client.post(f"/api/cases/{CASE_ID}/evidence-preflight", files={"files": ("upload.zip", fh, "application/zip")})
-    assert response.status_code == 404
-
-
-def test_preflight_endpoint_requires_a_file_or_path(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
-    db = _db()
-    _case(db)
-    client = _client(db)
-    response = client.post(f"/api/cases/{CASE_ID}/evidence-preflight", data={})
-    assert response.status_code == 400
-
-
-def test_preflight_endpoint_server_path(monkeypatch, tmp_path):
-    import app.core.evidence_paths as evidence_paths_module
-
-    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
-    allowed_root = tmp_path / "evidence"
-    allowed_root.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(evidence_paths_module.settings, "dfir_allow_host_path_import", True)
-    monkeypatch.setattr(evidence_paths_module.settings, "dfir_allowed_evidence_roots", str(allowed_root))
-
-    zip_path = allowed_root / "collection.zip"
+def test_archive_report_has_container_and_contained_object(tmp_path):
+    zip_path = tmp_path / "collection.zip"
     _make_linux_zip(zip_path)
 
-    db = _db()
-    _case(db)
-    client = _client(db)
+    report = run_preflight(zip_path, token="t10", original_filename="collection.zip", declared_platform=None, tmp_dir=tmp_path / "scratch")
 
-    response = client.post(f"/api/cases/{CASE_ID}/evidence-preflight", data={"server_path": str(zip_path)})
+    assert report.classification.container == "ZIP archive"
+    assert report.classification.contained_object is not None
+    assert "artifact collection" in report.classification.contained_object
+    assert report.resource_check.estimated_duration_bucket == "fast"
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["classification"]["hostname"] == "web01"
-    assert db.query(Evidence).count() == 0
+
+def test_low_confidence_diagnostic_has_recommendation_severity(tmp_path):
+    unknown_path = tmp_path / "notes.txt"
+    unknown_path.write_text("just some notes, not evidence", encoding="utf-8")
+
+    report = run_preflight(unknown_path, token="t11", original_filename="notes.txt", declared_platform=None, tmp_dir=tmp_path / "scratch")
+
+    diag = next(d for d in report.diagnostics if d.problem == "Low confidence classification")
+    assert diag.severity == "recommendation"
+
+
+def test_upload_limit_diagnostic_is_blocking_severity(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_max_upload_size", 100)
+    zip_path = tmp_path / "collection.zip"
+    _make_linux_zip(zip_path)
+
+    report = run_preflight(zip_path, token="t12", original_filename="collection.zip", declared_platform=None, tmp_dir=tmp_path / "scratch")
+
+    diag = next(d for d in report.diagnostics if d.problem == "Upload limit exceeded")
+    assert diag.severity == "blocking"
+
+
+def test_warnings_are_classified_by_severity(tmp_path, monkeypatch):
+    import app.services.evidence_preflight as preflight_module
+
+    monkeypatch.setattr(preflight_module, "open_evidence_container", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("boom")))
+    zip_path = tmp_path / "collection.zip"
+    _make_linux_zip(zip_path)
+
+    report = run_preflight(zip_path, token="t13", original_filename="collection.zip", declared_platform=None, tmp_dir=tmp_path / "scratch")
+
+    assert report.classification.warnings
+    warning = report.classification.warnings[0]
+    assert warning.severity == "recommendation"
+    assert "could not" in warning.message.lower()
+
+
+def test_duration_bucket_thresholds():
+    from app.services.evidence_preflight import _duration_bucket
+
+    assert _duration_bucket(None) is None
+    assert _duration_bucket(30) == "fast"
+    assert _duration_bucket(119) == "fast"
+    assert _duration_bucket(600) == "medium"
+    assert _duration_bucket(3600) == "long"
+    assert _duration_bucket(10800) == "very_long"

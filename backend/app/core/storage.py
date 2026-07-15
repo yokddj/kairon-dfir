@@ -48,6 +48,26 @@ def save_upload(case_id: str, upload: UploadFile) -> tuple[str, Path, int, str]:
     original_dir.mkdir(parents=True, exist_ok=True)
     filename = Path(upload.filename or "upload.bin").name
     stored_path = original_dir / filename
+
+    # When the wizard's Preflight Inspection already staged this exact file
+    # on local disk (app.services.evidence_upload_session) and already
+    # computed its SHA-256 while staging, promotion attaches that info to
+    # the UploadFile it constructs so the bytes are moved instead of
+    # re-read-and-hashed here - avoiding a second full-file pass on large
+    # evidence. Falls back to the normal streamed copy for every other
+    # caller (real HTTP multipart uploads), which is unaffected.
+    known_sha256 = getattr(upload, "_preflight_known_sha256", None)
+    staged_path = getattr(upload, "_preflight_staged_path", None)
+    if known_sha256 and staged_path is not None:
+        staged = Path(staged_path)
+        if staged.is_file():
+            size = staged.stat().st_size
+            try:
+                os.replace(staged, stored_path)
+            except OSError:
+                shutil.move(str(staged), str(stored_path))
+            return evidence_id, stored_path, size, known_sha256
+
     size = 0
     digest = hashlib.sha256()
     with stored_path.open("wb") as buffer:
