@@ -1,6 +1,6 @@
 # Case Management
 
-Kairon case management is for organizing many investigations without deleting evidence or changing access control.
+Kairon case management is for organizing many investigations. Status, priority, tags, notes, and the archive/close lifecycle never delete evidence or change access control — permanent removal is a separate, explicit action described in [Deleting a Case](#deleting-a-case).
 
 ## Case Status
 
@@ -75,6 +75,24 @@ Archived cases are hidden by default. Enable `Include archived` to show them.
 4. Use the Case Detail metadata panel to track status, notes, evidence count, host count, and processing summary.
 5. Close the case when analysis is complete.
 6. Archive the case when it should be hidden from the default operational list.
+
+## Deleting a Case
+
+Use `Delete case` (on the Case Detail page) only when a case must be permanently removed — for example a test case, a duplicate, or a case created by mistake. Unlike archiving or closing, deletion is irreversible.
+
+Deleting a case removes:
+
+- the case record itself;
+- its evidence records and uploaded evidence storage on disk;
+- extracted artifacts;
+- findings, detections, rule runs, rules, and rule sets scoped to the case;
+- tags and activity history for the case;
+- case access grants for that case;
+- the case's OpenSearch index and indexed documents.
+
+The UI requires typing `DELETE` to confirm before the action is enabled, to avoid accidental data loss. If index or storage cleanup fails after the database records are removed, the response reports the failure (`cleanup_error`) so it can be investigated and retried manually; the case and its database-backed records are still gone at that point.
+
+When in doubt between deleting and archiving, prefer `archived` — it is reversible and keeps all evidence, artifacts, and indexes intact for later review.
 
 ## Boundaries
 

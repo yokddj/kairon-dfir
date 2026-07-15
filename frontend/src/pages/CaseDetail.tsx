@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type DfirCase } from "../api/client";
 import ArtifactBadge from "../components/ArtifactBadge";
 import CreateFindingDialog from "../components/CreateFindingDialog";
@@ -13,6 +13,7 @@ import ProcessTreePanel from "../components/ProcessTreePanel";
 import Timeline from "../components/Timeline";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useHostContext } from "../hooks/useHostContext";
+import { useNotifications } from "../context/NotificationsContext";
 
 const tabs = ["overview", "evidences", "processing", "artifacts", "artifact_explorer", "search", "process_tree", "investigation_timeline", "detections", "findings", "activity"] as const;
 const tabLabels: Record<(typeof tabs)[number], string> = {
@@ -31,6 +32,8 @@ const tabLabels: Record<(typeof tabs)[number], string> = {
 
 export default function CaseDetail() {
   const { caseId = "" } = useParams();
+  const navigate = useNavigate();
+  const { notify } = useNotifications();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { activeCaseId, setActiveCase, caseContext } = useActiveCase();
@@ -46,6 +49,8 @@ export default function CaseDetail() {
   const [findingDialogOpen, setFindingDialogOpen] = useState(false);
   const [debugExportOpen, setDebugExportOpen] = useState(false);
   const [metadataEditorOpen, setMetadataEditorOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editPriority, setEditPriority] = useState("medium");
@@ -115,6 +120,21 @@ export default function CaseDetail() {
       void queryClient.invalidateQueries({ queryKey: ["cases"] });
     },
   });
+  const deleteCaseMutation = useMutation({
+    mutationFn: () => api.deleteCase(caseId),
+    onMutate: () => {
+      notify({ title: "Deleting case", description: "The case and its associated resources are being removed.", tone: "warning" });
+    },
+    onSuccess: () => {
+      notify({ title: "Case deleted", description: "The case, its evidence, artifacts and indexes were removed.", tone: "success" });
+      void queryClient.invalidateQueries({ queryKey: ["cases"] });
+      navigate("/cases");
+    },
+    onError: (error) => {
+      notify({ title: "Delete failed", description: error instanceof Error ? error.message : "The case could not be deleted.", tone: "error" });
+    },
+  });
+  const deleteCaseConfirmationValid = deleteConfirmText.trim() === "DELETE";
   useEffect(() => {
     if (caseQuery.data && caseQuery.data.id !== activeCaseId) {
       setActiveCase(caseQuery.data);
@@ -236,6 +256,9 @@ export default function CaseDetail() {
           {normalizedCaseStatus === "closed" ? <button onClick={() => caseStatusMutation.mutate("reopen")} className="rounded-full border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Reopen case</button> : <button onClick={() => window.confirm("Close this case? You can reopen it later.") && caseStatusMutation.mutate("close")} className="rounded-full border border-line bg-white/5 px-4 py-2 text-sm text-muted">Close case</button>}
           <button onClick={() => setDebugExportOpen(true)} className="rounded-full border border-line bg-white/5 px-4 py-2 text-sm text-muted">
             Export full case validation pack
+          </button>
+          <button onClick={() => setDeleteDialogOpen(true)} className="rounded-full border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
+            Delete case
           </button>
         </div>
         {caseStatusMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{caseStatusMutation.error.message}</p> : null}
@@ -566,6 +589,21 @@ export default function CaseDetail() {
                       </ol>
                     ) : <p className="mt-3 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">No processing runs yet. This evidence has been uploaded but processing has not started.</p>}
                   </div>
+                  {selectedProcessing.linux_artifacts?.length ? (
+                    <div className="mt-5" data-testid="linux-processing-artifacts">
+                      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Detected Linux artifacts</p>
+                      <div className="mt-3 overflow-x-auto rounded-2xl border border-line">
+                        <table className="min-w-full text-left text-xs">
+                          <thead className="bg-abyss/70 font-mono uppercase tracking-[0.12em] text-muted"><tr><th className="px-3 py-2">Artifact</th><th className="px-3 py-2">Family</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Records</th></tr></thead>
+                          <tbody className="divide-y divide-line/70">
+                            {selectedProcessing.linux_artifacts.map((artifact) => (
+                              <tr key={`${artifact.family}-${artifact.name}`}><td className="px-3 py-2 text-ink">{artifact.name}</td><td className="px-3 py-2 text-muted">{artifact.family}</td><td className="px-3 py-2 text-muted">{artifact.status}</td><td className="px-3 py-2 text-muted">{artifact.records ?? 0}</td></tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="mt-5">
                     <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Parser-level status</p>
                     {selectedProcessing.parser_runs.length ? (
@@ -796,6 +834,41 @@ export default function CaseDetail() {
           },
         }}
       />
+      {deleteDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Delete case">
+          <div className="w-full max-w-xl rounded-[28px] border border-danger/40 bg-panel p-6 shadow-panel">
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-danger">Delete case</p>
+            <h3 className="mt-2 text-2xl font-semibold text-ink">{caseQuery.data?.name || caseId}</h3>
+            <p className="mt-3 text-sm text-muted">
+              This permanently removes the case record, its evidence, artifacts, findings, detections, rules, tags, activity, case access grants, indexed documents and on-disk storage for this case. This cannot be undone.
+            </p>
+            <div className="mt-4 grid gap-2 text-sm text-muted">
+              <p>Evidence count: <span className="text-ink">{caseQuery.data?.evidence_count ?? evidencesQuery.data?.length ?? 0}</span></p>
+              <p>Status: <span className="text-ink">{normalizedCaseStatus || "active"}</span></p>
+            </div>
+            <label className="mt-5 block text-sm text-muted">
+              Type DELETE to confirm.
+              <input
+                value={deleteConfirmText}
+                onChange={(event) => setDeleteConfirmText(event.target.value)}
+                className="mt-2 w-full rounded-2xl border border-line bg-abyss px-4 py-3 font-mono text-sm text-ink outline-none focus:border-danger"
+              />
+            </label>
+            {deleteCaseMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{deleteCaseMutation.error.message}</p> : null}
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => { setDeleteDialogOpen(false); setDeleteConfirmText(""); }} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Cancel</button>
+              <button
+                type="button"
+                onClick={() => deleteCaseMutation.mutate()}
+                disabled={!deleteCaseConfirmationValid || deleteCaseMutation.isPending}
+                className="rounded-2xl bg-danger px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {deleteCaseMutation.isPending ? "Deleting..." : "Delete case"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

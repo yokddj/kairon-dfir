@@ -50,6 +50,11 @@ vi.mock("../context/ActiveCaseContext", () => ({
   useActiveCase: () => ({ activeCaseId: "case-1", clearActiveCase: vi.fn(), setActiveCase: vi.fn() }),
 }));
 
+const notifyMock = vi.fn();
+vi.mock("../context/NotificationsContext", () => ({
+  useNotifications: () => ({ notify: notifyMock }),
+}));
+
 vi.mock("../components/EvidenceUpload", () => ({ default: () => <div data-testid="evidence-upload" /> }));
 vi.mock("../components/EventTable", () => ({ default: () => <div data-testid="event-table" /> }));
 vi.mock("../components/FindingsWorkspace", () => ({ default: () => <div data-testid="findings-workspace" /> }));
@@ -198,5 +203,32 @@ describe("CaseDetail Processing Queue", () => {
     await waitFor(() => expect(archiveCaseMock).toHaveBeenCalledWith("case-1"));
     await userEvent.click(screen.getByRole("button", { name: /Close case/i }));
     await waitFor(() => expect(closeCaseMock).toHaveBeenCalledWith("case-1"));
+  });
+
+  it("requires typing DELETE before the delete case action is enabled", async () => {
+    renderPage();
+    await screen.findByRole("heading", { name: "Queue Case" });
+
+    await userEvent.click(screen.getByRole("button", { name: /Delete case/i }));
+    const dialog = await screen.findByRole("dialog", { name: /Delete case/i });
+    const confirmButton = within(dialog).getByRole("button", { name: /^Delete case$/ });
+    expect(confirmButton).toBeDisabled();
+
+    await userEvent.type(within(dialog).getByRole("textbox"), "nope");
+    expect(confirmButton).toBeDisabled();
+    expect(deleteCaseMock).not.toHaveBeenCalled();
+  });
+
+  it("deletes the case once DELETE is typed and confirmed", async () => {
+    deleteCaseMock.mockResolvedValue({ status: "deleted", case_id: "case-1", cleanup: { index_deleted: true, storage_deleted: true, cleanup_error: null } });
+    renderPage();
+    await screen.findByRole("heading", { name: "Queue Case" });
+
+    await userEvent.click(screen.getByRole("button", { name: /Delete case/i }));
+    const dialog = await screen.findByRole("dialog", { name: /Delete case/i });
+    await userEvent.type(within(dialog).getByRole("textbox"), "DELETE");
+    await userEvent.click(within(dialog).getByRole("button", { name: /^Delete case$/ }));
+
+    await waitFor(() => expect(deleteCaseMock).toHaveBeenCalledWith("case-1"));
   });
 });

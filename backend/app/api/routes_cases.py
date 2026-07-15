@@ -644,6 +644,8 @@ def reopen_case(case_id: str, db: Session = Depends(get_db)) -> Case:
 
 @router.delete("/{case_id}")
 def delete_case(case_id: str, db: Session = Depends(get_db)) -> dict:
+    from app.models.case_access import CaseAccess
+
     item = db.get(Case, case_id)
     if not item:
         raise HTTPException(status_code=404, detail="Case not found")
@@ -657,6 +659,7 @@ def delete_case(case_id: str, db: Session = Depends(get_db)) -> dict:
         db.query(Rule).filter(Rule.case_id == case_id).delete(synchronize_session=False)
         db.query(RuleSet).filter(RuleSet.case_id == case_id).delete(synchronize_session=False)
         db.query(Tag).filter(Tag.case_id == case_id).delete(synchronize_session=False)
+        db.query(CaseAccess).filter(CaseAccess.case_id == case_id).delete(synchronize_session=False)
         db.query(Case).filter(Case.id == case_id).delete(synchronize_session=False)
         db.commit()
     except SQLAlchemyError as exc:

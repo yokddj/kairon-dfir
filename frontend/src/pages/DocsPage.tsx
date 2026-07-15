@@ -49,7 +49,7 @@ const docSlugByHref: Record<string, string> = {
   "demo/generic-demo-guide.md": "generic-demo-guide",
   "validation/README.md": "validation-readme",
   "validation/validation-matrix-format.md": "validation-matrix-format",
-  "documentation_maintenance.md": "documentation-maintenance",
+  "maintenance/documentation-maintenance.md": "documentation-maintenance",
   "deployment/beta-vs-demo-mode.md": "beta-vs-demo-mode",
 };
 
