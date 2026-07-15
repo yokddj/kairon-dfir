@@ -3595,6 +3595,67 @@ export type UploadOptions = {
   evtxProfile?: EvtxProfile;
 };
 
+export type PreflightClassification = {
+  category: "disk_image" | "memory_dump" | "archive" | "unknown";
+  format_key: string | null;
+  confidence: string;
+  reason: string;
+  chain: string[];
+  platform: string;
+  hostname: string | null;
+  distro: string | null;
+  version: string | null;
+  volumes: number | null;
+  installations: number | null;
+  expected_parsers: string[];
+  warnings: string[];
+};
+
+export type PreflightResourceCheck = {
+  file_size_bytes: number;
+  compressed_size_bytes: number | null;
+  estimated_extracted_bytes: number | null;
+  estimated_temp_storage_bytes: number | null;
+  estimated_final_size_bytes: number | null;
+  estimated_processing_seconds: number | null;
+  estimated_artifact_count: number | null;
+  detected_archive_depth: number | null;
+  detected_backing_chain_depth: number | null;
+  available_disk_space_bytes: number;
+  configured_upload_limit_bytes: number;
+  configured_extraction_limit_bytes: number;
+  configured_archive_depth_limit: number;
+  configured_backing_chain_limit: number;
+  temp_directory: string;
+};
+
+export type PreflightStatusCheck = {
+  label: string;
+  ok: boolean;
+  detail: string;
+};
+
+export type PreflightDiagnostic = {
+  problem: string;
+  reason: string;
+  current_configuration: Record<string, string>;
+  required_configuration: Record<string, string>;
+  configuration_key: string | null;
+  configuration_file: string | null;
+  how_to_fix: string[];
+};
+
+export type PreflightReport = {
+  token: string;
+  original_filename: string;
+  classification: PreflightClassification;
+  pipeline_preview: string[];
+  resource_check: PreflightResourceCheck;
+  status: "ready" | "warning" | "blocked";
+  status_checks: PreflightStatusCheck[];
+  diagnostics: PreflightDiagnostic[];
+};
+
 export type RuleRunResult = {
   rule_id: string | null;
   rule_set_id?: string | null;
@@ -6205,6 +6266,23 @@ export const api = {
     return uploadFormData<Evidence>(`/cases/${caseId}/disk-images/upload`, formData, { onProgress: options?.onProgress, transport: "xhr" });
   },
   getEvidenceDiskImage: (evidenceId: string) => request<DiskImage>(`/evidences/${evidenceId}/disk-image`),
+  preflightEvidence: async (
+    caseId: string,
+    input: { file: File } | { files: File[]; folderUpload: true } | { serverPath: string },
+    options?: { declaredPlatform?: EvidencePlatform; onProgress?: (progress: UploadProgress) => void },
+  ) => {
+    const formData = new FormData();
+    if ("serverPath" in input) {
+      formData.append("server_path", input.serverPath);
+    } else if ("folderUpload" in input) {
+      input.files.forEach((file) => formData.append("files", file, (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name));
+      formData.append("folder_upload", "true");
+    } else {
+      formData.append("files", input.file, input.file.name);
+    }
+    if (options?.declaredPlatform) formData.append("declared_platform", options.declaredPlatform);
+    return uploadFormData<PreflightReport>(`/cases/${caseId}/evidence-preflight`, formData, { onProgress: options?.onProgress, transport: "xhr" });
+  },
   discoverVelociraptorZip: async (caseId: string, file: File, options?: UploadOptions) => {
     const formData = new FormData();
     formData.append("file", file);

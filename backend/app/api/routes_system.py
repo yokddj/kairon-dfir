@@ -78,6 +78,8 @@ DOCS_CATALOG = [
     {"slug": "evidence-platforms", "title": "Evidence platform selection", "summary": "Cómo se guardan provided/detected/effective platform y límites de Windows, Linux, macOS y Other.", "filename": "evidence-platforms.md"},
     {"slug": "linux-support", "title": "Linux support", "summary": "Colecciones Linux aceptadas, auto-discovery, inventario, cobertura, parsers y límites actuales.", "filename": "linux-support.md"},
     {"slug": "disk-image-ingestion", "title": "Disk image ingestion", "summary": "Soporte actual de RAW/EWF, volúmenes, OS detection, read-only y trazabilidad.", "filename": "disk-image-ingestion.md"},
+    {"slug": "unified-evidence-ingestion", "title": "Unified evidence ingestion", "summary": "Wizard guiado de 6 pasos para añadir evidencia sin conocer el pipeline interno.", "filename": "unified-evidence-ingestion.md"},
+    {"slug": "preflight-inspection", "title": "Preflight inspection", "summary": "Inspección de solo lectura antes de procesar: clasificación, pipeline preview, chequeo de recursos y diagnósticos accionables.", "filename": "preflight-inspection.md"},
     {"slug": "investigation-workflow", "title": "Investigation workflow", "summary": "Flujo recomendado para pivotar entre caso, host, evidencia, búsqueda, artefactos, memoria y hallazgos.", "filename": "investigation-workflow.md"},
     {"slug": "parser-backends", "title": "Parser backends", "summary": "Backends estables, advanced, planned y tooling_missing.", "filename": "parser_backends.md"},
     {"slug": "api-summary", "title": "API summary", "summary": "Mapa de endpoints y workflows principales.", "filename": "api_summary.md"},
