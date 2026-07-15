@@ -131,6 +131,34 @@ const evidencePayload = {
   size_bytes: 100,
   file_count: 2,
   ingest_status: "completed",
+  provided_platform: "auto",
+  detected_platform: "windows",
+  effective_platform: "windows",
+  platform_profile: {
+    platform: "windows",
+    platforms: ["windows"],
+    groups: [
+      {
+        id: "windows_core",
+        label: "Windows Core",
+        platform: "windows",
+        categories: [
+          { id: "evtx", label: "Event Logs", group_id: "windows_core", group_label: "Windows Core", platform: "windows" },
+          { id: "shimcache", label: "Shimcache", group_id: "windows_core", group_label: "Windows Core", platform: "windows" },
+        ],
+      },
+    ],
+    quick_selects: [
+      { id: "event_logs", label: "Event logs only", platform: "windows", category_ids: ["evtx", "windows_event"] },
+      { id: "execution", label: "Execution artifacts", platform: "windows", category_ids: ["evtx", "windows_event", "shimcache"] },
+      { id: "persistence", label: "Persistence artifacts", platform: "windows", category_ids: ["scheduled_task", "service"] },
+    ],
+    categories: [
+      { id: "evtx", label: "Event Logs", group_id: "windows_core", group_label: "Windows Core", platform: "windows" },
+      { id: "shimcache", label: "Shimcache", group_id: "windows_core", group_label: "Windows Core", platform: "windows" },
+    ],
+    available_categories: ["evtx", "shimcache"],
+  },
   provided_host: "HOSTA-MANUAL",
   detected_host: "hosta",
   detected_user: null,
@@ -1254,6 +1282,181 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     expect(screen.getAllByText(/Raw discovery inventory/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/Advanced \/ Debug benchmarks/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Benchmark & Tuning · Advanced\/Beta/i)).not.toBeInTheDocument();
+  });
+
+  it("renders linux platform groups and quick selects from the platform profile", async () => {
+    setupMinimalEvidenceDetail({
+      evidence: {
+        effective_platform: "linux",
+        detected_platform: "linux",
+        platform_profile: {
+          platform: "linux",
+          platforms: ["linux"],
+          groups: [
+            {
+              id: "linux_logs",
+              label: "Linux Logs",
+              platform: "linux",
+              categories: [
+                { id: "linux_journal", label: "Journal", group_id: "linux_logs", group_label: "Linux Logs", platform: "linux" },
+                { id: "linux_auth", label: "Auth logs", group_id: "linux_logs", group_label: "Linux Logs", platform: "linux" },
+              ],
+            },
+            {
+              id: "linux_inventory",
+              label: "Linux Inventory",
+              platform: "linux",
+              categories: [
+                { id: "linux_systemd", label: "Systemd Units", group_id: "linux_inventory", group_label: "Linux Inventory", platform: "linux" },
+              ],
+            },
+          ],
+          quick_selects: [
+            { id: "core_logs", label: "Journal & logs", platform: "linux", category_ids: ["linux_journal", "linux_auth"] },
+            { id: "persistence", label: "Persistence & identity", platform: "linux", category_ids: ["linux_systemd"] },
+          ],
+          categories: [
+            { id: "linux_journal", label: "Journal", group_id: "linux_logs", group_label: "Linux Logs", platform: "linux" },
+            { id: "linux_auth", label: "Auth logs", group_id: "linux_logs", group_label: "Linux Logs", platform: "linux" },
+            { id: "linux_systemd", label: "Systemd Units", group_id: "linux_inventory", group_label: "Linux Inventory", platform: "linux" },
+          ],
+          available_categories: ["linux_journal", "linux_auth", "linux_systemd"],
+        },
+        metadata_json: {
+          ...evidencePayload.metadata_json,
+          velociraptor_discovery: {
+            candidates: [
+              {
+                id: "journal-1",
+                category: "linux_journal",
+                artifact_type: "linux_journal",
+                parser_status: "parsed_native",
+                parser: "linux_journal_raw",
+                display_name: "journal.export",
+                original_path: "logs/journal.export",
+                local_path: "",
+                normalized_windows_path: "",
+                user: null,
+                browser: null,
+                profile: null,
+                size: 10,
+                mtime: "2026-05-21T10:00:00Z",
+                confidence: "high",
+                supported: true,
+                reason: null,
+                warnings: [],
+                companion_files: [],
+              },
+              {
+                id: "auth-1",
+                category: "linux_auth",
+                artifact_type: "linux_auth",
+                parser_status: "parsed_native",
+                parser: "linux_auth_raw",
+                display_name: "auth.log",
+                original_path: "var/log/auth.log",
+                local_path: "",
+                normalized_windows_path: "",
+                user: null,
+                browser: null,
+                profile: null,
+                size: 10,
+                mtime: "2026-05-21T10:00:00Z",
+                confidence: "high",
+                supported: true,
+                reason: null,
+                warnings: [],
+                companion_files: [],
+              },
+              {
+                id: "systemd-1",
+                category: "linux_systemd",
+                artifact_type: "linux_systemd",
+                parser_status: "parsed_native",
+                parser: "linux_systemd_raw",
+                display_name: "ssh.service",
+                original_path: "etc/systemd/system/ssh.service",
+                local_path: "",
+                normalized_windows_path: "",
+                user: null,
+                browser: null,
+                profile: null,
+                size: 10,
+                mtime: "2026-05-21T10:00:00Z",
+                confidence: "high",
+                supported: true,
+                reason: null,
+                warnings: [],
+                companion_files: [],
+              },
+            ],
+          },
+        },
+      },
+      indexingPlan: { supported_candidate_count: 3 },
+    });
+
+    renderPage();
+    await screen.findByText("collection.zip");
+
+    const selectedSection = screen.getByTestId("selected-artifact-types-section");
+    expect(within(selectedSection).getByText("Linux Logs")).toBeInTheDocument();
+    expect(within(selectedSection).getByText("Linux Inventory")).toBeInTheDocument();
+    expect(within(selectedSection).getByLabelText(/Journal/i)).toBeInTheDocument();
+    expect(within(selectedSection).getByLabelText(/Auth logs/i)).toBeInTheDocument();
+    expect(within(selectedSection).getByRole("button", { name: /Journal & logs/i })).toBeInTheDocument();
+    expect(within(selectedSection).getByRole("button", { name: /Persistence & identity/i })).toBeInTheDocument();
+  });
+
+  it("renders disk image inspection summary when disk image metadata is present", async () => {
+    setupMinimalEvidenceDetail({
+      evidence: {
+        evidence_type: "disk_image",
+        disk_image: {
+          id: "disk-1",
+          evidence_id: "evidence-1",
+          original_filename: "case.E01",
+          format: "ewf",
+          size_bytes: 1048576,
+          sha256: "d".repeat(64),
+          segment_count: 2,
+          status: "discovering_artifacts",
+          metadata_json: {},
+          tool_metadata: {},
+          warnings_json: ["ewf_export_used"],
+          error_json: {},
+          volumes: [
+            {
+              id: "vol-1",
+              disk_image_id: "disk-1",
+              partition_index: 1,
+              offset_bytes: 1048576,
+              length_bytes: 16777216,
+              partition_type: "fat32",
+              filesystem_type: "fat",
+              label: null,
+              uuid: null,
+              encrypted: false,
+              readable: true,
+              status: "readable",
+              warnings_json: [],
+              error_json: {},
+              metadata_json: {},
+              installations: [
+                { id: "os-1", disk_volume_id: "vol-1", platform: "linux", hostname: "ubuntu-lab", version: "Ubuntu 24.04 LTS", distro: "Ubuntu 24.04 LTS", root_path: "/", confidence: "high", detection_reasons: ["/etc/os-release"] },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    renderPage();
+
+    expect(await screen.findByTestId("disk-image-summary")).toBeInTheDocument();
+    expect(screen.getByText(/Format EWF/i)).toBeInTheDocument();
+    expect(screen.getByText(/Volume 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/ubuntu-lab/i)).toBeInTheDocument();
   });
 
   it("selects shimcache without opening debug and queues shimcache-only parsing", async () => {

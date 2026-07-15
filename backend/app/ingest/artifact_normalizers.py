@@ -1674,6 +1674,7 @@ def normalize_evtx_row(document: dict, row: dict, artifact_meta: dict) -> dict:
             {
                 "instance_id": task_instance_id,
                 "action_name": task_action_name,
+                "enabled": _lower_bool(first_value(row, ["Enabled"])),
                 "engine_pid": task_engine_pid,
                 "result_code": task_result_code,
             }
@@ -1903,21 +1904,21 @@ def normalize_prefetch_row(document: dict, row: dict, artifact_meta: dict) -> di
     parser_status = _clean_placeholder(first_value(row, ["ParserStatus"])) or ("parsed_native" if not parse_warnings or "unsupported_prefetch_version" not in parse_warnings else "failed")
     processed_at = _parse_iso_timestamp(str(artifact_meta.get("parser_processed_at") or "")) or datetime.now(tz=UTC).isoformat()
 
-    timestamp = latest_last_run or source_modified
+    timestamp = latest_last_run
     timestamp_precision = (
         "prefetch_last_run" if last_run
         else "prefetch_last_run_array" if last_runs
-        else "source_file_mtime" if source_modified and source_file_mtime_confidence == "high"
-        else "source_file_mtime_low_confidence" if source_file_mtime or source_modified
+        else "source_file_mtime" if source_file_mtime and source_file_mtime_confidence == "high"
+        else "source_file_mtime_low_confidence" if source_file_mtime
         else "unknown"
     )
-    if not latest_last_run and not source_modified and source_file_mtime and source_file_mtime_confidence == "high":
+    if not latest_last_run and source_file_mtime and source_file_mtime_confidence == "high":
         timestamp = source_file_mtime
-    elif not latest_last_run and not source_modified and source_file_mtime:
+    elif not latest_last_run and source_file_mtime:
         timestamp = source_file_mtime
 
     executable_path_name = _appcompat_basename(executable_path)
-    process_name = executable_path_name or executable_name
+    process_name = executable_name if str(executable_name or "").lower().endswith(".exe") else executable_path_name or executable_name
     file_name = executable_path_name or process_name
     file_extension = _appcompat_extension(executable_path or file_name)
     lowered_name = str(process_name or "").lower()
@@ -2155,7 +2156,7 @@ def normalize_amcache_row(document: dict, row: dict, artifact_meta: dict) -> dic
     lower_name = str(file_name or "").lower()
     is_os_component = _boolish(first_value(row, ["IsOsComponent"]))
     is_execution_candidate = file_extension in AMCACHE_EXECUTION_CANDIDATE_EXTENSIONS
-    is_installed_program = bool(program_name and install_date and not is_execution_candidate)
+    is_installed_program = bool(program_name and install_date and not is_execution_candidate and not file_path)
     if is_native_amcache:
         timestamp = key_last_write or install_date or link_date or compile_time
         timestamp_precision = (
@@ -2361,6 +2362,7 @@ def normalize_amcache_row(document: dict, row: dict, artifact_meta: dict) -> dic
         data_quality.add("low_confidence_execution")
 
     document["event"]["severity"] = severity
+    document.setdefault("ingest", {})["processed_at"] = _parse_iso_timestamp(str(artifact_meta.get("parser_processed_at") or "")) or _clean_placeholder(str(artifact_meta.get("parser_processed_at") or ""))
     document["risk_score"] = risk_score
     document["tags"] = sorted(tags)
     document["suspicious_reasons"] = sorted(reasons)
@@ -2378,7 +2380,11 @@ def normalize_shimcache_row(document: dict, row: dict, artifact_meta: dict) -> d
     timestamp = last_modified or last_update or None
     timestamp_precision = "shimcache_last_modified" if last_modified else "shimcache_last_update" if last_update else "unknown"
     lower_name = str((artifact_meta.get("name") or "")).lower()
-    is_recentfilecache = "recentfilecache" in lower_name or "recentfilecache" in " ".join(str(key).lower() for key in row.keys())
+    is_recentfilecache = (
+        str(artifact_meta.get("artifact_type") or "").lower() == "appcompat"
+        or "recentfilecache" in lower_name
+        or "recentfilecache" in " ".join(str(key).lower() for key in row.keys())
+    )
     if is_recentfilecache:
         artifact_type = "appcompat"
         document["@timestamp"] = timestamp or last_write
@@ -3606,8 +3612,15 @@ def normalize_registry_row(document: dict, row: dict, artifact_meta: dict) -> di
 def normalize_process_row(document: dict, row: dict, artifact_meta: dict) -> dict:
     process_name = first_value(row, ["Name", "ProcessName", "ImageName"])
     pid = first_value(row, ["Pid", "PID"])
+    command_line = first_value(row, ["CommandLine"])
     document["event"].update({"category": "execution", "type": "process_observed", "message": f"Process observed: {process_name or 'unknown'} ({pid or '?'})"})
-    document["process"].update({"name": process_name, "pid": pid, "ppid": first_value(row, ["PPid", "ParentPid"]), "command_line": first_value(row, ["CommandLine"]), "path": first_value(row, ["Path", "ImagePath"])})
+    document["process"].update({"name": process_name, "pid": pid, "ppid": first_value(row, ["PPid", "ParentPid"]), "command_line": command_line, "path": first_value(row, ["Path", "ImagePath"])})
+    lower_command = str(command_line or "").lower()
+    if any(token in lower_command for token in ("-enc", "-encodedcommand", "frombase64string")):
+        document.setdefault("tags", []).extend(tag for tag in ["suspicious", "suspicious_command", "encoded_command"] if tag not in document.get("tags", []))
+        document.setdefault("suspicious_reasons", []).append("Process command contains encoded PowerShell")
+        document["risk_score"] = max(int(document.get("risk_score") or 0), 70)
+        document["event"].update({"severity": "high", "timeline_include": True})
     return document
 
 
@@ -3625,8 +3638,8 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     doc = dict(doc or {})
     linux_data = dict(doc.get("linux") or {})
 
-    linux_data["artifact_family"] = row.get("artifact_family", "")
-    linux_data["artifact_type"] = row.get("artifact_type", source_path)
+    linux_data["artifact_family"] = row.get("artifact_family", artifact_type or "")
+    linux_data["artifact_type"] = row.get("artifact_type", "")
     linux_data["source_file"] = row.get("source_file", source_path)
     linux_data["message"] = row.get("message", "")
     linux_data["username"] = row.get("username", "")
@@ -3636,13 +3649,30 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["event_action"] = row.get("event_action", "")
     linux_data["auth_method"] = row.get("auth_method", "")
     linux_data["source_ip"] = row.get("source_ip", "")
+    linux_data["hostname"] = linux_data.get("hostname") or detected_host or ""
 
     if detected_host:
         doc["host"]["hostname"] = detected_host
+        doc["host"]["name"] = detected_host
         linux_data["detected_host"] = detected_host
+
+    if row.get("username"):
+        doc["user"]["name"] = row["username"]
+
+    doc["host"]["os"] = "Linux"
 
     if row.get("timestamp"):
         doc["@timestamp"] = row["timestamp"]
+
+    family = linux_data.get("artifact_family", "")
+    doc["artifact"]["type"] = family
+    doc["artifact"]["family"] = family
+    doc["event"]["category"] = family
+    doc["event"]["type"] = linux_data.get("artifact_type", "linux_record")
+    doc["event"]["action"] = linux_data.get("event_action", "") or linux_data.get("artifact_type", "")
+    doc["event"]["message"] = linux_data.get("message", "")
+    event_severity = "medium" if linux_data.get("event_action") in {"login", "auth_failure", "session_open", "session_close", "sudo", "su"} else "info"
+    doc["event"]["severity"] = event_severity
 
     doc["message"] = row.get("message", row.get("raw_excerpt", ""))
     doc["search_text"] = " ".join(str(v) for v in linux_data.values() if v)

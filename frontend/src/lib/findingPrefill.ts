@@ -1,4 +1,5 @@
 import type { Finding, FindingSeverity, FindingStatus } from "../api/client";
+import { artifactLabel as registryArtifactLabel } from "./artifactRegistry";
 
 export type FindingPrefill = Partial<Finding> & {
   title: string;
@@ -51,7 +52,7 @@ function cleanString(value: unknown): string | undefined {
 }
 
 function artifactLabel(family?: string | null, type?: string | null): string {
-  return (type || family || "source item").replaceAll("_", " ");
+  return registryArtifactLabel(type || family || "source item");
 }
 
 function inferTitle(row: Record<string, unknown>, family: string, type: string, summary: string): string {

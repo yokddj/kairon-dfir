@@ -13,6 +13,7 @@ const archiveCaseMock = vi.fn();
 const unarchiveCaseMock = vi.fn();
 const closeCaseMock = vi.fn();
 const reopenCaseMock = vi.fn();
+const deleteCaseMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -23,6 +24,7 @@ vi.mock("../api/client", () => ({
     unarchiveCase: (...args: unknown[]) => unarchiveCaseMock(...args),
     closeCase: (...args: unknown[]) => closeCaseMock(...args),
     reopenCase: (...args: unknown[]) => reopenCaseMock(...args),
+    deleteCase: (...args: unknown[]) => deleteCaseMock(...args),
   },
 }));
 
@@ -32,6 +34,11 @@ vi.mock("../context/ActiveCaseContext", () => ({
     clearActiveCase: vi.fn(),
     setActiveCase: vi.fn(),
   }),
+}));
+
+const notifyMock = vi.fn();
+vi.mock("../context/NotificationsContext", () => ({
+  useNotifications: () => ({ notify: notifyMock }),
 }));
 
 function caseItem(overrides: Record<string, unknown> = {}) {
@@ -68,14 +75,17 @@ function renderPage(initialPath = "/cases") {
 }
 
 describe("Cases page", () => {
+  let deletedIds: Set<string>;
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(window, "confirm").mockReturnValue(true);
+    deletedIds = new Set();
     listCasesMock.mockImplementation((params) => {
       const cases = [
         caseItem(),
         caseItem({ id: "case-2", name: "Archived Ransomware", status: "archived", priority: "critical", tags: ["ransomware", "windows"], description: "Archived case" }),
-      ];
+      ].filter((item) => !deletedIds.has(item.id));
       return params?.include_archived ? cases : cases.filter((item) => item.status !== "archived");
     });
     createCaseMock.mockImplementation((payload) => caseItem({ id: "created", ...payload }));
@@ -84,6 +94,10 @@ describe("Cases page", () => {
     unarchiveCaseMock.mockImplementation((id) => caseItem({ id, status: "active" }));
     closeCaseMock.mockImplementation((id) => caseItem({ id, status: "closed" }));
     reopenCaseMock.mockImplementation((id) => caseItem({ id, status: "active" }));
+    deleteCaseMock.mockImplementation((id: string) => {
+      deletedIds.add(id);
+      return Promise.resolve({ status: "deleted", case_id: id, cleanup: {} });
+    });
   });
 
   it("uses generic placeholders for case creation", async () => {
@@ -153,5 +167,66 @@ describe("Cases page", () => {
     listCasesMock.mockResolvedValueOnce([]);
     renderPage("/cases?q=missing");
     expect(await screen.findByText(/No active cases match your filters/i)).toBeInTheDocument();
+  });
+
+  describe("Delete Case", () => {
+    it("shows a Delete button on every case card", async () => {
+      renderPage();
+      await screen.findByText("Memory Lab");
+      expect(screen.getAllByRole("button", { name: "Delete" }).length).toBeGreaterThan(0);
+    });
+
+    it("opens a confirmation dialog with the deletion scope", async () => {
+      renderPage();
+      await screen.findByText("Memory Lab");
+      await userEvent.click(screen.getAllByRole("button", { name: "Delete" })[0]);
+      const dialog = await screen.findByRole("dialog", { name: "Delete Case" });
+      expect(within(dialog).getByText(/permanently delete this investigation/i)).toBeInTheDocument();
+      expect(within(dialog).getByText("Evidence")).toBeInTheDocument();
+      expect(within(dialog).getByText("Memory images")).toBeInTheDocument();
+      expect(within(dialog).getByText("Search index")).toBeInTheDocument();
+    });
+
+    it("keeps Delete disabled until the exact case name is typed", async () => {
+      renderPage();
+      await screen.findByText("Memory Lab");
+      await userEvent.click(screen.getAllByRole("button", { name: "Delete" })[0]);
+      const dialog = await screen.findByRole("dialog", { name: "Delete Case" });
+      const confirmButton = within(dialog).getByRole("button", { name: "Delete Case" });
+      expect(confirmButton).toBeDisabled();
+
+      await userEvent.type(within(dialog).getByRole("textbox"), "Memory La");
+      expect(confirmButton).toBeDisabled();
+      expect(deleteCaseMock).not.toHaveBeenCalled();
+
+      await userEvent.type(within(dialog).getByRole("textbox"), "b");
+      expect(confirmButton).toBeEnabled();
+    });
+
+    it("deletes the case, shows a toast, and removes the card without a refresh", async () => {
+      renderPage();
+      await screen.findByText("Memory Lab");
+      await userEvent.click(screen.getAllByRole("button", { name: "Delete" })[0]);
+      const dialog = await screen.findByRole("dialog", { name: "Delete Case" });
+      await userEvent.type(within(dialog).getByRole("textbox"), "Memory Lab");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Delete Case" }));
+
+      await waitFor(() => expect(deleteCaseMock).toHaveBeenCalledWith("case-1"));
+      await waitFor(() => expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ title: "Case deleted", description: "Case deleted successfully.", tone: "success" })));
+      await waitFor(() => expect(screen.queryByText("Memory Lab")).not.toBeInTheDocument());
+    });
+
+    it("shows a clear error message when deletion fails", async () => {
+      deleteCaseMock.mockRejectedValueOnce(new Error("Case cannot be deleted while processing is active."));
+      renderPage();
+      await screen.findByText("Memory Lab");
+      await userEvent.click(screen.getAllByRole("button", { name: "Delete" })[0]);
+      const dialog = await screen.findByRole("dialog", { name: "Delete Case" });
+      await userEvent.type(within(dialog).getByRole("textbox"), "Memory Lab");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Delete Case" }));
+
+      expect(await within(dialog).findByText("Case cannot be deleted while processing is active.")).toBeInTheDocument();
+      expect(screen.getByTestId("case-card")).toHaveTextContent("Memory Lab");
+    });
   });
 });

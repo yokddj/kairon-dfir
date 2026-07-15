@@ -17,6 +17,8 @@ const docSlugByHref: Record<string, string> = {
   "testing.md": "testing",
   "artifacts_matrix.md": "artifacts-matrix",
   "parser-coverage.md": "parser-coverage",
+  "platform-architecture.md": "platform-architecture",
+  "disk-image-ingestion.md": "disk-image-ingestion",
   "evidence-platforms.md": "evidence-platforms",
   "case-management.md": "case-management",
   "findings-notes.md": "findings-notes",
@@ -47,7 +49,7 @@ const docSlugByHref: Record<string, string> = {
   "demo/generic-demo-guide.md": "generic-demo-guide",
   "validation/README.md": "validation-readme",
   "validation/validation-matrix-format.md": "validation-matrix-format",
-  "documentation_maintenance.md": "documentation-maintenance",
+  "maintenance/documentation-maintenance.md": "documentation-maintenance",
   "deployment/beta-vs-demo-mode.md": "beta-vs-demo-mode",
 };
 

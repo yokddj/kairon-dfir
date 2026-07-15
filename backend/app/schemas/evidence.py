@@ -2,7 +2,9 @@ from datetime import datetime
 
 from pydantic import BaseModel, model_validator
 
+from app.core.evidence_platforms import build_evidence_platform_profile
 from app.models.evidence import EvidenceStorageMode, EvidenceType, IngestStatus, resolve_public_evidence_type
+from app.schemas.disk_image import DiskImageRead
 
 
 class EvidenceRead(BaseModel):
@@ -22,6 +24,8 @@ class EvidenceRead(BaseModel):
     provided_platform: str = "auto"
     detected_platform: str = "unknown"
     effective_platform: str = "unknown"
+    platform_profile: dict = {}
+    disk_image: DiskImageRead | None = None
     uploaded_by_user_id: str | None = None
     uploaded_at: datetime | None = None
     first_seen_at: datetime | None = None
@@ -104,6 +108,19 @@ class EvidenceRead(BaseModel):
             source_tool=data.get("source_tool"),
             metadata=metadata,
         )
+        available_categories = []
+        discovery = metadata.get("velociraptor_discovery") if isinstance(metadata.get("velociraptor_discovery"), dict) else {}
+        for candidate in discovery.get("candidates") or []:
+            if isinstance(candidate, dict) and candidate.get("category"):
+                available_categories.append(str(candidate.get("category")))
+        data["platform_profile"] = build_evidence_platform_profile(
+            data.get("effective_platform"),
+            evidence_type=getattr(data.get("evidence_type"), "value", data.get("evidence_type")),
+            available_categories=available_categories,
+        )
+        disk_image = getattr(value, "disk_image", None) if not isinstance(value, dict) else data.get("disk_image")
+        if disk_image is not None:
+            data["disk_image"] = DiskImageRead.model_validate(disk_image)
         data["ingest_metadata"] = metadata
         parser_errors = error_log.get("errors") if isinstance(error_log.get("errors"), list) else []
         data["parser_errors"] = parser_errors
@@ -254,6 +271,12 @@ class ArtifactRead(BaseModel):
     name: str
     artifact_type: str
     source_path: str
+    disk_image_id: str | None = None
+    disk_volume_id: str | None = None
+    os_installation_id: str | None = None
+    original_source_path: str | None = None
+    logical_source_path: str | None = None
+    acquisition_method: str | None = None
     parser: str
     record_count: int
     status: str

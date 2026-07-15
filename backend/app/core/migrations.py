@@ -2336,3 +2336,106 @@ def _v28_evidence_platform_selection(connection: Connection) -> None:
     connection.execute(text("UPDATE evidences SET provided_platform = 'auto' WHERE provided_platform IS NULL OR provided_platform = ''"))
     connection.execute(text("UPDATE evidences SET detected_platform = 'unknown' WHERE detected_platform IS NULL OR detected_platform = '' OR detected_platform = 'auto'"))
     connection.execute(text("UPDATE evidences SET effective_platform = CASE WHEN provided_platform IS NOT NULL AND provided_platform NOT IN ('', 'auto') THEN provided_platform WHEN detected_platform IS NOT NULL AND detected_platform NOT IN ('', 'auto') THEN detected_platform ELSE 'unknown' END WHERE effective_platform IS NULL OR effective_platform = '' OR effective_platform = 'auto'"))
+
+
+@register(29, "disk_image_ingestion")
+def _v29_disk_image_ingestion(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    dialect = connection.dialect.name
+    json_type = "JSONB" if dialect == "postgresql" else "JSON"
+    timestamp_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "TIMESTAMP"
+    id_type = "UUID" if dialect == "postgresql" else "VARCHAR(36)"
+    tables = set(inspector.get_table_names())
+    if "disk_images" not in tables:
+        connection.execute(
+            text(
+                f"""
+                CREATE TABLE disk_images (
+                    id {id_type} PRIMARY KEY,
+                    evidence_id {id_type} NOT NULL REFERENCES evidences(id) ON DELETE CASCADE,
+                    original_filename VARCHAR(512) NOT NULL,
+                    format VARCHAR(64) NOT NULL,
+                    size_bytes BIGINT NOT NULL DEFAULT 0,
+                    sha256 VARCHAR(128),
+                    segment_count INTEGER NOT NULL DEFAULT 1,
+                    status VARCHAR(64) NOT NULL DEFAULT 'uploaded',
+                    metadata_json {json_type} NOT NULL DEFAULT '{{}}',
+                    tool_metadata {json_type} NOT NULL DEFAULT '{{}}',
+                    warnings_json {json_type} NOT NULL DEFAULT '[]',
+                    error_json {json_type} NOT NULL DEFAULT '{{}}',
+                    created_at {timestamp_type} NOT NULL,
+                    updated_at {timestamp_type} NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_disk_images_evidence_id ON disk_images (evidence_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_disk_images_format ON disk_images (format)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_disk_images_status ON disk_images (status)"))
+    if "disk_volumes" not in tables:
+        connection.execute(
+            text(
+                f"""
+                CREATE TABLE disk_volumes (
+                    id {id_type} PRIMARY KEY,
+                    disk_image_id {id_type} NOT NULL REFERENCES disk_images(id) ON DELETE CASCADE,
+                    partition_index INTEGER NOT NULL DEFAULT 0,
+                    offset_bytes BIGINT NOT NULL DEFAULT 0,
+                    length_bytes BIGINT NOT NULL DEFAULT 0,
+                    partition_type VARCHAR(128),
+                    filesystem_type VARCHAR(64),
+                    label VARCHAR(255),
+                    uuid VARCHAR(128),
+                    encrypted BOOLEAN NOT NULL DEFAULT FALSE,
+                    readable BOOLEAN NOT NULL DEFAULT FALSE,
+                    status VARCHAR(64) NOT NULL DEFAULT 'discovered',
+                    warnings_json {json_type} NOT NULL DEFAULT '[]',
+                    error_json {json_type} NOT NULL DEFAULT '{{}}',
+                    metadata_json {json_type} NOT NULL DEFAULT '{{}}',
+                    created_at {timestamp_type} NOT NULL,
+                    updated_at {timestamp_type} NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_disk_volumes_disk_image_id ON disk_volumes (disk_image_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_disk_volumes_status ON disk_volumes (status)"))
+    if "os_installations" not in tables:
+        connection.execute(
+            text(
+                f"""
+                CREATE TABLE os_installations (
+                    id {id_type} PRIMARY KEY,
+                    disk_volume_id {id_type} NOT NULL REFERENCES disk_volumes(id) ON DELETE CASCADE,
+                    platform VARCHAR(32) NOT NULL,
+                    hostname VARCHAR(255),
+                    version VARCHAR(255),
+                    distro VARCHAR(255),
+                    root_path VARCHAR(1024) NOT NULL DEFAULT '/',
+                    confidence VARCHAR(32) NOT NULL DEFAULT 'medium',
+                    detection_reasons {json_type} NOT NULL DEFAULT '[]',
+                    metadata_json {json_type} NOT NULL DEFAULT '{{}}',
+                    created_at {timestamp_type} NOT NULL,
+                    updated_at {timestamp_type} NOT NULL
+                )
+                """
+            )
+        )
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_os_installations_disk_volume_id ON os_installations (disk_volume_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_os_installations_platform ON os_installations (platform)"))
+    if "artifacts" in tables:
+        existing = {c["name"] for c in inspector.get_columns("artifacts")}
+        additions = {
+            "disk_image_id": f"{id_type} REFERENCES disk_images(id) ON DELETE SET NULL",
+            "disk_volume_id": f"{id_type} REFERENCES disk_volumes(id) ON DELETE SET NULL",
+            "os_installation_id": f"{id_type} REFERENCES os_installations(id) ON DELETE SET NULL",
+            "original_source_path": "VARCHAR(4096)",
+            "logical_source_path": "VARCHAR(4096)",
+            "acquisition_method": "VARCHAR(128)",
+        }
+        for column_name, column_type in additions.items():
+            if column_name not in existing:
+                connection.execute(text(f"ALTER TABLE artifacts ADD COLUMN {column_name} {column_type}"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_artifacts_disk_image_id ON artifacts (disk_image_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_artifacts_disk_volume_id ON artifacts (disk_volume_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_artifacts_os_installation_id ON artifacts (os_installation_id)"))

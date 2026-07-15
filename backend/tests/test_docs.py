@@ -34,7 +34,6 @@ EXPECTED_DOCS = [
     "opensearch.md",
     "troubleshooting.md",
     "roadmap.md",
-    "documentation_maintenance.md",
 ]
 
 

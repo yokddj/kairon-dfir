@@ -11,6 +11,7 @@ const getSystemStatusMock = vi.fn();
 const validateEvidencePathMock = vi.fn();
 const registerEvidencePathMock = vi.fn();
 const uploadEvidenceMock = vi.fn();
+const uploadDiskImageMock = vi.fn();
 const uploadEvidenceFolderMock = vi.fn();
 const discoverVelociraptorZipMock = vi.fn();
 const discoverVelociraptorFolderMock = vi.fn();
@@ -30,6 +31,7 @@ vi.mock("../api/client", () => ({
     validateEvidencePath: (...args: unknown[]) => validateEvidencePathMock(...args),
     registerEvidencePath: (...args: unknown[]) => registerEvidencePathMock(...args),
     uploadEvidence: (...args: unknown[]) => uploadEvidenceMock(...args),
+    uploadDiskImage: (...args: unknown[]) => uploadDiskImageMock(...args),
     uploadEvidenceFolder: (...args: unknown[]) => uploadEvidenceFolderMock(...args),
     discoverVelociraptorZip: (...args: unknown[]) => discoverVelociraptorZipMock(...args),
     discoverVelociraptorFolder: (...args: unknown[]) => discoverVelociraptorFolderMock(...args),
@@ -70,6 +72,7 @@ describe("EvidenceUpload", () => {
     vi.unstubAllEnvs();
     navigateMock.mockReset();
     uploadEvidenceMock.mockReset();
+    uploadDiskImageMock.mockReset();
     uploadEvidenceFolderMock.mockReset();
     discoverVelociraptorZipMock.mockReset();
     discoverVelociraptorFolderMock.mockReset();
@@ -119,6 +122,7 @@ describe("EvidenceUpload", () => {
     });
     registerEvidencePathMock.mockResolvedValue({ id: "ev-1" });
     uploadEvidenceMock.mockResolvedValue({ id: "ev-2", evidence_type: "evtx", metadata_json: {}, ingest_status: "pending" });
+    uploadDiskImageMock.mockResolvedValue({ id: "ev-disk", evidence_type: "disk_image", metadata_json: {}, ingest_status: "pending", disk_image: null });
   });
 
   afterEach(() => {
@@ -212,6 +216,40 @@ describe("EvidenceUpload", () => {
     expect(await screen.findByText(/Memory image uploaded and finalized/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Open Memory Analysis/i })).toBeInTheDocument();
     expect(discoverVelociraptorZipMock).not.toHaveBeenCalled();
+  });
+
+  it("uploads a raw disk image through the dedicated disk image endpoint", async () => {
+    renderComponent();
+    await selectPrimaryFile(makeFile("disk", "sample.img"));
+
+    expect(await screen.findByText(/Detected: Disk image/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Index evidence/i }));
+
+    await waitFor(() =>
+      expect(uploadDiskImageMock).toHaveBeenCalledWith(
+        "case-1",
+        [expect.any(File)],
+        expect.objectContaining({ ingestMode: "usable_search" }),
+      ),
+    );
+  });
+
+  it("uploads segmented ewf sets through the dedicated disk image endpoint", async () => {
+    renderComponent();
+    await userEvent.click(screen.getByRole("button", { name: /Add RAW\/EWF disk image/i }));
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(input, [makeFile("seg1", "case.E01"), makeFile("seg2", "case.E02")]);
+
+    expect(await screen.findByText(/2 files selected/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Index evidence/i }));
+
+    await waitFor(() =>
+      expect(uploadDiskImageMock).toHaveBeenCalledWith(
+        "case-1",
+        [expect.any(File), expect.any(File)],
+        expect.objectContaining({ ingestMode: "usable_search" }),
+      ),
+    );
   });
 
   it("keeps advanced options collapsed by default", () => {

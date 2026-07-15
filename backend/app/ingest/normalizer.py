@@ -208,6 +208,8 @@ def _looks_like_evtxecmd(path: Path, artifact_meta: dict) -> bool:
     lower_name = path.name.lower()
     artifact_type = str(artifact_meta.get("artifact_type") or "").lower()
     parser = str(artifact_meta.get("parser") or "").lower()
+    if artifact_type == "scheduled_task" or parser == "scheduled_task_csv":
+        return False
     if path.suffix.lower() != ".csv":
         return False
     if artifact_type == "evtx" and (parser in {"zimmerman", "hayabusa"} or "evtxecmd" in lower_name):
@@ -232,6 +234,8 @@ def _looks_like_lecmd(path: Path, artifact_meta: dict) -> bool:
     lower_name = path.name.lower()
     artifact_type = str(artifact_meta.get("artifact_type") or "").lower()
     parser = str(artifact_meta.get("parser") or "").lower()
+    if artifact_type == "scheduled_task" or parser == "scheduled_task_csv":
+        return False
     if path.suffix.lower() != ".csv":
         return False
     if artifact_type == "lnk" and (parser == "zimmerman" or ("lecmd" in lower_name and "jlecmd" not in lower_name)):
@@ -663,9 +667,14 @@ def base_document(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
     timestamp, precision = parse_timestamp(first_value(row, TIMESTAMP_CANDIDATES))
     host_name = extract_host(row, artifact_meta)
     user_name = extract_user(row, artifact_meta)
-    os_type = artifact_meta.get("os_type", "windows" if artifact_meta.get("parser") in {"velociraptor", "kape", "zimmerman", "hayabusa", "generic_csv"} else "unknown")
+    artifact_family = str(artifact_meta.get("artifact_family") or "")
+    if artifact_family.startswith("linux_"):
+        os_type = "linux"
+    else:
+        os_type = artifact_meta.get("os_type", "windows" if artifact_meta.get("parser") in {"velociraptor", "kape", "zimmerman", "hayabusa", "generic_csv"} else "unknown")
     artifact_type = artifact_meta.get("artifact_type") or "unknown"
     source_path = artifact_meta.get("source_path")
+    original_source_path = artifact_meta.get("original_source_path") or source_path
     artifact_name = artifact_meta.get("name") or Path(str(source_path or "")).name or artifact_type
     parser_name = artifact_meta.get("parser")
     ingest_run_id = str(artifact_meta.get("ingest_run_id") or artifact_meta.get("run_id") or "")
@@ -684,13 +693,22 @@ def base_document(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
         "timestamp_precision": precision,
         "timezone": "UTC" if timestamp else None,
         "os": {"type": os_type, "version": None},
-        "host": {"name": host_name, "hostname": host_name, "ip": [], "os": "Windows" if os_type == "windows" else None},
+        "host": {"name": host_name, "hostname": host_name, "ip": [], "os": os_type.capitalize() if os_type in {"windows", "linux", "macos"} else None},
         "user": {"name": user_name if is_valid_username(user_name) else None, "sid": first_value(row, ["SID", "UserSid"])},
         "artifact": {
             "type": artifact_type,
             "name": artifact_name,
             "source_path": source_path,
+            "original_source_path": original_source_path,
             "parser": parser_name,
+        },
+        "evidence_source": {
+            "disk_image_id": artifact_meta.get("disk_image_id"),
+            "disk_volume_id": artifact_meta.get("disk_volume_id"),
+            "os_installation_id": artifact_meta.get("os_installation_id"),
+            "original_path": original_source_path,
+            "logical_source_path": artifact_meta.get("logical_source_path") or source_path,
+            "acquisition_method": artifact_meta.get("acquisition_method"),
         },
         "event": {"category": "unknown", "type": "unknown", "action": artifact_type, "severity": "info", "message": artifact_name},
         "process": {
@@ -1711,7 +1729,7 @@ def _apply_false_positive_reduction(document: dict) -> dict:
         if microsoft_path and (
             _is_microsoft_signed_verified(document)
             or "\\microsoft\\windows\\" in lower_path
-            or (document.get("task", {}) or {}).get("uri", "").startswith("\\Microsoft\\Windows\\")
+                or str((document.get("task", {}) or {}).get("uri") or "").startswith("\\Microsoft\\Windows\\")
         ) and not _is_user_startup_path(path):
             tags.update({"known_good_windows_path", "known_good_microsoft_task"})
             reasons = {
@@ -1877,11 +1895,12 @@ def normalize_row(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
     elif artifact_type == "process" or "pslist" in name:
         document = normalize_process_row(document, row, artifact_meta)
     elif artifact_type in {"network", "wlan", "dns"} or "netstat" in name or {"destinationip", "remoteaddress", "queryname", "recordtype"} & headers:
+        if artifact_type == "network" and parser == "registry":
+            row = classify_network_registry_row(row)
         document = normalize_network_artifact_row(document, row, artifact_meta)
     elif artifact_meta.get("artifact_family", "").startswith("linux_"):
         detected_host = document["host"]["hostname"]
         document = normalize_linux_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
-        return document
     else:
         document = normalize_generic_row(document, row, artifact_meta)
 
@@ -2127,7 +2146,7 @@ def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path,
             ],
         }
         return documents
-    if _looks_like_evtxecmd(path, artifact_meta):
+    if _looks_like_evtxecmd(path, artifact_meta) and not (artifact_type in {"network", "wlan", "dns"} and parser_name in {"evtx", "wlan_evtx", "dns_evtx"}):
         return parse_evtxecmd_file(case_id, evidence_id, artifact_id, path, artifact_meta)
     if _looks_like_pecmd(path, artifact_meta):
         return parse_pecmd_file(case_id, evidence_id, artifact_id, path, artifact_meta)
@@ -2135,7 +2154,7 @@ def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path,
         return parse_jlecmd_file(case_id, evidence_id, artifact_id, path, artifact_meta)
     if _looks_like_lecmd(path, artifact_meta):
         return parse_lecmd_file(case_id, evidence_id, artifact_id, path, artifact_meta)
-    if _looks_like_recmd(path, artifact_meta):
+    if _looks_like_recmd(path, artifact_meta) and not (artifact_type == "network" and parser_name == "registry"):
         return parse_recmd_file(case_id, evidence_id, artifact_id, path, artifact_meta)
     if _looks_like_scheduled_task(path, artifact_meta):
         if looks_like_scheduled_task_xml_path(path) or str(artifact_meta.get("parser") or "").lower() in {"xml", "scheduled_task_xml"}:
@@ -2542,7 +2561,10 @@ def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path,
             ],
         }
         return documents
-    if artifact_meta.get("artifact_type") in {"autoruns", "autorun"} or looks_like_autoruns_artifact(path, list(_csv_headers(path)) if path.suffix.lower() in {".csv", ".tsv"} else None):
+    if artifact_meta.get("artifact_type") in {"autoruns", "autorun"} or (
+        artifact_type != "network"
+        and looks_like_autoruns_artifact(path, list(_csv_headers(path)) if path.suffix.lower() in {".csv", ".tsv"} else None)
+    ):
         parser = str(artifact_meta.get("parser") or "").lower()
         if parser == "startup_folder":
             startup_source_path = str(artifact_meta.get("source_path") or path)
@@ -3812,5 +3834,42 @@ def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path,
             documents.append(_apply_data_quality(document))
         artifact_meta["ingest_audit"] = audit.as_dict(artifact_name=str(artifact_meta.get("name") or path.name))
         return documents
+    artifact_family = str(artifact_meta.get("artifact_family") or "").lower()
+    if artifact_family.startswith("linux_"):
+        parser = str(artifact_meta.get("parser") or "").lower()
+        parser_module = parser.replace("linux_", "").replace("_raw", "")
+        try:
+            import importlib
+            module = importlib.import_module(f"app.ingest.linux.{parser_module}")
+            parse_func = getattr(module, f"parse_{parser_module}", None)
+            if parse_func:
+                text = path.read_text(encoding="utf-8", errors="replace")
+                rows = parse_func(text, source_path=str(artifact_meta.get("source_path") or path))
+                documents = [normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta) for row in rows]
+                artifact_meta["ingest_audit"] = {
+                    "artifact": str(artifact_meta.get("name") or path.name),
+                    "parser": parser,
+                    "records_read": len(rows),
+                    "records_parsed": len(documents),
+                    "events_indexed": len(documents),
+                    "parse_warnings": [],
+                    "bulk_index_errors": 0,
+                }
+                return documents
+        except Exception:
+            pass
+        rows = read_records(path)
+        if rows:
+            return [normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta) for row in rows]
+        artifact_meta["ingest_audit"] = {
+            "artifact": str(artifact_meta.get("name") or path.name),
+            "parser": parser,
+            "records_read": 0,
+            "records_parsed": 0,
+            "events_indexed": 0,
+            "parse_warnings": ["linux_parse_failed"],
+            "bulk_index_errors": 0,
+        }
+        return []
     rows = read_records(path)
     return [normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta) for row in rows]

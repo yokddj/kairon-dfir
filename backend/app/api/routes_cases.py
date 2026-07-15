@@ -11,24 +11,18 @@ from app.analysis.semi_auto import build_case_semi_auto_analysis, render_case_se
 from app.core.activity import log_activity
 from app.core.config import get_settings
 from app.core.database import get_db, utc_now_naive
-from app.core.opensearch import delete_case_index, get_events_index, get_index_health, get_opensearch_client, index_exists, is_index_queryable, resolve_aggregatable_field
-from app.core.storage import case_storage_root, safe_remove
-from app.models.activity import AppActivityEvent
+from app.core.opensearch import get_events_index, get_index_health, get_opensearch_client, index_exists, is_index_queryable, resolve_aggregatable_field
 from app.models.artifact import Artifact
 from app.models.case import Case, CasePriority, CaseStatus
 from app.models.case_analysis_job import CaseAnalysisJob, CaseAnalysisJobStatus
-from app.models.detection_result import DetectionResult
 from app.models.event_marking import EventMarking
 from app.models.evidence import Evidence
 from app.models.finding import Finding
 from app.models.incident_timeline_draft import IncidentTimelineDraft
 from app.models.case_report import CaseReport
 from app.models.case_host import CaseHost
-from app.models.rule import Rule
-from app.models.rule_run import RuleRun
-from app.models.rule_set import RuleSet
-from app.models.tag import Tag
 from app.schemas.debug_export import DebugExportRequest
+from app.services import case_deletion
 from app.services.debug_export import build_execution_story, build_process_tree_bundle, build_process_tree_expansion, build_process_tree_focused, generate_debug_pack
 from app.services.host_attribution import build_host_attribution
 from app.services.host_identity import build_case_host_candidates, get_case_hosts
@@ -644,44 +638,25 @@ def reopen_case(case_id: str, db: Session = Depends(get_db)) -> Case:
 
 @router.delete("/{case_id}")
 def delete_case(case_id: str, db: Session = Depends(get_db)) -> dict:
-    item = db.get(Case, case_id)
-    if not item:
-        raise HTTPException(status_code=404, detail="Case not found")
     try:
-        db.query(AppActivityEvent).filter(AppActivityEvent.case_id == case_id).delete(synchronize_session=False)
-        db.query(DetectionResult).filter(DetectionResult.case_id == case_id).delete(synchronize_session=False)
-        db.query(Finding).filter(Finding.case_id == case_id).delete(synchronize_session=False)
-        db.query(RuleRun).filter(RuleRun.case_id == case_id).delete(synchronize_session=False)
-        db.query(Artifact).filter(Artifact.case_id == case_id).delete(synchronize_session=False)
-        db.query(Evidence).filter(Evidence.case_id == case_id).delete(synchronize_session=False)
-        db.query(Rule).filter(Rule.case_id == case_id).delete(synchronize_session=False)
-        db.query(RuleSet).filter(RuleSet.case_id == case_id).delete(synchronize_session=False)
-        db.query(Tag).filter(Tag.case_id == case_id).delete(synchronize_session=False)
-        db.query(Case).filter(Case.id == case_id).delete(synchronize_session=False)
-        db.commit()
+        result = case_deletion.delete_case(db, case_id)
+    except case_deletion.CaseNotFoundError:
+        raise HTTPException(status_code=404, detail="Case not found") from None
+    except case_deletion.CaseDeletionBlockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except SQLAlchemyError as exc:
-        db.rollback()
-        logger.exception("Could not delete case %s from database", case_id)
         raise HTTPException(status_code=500, detail=f"Could not delete case from database: {exc.__class__.__name__}") from exc
 
     _SUMMARY_CACHE.pop(case_id, None)
-    index_deleted = delete_case_index(case_id)
-    storage_deleted = False
-    cleanup_error = None
-    try:
-        case_root = case_storage_root(case_id)
-        storage_deleted = case_root.exists()
-        safe_remove(case_root)
-    except Exception as exc:  # noqa: BLE001
-        cleanup_error = str(exc)
-        logger.warning("Could not remove storage for case %s: %s", case_id, exc)
     return {
-        "status": "deleted",
-        "case_id": case_id,
+        "status": result.status,
+        "case_id": result.case_id,
         "cleanup": {
-            "index_deleted": index_deleted,
-            "storage_deleted": storage_deleted,
-            "cleanup_error": cleanup_error,
+            "index_deleted": result.index_deleted,
+            "storage_deleted": result.storage_deleted,
+            "reports_removed": result.reports_removed,
+            "snapshots_removed": result.snapshots_removed,
+            "cleanup_errors": result.cleanup_errors,
         },
     }
 

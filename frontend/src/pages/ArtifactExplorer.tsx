@@ -13,6 +13,7 @@ import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { useHostContext } from "../hooks/useHostContext";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
+import { artifactEventView, artifactLabel as artifactViewLabel, artifactOptions, artifactOptionsForPlatforms, canonicalArtifactView } from "../lib/artifactRegistry";
 
 const USER_ACTIVITY_TABS = [
   { value: "shellbag", label: "Shellbags" },
@@ -23,57 +24,6 @@ const USER_ACTIVITY_TABS = [
 ];
 const USER_ACTIVITY_TYPES = new Set(USER_ACTIVITY_TABS.map((item) => item.value));
 const INTERNAL_ARTIFACT_TYPES_HIDDEN_FROM_MAIN = new Set(["registry_persistence"]);
-const ARTIFACT_VIEW_LABELS: Record<string, string> = {
-  amcache: "Amcache",
-  appcompat: "Shimcache",
-  autorun: "Autoruns",
-  autoruns: "Autoruns",
-  browser: "Browser History",
-  cloud_sync: "Cloud Sync",
-  defender: "Defender",
-  email: "Email Artifacts",
-  evtx: "Windows Events",
-  jumplist: "Jump Lists",
-  linux_auth: "Linux Auth",
-  linux_audit: "Linux Audit",
-  linux_cron: "Linux Cron",
-  linux_identity: "Linux Identity",
-  linux_memory: "Linux Memory",
-  linux_network: "Linux Network",
-  linux_os_info: "Linux OS Info",
-  linux_packages: "Linux Packages",
-  linux_shell_history: "Linux Shell History",
-  linux_ssh: "Linux SSH",
-  linux_sudoers: "Linux Sudoers",
-  linux_syslog: "Linux Syslog",
-  linux_systemd: "Linux Systemd",
-  lnk: "LNK / Shortcuts",
-  mft: "MFT / Filesystem",
-  motw: "MOTW / Downloaded Files",
-  network: "Network",
-  powershell: "PowerShell",
-  prefetch: "Prefetch",
-  process: "Process / Execution",
-  recentdocs: "RecentDocs",
-  recycle_bin: "Recycle Bin",
-  registry: "Registry",
-  registry_command: "Registry Commands",
-  registry_event: "Registry Events",
-  scheduled_task: "Scheduled Tasks",
-  scheduled_tasks: "Scheduled Tasks",
-  service: "Services",
-  services: "Services",
-  shellbag: "Shellbags",
-  shimcache: "Shimcache",
-  srum: "SRUM",
-  startup_persistence: "Startup & Persistence",
-  usb: "USB",
-  user_activity: "User Activity",
-  userassist: "UserAssist",
-  windows_event: "Windows Events",
-  wmi: "WMI",
-  zone_identifier: "MOTW / Downloaded Files",
-};
 const EZ_BACKENDS: Record<string, { tool: string; backend: string; note: string }> = {
   lnk: { tool: "LECmd", backend: "lecmd_csv", note: "Lower coverage on HOSTA benchmark, richer target and argument fields." },
   jumplist: { tool: "JLECmd", backend: "jlecmd_csv", note: "Lower coverage on HOSTA benchmark, richer AppId, MRU and target fields." },
@@ -86,14 +36,6 @@ function riskLabel(score: number): string {
   if (score >= 70) return "High";
   if (score >= 40) return "Suspicious";
   return "Low";
-}
-
-function canonicalArtifactView(value: string | null | undefined): string {
-  return value === "registry_persistence" ? "startup_persistence" : (value ?? "");
-}
-
-function artifactViewLabel(value: string): string {
-  return ARTIFACT_VIEW_LABELS[value] ?? value.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
 function StartupPersistenceView({
@@ -661,55 +603,13 @@ export default function ArtifactExplorer() {
   const facetsQuery = useQuery({ queryKey: ["artifact-explorer-facets", caseId], queryFn: () => api.searchFacets({ caseId: caseId || undefined }) });
   const artifactTypeOptions = Object.keys(facetsQuery.data?.["artifact.type"] ?? {});
   const artifactTypeSelectOptions = useMemo(() => {
-    const options = new Set(artifactTypeOptions.filter((option) => !INTERNAL_ARTIFACT_TYPES_HIDDEN_FROM_MAIN.has(option)));
-    options.add("startup_persistence");
-    options.add("scheduled_task");
-    options.add("evtx");
-    options.add("motw");
-    options.add("email");
-    return Array.from(options).sort((left, right) => artifactViewLabel(left).localeCompare(artifactViewLabel(right)));
+    return artifactOptions(
+      artifactTypeOptions.filter((option) => !INTERNAL_ARTIFACT_TYPES_HIDDEN_FROM_MAIN.has(option)),
+      ["startup_persistence", "scheduled_task", "evtx", "motw", "email", ...artifactOptionsForPlatforms(["linux"])],
+    );
   }, [artifactTypeOptions]);
   const artifactNameOptions = Object.keys(facetsQuery.data?.["artifact.name"] ?? {});
-  const view: EventView =
-    artifactType === "mft" || artifactType === "usn"
-      ? "filesystem"
-      : artifactType === "evtx"
-        ? "evtx"
-        : artifactType === "amcache" || artifactType === "shimcache" || artifactType === "appcompat"
-          ? "execution_artifacts"
-        : artifactType === "srum"
-          ? "srum"
-        : artifactType === "defender"
-          ? "defender"
-        : artifactType === "powershell"
-          ? "powershell"
-        : artifactType === "recycle_bin"
-          ? "recycle_bin"
-        : artifactType === "shellbags" || artifactType === "shellbag"
-          ? "shellbags"
-        : artifactType === "jumplist"
-          ? "jumplist"
-        : artifactType === "usb"
-          ? "usb"
-        : artifactType === "bits"
-          ? "bits"
-        : artifactType === "wmi"
-          ? "wmi"
-        : artifactType === "autoruns" || artifactType === "autorun"
-          ? "autoruns"
-        : artifactType === "cloud_sync"
-          ? "cloud_sync"
-        : artifactType === "registry" || artifactType === "registry_event" || artifactType === "registry_command"
-          ? "registry"
-        : artifactType === "browser"
-            ? "browser"
-            : artifactType === "network" || artifactType === "linux_network" || artifactType === "linux_ssh"
-              ? "network"
-              : artifactType === "process" || artifactType === "prefetch" || artifactType === "linux_shell_history"
-                ? "execution"
-                : artifactType === "services" || artifactType === "scheduled_tasks" || artifactType === "scheduled_task" || artifactType === "linux_cron" || artifactType === "linux_systemd" || artifactType === "linux_sudoers"
-                  ? "persistence"
-                  : "auto";
+  const view = artifactEventView(artifactType) as EventView;
   const payload = useMemo(
     () => ({
       case_id: caseId || undefined,
@@ -995,6 +895,22 @@ export default function ArtifactExplorer() {
             )}
             .
           </p>
+        </div>
+        <div className="mt-4 rounded-2xl border border-mint/25 bg-mint/10 p-4" data-testid="linux-artifacts-view">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mint">Linux Artifacts</p>
+              <p className="mt-1 text-sm text-muted">Jump to supported Linux artifact families discovered from Linux collections.</p>
+            </div>
+            <span className="rounded-full border border-mint/30 bg-abyss/60 px-3 py-1 text-xs text-mint">Auto-discovery aware</span>
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {artifactOptionsForPlatforms(["linux"], { shortcutOnly: true }).map((viewName) => (
+              <button key={viewName} type="button" onClick={() => setArtifactType(viewName)} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted hover:border-mint/40 hover:text-mint">
+                {artifactViewLabel(viewName)}
+              </button>
+            ))}
+          </div>
         </div>
         {!caseId ? <p className="mt-2 text-sm text-amber-300">Artifact Views are available after selecting a case.</p> : null}
           {hostFilter || evidenceIdFilter ? (

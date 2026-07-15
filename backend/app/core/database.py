@@ -559,6 +559,14 @@ def _ensure_compatible_schema() -> None:
                       ALTER TYPE casereportstatus ADD VALUE 'cancelled';
                     END IF;
                   END IF;
+                  IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'evidencetype') THEN
+                    IF NOT EXISTS (
+                      SELECT 1 FROM pg_enum
+                      WHERE enumtypid = 'evidencetype'::regtype AND enumlabel = 'disk_image'
+                    ) THEN
+                      ALTER TYPE evidencetype ADD VALUE 'disk_image';
+                    END IF;
+                  END IF;
                   IF EXISTS (SELECT 1 FROM pg_type WHERE typname = 'evidencestoragemode') THEN
                     IF NOT EXISTS (
                       SELECT 1 FROM pg_enum

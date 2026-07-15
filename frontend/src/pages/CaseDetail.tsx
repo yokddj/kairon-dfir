@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type DfirCase } from "../api/client";
 import ArtifactBadge from "../components/ArtifactBadge";
 import CreateFindingDialog from "../components/CreateFindingDialog";
@@ -13,6 +13,7 @@ import ProcessTreePanel from "../components/ProcessTreePanel";
 import Timeline from "../components/Timeline";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useHostContext } from "../hooks/useHostContext";
+import DeleteCaseDialog from "../components/DeleteCaseDialog";
 
 const tabs = ["overview", "evidences", "processing", "artifacts", "artifact_explorer", "search", "process_tree", "investigation_timeline", "detections", "findings", "activity"] as const;
 const tabLabels: Record<(typeof tabs)[number], string> = {
@@ -31,6 +32,7 @@ const tabLabels: Record<(typeof tabs)[number], string> = {
 
 export default function CaseDetail() {
   const { caseId = "" } = useParams();
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { activeCaseId, setActiveCase, caseContext } = useActiveCase();
@@ -46,6 +48,7 @@ export default function CaseDetail() {
   const [findingDialogOpen, setFindingDialogOpen] = useState(false);
   const [debugExportOpen, setDebugExportOpen] = useState(false);
   const [metadataEditorOpen, setMetadataEditorOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editPriority, setEditPriority] = useState("medium");
@@ -236,6 +239,9 @@ export default function CaseDetail() {
           {normalizedCaseStatus === "closed" ? <button onClick={() => caseStatusMutation.mutate("reopen")} className="rounded-full border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Reopen case</button> : <button onClick={() => window.confirm("Close this case? You can reopen it later.") && caseStatusMutation.mutate("close")} className="rounded-full border border-line bg-white/5 px-4 py-2 text-sm text-muted">Close case</button>}
           <button onClick={() => setDebugExportOpen(true)} className="rounded-full border border-line bg-white/5 px-4 py-2 text-sm text-muted">
             Export full case validation pack
+          </button>
+          <button onClick={() => setDeleteDialogOpen(true)} className="rounded-full border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
+            Delete case
           </button>
         </div>
         {caseStatusMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{caseStatusMutation.error.message}</p> : null}
@@ -566,6 +572,21 @@ export default function CaseDetail() {
                       </ol>
                     ) : <p className="mt-3 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">No processing runs yet. This evidence has been uploaded but processing has not started.</p>}
                   </div>
+                  {selectedProcessing.linux_artifacts?.length ? (
+                    <div className="mt-5" data-testid="linux-processing-artifacts">
+                      <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Detected Linux artifacts</p>
+                      <div className="mt-3 overflow-x-auto rounded-2xl border border-line">
+                        <table className="min-w-full text-left text-xs">
+                          <thead className="bg-abyss/70 font-mono uppercase tracking-[0.12em] text-muted"><tr><th className="px-3 py-2">Artifact</th><th className="px-3 py-2">Family</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Records</th></tr></thead>
+                          <tbody className="divide-y divide-line/70">
+                            {selectedProcessing.linux_artifacts.map((artifact) => (
+                              <tr key={`${artifact.family}-${artifact.name}`}><td className="px-3 py-2 text-ink">{artifact.name}</td><td className="px-3 py-2 text-muted">{artifact.family}</td><td className="px-3 py-2 text-muted">{artifact.status}</td><td className="px-3 py-2 text-muted">{artifact.records ?? 0}</td></tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  ) : null}
                   <div className="mt-5">
                     <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Parser-level status</p>
                     {selectedProcessing.parser_runs.length ? (
@@ -795,6 +816,12 @@ export default function CaseDetail() {
             query,
           },
         }}
+      />
+      <DeleteCaseDialog
+        open={deleteDialogOpen}
+        caseItem={caseQuery.data ?? null}
+        onClose={() => setDeleteDialogOpen(false)}
+        onDeleted={() => navigate("/cases")}
       />
     </div>
   );

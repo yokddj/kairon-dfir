@@ -656,6 +656,9 @@ def _artifact_type_values(values: list[str] | None) -> list[str]:
 
 def _build_event_filters(case_id: str, params: dict[str, Any], db: Session | None = None) -> list[dict[str, Any]]:
     filters: list[dict[str, Any]] = [{"term": {"case_id": case_id}}]
+    platform_evidence_ids = _platform_evidence_ids(db, case_id, params.get("platform")) if db else None
+    if platform_evidence_ids is not None:
+        filters.append({"terms": {"evidence_id": platform_evidence_ids or ["__no_matching_evidence__"]}})
     for param_name, field_name in EVENT_TERMS_FILTERS.items():
         values = _dedupe(params.get(param_name))
         if not values:
@@ -794,6 +797,18 @@ def _source_file_filter(field_name: str, value: str) -> dict[str, Any]:
             "minimum_should_match": 1,
         }
     }
+
+
+def _platform_evidence_ids(db: Session | None, case_id: str, platform: Any) -> list[str] | None:
+    value = str(platform or "").strip().lower()
+    if not db or not value:
+        return None
+    rows = (
+        db.query(Evidence.id)
+        .filter(Evidence.case_id == case_id, Evidence.effective_platform == value)
+        .all()
+    )
+    return [str(row[0]) for row in rows]
 
 
 def _missing_host_value(value: Any) -> bool:
@@ -1128,6 +1143,9 @@ def _match_finding(finding: Finding, params: dict[str, Any], normalized_query: s
     if "finding" in _artifact_type_values(_dedupe(params.get("exclude_artifact_type"))):
         return False, 0
     if params.get("evidence_id") and finding.evidence_id != params.get("evidence_id"):
+        return False, 0
+    platform_evidence_ids = _platform_evidence_ids(db, case_id, params.get("platform")) if db else None
+    if platform_evidence_ids is not None and finding.evidence_id not in platform_evidence_ids:
         return False, 0
     if params.get("severity") and str(finding.severity.value) not in _dedupe(params.get("severity")):
         return False, 0
@@ -1745,6 +1763,7 @@ def build_search_v2_params(**kwargs: Any) -> dict[str, Any]:
     params["status"] = _dedupe(kwargs.get("status"))
     params["confidence"] = _dedupe(kwargs.get("confidence"))
     params["finding_type"] = _dedupe(kwargs.get("finding_type"))
+    params["platform"] = str(kwargs.get("platform") or "").strip().lower()
     params["include_highlights"] = kwargs.get("include_highlights", True)
     params["include_facets"] = kwargs.get("include_facets", True)
     params["include_filesystem_timeline"] = bool(kwargs.get("include_filesystem_timeline", False))
