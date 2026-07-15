@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, type DfirCase } from "../api/client";
 import CaseCard from "../components/CaseCard";
+import DeleteCaseDialog from "../components/DeleteCaseDialog";
 
 const statuses = ["active", "closed", "archived", "on_hold"];
 const priorities = ["low", "medium", "high", "critical"];
@@ -34,6 +35,7 @@ export default function Cases() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [editing, setEditing] = useState<DfirCase | null>(null);
+  const [deleting, setDeleting] = useState<DfirCase | null>(null);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editPriority, setEditPriority] = useState("medium");
@@ -160,6 +162,7 @@ export default function Cases() {
                 onUnarchive={(selected) => statusMutation.mutate({ action: "unarchive", item: selected })}
                 onClose={(selected) => window.confirm(`Close case "${selected.name}"? You can reopen it later.`) && statusMutation.mutate({ action: "close", item: selected })}
                 onReopen={(selected) => statusMutation.mutate({ action: "reopen", item: selected })}
+                onDelete={(selected) => setDeleting(selected)}
               />
             ))}
           </div>
@@ -197,6 +200,8 @@ export default function Cases() {
           </div>
         </div>
       ) : null}
+
+      <DeleteCaseDialog open={Boolean(deleting)} caseItem={deleting} onClose={() => setDeleting(null)} />
     </div>
   );
 }

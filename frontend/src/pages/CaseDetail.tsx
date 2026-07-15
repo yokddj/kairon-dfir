@@ -13,7 +13,7 @@ import ProcessTreePanel from "../components/ProcessTreePanel";
 import Timeline from "../components/Timeline";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useHostContext } from "../hooks/useHostContext";
-import { useNotifications } from "../context/NotificationsContext";
+import DeleteCaseDialog from "../components/DeleteCaseDialog";
 
 const tabs = ["overview", "evidences", "processing", "artifacts", "artifact_explorer", "search", "process_tree", "investigation_timeline", "detections", "findings", "activity"] as const;
 const tabLabels: Record<(typeof tabs)[number], string> = {
@@ -33,7 +33,6 @@ const tabLabels: Record<(typeof tabs)[number], string> = {
 export default function CaseDetail() {
   const { caseId = "" } = useParams();
   const navigate = useNavigate();
-  const { notify } = useNotifications();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { activeCaseId, setActiveCase, caseContext } = useActiveCase();
@@ -50,7 +49,6 @@ export default function CaseDetail() {
   const [debugExportOpen, setDebugExportOpen] = useState(false);
   const [metadataEditorOpen, setMetadataEditorOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editPriority, setEditPriority] = useState("medium");
@@ -120,21 +118,6 @@ export default function CaseDetail() {
       void queryClient.invalidateQueries({ queryKey: ["cases"] });
     },
   });
-  const deleteCaseMutation = useMutation({
-    mutationFn: () => api.deleteCase(caseId),
-    onMutate: () => {
-      notify({ title: "Deleting case", description: "The case and its associated resources are being removed.", tone: "warning" });
-    },
-    onSuccess: () => {
-      notify({ title: "Case deleted", description: "The case, its evidence, artifacts and indexes were removed.", tone: "success" });
-      void queryClient.invalidateQueries({ queryKey: ["cases"] });
-      navigate("/cases");
-    },
-    onError: (error) => {
-      notify({ title: "Delete failed", description: error instanceof Error ? error.message : "The case could not be deleted.", tone: "error" });
-    },
-  });
-  const deleteCaseConfirmationValid = deleteConfirmText.trim() === "DELETE";
   useEffect(() => {
     if (caseQuery.data && caseQuery.data.id !== activeCaseId) {
       setActiveCase(caseQuery.data);
@@ -834,41 +817,12 @@ export default function CaseDetail() {
           },
         }}
       />
-      {deleteDialogOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Delete case">
-          <div className="w-full max-w-xl rounded-[28px] border border-danger/40 bg-panel p-6 shadow-panel">
-            <p className="font-mono text-xs uppercase tracking-[0.24em] text-danger">Delete case</p>
-            <h3 className="mt-2 text-2xl font-semibold text-ink">{caseQuery.data?.name || caseId}</h3>
-            <p className="mt-3 text-sm text-muted">
-              This permanently removes the case record, its evidence, artifacts, findings, detections, rules, tags, activity, case access grants, indexed documents and on-disk storage for this case. This cannot be undone.
-            </p>
-            <div className="mt-4 grid gap-2 text-sm text-muted">
-              <p>Evidence count: <span className="text-ink">{caseQuery.data?.evidence_count ?? evidencesQuery.data?.length ?? 0}</span></p>
-              <p>Status: <span className="text-ink">{normalizedCaseStatus || "active"}</span></p>
-            </div>
-            <label className="mt-5 block text-sm text-muted">
-              Type DELETE to confirm.
-              <input
-                value={deleteConfirmText}
-                onChange={(event) => setDeleteConfirmText(event.target.value)}
-                className="mt-2 w-full rounded-2xl border border-line bg-abyss px-4 py-3 font-mono text-sm text-ink outline-none focus:border-danger"
-              />
-            </label>
-            {deleteCaseMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{deleteCaseMutation.error.message}</p> : null}
-            <div className="mt-5 flex flex-wrap justify-end gap-2">
-              <button type="button" onClick={() => { setDeleteDialogOpen(false); setDeleteConfirmText(""); }} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Cancel</button>
-              <button
-                type="button"
-                onClick={() => deleteCaseMutation.mutate()}
-                disabled={!deleteCaseConfirmationValid || deleteCaseMutation.isPending}
-                className="rounded-2xl bg-danger px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
-              >
-                {deleteCaseMutation.isPending ? "Deleting..." : "Delete case"}
-              </button>
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <DeleteCaseDialog
+        open={deleteDialogOpen}
+        caseItem={caseQuery.data ?? null}
+        onClose={() => setDeleteDialogOpen(false)}
+        onDeleted={() => navigate("/cases")}
+      />
     </div>
   );
 }
