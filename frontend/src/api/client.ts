@@ -3595,20 +3595,29 @@ export type UploadOptions = {
   evtxProfile?: EvtxProfile;
 };
 
+export type PreflightWarning = {
+  message: string;
+  severity: "information" | "recommendation";
+};
+
 export type PreflightClassification = {
   category: "disk_image" | "memory_dump" | "archive" | "unknown";
   format_key: string | null;
   confidence: string;
   reason: string;
   chain: string[];
+  container: string | null;
+  contained_object: string | null;
   platform: string;
   hostname: string | null;
   distro: string | null;
   version: string | null;
   volumes: number | null;
+  partitions: number | null;
+  filesystems: string[];
   installations: number | null;
   expected_parsers: string[];
-  warnings: string[];
+  warnings: PreflightWarning[];
 };
 
 export type PreflightResourceCheck = {
@@ -3618,6 +3627,7 @@ export type PreflightResourceCheck = {
   estimated_temp_storage_bytes: number | null;
   estimated_final_size_bytes: number | null;
   estimated_processing_seconds: number | null;
+  estimated_duration_bucket: "fast" | "medium" | "long" | "very_long" | null;
   estimated_artifact_count: number | null;
   detected_archive_depth: number | null;
   detected_backing_chain_depth: number | null;
@@ -3643,6 +3653,7 @@ export type PreflightDiagnostic = {
   configuration_key: string | null;
   configuration_file: string | null;
   how_to_fix: string[];
+  severity: "blocking" | "recommendation";
 };
 
 export type PreflightReport = {
@@ -3654,6 +3665,43 @@ export type PreflightReport = {
   status: "ready" | "warning" | "blocked";
   status_checks: PreflightStatusCheck[];
   diagnostics: PreflightDiagnostic[];
+};
+
+export type IngestionReadinessCheck = {
+  label: string;
+  ok: boolean;
+  detail: string;
+};
+
+export type IngestionReadiness = {
+  checks: IngestionReadinessCheck[];
+  available_disk_space_bytes: number;
+  configured_upload_limit_bytes: number;
+  configured_extraction_limit_bytes: number;
+  ready: boolean;
+  critical_ready: boolean;
+};
+
+export type EvidenceUploadSessionRead = {
+  id: string;
+  case_id: string;
+  status: string;
+  original_filename: string;
+  is_folder: boolean;
+  is_server_path: boolean;
+  size_bytes: number;
+  sha256: string | null;
+  client_sha256: string | null;
+  client_sha256_mismatch: boolean;
+  declared_platform: string | null;
+  expires_at: string;
+  created_at: string;
+};
+
+export type EvidenceUploadSessionCreateResponse = {
+  session: EvidenceUploadSessionRead;
+  preflight: PreflightReport;
+  health: IngestionReadiness | null;
 };
 
 export type RuleRunResult = {
@@ -6266,23 +6314,46 @@ export const api = {
     return uploadFormData<Evidence>(`/cases/${caseId}/disk-images/upload`, formData, { onProgress: options?.onProgress, transport: "xhr" });
   },
   getEvidenceDiskImage: (evidenceId: string) => request<DiskImage>(`/evidences/${evidenceId}/disk-image`),
-  preflightEvidence: async (
+  getIngestionReadiness: (caseId: string) => request<IngestionReadiness>(`/cases/${caseId}/ingestion-readiness`),
+  createEvidenceUploadSession: async (
     caseId: string,
-    input: { file: File } | { files: File[]; folderUpload: true } | { serverPath: string },
-    options?: { declaredPlatform?: EvidencePlatform; onProgress?: (progress: UploadProgress) => void },
+    input: { file: File } | { files: File[]; folderUpload?: boolean } | { serverPath: string },
+    options?: { declaredPlatform?: EvidencePlatform; clientSha256?: string; onProgress?: (progress: UploadProgress) => void },
   ) => {
     const formData = new FormData();
     if ("serverPath" in input) {
       formData.append("server_path", input.serverPath);
-    } else if ("folderUpload" in input) {
+    } else if ("files" in input) {
       input.files.forEach((file) => formData.append("files", file, (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name));
-      formData.append("folder_upload", "true");
+      if (input.folderUpload) formData.append("folder_upload", "true");
     } else {
       formData.append("files", input.file, input.file.name);
     }
     if (options?.declaredPlatform) formData.append("declared_platform", options.declaredPlatform);
-    return uploadFormData<PreflightReport>(`/cases/${caseId}/evidence-preflight`, formData, { onProgress: options?.onProgress, transport: "xhr" });
+    if (options?.clientSha256) formData.append("client_sha256", options.clientSha256);
+    return uploadFormData<EvidenceUploadSessionCreateResponse>(`/cases/${caseId}/evidence-uploads`, formData, { onProgress: options?.onProgress, transport: "xhr" });
   },
+  rerunEvidenceUploadPreflight: (caseId: string, sessionId: string, declaredPlatform?: EvidencePlatform | null) =>
+    request<PreflightReport>(`/cases/${caseId}/evidence-uploads/${sessionId}/preflight`, {
+      method: "POST",
+      body: JSON.stringify({ declared_platform: declaredPlatform ?? null }),
+    }),
+  promoteEvidenceUploadSession: (
+    caseId: string,
+    sessionId: string,
+    payload: {
+      provided_platform?: string | null;
+      host_id?: string | null;
+      provided_host?: string | null;
+      evtx_profile?: EvtxProfile | null;
+      memory_authorization_acknowledged?: boolean;
+      folder_name?: string | null;
+      labels?: string[];
+      notes?: string | null;
+    },
+  ) => request<Evidence>(`/cases/${caseId}/evidence-uploads/${sessionId}/promote`, { method: "POST", body: JSON.stringify(payload) }),
+  cancelEvidenceUploadSession: (caseId: string, sessionId: string) =>
+    request<{ status: string; session_id: string }>(`/cases/${caseId}/evidence-uploads/${sessionId}`, { method: "DELETE" }),
   discoverVelociraptorZip: async (caseId: string, file: File, options?: UploadOptions) => {
     const formData = new FormData();
     formData.append("file", file);
