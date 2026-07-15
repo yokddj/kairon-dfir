@@ -30,6 +30,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import logging
 import re
+from pathlib import Path
 
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
@@ -51,6 +52,7 @@ from app.models.detection_result import DetectionResult
 from app.models.disk_image import DiskImage, DiskVolume, OSInstallation
 from app.models.event_marking import EventMarking
 from app.models.evidence import Evidence, IngestStatus
+from app.models.evidence_upload_session import EvidenceUploadSession
 from app.models.finding import Finding
 from app.models.incident_timeline_draft import IncidentTimelineDraft
 from app.models.memory import (
@@ -192,6 +194,12 @@ def delete_case(db: Session, case_id: str) -> CaseDeletionResult:
         .all()
     ]
     report_ids = [row.id for row in db.query(CaseReport.id).filter(CaseReport.case_id == case_id).all()]
+    upload_session_staged_paths = [
+        (row.staged_path, row.is_server_path)
+        for row in db.query(EvidenceUploadSession.staged_path, EvidenceUploadSession.is_server_path)
+        .filter(EvidenceUploadSession.case_id == case_id, EvidenceUploadSession.status == "staged")
+        .all()
+    ]
 
     try:
         # Transitive-only tables (children before the parents they hang off).
@@ -243,6 +251,7 @@ def delete_case(db: Session, case_id: str) -> CaseDeletionResult:
         db.query(RuleImportRun).filter(RuleImportRun.case_id == case_id).delete(synchronize_session=False)
         db.query(Tag).filter(Tag.case_id == case_id).delete(synchronize_session=False)
         db.query(CaseAccess).filter(CaseAccess.case_id == case_id).delete(synchronize_session=False)
+        db.query(EvidenceUploadSession).filter(EvidenceUploadSession.case_id == case_id).delete(synchronize_session=False)
         db.query(Case).filter(Case.id == case_id).delete(synchronize_session=False)
         db.commit()
     except SQLAlchemyError:
@@ -283,5 +292,16 @@ def delete_case(db: Session, case_id: str) -> CaseDeletionResult:
     except Exception as exc:  # noqa: BLE001
         result.cleanup_errors.append(f"rule library snapshot cleanup failed: {exc}")
         logger.warning("Could not remove rule library snapshots for case %s: %s", case_id, exc)
+
+    for staged_path, is_server_path in upload_session_staged_paths:
+        if is_server_path:
+            continue  # never touch the analyst's own file - it was never copied
+        try:
+            path = Path(staged_path)
+            if path.exists():
+                safe_remove(path)
+        except Exception as exc:  # noqa: BLE001
+            result.cleanup_errors.append(f"upload session cleanup failed: {exc}")
+            logger.warning("Could not remove staged upload session file for case %s: %s", case_id, exc)
 
     return result

@@ -43,6 +43,7 @@ from app.schemas.evidence_preflight import (
     PreflightReport,
     PreflightResourceCheck,
     PreflightStatusCheck,
+    PreflightWarning,
 )
 
 # Rough throughput assumption for the processing-time estimate. There is no
@@ -189,6 +190,38 @@ def _inspect_archive_or_folder(path: Path, *, declared_platform: str | None, tmp
     }
 
 
+_BLOCKING_CHECK_LABELS = {
+    "Supported",
+    "Within upload limit",
+    "Enough storage",
+    "Within extraction limit",
+    "Within nested archive depth",
+    "Within virtual disk chain limit",
+}
+
+_CONTAINER_LABELS = {"zip": "ZIP archive", "7z": "7-Zip archive", "directory": "Folder"}
+
+
+def _duration_bucket(seconds: int | None) -> str | None:
+    """Honest, conservative estimate bucket - never implies false progress."""
+    if seconds is None:
+        return None
+    if seconds < 120:
+        return "fast"
+    if seconds < 1200:
+        return "medium"
+    if seconds < 7200:
+        return "long"
+    return "very_long"
+
+
+def _classify_warning(message: str) -> PreflightWarning:
+    lowered = message.lower()
+    if any(word in lowered for word in ("fail", "error", "could not", "unreadable", "encrypted")):
+        return PreflightWarning(message=message, severity="recommendation")
+    return PreflightWarning(message=message, severity="information")
+
+
 def _resolve_upload_limit(category: str) -> int:
     settings = get_settings()
     if category == EvidenceCategory.MEMORY_DUMP.value:
@@ -227,7 +260,10 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
     chain: list[str] = []
     platform = declared_platform or EvidencePlatform.unknown.value
     hostname = distro = version = None
-    volumes_count = installations_count = None
+    volumes_count = installations_count = partitions_count = None
+    container_label: str | None = None
+    contained_object: str | None = None
+    filesystems: list[str] = []
     expected_parsers: list[str] = []
     estimated_extracted_bytes: int | None = None
     estimated_temp_storage_bytes: int | None = None
@@ -257,6 +293,11 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
             chain.append(f"{platform.title()}" if platform not in {EvidencePlatform.unknown.value, EvidencePlatform.mixed.value} else "Unknown platform")
             if info["container_type"] != "directory":
                 chain[0] = "Archive"
+            container_label = _CONTAINER_LABELS.get(info["container_type"], info["container_type"])
+            if platform not in {EvidencePlatform.unknown.value, EvidencePlatform.mixed.value}:
+                contained_object = f"{distro or platform.title()} artifact collection ({info['expected_artifact_count']} matched file(s))"
+            else:
+                contained_object = f"Unclassified file collection ({info['entry_count']} file(s))"
         classification_category_value = "archive"
         pipeline_preview = [
             "Archive" if not is_directory else "Folder",
@@ -281,7 +322,9 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
             volumes = result.get("volumes") or []
             installs = result.get("installations") or []
             volumes_count = len(volumes)
+            partitions_count = volumes_count
             installations_count = len(installs)
+            filesystems = list(dict.fromkeys(v["filesystem_type"] for v in volumes if v.get("filesystem_type")))
             estimated_extracted_bytes = sum(int(v.get("length_bytes") or 0) for v in volumes)
             estimated_temp_storage_bytes = estimated_extracted_bytes if format_key != "raw" else 0
             if installs:
@@ -294,6 +337,11 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
             expected_parsers = sorted({e["label"] for e in registry_entries})
             estimated_artifact_count = len(expected_parsers)
             warnings.extend(result.get("warnings") or [])
+            container_label = f"{(format_key or 'disk').upper()} disk image"
+            if installs:
+                contained_object = f"{installations_count} OS installation(s) across {volumes_count} volume(s)"
+            else:
+                contained_object = f"{volumes_count} volume(s), no OS installation detected"
         classification_category_value = "disk_image"
         pipeline_preview = [
             "Archive" if is_supported_archive_container(path) else "Disk Image",
@@ -313,6 +361,8 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
         estimated_temp_storage_bytes = file_size
         expected_parsers = []
         classification_category_value = "memory_dump"
+        container_label = "Raw memory capture"
+        contained_object = "Memory dump"
         pipeline_preview = [
             "Memory Dump",
             "Evidence Classification",
@@ -339,6 +389,7 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
         estimated_temp_storage_bytes=estimated_temp_storage_bytes,
         estimated_final_size_bytes=estimated_final_size_bytes,
         estimated_processing_seconds=estimated_seconds,
+        estimated_duration_bucket=_duration_bucket(estimated_seconds),
         estimated_artifact_count=estimated_artifact_count,
         detected_archive_depth=detected_archive_depth,
         detected_backing_chain_depth=detected_backing_chain_depth,
@@ -462,6 +513,7 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
             problem="Low confidence classification",
             reason="We could not confidently determine the evidence type. You can continue with a manual override.",
             how_to_fix=["Use the Advanced options override to set platform/classification manually"],
+            severity="recommendation",
         ))
 
     if any(not check.ok for check in status_checks if check.label in {"Supported", "Within upload limit", "Enough storage", "Within extraction limit", "Within nested archive depth", "Within virtual disk chain limit"}):
@@ -477,14 +529,18 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
         confidence=classification_confidence,
         reason=classification_reason,
         chain=chain,
+        container=container_label,
+        contained_object=contained_object,
         platform=platform,
         hostname=hostname,
         distro=distro,
         version=version,
         volumes=volumes_count,
+        partitions=partitions_count,
+        filesystems=filesystems,
         installations=installations_count,
         expected_parsers=expected_parsers,
-        warnings=warnings,
+        warnings=[_classify_warning(message) for message in warnings],
     )
 
     return PreflightReport(

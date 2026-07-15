@@ -331,6 +331,37 @@ def test_delete_case_with_reports_removes_db_row_and_files(monkeypatch, tmp_path
     assert not report_dir.exists(), "report directory must be removed, not just the DB row"
 
 
+def test_delete_case_with_staged_upload_session_removes_row_and_staged_file(monkeypatch, tmp_path):
+    from app.core.config import get_settings
+    from app.models.evidence_upload_session import EvidenceUploadSession
+
+    monkeypatch.setattr(case_deletion, "delete_case_index", lambda case_id: True)
+    monkeypatch.setattr(case_deletion, "delete_case_memory_indices", lambda case_id: {"memory": True, "memory_experimental": True})
+    settings = get_settings()
+    monkeypatch.setattr(settings, "backend_data_dir", tmp_path)
+    db = _db()
+    _case(db)
+    staged_dir = tmp_path / "evidence-upload-sessions" / "session-1"
+    staged_dir.mkdir(parents=True)
+    staged_file = staged_dir / "collection.zip"
+    staged_file.write_bytes(b"fake zip bytes")
+    from datetime import datetime, timedelta, timezone
+    db.add(EvidenceUploadSession(
+        id="90000000-0000-4000-8000-000000000099", case_id=CASE_ID, status="staged",
+        original_filename="collection.zip", staged_path=str(staged_file), is_folder=False, is_server_path=False,
+        size_bytes=14, sha256="a" * 64, expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    ))
+    db.commit()
+    assert staged_file.exists()
+    client = _client(db)
+
+    response = client.delete(f"/api/cases/{CASE_ID}")
+
+    assert response.status_code == 200
+    assert db.query(EvidenceUploadSession).filter(EvidenceUploadSession.case_id == CASE_ID).count() == 0
+    assert not staged_file.exists(), "staged upload bytes must be cleaned up, not just the DB row"
+
+
 def test_delete_case_with_artifacts(monkeypatch):
     monkeypatch.setattr(case_deletion, "delete_case_index", lambda case_id: True)
     monkeypatch.setattr(case_deletion, "delete_case_memory_indices", lambda case_id: {"memory": True, "memory_experimental": True})
