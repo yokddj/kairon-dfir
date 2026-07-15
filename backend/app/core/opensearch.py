@@ -2140,16 +2140,34 @@ def delete_events_by_evidence(evidence_id: str, case_id: str) -> int:
         return 0
 
 
-def delete_case_index(case_id: str) -> bool:
-    client = get_opensearch_client()
-    index = get_events_index(case_id)
+def _delete_index_if_exists(client: OpenSearch, index: str) -> bool:
     if not index_exists(client, index):
-        logger.info("Case index %s does not exist while deleting case %s", index, case_id)
+        logger.info("Index %s does not exist while deleting", index)
         return False
     try:
         client.indices.delete(index=index, params={"ignore_unavailable": "true"})
-        logger.info("Deleted OpenSearch index %s for case %s", index, case_id)
+        logger.info("Deleted OpenSearch index %s", index)
         return True
     except Exception as exc:  # noqa: BLE001
-        logger.warning("Could not delete OpenSearch index %s for case %s: %s", index, case_id, exc)
+        logger.warning("Could not delete OpenSearch index %s: %s", index, exc)
         return False
+
+
+def delete_case_index(case_id: str) -> bool:
+    client = get_opensearch_client()
+    return _delete_index_if_exists(client, get_events_index(case_id))
+
+
+def delete_case_memory_indices(case_id: str) -> dict[str, bool]:
+    """Delete the per-case memory and memory-experimental indices.
+
+    These are separate index patterns from the main events index (see
+    get_memory_index / get_memory_experimental_index) and were not covered
+    by delete_case_index, leaving orphaned memory documents behind when a
+    case was deleted.
+    """
+    client = get_opensearch_client()
+    return {
+        "memory": _delete_index_if_exists(client, get_memory_index(case_id)),
+        "memory_experimental": _delete_index_if_exists(client, get_memory_experimental_index(case_id)),
+    }

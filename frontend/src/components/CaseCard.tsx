@@ -9,6 +9,7 @@ type Props = {
   onUnarchive?: (item: DfirCase) => void;
   onClose?: (item: DfirCase) => void;
   onReopen?: (item: DfirCase) => void;
+  onDelete?: (item: DfirCase) => void;
 };
 
 function processingLabel(summary: Record<string, number> | undefined): string {
@@ -17,7 +18,7 @@ function processingLabel(summary: Record<string, number> | undefined): string {
   return entries.map(([status, count]) => `${count} ${status}`).join(" · ");
 }
 
-export default function CaseCard({ item, onEdit, onArchive, onUnarchive, onClose, onReopen }: Props) {
+export default function CaseCard({ item, onEdit, onArchive, onUnarchive, onClose, onReopen, onDelete }: Props) {
   const { setActiveCase } = useActiveCase();
   const status = item.status === "open" ? "active" : item.status;
 
@@ -48,6 +49,7 @@ export default function CaseCard({ item, onEdit, onArchive, onUnarchive, onClose
         {onEdit ? <button type="button" onClick={() => onEdit(item)} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Edit case</button> : null}
         {status === "archived" ? <button type="button" onClick={() => onUnarchive?.(item)} className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">Unarchive</button> : <button type="button" onClick={() => onArchive?.(item)} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Archive</button>}
         {status === "closed" ? <button type="button" onClick={() => onReopen?.(item)} className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">Reopen</button> : <button type="button" onClick={() => onClose?.(item)} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Close</button>}
+        {onDelete ? <button type="button" onClick={() => onDelete(item)} className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-xs text-danger">Delete</button> : null}
       </div>
     </div>
   );

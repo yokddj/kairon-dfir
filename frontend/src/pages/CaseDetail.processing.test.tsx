@@ -205,29 +205,29 @@ describe("CaseDetail Processing Queue", () => {
     await waitFor(() => expect(closeCaseMock).toHaveBeenCalledWith("case-1"));
   });
 
-  it("requires typing DELETE before the delete case action is enabled", async () => {
+  it("requires typing the exact case name before the delete case action is enabled", async () => {
     renderPage();
     await screen.findByRole("heading", { name: "Queue Case" });
 
     await userEvent.click(screen.getByRole("button", { name: /Delete case/i }));
-    const dialog = await screen.findByRole("dialog", { name: /Delete case/i });
-    const confirmButton = within(dialog).getByRole("button", { name: /^Delete case$/ });
+    const dialog = await screen.findByRole("dialog", { name: "Delete Case" });
+    const confirmButton = within(dialog).getByRole("button", { name: "Delete Case" });
     expect(confirmButton).toBeDisabled();
 
-    await userEvent.type(within(dialog).getByRole("textbox"), "nope");
+    await userEvent.type(within(dialog).getByRole("textbox"), "Queue Cas");
     expect(confirmButton).toBeDisabled();
     expect(deleteCaseMock).not.toHaveBeenCalled();
   });
 
-  it("deletes the case once DELETE is typed and confirmed", async () => {
-    deleteCaseMock.mockResolvedValue({ status: "deleted", case_id: "case-1", cleanup: { index_deleted: true, storage_deleted: true, cleanup_error: null } });
+  it("deletes the case once its exact name is typed and confirmed", async () => {
+    deleteCaseMock.mockResolvedValue({ status: "deleted", case_id: "case-1", cleanup: {} });
     renderPage();
     await screen.findByRole("heading", { name: "Queue Case" });
 
     await userEvent.click(screen.getByRole("button", { name: /Delete case/i }));
-    const dialog = await screen.findByRole("dialog", { name: /Delete case/i });
-    await userEvent.type(within(dialog).getByRole("textbox"), "DELETE");
-    await userEvent.click(within(dialog).getByRole("button", { name: /^Delete case$/ }));
+    const dialog = await screen.findByRole("dialog", { name: "Delete Case" });
+    await userEvent.type(within(dialog).getByRole("textbox"), "Queue Case");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Delete Case" }));
 
     await waitFor(() => expect(deleteCaseMock).toHaveBeenCalledWith("case-1"));
   });

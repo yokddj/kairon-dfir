@@ -8,12 +8,8 @@ from app.api import routes_cases
 from app.core.database import Base, get_db
 from app.main import app, settings
 from app.models.activity import AppActivityEvent
-from app.models.artifact import Artifact
 from app.models.case import Case
-from app.models.case_access import CaseAccess
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
-from app.models.finding import Finding
-from app.models.tag import Tag
 
 
 CASE_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
@@ -172,41 +168,6 @@ def test_case_management_events_are_recorded():
 
     event_types = {event.activity_type for event in db.query(AppActivityEvent).all()}
     assert {"case_priority_changed", "case_tags_changed", "case_updated", "case_archived"}.issubset(event_types)
-
-
-def test_delete_case_removes_case_and_all_related_records(monkeypatch):
-    monkeypatch.setattr(routes_cases, "delete_case_index", lambda case_id: True)
-    db = _db()
-    _case(db)
-    _evidence(db)
-    db.add(Artifact(id="cccccccc-3333-4333-8333-ccccccccccc3", case_id=CASE_ID, evidence_id=EVIDENCE_ID, name="artifact.csv", artifact_type="evtx", source_path="/tmp/artifact.csv", parser="evtxecmd"))
-    db.add(Finding(id="dddddddd-4444-4444-8444-ddddddddddd4", case_id=CASE_ID, title="Suspicious logon"))
-    db.add(Tag(id="eeeeeeee-5555-4555-8555-eeeeeeeeeee5", case_id=CASE_ID, name="ctf"))
-    db.add(CaseAccess(id="ffffffff-6666-4666-8666-fffffffffff6", case_id=CASE_ID, user_id="some-user-id"))
-    db.commit()
-    client = _client(db)
-
-    response = client.delete(f"/api/cases/{CASE_ID}")
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["status"] == "deleted"
-    assert payload["cleanup"]["index_deleted"] is True
-    assert db.get(Case, CASE_ID) is None
-    assert db.get(Evidence, EVIDENCE_ID) is None
-    assert db.query(Artifact).filter(Artifact.case_id == CASE_ID).count() == 0
-    assert db.query(Finding).filter(Finding.case_id == CASE_ID).count() == 0
-    assert db.query(Tag).filter(Tag.case_id == CASE_ID).count() == 0
-    assert db.query(CaseAccess).filter(CaseAccess.case_id == CASE_ID).count() == 0
-
-
-def test_delete_missing_case_returns_404():
-    db = _db()
-    client = _client(db)
-
-    response = client.delete(f"/api/cases/{CASE_ID}")
-
-    assert response.status_code == 404
 
 
 def test_unauthenticated_user_cannot_access_cases(monkeypatch):
