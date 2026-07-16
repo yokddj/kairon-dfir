@@ -1760,6 +1760,7 @@ def normalize_row(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
     artifact_path = Path(artifact_name)
     name = artifact_name.lower()
     artifact_type = str(artifact_meta["artifact_type"]).lower()
+    artifact_family = str(artifact_meta.get("artifact_family") or "").lower()
     parser = str(artifact_meta.get("parser") or "").lower()
     source_tool = str(artifact_meta.get("source_tool") or "").lower()
     source_format = str(artifact_meta.get("source_format") or "").lower()
@@ -1878,6 +1879,9 @@ def normalize_row(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
         document = normalize_ntfs_row(document, row, artifact_meta)
     elif artifact_type == "wmi" or _looks_like_wmi(artifact_path, artifact_meta):
         document = normalize_wmi_row(document, row, artifact_meta)
+    elif artifact_family.startswith("linux_"):
+        detected_host = document["host"]["hostname"]
+        document = normalize_linux_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
     elif artifact_type not in {"network", "wlan", "dns"} and (artifact_type in {"defender", "detection"} or looks_like_defender_artifact(artifact_path, list(row.keys()))):
         document = normalize_defender_row(document, row, artifact_meta)
     elif looks_like_autoruns_artifact(artifact_path, list(row.keys())):
@@ -1898,9 +1902,6 @@ def normalize_row(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
         if artifact_type == "network" and parser == "registry":
             row = classify_network_registry_row(row)
         document = normalize_network_artifact_row(document, row, artifact_meta)
-    elif artifact_meta.get("artifact_family", "").startswith("linux_"):
-        detected_host = document["host"]["hostname"]
-        document = normalize_linux_row(document, row, source_path=source_path, artifact_type=artifact_type, detected_host=detected_host)
     else:
         document = normalize_generic_row(document, row, artifact_meta)
 
