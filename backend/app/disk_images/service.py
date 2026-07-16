@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import hashlib
+import fnmatch
+from functools import lru_cache
 import json
 from pathlib import Path
 import shutil
@@ -16,8 +18,11 @@ from app.core.artifact_registry import artifact_registry_entry
 from app.core.config import get_settings
 from app.core.storage import sanitize_relative_path
 from app.disk_images.registry import ewf_series_members, get_image_format_registry
+from app.ingest.linux.helpers import looks_like_linux_artifact
+from app.ingest.linux.os_detection import detect_linux_release
 from app.models.disk_image import DiskImage, DiskVolume, OSInstallation
 from app.models.evidence import Evidence, EvidencePlatform
+from app.services.parser_registry import get_parser_registry
 
 
 settings = get_settings()
@@ -178,25 +183,34 @@ def _detect_installations(fs_info: pytsk3.FS_Info, volume_id: str) -> list[dict[
                 "detection_reasons": windows_markers,
             }
         )
-    os_release = _read_small_file(fs_info, "/etc/os-release")
+    release_markers = {
+        path: _read_small_file(fs_info, path)
+        for path in (
+            "/etc/os-release",
+            "/usr/lib/os-release",
+            "/etc/lsb-release",
+            "/etc/issue",
+            "/etc/debian_version",
+            "/etc/redhat-release",
+            "/etc/centos-release",
+            "/etc/fedora-release",
+            "/etc/arch-release",
+        )
+    }
+    os_release = release_markers["/etc/os-release"] or release_markers["/usr/lib/os-release"]
     if os_release or sum(1 for marker in linux_markers if _exists(fs_info, marker)) >= 3:
-        hostname = _read_small_file(fs_info, "/etc/hostname", limit=4096).splitlines()[0].strip() if _read_small_file(fs_info, "/etc/hostname", limit=4096) else None
-        distro = None
-        version = None
-        for line in os_release.splitlines():
-            if line.startswith("PRETTY_NAME="):
-                distro = line.split("=", 1)[1].strip().strip('"')
-                version = distro
-                break
+        hostname_content = _read_small_file(fs_info, "/etc/hostname", limit=4096)
+        hostname = hostname_content.splitlines()[0].strip() if hostname_content else None
+        release = detect_linux_release(release_markers)
         installations.append(
             {
                 "platform": EvidencePlatform.linux.value,
                 "hostname": hostname,
-                "version": version,
-                "distro": distro,
+                "version": release.version,
+                "distro": release.distribution,
                 "root_path": "/",
-                "confidence": "high" if os_release else "medium",
-                "detection_reasons": [marker for marker in linux_markers if _exists(fs_info, marker)],
+                "confidence": release.confidence if release.distribution else ("high" if os_release else "medium"),
+                "detection_reasons": release.reasons + [marker for marker in linux_markers if _exists(fs_info, marker)],
             }
         )
     return installations
@@ -224,28 +238,48 @@ def _iter_directory(fs_info: pytsk3.FS_Info, directory_path: str, *, depth: int,
             yield from _iter_directory(fs_info, full_path, depth=depth + 1, max_depth=max_depth)
 
 
+_LINUX_DISK_EXTRA_SOURCE_PATTERNS = (
+    "*/usr/lib/os-release",
+    "*/etc/lsb-release",
+    "*/etc/debian_version",
+    "*/etc/issue",
+    "*/var/log/apt/term.log*",
+    "*/var/lib/dpkg/status",
+    "*/var/lib/snapd/*",
+)
+
+
+@lru_cache(maxsize=1)
+def _registry_source_patterns() -> tuple[str, ...]:
+    patterns: list[str] = []
+    for entry in get_parser_registry().values():
+        if str(entry.get("artifact_type") or "").startswith("linux_"):
+            patterns.extend(str(pattern) for pattern in entry.get("source_patterns") or [])
+    patterns.extend(_LINUX_DISK_EXTRA_SOURCE_PATTERNS)
+    return tuple(dict.fromkeys(patterns))
+
+
+def _matches_source_pattern(path: str, pattern: str) -> bool:
+    normalized = "/" + path.replace("\\", "/").lstrip("/")
+    return fnmatch.fnmatch(normalized.lower(), pattern.lower())
+
+
 def _should_materialize(path: str) -> bool:
     lower_path = path.lower()
-    patterns = (
+    if looks_like_linux_artifact(path):
+        return True
+    if any(_matches_source_pattern(path, pattern) for pattern in _registry_source_patterns()):
+        return True
+    legacy_patterns = (
         "/windows/system32/config/system",
         "/windows/system32/config/software",
         "/windows/system32/winevt/logs/",
         "/users/",
         "/programdata/",
-        "/etc/passwd",
-        "/etc/group",
-        "/etc/shadow",
-        "/etc/sudoers",
-        "/etc/cron",
-        "/etc/systemd/",
-        "/lib/systemd/",
-        "/var/log/",
-        "/home/",
-        "/root/",
         "hostnamectl.txt",
         "/logs/journal",
     )
-    return any(pattern in lower_path for pattern in patterns)
+    return any(pattern in lower_path for pattern in legacy_patterns)
 
 
 def _materialize_volume_installation(
@@ -265,6 +299,9 @@ def _materialize_volume_installation(
     file_count = 0
     bytes_written = 0
     for full_path, entry, is_dir in _iter_directory(fs_info, install.root_path, depth=0, max_depth=settings.disk_image_max_directory_depth):
+        meta = getattr(entry.info, "meta", None)
+        if meta and meta.type != pytsk3.TSK_FS_META_TYPE_REG:
+            continue
         if is_dir or not _should_materialize(full_path):
             continue
         file_count += 1
@@ -283,7 +320,6 @@ def _materialize_volume_installation(
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             file_obj = fs_info.open(full_path)
-            meta = getattr(entry.info, "meta", None)
             size = int(getattr(meta, "size", 0) or 0)
             data = file_obj.read_random(0, size)
         except Exception:
