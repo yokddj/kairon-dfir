@@ -43,7 +43,7 @@ def detect_linux_release(markers: dict[str, str]) -> LinuxReleaseDetection:
         if id_like:
             reasons.append(f"{path}:ID_LIKE={' '.join(id_like)}")
         if distro_id == "ubuntu":
-            return LinuxReleaseDetection("Ubuntu", version, "high", reasons, values)
+            return LinuxReleaseDetection(pretty or "Ubuntu", version, "high", reasons, values)
         if distro_id == "debian":
             return LinuxReleaseDetection(pretty or "Debian", version, "high", reasons, values)
         if name:
@@ -56,7 +56,7 @@ def detect_linux_release(markers: dict[str, str]) -> LinuxReleaseDetection:
         version = lsb_values.get("DISTRIB_RELEASE") or description
         reasons.append(f"/etc/lsb-release:DISTRIB_ID={distro_id or 'unknown'}")
         if distro_id.lower() == "ubuntu":
-            return LinuxReleaseDetection("Ubuntu", version, "high", reasons, lsb_values)
+            return LinuxReleaseDetection(description or "Ubuntu", version, "high", reasons, lsb_values)
         return LinuxReleaseDetection(description or distro_id or None, version, "medium", reasons, lsb_values)
 
     for path, distro in (("/etc/redhat-release", None), ("/etc/centos-release", "CentOS"), ("/etc/fedora-release", "Fedora"), ("/etc/arch-release", "Arch Linux")):
