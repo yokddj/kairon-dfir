@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from app.ingest.linux.helpers import looks_like_linux_artifact
+from app.ingest.linux.os_detection import detect_linux_release
 
 
 SUPPORTED_ARTIFACTS: dict[str, dict[str, str]] = {
@@ -82,14 +83,14 @@ def _artifact_key(family: str, artifact_type: str, path: str) -> str:
     return artifact_type or family
 
 
-def _parse_os_release(content: str) -> str | None:
-    values: dict[str, str] = {}
-    for line in content.splitlines():
-        if "=" not in line or line.lstrip().startswith("#"):
-            continue
-        key, value = line.split("=", 1)
-        values[key.strip()] = value.strip().strip('"')
-    return values.get("PRETTY_NAME") or values.get("NAME")
+def _parse_linux_release(root: Path, paths: list[str]) -> tuple[str | None, list[str]]:
+    markers: dict[str, str] = {}
+    for marker in ("/etc/os-release", "/usr/lib/os-release", "/etc/lsb-release", "/etc/issue", "/etc/debian_version"):
+        rel = marker.lstrip("/")
+        source = next((path for path in paths if path.lower().endswith(rel.lower())), None)
+        markers[marker] = _read_text(root, source) if source else ""
+    detection = detect_linux_release(markers)
+    return detection.distribution, detection.reasons
 
 
 def _parse_kernel(content: str, paths: list[str]) -> str | None:
@@ -166,12 +167,11 @@ def build_linux_inventory(root: Path, extracted_files: list[str]) -> dict[str, A
             if pattern.search(rel_path):
                 unsupported.append({"key": label.lower().replace(" ", "_"), "label": label, "source_path": rel_path, "status": "unsupported", "supported": False, "reason": reason})
 
-    os_release_path = next((path for path in paths if path.lower().endswith("os-release")), None)
     hostname_path = next((path for path in paths if path.lower().endswith("/etc/hostname") or path.lower() == "etc/hostname" or path.lower().endswith("/hostname")), None)
     hostnamectl_path = next((path for path in paths if "hostnamectl" in Path(path).name.lower()), None)
     proc_version_path = next((path for path in paths if path.lower().endswith("/proc/version") or path.lower() == "proc/version"), None)
 
-    distribution = _parse_os_release(_read_text(root, os_release_path)) if os_release_path else None
+    distribution, distribution_reasons = _parse_linux_release(root, paths)
     hostname = None
     if hostname_path:
         hostname = next((line.strip() for line in _read_text(root, hostname_path, limit=4096).splitlines() if line.strip() and not line.strip().startswith("#")), None)
@@ -187,7 +187,7 @@ def build_linux_inventory(root: Path, extracted_files: list[str]) -> dict[str, A
         return None
 
     not_detected = [
-        {"key": key, "label": spec["label"], "family": spec["family"], "status": "not_found", "supported": True}
+        {"key": key, "label": spec["label"], "family": spec["family"], "status": "not_inspected", "supported": True}
         for key, spec in SUPPORTED_ARTIFACTS.items()
         if key not in detected_by_key
     ]
@@ -203,6 +203,7 @@ def build_linux_inventory(root: Path, extracted_files: list[str]) -> dict[str, A
     return {
         "platform": "linux",
         "distribution": distribution,
+        "distribution_reasons": distribution_reasons,
         "hostname": hostname,
         "kernel": kernel,
         "users": users,
@@ -218,9 +219,9 @@ def build_linux_inventory(root: Path, extracted_files: list[str]) -> dict[str, A
             "coverage_percent": coverage_percent,
         },
         "processing": [
-            {"name": item["label"], "family": item["family"], "status": "Detected", "paths": item.get("paths", [])}
+            {"name": item["label"], "family": item["family"], "status": "Detected", "paths": item.get("paths", []), "source_count": len(item.get("paths", []))}
             for item in detected
         ]
-        + [{"name": item["label"], "family": item["key"], "status": "Unsupported", "paths": [item.get("source_path")]} for item in unsupported]
-        + [{"name": item["label"], "family": item["key"], "status": "Not found", "paths": []} for item in not_detected],
+        + [{"name": item["label"], "family": item["key"], "status": "Unsupported", "paths": [item.get("source_path")], "source_count": 1} for item in unsupported]
+        + [{"name": item["label"], "family": item["key"], "status": "Not inspected", "paths": [], "source_count": 0} for item in not_detected],
     }

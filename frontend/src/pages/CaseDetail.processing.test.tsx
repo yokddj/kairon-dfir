@@ -161,6 +161,32 @@ describe("CaseDetail Processing Queue", () => {
     expect(within(failedRow).getByRole("link", { name: /Open evidence/i })).toHaveAttribute("href", "/evidences/ev-failed");
   });
 
+  it("shows Linux source counts separately from parsed event counts", async () => {
+    getCaseProcessingMock.mockResolvedValueOnce(processingFixture({
+      items: [item({
+        evidence_id: "ev-linux",
+        filename: "ubuntu-disk.zip",
+        host: "vm-101",
+        linux_artifacts: [
+          { name: "shell history", family: "linux_shell_history", status: "Parsed", paths: ["home/alice/.bash_history"], source_count: 1, records: 0 },
+          { name: "packages", family: "packages", status: "Not inspected", paths: [], source_count: 0, records: 0 },
+        ],
+      })],
+    }));
+    renderPage();
+    const row = (await screen.findAllByText("ubuntu-disk.zip"))[0].closest("tr")!;
+    await userEvent.click(within(row).getByRole("button", { name: /View details/i }));
+
+    const linuxTable = await screen.findByTestId("linux-processing-artifacts");
+    expect(within(linuxTable).getByText("Sources found")).toBeInTheDocument();
+    expect(within(linuxTable).getByText("Events parsed")).toBeInTheDocument();
+    const shellRow = within(linuxTable).getByText("shell history").closest("tr")!;
+    expect(within(shellRow).getByText("Parsed")).toBeInTheDocument();
+    expect(within(shellRow).getByText("1")).toBeInTheDocument();
+    expect(within(shellRow).getByText("0")).toBeInTheDocument();
+    expect(within(linuxTable).getByText("Not inspected")).toBeInTheDocument();
+  });
+
   it("shows empty state when there are no processing runs", async () => {
     getCaseProcessingMock.mockResolvedValueOnce(processingFixture({ summary: {}, items: [] }));
     renderPage();

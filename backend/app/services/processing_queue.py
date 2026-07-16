@@ -281,6 +281,7 @@ def _linux_processing_rows(evidence: Evidence, artifacts: list[Artifact]) -> lis
                 "family": family,
                 "status": status_map.get(raw_status.lower(), raw_status.replace("_", " ").title() or "Detected"),
                 "paths": item.get("paths") or [],
+                "source_count": int(item.get("source_count") or len(item.get("paths") or [])),
                 "records": int(getattr(artifact, "record_count", 0) or 0) if artifact else 0,
             }
         )

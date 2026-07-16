@@ -600,10 +600,10 @@ export default function CaseDetail() {
                       <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Detected Linux artifacts</p>
                       <div className="mt-3 overflow-x-auto rounded-2xl border border-line">
                         <table className="min-w-full text-left text-xs">
-                          <thead className="bg-abyss/70 font-mono uppercase tracking-[0.12em] text-muted"><tr><th className="px-3 py-2">Artifact</th><th className="px-3 py-2">Family</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Records</th></tr></thead>
+                          <thead className="bg-abyss/70 font-mono uppercase tracking-[0.12em] text-muted"><tr><th className="px-3 py-2">Artifact</th><th className="px-3 py-2">Family</th><th className="px-3 py-2">Status</th><th className="px-3 py-2">Sources found</th><th className="px-3 py-2">Events parsed</th></tr></thead>
                           <tbody className="divide-y divide-line/70">
                             {selectedProcessing.linux_artifacts.map((artifact) => (
-                              <tr key={`${artifact.family}-${artifact.name}`}><td className="px-3 py-2 text-ink">{artifact.name}</td><td className="px-3 py-2 text-muted">{artifact.family}</td><td className="px-3 py-2 text-muted">{artifact.status}</td><td className="px-3 py-2 text-muted">{artifact.records ?? 0}</td></tr>
+                              <tr key={`${artifact.family}-${artifact.name}`}><td className="px-3 py-2 text-ink">{artifact.name}</td><td className="px-3 py-2 text-muted">{artifact.family}</td><td className="px-3 py-2 text-muted">{artifact.status}</td><td className="px-3 py-2 text-muted">{artifact.source_count ?? artifact.paths?.length ?? 0}</td><td className="px-3 py-2 text-muted">{artifact.records ?? 0}</td></tr>
                             ))}
                           </tbody>
                         </table>
