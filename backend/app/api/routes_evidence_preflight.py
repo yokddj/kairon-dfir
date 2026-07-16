@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -26,6 +26,7 @@ from app.services.auth_dependencies import get_optional_user
 from app.schemas.evidence_preflight import PreflightReport
 from app.schemas.evidence_upload_session import (
     EvidenceUploadSessionCreateResponse,
+    EvidenceUploadSessionStageResponse,
     EvidenceUploadSessionRead,
     PreflightRerunRequest,
     PromoteUploadSessionRequest,
@@ -33,6 +34,7 @@ from app.schemas.evidence_upload_session import (
 from app.services.evidence_upload_session import (
     UploadSessionError,
     cancel_upload_session,
+    create_streamed_upload_session,
     create_upload_session,
     get_active_session,
     promote_upload_session,
@@ -90,12 +92,47 @@ def create_evidence_upload(
         )
     except UploadSessionError as exc:
         status_code = 404 if exc.code == "case_not_found" else 400
-        raise HTTPException(status_code=status_code, detail=exc.message) from exc
+        raise HTTPException(status_code=status_code, detail=exc.details or {"error_code": exc.code, "code": exc.code, "message": exc.message}) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("Preflight inspection failed for case %s", case_id)
         raise HTTPException(status_code=500, detail=f"Preflight inspection failed: {exc.__class__.__name__}") from exc
 
     return EvidenceUploadSessionCreateResponse(session=_session_to_read(session), preflight=report, health=check_ingestion_readiness(db))
+
+
+@router.post("/{case_id}/evidence-uploads/stream", response_model=EvidenceUploadSessionStageResponse)
+async def create_evidence_upload_stream(
+    case_id: str,
+    request: Request,
+    filename: str = Query(..., min_length=1),
+    declared_platform: str | None = Query(None),
+    client_sha256: str | None = Query(None),
+    x_kairon_file_size: int | None = Header(None, alias="X-Kairon-File-Size"),
+    db: Session = Depends(get_db),
+) -> EvidenceUploadSessionStageResponse:
+    declared = declared_platform if declared_platform and declared_platform != "auto" else None
+    content_length = request.headers.get("content-length")
+    expected_bytes = x_kairon_file_size
+    if expected_bytes is None and content_length and content_length.isdigit():
+        expected_bytes = int(content_length)
+    try:
+        session = await create_streamed_upload_session(
+            db,
+            case_id,
+            request=request,
+            filename=filename,
+            expected_bytes=expected_bytes,
+            declared_platform=declared,
+            client_sha256=client_sha256,
+        )
+    except UploadSessionError as exc:
+        status_code = 404 if exc.code == "case_not_found" else 413 if exc.code in {"upload_size_limit", "insufficient_storage"} else 408 if exc.code == "upload_idle_timeout" else 499 if exc.code == "client_disconnected" else 400
+        raise HTTPException(status_code=status_code, detail=exc.details or {"error_code": exc.code, "code": exc.code, "message": exc.message}) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Streaming evidence upload failed for case %s", case_id)
+        raise HTTPException(status_code=500, detail={"error_code": "staging_failed", "code": "staging_failed", "message": f"Upload staging failed: {exc.__class__.__name__}"}) from exc
+
+    return EvidenceUploadSessionStageResponse(session=_session_to_read(session), health=check_ingestion_readiness(db))
 
 
 @router.post("/{case_id}/evidence-uploads/{session_id}/preflight", response_model=PreflightReport)
@@ -110,7 +147,11 @@ def rerun_evidence_upload_preflight(
     except UploadSessionError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
     declared = payload.declared_platform if payload.declared_platform and payload.declared_platform != "auto" else None
-    return rerun_preflight(session, declared_platform=declared)
+    report = rerun_preflight(session, declared_platform=declared)
+    session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category}
+    db.add(session)
+    db.commit()
+    return report
 
 
 @router.post("/{case_id}/evidence-uploads/{session_id}/promote", response_model=EvidenceRead)

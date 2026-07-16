@@ -57,7 +57,8 @@ class Settings(BaseSettings):
     bootstrap_admin_email: str = os.getenv("KAIRON_BOOTSTRAP_ADMIN_EMAIL", "")
     allowed_origins_env: str = os.getenv("KAIRON_ALLOWED_ORIGINS", "http://localhost:5173")
     csrf_secret: str = os.getenv("KAIRON_CSRF_SECRET", "CHANGE_ME_CSRF_SECRET")
-    backend_max_upload_size: int = Field(default=2147483648)
+    backend_max_upload_size: int = Field(default=34359738368)
+    backend_upload_idle_timeout_seconds: int = 60
     memory_analysis_enabled: bool = False
     volatility3_command: str = "vol"
     memprocfs_command: str = "memprocfs"

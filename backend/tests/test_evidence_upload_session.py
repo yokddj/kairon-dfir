@@ -9,16 +9,20 @@ nothing is enqueued/created until promotion is explicitly confirmed.
 """
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import zipfile
 from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from fastapi import FastAPI, UploadFile
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
+from starlette.requests import ClientDisconnect
 
 from app.api import routes_evidence_preflight
 from app.core.database import Base, get_db, utc_now
@@ -28,6 +32,7 @@ from app.models.evidence import Evidence
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
 from app.services.evidence_upload_session import (
     UploadSessionError,
+    _stage_streamed_file,
     cancel_upload_session,
     cleanup_expired_upload_sessions,
     create_upload_session,
@@ -70,6 +75,22 @@ def _upload_file(path: Path, filename: str | None = None) -> UploadFile:
     return UploadFile(path.open("rb"), filename=filename or path.name)
 
 
+class _StreamRequest:
+    def __init__(self, chunks):
+        self.chunks = list(chunks)
+        self.disconnect_checks = 0
+
+    async def is_disconnected(self):
+        self.disconnect_checks += 1
+        raise AssertionError("is_disconnected must not be polled while request.stream() is active")
+
+    async def stream(self):
+        for chunk in self.chunks:
+            if isinstance(chunk, BaseException):
+                raise chunk
+            yield chunk
+
+
 # ---------------------------------------------------------------------------
 # Session lifecycle: create, preflight, cancel, expiry
 # ---------------------------------------------------------------------------
@@ -89,6 +110,129 @@ def test_create_session_stages_file_and_runs_preflight_without_creating_evidence
     assert report.status == "ready"
     assert report.classification.hostname == "web01"
     assert db.query(Evidence).count() == 0
+
+
+def test_streaming_upload_stages_file_before_preflight(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+    client = _client(db)
+    body = b"PK\x03\x04" + (b"A" * (5 * 1024 * 1024))
+
+    response = client.post(
+        f"/api/cases/{CASE_ID}/evidence-uploads/stream?filename=large.zip",
+        content=body,
+        headers={"Content-Type": "application/octet-stream", "X-Kairon-File-Size": str(len(body))},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "preflight" not in payload
+    session = db.get(EvidenceUploadSession, payload["session"]["id"])
+    assert session is not None
+    assert session.size_bytes == len(body)
+    assert Path(session.staged_path).stat().st_size == len(body)
+
+    preflight = client.post(f"/api/cases/{CASE_ID}/evidence-uploads/{session.id}/preflight", json={"declared_platform": None})
+    assert preflight.status_code == 200
+    db.refresh(session)
+    assert (session.metadata_json or {}).get("category")
+
+
+@pytest.mark.anyio
+async def test_streaming_upload_preserves_repeated_chunks_without_disconnect_polling(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    chunks = [bytes([i % 251]) * (80 * 1024) for i in range(80)]
+    expected = b"".join(chunks)
+    request = _StreamRequest(chunks)
+
+    staged = await _stage_streamed_file(request, session_id="high-water-regression", filename="large.data", expected_bytes=len(expected))
+
+    assert request.disconnect_checks == 0
+    assert staged.size_bytes == len(expected)
+    assert staged.sha256 == hashlib.sha256(expected).hexdigest()
+    assert staged.path.read_bytes() == expected
+
+
+@pytest.mark.anyio
+async def test_streaming_upload_client_disconnect_becomes_structured_error_and_cleans_up(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    request = _StreamRequest([b"partial", ClientDisconnect()])
+
+    with pytest.raises(UploadSessionError) as exc:
+        await _stage_streamed_file(request, session_id="disconnect-test", filename="large.data", expected_bytes=1024)
+
+    assert exc.value.code == "client_disconnected"
+    assert exc.value.details["received_bytes"] == len(b"partial")
+    assert exc.value.details["expected_bytes"] == 1024
+    assert not (tmp_path / "evidence-upload-sessions" / "disconnect-test" / "large.data").exists()
+
+
+@pytest.mark.anyio
+async def test_streaming_upload_incomplete_transfer_fails_size_validation_and_cleans_up(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    request = _StreamRequest([b"short"])
+
+    with pytest.raises(UploadSessionError) as exc:
+        await _stage_streamed_file(request, session_id="incomplete-test", filename="large.data", expected_bytes=1024)
+
+    assert exc.value.code == "staging_failed"
+    assert exc.value.details["received_bytes"] == len(b"short")
+    assert exc.value.details["expected_bytes"] == 1024
+    assert not (tmp_path / "evidence-upload-sessions" / "incomplete-test" / "large.data").exists()
+
+
+def test_backend_dockerfile_does_not_patch_uvicorn_flow_control():
+    dockerfile = Path(__file__).resolve().parents[1] / "Dockerfile"
+    text = dockerfile.read_text(encoding="utf-8")
+
+    assert "uvicorn/protocols/http/flow_control.py" not in text
+    assert "HIGH_WATER_LIMIT" not in text
+
+
+def test_streaming_upload_rejects_insufficient_storage_before_reading(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    monkeypatch.setattr("app.services.evidence_upload_session.shutil.disk_usage", lambda _path: type("Usage", (), {"free": 10})())
+    db = _db()
+    _case(db)
+    client = _client(db)
+
+    response = client.post(
+        f"/api/cases/{CASE_ID}/evidence-uploads/stream?filename=too-large.zip",
+        content=b"abc",
+        headers={"Content-Type": "application/octet-stream", "X-Kairon-File-Size": str(1024)},
+    )
+
+    assert response.status_code == 413
+    detail = response.json()["detail"]
+    assert detail["code"] == "insufficient_storage"
+    assert detail["configuration_key"] == "BACKEND_TEMP_DIR"
+
+
+@pytest.mark.anyio
+async def test_streaming_upload_idle_timeout_cleans_partial_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_upload_idle_timeout_seconds", 1)
+
+    class SlowRequest:
+        async def is_disconnected(self):
+            return False
+
+        async def stream(self):
+            yield b"abc"
+            await asyncio.sleep(2)
+            yield b"def"
+
+    with pytest.raises(UploadSessionError) as exc:
+        await _stage_streamed_file(SlowRequest(), session_id="idle-test", filename="large.zip", expected_bytes=6)
+
+    assert exc.value.code == "upload_idle_timeout"
+    assert not (tmp_path / "evidence-upload-sessions" / "idle-test" / "large.zip").exists()
 
 
 def test_client_sha256_mismatch_is_flagged_not_silently_trusted(tmp_path, monkeypatch):
