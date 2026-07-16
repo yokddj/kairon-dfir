@@ -1456,6 +1456,8 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     expect(await screen.findByTestId("disk-image-summary")).toBeInTheDocument();
     expect(screen.getByText(/Format EWF/i)).toBeInTheDocument();
     expect(screen.getByText(/Volume 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/Ubuntu 24.04 LTS/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Debian GNU\/Linux/i)).not.toBeInTheDocument();
     expect(screen.getByText(/ubuntu-lab/i)).toBeInTheDocument();
   });
 
