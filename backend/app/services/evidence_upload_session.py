@@ -20,16 +20,21 @@ pattern used by MemoryUpload sessions.
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
+import os
 import shutil
+import time
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, BinaryIO
 from uuid import uuid4
 
-from fastapi import UploadFile
+from fastapi import Request, UploadFile
 from sqlalchemy.orm import Session
+from starlette.requests import ClientDisconnect
 
 from app.core.config import get_settings
 from app.core.database import utc_now
@@ -41,12 +46,15 @@ from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUp
 from app.schemas.evidence_preflight import PreflightReport
 from app.services.evidence_preflight import run_preflight
 
+logger = logging.getLogger(__name__)
+
 
 class UploadSessionError(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, details: dict[str, Any] | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.details = details or {}
 
 
 @dataclass
@@ -61,6 +69,148 @@ def _session_root(session_id: str) -> Path:
     return settings.backend_temp_dir / "evidence-upload-sessions" / session_id
 
 
+def _upload_error_detail(code: str, message: str, **values: Any) -> dict[str, Any]:
+    return {"error_code": code, "code": code, "message": message, **values}
+
+
+def _available_bytes(path: Path) -> int:
+    path.mkdir(parents=True, exist_ok=True)
+    return shutil.disk_usage(path).free
+
+
+def _log_upload(event: str, **values: Any) -> None:
+    payload = {"timestamp": datetime.now(timezone.utc).isoformat(), **values}
+    logger.info("%s %s", event, " ".join(f"{key}={value}" for key, value in payload.items()))
+
+
+def _preupload_storage_check(*, session_id: str, expected_bytes: int | None, temp_dir: Path, max_bytes: int) -> int:
+    started = time.monotonic()
+    available = _available_bytes(temp_dir)
+    estimated_temp_bytes = expected_bytes or 0
+    required_bytes = (expected_bytes or 0) + estimated_temp_bytes
+    _log_upload(
+        "STORAGE PRECHECK START",
+        session_id=session_id,
+        expected_bytes=expected_bytes,
+        estimated_temp_bytes=estimated_temp_bytes,
+        required_bytes=required_bytes,
+        available_bytes=available,
+        temp_dir=temp_dir,
+    )
+    if expected_bytes is not None and expected_bytes > max_bytes:
+        _log_upload(
+            "STORAGE PRECHECK END",
+            session_id=session_id,
+            status="blocked",
+            reason="upload_size_limit",
+            duration_s=round(time.monotonic() - started, 3),
+            expected_bytes=expected_bytes,
+            configured_limit_bytes=max_bytes,
+            available_bytes=available,
+        )
+        raise UploadSessionError(
+            "upload_size_limit",
+            "Selected evidence exceeds the configured upload limit.",
+            _upload_error_detail(
+                "upload_size_limit",
+                "Selected evidence exceeds the configured upload limit.",
+                expected_bytes=expected_bytes,
+                configured_limit_bytes=max_bytes,
+                available_storage_bytes=available,
+                configuration_key="BACKEND_MAX_UPLOAD_SIZE",
+                configuration_file="backend/.env",
+            ),
+        )
+    if expected_bytes is not None and available < required_bytes:
+        _log_upload(
+            "STORAGE PRECHECK END",
+            session_id=session_id,
+            status="blocked",
+            reason="insufficient_storage",
+            duration_s=round(time.monotonic() - started, 3),
+            expected_bytes=expected_bytes,
+            estimated_temp_bytes=estimated_temp_bytes,
+            required_bytes=required_bytes,
+            available_bytes=available,
+        )
+        raise UploadSessionError(
+            "insufficient_storage",
+            "Temporary storage is too low for this upload.",
+            _upload_error_detail(
+                "insufficient_storage",
+                "Temporary storage is too low for this upload.",
+                expected_bytes=expected_bytes,
+                estimated_temp_storage_bytes=estimated_temp_bytes,
+                required_storage_bytes=required_bytes,
+                available_storage_bytes=available,
+                temp_directory=str(temp_dir),
+                configuration_key="BACKEND_TEMP_DIR",
+                configuration_file="backend/.env",
+            ),
+        )
+    _log_upload(
+        "STORAGE PRECHECK END",
+        session_id=session_id,
+        status="ok",
+        duration_s=round(time.monotonic() - started, 3),
+        expected_bytes=expected_bytes,
+        estimated_temp_bytes=estimated_temp_bytes,
+        required_bytes=required_bytes,
+        available_bytes=available,
+    )
+    return available
+
+
+def _build_session_from_staged(
+    db: Session,
+    *,
+    case_id: str,
+    session_id: str,
+    staged: _StagedFile,
+    original_filename: str,
+    is_folder: bool,
+    is_server_path: bool,
+    declared_platform: str | None,
+    client_sha256: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> EvidenceUploadSession:
+    settings = get_settings()
+    expires_at = utc_now() + timedelta(seconds=max(60, int(settings.evidence_upload_session_ttl_seconds)))
+    session = EvidenceUploadSession(
+        id=session_id,
+        case_id=case_id,
+        status=EvidenceUploadSessionStatus.staged.value,
+        original_filename=original_filename,
+        staged_path=str(staged.path),
+        is_folder=is_folder,
+        is_server_path=is_server_path,
+        size_bytes=staged.size_bytes,
+        sha256=staged.sha256,
+        client_sha256=client_sha256,
+        declared_platform=declared_platform,
+        expires_at=expires_at,
+        metadata_json=metadata or {},
+    )
+    if client_sha256 and session.sha256 and client_sha256.strip().lower() != session.sha256.lower():
+        session.metadata_json = {**(session.metadata_json or {}), "client_sha256_mismatch": True}
+
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    report = run_preflight(
+        Path(session.staged_path),
+        token=session.id,
+        original_filename=session.original_filename,
+        declared_platform=declared_platform,
+        tmp_dir=_session_root(session_id) / "scratch",
+    )
+    session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category}
+    db.add(session)
+    db.commit()
+    return session, report
+
+
 def _stage_single_file(upload: UploadFile, root: Path) -> _StagedFile:
     root.mkdir(parents=True, exist_ok=True)
     filename = Path(upload.filename or "upload.bin").name
@@ -73,6 +223,193 @@ def _stage_single_file(upload: UploadFile, root: Path) -> _StagedFile:
             digest.update(chunk)
             buffer.write(chunk)
     return _StagedFile(path=target, size_bytes=size, sha256=digest.hexdigest())
+
+
+async def _stage_streamed_file(
+    request: Request,
+    *,
+    session_id: str,
+    filename: str,
+    expected_bytes: int | None,
+) -> _StagedFile:
+    settings = get_settings()
+    root = _session_root(session_id)
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / Path(filename or "upload.bin").name
+    temp_dir = settings.backend_temp_dir
+    max_bytes = int(settings.backend_max_upload_size)
+    idle_timeout = max(1, int(settings.backend_upload_idle_timeout_seconds))
+    available = _preupload_storage_check(session_id=session_id, expected_bytes=expected_bytes, temp_dir=temp_dir, max_bytes=max_bytes)
+
+    started = time.monotonic()
+    last_progress = started
+    last_log = started
+    size = 0
+    digest = hashlib.sha256()
+    stream = request.stream().__aiter__()
+    cleaned = False
+    first_byte_logged = False
+    next_threshold = 10
+    _log_upload(
+        "UPLOAD START",
+        session_id=session_id,
+        filename=target.name,
+        expected_bytes=expected_bytes,
+        temp_dir=temp_dir,
+        available_bytes=available,
+    )
+
+    try:
+        with target.open("xb") as buffer:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(stream.__anext__(), timeout=idle_timeout)
+                    _log_upload("APP CHUNK", session_id=session_id, chunk_size=len(chunk), total_bytes_before=size, expected_bytes=expected_bytes)
+                except StopAsyncIteration:
+                    _log_upload("STREAM EXHAUSTED", session_id=session_id, received_bytes=size)
+                    break
+                except asyncio.TimeoutError as exc:
+                    current_size = target.stat().st_size if target.exists() else size
+                    last_progress_age = time.monotonic() - last_progress
+                    available_now = _available_bytes(temp_dir)
+                    _log_upload(
+                        "UPLOAD STALLED",
+                        session_id=session_id,
+                        received_bytes=size,
+                        written_bytes=current_size,
+                        last_progress_age_s=round(last_progress_age, 3),
+                        staged_file_size=current_size,
+                        available_bytes=available_now,
+                    )
+                    raise UploadSessionError(
+                        "upload_idle_timeout",
+                        f"No upload progress was received for {idle_timeout} seconds.",
+                        _upload_error_detail(
+                            "upload_idle_timeout",
+                            f"No upload progress was received for {idle_timeout} seconds.",
+                            received_bytes=size,
+                            expected_bytes=expected_bytes,
+                            last_progress_age_seconds=round(last_progress_age, 3),
+                            available_storage_bytes=available_now,
+                            temp_directory=str(temp_dir),
+                            configuration_key="BACKEND_UPLOAD_IDLE_TIMEOUT_SECONDS",
+                            configuration_file="backend/.env",
+                        ),
+                    ) from exc
+                except ClientDisconnect as exc:
+                    current_size = target.stat().st_size if target.exists() else size
+                    raise UploadSessionError(
+                        "client_disconnected",
+                        "The client disconnected before all evidence bytes reached the server.",
+                        _upload_error_detail(
+                            "client_disconnected",
+                            "The client disconnected before all evidence bytes reached the server.",
+                            received_bytes=size,
+                            expected_bytes=expected_bytes,
+                            staged_file_size=current_size,
+                        ),
+                    ) from exc
+                if not chunk:
+                    continue
+                if not first_byte_logged:
+                    first_byte_logged = True
+                    _log_upload(
+                        "UPLOAD FIRST BYTE",
+                        session_id=session_id,
+                        duration_s=round(time.monotonic() - started, 3),
+                        expected_bytes=expected_bytes,
+                        available_bytes=_available_bytes(temp_dir),
+                    )
+                next_size = size + len(chunk)
+                if next_size > max_bytes or (expected_bytes is not None and next_size > expected_bytes):
+                    raise UploadSessionError(
+                        "upload_size_limit",
+                        "Upload exceeded the configured size limit.",
+                        _upload_error_detail(
+                            "upload_size_limit",
+                            "Upload exceeded the configured size limit.",
+                            received_bytes=next_size,
+                            expected_bytes=expected_bytes,
+                            configured_limit_bytes=max_bytes,
+                            configuration_key="BACKEND_MAX_UPLOAD_SIZE",
+                            configuration_file="backend/.env",
+                        ),
+                    )
+                try:
+                    digest.update(chunk)
+                    buffer.write(chunk)
+                except OSError as exc:
+                    available_now = _available_bytes(temp_dir)
+                    raise UploadSessionError(
+                        "write_failed",
+                        "Kairon could not write the upload to temporary storage.",
+                        _upload_error_detail(
+                            "write_failed",
+                            "Kairon could not write the upload to temporary storage.",
+                            received_bytes=size,
+                            expected_bytes=expected_bytes,
+                            available_storage_bytes=available_now,
+                            temp_directory=str(temp_dir),
+                        ),
+                    ) from exc
+                size = next_size
+                last_progress = time.monotonic()
+                elapsed = max(last_progress - started, 0.001)
+                if expected_bytes:
+                    percent_int = int((size / expected_bytes) * 100)
+                    while next_threshold <= 100 and percent_int >= next_threshold:
+                        written = target.stat().st_size if target.exists() else size
+                        _log_upload(
+                            f"UPLOAD {next_threshold}%",
+                            session_id=session_id,
+                            received_bytes=size,
+                            written_bytes=written,
+                            percent=next_threshold,
+                            duration_s=round(elapsed, 3),
+                            available_bytes=_available_bytes(temp_dir),
+                        )
+                        next_threshold += 10
+                if last_progress - last_log >= 5 or (expected_bytes is not None and size == expected_bytes):
+                    written = target.stat().st_size if target.exists() else size
+                    percent = round((size / expected_bytes) * 100, 2) if expected_bytes else None
+                    speed = round((size / 1024 / 1024) / elapsed, 3)
+                    _log_upload(
+                        "UPLOAD PROGRESS",
+                        session_id=session_id,
+                        received_bytes=size,
+                        written_bytes=written,
+                        percent=percent,
+                        speed_mib_s=speed,
+                        average_speed_mib_s=speed,
+                        last_progress_age_s=0,
+                        available_bytes=_available_bytes(temp_dir),
+                    )
+                    last_log = last_progress
+            buffer.flush()
+            os.fsync(buffer.fileno())
+        if expected_bytes is not None and size != expected_bytes:
+            raise UploadSessionError(
+                "staging_failed",
+                "Transferred evidence size did not match the declared size.",
+                _upload_error_detail("staging_failed", "Transferred evidence size did not match the declared size.", received_bytes=size, expected_bytes=expected_bytes),
+            )
+        duration = time.monotonic() - started
+        _log_upload(
+            "UPLOAD COMPLETE",
+            session_id=session_id,
+            received_bytes=size,
+            written_bytes=target.stat().st_size,
+            duration_s=round(duration, 3),
+            average_speed_mib_s=round((size / 1024 / 1024) / max(duration, 0.001), 3),
+        )
+        _log_upload("SHA256 END", session_id=session_id, sha256=digest.hexdigest(), bytes=size, duration_s=round(duration, 3), status="ok")
+        return _StagedFile(path=target, size_bytes=size, sha256=digest.hexdigest())
+    except Exception:
+        if target.exists():
+            target.unlink(missing_ok=True)
+            cleaned = True
+        _log_upload("UPLOAD CLEANUP", session_id=session_id, cleanup_result=cleaned)
+        raise
 
 
 def _stage_disk_image_segments(files: list[UploadFile], root: Path) -> tuple[_StagedFile, list[dict[str, str]]]:
@@ -239,6 +576,52 @@ def create_upload_session(
     return session, report
 
 
+async def create_streamed_upload_session(
+    db: Session,
+    case_id: str,
+    *,
+    request: Request,
+    filename: str,
+    expected_bytes: int | None,
+    declared_platform: str | None = None,
+    client_sha256: str | None = None,
+) -> tuple[EvidenceUploadSession, PreflightReport]:
+    if not db.get(Case, case_id):
+        raise UploadSessionError("case_not_found", "Case not found")
+    if not filename:
+        raise UploadSessionError("no_file", "No file name was provided for upload.")
+    session_id = str(uuid4())
+    try:
+        staged = await _stage_streamed_file(request, session_id=session_id, filename=filename, expected_bytes=expected_bytes)
+        settings = get_settings()
+        expires_at = utc_now() + timedelta(seconds=max(60, int(settings.evidence_upload_session_ttl_seconds)))
+        session = EvidenceUploadSession(
+            id=session_id,
+            case_id=case_id,
+            status=EvidenceUploadSessionStatus.staged.value,
+            original_filename=Path(filename).name,
+            staged_path=str(staged.path),
+            is_folder=False,
+            is_server_path=False,
+            size_bytes=staged.size_bytes,
+            sha256=staged.sha256,
+            client_sha256=client_sha256,
+            declared_platform=declared_platform,
+            expires_at=expires_at,
+        )
+        if client_sha256 and session.sha256 and client_sha256.strip().lower() != session.sha256.lower():
+            session.metadata_json = {"client_sha256_mismatch": True}
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        return session
+    except Exception:
+        root = _session_root(session_id)
+        if root.exists():
+            shutil.rmtree(root, ignore_errors=True)
+        raise
+
+
 def rerun_preflight(session: EvidenceUploadSession, *, declared_platform: str | None) -> PreflightReport:
     return run_preflight(
         Path(session.staged_path),
@@ -339,6 +722,15 @@ def promote_upload_session(
     # of the functions' own defaults produces a Form(...)/File(...) object
     # instead of None/False and breaks internal string handling.
     case_id = session.case_id
+    promotion_started = time.monotonic()
+    _log_upload(
+        "PROMOTION START",
+        session_id=session.id,
+        case_id=case_id,
+        staged_path=session.staged_path,
+        bytes=session.size_bytes,
+        category=(session.metadata_json or {}).get("category"),
+    )
     try:
         if session.is_server_path:
             payload = RegisterPathRequest(
@@ -417,7 +809,15 @@ def promote_upload_session(
                 upload.file.close()
                 for extra in extra_uploads:
                     extra.file.close()
-    except Exception:
+    except Exception as exc:
+        _log_upload(
+            "PROMOTION END",
+            session_id=session.id,
+            case_id=case_id,
+            status="error",
+            error_type=type(exc).__name__,
+            duration_s=round(time.monotonic() - promotion_started, 3),
+        )
         raise
 
     session.status = EvidenceUploadSessionStatus.promoted.value
@@ -425,4 +825,12 @@ def promote_upload_session(
     db.add(session)
     db.commit()
     _cleanup_storage(session)
+    _log_upload(
+        "PROMOTION END",
+        session_id=session.id,
+        case_id=case_id,
+        evidence_id=evidence.id,
+        status="ok",
+        duration_s=round(time.monotonic() - promotion_started, 3),
+    )
     return evidence

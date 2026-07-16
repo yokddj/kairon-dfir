@@ -29,6 +29,11 @@ class EvidenceUploadSessionCreateResponse(BaseModel):
     health: dict | None = None
 
 
+class EvidenceUploadSessionStageResponse(BaseModel):
+    session: EvidenceUploadSessionRead
+    health: dict | None = None
+
+
 class PreflightRerunRequest(BaseModel):
     declared_platform: str | None = None
 
