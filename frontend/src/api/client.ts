@@ -741,7 +741,7 @@ export type ProcessingEvidenceItem = {
   last_error: string | null;
   runs: ProcessingRun[];
   parser_runs: ProcessingParserRun[];
-  linux_artifacts?: Array<{ name: string; family: string; status: string; paths?: string[]; records?: number }>;
+  linux_artifacts?: Array<{ name: string; family: string; status: string; paths?: string[]; source_count?: number; records?: number }>;
   errors: Array<{ parser: string; summary: string | null; details: Record<string, unknown> }>;
   links: { evidence: string; artifacts: string; search: string; memory?: string | null };
 };
