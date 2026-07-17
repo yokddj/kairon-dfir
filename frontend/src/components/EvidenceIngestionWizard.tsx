@@ -204,6 +204,16 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   });
 
   const blocked = preflight?.status === "blocked" && !manualOverrideAccepted;
+  const memoryRequiresExplicitHost = intakeType === "memory_dump";
+  const hostStepBlockingReason = useMemo(() => {
+    if (!memoryRequiresExplicitHost) return null;
+    if (hostChoice === "__create__") {
+      return newHostName.trim() ? null : "Enter a source host name for this memory evidence.";
+    }
+    if (hostChoice === "auto") return "Memory evidence requires an explicit source host, matching the legacy memory uploader.";
+    return null;
+  }, [hostChoice, memoryRequiresExplicitHost, newHostName]);
+  const canContinueHostStep = hostStepBlockingReason === null;
 
   const canAdvanceStep4 = useMemo(() => {
     if (requiresPathInput) return serverPath.trim().length > 0;
@@ -315,12 +325,18 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
         {step === 3 ? (
           <section className="mt-5">
             <h2 className="text-xl font-semibold text-ink">Host</h2>
-            <p className="mt-1 text-sm text-muted">Auto Assign lets Kairon match or create a host once the evidence is inspected.</p>
+            <p className="mt-1 text-sm text-muted">
+              {memoryRequiresExplicitHost
+                ? "Memory evidence follows the legacy uploader contract and requires an explicit source host."
+                : "Auto Assign lets Kairon match or create a host once the evidence is inspected."}
+            </p>
             <div className="mt-4 grid gap-3">
-              <label className={`rounded-2xl border p-4 ${hostChoice === "auto" ? "border-accent bg-accent/10" : "border-line bg-abyss/60"}`}>
-                <input type="radio" name="host-choice" className="mr-2" checked={hostChoice === "auto"} onChange={() => setHostChoice("auto")} />
-                Auto Assign
-              </label>
+              {!memoryRequiresExplicitHost ? (
+                <label className={`rounded-2xl border p-4 ${hostChoice === "auto" ? "border-accent bg-accent/10" : "border-line bg-abyss/60"}`}>
+                  <input type="radio" name="host-choice" className="mr-2" checked={hostChoice === "auto"} onChange={() => setHostChoice("auto")} />
+                  Auto Assign
+                </label>
+              ) : null}
               <label className={`rounded-2xl border p-4 ${hostChoice !== "auto" && hostChoice !== "__create__" ? "border-accent bg-accent/10" : "border-line bg-abyss/60"}`}>
                 <input type="radio" name="host-choice" className="mr-2" checked={hostChoice !== "auto" && hostChoice !== "__create__"} onChange={() => setHostChoice(caseHosts[0]?.id ?? "auto")} disabled={!caseHosts.length} />
                 Assign existing host
@@ -338,9 +354,14 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
                 ) : null}
               </label>
             </div>
+            {memoryRequiresExplicitHost ? (
+              <p className="mt-3 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100" data-testid="memory-host-required-message">
+                Memory uploads require a source host before registration. Select an existing host or create one before continuing.
+              </p>
+            ) : null}
             <div className="mt-5 flex justify-between">
               <button type="button" onClick={() => setStep(2)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
-              <button type="button" onClick={() => setStep(4)} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">Continue</button>
+              <button type="button" onClick={() => setStep(4)} disabled={!canContinueHostStep} title={hostStepBlockingReason ?? undefined} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50">Continue</button>
             </div>
           </section>
         ) : null}
