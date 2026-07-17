@@ -393,6 +393,30 @@ describe("EvidenceIngestionWizard", () => {
     expect(screen.getByRole("option", { name: "WS-01" })).toBeInTheDocument();
   });
 
+  it("keeps Auto Assign available for non-memory evidence", async () => {
+    renderWizard();
+    await passHealthCheck();
+    await userEvent.click(screen.getByRole("button", { name: /Artifact Collection/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(await screen.findByRole("radio", { name: "Auto Assign" })).toBeInTheDocument();
+  });
+
+  it("requires an explicit host before memory evidence can continue", async () => {
+    renderWizard();
+    await passHealthCheck();
+    await userEvent.click(screen.getByRole("button", { name: /Memory Dump/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(screen.queryByRole("radio", { name: "Auto Assign" })).not.toBeInTheDocument();
+    expect(await screen.findByTestId("memory-host-required-message")).toHaveTextContent(/require a source host/i);
+    const continueButton = screen.getByRole("button", { name: "Continue" });
+    expect(continueButton).toBeDisabled();
+
+    await userEvent.click(screen.getByRole("radio", { name: "Assign existing host" }));
+    expect(continueButton).toBeEnabled();
+  });
+
   it("folder flow promotes the upload session on Start Processing", async () => {
     promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-4", original_filename: "3 files" });
     createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
@@ -435,7 +459,11 @@ describe("EvidenceIngestionWizard", () => {
       preflight: readyReport({ original_filename: "capture.mem", pipeline_preview: ["Memory Dump", "Evidence Classification", "Memory Registration", "Memory Analysis (manual, after ingestion)"] }),
     }));
     renderWizard();
-    await goToFileStep(/Memory Dump/);
+    await passHealthCheck();
+    await userEvent.click(screen.getByRole("button", { name: /Memory Dump/ }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue" })); // platform
+    await userEvent.click(screen.getByRole("radio", { name: "Assign existing host" }));
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
     const file = new File(["x"], "capture.mem");
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
@@ -450,7 +478,7 @@ describe("EvidenceIngestionWizard", () => {
     expect(startButton).toBeEnabled();
 
     await userEvent.click(startButton);
-    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ memory_authorization_acknowledged: true })));
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ host_id: "host-1", memory_authorization_acknowledged: true })));
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/memory/evidence-3"));
   });
 });
