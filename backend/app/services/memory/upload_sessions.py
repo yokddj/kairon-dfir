@@ -363,6 +363,142 @@ def create_memory_upload_session(
     return upload
 
 
+def create_memory_upload_session_from_staged_file(
+    db: Session,
+    *,
+    case_id: str,
+    filename: str,
+    staged_path: Path,
+    expected_size_bytes: int,
+    provided_host: str,
+    authorization_acknowledged: bool,
+    expected_sha256: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> MemoryUpload:
+    """Create a canonical MemoryUpload session from wizard-staged bytes.
+
+    The unified evidence wizard stages files before promotion.  Memory evidence
+    still needs the memory upload lifecycle because that path owns canonical
+    storage, duplicate detection, metadata-only registration, readiness, and
+    symbol-preparation side effects.  This adapter records the staged file as a
+    single received chunk without buffering the full image in memory; callers
+    must finish by calling ``finalize_memory_upload_session()``.
+    """
+    settings = get_settings()
+    if not bool(settings.memory_upload_enabled):
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_DISABLED", "Memory image upload is disabled by server configuration.")
+    if not authorization_acknowledged:
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_AUTHORIZATION_REQUIRED", "Authorization acknowledgement is required before uploading RAM evidence.")
+    if expected_size_bytes <= 0:
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_INVALID_SIZE", "Expected upload size must be greater than zero.")
+    if not staged_path.is_file() or staged_path.is_symlink():
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_STAGED_FILE_MISSING", "The staged memory upload is no longer available.")
+    actual_size = staged_path.stat().st_size
+    if actual_size != expected_size_bytes:
+        raise MemoryUploadSessionError(
+            "MEMORY_UPLOAD_STAGED_SIZE_MISMATCH",
+            "Staged memory upload size does not match the recorded session size.",
+            detail={"expected_bytes": expected_size_bytes, "actual_bytes": actual_size},
+        )
+    max_bytes = int(settings.memory_upload_max_bytes or settings.memory_max_upload_size or 0)
+    if expected_size_bytes > max_bytes:
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_TOO_LARGE", "Selected file exceeds the configured memory upload size limit.")
+    extension = _allowed_memory_extension(filename)
+    safe_name = safe_display_filename(filename)
+    provided_host = str(provided_host or "").strip()
+    if not provided_host:
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_HOST_REQUIRED", "Source host is required for memory evidence registration.")
+
+    conflicting = (
+        db.query(MemoryUpload)
+        .filter(
+            MemoryUpload.case_id == case_id,
+            MemoryUpload.display_name == safe_name,
+            MemoryUpload.expected_bytes == expected_size_bytes,
+            MemoryUpload.status.in_(tuple(ACTIVE_UPLOAD_SESSION_STATUSES)),
+        )
+        .order_by(MemoryUpload.created_at.desc())
+        .first()
+    )
+    if conflicting is not None:
+        raise MemoryUploadSessionError(
+            "MEMORY_UPLOAD_ACTIVE_SESSION_EXISTS",
+            "Another upload session for this memory image is already active.",
+            detail={"existing_upload_id": str(conflicting.id), "filename": conflicting.display_name, "expected_bytes": int(conflicting.expected_bytes or 0)},
+        )
+
+    case_quota = int(settings.memory_upload_case_quota_bytes or 0)
+    if _case_memory_usage_bytes(db, case_id) + expected_size_bytes > case_quota:
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_CASE_QUOTA_EXCEEDED", "This case has reached its configured memory upload quota.")
+    capacity = _capacity_snapshot(db, expected_bytes=expected_size_bytes)
+    if not bool(capacity["can_accept_selected_size"]):
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_INSUFFICIENT_SPACE", "Server storage capacity is below the safe threshold for this memory image.")
+
+    upload = create_memory_upload(
+        upload_id=str(uuid4()),
+        case_id=case_id,
+        expected_bytes=expected_size_bytes,
+        display_name=safe_name,
+        source_host=provided_host,
+        extension=extension,
+        metadata={
+            "received_chunks": {},
+            "active_chunks": [],
+            "upload_mode": "wizard_staged",
+            "resumable": False,
+            "provided_host": provided_host,
+            **(metadata or {}),
+        },
+        db=db,
+        initial_status="uploading",
+        chunk_size_bytes=expected_size_bytes,
+        total_chunks=1,
+        expected_sha256=_sanitize_sha256(expected_sha256),
+        staging_name=str(uuid4()),
+    )
+    chunk_dir = _chunk_dir(upload)
+    chunk_dir.mkdir(parents=True, exist_ok=True)
+    temp_path = chunk_dir / f"00000000.{uuid4()}.part"
+    final_path = _chunk_path(upload, 0)
+    digest = hashlib.sha256()
+    bytes_written = 0
+    try:
+        with staged_path.open("rb") as source, temp_path.open("xb") as target:
+            for blob in iter(lambda: source.read(1024 * 1024), b""):
+                bytes_written += len(blob)
+                digest.update(blob)
+                target.write(blob)
+            target.flush()
+            os.fsync(target.fileno())
+        if bytes_written != expected_size_bytes:
+            raise MemoryUploadSessionError("MEMORY_UPLOAD_INVALID_CHUNK_LENGTH", "Staged memory upload payload is incomplete.")
+        computed_sha = digest.hexdigest()
+        expected = _sanitize_sha256(expected_sha256)
+        if expected and computed_sha != expected:
+            raise MemoryUploadSessionError("MEMORY_UPLOAD_SHA256_MISMATCH", "Staged memory upload SHA-256 does not match the client integrity hint.")
+        os.replace(temp_path, final_path)
+        upload.sha256 = computed_sha
+        upload.bytes_received = bytes_written
+        upload.received_chunk_count = 1
+        upload.status = "uploading"
+        _set_received_chunks(upload, {"0": {"size": bytes_written, "sha256": computed_sha}})
+        _touch_session(upload)
+        db.add(upload)
+        db.commit()
+        db.refresh(upload)
+        return upload
+    except Exception:
+        temp_path.unlink(missing_ok=True)
+        _cleanup_session_storage(upload)
+        upload.status = "failed"
+        upload.failure_code = "MEMORY_UPLOAD_STAGED_IMPORT_FAILED"
+        upload.failure_message = "Kairon could not import staged wizard memory bytes."
+        upload.retryable = False
+        db.add(upload)
+        db.commit()
+        raise
+
+
 async def store_memory_upload_chunk(
     db: Session,
     *,
