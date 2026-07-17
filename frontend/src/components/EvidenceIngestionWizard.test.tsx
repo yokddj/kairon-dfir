@@ -14,6 +14,12 @@ const rerunEvidenceUploadPreflightMock = vi.fn();
 const getIngestionReadinessMock = vi.fn();
 const getCaseHostsMock = vi.fn();
 const createCaseHostMock = vi.fn();
+const navigateMock = vi.fn();
+
+vi.mock("react-router-dom", async () => {
+  const actual = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+  return { ...actual, useNavigate: () => navigateMock };
+});
 
 vi.mock("../api/client", () => ({
   api: {
@@ -156,6 +162,7 @@ async function goToFileStep(cardName: RegExp) {
 describe("EvidenceIngestionWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    navigateMock.mockReset();
     getCaseHostsMock.mockResolvedValue({ hosts: [{ id: "host-1", display_name: "WS-01" }] });
     getIngestionReadinessMock.mockResolvedValue(readyHealth());
     createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse());
@@ -423,7 +430,7 @@ describe("EvidenceIngestionWizard", () => {
   });
 
   it("memory flow requires authorization acknowledgement before Start Processing is enabled", async () => {
-    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-3", original_filename: "capture.mem" });
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-3", original_filename: "capture.mem", evidence_type: "memory_dump" });
     createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
       preflight: readyReport({ original_filename: "capture.mem", pipeline_preview: ["Memory Dump", "Evidence Classification", "Memory Registration", "Memory Analysis (manual, after ingestion)"] }),
     }));
@@ -444,5 +451,6 @@ describe("EvidenceIngestionWizard", () => {
 
     await userEvent.click(startButton);
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ memory_authorization_acknowledged: true })));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/memory/evidence-3"));
   });
 });

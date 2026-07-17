@@ -3,16 +3,12 @@
 Stages an evidence file once, runs Preflight Inspection against the staged
 copy (possibly more than once, e.g. after a platform override), and - only
 once the analyst confirms Start Processing - promotes the session into a
-real Evidence by calling the existing, unmodified upload routes directly
-with an UploadFile wrapping the already-staged bytes. The browser never
-re-transmits the file for promotion.
+real Evidence by routing to the same canonical backend path used by each
+evidence type. The browser never re-transmits the file for promotion.
 
-This module does not touch app.services.memory.upload_sessions (the
-existing resumable/chunked session system for memory dumps) or
-app.disk_images.service - both remain exactly as they were. It also never
-enqueues a worker job or creates an Evidence row itself; that only happens
-inside the real upload_* route functions this module calls at promotion
-time, unchanged.
+Generic evidence and disk images still delegate to the existing upload route
+functions. Memory dumps delegate to app.services.memory.upload_sessions so the
+wizard shares the same canonical registration lifecycle as the memory upload UI.
 
 Sessions expire automatically (EVIDENCE_UPLOAD_SESSION_TTL_SECONDS) and are
 cleaned up by cleanup_expired_upload_sessions(), mirroring the same expiry
@@ -711,7 +707,9 @@ def promote_upload_session(
     notes: str | None,
     current_user: Any,
 ) -> Evidence:
-    from app.api.routes_evidence import RegisterPathRequest, register_evidence_path, upload_disk_image, upload_evidence, upload_evidence_folder
+    from app.api.routes_evidence import RegisterPathRequest, _actor_label, _current_user_id, _set_evidence_host_assignment, register_evidence_path, upload_disk_image, upload_evidence, upload_evidence_folder
+    from app.models.case_host import CaseHost
+    from app.services.memory.upload_sessions import create_memory_upload_session_from_staged_file, finalize_memory_upload_session
 
     # NOTE: upload_evidence/upload_disk_image/upload_evidence_folder are
     # FastAPI route functions whose parameter defaults are Form(...)/File(...)
@@ -776,7 +774,8 @@ def promote_upload_session(
                 for spec in extra_segment_specs
             ]
             try:
-                if session.metadata_json and session.metadata_json.get("category") == "disk_image":
+                category = (session.metadata_json or {}).get("category")
+                if category == "disk_image":
                     evidence = upload_disk_image(
                         case_id,
                         [upload, *extra_uploads],
@@ -787,6 +786,51 @@ def promote_upload_session(
                         db=db,
                         current_user=current_user,
                     )
+                elif category == "memory_dump":
+                    host_label = (provided_host or "").strip()
+                    if not host_label and host_id:
+                        host = db.get(CaseHost, host_id)
+                        if host is not None and host.case_id == case_id:
+                            host_label = host.display_name
+                    memory_upload = create_memory_upload_session_from_staged_file(
+                        db,
+                        case_id=case_id,
+                        filename=session.original_filename,
+                        staged_path=staged_path,
+                        expected_size_bytes=int(session.size_bytes or staged_path.stat().st_size),
+                        provided_host=host_label,
+                        authorization_acknowledged=memory_authorization_acknowledged,
+                        expected_sha256=session.sha256,
+                        metadata={
+                            "evidence_intent": "raw",
+                            "packaging": "single_file",
+                            "ingest_mode": None,
+                            "provided_platform": provided_platform,
+                            "evtx_profile": evtx_profile,
+                            "authorization_acknowledged": bool(memory_authorization_acknowledged),
+                            "uploaded_by_user_id": _current_user_id(current_user),
+                            "source_upload_session_id": session.id,
+                            "source_upload_session_kind": "unified_evidence_wizard",
+                        },
+                    )
+                    _finalized, evidence = finalize_memory_upload_session(
+                        db,
+                        case_id=case_id,
+                        upload_id=memory_upload.id,
+                        expected_sha256=session.sha256,
+                    )
+                    if evidence is None:
+                        raise UploadSessionError("memory_registration_failed", "Memory upload finalization did not create an Evidence row.")
+                    if host_id:
+                        evidence = _set_evidence_host_assignment(
+                            db,
+                            evidence,
+                            host_id=host_id,
+                            actor_user_id=_current_user_id(current_user),
+                            actor=_actor_label(current_user),
+                            reason="Assigned during evidence ingestion wizard",
+                            method="upload_assignment",
+                        )
                 else:
                     evidence = upload_evidence(
                         case_id,

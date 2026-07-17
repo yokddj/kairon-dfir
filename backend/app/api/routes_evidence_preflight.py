@@ -41,6 +41,7 @@ from app.services.evidence_upload_session import (
     rerun_preflight,
 )
 from app.services.ingestion_health import check_ingestion_readiness
+from app.services.memory.upload_sessions import MemoryUploadSessionError
 
 router = APIRouter(prefix="/api/cases", tags=["evidence-preflight"])
 logger = logging.getLogger(__name__)
@@ -184,6 +185,15 @@ def promote_evidence_upload(
         )
     except HTTPException:
         raise
+    except MemoryUploadSessionError as exc:
+        if exc.code in {"MEMORY_UPLOAD_ACTIVE_SESSION_EXISTS", "MEMORY_EVIDENCE_DUPLICATE"}:
+            status_code = 409
+        elif exc.code == "MEMORY_UPLOAD_TOO_LARGE":
+            status_code = 413
+        else:
+            status_code = 400
+        detail = {"error_code": exc.code, "code": exc.code, "message": exc.message, **(exc.detail or {})}
+        raise HTTPException(status_code=status_code, detail=detail) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("Promoting upload session %s failed for case %s", session_id, case_id)
         raise HTTPException(status_code=500, detail=f"Could not start processing: {exc.__class__.__name__}") from exc
