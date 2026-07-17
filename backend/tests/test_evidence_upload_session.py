@@ -524,6 +524,33 @@ def test_memory_wizard_and_legacy_upload_register_equivalent_canonical_evidence(
     assert wizard_upload.metadata_json["source_upload_session_kind"] == "unified_evidence_wizard"
 
 
+def test_legacy_memory_upload_without_explicit_host_is_rejected(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
+    monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_upload_enabled", True)
+    monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_upload_case_quota_bytes", 256 * 1024 * 1024)
+    monkeypatch.setattr("app.services.memory.upload_sessions._capacity_snapshot", lambda *args, **kwargs: {"can_accept_selected_size": True})
+    db = _db()
+    _case(db)
+
+    with pytest.raises(Exception) as exc:
+        create_memory_upload_session(
+            db,
+            case_id=CASE_ID,
+            filename="capture.mem",
+            expected_size_bytes=4096,
+            provided_host="",
+            authorization_acknowledged=True,
+            upload_mode="direct",
+        )
+
+    assert getattr(exc.value, "code", None) == "MEMORY_UPLOAD_HOST_REQUIRED"
+    assert db.query(Evidence).count() == 0
+    assert db.query(MemoryUpload).count() == 0
+
+
 def test_promote_memory_session_requires_authorization_acknowledgement(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
@@ -556,6 +583,112 @@ def test_promote_memory_session_requires_authorization_acknowledgement(tmp_path,
 
     assert getattr(exc.value, "code", None) == "MEMORY_UPLOAD_AUTHORIZATION_REQUIRED"
     assert db.query(Evidence).count() == 0
+
+
+def test_promote_memory_session_requires_explicit_source_host_like_legacy(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
+    monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_upload_enabled", True)
+    monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_upload_case_quota_bytes", 256 * 1024 * 1024)
+    monkeypatch.setattr("app.services.memory.upload_sessions._capacity_snapshot", lambda *args, **kwargs: {"can_accept_selected_size": True})
+    db = _db()
+    _case(db)
+    ram_path = tmp_path / "capture.mem"
+    ram_path.write_bytes(b"RAM" * 1024)
+    session, report = create_upload_session(db, CASE_ID, files=[_upload_file(ram_path)], declared_platform=None, client_sha256=None)
+    assert report.classification.category == "memory_dump"
+
+    with pytest.raises(Exception) as exc:
+        promote_upload_session(
+            db,
+            session,
+            provided_platform=None,
+            host_id=None,
+            provided_host=None,
+            evtx_profile=None,
+            memory_authorization_acknowledged=True,
+            folder_name=None,
+            labels=None,
+            notes=None,
+            current_user=None,
+        )
+
+    assert getattr(exc.value, "code", None) == "MEMORY_UPLOAD_HOST_REQUIRED"
+    assert db.query(Evidence).count() == 0
+    assert db.query(MemoryUpload).count() == 0
+
+
+def test_promote_memory_session_without_host_returns_structured_api_error(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
+    monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_upload_enabled", True)
+    monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_upload_case_quota_bytes", 256 * 1024 * 1024)
+    monkeypatch.setattr("app.services.memory.upload_sessions._capacity_snapshot", lambda *args, **kwargs: {"can_accept_selected_size": True})
+    db = _db()
+    _case(db)
+    client = _client(db)
+    ram_path = tmp_path / "capture.mem"
+    ram_path.write_bytes(b"RAM" * 1024)
+    session, report = create_upload_session(db, CASE_ID, files=[_upload_file(ram_path)], declared_platform=None, client_sha256=None)
+    assert report.classification.category == "memory_dump"
+
+    response = client.post(
+        f"/api/cases/{CASE_ID}/evidence-uploads/{session.id}/promote",
+        json={"provided_platform": None, "host_id": None, "memory_authorization_acknowledged": True},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "error_code": "MEMORY_UPLOAD_HOST_REQUIRED",
+        "code": "MEMORY_UPLOAD_HOST_REQUIRED",
+        "message": "Source host is required for memory evidence registration.",
+    }
+    assert db.query(Evidence).count() == 0
+    assert db.query(MemoryUpload).count() == 0
+
+
+def test_promote_memory_session_rejects_host_from_another_case(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
+    monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_upload_enabled", True)
+    monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_upload_case_quota_bytes", 256 * 1024 * 1024)
+    monkeypatch.setattr("app.services.memory.upload_sessions._capacity_snapshot", lambda *args, **kwargs: {"can_accept_selected_size": True})
+    db = _db()
+    _case(db)
+    other_case_id = "aaaaaaaa-3333-4333-8333-aaaaaaaaaaaa"
+    _case(db, case_id=other_case_id)
+    other_host = CaseHost(id="bbbbbbbb-3333-4333-8333-bbbbbbbbbbbb", case_id=other_case_id, canonical_name="OTHER-HOST", display_name="OTHER-HOST", confidence="manual", source="manual")
+    db.add(other_host)
+    db.commit()
+    ram_path = tmp_path / "capture.mem"
+    ram_path.write_bytes(b"RAM" * 1024)
+    session, report = create_upload_session(db, CASE_ID, files=[_upload_file(ram_path)], declared_platform=None, client_sha256=None)
+    assert report.classification.category == "memory_dump"
+
+    with pytest.raises(Exception) as exc:
+        promote_upload_session(
+            db,
+            session,
+            provided_platform=None,
+            host_id=other_host.id,
+            provided_host=None,
+            evtx_profile=None,
+            memory_authorization_acknowledged=True,
+            folder_name=None,
+            labels=None,
+            notes=None,
+            current_user=None,
+        )
+
+    assert getattr(exc.value, "code", None) == "MEMORY_UPLOAD_HOST_REQUIRED"
+    assert db.query(Evidence).count() == 0
+    assert db.query(MemoryUpload).count() == 0
 
 
 def test_promote_disk_image_with_multiple_segments_passes_all_segments_in_order(tmp_path, monkeypatch):
