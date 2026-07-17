@@ -192,6 +192,10 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
       void queryClient.invalidateQueries({ queryKey: ["case-processing", caseId] });
       void queryClient.invalidateQueries({ queryKey: ["evidences", caseId] });
       handleClose();
+      if (evidence.evidence_type === "memory_dump") {
+        navigate(`/cases/${caseId}/memory/${evidence.id}`);
+        return;
+      }
       navigate(`/cases/${caseId}?tab=processing&evidence_id=${evidence.id}`);
     },
     onError: (error) => {

@@ -28,8 +28,15 @@ from app.api import routes_evidence_preflight
 from app.core.database import Base, get_db, utc_now
 from app.core.config import get_settings
 from app.models.case import Case
+from app.models.case_host import CaseHost
 from app.models.evidence import Evidence
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
+from app.models.memory import MemoryUpload
+from app.services.memory.upload_sessions import (
+    create_memory_upload_session,
+    finalize_memory_upload_session,
+    store_memory_upload_chunk_stream,
+)
 from app.services.evidence_upload_session import (
     UploadSessionError,
     _stage_streamed_file,
@@ -89,6 +96,10 @@ class _StreamRequest:
             if isinstance(chunk, BaseException):
                 raise chunk
             yield chunk
+
+
+async def _bytes_stream(payload: bytes):
+    yield payload
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +383,179 @@ def test_promote_disk_image_category_routes_to_disk_image_upload(tmp_path, monke
         current_user=None,
     )
     assert evidence.evidence_type.value == "disk_image"
+
+
+def test_promote_memory_session_uses_memory_upload_lifecycle_not_generic_ingest(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
+    monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_upload_enabled", True)
+    monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_upload_case_quota_bytes", 256 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_auto_preparation", False)
+    monkeypatch.setattr(settings, "memory_auto_symbol_probe", False)
+    monkeypatch.setattr("app.services.memory.upload_sessions._capacity_snapshot", lambda *args, **kwargs: {"can_accept_selected_size": True})
+    monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda _evidence_id: (_ for _ in ()).throw(AssertionError("memory wizard must not enqueue generic ingest")))
+    monkeypatch.setattr("app.api.routes_evidence.upload_evidence", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("memory wizard must not call generic upload_evidence")))
+    monkeypatch.setattr("app.api.routes_evidence.upload_disk_image", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("memory wizard must not call disk image upload")))
+    db = _db()
+    _case(db)
+    host = CaseHost(id="bbbbbbbb-1111-4111-8111-bbbbbbbbbbbb", case_id=CASE_ID, canonical_name="WIN-RAM01", display_name="WIN-RAM01", confidence="manual", source="manual")
+    db.add(host)
+    db.commit()
+    ram_path = tmp_path / "capture.mem"
+    ram_bytes = b"RAM" * 4096
+    ram_path.write_bytes(ram_bytes)
+
+    session, report = create_upload_session(db, CASE_ID, files=[_upload_file(ram_path)], declared_platform=None, client_sha256=None)
+    assert report.classification.category == "memory_dump"
+    staged_path = Path(session.staged_path)
+    known_hash = hashlib.sha256(ram_bytes).hexdigest()
+
+    evidence = promote_upload_session(
+        db,
+        session,
+        provided_platform="windows",
+        host_id=host.id,
+        provided_host=None,
+        evtx_profile=None,
+        memory_authorization_acknowledged=True,
+        folder_name=None,
+        labels=None,
+        notes=None,
+        current_user=None,
+    )
+
+    assert evidence.evidence_type.value == "memory_dump"
+    assert evidence.sha256 == known_hash
+    assert evidence.size_bytes == len(ram_bytes)
+    assert evidence.ingest_status.value == "completed"
+    assert evidence.host_id == host.id
+    assert evidence.metadata_json["memory_analysis"]["status"] == "registered"
+    assert evidence.ingest_source["memory_upload"] is True
+    assert Path(evidence.stored_path).name == "memory-image.mem"
+    assert Path(evidence.stored_path).read_bytes() == ram_bytes
+    upload = db.query(MemoryUpload).filter(MemoryUpload.evidence_id == evidence.id).one()
+    assert upload.status == "completed"
+    assert upload.sha256 == known_hash
+    assert upload.metadata_json["source_upload_session_kind"] == "unified_evidence_wizard"
+    assert db.get(EvidenceUploadSession, session.id).status == EvidenceUploadSessionStatus.promoted.value
+    assert db.get(EvidenceUploadSession, session.id).promoted_evidence_id == evidence.id
+    assert not staged_path.exists()
+
+
+def test_memory_wizard_and_legacy_upload_register_equivalent_canonical_evidence(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
+    monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_upload_enabled", True)
+    monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_upload_case_quota_bytes", 256 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_auto_preparation", False)
+    monkeypatch.setattr(settings, "memory_auto_symbol_probe", False)
+    monkeypatch.setattr("app.services.memory.upload_sessions._capacity_snapshot", lambda *args, **kwargs: {"can_accept_selected_size": True})
+    db = _db()
+    legacy_case_id = CASE_ID
+    wizard_case_id = "aaaaaaaa-2222-4222-8222-aaaaaaaaaaaa"
+    _case(db, case_id=legacy_case_id)
+    _case(db, case_id=wizard_case_id)
+    ram_bytes = b"Kairon RAM parity\x00" * 4096
+    known_hash = hashlib.sha256(ram_bytes).hexdigest()
+
+    legacy_upload = create_memory_upload_session(
+        db,
+        case_id=legacy_case_id,
+        filename="capture.mem",
+        expected_size_bytes=len(ram_bytes),
+        provided_host="WIN-RAM01",
+        authorization_acknowledged=True,
+        expected_sha256=known_hash,
+        upload_mode="direct",
+    )
+    asyncio.run(
+        store_memory_upload_chunk_stream(
+            db,
+            case_id=legacy_case_id,
+            upload_id=legacy_upload.id,
+            chunk_index=0,
+            chunks=_bytes_stream(ram_bytes),
+            headers={"content-length": str(len(ram_bytes)), "x-kairon-chunk-sha256": known_hash},
+            content_length_is_payload=True,
+            expected_mode="direct",
+        )
+    )
+    _, legacy_evidence = finalize_memory_upload_session(db, case_id=legacy_case_id, upload_id=legacy_upload.id, expected_sha256=known_hash)
+
+    ram_path = tmp_path / "capture.mem"
+    ram_path.write_bytes(ram_bytes)
+    wizard_session, report = create_upload_session(db, wizard_case_id, files=[_upload_file(ram_path)], declared_platform=None, client_sha256=known_hash)
+    assert report.classification.category == "memory_dump"
+    wizard_evidence = promote_upload_session(
+        db,
+        wizard_session,
+        provided_platform="windows",
+        host_id=None,
+        provided_host="WIN-RAM01",
+        evtx_profile=None,
+        memory_authorization_acknowledged=True,
+        folder_name=None,
+        labels=None,
+        notes=None,
+        current_user=None,
+    )
+
+    assert legacy_evidence is not None
+    legacy_upload = db.query(MemoryUpload).filter(MemoryUpload.evidence_id == legacy_evidence.id).one()
+    wizard_upload = db.query(MemoryUpload).filter(MemoryUpload.evidence_id == wizard_evidence.id).one()
+    for evidence in (legacy_evidence, wizard_evidence):
+        assert evidence.evidence_type.value == "memory_dump"
+        assert evidence.sha256 == known_hash
+        assert evidence.size_bytes == len(ram_bytes)
+        assert evidence.ingest_status.value == "completed"
+        assert evidence.metadata_json["memory_analysis"]["status"] == "registered"
+        assert evidence.ingest_source["memory_upload"] is True
+        assert Path(evidence.stored_path).name == "memory-image.mem"
+        assert Path(evidence.stored_path).read_bytes() == ram_bytes
+    for upload in (legacy_upload, wizard_upload):
+        assert upload.status == "completed"
+        assert upload.sha256 == known_hash
+        assert upload.bytes_received == len(ram_bytes)
+        assert upload.received_chunk_count == 1
+    assert wizard_upload.metadata_json["source_upload_session_kind"] == "unified_evidence_wizard"
+
+
+def test_promote_memory_session_requires_authorization_acknowledgement(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
+    monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr(settings, "memory_upload_enabled", True)
+    monkeypatch.setattr(settings, "memory_upload_max_bytes", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_max_upload_size", 64 * 1024 * 1024)
+    monkeypatch.setattr(settings, "memory_upload_case_quota_bytes", 256 * 1024 * 1024)
+    monkeypatch.setattr("app.services.memory.upload_sessions._capacity_snapshot", lambda *args, **kwargs: {"can_accept_selected_size": True})
+    db = _db()
+    _case(db)
+    ram_path = tmp_path / "capture.mem"
+    ram_path.write_bytes(b"RAM" * 1024)
+    session, report = create_upload_session(db, CASE_ID, files=[_upload_file(ram_path)], declared_platform=None, client_sha256=None)
+    assert report.classification.category == "memory_dump"
+
+    with pytest.raises(Exception) as exc:
+        promote_upload_session(
+            db,
+            session,
+            provided_platform=None,
+            host_id=None,
+            provided_host="WIN-RAM01",
+            evtx_profile=None,
+            memory_authorization_acknowledged=False,
+            folder_name=None,
+            labels=None,
+            notes=None,
+            current_user=None,
+        )
+
+    assert getattr(exc.value, "code", None) == "MEMORY_UPLOAD_AUTHORIZATION_REQUIRED"
+    assert db.query(Evidence).count() == 0
 
 
 def test_promote_disk_image_with_multiple_segments_passes_all_segments_in_order(tmp_path, monkeypatch):
