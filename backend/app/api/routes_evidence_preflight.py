@@ -194,6 +194,9 @@ def promote_evidence_upload(
             status_code = 400
         detail = {"error_code": exc.code, "code": exc.code, "message": exc.message, **(exc.detail or {})}
         raise HTTPException(status_code=status_code, detail=detail) from exc
+    except UploadSessionError as exc:
+        detail = {"error_code": exc.code, "code": exc.code, "message": exc.message}
+        raise HTTPException(status_code=400, detail=detail) from exc
     except Exception as exc:  # noqa: BLE001
         logger.exception("Promoting upload session %s failed for case %s", session_id, case_id)
         raise HTTPException(status_code=500, detail=f"Could not start processing: {exc.__class__.__name__}") from exc
