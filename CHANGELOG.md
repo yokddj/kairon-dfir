@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.9.0-beta - 2026-07-18
+
+### Highlights
+
+- Canonical Host Resolution Service.
+- Unified evidence intake host behavior.
+- Unified memory wizard and legacy upload flow.
+- First-class Linux collection ingestion.
+- Improved Linux disk-image handling.
+- Canonical hostname normalization and deduplication.
+
+### Added
+
+- Central evidence host policy table.
+- Structured host-resolution outcomes for resolved, created, unassigned, ambiguous, required, and conflict states.
+- Host-resolution provenance through evidence metadata, custody events, and assignment fields.
+- Host assignment and host creation custody events across supported intake paths.
+- Linux triage collection support for archive and folder-style evidence.
+- Linux hostname and platform detection from common collection metadata.
+- Support for journal, cron, auth/syslog, package, identity, network, service, and common Linux triage metadata.
+
+### Changed
+
+- Generic upload, disk upload, and register-path flows now use Host Resolution.
+- Velociraptor upload and selection now use the canonical host service.
+- Memory lifecycle and wizard promotion now use the canonical host service.
+- Analyst reassignment now delegates to the canonical host assignment service.
+- Memory evidence consistently requires an explicit source host.
+- Linux intake uses canonical platform and capability handling.
+
+### Fixed
+
+- Memory wizard incorrectly offering Auto Assign for memory evidence.
+- Equivalent hostname variants creating avoidable duplicate hosts.
+- Host ownership validation inconsistencies across evidence routes.
+- Duplicate custody events on idempotent host assignment retries.
+- Linux artifact identity being overwritten during indexing.
+- Nested Linux gzip/tar intake behavior.
+- Linux hostname fallback behavior during collection processing.
+
+### Validation
+
+- Real Windows memory validation passed.
+- Real Windows collection validation passed.
+- Real parsed Windows archive validation passed.
+- Real Linux disk-image validation passed.
+- Real Linux collection validation passed.
+- Repeated Linux collection upload reused one canonical host and did not create duplicates.
+- Backend and frontend regression comparisons found no branch-specific failures.
+- Focused backend tests, frontend build, quality gate, and diff check passed before release preparation.
+
 ## Private Beta Candidate - 2026-06-02
 
 ### Added
@@ -29,4 +80,3 @@
 - Shellbags parser is pending.
 - Outlook/OST/PST mail-store triage is pending.
 - Public Internet deployment requires an external security boundary.
-
