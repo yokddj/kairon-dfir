@@ -23,7 +23,7 @@ from app.schemas.evidence import EvidenceRead
 from app.services.evidence_runs import mark_opensearch_infrastructure_block, merge_evidence_metadata
 from app.services.auth_dependencies import get_optional_user
 from app.services.evidence_integrity import record_evidence_event
-from app.services.host_identity import is_invalid_host_value
+from app.services.host_resolution import normalize_provided_host, record_host_assignment_event, require_provided_host, resolve_host
 from app.services.ingest_plan import build_plan, persist_plan
 from app.services.usable_ingest import ingest_mode_metadata, normalize_ingest_mode
 from app.workers.tasks import enqueue_ingest
@@ -36,6 +36,11 @@ settings = get_settings()
 def _current_user_id(current_user: User | None) -> str | None:
     value = getattr(current_user, "id", None)
     return str(value) if value else None
+
+
+def _actor_label(current_user: User | None = None) -> str:
+    value = getattr(current_user, "email", None) or getattr(current_user, "username", None) or getattr(current_user, "id", None)
+    return str(value) if value else "ui_or_api"
 
 
 def _mark_evidence_blocked_before_ingest(db: Session, evidence: Evidence, exc: OpenSearchIngestBlockedError) -> None:
@@ -132,17 +137,11 @@ def _generic_archive_fallback_metadata(extra: dict | None = None) -> dict:
 
 
 def _normalize_provided_host(value: str | None) -> str | None:
-    normalized = str(value or "").strip()
-    if is_invalid_host_value(normalized):
-        return None
-    return normalized or None
+    return normalize_provided_host(value)
 
 
 def _require_provided_host(value: str | None) -> str:
-    normalized = _normalize_provided_host(value)
-    if not normalized:
-        raise HTTPException(status_code=400, detail="Host name is required for evidence indexing.")
-    return normalized
+    return require_provided_host(value)
 
 
 def _resolve_requested_platform(value: str | None, *, filename: str | None = None, paths: list[str] | None = None, evidence_type: str | None = None) -> tuple[str, str, str]:
@@ -336,6 +335,14 @@ def discover_velociraptor_zip(
     resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(provided_platform, filename=file.filename or stored_path.name)
     normalized_ingest_mode = normalize_ingest_mode(ingest_mode)
     normalized_evtx_profile = str(evtx_profile or "").strip() or None
+    host_resolution = resolve_host(
+        db,
+        case_id=case_id,
+        evidence_type=EvidenceType.velociraptor_zip,
+        provided_host=normalized_provided_host,
+        allow_create=True,
+    )
+    host_assignment = host_resolution.assignment_fields(actor=_actor_label(current_user), reason="Assigned during Velociraptor upload", method="upload_assignment")
     evidence = Evidence(
         id=evidence_id,
         case_id=case_id,
@@ -354,6 +361,7 @@ def discover_velociraptor_zip(
         first_seen_at=utc_now_naive(),
         integrity_status=EvidenceIntegrityStatus.unknown,
         ingest_status=IngestStatus.pending,
+        **host_assignment,
         source_tool="velociraptor",
         ingest_source={
             "mode": "uploaded",
@@ -373,6 +381,18 @@ def discover_velociraptor_zip(
     db.add(evidence)
     record_evidence_event(db, evidence, EvidenceCustodyEventType.uploaded, "Evidence uploaded and registered.", actor_user_id=_current_user_id(current_user), details={"original_filename": evidence.original_filename, "size_bytes": evidence.size_bytes, "evidence_type": evidence.evidence_type.value})
     record_evidence_event(db, evidence, EvidenceCustodyEventType.hash_computed, "SHA-256 computed for uploaded evidence.", actor_user_id=_current_user_id(current_user), details={"sha256": evidence.sha256, "size_bytes": evidence.size_bytes})
+    if host_resolution.host_id:
+        record_host_assignment_event(
+            db,
+            evidence,
+            previous_host_id=None,
+            new_host_id=host_resolution.host_id,
+            actor_user_id=_current_user_id(current_user),
+            actor=_actor_label(current_user),
+            reason="Assigned during Velociraptor upload",
+            method="upload_assignment",
+            host_created=host_resolution.created,
+        )
     db.commit()
     db.refresh(evidence)
     _write_initial_manifest(evidence)
@@ -406,6 +426,7 @@ def discover_velociraptor_folder(
     provided_platform: str | None = Form(None),
     evtx_profile: str | None = Form(None),
     db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_user),
 ) -> dict:
     _ensure_browser_folder_upload_allowed(files)
     if not db.get(Case, case_id):
@@ -416,6 +437,14 @@ def discover_velociraptor_folder(
     resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(provided_platform, filename=folder_label, paths=entry_paths)
     normalized_ingest_mode = normalize_ingest_mode(ingest_mode)
     normalized_evtx_profile = str(evtx_profile or "").strip() or None
+    host_resolution = resolve_host(
+        db,
+        case_id=case_id,
+        evidence_type=EvidenceType.velociraptor_zip,
+        provided_host=normalized_provided_host,
+        allow_create=True,
+    )
+    host_assignment = host_resolution.assignment_fields(actor=_actor_label(current_user), reason="Assigned during Velociraptor upload", method="upload_assignment")
     evidence = Evidence(
         id=evidence_id,
         case_id=case_id,
@@ -428,6 +457,7 @@ def discover_velociraptor_folder(
         detected_platform=resolved_detected_platform,
         effective_platform=resolved_effective_platform,
         ingest_status=IngestStatus.pending,
+        **host_assignment,
         source_tool="velociraptor",
         ingest_source={
             "mode": "uploaded",
@@ -445,6 +475,18 @@ def discover_velociraptor_folder(
         error_log={},
     )
     db.add(evidence)
+    if host_resolution.host_id:
+        record_host_assignment_event(
+            db,
+            evidence,
+            previous_host_id=None,
+            new_host_id=host_resolution.host_id,
+            actor_user_id=_current_user_id(current_user),
+            actor=_actor_label(current_user),
+            reason="Assigned during Velociraptor upload",
+            method="upload_assignment",
+            host_created=host_resolution.created,
+        )
     db.commit()
     db.refresh(evidence)
     _write_initial_manifest(evidence)
@@ -520,6 +562,14 @@ def parse_velociraptor_selection(payload: VelociraptorParseRequest, db: Session 
     requested_provided_host = _normalize_provided_host(payload.provided_host) or _normalize_provided_host(existing_metadata.get("provided_host"))
     if not requested_provided_host:
         raise HTTPException(status_code=400, detail="Host name is required for evidence indexing.")
+    host_resolution = resolve_host(
+        db,
+        case_id=evidence.case_id,
+        evidence_type=evidence.evidence_type,
+        host_id=evidence.host_id,
+        provided_host=requested_provided_host,
+        allow_create=True,
+    )
     requested_evtx_profile = str(payload.evtx_profile or existing_metadata.get("evtx_profile") or "").strip() or None
     metadata = _apply_velociraptor_selection_metadata(existing_metadata, candidates, selected)
     metadata.update(ingest_mode_metadata(requested_ingest_mode))
@@ -566,6 +616,22 @@ def parse_velociraptor_selection(payload: VelociraptorParseRequest, db: Session 
     }
     evidence.ingest_status = IngestStatus.pending
     evidence.error_log = {}
+    previous_host_id = evidence.host_id
+    host_assignment = host_resolution.assignment_fields(actor=_actor_label(), reason="Assigned during Velociraptor selection", method="upload_assignment")
+    for key, value in host_assignment.items():
+        setattr(evidence, key, value)
+    if host_resolution.host_id and previous_host_id != host_resolution.host_id:
+        record_host_assignment_event(
+            db,
+            evidence,
+            previous_host_id=previous_host_id,
+            new_host_id=host_resolution.host_id,
+            actor_user_id=None,
+            actor=_actor_label(),
+            reason="Assigned during Velociraptor selection",
+            method="upload_assignment",
+            host_created=host_resolution.created,
+        )
     db.commit()
     db.refresh(evidence)
     try:

@@ -19,6 +19,7 @@ from app.core.storage import safe_display_filename, sha256_file
 from app.models.evidence import Evidence, EvidenceCustodyEventType, EvidenceIntegrityStatus, EvidenceStorageMode, EvidenceType, EvidencePlatform, IngestStatus, detect_evidence_platform, normalize_evidence_platform, resolve_evidence_platform
 from app.services.evidence_integrity import record_evidence_event
 from app.models.memory import MemoryUpload
+from app.services.host_resolution import record_host_assignment_event, resolve_host
 from app.services.memory.upload_capacity import assert_memory_upload_capacity, release_memory_upload_slot_if_owner
 from app.services.memory.evidence_access import secure_uploaded_memory_permissions
 
@@ -482,10 +483,40 @@ def _persist_evidence_minimal(
     db.add(evidence)
     db.commit()
     db.refresh(evidence)
+    host_resolution = None
+    try:
+        host_resolution = resolve_host(
+            db,
+            case_id=item.case_id,
+            evidence_type=EvidenceType.memory_dump,
+            provided_host=item.source_host,
+            allow_create=True,
+            detected_platform=evidence.detected_platform,
+            platform_confidence="high" if evidence.detected_platform not in {None, "", "unknown", "auto"} else "unknown",
+        )
+        for key, value in host_resolution.assignment_fields(actor="memory_upload", reason="Assigned during memory evidence registration", method="memory_upload_assignment").items():
+            setattr(evidence, key, value)
+        db.commit()
+        db.refresh(evidence)
+    except Exception:  # noqa: BLE001
+        db.rollback()
+        logger.exception("memory evidence host assignment failed upload_id=%s evidence_id=%s", item.id, evidence.id)
     try:
         record_evidence_event(db, evidence, EvidenceCustodyEventType.uploaded, "Memory evidence uploaded and registered.", actor_user_id=evidence.uploaded_by_user_id, details={"original_filename": evidence.original_filename, "size_bytes": evidence.size_bytes, "evidence_type": evidence.evidence_type.value})
         if evidence.sha256:
             record_evidence_event(db, evidence, EvidenceCustodyEventType.hash_computed, "SHA-256 computed for uploaded memory evidence.", actor_user_id=evidence.uploaded_by_user_id, details={"sha256": evidence.sha256, "size_bytes": evidence.size_bytes})
+        if host_resolution and host_resolution.host_id:
+            record_host_assignment_event(
+                db,
+                evidence,
+                previous_host_id=None,
+                new_host_id=host_resolution.host_id,
+                actor_user_id=evidence.uploaded_by_user_id,
+                actor="memory_upload",
+                reason="Assigned during memory evidence registration",
+                method="memory_upload_assignment",
+                host_created=host_resolution.created,
+            )
         db.commit()
     except Exception:  # noqa: BLE001
         db.rollback()
