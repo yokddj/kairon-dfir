@@ -18,6 +18,8 @@ Use this process for private beta updates.
 
 3. Confirm no ingest/rules/report jobs are running in the System page or queue status.
 
+4. Confirm enough free disk space exists for uploaded evidence, extracted artifacts, PostgreSQL, and OpenSearch data.
+
 ## Update
 
 ```bash
@@ -26,7 +28,7 @@ docker compose build
 docker compose up -d
 ```
 
-If database migrations are part of a release, run them before opening the UI to analysts.
+Database migrations and compatibility schema checks run during backend startup. Do not open the UI to analysts until the backend health endpoint reports healthy after the update.
 
 ## Post-Update Smoke
 
@@ -41,6 +43,9 @@ Then validate:
 - System page shows OpenSearch and worker healthy
 - existing case Search works
 - report preview/export works
+- users, cases, hosts, evidence, and custody events are still visible
+- a new non-memory evidence upload resolves or creates the expected host according to its Host Resolution policy
+- memory evidence upload still requires an explicit source host
 
 For the validation sample case, use:
 
@@ -66,6 +71,13 @@ If migrations or data changes occurred:
 4. Restore `./data` if files were changed or removed.
 5. Start the previous known-good version.
 
+## 0.9.0-beta Notes
+
+- Host Resolution Service uses existing schema for case hosts, aliases, evidence assignment fields, platform fields, and custody events.
+- No automatic host merge is performed during upgrade.
+- Existing evidence remains readable; new deterministic host behavior applies to new intake and reassignment operations.
+- Reindex is not required solely for this release unless operators want historical search documents to reflect newly assigned host metadata.
+
 ## Evidence Volumes
 
 Never delete Docker volumes during rollback unless you are intentionally restoring from backup:
@@ -74,4 +86,3 @@ Never delete Docker volumes during rollback unless you are intentionally restori
 - `opensearch_data`
 
 Do not clean `./data` unless you understand which uploaded evidence and derived parser outputs it contains.
-

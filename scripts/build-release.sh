@@ -3,7 +3,7 @@ set -euo pipefail
 # Kairon Release Build Script
 # Usage: bash scripts/build-release.sh [VERSION]
 
-VERSION="${1:-0.1.0-beta.1}"
+VERSION="${1:-0.9.0-beta}"
 KAIRON_COMMIT="$(git rev-parse HEAD)"
 KAIRON_VERSION="$VERSION"
 SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
@@ -17,6 +17,7 @@ echo "  epoch:    $SOURCE_DATE_EPOCH"
 echo ""
 
 export KAIRON_COMMIT KAIRON_VERSION BUILD_DATE SOURCE_DATE_EPOCH
+export APP_VERSION="$KAIRON_VERSION"
 
 echo "--- Building images ---"
 docker compose build \

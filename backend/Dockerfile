@@ -2,10 +2,12 @@ FROM python:3.12-slim@sha256:423ed6ab25b1921a477529254bfeeabf5855151dc2c3141699a
 
 ARG KAIRON_COMMIT=unknown
 ARG BUILD_DATE=unknown
+ARG KAIRON_VERSION=0.9.0-beta
 ARG DOTNET_VERSION=9.0
 
 ENV KAIRON_COMMIT=${KAIRON_COMMIT}
 ENV BUILD_DATE=${BUILD_DATE}
+ENV APP_VERSION=${KAIRON_VERSION}
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV DOTNET_ROOT=/opt/dotnet
@@ -14,6 +16,11 @@ ENV EVTXECMD_DOTNET_DLL=/opt/evtxecmd/EvtxECmd.dll
 ENV EZTOOLS_ROOT=/opt/eztools
 
 WORKDIR /app
+
+LABEL org.opencontainers.image.title="Kairon DFIR backend" \
+      org.opencontainers.image.version="${KAIRON_VERSION}" \
+      org.opencontainers.image.revision="${KAIRON_COMMIT}" \
+      org.opencontainers.image.created="${BUILD_DATE}"
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential libpq-dev libyara-dev pkg-config p7zip-full curl ca-certificates libicu-dev ewf-tools sleuthkit dosfstools mtools gdisk parted qemu-utils \
