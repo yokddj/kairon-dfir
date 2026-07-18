@@ -63,9 +63,8 @@ Not supported yet:
 
 - Full Linux memory analysis with Volatility
 - ext4 filesystem parsing
-- Linux disk images
-- Virtual Disk Upload for Linux
-- Automatic disk mounting
+- Full automatic filesystem mounting for every Linux disk-image layout
+- Write-capable disk-image mounting
 - Binary systemd journal parsing
 - SELinux policy database parsing
 - macOS collection parsing

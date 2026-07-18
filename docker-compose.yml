@@ -72,6 +72,7 @@ services:
       args:
         KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
         BUILD_DATE: ${BUILD_DATE:-unknown}
+        KAIRON_VERSION: ${APP_VERSION:-0.9.0-beta}
     restart: unless-stopped
     env_file:
       - config/defaults.env
@@ -97,6 +98,7 @@ services:
       KAIRON_CLI_OPERATOR_ROOTS: /operator-symbol-import
       KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
       BUILD_DATE: ${BUILD_DATE:-unknown}
+      APP_VERSION: ${APP_VERSION:-0.9.0-beta}
     command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "${BACKEND_UVICORN_WORKERS:-1}"]
     group_add:
       - "${MEMORY_EVIDENCE_SHARED_GID:-10001}"
@@ -105,6 +107,10 @@ services:
     build:
       context: .
       dockerfile: backend/Dockerfile
+      args:
+        KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
+        BUILD_DATE: ${BUILD_DATE:-unknown}
+        KAIRON_VERSION: ${APP_VERSION:-0.9.0-beta}
     env_file:
       - config/defaults.env
       - .env
@@ -381,6 +387,7 @@ services:
       args:
         KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
         BUILD_DATE: ${BUILD_DATE:-unknown}
+        KAIRON_VERSION: ${APP_VERSION:-0.9.0-beta}
     restart: unless-stopped
     depends_on:
       backend:
