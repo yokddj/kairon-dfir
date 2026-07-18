@@ -707,8 +707,9 @@ def promote_upload_session(
     notes: str | None,
     current_user: Any,
 ) -> Evidence:
-    from app.api.routes_evidence import RegisterPathRequest, _actor_label, _current_user_id, _set_evidence_host_assignment, register_evidence_path, upload_disk_image, upload_evidence, upload_evidence_folder
-    from app.models.case_host import CaseHost
+    from app.api.routes_evidence import RegisterPathRequest, _actor_label, _current_user_id, register_evidence_path, upload_disk_image, upload_evidence, upload_evidence_folder
+    from app.models.evidence import EvidenceType
+    from app.services.host_resolution import assign_evidence_host as service_assign_evidence_host, resolve_host
     from app.services.memory.upload_sessions import create_memory_upload_session_from_staged_file, finalize_memory_upload_session
 
     # NOTE: upload_evidence/upload_disk_image/upload_evidence_folder are
@@ -787,11 +788,21 @@ def promote_upload_session(
                         current_user=current_user,
                     )
                 elif category == "memory_dump":
-                    host_label = (provided_host or "").strip()
-                    if not host_label and host_id:
-                        host = db.get(CaseHost, host_id)
-                        if host is not None and host.case_id == case_id:
-                            host_label = host.display_name
+                    try:
+                        host_resolution = resolve_host(
+                            db,
+                            case_id=case_id,
+                            evidence_type=EvidenceType.memory_dump,
+                            host_id=host_id,
+                            provided_host=provided_host,
+                            allow_create=True,
+                        )
+                    except Exception as exc:
+                        raise UploadSessionError(
+                            "MEMORY_UPLOAD_HOST_REQUIRED",
+                            "Source host is required for memory evidence registration.",
+                        ) from exc
+                    host_label = host_resolution.display_name or ""
                     memory_upload = create_memory_upload_session_from_staged_file(
                         db,
                         case_id=case_id,
@@ -821,15 +832,16 @@ def promote_upload_session(
                     )
                     if evidence is None:
                         raise UploadSessionError("memory_registration_failed", "Memory upload finalization did not create an Evidence row.")
-                    if host_id:
-                        evidence = _set_evidence_host_assignment(
+                    if host_resolution.host_id:
+                        evidence = service_assign_evidence_host(
                             db,
                             evidence,
-                            host_id=host_id,
+                            host_id=host_resolution.host_id,
                             actor_user_id=_current_user_id(current_user),
                             actor=_actor_label(current_user),
                             reason="Assigned during evidence ingestion wizard",
                             method="upload_assignment",
+                            host_created=host_resolution.created,
                         )
                 else:
                     evidence = upload_evidence(

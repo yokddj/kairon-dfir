@@ -1,14 +1,11 @@
 import logging
-from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.core.opensearch import get_events_index, get_opensearch_client, search_documents
-from app.models.assignment_history import AssignmentHistory
 from app.models.case_host import CaseHost
-from app.models.evidence import Evidence, EvidenceCustodyEventType
-from app.services.evidence_integrity import record_evidence_event
+from app.models.evidence import Evidence
 
 logger = logging.getLogger(__name__)
 
@@ -25,61 +22,19 @@ def execute_host_reassignment(
     evidence = db.get(Evidence, evidence_id)
     if not evidence:
         raise ValueError("Evidence not found")
-    host = db.get(CaseHost, new_host_id)
-    if not host or host.case_id != evidence.case_id:
-        raise ValueError("Host not found in this case")
-
     old_host_id = evidence.host_id
-    old_status = evidence.host_assignment_status
+    from app.services.host_resolution import assign_evidence_host
 
-    evidence.host_id = new_host_id
-    evidence.host_assignment_status = "confirmed"
-    evidence.host_assignment_method = "analyst_reassigned"
-    evidence.host_assignment_confidence = confidence
-    evidence.host_assignment_reason = reason or "Analyst reassigned"
-    evidence.host_assignment_updated_at = datetime.now(UTC).isoformat()
-    evidence.host_assignment_updated_by = actor
-
-    history = AssignmentHistory(
-        evidence_id=evidence_id,
-        case_id=evidence.case_id,
-        previous_host_id=old_host_id,
-        new_host_id=new_host_id,
-        previous_status=old_status,
-        new_status="confirmed",
-        method="analyst_reassigned",
-        confidence=confidence,
-        actor=actor,
-        reason=reason or "Analyst reassigned",
-        created_at_str=datetime.now(UTC).isoformat(),
-    )
-    db.add(history)
-    event_type = EvidenceCustodyEventType.host_assignment_changed if old_host_id and old_host_id != new_host_id else EvidenceCustodyEventType.host_assigned
-    record_evidence_event(
+    evidence = assign_evidence_host(
         db,
         evidence,
-        event_type,
-        f"Evidence assigned to host {host.display_name}.",
+        host_id=new_host_id,
         actor_user_id=None,
-        details={
-            "previous_host_id": old_host_id,
-            "new_host_id": new_host_id,
-            "detected_host": evidence.detected_host,
-            "actor": actor,
-            "reason": reason,
-            "method": "analyst_reassigned",
-        },
+        actor=actor,
+        reason=reason or "Analyst reassigned",
+        method="analyst_reassigned",
+        confidence=confidence,
     )
-    db.commit()
-    db.refresh(evidence)
-
-    try:
-        backfill_result = backfill_evidence_documents(db, evidence_id)
-    except Exception:
-        logger.exception("backfill failed for evidence %s", evidence_id)
-        backfill_result = {"updated": 0, "error": "backfill failed"}
-
-    invalidate_host_caches(evidence_id, new_host_id)
 
     return {
         "evidence_id": evidence.id,
@@ -87,7 +42,6 @@ def execute_host_reassignment(
         "status": "confirmed",
         "previous_host_id": old_host_id,
         "new_host_id": new_host_id,
-        "backfill": backfill_result,
     }
 
 
