@@ -51,6 +51,7 @@ export default function CaseDetail() {
   const [metadataEditorOpen, setMetadataEditorOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [ingestionWizardOpen, setIngestionWizardOpen] = useState(false);
+  const [advancedUploadOpen, setAdvancedUploadOpen] = useState(false);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editPriority, setEditPriority] = useState("medium");
@@ -183,6 +184,30 @@ export default function CaseDetail() {
   );
   const selectedProcessing = processingQuery.data?.items.find((item) => item.evidence_id === selectedProcessingId) ?? processingQuery.data?.items[0] ?? null;
   const normalizedCaseStatus = caseQuery.data?.status === "open" ? "active" : caseQuery.data?.status;
+  const renderGuidedIngestionPanel = (options: { includeArtifactsInvalidation?: boolean } = {}) => (
+    <div className="space-y-4">
+      <div className="rounded-3xl border border-accent/30 bg-accent/5 p-5 shadow-panel">
+        <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Add evidence</p>
+        <p className="mt-2 text-sm text-muted">A guided wizard classifies your evidence and previews exactly what Kairon is about to do before anything is processed.</p>
+        <button type="button" onClick={() => setIngestionWizardOpen(true)} className="mt-4 rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">
+          Add Evidence
+        </button>
+      </div>
+      <details open={advancedUploadOpen} onToggle={(event) => setAdvancedUploadOpen(event.currentTarget.open)} className="rounded-3xl border border-line bg-panel/50 p-4">
+        <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.16em] text-muted">Advanced upload (Velociraptor selection, EVTX profile, folder discovery)</summary>
+        {advancedUploadOpen ? <div className="mt-4">
+          <EvidenceUpload
+            caseId={caseId}
+            onUploaded={() => {
+              void queryClient.invalidateQueries({ queryKey: ["evidences", caseId] });
+              if (options.includeArtifactsInvalidation) void queryClient.invalidateQueries({ queryKey: ["artifacts", caseId] });
+              void queryClient.invalidateQueries({ queryKey: ["case-processing", caseId] });
+            }}
+          />
+        </div> : null}
+      </details>
+    </div>
+  );
 
   return (
     <div className="space-y-8">
@@ -259,28 +284,7 @@ export default function CaseDetail() {
 
       {tab === "overview" ? (
         <section className="grid gap-6 lg:grid-cols-[1.1fr_1.9fr]">
-          <div className="space-y-4">
-            <div className="rounded-3xl border border-accent/30 bg-accent/5 p-5 shadow-panel">
-              <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Add evidence</p>
-              <p className="mt-2 text-sm text-muted">A guided wizard classifies your evidence and previews exactly what Kairon is about to do before anything is processed.</p>
-              <button type="button" onClick={() => setIngestionWizardOpen(true)} className="mt-4 rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">
-                Add Evidence
-              </button>
-            </div>
-            <details className="rounded-3xl border border-line bg-panel/50 p-4">
-              <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.16em] text-muted">Advanced upload (Velociraptor selection, EVTX profile, folder discovery)</summary>
-              <div className="mt-4">
-                <EvidenceUpload
-                  caseId={caseId}
-                  onUploaded={() => {
-                    void queryClient.invalidateQueries({ queryKey: ["evidences", caseId] });
-                    void queryClient.invalidateQueries({ queryKey: ["artifacts", caseId] });
-                    void queryClient.invalidateQueries({ queryKey: ["case-processing", caseId] });
-                  }}
-                />
-              </div>
-            </details>
-          </div>
+          {renderGuidedIngestionPanel({ includeArtifactsInvalidation: true })}
           <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
             <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">What happened?</p>
             <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -452,16 +456,10 @@ export default function CaseDetail() {
 
       {tab === "evidences" ? (
         <section className="space-y-4">
-          <EvidenceUpload
-            caseId={caseId}
-            onUploaded={() => {
-              void queryClient.invalidateQueries({ queryKey: ["evidences", caseId] });
-              void queryClient.invalidateQueries({ queryKey: ["case-processing", caseId] });
-            }}
-          />
+          {renderGuidedIngestionPanel()}
           {!evidencesQuery.data?.length ? (
             <div className="rounded-3xl border border-line bg-panel/40 p-5 text-sm text-muted">
-              {hasHostFilter ? <>No evidence associated with {activeHost}. <button type="button" onClick={clearHostFilter} className="text-accent underline underline-offset-4">Clear host filter</button> to see all evidence, including unassigned evidence.</> : "This is the evidence workspace for the case. Click the upload panel above to add a raw evidence collection, parsed KAPE/EZ Tools output, or loose CSV/JSON artifacts."}
+              {hasHostFilter ? <>No evidence associated with {activeHost}. <button type="button" onClick={clearHostFilter} className="text-accent underline underline-offset-4">Clear host filter</button> to see all evidence, including unassigned evidence.</> : "This is the evidence workspace for the case. Use Add Evidence for guided ingestion, or expand Advanced upload for specialized Velociraptor, EVTX, folder discovery, and server-path flows."}
             </div>
           ) : null}
           {(evidencesQuery.data ?? []).map((item) => {
