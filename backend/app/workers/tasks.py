@@ -1679,14 +1679,16 @@ def _benchmark_phase_snapshot(state: dict | None) -> list[dict]:
 
 def _parallel_evidence_ref(evidence: Evidence) -> dict[str, object]:
     metadata = dict(getattr(evidence, "metadata_json", None) or {})
-    preferred_host = str(metadata.get("provided_host") or getattr(evidence, "detected_host", None) or "").strip() or None
+    assigned_host = getattr(evidence, "host", None)
+    assigned_hostname = normalize_hostname(str(getattr(assigned_host, "canonical_name", "") or "")) if assigned_host else None
+    preferred_host = assigned_hostname or str(metadata.get("provided_host") or getattr(evidence, "detected_host", None) or "").strip() or None
     evidence_ref: dict[str, object] = {
         "id": str(evidence.id),
         "case_id": str(evidence.case_id),
         "detected_host": preferred_host,
         "detected_user": getattr(evidence, "detected_user", None),
     }
-    provided_host = str(metadata.get("provided_host") or "").strip()
+    provided_host = assigned_hostname or str(metadata.get("provided_host") or "").strip()
     if provided_host:
         evidence_ref["provided_host"] = provided_host
     ingest_run_id = str(metadata.get("current_ingest_run_id") or metadata.get("latest_ingest_run_id") or "").strip()
