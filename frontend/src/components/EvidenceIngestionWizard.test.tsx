@@ -530,7 +530,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(screen.getByRole("radio", { name: /Custom indexing/i }));
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
-    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-custom", { profile: "advanced_custom" }));
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-custom", { profile: "fast" }));
   });
 
   it("can save evidence without starting indexing", async () => {
