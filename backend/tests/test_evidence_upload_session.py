@@ -147,6 +147,7 @@ def test_streaming_upload_stages_file_before_preflight(tmp_path, monkeypatch):
 
     preflight = client.post(f"/api/cases/{CASE_ID}/evidence-uploads/{session.id}/preflight", json={"declared_platform": None})
     assert preflight.status_code == 200
+    assert preflight.json()["evidence_options"] == []
     db.refresh(session)
     assert (session.metadata_json or {}).get("category")
 

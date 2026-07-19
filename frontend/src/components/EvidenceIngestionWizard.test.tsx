@@ -87,6 +87,7 @@ function readyReport(overrides: Partial<PreflightReport> = {}): PreflightReport 
       { label: "Enough storage", ok: true, detail: "4.7 GB available, ~3.8 KB needed" },
     ],
     diagnostics: [],
+    evidence_options: [],
     ...overrides,
   };
 }
@@ -271,6 +272,41 @@ describe("EvidenceIngestionWizard", () => {
     expect(within(report).getByText(/artifact collection/)).toBeInTheDocument();
     expect(within(report).getByText(/Fast \(under 2 minutes\)/)).toBeInTheDocument();
     expect(within(report).getByText("Ready to process")).toBeInTheDocument();
+  });
+
+  it("renders preflight when the backend includes empty evidence options", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+      preflight: readyReport({ evidence_options: [] }),
+    }));
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    expect(await screen.findByTestId("preflight-report")).toBeInTheDocument();
+    expect(screen.getByText("Ready to process")).toBeInTheDocument();
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
+  });
+
+  it("normalizes preflight when the backend omits evidence options", async () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { evidence_options: _evidenceOptions, ...preflightWithoutOptions } = readyReport();
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+      preflight: preflightWithoutOptions as PreflightReport,
+    }));
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    expect(await screen.findByTestId("preflight-report")).toBeInTheDocument();
+    expect(screen.getByText("Ready to process")).toBeInTheDocument();
+    expect(consoleError).not.toHaveBeenCalled();
+    consoleError.mockRestore();
   });
 
   it("shows a hash mismatch warning when the server-staged hash disagrees with the client hash", async () => {
