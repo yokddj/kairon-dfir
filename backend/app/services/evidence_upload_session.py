@@ -760,6 +760,8 @@ def promote_upload_session(
                     case_id,
                     uploads,
                     provided_platform=provided_platform,
+                    provided_host=provided_host,
+                    host_id=host_id,
                     db=db,
                     current_user=current_user,
                 )

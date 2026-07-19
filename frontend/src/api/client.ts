@@ -3600,6 +3600,15 @@ export type PreflightWarning = {
   severity: "information" | "recommendation";
 };
 
+export type PreflightEvidenceOption = {
+  id: string;
+  label: string;
+  path: string;
+  category: string;
+  format_key: string | null;
+  size_bytes: number | null;
+};
+
 export type PreflightClassification = {
   category: "disk_image" | "memory_dump" | "archive" | "unknown";
   format_key: string | null;
@@ -3665,6 +3674,7 @@ export type PreflightReport = {
   status: "ready" | "warning" | "blocked";
   status_checks: PreflightStatusCheck[];
   diagnostics: PreflightDiagnostic[];
+  evidence_options: PreflightEvidenceOption[];
 };
 
 export type IngestionReadinessCheck = {
