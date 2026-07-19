@@ -239,7 +239,7 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
       }
 
       const result = await api.runEvidenceIndexingPlan(evidence.id, {
-        profile: processingMode === "custom" ? "advanced_custom" : "recommended",
+        profile: processingMode === "custom" ? "fast" : "recommended",
       });
       return { evidence, queuedJobs: result.queued_jobs.length };
     },
@@ -698,7 +698,7 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
                   <label className={`rounded-2xl border p-3 text-sm ${processingMode === "custom" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
                     <input type="radio" name="processing-mode" className="mr-2" checked={processingMode === "custom"} onChange={() => setProcessingMode("custom")} />
                     Custom indexing
-                    <span className="mt-1 block text-xs text-muted">Use the advanced custom indexing profile.</span>
+                    <span className="mt-1 block text-xs text-muted">Use the faster supported custom profile.</span>
                   </label>
                   <label className={`rounded-2xl border p-3 text-sm ${processingMode === "skip" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
                     <input type="radio" name="processing-mode" className="mr-2" checked={processingMode === "skip"} onChange={() => setProcessingMode("skip")} />
