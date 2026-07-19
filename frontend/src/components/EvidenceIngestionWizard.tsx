@@ -9,6 +9,7 @@ import { hashFileWithProgress } from "../lib/sha256";
 
 type IntakeType = "disk_image" | "memory_dump" | "artifact_collection" | "folder" | "server_path";
 type WizardStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
+type ProcessingMode = "recommended" | "custom" | "skip";
 
 const TOTAL_STEPS = 7;
 
@@ -73,6 +74,7 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   const [manualOverrideAccepted, setManualOverrideAccepted] = useState(false);
   const [memoryAuthorizationAcknowledged, setMemoryAuthorizationAcknowledged] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [processingMode, setProcessingMode] = useState<ProcessingMode>("recommended");
   const [labels, setLabels] = useState("");
   const [notes, setNotes] = useState("");
   const [hashProgress, setHashProgress] = useState<number | null>(null);
@@ -131,6 +133,7 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
     setManualOverrideAccepted(false);
     setMemoryAuthorizationAcknowledged(false);
     setAdvancedOpen(false);
+    setProcessingMode("recommended");
     setLabels("");
     setNotes("");
     setHashProgress(null);
@@ -180,23 +183,41 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   }
 
   const startMutation = useMutation({
-    mutationFn: async (): Promise<Evidence> => {
+    mutationFn: async (): Promise<{ evidence: Evidence; queuedJobs: number | null }> => {
       if (!session) throw new Error("No upload session is active");
       const hostId = await resolveHostId();
       const declaredPlatform = platform === "auto" ? undefined : platform;
-      return api.promoteEvidenceUploadSession(caseId, session.id, {
+      const evidence = await api.promoteEvidenceUploadSession(caseId, session.id, {
         provided_platform: declaredPlatform,
         host_id: hostId,
         memory_authorization_acknowledged: intakeType === "memory_dump" ? memoryAuthorizationAcknowledged : undefined,
         labels: labels.split(",").map((label) => label.trim()).filter(Boolean),
         notes: notes.trim() || undefined,
       });
+
+      if (evidence.evidence_type === "memory_dump" || processingMode === "skip") {
+        return { evidence, queuedJobs: null };
+      }
+
+      const result = await api.runEvidenceIndexingPlan(evidence.id, {
+        profile: processingMode === "custom" ? "advanced_custom" : "recommended",
+      });
+      return { evidence, queuedJobs: result.queued_jobs.length };
     },
-    onSuccess: (evidence) => {
+    onSuccess: ({ evidence, queuedJobs }) => {
       promotedRef.current = true;
-      notify({ title: "Processing started", description: `${evidence.original_filename} was queued for processing.`, tone: "success" });
+      notify({
+        title: queuedJobs === null ? "Evidence saved" : "Indexing started",
+        description: queuedJobs === null
+          ? `${evidence.original_filename} was added to the case.`
+          : queuedJobs > 0
+            ? `${queuedJobs} indexing step(s) were queued for ${evidence.original_filename}.`
+            : `${evidence.original_filename} is already indexed for the selected profile.`,
+        tone: "success",
+      });
       void queryClient.invalidateQueries({ queryKey: ["case-processing", caseId] });
       void queryClient.invalidateQueries({ queryKey: ["evidences", caseId] });
+      void queryClient.invalidateQueries({ queryKey: ["evidence-indexing-plan", evidence.id] });
       handleClose();
       if (evidence.evidence_type === "memory_dump") {
         navigate(`/cases/${caseId}/memory/${evidence.id}`);
@@ -551,6 +572,28 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
               <p className="mt-1">Pipeline: <span className="text-ink">{preflight.pipeline_preview.join(" → ")}</span></p>
               <p className="mt-1">Estimated duration: <span className="text-ink">{durationBucketLabel(preflight.resource_check.estimated_duration_bucket) ?? "unknown"}</span></p>
             </div>
+            {intakeType !== "memory_dump" ? (
+              <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4">
+                <h3 className="text-sm font-semibold text-ink">Processing</h3>
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  <label className={`rounded-2xl border p-3 text-sm ${processingMode === "recommended" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+                    <input type="radio" name="processing-mode" className="mr-2" checked={processingMode === "recommended"} onChange={() => setProcessingMode("recommended")} />
+                    Recommended indexing
+                    <span className="mt-1 block text-xs text-muted">Queue the default parsers for this evidence type.</span>
+                  </label>
+                  <label className={`rounded-2xl border p-3 text-sm ${processingMode === "custom" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+                    <input type="radio" name="processing-mode" className="mr-2" checked={processingMode === "custom"} onChange={() => setProcessingMode("custom")} />
+                    Custom indexing
+                    <span className="mt-1 block text-xs text-muted">Use the advanced custom indexing profile.</span>
+                  </label>
+                  <label className={`rounded-2xl border p-3 text-sm ${processingMode === "skip" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+                    <input type="radio" name="processing-mode" className="mr-2" checked={processingMode === "skip"} onChange={() => setProcessingMode("skip")} />
+                    Save without indexing
+                    <span className="mt-1 block text-xs text-muted">Add evidence now and start indexing later.</span>
+                  </label>
+                </div>
+              </div>
+            ) : null}
             {intakeType === "memory_dump" ? (
               <label className="mt-4 flex items-start gap-2 rounded-2xl border border-amber/40 bg-amber/10 p-4 text-sm text-ink">
                 <input type="checkbox" className="mt-1" checked={memoryAuthorizationAcknowledged} onChange={(event) => setMemoryAuthorizationAcknowledged(event.target.checked)} />
@@ -566,7 +609,7 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
                 onClick={() => startMutation.mutate()}
                 className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
               >
-                {startMutation.isPending ? "Starting..." : "Start Processing"}
+                {startMutation.isPending ? "Starting..." : processingMode === "skip" && intakeType !== "memory_dump" ? "Save Evidence" : "Start Processing"}
               </button>
             </div>
           </section>

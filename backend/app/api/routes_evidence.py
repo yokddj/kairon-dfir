@@ -2555,6 +2555,8 @@ def upload_evidence_folder(
     case_id: str,
     files: list[UploadFile] = File(...),
     provided_platform: str | None = Form(None),
+    provided_host: str | None = Form(None),
+    host_id: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_optional_user),
 ) -> Evidence:
@@ -2565,6 +2567,17 @@ def upload_evidence_folder(
     entry_paths = [str(item.get("path") or "") for item in folder_entries]
     raw_collection = _should_route_to_raw_collection_discovery(folder_path, entry_paths)
     resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(provided_platform, filename=folder_label, paths=entry_paths)
+    normalized_provided_host = _normalize_provided_host(provided_host)
+    evidence_type = EvidenceType.velociraptor_zip if raw_collection else EvidenceType.parsed_folder
+    host_resolution = _resolve_upload_host(
+        db,
+        case_id=case_id,
+        evidence_type=evidence_type,
+        host_id=host_id,
+        provided_host=normalized_provided_host,
+    )
+    normalized_provided_host = host_resolution.provided_host or normalized_provided_host
+    host_assignment = host_resolution.assignment_fields(actor=_actor_label(current_user), reason="Assigned during upload", method="upload_assignment")
     evidence = Evidence(
         id=evidence_id,
         case_id=case_id,
@@ -2574,10 +2587,10 @@ def upload_evidence_folder(
         storage_mode=EvidenceStorageMode.uploaded,
         is_external=False,
         copy_to_storage=True,
-        evidence_type=EvidenceType.velociraptor_zip if raw_collection else EvidenceType.parsed_folder,
+        evidence_type=evidence_type,
         sha256=folder_sha256,
         size_bytes=total_size,
-        detected_type=(EvidenceType.velociraptor_zip if raw_collection else EvidenceType.parsed_folder).value,
+        detected_type=evidence_type.value,
         provided_platform=resolved_provided_platform,
         detected_platform=resolved_detected_platform,
         effective_platform=resolved_effective_platform,
@@ -2587,14 +2600,27 @@ def upload_evidence_folder(
         integrity_status=EvidenceIntegrityStatus.unknown,
         file_count=len([item for item in folder_entries if not item.get("ignored")]),
         ingest_status=IngestStatus.pending,
+        **host_assignment,
         source_tool="raw_collection" if raw_collection else None,
         path_validation={},
-        ingest_source={"mode": EvidenceStorageMode.uploaded.value, "original_path": str(folder_path), "storage_path": str(folder_path), "copied": True, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform},
-        metadata_json=_raw_collection_initial_metadata({"folder_entries": folder_entries, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform}) if raw_collection else _initial_metadata({"folder_entries": folder_entries, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform}),
+        ingest_source={"mode": EvidenceStorageMode.uploaded.value, "original_path": str(folder_path), "storage_path": str(folder_path), "copied": True, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform},
+        metadata_json=_raw_collection_initial_metadata({"folder_entries": folder_entries, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform}) if raw_collection else _initial_metadata({"folder_entries": folder_entries, "provided_host": normalized_provided_host, "provided_platform": resolved_provided_platform, "detected_platform": resolved_detected_platform, "effective_platform": resolved_effective_platform}),
         error_log={},
     )
     db.add(evidence)
     _record_upload_custody_events(db, evidence, actor_user_id=_current_user_id(current_user), hash_summary="Folder fingerprint computed for uploaded evidence.")
+    if host_resolution.host_id:
+        _record_host_assignment_event(
+            db,
+            evidence,
+            previous_host_id=None,
+            new_host_id=host_resolution.host_id,
+            actor_user_id=_current_user_id(current_user),
+            actor=_actor_label(current_user),
+            reason="Assigned during upload",
+            method="upload_assignment",
+            host_created=host_resolution.created,
+        )
     db.commit()
     db.refresh(evidence)
     _write_initial_manifest(evidence)
