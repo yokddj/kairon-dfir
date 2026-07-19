@@ -169,6 +169,7 @@ describe("EvidenceIngestionWizard", () => {
     getCaseHostsMock.mockResolvedValue({ hosts: [{ id: "host-1", display_name: "WS-01" }] });
     getIngestionReadinessMock.mockResolvedValue(readyHealth());
     createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse());
+    createCaseHostMock.mockResolvedValue({ host: { id: "host-created", display_name: "NEW-HOST" }, created: true });
     runEvidenceIndexingPlanMock.mockResolvedValue({ accepted: true, evidence_id: "evidence-1", profile: "recommended", run_id: "plan-1", status: "queued", queued_jobs: [{ step_id: "linux_artifacts", run_id: "job-1", status: "queued" }], plan: { run_id: "plan-1", profile: "recommended", status: "queued", steps: [], excluded: [], queued_jobs: [] } });
     cancelEvidenceUploadSessionMock.mockResolvedValue({ status: "cancelled", session_id: "session-1" });
   });
@@ -421,6 +422,99 @@ describe("EvidenceIngestionWizard", () => {
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({})));
     await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-2", { profile: "recommended" }));
     expect(cancelEvidenceUploadSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("uses a detected hostname as the host assignment before recommended indexing", async () => {
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-detected", original_filename: "collection.zip" });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(await screen.findByTestId("detected-hostname")).toHaveTextContent("web01");
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ provided_host: "web01" })));
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-detected", { profile: "recommended" }));
+  });
+
+  it("auto assigns a detected hostname to an existing matching host", async () => {
+    getCaseHostsMock.mockResolvedValue({ hosts: [{ id: "host-web01", display_name: "web01", canonical_name: "web01", aliases: [], all_names: ["web01"] }] });
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-existing", original_filename: "collection.zip" });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(await screen.findByLabelText(/Auto assign to web01/i)).toBeChecked();
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ host_id: "host-web01" })));
+  });
+
+  it("requires explicit selection when multiple hosts match the detected hostname", async () => {
+    getCaseHostsMock.mockResolvedValue({ hosts: [
+      { id: "host-a", display_name: "WEB01", canonical_name: "web01", aliases: [], all_names: ["web01"] },
+      { id: "host-b", display_name: "web01.local", canonical_name: "web01-local", aliases: ["web01"], all_names: ["web01.local", "web01"] },
+    ] });
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-multi", original_filename: "collection.zip" });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(await screen.findByTestId("multiple-host-matches")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Start Processing" })).toBeDisabled();
+    await userEvent.click(screen.getByRole("radio", { name: /Assign to existing host/i }));
+    await userEvent.selectOptions(screen.getByRole("combobox"), "host-b");
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ host_id: "host-b" })));
+  });
+
+  it("blocks indexing when no hostname is detected until a host is provided", async () => {
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({ preflight: readyReport({ classification: { ...readyReport().classification, hostname: null } }) }));
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-created", original_filename: "collection.zip" });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(await screen.findByTestId("missing-hostname")).toBeInTheDocument();
+    const startButton = screen.getByRole("button", { name: "Start Processing" });
+    expect(startButton).toBeDisabled();
+    await userEvent.type(screen.getByPlaceholderText("WS-01"), "NEW-HOST");
+    expect(startButton).toBeEnabled();
+    await userEvent.click(startButton);
+
+    await waitFor(() => expect(createCaseHostMock).toHaveBeenCalledWith("case-1", { host_name: "NEW-HOST", reason: "Created during evidence ingestion wizard" }));
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ host_id: "host-created" })));
+  });
+
+  it("allows keeping evidence unassigned when saving without indexing", async () => {
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({ preflight: readyReport({ classification: { ...readyReport().classification, hostname: null } }) }));
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-unassigned", original_filename: "collection.zip" });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await userEvent.click(screen.getByRole("radio", { name: /Save without indexing/i }));
+    await userEvent.click(screen.getByRole("radio", { name: /Keep unassigned/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Save Evidence" }));
+
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.not.objectContaining({ host_id: expect.any(String), provided_host: expect.any(String) })));
+    expect(runEvidenceIndexingPlanMock).not.toHaveBeenCalled();
   });
 
   it("can start the advanced custom indexing profile from the wizard", async () => {

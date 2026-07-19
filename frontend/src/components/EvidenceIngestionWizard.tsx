@@ -10,8 +10,11 @@ import { hashFileWithProgress } from "../lib/sha256";
 type IntakeType = "disk_image" | "memory_dump" | "artifact_collection" | "folder" | "server_path";
 type WizardStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 type ProcessingMode = "recommended" | "custom" | "skip";
+type HostChoice = "auto" | "__create__" | "__unassigned__" | string;
 
 const TOTAL_STEPS = 7;
+const CREATE_HOST_CHOICE = "__create__";
+const UNASSIGNED_HOST_CHOICE = "__unassigned__";
 
 type Props = {
   open: boolean;
@@ -57,6 +60,16 @@ function normalizePreflightReport(report: PreflightReport): PreflightReport {
   return { ...report, evidence_options: maybeReport.evidence_options ?? [] };
 }
 
+function normalizeHostLabel(value: string | null | undefined): string {
+  return String(value ?? "").trim().replace(/\.+$/, "").toLowerCase();
+}
+
+function hostMatchesName(host: { canonical_name?: string; display_name?: string; aliases?: string[]; all_names?: string[] }, name: string | null | undefined): boolean {
+  const normalized = normalizeHostLabel(name);
+  if (!normalized) return false;
+  return [host.canonical_name, host.display_name, ...(host.aliases ?? []), ...(host.all_names ?? [])].some((candidate) => normalizeHostLabel(candidate) === normalized);
+}
+
 export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -65,8 +78,9 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   const [step, setStep] = useState<WizardStep>(0);
   const [intakeType, setIntakeType] = useState<IntakeType | null>(null);
   const [platform, setPlatform] = useState<EvidencePlatform>("auto");
-  const [hostChoice, setHostChoice] = useState<"auto" | string>("auto");
+  const [hostChoice, setHostChoice] = useState<HostChoice>("auto");
   const [newHostName, setNewHostName] = useState("");
+  const [hostSearch, setHostSearch] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [serverPath, setServerPath] = useState("");
   const [session, setSession] = useState<EvidenceUploadSessionRead | null>(null);
@@ -126,6 +140,7 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
     setPlatform("auto");
     setHostChoice("auto");
     setNewHostName("");
+    setHostSearch("");
     setFiles([]);
     setServerPath("");
     setSession(null);
@@ -170,26 +185,50 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
     },
   });
 
-  async function resolveHostId(): Promise<string | undefined> {
-    if (hostChoice === "auto") return undefined;
-    if (hostChoice === "__create__") {
+  const detectedHostname = preflight?.classification.hostname?.trim() || "";
+  const detectedHostMatches = useMemo(() => caseHosts.filter((host) => hostMatchesName(host, detectedHostname)), [caseHosts, detectedHostname]);
+  const filteredCaseHosts = useMemo(() => {
+    const query = normalizeHostLabel(hostSearch);
+    if (!query) return caseHosts;
+    return caseHosts.filter((host) => [host.display_name, host.canonical_name, ...(host.aliases ?? []), ...(host.all_names ?? [])].some((candidate) => normalizeHostLabel(candidate).includes(query)));
+  }, [caseHosts, hostSearch]);
+
+  useEffect(() => {
+    if (!preflight || intakeType === "memory_dump") return;
+    if (detectedHostname) {
+      setHostChoice("auto");
+      return;
+    }
+    setHostChoice((current) => current === "auto" ? CREATE_HOST_CHOICE : current);
+  }, [detectedHostname, intakeType, preflight]);
+
+  async function resolveHostAssignment(): Promise<{ host_id?: string; provided_host?: string }> {
+    if (hostChoice === UNASSIGNED_HOST_CHOICE) return {};
+    if (hostChoice === "auto") {
+      if (!detectedHostname) return {};
+      if (detectedHostMatches.length === 1) return { host_id: detectedHostMatches[0].id };
+      if (detectedHostMatches.length > 1) throw new Error("Multiple hosts match the detected hostname. Select the correct host before indexing.");
+      return { provided_host: detectedHostname };
+    }
+    if (hostChoice === CREATE_HOST_CHOICE) {
       const name = newHostName.trim();
-      if (!name) return undefined;
+      if (!name) return {};
       const result = await api.createCaseHost(caseId, { host_name: name, reason: "Created during evidence ingestion wizard" });
       await queryClient.invalidateQueries({ queryKey: ["case-hosts", caseId] });
-      return result.host.id;
+      return { host_id: result.host.id };
     }
-    return hostChoice;
+    return { host_id: hostChoice };
   }
 
   const startMutation = useMutation({
     mutationFn: async (): Promise<{ evidence: Evidence; queuedJobs: number | null }> => {
       if (!session) throw new Error("No upload session is active");
-      const hostId = await resolveHostId();
+      const hostAssignment = await resolveHostAssignment();
       const declaredPlatform = platform === "auto" ? undefined : platform;
       const evidence = await api.promoteEvidenceUploadSession(caseId, session.id, {
         provided_platform: declaredPlatform,
-        host_id: hostId,
+        host_id: hostAssignment.host_id,
+        provided_host: hostAssignment.provided_host,
         memory_authorization_acknowledged: intakeType === "memory_dump" ? memoryAuthorizationAcknowledged : undefined,
         labels: labels.split(",").map((label) => label.trim()).filter(Boolean),
         notes: notes.trim() || undefined,
@@ -234,7 +273,7 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   const memoryRequiresExplicitHost = intakeType === "memory_dump";
   const hostStepBlockingReason = useMemo(() => {
     if (!memoryRequiresExplicitHost) return null;
-    if (hostChoice === "__create__") {
+    if (hostChoice === CREATE_HOST_CHOICE) {
       return newHostName.trim() ? null : "Enter a source host name for this memory evidence.";
     }
     if (hostChoice === "auto") return "Memory evidence requires an explicit source host, matching the legacy memory uploader.";
@@ -248,6 +287,23 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   }, [requiresPathInput, serverPath, files]);
 
   const hashPending = files.length === 1 && !requiresPathInput && hashProgress !== null && hashProgress < 1;
+
+  const hostAssignmentRequired = intakeType === "memory_dump" || processingMode !== "skip";
+  const hostAssignmentBlockingReason = useMemo(() => {
+    if (!hostAssignmentRequired) return null;
+    if (hostChoice === UNASSIGNED_HOST_CHOICE) return "Choose an existing host or create a new host before indexing.";
+    if (hostChoice === CREATE_HOST_CHOICE) return newHostName.trim() ? null : "Enter a hostname before indexing.";
+    if (hostChoice === "auto") {
+      if (!detectedHostname) return "No reliable hostname was detected. Choose an existing host or create a new one before indexing.";
+      if (detectedHostMatches.length > 1) return "Multiple hosts match the detected hostname. Select the correct host before indexing.";
+      return null;
+    }
+    return hostChoice ? null : "Choose a host before indexing.";
+  }, [detectedHostMatches.length, detectedHostname, hostAssignmentRequired, hostChoice, newHostName]);
+  const canStartProcessing = !startMutation.isPending && !(intakeType === "memory_dump" && !memoryAuthorizationAcknowledged) && hostAssignmentBlockingReason === null;
+  const selectedHostName = hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE
+    ? caseHosts.find((h) => h.id === hostChoice)?.display_name || "Selected host"
+    : null;
 
   if (!open) return null;
 
@@ -364,19 +420,19 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
                   Auto Assign
                 </label>
               ) : null}
-              <label className={`rounded-2xl border p-4 ${hostChoice !== "auto" && hostChoice !== "__create__" ? "border-accent bg-accent/10" : "border-line bg-abyss/60"}`}>
-                <input type="radio" name="host-choice" className="mr-2" checked={hostChoice !== "auto" && hostChoice !== "__create__"} onChange={() => setHostChoice(caseHosts[0]?.id ?? "auto")} disabled={!caseHosts.length} />
+              <label className={`rounded-2xl border p-4 ${hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10" : "border-line bg-abyss/60"}`}>
+                <input type="radio" name="host-choice" className="mr-2" checked={hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(caseHosts[0]?.id ?? "auto")} disabled={!caseHosts.length} />
                 Assign existing host
-                {hostChoice !== "auto" && hostChoice !== "__create__" ? (
+                {hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? (
                   <select value={hostChoice} onChange={(event) => setHostChoice(event.target.value)} className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink">
                     {caseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
                   </select>
                 ) : null}
               </label>
-              <label className={`rounded-2xl border p-4 ${hostChoice === "__create__" ? "border-accent bg-accent/10" : "border-line bg-abyss/60"}`}>
-                <input type="radio" name="host-choice" className="mr-2" checked={hostChoice === "__create__"} onChange={() => setHostChoice("__create__")} />
+              <label className={`rounded-2xl border p-4 ${hostChoice === CREATE_HOST_CHOICE ? "border-accent bg-accent/10" : "border-line bg-abyss/60"}`}>
+                <input type="radio" name="host-choice" className="mr-2" checked={hostChoice === CREATE_HOST_CHOICE} onChange={() => setHostChoice(CREATE_HOST_CHOICE)} />
                 Create new host
-                {hostChoice === "__create__" ? (
+                {hostChoice === CREATE_HOST_CHOICE ? (
                   <input value={newHostName} onChange={(event) => setNewHostName(event.target.value)} placeholder="WS-01" className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" />
                 ) : null}
               </label>
@@ -568,9 +624,67 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
             <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
               <p>Evidence: <span className="text-ink">{preflight.original_filename}</span></p>
               <p className="mt-1">Platform: <span className="text-ink">{platform === "auto" ? `Auto Detect (${preflight.classification.platform})` : platform}</span></p>
-              <p className="mt-1">Host: <span className="text-ink">{hostChoice === "auto" ? "Auto Assign" : hostChoice === "__create__" ? newHostName || "New host" : caseHosts.find((h) => h.id === hostChoice)?.display_name || "Selected host"}</span></p>
               <p className="mt-1">Pipeline: <span className="text-ink">{preflight.pipeline_preview.join(" → ")}</span></p>
               <p className="mt-1">Estimated duration: <span className="text-ink">{durationBucketLabel(preflight.resource_check.estimated_duration_bucket) ?? "unknown"}</span></p>
+            </div>
+            <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4" data-testid="host-assignment-panel">
+              <h3 className="text-sm font-semibold text-ink">Host Assignment</h3>
+              {detectedHostname ? (
+                <div className="mt-3 rounded-2xl border border-mint/30 bg-mint/10 p-3 text-sm text-mint" data-testid="detected-hostname">
+                  <p className="font-semibold">&#10003; Detected hostname</p>
+                  <p className="mt-1 text-ink">{detectedHostname}</p>
+                </div>
+              ) : (
+                <p className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-sm text-amber" data-testid="missing-hostname">
+                  No reliable hostname was detected. Choose an existing host or create a new one before indexing.
+                </p>
+              )}
+              {detectedHostname && detectedHostMatches.length === 0 ? (
+                <p className="mt-3 text-sm text-muted">No existing host matches this hostname. Kairon can create it during evidence registration.</p>
+              ) : null}
+              {detectedHostname && detectedHostMatches.length > 1 ? (
+                <p className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-sm text-amber" data-testid="multiple-host-matches">
+                  Multiple hosts match this hostname. Select the correct host before indexing.
+                </p>
+              ) : null}
+              <div className="mt-4 grid gap-3">
+                {detectedHostname ? (
+                  <label className={`rounded-2xl border p-3 text-sm ${hostChoice === "auto" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+                    <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === "auto"} onChange={() => setHostChoice("auto")} disabled={detectedHostMatches.length > 1} />
+                    {detectedHostMatches.length === 1 ? `Auto assign to ${detectedHostMatches[0].display_name}` : "Create host from detected hostname"}
+                  </label>
+                ) : null}
+                <label className={`rounded-2xl border p-3 text-sm ${hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+                  <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(filteredCaseHosts[0]?.id ?? caseHosts[0]?.id ?? "auto")} disabled={!caseHosts.length} />
+                  Assign to existing host
+                  {hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? (
+                    <>
+                      <input value={hostSearch} onChange={(event) => setHostSearch(event.target.value)} placeholder="Search hosts" className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" />
+                      <select value={hostChoice} onChange={(event) => setHostChoice(event.target.value)} className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink">
+                        {filteredCaseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
+                      </select>
+                    </>
+                  ) : null}
+                </label>
+                <label className={`rounded-2xl border p-3 text-sm ${hostChoice === CREATE_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+                  <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === CREATE_HOST_CHOICE} onChange={() => setHostChoice(CREATE_HOST_CHOICE)} />
+                  Create new host
+                  {hostChoice === CREATE_HOST_CHOICE ? (
+                    <input value={newHostName} onChange={(event) => setNewHostName(event.target.value)} placeholder={detectedHostname || "WS-01"} className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" />
+                  ) : null}
+                </label>
+                {processingMode === "skip" && intakeType !== "memory_dump" ? (
+                  <label className={`rounded-2xl border p-3 text-sm ${hostChoice === UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+                    <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(UNASSIGNED_HOST_CHOICE)} />
+                    Keep unassigned
+                    <span className="mt-1 block text-xs text-muted">Host assignment can be completed later because indexing will not start now.</span>
+                  </label>
+                ) : null}
+              </div>
+              <p className="mt-3 text-sm text-muted">
+                Assignment: <span className="text-ink">{hostChoice === "auto" ? detectedHostMatches.length === 1 ? detectedHostMatches[0].display_name : detectedHostname ? detectedHostname : "Needs host" : hostChoice === CREATE_HOST_CHOICE ? newHostName || "New host" : hostChoice === UNASSIGNED_HOST_CHOICE ? "Keep unassigned" : selectedHostName}</span>
+              </p>
+              {hostAssignmentBlockingReason ? <p className="mt-3 text-sm text-amber" data-testid="host-assignment-guidance">{hostAssignmentBlockingReason}</p> : null}
             </div>
             {intakeType !== "memory_dump" ? (
               <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4">
@@ -605,7 +719,7 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
               <button type="button" onClick={() => setStep(5)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
               <button
                 type="button"
-                disabled={startMutation.isPending || (intakeType === "memory_dump" && !memoryAuthorizationAcknowledged)}
+                disabled={!canStartProcessing}
                 onClick={() => startMutation.mutate()}
                 className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
               >
