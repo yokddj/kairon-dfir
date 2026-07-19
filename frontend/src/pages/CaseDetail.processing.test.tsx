@@ -56,6 +56,15 @@ vi.mock("../context/NotificationsContext", () => ({
 }));
 
 vi.mock("../components/EvidenceUpload", () => ({ default: () => <div data-testid="evidence-upload" /> }));
+vi.mock("../components/EvidenceIngestionWizard", () => ({
+  default: ({ open, onClose }: { open: boolean; onClose: () => void }) => (
+    open ? (
+      <div role="dialog" aria-label="Add Evidence" data-testid="evidence-ingestion-wizard">
+        <button type="button" onClick={onClose}>Close wizard</button>
+      </div>
+    ) : null
+  ),
+}));
 vi.mock("../components/EventTable", () => ({ default: () => <div data-testid="event-table" /> }));
 vi.mock("../components/FindingsWorkspace", () => ({ default: () => <div data-testid="findings-workspace" /> }));
 vi.mock("../components/ProcessTreePanel", () => ({ default: () => <div data-testid="process-tree" /> }));
@@ -105,10 +114,10 @@ function item(overrides: Record<string, unknown>) {
   };
 }
 
-function renderPage() {
+function renderPage(initialEntry = "/cases/case-1?tab=processing") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter initialEntries={["/cases/case-1?tab=processing"]}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <QueryClientProvider client={queryClient}>
         <Routes>
           <Route path="/cases/:caseId" element={<CaseDetail />} />
@@ -146,6 +155,50 @@ describe("CaseDetail Processing Queue", () => {
     expect(screen.getAllByText("pending").length).toBeGreaterThan(0);
     const failedRow = screen.getByText("failed.zip").closest("tr")!;
     expect(within(failedRow).getByText("1")).toBeInTheDocument();
+  });
+
+  it("uses the guided wizard as the primary evidences tab ingestion action", async () => {
+    renderPage("/cases/case-1?tab=evidences");
+
+    expect(await screen.findByRole("heading", { name: "Queue Case" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Add Evidence$/i })).toBeInTheDocument();
+    expect(screen.queryByTestId("evidence-upload")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Add Evidence$/i }));
+
+    expect(screen.getByRole("dialog", { name: "Add Evidence" })).toBeInTheDocument();
+  });
+
+  it("keeps advanced upload available from the evidences tab", async () => {
+    renderPage("/cases/case-1?tab=evidences");
+
+    await screen.findByRole("heading", { name: "Queue Case" });
+    expect(screen.queryByTestId("evidence-upload")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByText(/Advanced upload/i, { selector: "summary" }));
+
+    expect(screen.getByTestId("evidence-upload")).toBeInTheDocument();
+  });
+
+  it("returns to the evidences tab when the guided wizard is closed", async () => {
+    renderPage("/cases/case-1?tab=evidences");
+
+    await screen.findByRole("heading", { name: "Queue Case" });
+    await userEvent.click(screen.getByRole("button", { name: /^Add Evidence$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /Close wizard/i }));
+
+    expect(screen.queryByRole("dialog", { name: "Add Evidence" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Add Evidence$/i })).toBeInTheDocument();
+    expect(screen.getByText(/Use Add Evidence for guided ingestion/i)).toBeInTheDocument();
+  });
+
+  it("keeps the overview Add Evidence button wired to the guided wizard", async () => {
+    renderPage("/cases/case-1");
+
+    await screen.findByRole("heading", { name: "Queue Case" });
+    await userEvent.click(screen.getByRole("button", { name: /^Add Evidence$/i }));
+
+    expect(screen.getByRole("dialog", { name: "Add Evidence" })).toBeInTheDocument();
   });
 
   it("opens processing detail and shows parser error state", async () => {

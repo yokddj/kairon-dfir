@@ -1,9 +1,18 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PreflightWarning(BaseModel):
     message: str
     severity: str  # "information" | "recommendation"
+
+
+class PreflightEvidenceOption(BaseModel):
+    id: str
+    label: str
+    path: str
+    category: str
+    format_key: str | None = None
+    size_bytes: int | None = None
 
 
 class PreflightClassification(BaseModel):
@@ -71,3 +80,4 @@ class PreflightReport(BaseModel):
     status: str  # "ready" | "warning" | "blocked"
     status_checks: list[PreflightStatusCheck]
     diagnostics: list[PreflightDiagnostic] = []
+    evidence_options: list[PreflightEvidenceOption] = Field(default_factory=list)

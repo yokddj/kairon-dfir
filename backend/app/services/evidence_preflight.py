@@ -552,4 +552,5 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
         status=overall_status,
         status_checks=status_checks,
         diagnostics=diagnostics,
+        evidence_options=[],
     )
