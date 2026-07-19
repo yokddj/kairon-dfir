@@ -39,6 +39,8 @@
 - Linux artifact identity being overwritten during indexing.
 - Nested Linux gzip/tar intake behavior.
 - Linux hostname fallback behavior during collection processing.
+- Recommended indexing being blocked when evidence had a valid assigned host but no legacy `provided_host` metadata.
+- Recommended indexing now uses the canonical assigned host before falling back to legacy hostname metadata.
 
 ### Validation
 
@@ -48,6 +50,10 @@
 - Real Linux disk-image validation passed.
 - Real Linux collection validation passed.
 - Repeated Linux collection upload reused one canonical host and did not create duplicates.
+- Validated the full Velociraptor collection workflow from upload through recommended indexing and processing.
+- Confirmed assigned-host indexing without backfilling legacy `provided_host`.
+- Confirmed 30,236 indexed events in isolated real-evidence validation.
+- Terminal `completed_with_errors` was caused by parser-specific EVTX stalls/empty channels, not host resolution.
 - Backend and frontend regression comparisons found no branch-specific failures.
 - Focused backend tests, frontend build, quality gate, and diff check passed before release preparation.
 
