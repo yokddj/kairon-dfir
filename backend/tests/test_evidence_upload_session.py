@@ -752,6 +752,9 @@ def test_promote_folder_session(tmp_path, monkeypatch):
     monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: "job-1")
     db = _db()
     _case(db)
+    host = CaseHost(id="bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb", case_id=CASE_ID, canonical_name="WS-FOLDER", display_name="WS-FOLDER", confidence="manual", source="manual")
+    db.add(host)
+    db.commit()
 
     (tmp_path / "a.log").write_text("a\n", encoding="utf-8")
     (tmp_path / "b.log").write_text("b\n", encoding="utf-8")
@@ -764,11 +767,13 @@ def test_promote_folder_session(tmp_path, monkeypatch):
 
     evidence = promote_upload_session(
         db, session,
-        provided_platform=None, host_id=None, provided_host=None, evtx_profile=None,
+        provided_platform=None, host_id=host.id, provided_host=None, evtx_profile=None,
         memory_authorization_acknowledged=False, folder_name=None, labels=None, notes=None,
         current_user=None,
     )
     assert evidence.id is not None
+    assert evidence.host_id == host.id
+    assert (evidence.metadata_json or {}).get("provided_host") == "WS-FOLDER"
     assert not Path(session.staged_path).exists()
 
 

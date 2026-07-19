@@ -9,6 +9,7 @@ import type { EvidenceUploadSessionCreateResponse, IngestionReadiness, Preflight
 
 const createEvidenceUploadSessionMock = vi.fn();
 const promoteEvidenceUploadSessionMock = vi.fn();
+const runEvidenceIndexingPlanMock = vi.fn();
 const cancelEvidenceUploadSessionMock = vi.fn();
 const rerunEvidenceUploadPreflightMock = vi.fn();
 const getIngestionReadinessMock = vi.fn();
@@ -25,6 +26,7 @@ vi.mock("../api/client", () => ({
   api: {
     createEvidenceUploadSession: (...args: unknown[]) => createEvidenceUploadSessionMock(...args),
     promoteEvidenceUploadSession: (...args: unknown[]) => promoteEvidenceUploadSessionMock(...args),
+    runEvidenceIndexingPlan: (...args: unknown[]) => runEvidenceIndexingPlanMock(...args),
     cancelEvidenceUploadSession: (...args: unknown[]) => cancelEvidenceUploadSessionMock(...args),
     rerunEvidenceUploadPreflight: (...args: unknown[]) => rerunEvidenceUploadPreflightMock(...args),
     getIngestionReadiness: (...args: unknown[]) => getIngestionReadinessMock(...args),
@@ -167,6 +169,7 @@ describe("EvidenceIngestionWizard", () => {
     getCaseHostsMock.mockResolvedValue({ hosts: [{ id: "host-1", display_name: "WS-01" }] });
     getIngestionReadinessMock.mockResolvedValue(readyHealth());
     createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse());
+    runEvidenceIndexingPlanMock.mockResolvedValue({ accepted: true, evidence_id: "evidence-1", profile: "recommended", run_id: "plan-1", status: "queued", queued_jobs: [{ step_id: "linux_artifacts", run_id: "job-1", status: "queued" }], plan: { run_id: "plan-1", profile: "recommended", status: "queued", steps: [], excluded: [], queued_jobs: [] } });
     cancelEvidenceUploadSessionMock.mockResolvedValue({ status: "cancelled", session_id: "session-1" });
   });
 
@@ -399,6 +402,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-disk", expect.objectContaining({})));
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-1", { profile: "recommended" }));
   });
 
   it("artifact collection flow promotes the upload session on Start Processing", async () => {
@@ -415,7 +419,41 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({})));
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-2", { profile: "recommended" }));
     expect(cancelEvidenceUploadSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("can start the advanced custom indexing profile from the wizard", async () => {
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-custom", original_filename: "collection.zip" });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await screen.findByText("Confirmation");
+    await userEvent.click(screen.getByRole("radio", { name: /Custom indexing/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-custom", { profile: "advanced_custom" }));
+  });
+
+  it("can save evidence without starting indexing", async () => {
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-skip", original_filename: "collection.zip" });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await screen.findByText("Confirmation");
+    await userEvent.click(screen.getByRole("radio", { name: /Save without indexing/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Save Evidence" }));
+
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({})));
+    expect(runEvidenceIndexingPlanMock).not.toHaveBeenCalled();
   });
 
   it("lets the analyst assign an existing host before continuing", async () => {
@@ -471,6 +509,7 @@ describe("EvidenceIngestionWizard", () => {
 
     expect(createEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", { files, folderUpload: true }, expect.objectContaining({}));
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalled());
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-4", { profile: "recommended" }));
   });
 
   it("server path flow registers via the upload session on Start Processing", async () => {
@@ -487,6 +526,7 @@ describe("EvidenceIngestionWizard", () => {
 
     expect(createEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", { serverPath: "/mnt/evidence/disk.E01" }, { declaredPlatform: "auto" });
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({})));
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-5", { profile: "recommended" }));
   });
 
   it("memory flow requires authorization acknowledgement before Start Processing is enabled", async () => {
@@ -515,6 +555,7 @@ describe("EvidenceIngestionWizard", () => {
 
     await userEvent.click(startButton);
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ host_id: "host-1", memory_authorization_acknowledged: true })));
+    expect(runEvidenceIndexingPlanMock).not.toHaveBeenCalled();
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/memory/evidence-3"));
   });
 });
