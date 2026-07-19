@@ -51,6 +51,11 @@ function durationBucketLabel(bucket: string | null): string | null {
   }
 }
 
+function normalizePreflightReport(report: PreflightReport): PreflightReport {
+  const maybeReport = report as PreflightReport & { evidence_options?: PreflightReport["evidence_options"] };
+  return { ...report, evidence_options: maybeReport.evidence_options ?? [] };
+}
+
 export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -152,8 +157,9 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
       return api.createEvidenceUploadSession(caseId, { file: files[0] }, { declaredPlatform: platform, clientSha256: clientSha256 ?? undefined });
     },
     onSuccess: (response) => {
+      const preflightReport = normalizePreflightReport(response.preflight);
       setSession(response.session);
-      setPreflight(response.preflight);
+      setPreflight(preflightReport);
       setStep(5);
     },
     onError: (error) => {
