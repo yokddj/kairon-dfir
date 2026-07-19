@@ -1500,6 +1500,25 @@ def _require_provided_host(value: str | None) -> str:
     return require_provided_host(value)
 
 
+def _resolve_indexing_hostname(db: Session, item: Evidence, metadata: dict) -> tuple[str, bool]:
+    host_id = str(item.host_id or "").strip()
+    if host_id:
+        host = db.get(CaseHost, host_id)
+        if not host:
+            raise HTTPException(status_code=400, detail="Assigned host was not found for evidence indexing.")
+        if host.case_id != item.case_id:
+            raise HTTPException(status_code=400, detail="Assigned host does not belong to this case.")
+        canonical_name = _normalize_provided_host(host.canonical_name)
+        if not canonical_name:
+            raise HTTPException(status_code=400, detail="Assigned host canonical name is required for evidence indexing.")
+        return canonical_name, True
+
+    requested_provided_host = _normalize_provided_host(metadata.get("provided_host")) or _normalize_provided_host((item.ingest_source or {}).get("provided_host"))
+    if not requested_provided_host:
+        raise HTTPException(status_code=400, detail="Host name is required for evidence indexing.")
+    return requested_provided_host, False
+
+
 def _validated_case_host_id(db: Session, case_id: str, host_id: str | None) -> str | None:
     return validate_case_host_id(db, case_id, host_id)
 
@@ -4254,9 +4273,7 @@ def _queue_recommended_raw_discovery_ingest(item: Evidence, metadata: dict, *, p
             "selected_candidate_ids": [],
         }
     requested_ingest_mode = normalize_ingest_mode(metadata.get("ingest_mode") or USABLE_INGEST_MODE)
-    requested_provided_host = _normalize_provided_host(metadata.get("provided_host")) or _normalize_provided_host((item.ingest_source or {}).get("provided_host"))
-    if not requested_provided_host:
-        raise HTTPException(status_code=400, detail="Host name is required for evidence indexing.")
+    requested_provided_host, indexing_host_from_assignment = _resolve_indexing_hostname(db, item, metadata)
     requested_evtx_profile = str(metadata.get("evtx_profile") or "").strip() or None
     new_metadata = _apply_reprocess_selection_metadata(
         item,
@@ -4267,7 +4284,8 @@ def _queue_recommended_raw_discovery_ingest(item: Evidence, metadata: dict, *, p
     )
     new_metadata = merge_evidence_metadata(new_metadata, ingest_mode_metadata(requested_ingest_mode))
     new_metadata["ingest_mode"] = requested_ingest_mode
-    new_metadata["provided_host"] = requested_provided_host
+    if not indexing_host_from_assignment:
+        new_metadata["provided_host"] = requested_provided_host
     new_metadata["current_phase"] = "extracting_selected"
     new_metadata["progress_pct"] = 25
     new_metadata["selected_files_extracted"] = 0
@@ -4275,12 +4293,14 @@ def _queue_recommended_raw_discovery_ingest(item: Evidence, metadata: dict, *, p
     new_metadata["indexing_profile"] = profile
     new_metadata["indexing_plan_recovered_waiting_selection"] = current_phase in {"waiting_selection", "selection_pending"}
     item.metadata_json = merge_evidence_metadata(metadata, new_metadata)
-    item.ingest_source = {
+    ingest_source = {
         **(item.ingest_source or {}),
         "ingest_mode": requested_ingest_mode,
-        "provided_host": requested_provided_host,
         "evtx_profile": new_metadata.get("evtx_profile"),
     }
+    if not indexing_host_from_assignment:
+        ingest_source["provided_host"] = requested_provided_host
+    item.ingest_source = ingest_source
     item.ingest_status = IngestStatus.pending
     item.error_log = {}
     item.processed_at = None
