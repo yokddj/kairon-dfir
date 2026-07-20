@@ -90,6 +90,7 @@ export function MemoryEvidenceHeader({
   // supported profiles are already completed.
   const headerLabel = useMemo(() => {
     if (!catalogue) return "Run analysis";
+    const hasLiveRun = Boolean(activeResult?.active_run) || isAnalyzing;
     const supported = catalogue.items.filter((it) => it.available);
     if (supported.length === 0) return "Run analysis";
     const completed = supported.filter(
@@ -99,10 +100,10 @@ export function MemoryEvidenceHeader({
       (it) => it.last_status === "queued" || it.last_status === "running" || it.last_status === "pending",
     );
     if (completed.length === 0 && active.length === 0) return "Analyze memory";
-    if (completed.length === 0 && active.length > 0) return isAnalyzing ? "Starting analysis..." : "Analysis in progress...";
+    if (completed.length === 0 && active.length > 0 && hasLiveRun) return isAnalyzing ? "Starting analysis..." : "Analysis in progress...";
     if (completed.length >= supported.length) return "Re-run analysis";
     return "Complete analysis";
-  }, [catalogue, isAnalyzing]);
+  }, [activeResult?.active_run, catalogue, isAnalyzing]);
 
   function copyId() {
     if (typeof navigator === "undefined" || !navigator.clipboard) return;

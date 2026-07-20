@@ -342,24 +342,34 @@ def _record_vol_version(probe: MemoryNativeProbe, db: Session | None = None) -> 
 
 def _canonical_evidence_path(db: Session, evidence_id: str) -> Path:
     from app.models.evidence import Evidence
+    from app.services.memory.evidence_access import MemoryStorageAccessError, validate_current_process_evidence_access
+
     evidence = db.get(Evidence, evidence_id)
     if evidence is None:
         raise NativeProbeError(
             "NATIVE_PROBE_EVIDENCE_MISSING", "Evidence not found."
         )
-    stored = getattr(evidence, "stored_path", None) or getattr(evidence, "original_path", None)
-    if not stored:
+    try:
+        return validate_current_process_evidence_access(evidence, settings=get_settings()).path
+    except MemoryStorageAccessError as exc:
+        logger.warning(
+            "native memory probe canonical evidence access failed",
+            extra={
+                "evidence_id": evidence_id,
+                "case_id": getattr(evidence, "case_id", None),
+                "storage_error_code": exc.code,
+                "stored_path": getattr(evidence, "stored_path", None),
+            },
+        )
+    if not getattr(evidence, "stored_path", None):
         raise NativeProbeError(
             "NATIVE_PROBE_EVIDENCE_PATH_MISSING",
             "Evidence file path could not be resolved.",
         )
-    path = Path(stored)
-    if not path.exists():
-        raise NativeProbeError(
-            "NATIVE_PROBE_EVIDENCE_FILE_MISSING",
-            "Evidence file does not exist on the filesystem.",
-        )
-    return path
+    raise NativeProbeError(
+        "NATIVE_PROBE_EVIDENCE_FILE_MISSING",
+        "Evidence file does not exist in canonical storage visible to this worker.",
+    )
 
 
 def _resolve_vol_executable() -> str:

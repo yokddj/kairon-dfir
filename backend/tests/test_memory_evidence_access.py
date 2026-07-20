@@ -105,3 +105,27 @@ def test_sanitizer_placeholder_is_never_used_as_real_path(tmp_path: Path, monkey
     assert opened[0].name != "[path]"
     assert exc_info.value.code == "MEMORY_EVIDENCE_PERMISSION_DENIED"
     assert str(path) not in exc_info.value.message
+
+
+def test_canonical_relative_path_wins_over_stale_stored_path(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    settings.memory_output_root.mkdir(mode=0o770)
+    evidence, canonical_path = _evidence(settings)
+    evidence.stored_path = "/app/data/tmp/stale-upload-session/memory.dmp"
+
+    access = evidence_access.validate_current_process_evidence_access(evidence, settings=settings)
+
+    assert access.path == canonical_path.resolve()
+    assert access.readable is True
+
+
+def test_missing_canonical_storage_reports_storage_failure_without_path(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    evidence, canonical_path = _evidence(settings)
+    canonical_path.unlink()
+
+    with pytest.raises(evidence_access.MemoryStorageAccessError) as exc_info:
+        evidence_access.validate_current_process_evidence_access(evidence, settings=settings)
+
+    assert exc_info.value.code == "EVIDENCE_FILE_NOT_FOUND"
+    assert str(canonical_path) not in exc_info.value.message
