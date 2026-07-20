@@ -261,6 +261,49 @@ describe("EvidenceIngestionWizard", () => {
     );
   });
 
+  it("shows explicit upload and preflight stages instead of a generic inspecting state", async () => {
+    let resolveSession: ((value: EvidenceUploadSessionCreateResponse) => void) | undefined;
+    createEvidenceUploadSessionMock.mockImplementationOnce((_caseId, _input, options) => {
+      options?.onProgress?.({ loaded: 2100, total: 4200, lengthComputable: true });
+      return new Promise<EvidenceUploadSessionCreateResponse>((resolve) => {
+        resolveSession = resolve;
+      });
+    });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["zip-bytes"], "collection.zip", { type: "application/zip" }));
+    await waitFor(() => expect(screen.queryByTestId("sha256-progress")).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    const panel = await screen.findByTestId("inspection-progress-panel");
+    expect(within(panel).getByText(/Uploading evidence to staging storage/i)).toBeInTheDocument();
+    expect(within(panel).getByText(/Uploading evidence 50%/i)).toBeInTheDocument();
+    expect(within(panel).getByText(/Scanning contents, detecting platform, discovering hosts/i)).toBeInTheDocument();
+
+    resolveSession?.(sessionResponse());
+    expect(await screen.findByTestId("preflight-report")).toBeInTheDocument();
+  });
+
+  it("keeps the selected evidence visible and offers retry when preflight inspection fails", async () => {
+    createEvidenceUploadSessionMock.mockRejectedValueOnce(new Error("archive could not be inspected"));
+    createEvidenceUploadSessionMock.mockResolvedValueOnce(sessionResponse());
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["zip-bytes"], "collection.zip", { type: "application/zip" }));
+    await waitFor(() => expect(screen.queryByTestId("sha256-progress")).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    const panel = await screen.findByTestId("inspection-progress-panel");
+    expect(within(panel).getByText(/Inspection failed/i)).toBeInTheDocument();
+    expect(within(panel).getByText(/archive could not be inspected/i)).toBeInTheDocument();
+    expect(screen.getByText("collection.zip")).toBeInTheDocument();
+
+    await userEvent.click(within(panel).getByRole("button", { name: /Retry inspection/i }));
+    expect(await screen.findByTestId("preflight-report")).toBeInTheDocument();
+  });
+
   it("runs preflight and shows the richer inspection report", async () => {
     renderWizard();
     await goToFileStep(/Artifact Collection/);
