@@ -168,6 +168,11 @@ def test_vadinfo_normalizes_to_memory_vad():
     items = result["items"]
     assert items[0]["memory_artifact_type"] == "memory_vad"
     assert items[0]["document_type"] == "memory_vad"
+    assert items[0]["case_id"] == "case-1"
+    assert items[0]["evidence_id"] == "ev-1"
+    assert items[0]["scan_run_id"] == "run-1"
+    assert items[0]["plugin_run_id"] == "plugin-1"
+    assert items[0]["provenance"]["case_id"] == "case-1"
     assert items[0]["pid"] == 1234
     assert items[0]["start_address"] == "0x7ffe0000"
     assert items[0]["protection"] == "PAGE_READONLY"
