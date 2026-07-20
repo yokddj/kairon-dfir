@@ -186,6 +186,31 @@ def test_network_state_indexes_as_connection_state(monkeypatch: pytest.MonkeyPat
     assert indexed_doc["connection_state"] == "ESTABLISHED"
 
 
+def test_vad_hex_addresses_index_as_numeric_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.memory import artifact_indexing
+
+    client = MagicMock()
+    client.indices.exists.return_value = True
+    client.bulk.return_value = {"errors": False, "items": [{"index": {"_id": "vad-1"}}]}
+    monkeypatch.setattr(artifact_indexing, "get_opensearch_client", lambda: client)
+
+    index_artifact_documents(
+        CASE,
+        [
+            {
+                "document_id": "vad-1",
+                "document_type": "memory_vad",
+                "start_address": "0xfffff68000000000",
+                "end_address": "0xfffff68000000fff",
+            }
+        ],
+    )
+
+    indexed_doc = client.bulk.call_args.kwargs["body"][1]
+    assert indexed_doc["start_address"] == int("0xfffff68000000000", 0)
+    assert indexed_doc["end_address"] == int("0xfffff68000000fff", 0)
+
+
 def test_network_summary_aggregates_netscan_and_netstat(monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.memory import execution
 
