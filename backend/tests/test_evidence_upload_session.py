@@ -325,7 +325,8 @@ def test_get_active_session_rejects_wrong_case_or_terminal_status(tmp_path, monk
 def test_promote_reuses_staged_bytes_without_retransmission_or_rehash(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
-    monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: "job-1")
+    enqueued: list[str] = []
+    monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: enqueued.append(evidence_id) or "job-1")
     monkeypatch.setattr("app.core.storage.settings", settings)
     db = _db()
     _case(db)
@@ -347,6 +348,8 @@ def test_promote_reuses_staged_bytes_without_retransmission_or_rehash(tmp_path, 
     assert not staged_path.exists(), "the staged copy must be moved into evidence storage, not duplicated"
     assert Path(evidence.stored_path).exists()
     assert Path(evidence.stored_path).read_bytes() == zip_path.read_bytes()
+    assert enqueued == [evidence.id]
+    assert session.id not in enqueued
     assert db.get(EvidenceUploadSession, session.id).status == EvidenceUploadSessionStatus.promoted.value
     assert db.get(EvidenceUploadSession, session.id).promoted_evidence_id == evidence.id
 

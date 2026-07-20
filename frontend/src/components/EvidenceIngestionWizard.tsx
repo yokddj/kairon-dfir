@@ -94,6 +94,7 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   const [hashProgress, setHashProgress] = useState<number | null>(null);
   const [clientSha256, setClientSha256] = useState<string | null>(null);
   const promotedRef = useRef(false);
+  const promotedEvidenceRef = useRef<Evidence | null>(null);
 
   const requiresPathInput = intakeType === "server_path";
   const requiresFolderInput = intakeType === "folder";
@@ -154,6 +155,7 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
     setHashProgress(null);
     setClientSha256(null);
     promotedRef.current = false;
+    promotedEvidenceRef.current = null;
   }
 
   function handleClose() {
@@ -223,16 +225,21 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   const startMutation = useMutation({
     mutationFn: async (): Promise<{ evidence: Evidence; queuedJobs: number | null }> => {
       if (!session) throw new Error("No upload session is active");
-      const hostAssignment = await resolveHostAssignment();
-      const declaredPlatform = platform === "auto" ? undefined : platform;
-      const evidence = await api.promoteEvidenceUploadSession(caseId, session.id, {
-        provided_platform: declaredPlatform,
-        host_id: hostAssignment.host_id,
-        provided_host: hostAssignment.provided_host,
-        memory_authorization_acknowledged: intakeType === "memory_dump" ? memoryAuthorizationAcknowledged : undefined,
-        labels: labels.split(",").map((label) => label.trim()).filter(Boolean),
-        notes: notes.trim() || undefined,
-      });
+      let evidence = promotedEvidenceRef.current;
+      if (!evidence) {
+        const hostAssignment = await resolveHostAssignment();
+        const declaredPlatform = platform === "auto" ? undefined : platform;
+        evidence = await api.promoteEvidenceUploadSession(caseId, session.id, {
+          provided_platform: declaredPlatform,
+          host_id: hostAssignment.host_id,
+          provided_host: hostAssignment.provided_host,
+          memory_authorization_acknowledged: intakeType === "memory_dump" ? memoryAuthorizationAcknowledged : undefined,
+          labels: labels.split(",").map((label) => label.trim()).filter(Boolean),
+          notes: notes.trim() || undefined,
+        });
+        promotedRef.current = true;
+        promotedEvidenceRef.current = evidence;
+      }
 
       if (evidence.evidence_type === "memory_dump" || processingMode === "skip") {
         return { evidence, queuedJobs: null };

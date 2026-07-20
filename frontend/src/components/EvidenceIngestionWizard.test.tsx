@@ -517,6 +517,28 @@ describe("EvidenceIngestionWizard", () => {
     expect(runEvidenceIndexingPlanMock).not.toHaveBeenCalled();
   });
 
+  it("does not promote a second evidence record when indexing is retried after promotion", async () => {
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-retry", original_filename: "collection.zip" });
+    runEvidenceIndexingPlanMock.mockRejectedValueOnce(new Error("worker unavailable"));
+    runEvidenceIndexingPlanMock.mockResolvedValueOnce({ accepted: true, evidence_id: "evidence-retry", profile: "recommended", run_id: "plan-2", status: "queued", queued_jobs: [{ step_id: "linux_artifacts", run_id: "job-2", status: "queued" }], plan: { run_id: "plan-2", profile: "recommended", status: "queued", steps: [], excluded: [], queued_jobs: [] } });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("worker unavailable")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledTimes(2));
+    expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledTimes(1);
+    expect(runEvidenceIndexingPlanMock).toHaveBeenNthCalledWith(2, "evidence-retry", { profile: "recommended" });
+  });
+
   it("can start the advanced custom indexing profile from the wizard", async () => {
     promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-custom", original_filename: "collection.zip" });
     renderWizard();
