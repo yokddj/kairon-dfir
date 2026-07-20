@@ -182,6 +182,7 @@ from app.workers.tasks import (
     _artifact_can_parallelize,
     _artifact_progress_callback,
     _ensure_parallel_submit_payload_isolation,
+    _ensure_worker_source_available,
     _finalize_artifact_status,
     _parallel_evidence_ref,
     _process_parallel_normalized_artifact,
@@ -190,6 +191,8 @@ from app.workers.tasks import (
     _run_isolated_session_write,
     _schedule_parallel_artifact,
     _split_parallel_and_sequential_artifacts,
+    _classify_ingest_abort,
+    EvidenceSourceUnavailableError,
     enqueue_ingest,
     enqueue_problematic_artifact_retry,
 )
@@ -529,6 +532,28 @@ def test_enqueue_ingest_uses_configured_job_timeout(monkeypatch: pytest.MonkeyPa
 
     assert job_id == "job-1"
     assert enqueued["job_timeout"] == 10800
+
+
+def test_worker_source_guard_allows_existing_canonical_path(tmp_path: Path) -> None:
+    source = tmp_path / "evidence.zip"
+    source.write_bytes(b"PK\x03\x04")
+    evidence = SimpleNamespace(id="evidence-1", case_id="case-1", original_filename="evidence.zip")
+
+    _ensure_worker_source_available(evidence, source)
+
+
+def test_worker_source_guard_returns_redacted_storage_error(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.zip"
+    evidence = SimpleNamespace(id="evidence-1", case_id="case-1", original_filename="missing.zip")
+
+    with pytest.raises(EvidenceSourceUnavailableError) as exc:
+        _ensure_worker_source_available(evidence, missing)
+
+    abort_kind, artifact_status, message = _classify_ingest_abort(exc.value)
+    assert abort_kind == "source_unavailable"
+    assert artifact_status == "failed_source_unavailable"
+    assert "Evidence source file is unavailable to the processing worker" in message
+    assert str(missing) not in message
 
 
 def test_enqueue_problematic_artifact_retry_uses_configured_job_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
