@@ -611,10 +611,12 @@ describe("MemoryUploadPage", () => {
 
     localStorage.setItem("kairon-memory-upload:case-1", JSON.stringify({ uploadId, filename: "authorized.mem", expectedBytes, providedHost: "HOSTA" }));
     getMemoryUploadStatusMock.mockImplementation(() => Promise.resolve(buildStatus()));
-    uploadMemoryUploadChunkMock.mockImplementation((_caseId: string, _uploadId: string, chunkIndex: number) => {
-      if (!received.includes(chunkIndex)) {
-        received = [...received, chunkIndex].sort((a, b) => a - b);
-      }
+    // The chunk never actually lands server-side here (unlike the
+    // reconciliation-recovery tests in runResumableUpload.test.ts) - this
+    // test exercises a genuine, persistent timeout, so `received` must stay
+    // untouched to correctly assert the upload stays paused rather than
+    // silently reconciling and completing.
+    uploadMemoryUploadChunkMock.mockImplementation(() => {
       return Promise.reject(new Error("Upload timed out. Your network may be unavailable."));
     });
     finalizeMemoryUploadMock.mockResolvedValue(uploadStatus({
