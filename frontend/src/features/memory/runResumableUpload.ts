@@ -137,6 +137,7 @@ async function uploadChunkWithRetry(
   totalChunks: number,
   signal: AbortSignal,
   uploadChunk: RunResumableUploadArgs["uploadChunk"],
+  getStatus: RunResumableUploadArgs["getStatus"],
   onProgress: ((info: { loaded: number; total: number }) => void) | undefined,
   onChunkProgress: ((chunkIndex: number, loaded: number, chunkBytes: number) => void) | undefined,
   sleep: (ms: number) => Promise<void>,
@@ -162,7 +163,36 @@ async function uploadChunkWithRetry(
       if (signal.aborted) {
         throw new Error("Upload aborted");
       }
-      if (!shouldRetryChunkUpload(error) || attempt >= CHUNK_UPLOAD_MAX_RETRIES) {
+      if (!shouldRetryChunkUpload(error)) {
+        onChunkProgress?.(chunkIndex, 0, blob.size);
+        throw error;
+      }
+      // The local request appeared to fail (timeout, network blip, 5xx),
+      // but that doesn't mean the bytes never arrived - only that this
+      // client never saw the response. Production logs have shown a real
+      // browser resending (and getting a 409 offset_mismatch for) a chunk
+      // the server had already committed minutes earlier. Reconcile
+      // against the server's authoritative chunk bitmap before resending:
+      // if this specific chunk is no longer missing, treat it as delivered
+      // instead of paying for a full retry (and possible repeat stall).
+      // Index-based (not a raw byte-count comparison) so this stays correct
+      // under concurrency, where a sibling chunk landing first can advance
+      // the cumulative byte count without this chunk being the one received.
+      try {
+        const reconciled = await getStatus(uploadId);
+        const { missingChunks: reconciledMissing } = deriveMissingChunks(reconciled, file, chunkSize);
+        if (!reconciledMissing.includes(chunkIndex)) {
+          onChunkProgress?.(chunkIndex, 0, blob.size);
+          if (onProgress) {
+            onProgress({ loaded: reconciled.bytes_received, total: reconciled.expected_bytes });
+          }
+          return reconciled;
+        }
+      } catch {
+        // Reconciliation read itself failed (e.g. offline) - fall through
+        // to the normal retry/backoff below.
+      }
+      if (attempt >= CHUNK_UPLOAD_MAX_RETRIES) {
         onChunkProgress?.(chunkIndex, 0, blob.size);
         throw error;
       }
@@ -283,6 +313,7 @@ export async function runResumableUpload(
             totalChunks,
             signal,
             uploadChunk,
+            getStatus,
             onProgress,
             updateChunkProgress,
             sleep,
