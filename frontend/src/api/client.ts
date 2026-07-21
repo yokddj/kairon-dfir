@@ -6356,6 +6356,12 @@ export const api = {
   getEvidenceDiskImage: (evidenceId: string) => request<DiskImage>(`/evidences/${evidenceId}/disk-image`),
   getIngestionReadiness: (caseId: string) => request<IngestionReadiness>(`/cases/${caseId}/ingestion-readiness`),
   getCaseActivity: (caseId: string) => request<ActivityCenterResponse>(`/cases/${caseId}/activity`),
+  retryEvidenceOperation: (caseId: string, operationId: string) =>
+    request<{ status: string; operation_id: string; job_type?: string; job_id?: string }>(`/cases/${caseId}/evidence-operations/${operationId}/retry`, { method: "POST" }),
+  dismissEvidenceOperation: (caseId: string, operationId: string) =>
+    request<{ status: string; operation_id: string }>(`/cases/${caseId}/evidence-operations/${operationId}/dismiss`, { method: "POST" }),
+  getEvidenceUploadSession: (caseId: string, sessionId: string) =>
+    request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null }>(`/cases/${caseId}/evidence-uploads/${sessionId}`),
   createResumableEvidenceUploadSession: (caseId: string, payload: { filename: string; expected_size_bytes: number; declared_platform?: EvidencePlatform; client_sha256?: string }) =>
     request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null }>(`/cases/${caseId}/evidence-uploads/resumable`, { method: "POST", body: JSON.stringify(payload) }),
   appendResumableEvidenceUpload: (caseId: string, sessionId: string, blob: Blob, offset: number, options?: { onProgress?: (progress: UploadProgress) => void }) =>

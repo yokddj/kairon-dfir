@@ -40,6 +40,7 @@ from app.models.case import Case
 from app.models.evidence import Evidence
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
 from app.schemas.evidence_preflight import PreflightReport
+from app.services.evidence_operations import sync_upload_operation
 from app.services.evidence_preflight import run_preflight
 
 logger = logging.getLogger(__name__)
@@ -252,6 +253,7 @@ def create_resumable_upload_session(
     db.add(session)
     db.commit()
     db.refresh(session)
+    sync_upload_operation(db, session)
     return session
 
 
@@ -297,6 +299,7 @@ def append_resumable_upload_chunk(
         _touch_upload_session(session)
         db.add(session)
         db.commit()
+        sync_upload_operation(db, session)
         raise
     session.bytes_received = written
     session.size_bytes = written
@@ -306,10 +309,21 @@ def append_resumable_upload_chunk(
     db.add(session)
     db.commit()
     db.refresh(session)
+    sync_upload_operation(db, session)
     return session
 
 
 def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSession) -> tuple[EvidenceUploadSession, PreflightReport]:
+    if session.status == EvidenceUploadSessionStatus.staged.value:
+        report = run_preflight(Path(session.staged_path), token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch")
+        session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete"}
+        session.failure_message = None
+        _touch_upload_session(session)
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        sync_upload_operation(db, session)
+        return session, report
     if session.status not in {EvidenceUploadSessionStatus.uploading.value, EvidenceUploadSessionStatus.interrupted.value, EvidenceUploadSessionStatus.created.value}:
         raise UploadSessionError("session_not_uploading", f"Upload session is '{session.status}', not ready to finalize.")
     path = Path(session.staged_path)
@@ -322,6 +336,7 @@ def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSessio
         _touch_upload_session(session)
         db.add(session)
         db.commit()
+        sync_upload_operation(db, session)
         raise UploadSessionError("upload_incomplete", session.failure_message, {"bytes_received": size, "expected_bytes": session.expected_size_bytes})
     session.status = EvidenceUploadSessionStatus.preflight_running.value
     session.bytes_received = size
@@ -341,6 +356,7 @@ def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSessio
     db.add(session)
     db.commit()
     db.refresh(session)
+    sync_upload_operation(db, session)
     return session, report
 
 
@@ -695,6 +711,7 @@ def create_upload_session(
     db.add(session)
     db.commit()
     db.refresh(session)
+    sync_upload_operation(db, session)
 
     report = run_preflight(
         Path(session.staged_path),
@@ -706,6 +723,7 @@ def create_upload_session(
     session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category}
     db.add(session)
     db.commit()
+    sync_upload_operation(db, session)
     return session, report
 
 
@@ -747,6 +765,7 @@ async def create_streamed_upload_session(
         db.add(session)
         db.commit()
         db.refresh(session)
+        sync_upload_operation(db, session)
         return session
     except Exception:
         root = _session_root(session_id)
@@ -794,6 +813,7 @@ def cancel_upload_session(db: Session, session: EvidenceUploadSession) -> None:
     session.status = EvidenceUploadSessionStatus.cancelled.value
     db.add(session)
     db.commit()
+    sync_upload_operation(db, session)
 
 
 def cleanup_expired_upload_sessions(db: Session, *, limit: int = 50) -> dict[str, int]:
@@ -810,6 +830,7 @@ def cleanup_expired_upload_sessions(db: Session, *, limit: int = 50) -> dict[str
         item.status = EvidenceUploadSessionStatus.expired.value
         item.failure_message = "Upload session expired before processing was confirmed."
         db.add(item)
+        sync_upload_operation(db, item, commit=False)
     db.commit()
     return {"expired": len(expired)}
 
@@ -1019,6 +1040,7 @@ def promote_upload_session(
     session.promoted_evidence_id = evidence.id
     db.add(session)
     db.commit()
+    sync_upload_operation(db, session)
     _cleanup_storage(session)
     _log_upload(
         "PROMOTION END",

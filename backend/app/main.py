@@ -289,6 +289,17 @@ def on_startup() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("native probe periodic reconciliation scheduling skipped: %s", exc)
 
+    from app.services.evidence_operations import reconcile_evidence_operations
+    db = SessionLocal()
+    try:
+        evidence_stats = reconcile_evidence_operations(db)
+        if any(evidence_stats.values()):
+            logger.info("evidence lifecycle reconciliation: %s", evidence_stats)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("evidence lifecycle reconciliation skipped: %s", exc)
+    finally:
+        db.close()
+
     from app.services.memory.upload_sessions import (
         cleanup_expired_memory_upload_sessions,
         schedule_periodic_cleanup_if_needed,

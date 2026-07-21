@@ -20,6 +20,7 @@ from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
+from app.models.evidence_operation import EvidenceOperation, EvidenceOperationJob
 from app.models.evidence_upload_session import EvidenceUploadSession
 from app.models.user import User
 from app.schemas.evidence import EvidenceRead
@@ -49,6 +50,7 @@ from app.services.evidence_upload_session import (
     promote_upload_session,
     rerun_preflight,
 )
+from app.services.evidence_operations import reconcile_evidence_operations, sync_upload_operation
 from app.services.processing_queue import list_case_processing
 from app.services.ingestion_health import check_ingestion_readiness
 from app.services.memory.upload_sessions import MemoryUploadSessionError
@@ -97,31 +99,61 @@ def case_activity_center(case_id: str, db: Session = Depends(get_db)) -> Activit
 
     operations: list[dict] = []
     now = datetime.now(timezone.utc)
+    reconcile_evidence_operations(db)
     sessions = db.query(EvidenceUploadSession).filter(EvidenceUploadSession.case_id == case_id).order_by(EvidenceUploadSession.updated_at.desc()).limit(50).all()
     for session in sessions:
-        expected = int(session.expected_size_bytes or session.size_bytes or 0) or None
-        received = int(session.bytes_received or session.size_bytes or 0)
-        progress = round(min(100, (received / expected) * 100), 2) if expected else (100 if session.status in {"staged", "promoted"} else None)
-        owner = "browser" if session.status in {"created", "uploading", "interrupted"} else "backend" if session.status in {"preflight_running", "staged", "promoted"} else "database"
-        started = session.created_at
+        sync_upload_operation(db, session, commit=False)
+    db.commit()
+    persisted = db.query(EvidenceOperation).filter(EvidenceOperation.case_id == case_id).order_by(EvidenceOperation.updated_at.desc()).limit(50).all()
+    for operation in persisted:
+        details = dict(operation.metadata_json or {})
+        jobs = db.query(EvidenceOperationJob).filter(EvidenceOperationJob.operation_id == operation.id).order_by(EvidenceOperationJob.updated_at.desc()).all()
+        details["operation_id"] = operation.id
+        details["evidence_id"] = operation.evidence_id
+        details["jobs"] = [
+            {
+                "id": job.id,
+                "job_type": job.job_type,
+                "status": job.status,
+                "progress": job.progress,
+                "owner": job.owner,
+                "rq_job_id": job.rq_job_id,
+                "started_at": job.started_at,
+                "updated_at": job.updated_at,
+                "finished_at": job.finished_at,
+                "last_error": job.last_error,
+                "retry_count": job.retry_count,
+            }
+            for job in jobs
+        ]
+        category = "Uploads"
+        if operation.status == "paused":
+            category = "Paused uploads"
+        elif operation.status == "completed":
+            category = "Completed"
+        elif operation.status in {"failed", "cancelled", "expired"}:
+            category = "Failed"
+        elif operation.stage in {"preflight_running", "preflight_complete", "staged"}:
+            category = "Processing"
+        started = operation.started_at or operation.created_at
         elapsed = (now - started).total_seconds() if started and getattr(started, "tzinfo", None) else None
         operations.append({
-            "id": session.id,
+            "id": operation.id,
             "case_id": case_id,
-            "kind": "upload",
-            "category": "Uploads" if session.status in {"created", "uploading"} else "Paused uploads" if session.status == "interrupted" else "Completed" if session.status == "promoted" else "Processing" if session.status in {"staged", "preflight_running"} else "Failed",
-            "status": session.status,
-            "stage": str((session.metadata_json or {}).get("current_stage") or session.status),
-            "label": session.original_filename,
-            "progress": progress,
-            "bytes_received": received,
-            "expected_size_bytes": expected,
-            "current_owner": owner,
-            "created_at": session.created_at,
-            "updated_at": session.updated_at,
-            "last_activity_at": session.last_activity_at or session.updated_at,
+            "kind": operation.kind,
+            "category": category,
+            "status": operation.status,
+            "stage": operation.stage,
+            "label": str(details.get("label") or details.get("original_filename") or operation.id),
+            "progress": operation.progress,
+            "bytes_received": operation.bytes_received,
+            "expected_size_bytes": operation.expected_size_bytes,
+            "current_owner": operation.owner,
+            "created_at": operation.created_at,
+            "updated_at": operation.updated_at,
+            "last_activity_at": operation.updated_at,
             "elapsed_seconds": round(elapsed, 3) if elapsed is not None else None,
-            "details": {"sha256": session.sha256, "promoted_evidence_id": session.promoted_evidence_id, "failure_message": session.failure_message},
+            "details": details,
         })
     processing = list_case_processing(db, case_id)
     for item in processing.get("items", []):
@@ -148,6 +180,41 @@ def case_activity_center(case_id: str, db: Session = Depends(get_db)) -> Activit
     return ActivityCenterResponse(case_id=case_id, summary=dict(counts), operations=operations)
 
 
+@router.post("/{case_id}/evidence-operations/{operation_id}/retry")
+def retry_evidence_operation(case_id: str, operation_id: str, db: Session = Depends(get_db)) -> dict:
+    from app.services.evidence_operations import transition_operation, upsert_operation_job
+    from app.workers.tasks import enqueue_evidence_upload_preflight
+
+    operation = db.get(EvidenceOperation, operation_id)
+    if operation is None or operation.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Evidence operation not found")
+    if operation.upload_session_id and operation.stage in {"queued_preflight", "finalizing_upload", "preflight_failed", "upload", "uploading"}:
+        transition_operation(operation, "finalizing", stage="queued_preflight", owner="worker", force=True)
+        job = upsert_operation_job(db, operation, job_type="preflight", dedupe_key=operation.upload_session_id, status="queued", commit=False)
+        job.retry_count += 1
+        db.add(operation)
+        db.add(job)
+        db.commit()
+        job.rq_job_id = enqueue_evidence_upload_preflight(operation.upload_session_id)
+        db.add(job)
+        db.commit()
+        return {"status": "queued", "operation_id": operation.id, "job_type": "preflight", "job_id": job.rq_job_id}
+    raise HTTPException(status_code=409, detail="This operation cannot be retried automatically yet.")
+
+
+@router.post("/{case_id}/evidence-operations/{operation_id}/dismiss")
+def dismiss_evidence_operation(case_id: str, operation_id: str, db: Session = Depends(get_db)) -> dict:
+    operation = db.get(EvidenceOperation, operation_id)
+    if operation is None or operation.case_id != case_id:
+        raise HTTPException(status_code=404, detail="Evidence operation not found")
+    if operation.status not in {"completed", "cancelled", "expired"}:
+        raise HTTPException(status_code=409, detail="Only completed terminal operations can be dismissed.")
+    operation.metadata_json = {**(operation.metadata_json or {}), "dismissed": True}
+    db.add(operation)
+    db.commit()
+    return {"status": "dismissed", "operation_id": operation.id}
+
+
 @router.post("/{case_id}/evidence-uploads/resumable", response_model=EvidenceUploadSessionStageResponse)
 def init_resumable_evidence_upload(case_id: str, payload: EvidenceUploadSessionInitRequest, db: Session = Depends(get_db)) -> EvidenceUploadSessionStageResponse:
     declared = payload.declared_platform if payload.declared_platform and payload.declared_platform != "auto" else None
@@ -158,11 +225,34 @@ def init_resumable_evidence_upload(case_id: str, payload: EvidenceUploadSessionI
     return EvidenceUploadSessionStageResponse(session=_session_to_read(session), health=check_ingestion_readiness(db))
 
 
+@router.get("/{case_id}/evidence-uploads/{session_id}", response_model=EvidenceUploadSessionStageResponse)
+def get_evidence_upload(case_id: str, session_id: str, db: Session = Depends(get_db)) -> EvidenceUploadSessionStageResponse:
+    try:
+        session = get_upload_session(db, case_id, session_id)
+    except UploadSessionError as exc:
+        raise _http_from_upload_error(exc) from exc
+    sync_upload_operation(db, session)
+    return EvidenceUploadSessionStageResponse(session=_session_to_read(session), health=check_ingestion_readiness(db))
+
+
 @router.put("/{case_id}/evidence-uploads/{session_id}/bytes", response_model=EvidenceUploadSessionAppendResponse)
 async def append_resumable_evidence_upload(case_id: str, session_id: str, request: Request, offset: int = Query(..., ge=0), db: Session = Depends(get_db)) -> EvidenceUploadSessionAppendResponse:
     try:
         session = get_upload_session(db, case_id, session_id)
         session = append_resumable_upload_chunk(db, session, offset=offset, body=BytesIO(await request.body()))
+        if session.expected_size_bytes is not None and int(session.bytes_received or 0) >= int(session.expected_size_bytes):
+            from app.services.evidence_operations import get_upload_operation, transition_operation, upsert_operation_job
+            from app.workers.tasks import enqueue_evidence_upload_preflight
+
+            operation = get_upload_operation(db, session)
+            transition_operation(operation, "finalizing", stage="queued_preflight", owner="worker", force=True)
+            job = upsert_operation_job(db, operation, job_type="preflight", dedupe_key=session.id, status="queued", commit=False)
+            db.add(operation)
+            db.commit()
+            job_id = enqueue_evidence_upload_preflight(session.id)
+            job.rq_job_id = job_id
+            db.add(job)
+            db.commit()
     except UploadSessionError as exc:
         raise _http_from_upload_error(exc) from exc
     return EvidenceUploadSessionAppendResponse(session=_session_to_read(session), offset=int(session.bytes_received or 0))
@@ -260,6 +350,7 @@ def rerun_evidence_upload_preflight(
     session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category}
     db.add(session)
     db.commit()
+    sync_upload_operation(db, session)
     return report
 
 
@@ -278,6 +369,14 @@ def promote_evidence_upload(
 
     declared = payload.provided_platform if payload.provided_platform and payload.provided_platform != "auto" else None
     try:
+        from app.services.evidence_operations import get_upload_operation, mark_operation_job_finished, mark_operation_job_running, transition_operation, upsert_operation_job
+
+        operation = get_upload_operation(db, session)
+        transition_operation(operation, "promoting", stage="promoting", owner="backend", force=True)
+        promotion_job = upsert_operation_job(db, operation, job_type="promotion", dedupe_key=session.id, status="queued", commit=False)
+        db.add(operation)
+        db.commit()
+        mark_operation_job_running(db, promotion_job)
         evidence = promote_upload_session(
             db,
             session,
@@ -291,6 +390,12 @@ def promote_evidence_upload(
             notes=payload.notes,
             current_user=current_user,
         )
+        operation = get_upload_operation(db, session)
+        transition_operation(operation, "queued", stage="processing_queued", owner="worker", force=True)
+        upsert_operation_job(db, operation, job_type="promotion", dedupe_key=session.id, status="completed", metadata={"evidence_id": evidence.id}, commit=False)
+        db.add(operation)
+        db.commit()
+        mark_operation_job_finished(db, promotion_job, status="completed", progress=100)
     except HTTPException:
         raise
     except MemoryUploadSessionError as exc:
@@ -303,9 +408,13 @@ def promote_evidence_upload(
         detail = {"error_code": exc.code, "code": exc.code, "message": exc.message, **(exc.detail or {})}
         raise HTTPException(status_code=status_code, detail=detail) from exc
     except UploadSessionError as exc:
+        if 'promotion_job' in locals():
+            mark_operation_job_finished(db, promotion_job, status="failed", error=exc.message)
         detail = {"error_code": exc.code, "code": exc.code, "message": exc.message}
         raise HTTPException(status_code=400, detail=detail) from exc
     except Exception as exc:  # noqa: BLE001
+        if 'promotion_job' in locals():
+            mark_operation_job_finished(db, promotion_job, status="failed", error=str(exc))
         logger.exception("Promoting upload session %s failed for case %s", session_id, case_id)
         raise HTTPException(status_code=500, detail=f"Could not start processing: {exc.__class__.__name__}") from exc
     return evidence
@@ -314,7 +423,7 @@ def promote_evidence_upload(
 @router.delete("/{case_id}/evidence-uploads/{session_id}")
 def cancel_evidence_upload(case_id: str, session_id: str, db: Session = Depends(get_db)) -> dict:
     try:
-        session = get_active_session(db, case_id, session_id)
+        session = get_upload_session(db, case_id, session_id)
     except UploadSessionError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
     cancel_upload_session(db, session)

@@ -31,6 +31,7 @@ from app.core.config import get_settings
 from app.models.case import Case
 from app.models.case_host import CaseHost
 from app.models.evidence import Evidence
+from app.models.evidence_operation import EvidenceOperation, EvidenceOperationJob
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
 from app.models.memory import MemoryUpload
 from app.services.memory.upload_sessions import (
@@ -50,6 +51,7 @@ from app.services.evidence_upload_session import (
     get_active_session,
     promote_upload_session,
 )
+from app.services.evidence_operations import reconcile_evidence_operations, transition_operation, upsert_operation_job
 
 settings = get_settings()
 CASE_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
@@ -174,6 +176,70 @@ def test_resumable_upload_persists_session_before_bytes_and_resumes_from_offset(
     assert session.bytes_received == 3
     assert session.status == EvidenceUploadSessionStatus.uploading.value
     assert Path(session.staged_path).read_bytes() == b"abc"
+
+
+def test_resumable_upload_syncs_actionable_operation_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+    operation = db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).one()
+    assert operation.status == "waiting_upload"
+    assert operation.stage == "upload"
+    assert operation.metadata_json["upload_session_id"] == session.id
+
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(b"abcde"))
+    operation = db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).one()
+    assert operation.progress == 50
+    assert operation.bytes_received == 5
+    assert operation.expected_size_bytes == 10
+
+    cancel_upload_session(db, session)
+    operation = db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).one()
+    assert operation.status == "cancelled"
+    assert operation.completed_at is not None
+
+
+def test_operation_transition_graph_rejects_impossible_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+    operation = db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).one()
+
+    with pytest.raises(ValueError):
+        transition_operation(operation, "completed")
+
+
+def test_operation_jobs_are_idempotent_per_operation(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+    operation = db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).one()
+
+    first = upsert_operation_job(db, operation, job_type="preflight", dedupe_key=session.id, status="queued")
+    second = upsert_operation_job(db, operation, job_type="preflight", dedupe_key=session.id, status="running")
+
+    assert first.id == second.id
+    assert db.query(EvidenceOperationJob).filter(EvidenceOperationJob.operation_id == operation.id).count() == 1
+    assert second.status == "running"
+
+
+def test_reconciliation_recovers_session_without_operation(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+    db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).delete()
+    db.commit()
+
+    stats = reconcile_evidence_operations(db)
+
+    assert stats["sessions_without_operations"] == 1
+    assert db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).count() == 1
 
 
 def test_resumable_upload_rejects_wrong_offset_without_duplicate_bytes(tmp_path, monkeypatch):
