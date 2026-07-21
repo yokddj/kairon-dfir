@@ -13,12 +13,17 @@ class EvidenceUploadSessionRead(BaseModel):
     is_folder: bool
     is_server_path: bool
     size_bytes: int
+    expected_size_bytes: int | None = None
+    bytes_received: int = 0
     sha256: str | None = None
     client_sha256: str | None = None
     client_sha256_mismatch: bool = False
     declared_platform: str | None = None
     expires_at: datetime
     created_at: datetime
+    updated_at: datetime
+    last_activity_at: datetime | None = None
+    failure_message: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -32,6 +37,49 @@ class EvidenceUploadSessionCreateResponse(BaseModel):
 class EvidenceUploadSessionStageResponse(BaseModel):
     session: EvidenceUploadSessionRead
     health: dict | None = None
+
+
+class EvidenceUploadSessionInitRequest(BaseModel):
+    filename: str
+    expected_size_bytes: int
+    declared_platform: str | None = None
+    client_sha256: str | None = None
+
+
+class EvidenceUploadSessionAppendResponse(BaseModel):
+    session: EvidenceUploadSessionRead
+    offset: int
+
+
+class EvidenceUploadSessionFinalizeResponse(BaseModel):
+    session: EvidenceUploadSessionRead
+    preflight: PreflightReport
+    health: dict | None = None
+
+
+class ActivityOperationRead(BaseModel):
+    id: str
+    case_id: str
+    kind: str
+    category: str
+    status: str
+    stage: str
+    label: str
+    progress: float | None = None
+    bytes_received: int | None = None
+    expected_size_bytes: int | None = None
+    current_owner: str
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+    last_activity_at: datetime | str | None = None
+    elapsed_seconds: float | None = None
+    details: dict = {}
+
+
+class ActivityCenterResponse(BaseModel):
+    case_id: str
+    summary: dict[str, int]
+    operations: list[ActivityOperationRead]
 
 
 class PreflightRerunRequest(BaseModel):
