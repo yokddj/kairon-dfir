@@ -207,6 +207,143 @@ def _build_session_from_staged(
     return session, report
 
 
+def _touch_upload_session(session: EvidenceUploadSession) -> None:
+    session.last_activity_at = utc_now()
+    settings = get_settings()
+    session.expires_at = utc_now() + timedelta(seconds=max(60, int(settings.evidence_upload_session_ttl_seconds)))
+
+
+def create_resumable_upload_session(
+    db: Session,
+    case_id: str,
+    *,
+    filename: str,
+    expected_size_bytes: int,
+    declared_platform: str | None = None,
+    client_sha256: str | None = None,
+) -> EvidenceUploadSession:
+    if not db.get(Case, case_id):
+        raise UploadSessionError("case_not_found", "Case not found")
+    if expected_size_bytes <= 0:
+        raise UploadSessionError("invalid_size", "Expected upload size must be greater than zero.")
+    settings = get_settings()
+    session_id = str(uuid4())
+    root = _session_root(session_id)
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / Path(filename or "upload.bin").name
+    _preupload_storage_check(session_id=session_id, expected_bytes=expected_size_bytes, temp_dir=settings.backend_temp_dir, max_bytes=int(settings.backend_max_upload_size))
+    session = EvidenceUploadSession(
+        id=session_id,
+        case_id=case_id,
+        status=EvidenceUploadSessionStatus.created.value,
+        original_filename=target.name,
+        staged_path=str(target),
+        is_folder=False,
+        is_server_path=False,
+        size_bytes=0,
+        expected_size_bytes=expected_size_bytes,
+        bytes_received=0,
+        client_sha256=client_sha256,
+        declared_platform=declared_platform,
+        expires_at=utc_now() + timedelta(seconds=max(60, int(settings.evidence_upload_session_ttl_seconds))),
+        last_activity_at=utc_now(),
+        metadata_json={"upload_mode": "resumable", "current_stage": "upload"},
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def get_upload_session(db: Session, case_id: str, session_id: str) -> EvidenceUploadSession:
+    session = db.get(EvidenceUploadSession, session_id)
+    if session is None or session.case_id != case_id:
+        raise UploadSessionError("session_not_found", "Upload session not found.")
+    return session
+
+
+def append_resumable_upload_chunk(
+    db: Session,
+    session: EvidenceUploadSession,
+    *,
+    offset: int,
+    body: BinaryIO,
+) -> EvidenceUploadSession:
+    if session.status not in {EvidenceUploadSessionStatus.created.value, EvidenceUploadSessionStatus.uploading.value, EvidenceUploadSessionStatus.interrupted.value}:
+        raise UploadSessionError("session_not_uploading", f"Upload session is '{session.status}', not uploadable.")
+    target = Path(session.staged_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    current_size = target.stat().st_size if target.exists() else 0
+    if offset != current_size or offset != int(session.bytes_received or 0):
+        raise UploadSessionError("offset_mismatch", "Upload offset does not match the server-confirmed offset.", {"expected_offset": current_size, "received_offset": offset})
+    max_bytes = int(get_settings().backend_max_upload_size)
+    written = current_size
+    try:
+        with target.open("ab") as buffer:
+            while chunk := body.read(1024 * 1024):
+                next_size = written + len(chunk)
+                if next_size > max_bytes or (session.expected_size_bytes is not None and next_size > int(session.expected_size_bytes)):
+                    raise UploadSessionError("upload_size_limit", "Upload exceeded the configured size limit.")
+                buffer.write(chunk)
+                written = next_size
+            buffer.flush()
+            os.fsync(buffer.fileno())
+    except UploadSessionError:
+        raise
+    except Exception as exc:
+        session.status = EvidenceUploadSessionStatus.interrupted.value
+        session.failure_message = f"Upload interrupted: {exc.__class__.__name__}"
+        session.bytes_received = target.stat().st_size if target.exists() else written
+        _touch_upload_session(session)
+        db.add(session)
+        db.commit()
+        raise
+    session.bytes_received = written
+    session.size_bytes = written
+    session.status = EvidenceUploadSessionStatus.uploading.value if session.expected_size_bytes is None or written < int(session.expected_size_bytes) else EvidenceUploadSessionStatus.uploading.value
+    session.failure_message = None
+    _touch_upload_session(session)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session
+
+
+def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSession) -> tuple[EvidenceUploadSession, PreflightReport]:
+    if session.status not in {EvidenceUploadSessionStatus.uploading.value, EvidenceUploadSessionStatus.interrupted.value, EvidenceUploadSessionStatus.created.value}:
+        raise UploadSessionError("session_not_uploading", f"Upload session is '{session.status}', not ready to finalize.")
+    path = Path(session.staged_path)
+    size = path.stat().st_size if path.exists() else 0
+    if session.expected_size_bytes is not None and size != int(session.expected_size_bytes):
+        session.status = EvidenceUploadSessionStatus.interrupted.value
+        session.bytes_received = size
+        session.size_bytes = size
+        session.failure_message = "Upload is incomplete. Resume from the confirmed offset before finalizing."
+        _touch_upload_session(session)
+        db.add(session)
+        db.commit()
+        raise UploadSessionError("upload_incomplete", session.failure_message, {"bytes_received": size, "expected_bytes": session.expected_size_bytes})
+    session.status = EvidenceUploadSessionStatus.preflight_running.value
+    session.bytes_received = size
+    session.size_bytes = size
+    _touch_upload_session(session)
+    db.add(session)
+    db.commit()
+    digest = _hash_existing_file(path)
+    session.sha256 = digest
+    if session.client_sha256 and digest and session.client_sha256.strip().lower() != digest.lower():
+        session.metadata_json = {**(session.metadata_json or {}), "client_sha256_mismatch": True}
+    report = run_preflight(path, token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch")
+    session.status = EvidenceUploadSessionStatus.staged.value
+    session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete"}
+    session.failure_message = None
+    _touch_upload_session(session)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    return session, report
+
+
 def _stage_single_file(upload: UploadFile, root: Path) -> _StagedFile:
     root.mkdir(parents=True, exist_ok=True)
     filename = Path(upload.filename or "upload.bin").name

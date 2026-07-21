@@ -1148,6 +1148,8 @@ def _is_non_terminal_artifact_status(status: str | None) -> bool:
 def _classify_ingest_abort(exc: Exception) -> tuple[str, str, str]:
     if isinstance(exc, OpenSearchIngestBlockedError):
         return "infrastructure_blocked_opensearch", "failed_aborted", str(exc)
+    if isinstance(exc, EvidenceSourceUnavailableError):
+        return "source_unavailable", "failed_source_unavailable", exc.user_message
     message = str(exc)
     lowered = message.lower()
     if "task exceeded maximum timeout value" in lowered:
@@ -1155,6 +1157,27 @@ def _classify_ingest_abort(exc: Exception) -> tuple[str, str, str]:
     if "cancel" in lowered:
         return "cancelled", "cancelled", message
     return "aborted", "failed_aborted", message
+
+
+class EvidenceSourceUnavailableError(RuntimeError):
+    def __init__(self, evidence_id: str, source_path: Path):
+        self.evidence_id = evidence_id
+        self.source_path = source_path
+        self.user_message = "Evidence source file is unavailable to the processing worker. Verify shared evidence storage is mounted for backend and worker services."
+        super().__init__(self.user_message)
+
+
+def _ensure_worker_source_available(evidence: Evidence, source_path: Path) -> None:
+    if source_path.exists():
+        return
+    logger.error(
+        "Evidence source unavailable to worker evidence_id=%s case_id=%s filename=%s stored_path=%s",
+        evidence.id,
+        evidence.case_id,
+        evidence.original_filename,
+        source_path,
+    )
+    raise EvidenceSourceUnavailableError(str(evidence.id), source_path)
 
 
 def _artifact_progress_snapshot(metadata: dict[str, object]) -> dict[str, dict[str, int]]:
@@ -4094,6 +4117,7 @@ def ingest_evidence(evidence_id: str) -> None:
         initial_phase = "extracting_selected" if is_selected_velociraptor else "extracting"
         initial_phases = ["uploaded", "indexing_zip", "discovering_candidates", "waiting_selection", "extracting_selected", "parsing", "indexing_events"] if is_selected_velociraptor else ["uploaded", "extracting", "detecting", "parsing", "indexing"]
         stored_path = Path(evidence.stored_path)
+        _ensure_worker_source_available(evidence, stored_path)
         discovery_candidates = list(((metadata.get("velociraptor_discovery") or {}).get("candidates") or []))
         selected_artifact_types = sorted(
             {

@@ -48,6 +48,10 @@ PREP_REQUIREMENT_UNKNOWN_ERROR = "WINDOWS_REQUIREMENT_UNKNOWN"
 PREP_DISCOVERY_FAILED_ERROR = "WINDOWS_DISCOVERY_FAILED"
 PREP_STALE_TIMEOUT = "MEMORY_PREPARATION_STALE"
 PREP_EVIDENCE_PATH_UNAVAILABLE = "MEMORY_EVIDENCE_PATH_UNAVAILABLE"
+PREP_EVIDENCE_STORAGE_LOOKUP_FAILED = "MEMORY_EVIDENCE_STORAGE_LOOKUP_FAILED"
+PREP_EVIDENCE_STORAGE_MOUNT_MISMATCH = "MEMORY_EVIDENCE_STORAGE_MOUNT_MISMATCH"
+PREP_EVIDENCE_PERMISSION_DENIED = "MEMORY_EVIDENCE_PERMISSION_DENIED"
+PREP_EVIDENCE_SIZE_MISMATCH = "MEMORY_EVIDENCE_SIZE_MISMATCH"
 PREP_SYMBOL_CACHE_UNWRITABLE = "MEMORY_SYMBOL_CACHE_NOT_WRITABLE"
 
 
@@ -84,18 +88,74 @@ def _latest_terminal_preparation(db: Session, evidence_id: str):
 
 
 def _evidence_canonical_path(evidence) -> Path:
-    """Return the absolute path of the canonical blob."""
-    stored = getattr(evidence, "stored_path", None) or getattr(evidence, "original_path", None)
-    if not stored:
-        raise ValueError("evidence is missing stored_path")
-    return Path(stored)
+    """Return the worker-visible canonical promoted evidence path."""
+    from app.services.memory.evidence_access import resolve_memory_evidence_path
+
+    return resolve_memory_evidence_path(evidence, settings=get_settings())
+
+
+def _storage_error_for(code: str | None) -> tuple[str, str, str]:
+    if code in {"EVIDENCE_PATH_MISSING", "UNSAFE_EVIDENCE_PATH", "UNSAFE_EVIDENCE_FILE"}:
+        return (
+            "evidence_storage_lookup_failed",
+            PREP_EVIDENCE_STORAGE_LOOKUP_FAILED,
+            "Memory evidence storage metadata could not be resolved safely.",
+        )
+    if code == "MEMORY_EVIDENCE_PERMISSION_DENIED":
+        return (
+            "evidence_storage_permission_denied",
+            PREP_EVIDENCE_PERMISSION_DENIED,
+            "The memory worker cannot read canonical evidence storage. An administrator must correct evidence storage permissions.",
+        )
+    if code == "EVIDENCE_SIZE_MISMATCH":
+        return (
+            "evidence_storage_size_mismatch",
+            PREP_EVIDENCE_SIZE_MISMATCH,
+            "Memory evidence size does not match its registration metadata.",
+        )
+    return (
+        "evidence_storage_mount_mismatch",
+        PREP_EVIDENCE_STORAGE_MOUNT_MISMATCH,
+        "The memory worker cannot see canonical promoted evidence storage. Verify backend and memory worker share the same evidence mount.",
+    )
+
+
+def _validate_worker_evidence_access(evidence) -> tuple[bool, str | None, str | None, str | None]:
+    from app.services.memory.evidence_access import MemoryStorageAccessError, validate_current_process_evidence_access
+
+    try:
+        access = validate_current_process_evidence_access(evidence, settings=get_settings())
+    except MemoryStorageAccessError as exc:
+        reason, error_code, message = _storage_error_for(exc.code)
+        logger.warning(
+            "memory preparation evidence storage check failed",
+            extra={
+                "evidence_id": getattr(evidence, "id", None),
+                "case_id": getattr(evidence, "case_id", None),
+                "storage_error_code": exc.code,
+                "stored_path": getattr(evidence, "stored_path", None),
+                "storage_mode": str(getattr(evidence, "storage_mode", "")),
+            },
+        )
+        return False, reason, error_code, message
+    logger.info(
+        "memory preparation resolved canonical evidence path",
+        extra={
+            "evidence_id": getattr(evidence, "id", None),
+            "case_id": getattr(evidence, "case_id", None),
+            "resolved_path": str(access.path),
+            "size_bytes": getattr(evidence, "size_bytes", None),
+        },
+    )
+    return True, None, None, None
 
 
 def _validate_worker_evidence_path(evidence) -> tuple[bool, str | None, str | None]:
-    try:
-        path = _evidence_canonical_path(evidence)
-    except ValueError as exc:
-        return False, "evidence_path_missing", str(exc)[:200]
+    """Compatibility wrapper for older unit tests and callers."""
+    stored = getattr(evidence, "stored_path", None) or getattr(evidence, "original_path", None)
+    if not stored:
+        return False, "evidence_path_missing", "evidence is missing stored_path"
+    path = Path(stored)
     try:
         if not path.exists():
             return False, "evidence_path_unavailable", "The memory worker cannot see the completed evidence path."
@@ -147,7 +207,7 @@ def _probe_evidence(evidence) -> dict[str, Any]:
 
     try:
         path = _evidence_canonical_path(evidence)
-    except ValueError as exc:
+    except Exception as exc:  # noqa: BLE001
         return {
             "platform": "unknown",
             "format": "unknown",
@@ -425,7 +485,7 @@ def _run_bounded_requirement_discovery(
     work_dir = _discovery_work_dir(evidence)
     try:
         canonical = _evidence_canonical_path(evidence)
-    except ValueError as exc:
+    except Exception as exc:  # noqa: BLE001
         return _DISCOVERY_RETRYABLE, "windows_evidence_path_missing", (
             "WINDOWS_DISCOVERY_EVIDENCE_PATH_MISSING"
         ), None, {"platform": "windows", "error": str(exc)[:200]}
@@ -566,17 +626,17 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
         _persist_heartbeat(prep, current_step="probing_platform")
         db.commit()
 
-        ok, reason, message = _validate_worker_evidence_path(evidence)
+        ok, reason, error_code, message = _validate_worker_evidence_access(evidence)
         if not ok:
             _persist_terminal(
                 prep,
                 state=PREP_FAILED,
                 reason=reason or "evidence_path_unavailable",
-                error_code=PREP_EVIDENCE_PATH_UNAVAILABLE,
+                error_code=error_code or PREP_EVIDENCE_PATH_UNAVAILABLE,
                 sanitized_message=message,
             )
             db.commit()
-            return {"state": "failed", "error_code": PREP_EVIDENCE_PATH_UNAVAILABLE, "reason": reason}
+            return {"state": "failed", "error_code": error_code or PREP_EVIDENCE_PATH_UNAVAILABLE, "reason": reason}
 
         ok, reason, message = _validate_symbol_cache_writable()
         if not ok:

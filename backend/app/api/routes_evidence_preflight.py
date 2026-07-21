@@ -14,6 +14,7 @@ confirms:
 from __future__ import annotations
 
 import logging
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from sqlalchemy.orm import Session
@@ -25,7 +26,11 @@ from app.schemas.evidence import EvidenceRead
 from app.services.auth_dependencies import get_optional_user
 from app.schemas.evidence_preflight import PreflightReport
 from app.schemas.evidence_upload_session import (
+    ActivityCenterResponse,
     EvidenceUploadSessionCreateResponse,
+    EvidenceUploadSessionAppendResponse,
+    EvidenceUploadSessionFinalizeResponse,
+    EvidenceUploadSessionInitRequest,
     EvidenceUploadSessionStageResponse,
     EvidenceUploadSessionRead,
     PreflightRerunRequest,
@@ -33,13 +38,18 @@ from app.schemas.evidence_upload_session import (
 )
 from app.services.evidence_upload_session import (
     UploadSessionError,
+    append_resumable_upload_chunk,
     cancel_upload_session,
+    create_resumable_upload_session,
     create_streamed_upload_session,
     create_upload_session,
     get_active_session,
+    get_upload_session,
+    finalize_resumable_upload_session,
     promote_upload_session,
     rerun_preflight,
 )
+from app.services.processing_queue import list_case_processing
 from app.services.ingestion_health import check_ingestion_readiness
 from app.services.memory.upload_sessions import MemoryUploadSessionError
 
@@ -62,12 +72,110 @@ def _session_to_read(session: EvidenceUploadSession) -> EvidenceUploadSessionRea
         declared_platform=session.declared_platform,
         expires_at=session.expires_at,
         created_at=session.created_at,
+        updated_at=session.updated_at,
+        expected_size_bytes=session.expected_size_bytes,
+        bytes_received=session.bytes_received,
+        last_activity_at=session.last_activity_at,
+        failure_message=session.failure_message,
     )
+
+
+def _http_from_upload_error(exc: UploadSessionError) -> HTTPException:
+    status_code = 404 if exc.code in {"case_not_found", "session_not_found"} else 409 if exc.code in {"offset_mismatch", "session_not_uploading"} else 400
+    return HTTPException(status_code=status_code, detail=exc.details or {"error_code": exc.code, "code": exc.code, "message": exc.message})
 
 
 @router.get("/{case_id}/ingestion-readiness")
 def ingestion_readiness(case_id: str, db: Session = Depends(get_db)) -> dict:
     return check_ingestion_readiness(db)
+
+
+@router.get("/{case_id}/activity", response_model=ActivityCenterResponse)
+def case_activity_center(case_id: str, db: Session = Depends(get_db)) -> ActivityCenterResponse:
+    from collections import Counter
+    from datetime import datetime, timezone
+
+    operations: list[dict] = []
+    now = datetime.now(timezone.utc)
+    sessions = db.query(EvidenceUploadSession).filter(EvidenceUploadSession.case_id == case_id).order_by(EvidenceUploadSession.updated_at.desc()).limit(50).all()
+    for session in sessions:
+        expected = int(session.expected_size_bytes or session.size_bytes or 0) or None
+        received = int(session.bytes_received or session.size_bytes or 0)
+        progress = round(min(100, (received / expected) * 100), 2) if expected else (100 if session.status in {"staged", "promoted"} else None)
+        owner = "browser" if session.status in {"created", "uploading", "interrupted"} else "backend" if session.status in {"preflight_running", "staged", "promoted"} else "database"
+        started = session.created_at
+        elapsed = (now - started).total_seconds() if started and getattr(started, "tzinfo", None) else None
+        operations.append({
+            "id": session.id,
+            "case_id": case_id,
+            "kind": "upload",
+            "category": "Uploads" if session.status in {"created", "uploading"} else "Paused uploads" if session.status == "interrupted" else "Completed" if session.status == "promoted" else "Processing" if session.status in {"staged", "preflight_running"} else "Failed",
+            "status": session.status,
+            "stage": str((session.metadata_json or {}).get("current_stage") or session.status),
+            "label": session.original_filename,
+            "progress": progress,
+            "bytes_received": received,
+            "expected_size_bytes": expected,
+            "current_owner": owner,
+            "created_at": session.created_at,
+            "updated_at": session.updated_at,
+            "last_activity_at": session.last_activity_at or session.updated_at,
+            "elapsed_seconds": round(elapsed, 3) if elapsed is not None else None,
+            "details": {"sha256": session.sha256, "promoted_evidence_id": session.promoted_evidence_id, "failure_message": session.failure_message},
+        })
+    processing = list_case_processing(db, case_id)
+    for item in processing.get("items", []):
+        status = str(item.get("processing_status") or "unknown")
+        operations.append({
+            "id": str(item.get("evidence_id")),
+            "case_id": case_id,
+            "kind": "processing",
+            "category": "Completed" if status.startswith("completed") else "Failed" if status == "failed" else "Processing" if status in {"queued", "running", "pending"} else "Indexing",
+            "status": status,
+            "stage": str(item.get("last_run_status") or status),
+            "label": str(item.get("filename") or item.get("evidence_id")),
+            "progress": 100 if status.startswith("completed") else None,
+            "bytes_received": None,
+            "expected_size_bytes": None,
+            "current_owner": "worker" if status in {"queued", "running", "pending"} else "database",
+            "created_at": item.get("uploaded_at"),
+            "updated_at": item.get("last_run_finished_at") or item.get("last_run_started_at") or item.get("uploaded_at"),
+            "last_activity_at": item.get("last_run_finished_at") or item.get("last_run_started_at") or item.get("uploaded_at"),
+            "elapsed_seconds": item.get("duration"),
+            "details": {"host": item.get("host"), "artifact_count": item.get("artifact_count"), "links": item.get("links")},
+        })
+    counts = Counter(str(item["category"]) for item in operations)
+    return ActivityCenterResponse(case_id=case_id, summary=dict(counts), operations=operations)
+
+
+@router.post("/{case_id}/evidence-uploads/resumable", response_model=EvidenceUploadSessionStageResponse)
+def init_resumable_evidence_upload(case_id: str, payload: EvidenceUploadSessionInitRequest, db: Session = Depends(get_db)) -> EvidenceUploadSessionStageResponse:
+    declared = payload.declared_platform if payload.declared_platform and payload.declared_platform != "auto" else None
+    try:
+        session = create_resumable_upload_session(db, case_id, filename=payload.filename, expected_size_bytes=payload.expected_size_bytes, declared_platform=declared, client_sha256=payload.client_sha256)
+    except UploadSessionError as exc:
+        raise _http_from_upload_error(exc) from exc
+    return EvidenceUploadSessionStageResponse(session=_session_to_read(session), health=check_ingestion_readiness(db))
+
+
+@router.put("/{case_id}/evidence-uploads/{session_id}/bytes", response_model=EvidenceUploadSessionAppendResponse)
+async def append_resumable_evidence_upload(case_id: str, session_id: str, request: Request, offset: int = Query(..., ge=0), db: Session = Depends(get_db)) -> EvidenceUploadSessionAppendResponse:
+    try:
+        session = get_upload_session(db, case_id, session_id)
+        session = append_resumable_upload_chunk(db, session, offset=offset, body=BytesIO(await request.body()))
+    except UploadSessionError as exc:
+        raise _http_from_upload_error(exc) from exc
+    return EvidenceUploadSessionAppendResponse(session=_session_to_read(session), offset=int(session.bytes_received or 0))
+
+
+@router.post("/{case_id}/evidence-uploads/{session_id}/finalize", response_model=EvidenceUploadSessionFinalizeResponse)
+def finalize_resumable_evidence_upload(case_id: str, session_id: str, db: Session = Depends(get_db)) -> EvidenceUploadSessionFinalizeResponse:
+    try:
+        session = get_upload_session(db, case_id, session_id)
+        session, report = finalize_resumable_upload_session(db, session)
+    except UploadSessionError as exc:
+        raise _http_from_upload_error(exc) from exc
+    return EvidenceUploadSessionFinalizeResponse(session=_session_to_read(session), preflight=report, health=check_ingestion_readiness(db))
 
 
 @router.post("/{case_id}/evidence-uploads", response_model=EvidenceUploadSessionCreateResponse)

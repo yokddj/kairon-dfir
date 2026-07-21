@@ -245,4 +245,37 @@ describe("Header label v1", () => {
     fireEvent.click(button);
     expect(onOpenCatalogue).toHaveBeenCalledTimes(1);
   });
+
+  it("10) stale queued catalogue without an active run does not show fake progress", async () => {
+    const staleQueuedCatalogue = {
+      ...freshCatalogue,
+      items: freshCatalogue.items.map((item, index) =>
+        index === 0 ? { ...item, last_run: { id: "stale-run" }, last_status: "queued" } : item,
+      ),
+    };
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
+    render(
+      <MemoryRouter>
+        <QueryClientProvider client={qc}>
+          <MemoryEvidenceHeader
+            caseId={CASE}
+            evidence={makeEvidence()}
+            activeResult={{ active_run: null, latest_attempt: null, using_fallback: false } as any}
+            family="processes"
+            historicalRunId={null}
+            onViewHistory={vi.fn()}
+            onReturnToLatest={vi.fn()}
+            onOpenCatalogue={vi.fn()}
+            symbolPreparation={{ effective_state: "failed", preparation_state: "failed", ui_state: "failed" } as any}
+            catalogue={staleQueuedCatalogue}
+          />
+        </QueryClientProvider>
+      </MemoryRouter>,
+    );
+
+    const button = await screen.findByTestId("memory-open-catalogue");
+    expect(button).toHaveTextContent(/Complete analysis/i);
+    expect(button).toBeEnabled();
+    expect(screen.queryByText(/Analysis in progress/i)).not.toBeInTheDocument();
+  });
 });

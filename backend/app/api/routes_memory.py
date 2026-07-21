@@ -234,10 +234,10 @@ def get_memory_evidence_diagnostics(
     if evidence is None or evidence.case_id != case_id or evidence.evidence_type != EvidenceType.memory_dump:
         raise HTTPException(status_code=404, detail="Memory evidence was not found.")
     backend = check_volatility3_backend()
-    canonical_path = Path(evidence.stored_path) if evidence.stored_path else None
-    file_present = canonical_path is not None and canonical_path.exists() and canonical_path.is_file()
-    file_size = canonical_path.stat().st_size if file_present else 0
-    size_match = file_present and file_size == int(evidence.size_bytes or 0)
+    readiness = evidence_readiness(evidence)
+    file_present = bool(readiness.get("exists") and readiness.get("regular_file"))
+    file_size = int(evidence.size_bytes or 0) if file_present else 0
+    size_match = bool(readiness.get("size_matches"))
     # We do not re-hash the file in this endpoint (the evidence row
     # already records the SHA-256 captured at upload time).  The
     # operator can request a re-hash via the repair command.
@@ -257,6 +257,9 @@ def get_memory_evidence_diagnostics(
         "volatility_executable": bool(backend.get("volatility_path")),
         "volatility_version": backend.get("volatility_version"),
         "cache_readable": bool(backend.get("cache_readable", True)),
+        "storage_error_code": readiness.get("error_code"),
+        "storage_message": readiness.get("sanitized_message"),
+        "readable_by_worker": readiness.get("readable_by_memory_worker"),
         "last_run_status": evidence.ingest_status.value if evidence.ingest_status else None,
         "last_error_stage": (evidence.error_log or {}).get("last_error_stage"),
         "auto_preparation": bool(getattr(get_settings(), "memory_auto_preparation", False)),

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from io import BytesIO
 import zipfile
 from datetime import timedelta
 from pathlib import Path
@@ -40,9 +41,12 @@ from app.services.memory.upload_sessions import (
 from app.services.evidence_upload_session import (
     UploadSessionError,
     _stage_streamed_file,
+    append_resumable_upload_chunk,
     cancel_upload_session,
     cleanup_expired_upload_sessions,
+    create_resumable_upload_session,
     create_upload_session,
+    finalize_resumable_upload_session,
     get_active_session,
     promote_upload_session,
 )
@@ -150,6 +154,63 @@ def test_streaming_upload_stages_file_before_preflight(tmp_path, monkeypatch):
     assert preflight.json()["evidence_options"] == []
     db.refresh(session)
     assert (session.metadata_json or {}).get("category")
+
+
+def test_resumable_upload_persists_session_before_bytes_and_resumes_from_offset(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+
+    assert session.status == EvidenceUploadSessionStatus.created.value
+    assert session.bytes_received == 0
+    assert Path(session.staged_path).parent.exists()
+
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(b"abc"))
+    db.refresh(session)
+
+    assert session.bytes_received == 3
+    assert session.status == EvidenceUploadSessionStatus.uploading.value
+    assert Path(session.staged_path).read_bytes() == b"abc"
+
+
+def test_resumable_upload_rejects_wrong_offset_without_duplicate_bytes(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=6)
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(b"abc"))
+    db.refresh(session)
+
+    with pytest.raises(UploadSessionError) as exc:
+        append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(b"abc"))
+
+    assert exc.value.code == "offset_mismatch"
+    assert Path(session.staged_path).read_bytes() == b"abc"
+
+
+def test_resumable_finalize_computes_authoritative_hash_and_preflight(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+    zip_path = tmp_path / "collection.zip"
+    _make_zip(zip_path)
+    payload = zip_path.read_bytes()
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=len(payload), client_sha256="0" * 64)
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(payload))
+    db.refresh(session)
+
+    session, report = finalize_resumable_upload_session(db, session)
+
+    assert session.status == EvidenceUploadSessionStatus.staged.value
+    assert session.sha256 == hashlib.sha256(payload).hexdigest()
+    assert session.metadata_json["client_sha256_mismatch"] is True
+    assert report.status == "ready"
+    assert report.classification.hostname == "web01"
 
 
 @pytest.mark.anyio
@@ -325,7 +386,8 @@ def test_get_active_session_rejects_wrong_case_or_terminal_status(tmp_path, monk
 def test_promote_reuses_staged_bytes_without_retransmission_or_rehash(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
-    monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: "job-1")
+    enqueued: list[str] = []
+    monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: enqueued.append(evidence_id) or "job-1")
     monkeypatch.setattr("app.core.storage.settings", settings)
     db = _db()
     _case(db)
@@ -347,6 +409,8 @@ def test_promote_reuses_staged_bytes_without_retransmission_or_rehash(tmp_path, 
     assert not staged_path.exists(), "the staged copy must be moved into evidence storage, not duplicated"
     assert Path(evidence.stored_path).exists()
     assert Path(evidence.stored_path).read_bytes() == zip_path.read_bytes()
+    assert enqueued == [evidence.id]
+    assert session.id not in enqueued
     assert db.get(EvidenceUploadSession, session.id).status == EvidenceUploadSessionStatus.promoted.value
     assert db.get(EvidenceUploadSession, session.id).promoted_evidence_id == evidence.id
 
