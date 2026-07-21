@@ -122,6 +122,7 @@ export default function Sidebar() {
     {
       title: "Investigation",
       items: [
+        { to: "/cases/:caseId/evidence", label: "Evidence & Ingest", icon: Database, requiresCase: true },
         { to: "/cases/:caseId/search", label: "Search", icon: Search, requiresCase: true },
         { to: "/cases/:caseId/command-history", label: "Command History", icon: Terminal, requiresCase: true },
         { to: "/cases/:caseId/process-graph", label: "Execution Stories", icon: Waypoints, requiresCase: true },
@@ -136,12 +137,6 @@ export default function Sidebar() {
         { to: "/cases/:caseId/findings", label: "Findings", icon: ShieldAlert, requiresCase: true },
         { to: "/cases/:caseId/detections", label: "Detections", icon: ShieldAlert, requiresCase: true },
         { to: "/cases/:caseId/reports", label: "Reports", icon: FileArchive, requiresCase: true },
-      ],
-    },
-    {
-      title: "Evidence",
-      items: [
-        { to: "/cases/:caseId/evidence", label: "Evidence & Ingest", icon: Database, requiresCase: true },
       ],
     },
     {
@@ -165,7 +160,7 @@ export default function Sidebar() {
       items: [
         { to: "/rules", label: "Rules", icon: ScanSearch },
         { to: "/cases/:caseId/debug-export", label: "Debug Export", icon: FileArchive, requiresCase: true },
-        { to: "/activity", label: "Jobs & Activity", icon: Activity },
+        { to: "/activity", label: "Activity Center", icon: Activity },
         { to: "/siem", label: "Diagnostics: OpenSearch Console", icon: ScanSearch },
         { to: "/system/performance", label: "System / Performance", icon: Gauge },
       ],

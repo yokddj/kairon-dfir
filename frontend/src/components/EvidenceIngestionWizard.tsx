@@ -5,12 +5,12 @@ import { useNavigate } from "react-router-dom";
 import { api, type Evidence, type EvidencePlatform, type EvidenceUploadSessionRead, type PreflightReport } from "../api/client";
 import { useNotifications } from "../context/NotificationsContext";
 import { platformUploadOptions } from "../lib/platformRegistry";
-import { hashFileWithProgress } from "../lib/sha256";
 
 type IntakeType = "disk_image" | "memory_dump" | "artifact_collection" | "folder" | "server_path";
 type WizardStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 type ProcessingMode = "recommended" | "custom" | "skip";
 type HostChoice = "auto" | "__create__" | "__unassigned__" | string;
+type InspectionState = "idle" | "uploading" | "finalizing_upload" | "preflight_running" | "complete" | "failed";
 
 const TOTAL_STEPS = 7;
 const CREATE_HOST_CHOICE = "__create__";
@@ -64,6 +64,28 @@ function normalizeHostLabel(value: string | null | undefined): string {
   return String(value ?? "").trim().replace(/\.+$/, "").toLowerCase();
 }
 
+function inspectionStateLabel(state: InspectionState, options: { isServerPath: boolean }): string {
+  switch (state) {
+    case "uploading":
+      return "Uploading evidence to staging storage";
+    case "finalizing_upload":
+      return "Finalizing staged upload";
+    case "preflight_running":
+      return options.isServerPath ? "Inspecting server path" : "Inspecting staged evidence";
+    case "complete":
+      return "Inspection complete";
+    case "failed":
+      return "Inspection failed";
+    default:
+      return "Ready for inspection";
+  }
+}
+
+function inspectionErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return "Kairon could not inspect this evidence.";
+}
+
 function hostMatchesName(host: { canonical_name?: string; display_name?: string; aliases?: string[]; all_names?: string[] }, name: string | null | undefined): boolean {
   const normalized = normalizeHostLabel(name);
   if (!normalized) return false;
@@ -93,7 +115,13 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   const [notes, setNotes] = useState("");
   const [hashProgress, setHashProgress] = useState<number | null>(null);
   const [clientSha256, setClientSha256] = useState<string | null>(null);
+  const [inspectionState, setInspectionState] = useState<InspectionState>("idle");
+  const [inspectionError, setInspectionError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
+  const [inspectionStartedAt, setInspectionStartedAt] = useState<number | null>(null);
+  const [nowMs, setNowMs] = useState(Date.now());
   const promotedRef = useRef(false);
+  const promotedEvidenceRef = useRef<Evidence | null>(null);
 
   const requiresPathInput = intakeType === "server_path";
   const requiresFolderInput = intakeType === "folder";
@@ -109,29 +137,8 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   });
 
   useEffect(() => {
-    if (requiresPathInput || files.length !== 1) {
-      setClientSha256(null);
-      setHashProgress(null);
-      return;
-    }
-    let cancelled = false;
     setClientSha256(null);
-    setHashProgress(0);
-    hashFileWithProgress(files[0], (fraction) => {
-      if (!cancelled) setHashProgress(fraction);
-    })
-      .then((hash) => {
-        if (!cancelled) {
-          setClientSha256(hash);
-          setHashProgress(1);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setHashProgress(null);
-      });
-    return () => {
-      cancelled = true;
-    };
+    setHashProgress(null);
   }, [files, requiresPathInput]);
 
   function reset() {
@@ -153,37 +160,94 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
     setNotes("");
     setHashProgress(null);
     setClientSha256(null);
+    setInspectionState("idle");
+    setInspectionError(null);
+    setUploadProgress(null);
+    setInspectionStartedAt(null);
+    setNowMs(Date.now());
     promotedRef.current = false;
+    promotedEvidenceRef.current = null;
   }
 
   function handleClose() {
-    if (session && !promotedRef.current) {
-      void api.cancelEvidenceUploadSession(caseId, session.id).catch(() => {});
-    }
     reset();
     onClose();
   }
 
+  async function uploadSingleFileResumable(file: File, onProgress: (progress: { loaded: number; total: number; lengthComputable: boolean }) => void) {
+    if (!api.createResumableEvidenceUploadSession || !api.appendResumableEvidenceUpload || !api.finalizeResumableEvidenceUploadSession) {
+      return api.createEvidenceUploadSession(caseId, { file }, { declaredPlatform: platform, onProgress });
+    }
+    const created = await api.createResumableEvidenceUploadSession(caseId, {
+      filename: file.name,
+      expected_size_bytes: file.size,
+      declared_platform: platform,
+    });
+    setSession(created.session);
+    let offset = created.session.bytes_received || 0;
+    const chunkSize = 16 * 1024 * 1024;
+    while (offset < file.size) {
+      const next = Math.min(file.size, offset + chunkSize);
+      const chunk = file.slice(offset, next);
+      const startingOffset = offset;
+      const response = await api.appendResumableEvidenceUpload(caseId, created.session.id, chunk, offset, {
+        onProgress: (progress) => onProgress({ loaded: startingOffset + progress.loaded, total: file.size, lengthComputable: true }),
+      });
+      offset = response.offset;
+      setSession(response.session);
+      onProgress({ loaded: offset, total: file.size, lengthComputable: true });
+    }
+    setInspectionState("finalizing_upload");
+    return api.finalizeResumableEvidenceUploadSession(caseId, created.session.id);
+  }
+
   const createSessionMutation = useMutation({
     mutationFn: async () => {
+      setInspectionError(null);
+      setInspectionStartedAt(Date.now());
+      setNowMs(Date.now());
+      setUploadProgress(requiresPathInput ? null : 0);
       if (intakeType === "server_path") {
+        setInspectionState("preflight_running");
         return api.createEvidenceUploadSession(caseId, { serverPath: serverPath.trim() }, { declaredPlatform: platform });
       }
-      if (requiresFolderInput || files.length > 1) {
-        return api.createEvidenceUploadSession(caseId, { files, folderUpload: requiresFolderInput }, { declaredPlatform: platform });
+      setInspectionState("uploading");
+      const onProgress = (progress: { loaded: number; total: number; lengthComputable: boolean }) => {
+        if (!progress.lengthComputable || progress.total <= 0) return;
+        const fraction = Math.min(1, progress.loaded / progress.total);
+        setUploadProgress(fraction);
+        if (fraction >= 1) setInspectionState("finalizing_upload");
+      };
+      if (!requiresFolderInput && files.length === 1) {
+        return uploadSingleFileResumable(files[0], onProgress);
       }
-      return api.createEvidenceUploadSession(caseId, { file: files[0] }, { declaredPlatform: platform, clientSha256: clientSha256 ?? undefined });
+      if (requiresFolderInput || files.length > 1) {
+        return api.createEvidenceUploadSession(caseId, { files, folderUpload: requiresFolderInput }, { declaredPlatform: platform, onProgress });
+      }
+      return api.createEvidenceUploadSession(caseId, { file: files[0] }, { declaredPlatform: platform, clientSha256: clientSha256 ?? undefined, onProgress });
     },
     onSuccess: (response) => {
       const preflightReport = normalizePreflightReport(response.preflight);
       setSession(response.session);
       setPreflight(preflightReport);
+      setUploadProgress(response.session.is_server_path ? null : 1);
+      setInspectionState("complete");
+      setInspectionError(null);
       setStep(5);
     },
     onError: (error) => {
-      notify({ title: "Preflight inspection failed", description: error instanceof Error ? error.message : "Kairon could not inspect this evidence.", tone: "error" });
+      const message = inspectionErrorMessage(error);
+      setInspectionState("failed");
+      setInspectionError(message);
+      notify({ title: "Preflight inspection failed", description: message, tone: "error" });
     },
   });
+
+  useEffect(() => {
+    if (!createSessionMutation.isPending) return;
+    const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(interval);
+  }, [createSessionMutation.isPending]);
 
   const detectedHostname = preflight?.classification.hostname?.trim() || "";
   const detectedHostMatches = useMemo(() => caseHosts.filter((host) => hostMatchesName(host, detectedHostname)), [caseHosts, detectedHostname]);
@@ -223,16 +287,21 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   const startMutation = useMutation({
     mutationFn: async (): Promise<{ evidence: Evidence; queuedJobs: number | null }> => {
       if (!session) throw new Error("No upload session is active");
-      const hostAssignment = await resolveHostAssignment();
-      const declaredPlatform = platform === "auto" ? undefined : platform;
-      const evidence = await api.promoteEvidenceUploadSession(caseId, session.id, {
-        provided_platform: declaredPlatform,
-        host_id: hostAssignment.host_id,
-        provided_host: hostAssignment.provided_host,
-        memory_authorization_acknowledged: intakeType === "memory_dump" ? memoryAuthorizationAcknowledged : undefined,
-        labels: labels.split(",").map((label) => label.trim()).filter(Boolean),
-        notes: notes.trim() || undefined,
-      });
+      let evidence = promotedEvidenceRef.current;
+      if (!evidence) {
+        const hostAssignment = await resolveHostAssignment();
+        const declaredPlatform = platform === "auto" ? undefined : platform;
+        evidence = await api.promoteEvidenceUploadSession(caseId, session.id, {
+          provided_platform: declaredPlatform,
+          host_id: hostAssignment.host_id,
+          provided_host: hostAssignment.provided_host,
+          memory_authorization_acknowledged: intakeType === "memory_dump" ? memoryAuthorizationAcknowledged : undefined,
+          labels: labels.split(",").map((label) => label.trim()).filter(Boolean),
+          notes: notes.trim() || undefined,
+        });
+        promotedRef.current = true;
+        promotedEvidenceRef.current = evidence;
+      }
 
       if (evidence.evidence_type === "memory_dump" || processingMode === "skip") {
         return { evidence, queuedJobs: null };
@@ -287,6 +356,8 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   }, [requiresPathInput, serverPath, files]);
 
   const hashPending = files.length === 1 && !requiresPathInput && hashProgress !== null && hashProgress < 1;
+  const inspectionElapsedSeconds = inspectionStartedAt ? Math.max(0, Math.floor((nowMs - inspectionStartedAt) / 1000)) : 0;
+  const inspectionLabel = inspectionStateLabel(inspectionState, { isServerPath: requiresPathInput });
 
   const hostAssignmentRequired = intakeType === "memory_dump" || processingMode !== "skip";
   const hostAssignmentBlockingReason = useMemo(() => {
@@ -476,6 +547,39 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
                 ) : null}
               </label>
             )}
+            {(createSessionMutation.isPending || inspectionState === "failed") ? (
+              <div className={`mt-5 rounded-2xl border p-4 text-sm ${inspectionState === "failed" ? "border-danger/40 bg-danger/10" : "border-line bg-abyss/60"}`} data-testid="inspection-progress-panel">
+                <p className={`font-semibold ${inspectionState === "failed" ? "text-danger" : "text-ink"}`}>{inspectionLabel}</p>
+                {inspectionStartedAt ? <p className="mt-1 text-xs text-muted">Elapsed: {inspectionElapsedSeconds}s</p> : null}
+                {inspectionState === "failed" && inspectionError ? (
+                  <>
+                    <p className="mt-3 text-sm text-danger">{inspectionError}</p>
+                    <div className="mt-4 flex flex-wrap gap-2">
+                      <button type="button" onClick={() => createSessionMutation.mutate()} className="rounded-2xl bg-accent px-4 py-2 text-xs font-semibold text-abyss">Retry inspection</button>
+                      <button type="button" onClick={() => { setInspectionState("idle"); setInspectionError(null); }} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-xs text-muted">Change evidence</button>
+                    </div>
+                  </>
+                ) : (
+                  <div className="mt-4 space-y-2">
+                    {!requiresPathInput ? (
+                      <div className={`rounded-xl border px-3 py-2 ${uploadProgress === 1 ? "border-mint/30 bg-mint/10 text-mint" : inspectionState === "uploading" || inspectionState === "finalizing_upload" ? "border-accent/30 bg-accent/10 text-accent" : "border-line text-muted"}`}>
+                        {uploadProgress === 1 ? "Done:" : inspectionState === "uploading" || inspectionState === "finalizing_upload" ? "Active:" : "Queued:"} Uploading evidence{uploadProgress !== null ? ` ${Math.round(uploadProgress * 100)}%` : ""}
+                        {uploadProgress !== null ? <div className="mt-2 h-1.5 rounded-full bg-abyss"><div className="h-1.5 rounded-full bg-accent transition-all" style={{ width: `${Math.max(5, Math.round(uploadProgress * 100))}%` }} /></div> : null}
+                      </div>
+                    ) : null}
+                    {!requiresPathInput ? (
+                      <p className={`rounded-xl border px-3 py-2 ${inspectionState === "finalizing_upload" ? "border-accent/30 bg-accent/10 text-accent" : uploadProgress === 1 ? "border-mint/30 bg-mint/10 text-mint" : "border-line text-muted"}`}>
+                        {inspectionState === "finalizing_upload" ? "Active:" : uploadProgress === 1 ? "Done:" : "Queued:"} Finalizing upload on the server
+                      </p>
+                    ) : null}
+                    <p className={`rounded-xl border px-3 py-2 ${inspectionState === "preflight_running" ? "border-accent/30 bg-accent/10 text-accent" : "border-line text-muted"}`}>
+                      {inspectionState === "preflight_running" ? "Active:" : "Queued:"} Scanning contents, detecting platform, discovering hosts, and estimating processing
+                    </p>
+                    <p className="text-xs text-muted">Kairon is staging the evidence, then running a read-only preflight. Large archives or disk images can take longer while metadata and candidate artifacts are inspected.</p>
+                  </div>
+                )}
+              </div>
+            ) : null}
             <div className="mt-5 flex justify-between">
               <button type="button" onClick={() => setStep(3)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
               <button
@@ -484,7 +588,7 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
                 onClick={() => createSessionMutation.mutate()}
                 className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
               >
-                {createSessionMutation.isPending ? "Inspecting..." : hashPending ? "Calculating SHA-256..." : "Inspect evidence"}
+                {createSessionMutation.isPending ? inspectionLabel : hashPending ? "Calculating SHA-256..." : "Inspect evidence"}
               </button>
             </div>
           </section>

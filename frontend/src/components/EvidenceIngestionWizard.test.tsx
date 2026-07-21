@@ -218,7 +218,7 @@ describe("EvidenceIngestionWizard", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("cancels the upload session on close after a session was created", async () => {
+  it("leaves the upload session available when the wizard is closed after inspection", async () => {
     const { onClose } = renderWizard();
     await goToFileStep(/Artifact Collection/);
     const file = new File(["zip-bytes"], "collection.zip", { type: "application/zip" });
@@ -229,7 +229,7 @@ describe("EvidenceIngestionWizard", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(cancelEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1");
+    expect(cancelEvidenceUploadSessionMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -241,24 +241,64 @@ describe("EvidenceIngestionWizard", () => {
     expect(autoCard.className).toContain("border-accent");
   });
 
-  it("computes a client-side SHA-256 progressively after file selection and reuses it when inspecting", async () => {
+  it("starts upload without waiting for a client-side SHA-256 pass", async () => {
     renderWizard();
     await goToFileStep(/Artifact Collection/);
 
     const file = new File(["zip-bytes"], "collection.zip", { type: "application/zip" });
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
 
-    await waitFor(() => expect(screen.getByTestId("sha256-ready")).toBeInTheDocument());
-    expect(screen.getByTestId("sha256-ready").textContent).toMatch(/SHA-256: [0-9a-f]{64}/);
+    expect(screen.queryByTestId("sha256-ready")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sha256-progress")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
 
-    expect(createEvidenceUploadSessionMock).toHaveBeenCalledWith(
-      "case-1",
-      { file },
-      expect.objectContaining({ declaredPlatform: "auto", clientSha256: expect.stringMatching(/^[0-9a-f]{64}$/) }),
-    );
+    expect(createEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", { file }, expect.objectContaining({ declaredPlatform: "auto" }));
+    expect(createEvidenceUploadSessionMock.mock.calls[0][2]).not.toHaveProperty("clientSha256");
+  });
+
+  it("shows explicit upload and preflight stages instead of a generic inspecting state", async () => {
+    let resolveSession: ((value: EvidenceUploadSessionCreateResponse) => void) | undefined;
+    createEvidenceUploadSessionMock.mockImplementationOnce((_caseId, _input, options) => {
+      options?.onProgress?.({ loaded: 2100, total: 4200, lengthComputable: true });
+      return new Promise<EvidenceUploadSessionCreateResponse>((resolve) => {
+        resolveSession = resolve;
+      });
+    });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["zip-bytes"], "collection.zip", { type: "application/zip" }));
+    await waitFor(() => expect(screen.queryByTestId("sha256-progress")).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    const panel = await screen.findByTestId("inspection-progress-panel");
+    expect(within(panel).getByText(/Uploading evidence to staging storage/i)).toBeInTheDocument();
+    expect(within(panel).getByText(/Uploading evidence 50%/i)).toBeInTheDocument();
+    expect(within(panel).getByText(/Scanning contents, detecting platform, discovering hosts/i)).toBeInTheDocument();
+
+    resolveSession?.(sessionResponse());
+    expect(await screen.findByTestId("preflight-report")).toBeInTheDocument();
+  });
+
+  it("keeps the selected evidence visible and offers retry when preflight inspection fails", async () => {
+    createEvidenceUploadSessionMock.mockRejectedValueOnce(new Error("archive could not be inspected"));
+    createEvidenceUploadSessionMock.mockResolvedValueOnce(sessionResponse());
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["zip-bytes"], "collection.zip", { type: "application/zip" }));
+    await waitFor(() => expect(screen.queryByTestId("sha256-progress")).not.toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    const panel = await screen.findByTestId("inspection-progress-panel");
+    expect(within(panel).getByText(/Inspection failed/i)).toBeInTheDocument();
+    expect(within(panel).getByText(/archive could not be inspected/i)).toBeInTheDocument();
+    expect(screen.getByText("collection.zip")).toBeInTheDocument();
+
+    await userEvent.click(within(panel).getByRole("button", { name: /Retry inspection/i }));
+    expect(await screen.findByTestId("preflight-report")).toBeInTheDocument();
   });
 
   it("runs preflight and shows the richer inspection report", async () => {
@@ -515,6 +555,28 @@ describe("EvidenceIngestionWizard", () => {
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.not.objectContaining({ host_id: expect.any(String), provided_host: expect.any(String) })));
     expect(runEvidenceIndexingPlanMock).not.toHaveBeenCalled();
+  });
+
+  it("does not promote a second evidence record when indexing is retried after promotion", async () => {
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-retry", original_filename: "collection.zip" });
+    runEvidenceIndexingPlanMock.mockRejectedValueOnce(new Error("worker unavailable"));
+    runEvidenceIndexingPlanMock.mockResolvedValueOnce({ accepted: true, evidence_id: "evidence-retry", profile: "recommended", run_id: "plan-2", status: "queued", queued_jobs: [{ step_id: "linux_artifacts", run_id: "job-2", status: "queued" }], plan: { run_id: "plan-2", profile: "recommended", status: "queued", steps: [], excluded: [], queued_jobs: [] } });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("worker unavailable")).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledTimes(2));
+    expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledTimes(1);
+    expect(runEvidenceIndexingPlanMock).toHaveBeenNthCalledWith(2, "evidence-retry", { profile: "recommended" });
   });
 
   it("can start the advanced custom indexing profile from the wizard", async () => {

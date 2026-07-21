@@ -35,6 +35,7 @@ import os
 import uuid as _uuid
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -311,6 +312,72 @@ def test_6_duplicate_dispatch_reuses_active_row(db: Session, monkeypatch) -> Non
     assert active[0].id == second["preparation_id"]
     # The latest job id is on the active row.
     assert active[0].worker_task_id == "rq-job-B"
+
+
+def test_preparation_worker_uses_canonical_promoted_path(tmp_path, monkeypatch) -> None:
+    data_root = tmp_path / "data"
+    canonical = data_root / "evidence" / "case-1" / "evidence-1" / "original" / "memory-image.dmp"
+    canonical.parent.mkdir(parents=True)
+    canonical.write_bytes(b"memory")
+    settings = SimpleNamespace(
+        backend_data_dir=data_root,
+        allowed_evidence_roots=[],
+        memory_worker_uid=os.getuid(),
+        memory_worker_gid=os.getgid(),
+        memory_evidence_shared_gid=os.getgid(),
+        memory_output_root=tmp_path / "memory-output",
+    )
+    settings.memory_output_root.mkdir()
+    evidence = SimpleNamespace(
+        id="evidence-1",
+        case_id="case-1",
+        stored_path="/app/data/tmp/stale-upload-session/memory.dmp",
+        original_path="/app/data/tmp/stale-upload-session/memory.dmp",
+        ingest_source={"canonical_relative_path": "evidence/case-1/evidence-1/original/memory-image.dmp"},
+        storage_mode=EvidenceStorageMode.uploaded,
+        size_bytes=len(b"memory"),
+    )
+    monkeypatch.setattr(pr, "get_settings", lambda: settings)
+
+    ok, reason, error_code, message = pr._validate_worker_evidence_access(evidence)
+
+    assert ok is True
+    assert reason is None
+    assert error_code is None
+    assert message is None
+
+
+def test_preparation_reports_mount_mismatch_without_leaking_path(tmp_path, monkeypatch) -> None:
+    data_root = tmp_path / "data"
+    (data_root / "evidence").mkdir(parents=True)
+    missing = data_root / "evidence" / "case-1" / "evidence-1" / "original" / "memory-image.dmp"
+    settings = SimpleNamespace(
+        backend_data_dir=data_root,
+        allowed_evidence_roots=[],
+        memory_worker_uid=os.getuid(),
+        memory_worker_gid=os.getgid(),
+        memory_evidence_shared_gid=os.getgid(),
+        memory_output_root=tmp_path / "memory-output",
+    )
+    settings.memory_output_root.mkdir()
+    evidence = SimpleNamespace(
+        id="evidence-1",
+        case_id="case-1",
+        stored_path=str(missing),
+        original_path=str(missing),
+        ingest_source={"canonical_relative_path": "evidence/case-1/evidence-1/original/memory-image.dmp"},
+        storage_mode=EvidenceStorageMode.uploaded,
+        size_bytes=42,
+    )
+    monkeypatch.setattr(pr, "get_settings", lambda: settings)
+
+    ok, reason, error_code, message = pr._validate_worker_evidence_access(evidence)
+
+    assert ok is False
+    assert reason == "evidence_storage_mount_mismatch"
+    assert error_code == "MEMORY_EVIDENCE_STORAGE_MOUNT_MISMATCH"
+    assert "share the same evidence mount" in message
+    assert str(missing) not in message
 
 
 # ---------------------------------------------------------------------------

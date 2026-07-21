@@ -3700,18 +3700,48 @@ export type EvidenceUploadSessionRead = {
   is_folder: boolean;
   is_server_path: boolean;
   size_bytes: number;
+  expected_size_bytes: number | null;
+  bytes_received: number;
   sha256: string | null;
   client_sha256: string | null;
   client_sha256_mismatch: boolean;
   declared_platform: string | null;
   expires_at: string;
   created_at: string;
+  updated_at: string;
+  last_activity_at: string | null;
+  failure_message: string | null;
 };
 
 export type EvidenceUploadSessionCreateResponse = {
   session: EvidenceUploadSessionRead;
   preflight: PreflightReport;
   health: IngestionReadiness | null;
+};
+
+export type ActivityOperation = {
+  id: string;
+  case_id: string;
+  kind: string;
+  category: string;
+  status: string;
+  stage: string;
+  label: string;
+  progress: number | null;
+  bytes_received: number | null;
+  expected_size_bytes: number | null;
+  current_owner: string;
+  created_at: string | null;
+  updated_at: string | null;
+  last_activity_at: string | null;
+  elapsed_seconds: number | null;
+  details: Record<string, unknown>;
+};
+
+export type ActivityCenterResponse = {
+  case_id: string;
+  summary: Record<string, number>;
+  operations: ActivityOperation[];
 };
 
 export type RuleRunResult = {
@@ -6325,6 +6355,17 @@ export const api = {
   },
   getEvidenceDiskImage: (evidenceId: string) => request<DiskImage>(`/evidences/${evidenceId}/disk-image`),
   getIngestionReadiness: (caseId: string) => request<IngestionReadiness>(`/cases/${caseId}/ingestion-readiness`),
+  getCaseActivity: (caseId: string) => request<ActivityCenterResponse>(`/cases/${caseId}/activity`),
+  createResumableEvidenceUploadSession: (caseId: string, payload: { filename: string; expected_size_bytes: number; declared_platform?: EvidencePlatform; client_sha256?: string }) =>
+    request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null }>(`/cases/${caseId}/evidence-uploads/resumable`, { method: "POST", body: JSON.stringify(payload) }),
+  appendResumableEvidenceUpload: (caseId: string, sessionId: string, blob: Blob, offset: number, options?: { onProgress?: (progress: UploadProgress) => void }) =>
+    uploadBlob<{ session: EvidenceUploadSessionRead; offset: number }>(`/cases/${caseId}/evidence-uploads/${sessionId}/bytes?offset=${offset}`, blob, {
+      method: "PUT",
+      contentType: "application/octet-stream",
+      onProgress: options?.onProgress ? (progress) => options.onProgress?.({ loaded: progress.loaded, total: progress.total, lengthComputable: true }) : undefined,
+    }),
+  finalizeResumableEvidenceUploadSession: (caseId: string, sessionId: string) =>
+    request<EvidenceUploadSessionCreateResponse>(`/cases/${caseId}/evidence-uploads/${sessionId}/finalize`, { method: "POST" }),
   createEvidenceUploadSession: async (
     caseId: string,
     input: { file: File } | { files: File[]; folderUpload?: boolean } | { serverPath: string },

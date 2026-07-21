@@ -13,14 +13,19 @@ from app.core.database import Base, JSONVariant, TimestampMixin, UUIDMixin, utc_
 # once reached (promoted sessions' staged copy is already removed at
 # promotion time; cancelled/expired sessions' storage is removed immediately
 # when they transition, mirroring app.services.memory.upload_sessions).
-ACTIVE_EVIDENCE_UPLOAD_SESSION_STATUSES = ("staged",)
+ACTIVE_EVIDENCE_UPLOAD_SESSION_STATUSES = ("created", "uploading", "interrupted", "staged", "preflight_running")
 
 
 class EvidenceUploadSessionStatus(str, enum.Enum):
+    created = "created"
+    uploading = "uploading"
+    interrupted = "interrupted"
+    preflight_running = "preflight_running"
     staged = "staged"
     promoted = "promoted"
     cancelled = "cancelled"
     expired = "expired"
+    failed = "failed"
 
 
 class EvidenceUploadSession(UUIDMixin, TimestampMixin, Base):
@@ -46,10 +51,13 @@ class EvidenceUploadSession(UUIDMixin, TimestampMixin, Base):
     is_folder: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_server_path: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    expected_size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    bytes_received: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     client_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     declared_platform: Mapped[str | None] = mapped_column(String(32), nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False, index=True)
+    last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     promoted_evidence_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     failure_message: Mapped[str | None] = mapped_column(String(512), nullable=True)

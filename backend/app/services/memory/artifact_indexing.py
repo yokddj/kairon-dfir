@@ -176,6 +176,11 @@ def index_artifact_documents(case_id: str, documents: list[dict[str, Any]], *, b
 
 
 def _prepare_artifact_document_for_index(doc: dict[str, Any]) -> dict[str, Any]:
+    if doc.get("document_type") == "memory_vad":
+        prepared = dict(doc)
+        for key in ("start_address", "end_address"):
+            prepared[key] = _coerce_address_for_index(prepared.get(key))
+        return prepared
     if doc.get("document_type") != "memory_network_connection":
         return doc
     prepared = dict(doc)
@@ -186,6 +191,17 @@ def _prepare_artifact_document_for_index(doc: dict[str, Any]) -> dict[str, Any]:
     # after search so old indexes do not reject scalar network states.
     prepared["state"] = None
     return prepared
+
+
+def _coerce_address_for_index(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    if isinstance(value, int):
+        return value
+    try:
+        return int(str(value).strip(), 0)
+    except (TypeError, ValueError):
+        return None
 
 
 # ---------------------------------------------------------------------------
