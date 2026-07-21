@@ -5,7 +5,6 @@ import { useNavigate } from "react-router-dom";
 import { api, type Evidence, type EvidencePlatform, type EvidenceUploadSessionRead, type PreflightReport } from "../api/client";
 import { useNotifications } from "../context/NotificationsContext";
 import { platformUploadOptions } from "../lib/platformRegistry";
-import { hashFileWithProgress } from "../lib/sha256";
 
 type IntakeType = "disk_image" | "memory_dump" | "artifact_collection" | "folder" | "server_path";
 type WizardStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -138,29 +137,8 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   });
 
   useEffect(() => {
-    if (requiresPathInput || files.length !== 1) {
-      setClientSha256(null);
-      setHashProgress(null);
-      return;
-    }
-    let cancelled = false;
     setClientSha256(null);
-    setHashProgress(0);
-    hashFileWithProgress(files[0], (fraction) => {
-      if (!cancelled) setHashProgress(fraction);
-    })
-      .then((hash) => {
-        if (!cancelled) {
-          setClientSha256(hash);
-          setHashProgress(1);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setHashProgress(null);
-      });
-    return () => {
-      cancelled = true;
-    };
+    setHashProgress(null);
   }, [files, requiresPathInput]);
 
   function reset() {
@@ -192,11 +170,35 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
   }
 
   function handleClose() {
-    if (session && !promotedRef.current) {
-      void api.cancelEvidenceUploadSession(caseId, session.id).catch(() => {});
-    }
     reset();
     onClose();
+  }
+
+  async function uploadSingleFileResumable(file: File, onProgress: (progress: { loaded: number; total: number; lengthComputable: boolean }) => void) {
+    if (!api.createResumableEvidenceUploadSession || !api.appendResumableEvidenceUpload || !api.finalizeResumableEvidenceUploadSession) {
+      return api.createEvidenceUploadSession(caseId, { file }, { declaredPlatform: platform, onProgress });
+    }
+    const created = await api.createResumableEvidenceUploadSession(caseId, {
+      filename: file.name,
+      expected_size_bytes: file.size,
+      declared_platform: platform,
+    });
+    setSession(created.session);
+    let offset = created.session.bytes_received || 0;
+    const chunkSize = 16 * 1024 * 1024;
+    while (offset < file.size) {
+      const next = Math.min(file.size, offset + chunkSize);
+      const chunk = file.slice(offset, next);
+      const startingOffset = offset;
+      const response = await api.appendResumableEvidenceUpload(caseId, created.session.id, chunk, offset, {
+        onProgress: (progress) => onProgress({ loaded: startingOffset + progress.loaded, total: file.size, lengthComputable: true }),
+      });
+      offset = response.offset;
+      setSession(response.session);
+      onProgress({ loaded: offset, total: file.size, lengthComputable: true });
+    }
+    setInspectionState("finalizing_upload");
+    return api.finalizeResumableEvidenceUploadSession(caseId, created.session.id);
   }
 
   const createSessionMutation = useMutation({
@@ -216,6 +218,9 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
         setUploadProgress(fraction);
         if (fraction >= 1) setInspectionState("finalizing_upload");
       };
+      if (!requiresFolderInput && files.length === 1) {
+        return uploadSingleFileResumable(files[0], onProgress);
+      }
       if (requiresFolderInput || files.length > 1) {
         return api.createEvidenceUploadSession(caseId, { files, folderUpload: requiresFolderInput }, { declaredPlatform: platform, onProgress });
       }

@@ -2439,3 +2439,20 @@ def _v29_disk_image_ingestion(connection: Connection) -> None:
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_artifacts_disk_image_id ON artifacts (disk_image_id)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_artifacts_disk_volume_id ON artifacts (disk_volume_id)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_artifacts_os_installation_id ON artifacts (os_installation_id)"))
+
+
+@register(30, "evidence_upload_sessions_resumable_state")
+def _v30_evidence_upload_sessions_resumable_state(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    if "evidence_upload_sessions" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("evidence_upload_sessions")}
+    column_defs = {
+        "expected_size_bytes": "BIGINT",
+        "bytes_received": "BIGINT NOT NULL DEFAULT 0",
+        "last_activity_at": "TIMESTAMP",
+    }
+    for column_name, column_type in column_defs.items():
+        if column_name not in existing:
+            connection.execute(text(f"ALTER TABLE evidence_upload_sessions ADD COLUMN {column_name} {column_type}"))
+    connection.execute(text("UPDATE evidence_upload_sessions SET bytes_received = size_bytes WHERE bytes_received = 0 AND size_bytes > 0"))

@@ -218,7 +218,7 @@ describe("EvidenceIngestionWizard", () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  it("cancels the upload session on close after a session was created", async () => {
+  it("leaves the upload session available when the wizard is closed after inspection", async () => {
     const { onClose } = renderWizard();
     await goToFileStep(/Artifact Collection/);
     const file = new File(["zip-bytes"], "collection.zip", { type: "application/zip" });
@@ -229,7 +229,7 @@ describe("EvidenceIngestionWizard", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
-    expect(cancelEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1");
+    expect(cancelEvidenceUploadSessionMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -241,24 +241,21 @@ describe("EvidenceIngestionWizard", () => {
     expect(autoCard.className).toContain("border-accent");
   });
 
-  it("computes a client-side SHA-256 progressively after file selection and reuses it when inspecting", async () => {
+  it("starts upload without waiting for a client-side SHA-256 pass", async () => {
     renderWizard();
     await goToFileStep(/Artifact Collection/);
 
     const file = new File(["zip-bytes"], "collection.zip", { type: "application/zip" });
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
 
-    await waitFor(() => expect(screen.getByTestId("sha256-ready")).toBeInTheDocument());
-    expect(screen.getByTestId("sha256-ready").textContent).toMatch(/SHA-256: [0-9a-f]{64}/);
+    expect(screen.queryByTestId("sha256-ready")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("sha256-progress")).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
 
-    expect(createEvidenceUploadSessionMock).toHaveBeenCalledWith(
-      "case-1",
-      { file },
-      expect.objectContaining({ declaredPlatform: "auto", clientSha256: expect.stringMatching(/^[0-9a-f]{64}$/) }),
-    );
+    expect(createEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", { file }, expect.objectContaining({ declaredPlatform: "auto" }));
+    expect(createEvidenceUploadSessionMock.mock.calls[0][2]).not.toHaveProperty("clientSha256");
   });
 
   it("shows explicit upload and preflight stages instead of a generic inspecting state", async () => {
