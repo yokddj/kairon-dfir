@@ -4386,6 +4386,18 @@ def run_evidence_indexing_plan(evidence_id: str, payload: EvidenceIndexingPlanRu
         item.metadata_json = metadata
         flag_modified(item, "metadata_json")
         db.commit()
+        try:
+            from app.models.evidence_operation import EvidenceOperation
+            from app.services.evidence_operations import transition_operation, upsert_operation_job
+
+            operation = db.query(EvidenceOperation).filter(EvidenceOperation.evidence_id == item.id).order_by(EvidenceOperation.updated_at.desc()).first()
+            if operation:
+                transition_operation(operation, "queued", stage="indexing_queued", owner="worker", force=True)
+                upsert_operation_job(db, operation, job_type="indexing", dedupe_key=run["run_id"], status="queued", rq_job_id=str(core_ingest.get("run_id") or ""), metadata={"profile": profile, "queued_jobs": run["queued_jobs"]}, commit=False)
+                db.add(operation)
+                db.commit()
+        except Exception:
+            logger.warning("Could not attach indexing plan to evidence operation", exc_info=True)
         return {
             "accepted": True,
             "evidence_id": item.id,
@@ -4416,6 +4428,18 @@ def run_evidence_indexing_plan(evidence_id: str, payload: EvidenceIndexingPlanRu
     item.metadata_json = metadata
     flag_modified(item, "metadata_json")
     db.commit()
+    try:
+        from app.models.evidence_operation import EvidenceOperation
+        from app.services.evidence_operations import transition_operation, upsert_operation_job
+
+        operation = db.query(EvidenceOperation).filter(EvidenceOperation.evidence_id == item.id).order_by(EvidenceOperation.updated_at.desc()).first()
+        if operation:
+            transition_operation(operation, "queued", stage="indexing_queued", owner="worker", force=True)
+            upsert_operation_job(db, operation, job_type="indexing", dedupe_key=run["run_id"], status=run["status"], metadata={"profile": profile, "queued_jobs": queued_jobs}, commit=False)
+            db.add(operation)
+            db.commit()
+    except Exception:
+        logger.warning("Could not attach indexing plan to evidence operation", exc_info=True)
     return {
         "accepted": True,
         "evidence_id": item.id,

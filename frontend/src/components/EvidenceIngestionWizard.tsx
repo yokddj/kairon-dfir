@@ -19,6 +19,7 @@ const UNASSIGNED_HOST_CHOICE = "__unassigned__";
 type Props = {
   open: boolean;
   caseId: string;
+  resumeSessionId?: string;
   onClose: () => void;
 };
 
@@ -92,7 +93,7 @@ function hostMatchesName(host: { canonical_name?: string; display_name?: string;
   return [host.canonical_name, host.display_name, ...(host.aliases ?? []), ...(host.all_names ?? [])].some((candidate) => normalizeHostLabel(candidate) === normalized);
 }
 
-export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props) {
+export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId, onClose }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { notify } = useNotifications();
@@ -134,6 +135,12 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
     queryFn: () => api.getIngestionReadiness(caseId),
     enabled: open && Boolean(caseId),
     staleTime: 10_000,
+  });
+  const restoreSessionQuery = useQuery({
+    queryKey: ["evidence-upload-session", caseId, resumeSessionId],
+    queryFn: () => api.getEvidenceUploadSession(caseId, resumeSessionId || ""),
+    enabled: open && Boolean(caseId && resumeSessionId),
+    staleTime: 0,
   });
 
   useEffect(() => {
@@ -178,19 +185,23 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
     if (!api.createResumableEvidenceUploadSession || !api.appendResumableEvidenceUpload || !api.finalizeResumableEvidenceUploadSession) {
       return api.createEvidenceUploadSession(caseId, { file }, { declaredPlatform: platform, onProgress });
     }
-    const created = await api.createResumableEvidenceUploadSession(caseId, {
+    const existing = session && ["created", "uploading", "interrupted"].includes(session.status) ? session : null;
+    if (existing && (existing.original_filename !== file.name || existing.expected_size_bytes !== file.size)) {
+      throw new Error(`Select the original file (${existing.original_filename}, ${bytes(existing.expected_size_bytes)}) to resume this upload.`);
+    }
+    const activeSession = existing ?? (await api.createResumableEvidenceUploadSession(caseId, {
       filename: file.name,
       expected_size_bytes: file.size,
       declared_platform: platform,
-    });
-    setSession(created.session);
-    let offset = created.session.bytes_received || 0;
+    })).session;
+    setSession(activeSession);
+    let offset = activeSession.bytes_received || 0;
     const chunkSize = 16 * 1024 * 1024;
     while (offset < file.size) {
       const next = Math.min(file.size, offset + chunkSize);
       const chunk = file.slice(offset, next);
       const startingOffset = offset;
-      const response = await api.appendResumableEvidenceUpload(caseId, created.session.id, chunk, offset, {
+      const response = await api.appendResumableEvidenceUpload(caseId, activeSession.id, chunk, offset, {
         onProgress: (progress) => onProgress({ loaded: startingOffset + progress.loaded, total: file.size, lengthComputable: true }),
       });
       offset = response.offset;
@@ -198,7 +209,7 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
       onProgress({ loaded: offset, total: file.size, lengthComputable: true });
     }
     setInspectionState("finalizing_upload");
-    return api.finalizeResumableEvidenceUploadSession(caseId, created.session.id);
+    return api.finalizeResumableEvidenceUploadSession(caseId, activeSession.id);
   }
 
   const createSessionMutation = useMutation({
@@ -248,6 +259,36 @@ export default function EvidenceIngestionWizard({ open, caseId, onClose }: Props
     const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(interval);
   }, [createSessionMutation.isPending]);
+
+  useEffect(() => {
+    const restored = restoreSessionQuery.data?.session;
+    if (!restored) return;
+    setSession(restored);
+    setPlatform((restored.declared_platform as EvidencePlatform | null) ?? "auto");
+    setIntakeType(restored.is_server_path ? "server_path" : restored.is_folder ? "folder" : "artifact_collection");
+    setUploadProgress(restored.expected_size_bytes ? Math.min(1, (restored.bytes_received || 0) / restored.expected_size_bytes) : null);
+    setInspectionStartedAt(restored.created_at ? Date.parse(restored.created_at) : null);
+    if (restored.status === "staged") {
+      setStep(5);
+      setInspectionState("preflight_running");
+      api.rerunEvidenceUploadPreflight(caseId, restored.id, (restored.declared_platform as EvidencePlatform | null) ?? null)
+        .then((report) => {
+          setPreflight(normalizePreflightReport(report));
+          setInspectionState("complete");
+          setInspectionError(null);
+        })
+        .catch((error) => {
+          setInspectionState("failed");
+          setInspectionError(inspectionErrorMessage(error));
+        });
+      return;
+    }
+    if (["created", "uploading", "interrupted"].includes(restored.status)) {
+      setStep(4);
+      setInspectionState("failed");
+      setInspectionError(`Select ${restored.original_filename} again to continue from ${bytes(restored.bytes_received)}.`);
+    }
+  }, [caseId, restoreSessionQuery.data]);
 
   const detectedHostname = preflight?.classification.hostname?.trim() || "";
   const detectedHostMatches = useMemo(() => caseHosts.filter((host) => hostMatchesName(host, detectedHostname)), [caseHosts, detectedHostname]);

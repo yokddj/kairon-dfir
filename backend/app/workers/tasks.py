@@ -408,6 +408,65 @@ def enqueue_ingest(evidence_id: str) -> str:
     return job.id
 
 
+def enqueue_evidence_upload_preflight(upload_session_id: str) -> str:
+    for job_id in ingest_queue.job_ids:
+        job = ingest_queue.fetch_job(job_id)
+        if job and job.func_name == "app.workers.tasks.run_evidence_upload_preflight" and tuple(job.args or ()) == (upload_session_id,):
+            return job.id
+    started = StartedJobRegistry(queue=ingest_queue)
+    for job_id in started.get_job_ids():
+        job = ingest_queue.fetch_job(job_id)
+        if job and job.func_name == "app.workers.tasks.run_evidence_upload_preflight" and tuple(job.args or ()) == (upload_session_id,):
+            return job.id
+    job = ingest_queue.enqueue(
+        "app.workers.tasks.run_evidence_upload_preflight",
+        upload_session_id,
+        job_timeout=max(int(settings.ingest_job_timeout_seconds or 0), 60),
+    )
+    return job.id
+
+
+def run_evidence_upload_preflight(upload_session_id: str) -> dict:
+    from app.models.evidence_upload_session import EvidenceUploadSession
+    from app.services.evidence_operations import (
+        active_job_for_operation,
+        get_upload_operation,
+        mark_operation_job_finished,
+        mark_operation_job_running,
+        transition_operation,
+        upsert_operation_job,
+    )
+    from app.services.evidence_upload_session import finalize_resumable_upload_session
+
+    with SessionLocal() as db:
+        session = db.get(EvidenceUploadSession, upload_session_id)
+        if session is None:
+            return {"status": "missing_session", "upload_session_id": upload_session_id}
+        operation = get_upload_operation(db, session)
+        active = active_job_for_operation(db, operation, "preflight")
+        job = active or upsert_operation_job(db, operation, job_type="preflight", dedupe_key=session.id, status="queued", commit=False)
+        mark_operation_job_running(db, job)
+        try:
+            transition_operation(operation, "finalizing", stage="finalizing_upload", owner="worker", force=True)
+            db.add(operation)
+            db.commit()
+            session, report = finalize_resumable_upload_session(db, session)
+            operation = get_upload_operation(db, session)
+            transition_operation(operation, "waiting_user", stage="preflight_complete", owner="backend", force=True)
+            upsert_operation_job(db, operation, job_type="preflight", dedupe_key=session.id, status="completed", metadata={"preflight_status": report.status}, commit=False)
+            db.add(operation)
+            db.commit()
+            mark_operation_job_finished(db, job, status="completed", progress=100)
+            return {"status": "completed", "upload_session_id": session.id, "operation_id": operation.id, "preflight_status": report.status}
+        except Exception as exc:  # noqa: BLE001
+            operation = get_upload_operation(db, session)
+            transition_operation(operation, "failed", stage="preflight_failed", owner="worker", error=str(exc), force=True)
+            db.add(operation)
+            db.commit()
+            mark_operation_job_finished(db, job, status="failed", error=str(exc))
+            raise
+
+
 def enqueue_problematic_artifact_retry(
     *,
     evidence_id: str,
