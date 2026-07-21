@@ -362,11 +362,38 @@ async function uploadFormData<T>(path: string, formData: FormData, options?: Upl
 
 const UPLOAD_BLOB_DEFAULT_TIMEOUT_MS = 300_000;
 
+// TEMPORARY diagnostic trace for the production evidence-upload stall
+// investigation (Kairon, 2026-07-21). Structured, no payload contents or
+// auth headers logged. Remove once the XHR event sequence is confirmed.
+let __uploadTraceSeq = 0;
+function uploadTrace(reqId: string, event: string, data?: Record<string, unknown>) {
+  try {
+    // eslint-disable-next-line no-console
+    console.debug(
+      `[upload-trace] seq=${++__uploadTraceSeq} req=${reqId} t=${Date.now()} event=${event}`,
+      data ?? {},
+    );
+  } catch {
+    // Tracing must never break the upload.
+  }
+}
+function safeXhrStatus(xhr: XMLHttpRequest): number | string {
+  try {
+    return xhr.status;
+  } catch (error) {
+    return `unreadable:${error instanceof Error ? error.message : String(error)}`;
+  }
+}
+
 export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBlobOptions): Promise<T> {
   let lastError: UploadAttemptError | unknown;
   let lastRetryable = false;
   for (const baseUrl of API_BASE_URLS) {
     const url = `${baseUrl}${path}`;
+    const reqId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+    const offsetMatch = /[?&]offset=(\d+)/.exec(path);
+    const traceCtx = { path, offset: offsetMatch ? Number(offsetMatch[1]) : null, size: blob.size };
+    uploadTrace(reqId, "attempt:start", traceCtx);
 
     try {
       return await new Promise<T>((resolve, reject) => {
@@ -378,15 +405,31 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
           }
         };
         const finish = (fn: () => void) => {
-          if (settled) return;
+          if (settled) {
+            uploadTrace(reqId, "finish:ignored-already-settled", traceCtx);
+            return;
+          }
           settled = true;
           cleanup();
-          fn();
+          try {
+            fn();
+            uploadTrace(reqId, "finish:settled-ok", traceCtx);
+          } catch (settleError) {
+            uploadTrace(reqId, "finish:settle-threw", {
+              ...traceCtx,
+              message: settleError instanceof Error ? settleError.message : String(settleError),
+            });
+            reject(settleError instanceof Error ? settleError : new Error(String(settleError)));
+          }
         };
-        const onParentAbort = () => xhr.abort();
+        const onParentAbort = () => {
+          uploadTrace(reqId, "signal:abort-received", traceCtx);
+          xhr.abort();
+        };
 
         if (options?.signal) {
           if (options.signal.aborted) {
+            uploadTrace(reqId, "signal:already-aborted", traceCtx);
             reject(new Error("Upload aborted"));
             return;
           }
@@ -413,21 +456,53 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
           xhr.setRequestHeader(key, value);
         }
         xhr.timeout = options?.timeoutMs ?? UPLOAD_BLOB_DEFAULT_TIMEOUT_MS;
-        xhr.onabort = () => finish(() => reject(new Error("Upload aborted")));
+        uploadTrace(reqId, "xhr:configured", { ...traceCtx, timeoutMs: xhr.timeout });
+
+        xhr.onreadystatechange = () => {
+          uploadTrace(reqId, "xhr:readystatechange", { ...traceCtx, readyState: xhr.readyState, status: safeXhrStatus(xhr) });
+        };
+        xhr.onloadstart = () => uploadTrace(reqId, "xhr:loadstart", traceCtx);
+        xhr.onprogress = (event) => uploadTrace(reqId, "xhr:progress", { ...traceCtx, loaded: event.loaded, total: event.total });
+        xhr.onloadend = () => uploadTrace(reqId, "xhr:loadend", { ...traceCtx, readyState: xhr.readyState, status: safeXhrStatus(xhr), responseLength: (xhr.responseText || "").length });
+        xhr.onabort = () => {
+          uploadTrace(reqId, "xhr:onabort", traceCtx);
+          finish(() => reject(new Error("Upload aborted")));
+        };
         if (xhr.upload) {
+          xhr.upload.onloadstart = () => uploadTrace(reqId, "upload:loadstart", traceCtx);
+          xhr.upload.onload = () => uploadTrace(reqId, "upload:load", traceCtx);
+          xhr.upload.onloadend = () => uploadTrace(reqId, "upload:loadend", traceCtx);
+          xhr.upload.onerror = () => uploadTrace(reqId, "upload:error", traceCtx);
+          xhr.upload.onabort = () => uploadTrace(reqId, "upload:abort", traceCtx);
           xhr.upload.onprogress = (event) => {
+            uploadTrace(reqId, "upload:progress", { ...traceCtx, loaded: event.loaded, total: event.total });
             if (options?.onProgress && event.lengthComputable) {
               options.onProgress({ loaded: event.loaded, total: event.total });
             }
           };
         }
-        xhr.onerror = () => finish(() => reject(new Error(`Network error while uploading to ${url}`)));
-        xhr.ontimeout = () => finish(() => {
-          const error = new Error("Upload timed out. Your network may be unavailable. Check your connection and try again.");
-          (error as UploadAttemptError).nonRetryable = false;
-          reject(error);
-        });
-        xhr.onload = () => finish(() => {
+        xhr.onerror = () => {
+          uploadTrace(reqId, "xhr:onerror", { ...traceCtx, readyState: xhr.readyState, status: safeXhrStatus(xhr) });
+          finish(() => reject(new Error(`Network error while uploading to ${url}`)));
+        };
+        xhr.ontimeout = () => {
+          uploadTrace(reqId, "xhr:ontimeout", { ...traceCtx, readyState: xhr.readyState, status: safeXhrStatus(xhr) });
+          finish(() => {
+            const error = new Error("Upload timed out. Your network may be unavailable. Check your connection and try again.");
+            (error as UploadAttemptError).nonRetryable = false;
+            reject(error);
+          });
+        };
+        xhr.onload = () => {
+          uploadTrace(reqId, "xhr:onload", {
+            ...traceCtx,
+            readyState: xhr.readyState,
+            status: safeXhrStatus(xhr),
+            contentType: xhr.getResponseHeader("content-type"),
+            contentLength: xhr.getResponseHeader("content-length"),
+            responseLength: (xhr.responseText || "").length,
+          });
+          finish(() => {
           const contentType = xhr.getResponseHeader("content-type") ?? "";
           const bodyText = xhr.responseText || "";
           if (xhr.status < 200 || xhr.status >= 300) {
@@ -456,26 +531,34 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
               detail,
             ) as ApiError & UploadAttemptError;
             error.nonRetryable = true;
+            uploadTrace(reqId, "promise:reject", { ...traceCtx, status: xhr.status, errorCode });
             reject(error);
             return;
           }
 
           if (xhr.status === 204 || !bodyText) {
+            uploadTrace(reqId, "promise:resolve-empty", { ...traceCtx, status: xhr.status });
             resolve(undefined as T);
             return;
           }
           if (!contentType.includes("application/json")) {
+            uploadTrace(reqId, "promise:resolve-text", { ...traceCtx, status: xhr.status });
             resolve(bodyText as T);
             return;
           }
           try {
             resolve(JSON.parse(bodyText) as T);
+            uploadTrace(reqId, "promise:resolve-json", { ...traceCtx, status: xhr.status });
           } catch (parseError) {
             const message = parseError instanceof Error && parseError.message ? parseError.message : String(parseError);
+            uploadTrace(reqId, "promise:reject-parse-error", { ...traceCtx, message });
             reject(new Error(`Upload response parsing failed after successful HTTP ${xhr.status}. ${message}`));
           }
-        });
+          });
+        };
+        uploadTrace(reqId, "xhr:before-send", traceCtx);
         xhr.send(body);
+        uploadTrace(reqId, "xhr:send-called", traceCtx);
       });
     } catch (error) {
       lastError = error;
@@ -514,10 +597,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (hasBody && !(init?.body instanceof FormData) && !headers.has("Content-Type")) {
     headers.set("Content-Type", "application/json");
   }
+  const isEvidenceUploadPath = path.includes("/evidence-uploads/");
+  const reqId = isEvidenceUploadPath ? `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}` : null;
+  if (reqId) uploadTrace(reqId, "request:start", { path, method: init?.method ?? "GET" });
   const response = await apiFetch(path, {
     headers,
     ...init,
   });
+  if (reqId) uploadTrace(reqId, "request:fetch-resolved", { path, status: response.status });
   if (!response.ok) {
     const body = await response.text();
     let detail: unknown = undefined;
