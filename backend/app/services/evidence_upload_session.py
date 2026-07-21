@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, AsyncIterable, BinaryIO
 from uuid import uuid4
 
 from fastapi import Request, UploadFile
@@ -304,6 +304,68 @@ def append_resumable_upload_chunk(
     session.bytes_received = written
     session.size_bytes = written
     session.status = EvidenceUploadSessionStatus.uploading.value if session.expected_size_bytes is None or written < int(session.expected_size_bytes) else EvidenceUploadSessionStatus.uploading.value
+    session.failure_message = None
+    _touch_upload_session(session)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    sync_upload_operation(db, session)
+    return session
+
+
+async def append_resumable_upload_chunk_stream(
+    db: Session,
+    session: EvidenceUploadSession,
+    *,
+    offset: int,
+    chunks: AsyncIterable[bytes],
+) -> EvidenceUploadSession:
+    if session.status not in {EvidenceUploadSessionStatus.created.value, EvidenceUploadSessionStatus.uploading.value, EvidenceUploadSessionStatus.interrupted.value}:
+        raise UploadSessionError("session_not_uploading", f"Upload session is '{session.status}', not uploadable.")
+    target = Path(session.staged_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    current_size = target.stat().st_size if target.exists() else 0
+    if offset != current_size or offset != int(session.bytes_received or 0):
+        raise UploadSessionError("offset_mismatch", "Upload offset does not match the server-confirmed offset.", {"expected_offset": current_size, "received_offset": offset})
+    max_bytes = int(get_settings().backend_max_upload_size)
+    written = current_size
+    temp_path = target.parent / f".{target.name}.{uuid4()}.part"
+    try:
+        with temp_path.open("wb") as temp_buffer:
+            async for chunk in chunks:
+                if not chunk:
+                    continue
+                next_size = written + len(chunk)
+                if next_size > max_bytes or (session.expected_size_bytes is not None and next_size > int(session.expected_size_bytes)):
+                    raise UploadSessionError("upload_size_limit", "Upload exceeded the configured size limit.")
+                temp_buffer.write(chunk)
+                written = next_size
+            temp_buffer.flush()
+            os.fsync(temp_buffer.fileno())
+        with target.open("ab") as buffer, temp_path.open("rb") as temp_buffer:
+            shutil.copyfileobj(temp_buffer, buffer, length=1024 * 1024)
+            buffer.flush()
+            os.fsync(buffer.fileno())
+    except UploadSessionError:
+        raise
+    except Exception as exc:
+        session.status = EvidenceUploadSessionStatus.interrupted.value
+        session.failure_message = f"Upload interrupted: {exc.__class__.__name__}"
+        session.bytes_received = current_size
+        session.size_bytes = current_size
+        _touch_upload_session(session)
+        db.add(session)
+        db.commit()
+        sync_upload_operation(db, session)
+        raise
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            logger.warning("evidence upload temp chunk cleanup failed", extra={"session_id": session.id, "temp_path": str(temp_path)})
+    session.bytes_received = written
+    session.size_bytes = written
+    session.status = EvidenceUploadSessionStatus.uploading.value
     session.failure_message = None
     _touch_upload_session(session)
     db.add(session)

@@ -707,6 +707,90 @@ describe("runResumableUpload", () => {
     expect(finalize).not.toHaveBeenCalled();
   });
 
+  it("reconciles after an HTTP 409 offset_mismatch instead of failing, and continues from the server-confirmed offset", async () => {
+    const uploadId = "offset-mismatch-1";
+    const file = makeFile(8);
+    const chunkSize = 4;
+
+    // The client's local view is stale: it believes both chunks are still
+    // missing, but the server already has chunk 0 staged (e.g. from an
+    // earlier attempt whose response the client never saw).
+    const staleStatus = makeStatus({
+      upload_id: uploadId,
+      expected_bytes: file.size,
+      chunk_size_bytes: chunkSize,
+      total_chunks: 2,
+      received_chunks: [],
+      received_chunk_count: 0,
+      bytes_received: 0,
+      missing_chunks: [0, 1],
+    });
+    const reconciledStatus = makeStatus({
+      upload_id: uploadId,
+      expected_bytes: file.size,
+      chunk_size_bytes: chunkSize,
+      total_chunks: 2,
+      received_chunks: [0],
+      received_chunk_count: 1,
+      bytes_received: 4,
+      missing_chunks: [1],
+    });
+    const completeStatus = makeStatus({
+      upload_id: uploadId,
+      expected_bytes: file.size,
+      chunk_size_bytes: chunkSize,
+      total_chunks: 2,
+      received_chunks: [0, 1],
+      received_chunk_count: 2,
+      bytes_received: 8,
+      missing_chunks: [],
+    });
+
+    const getStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ ...staleStatus })
+      .mockResolvedValueOnce({ ...reconciledStatus })
+      .mockResolvedValue({ ...completeStatus });
+
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      if (chunkIndex === 0) {
+        throw new ApiError(409, "offset_mismatch", "Upload offset does not match the server-confirmed offset.", null);
+      }
+      return { ...completeStatus };
+    });
+    const finalize = vi.fn(async () =>
+      makeStatus({
+        upload_id: uploadId,
+        status: "completed",
+        evidence_id: "ev-recon",
+        bytes_received: file.size,
+        expected_bytes: file.size,
+        missing_chunks: [],
+        received_chunks: [0, 1],
+        received_chunk_count: 2,
+        progress_percent: 100,
+      }),
+    );
+
+    const result = await runResumableUpload({
+      uploadId,
+      file,
+      chunkSize,
+      getStatus,
+      uploadChunk,
+      finalize,
+      signal: new AbortController().signal,
+      sleep: sleepImmediate,
+    });
+
+    expect(result.type).toBe("completed");
+    // Chunk 0 is attempted once, rejected as already-staged, and the
+    // uploader must move on to chunk 1 rather than retrying chunk 0 or
+    // giving up entirely.
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([0, 1]);
+    expect(finalize).toHaveBeenCalledTimes(1);
+  });
+
   it("aborts before first chunk and does not start upload", async () => {
     const uploadId = "abort-early";
     const file = makeFile(20);

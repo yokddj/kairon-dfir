@@ -207,6 +207,8 @@ export async function runResumableUpload(
   let effectiveConcurrency = Math.max(1, Math.min(requestedConcurrency || 1, maxConcurrency || 1, 4));
   let fallbackToSequential = false;
   let confirmedBytes = currentStatus.bytes_received || 0;
+  let offsetReconciliations = 0;
+  const MAX_OFFSET_RECONCILIATIONS = 5;
   const activeProgress = new Map<number, number>();
   const emitAggregateProgress = () => {
     if (!onProgress) return;
@@ -303,6 +305,23 @@ export async function runResumableUpload(
           continue;
         }
         const reason = rejected.reason;
+        if (
+          reason instanceof ApiError &&
+          reason.status === 409 &&
+          reason.errorCode === "offset_mismatch" &&
+          offsetReconciliations < MAX_OFFSET_RECONCILIATIONS
+        ) {
+          // The server rejected the chunk because its offset no longer
+          // matches the server-confirmed byte count. Our local view of
+          // progress is stale (a prior chunk we thought was unconfirmed may
+          // already be staged) - reconcile with the authoritative status
+          // instead of failing outright, since this is a resumable uploader.
+          offsetReconciliations += 1;
+          currentStatus = await getStatus(uploadId);
+          confirmedBytes = currentStatus.bytes_received || 0;
+          emitAggregateProgress();
+          continue;
+        }
         if (reason instanceof Error) throw reason;
         throw new Error("Chunk upload failed.");
       }
