@@ -14,7 +14,6 @@ confirms:
 from __future__ import annotations
 
 import logging
-from io import BytesIO
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, Request, UploadFile
 from sqlalchemy.orm import Session
@@ -39,7 +38,7 @@ from app.schemas.evidence_upload_session import (
 )
 from app.services.evidence_upload_session import (
     UploadSessionError,
-    append_resumable_upload_chunk,
+    append_resumable_upload_chunk_stream,
     cancel_upload_session,
     create_resumable_upload_session,
     create_streamed_upload_session,
@@ -232,14 +231,14 @@ def get_evidence_upload(case_id: str, session_id: str, db: Session = Depends(get
     except UploadSessionError as exc:
         raise _http_from_upload_error(exc) from exc
     sync_upload_operation(db, session)
-    return EvidenceUploadSessionStageResponse(session=_session_to_read(session), health=check_ingestion_readiness(db))
+    return EvidenceUploadSessionStageResponse(session=_session_to_read(session), health=None)
 
 
 @router.put("/{case_id}/evidence-uploads/{session_id}/bytes", response_model=EvidenceUploadSessionAppendResponse)
 async def append_resumable_evidence_upload(case_id: str, session_id: str, request: Request, offset: int = Query(..., ge=0), db: Session = Depends(get_db)) -> EvidenceUploadSessionAppendResponse:
     try:
         session = get_upload_session(db, case_id, session_id)
-        session = append_resumable_upload_chunk(db, session, offset=offset, body=BytesIO(await request.body()))
+        session = await append_resumable_upload_chunk_stream(db, session, offset=offset, chunks=request.stream())
         if session.expected_size_bytes is not None and int(session.bytes_received or 0) >= int(session.expected_size_bytes):
             from app.services.evidence_operations import get_upload_operation, transition_operation, upsert_operation_job
             from app.workers.tasks import enqueue_evidence_upload_preflight

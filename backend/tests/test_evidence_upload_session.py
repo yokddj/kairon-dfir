@@ -43,6 +43,7 @@ from app.services.evidence_upload_session import (
     UploadSessionError,
     _stage_streamed_file,
     append_resumable_upload_chunk,
+    append_resumable_upload_chunk_stream,
     cancel_upload_session,
     cleanup_expired_upload_sessions,
     create_resumable_upload_session,
@@ -255,6 +256,28 @@ def test_resumable_upload_rejects_wrong_offset_without_duplicate_bytes(tmp_path,
         append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(b"abc"))
 
     assert exc.value.code == "offset_mismatch"
+    assert Path(session.staged_path).read_bytes() == b"abc"
+
+
+@pytest.mark.anyio
+async def test_resumable_stream_append_preserves_confirmed_offset_on_disconnect(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=9)
+
+    await append_resumable_upload_chunk_stream(db, session, offset=0, chunks=_StreamRequest([b"abc"]).stream())
+    db.refresh(session)
+    assert session.bytes_received == 3
+    assert Path(session.staged_path).read_bytes() == b"abc"
+
+    with pytest.raises(ClientDisconnect):
+        await append_resumable_upload_chunk_stream(db, session, offset=3, chunks=_StreamRequest([b"par", ClientDisconnect()]).stream())
+
+    db.refresh(session)
+    assert session.status == EvidenceUploadSessionStatus.interrupted.value
+    assert session.bytes_received == 3
     assert Path(session.staged_path).read_bytes() == b"abc"
 
 
@@ -984,6 +1007,34 @@ def test_api_cancel_endpoint(tmp_path, monkeypatch):
     cancel_response = client.delete(f"/api/cases/{CASE_ID}/evidence-uploads/{session_id}")
     assert cancel_response.status_code == 200
     assert db.get(EvidenceUploadSession, session_id).status == "cancelled"
+
+
+def test_get_evidence_upload_status_does_not_run_ingestion_health_check(tmp_path, monkeypatch):
+    """The resumable upload loop polls this endpoint once per chunk. It must
+    stay a cheap session lookup: bundling the full infra health check (which
+    hits OpenSearch and does an unbounded Redis worker scan) here turns every
+    chunk boundary into a potential multi-second-or-longer stall, unlike the
+    Memory uploader's equivalent status endpoint, which has no such check."""
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    client = _client(db)
+
+    create_response = client.post(
+        f"/api/cases/{CASE_ID}/evidence-uploads/resumable",
+        json={"filename": "big.bin", "expected_size_bytes": 10},
+    )
+    assert create_response.status_code == 200
+    session_id = create_response.json()["session"]["id"]
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("check_ingestion_readiness must not run on the per-chunk status poll")
+
+    monkeypatch.setattr(routes_evidence_preflight, "check_ingestion_readiness", _fail_if_called)
+
+    status_response = client.get(f"/api/cases/{CASE_ID}/evidence-uploads/{session_id}")
+    assert status_response.status_code == 200
+    assert status_response.json()["health"] is None
 
 
 def test_api_rerun_preflight_with_platform_override(tmp_path, monkeypatch):

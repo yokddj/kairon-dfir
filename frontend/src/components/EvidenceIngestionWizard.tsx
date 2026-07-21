@@ -2,8 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
-import { api, type Evidence, type EvidencePlatform, type EvidenceUploadSessionRead, type PreflightReport } from "../api/client";
+import { api, type Evidence, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type MemoryUploadStatus, type PreflightReport } from "../api/client";
 import { useNotifications } from "../context/NotificationsContext";
+import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
 import { platformUploadOptions } from "../lib/platformRegistry";
 
 type IntakeType = "disk_image" | "memory_dump" | "artifact_collection" | "folder" | "server_path";
@@ -85,6 +86,32 @@ function inspectionStateLabel(state: InspectionState, options: { isServerPath: b
 function inspectionErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return "Kairon could not inspect this evidence.";
+}
+
+function evidenceSessionUploadStatus(session: EvidenceUploadSessionRead, file: File, chunkSize: number): MemoryUploadStatus {
+  const bytesReceived = Math.max(0, Math.min(file.size, session.bytes_received || 0));
+  const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+  const firstMissingChunk = bytesReceived >= file.size ? totalChunks : Math.floor(bytesReceived / chunkSize);
+  const missingChunks = bytesReceived >= file.size ? [] : Array.from({ length: totalChunks - firstMissingChunk }, (_, index) => firstMissingChunk + index);
+  const status: MemoryUploadStatus["status"] = session.status === "created" ? "created" : session.status === "expired" ? "expired" : session.status === "cancelled" ? "cancelled" : session.status === "failed" ? "failed" : "uploading";
+  return {
+    upload_id: session.id,
+    case_id: session.case_id,
+    evidence_id: null,
+    status,
+    bytes_received: bytesReceived,
+    expected_bytes: file.size,
+    chunk_size_bytes: chunkSize,
+    total_chunks: totalChunks,
+    received_chunks: Array.from({ length: firstMissingChunk }, (_, index) => index),
+    missing_chunks: missingChunks,
+    filename: session.original_filename,
+    updated_at: session.updated_at,
+    failure_code: null,
+    failure_message: session.failure_message,
+    message: session.failure_message || "Evidence upload in progress.",
+    retryable: true,
+  };
 }
 
 function hostMatchesName(host: { canonical_name?: string; display_name?: string; aliases?: string[]; all_names?: string[] }, name: string | null | undefined): boolean {
@@ -195,21 +222,47 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       declared_platform: platform,
     })).session;
     setSession(activeSession);
-    let offset = activeSession.bytes_received || 0;
-    const chunkSize = 16 * 1024 * 1024;
-    while (offset < file.size) {
-      const next = Math.min(file.size, offset + chunkSize);
-      const chunk = file.slice(offset, next);
-      const startingOffset = offset;
-      const response = await api.appendResumableEvidenceUpload(caseId, activeSession.id, chunk, offset, {
-        onProgress: (progress) => onProgress({ loaded: startingOffset + progress.loaded, total: file.size, lengthComputable: true }),
-      });
-      offset = response.offset;
-      setSession(response.session);
-      onProgress({ loaded: offset, total: file.size, lengthComputable: true });
+    const chunkSize = DEFAULT_CHUNK_SIZE;
+    const controller = new AbortController();
+    let latestSession = activeSession;
+    let finalizedResponse: EvidenceUploadSessionCreateResponse | null = null;
+    const result = await runResumableUpload({
+      uploadId: activeSession.id,
+      file,
+      chunkSize,
+      getStatus: async () => {
+        const response = await api.getEvidenceUploadSession(caseId, activeSession.id);
+        latestSession = response.session;
+        setSession(response.session);
+        return evidenceSessionUploadStatus(response.session, file, chunkSize);
+      },
+      uploadChunk: async (_uploadId, chunkIndex, blob, signal, uploadProgress) => {
+        const offset = chunkIndex * chunkSize;
+        const response = await api.appendResumableEvidenceUpload(caseId, activeSession.id, blob, offset, {
+          signal,
+          onProgress: uploadProgress ? (progress) => uploadProgress({ loaded: progress.loaded, total: progress.total }) : undefined,
+        });
+        latestSession = response.session;
+        setSession(response.session);
+        return evidenceSessionUploadStatus(response.session, file, chunkSize);
+      },
+      finalize: async () => {
+        setInspectionState("finalizing_upload");
+        finalizedResponse = await api.finalizeResumableEvidenceUploadSession(caseId, activeSession.id);
+        latestSession = finalizedResponse.session;
+        setSession(finalizedResponse.session);
+        return evidenceSessionUploadStatus(finalizedResponse.session, file, chunkSize);
+      },
+      signal: controller.signal,
+      onProgress: (progress) => onProgress({ loaded: progress.loaded, total: progress.total, lengthComputable: true }),
+    });
+    if (result.type === "completed") {
+      return finalizedResponse ?? api.finalizeResumableEvidenceUploadSession(caseId, activeSession.id);
     }
-    setInspectionState("finalizing_upload");
-    return api.finalizeResumableEvidenceUploadSession(caseId, activeSession.id);
+    if (result.type === "terminal" && finalizedResponse) return finalizedResponse;
+    if (result.type === "aborted") throw new Error("Upload aborted");
+    if (result.type === "stalled") throw new Error("Upload paused because the server did not acknowledge the last chunk. Resume the upload to continue.");
+    throw new Error(result.type === "failed" ? result.message : latestSession.failure_message || "Upload failed.");
   }
 
   const createSessionMutation = useMutation({

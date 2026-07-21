@@ -6364,10 +6364,11 @@ export const api = {
     request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null }>(`/cases/${caseId}/evidence-uploads/${sessionId}`),
   createResumableEvidenceUploadSession: (caseId: string, payload: { filename: string; expected_size_bytes: number; declared_platform?: EvidencePlatform; client_sha256?: string }) =>
     request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null }>(`/cases/${caseId}/evidence-uploads/resumable`, { method: "POST", body: JSON.stringify(payload) }),
-  appendResumableEvidenceUpload: (caseId: string, sessionId: string, blob: Blob, offset: number, options?: { onProgress?: (progress: UploadProgress) => void }) =>
+  appendResumableEvidenceUpload: (caseId: string, sessionId: string, blob: Blob, offset: number, options?: { signal?: AbortSignal; onProgress?: (progress: UploadProgress) => void }) =>
     uploadBlob<{ session: EvidenceUploadSessionRead; offset: number }>(`/cases/${caseId}/evidence-uploads/${sessionId}/bytes?offset=${offset}`, blob, {
       method: "PUT",
       contentType: "application/octet-stream",
+      signal: options?.signal,
       onProgress: options?.onProgress ? (progress) => options.onProgress?.({ loaded: progress.loaded, total: progress.total, lengthComputable: true }) : undefined,
     }),
   finalizeResumableEvidenceUploadSession: (caseId: string, sessionId: string) =>
