@@ -56,11 +56,12 @@ class EvidenceUploadSessionInitRequest(BaseModel):
     expected_size_bytes: int
     declared_platform: str | None = None
     client_sha256: str | None = None
-    # Only consulted when UNIFIED_UPLOAD_EVIDENCE_MEMORY_DUMP is enabled and
-    # intake_category == "memory_dump" -- see
-    # app.services.evidence_unified_upload.create_unified_upload_session.
-    # All other intake categories ignore these fields and take the
-    # unchanged legacy byte-offset path.
+    # Only consulted when intake_category names a kind registered in
+    # app.services.evidence_unified_upload.UNIFIED_UPLOAD_KINDS
+    # ("memory_dump", "disk_image", "archive") AND that kind's own flag is
+    # enabled -- see create_unified_upload_session. Any other intake
+    # category (folder, server_path, multi-file/multi-segment selections)
+    # ignores these fields and takes the unchanged legacy byte-offset path.
     intake_category: str | None = None
     host_id: str | None = None
     provided_host: str | None = None

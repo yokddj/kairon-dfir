@@ -1018,3 +1018,84 @@ describe("EvidenceIngestionWizard unified disk_image uploads", () => {
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/evidences/evidence-disk-2"));
   });
 });
+
+describe("EvidenceIngestionWizard unified single-file archive uploads", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navigateMock.mockReset();
+    getCaseHostsMock.mockResolvedValue({ hosts: [{ id: "host-1", display_name: "WS-01" }] });
+    getIngestionReadinessMock.mockResolvedValue(readyHealth({ unified_upload_evidence_archive: true }));
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [] });
+  });
+
+  it("routes a single .zip file under Artifact Collection through the unified transport with intake_category archive", async () => {
+    const payload = new Uint8Array(24).fill(3);
+    createResumableEvidenceUploadSessionMock.mockResolvedValue({
+      session: { ...sessionResponse().session, id: "archive-session-1", status: "created", original_filename: "collection.zip", size_bytes: 24, category: "archive", backend: "unified" },
+      health: readyHealth({ unified_upload_evidence_archive: true }),
+      unified: { memory_upload_id: "archive-upload-1", chunk_size_bytes: 32, default_concurrency: 2, max_concurrency: 4, total_chunks: 1 },
+    });
+    const receivedChunks = new Set<number>();
+    const statusFor = () => ({
+      upload_id: "archive-upload-1", case_id: "case-1", evidence_id: null, status: "uploading",
+      bytes_received: receivedChunks.size * 24, expected_bytes: 24, chunk_size_bytes: 32, total_chunks: 1,
+      received_chunks: Array.from(receivedChunks).sort(), missing_chunks: [0].filter((i) => !receivedChunks.has(i)),
+      filename: "collection.zip", updated_at: new Date().toISOString(), failure_code: null, failure_message: null, message: "", retryable: true,
+    });
+    getMemoryUploadStatusMock.mockImplementation(async () => statusFor());
+    uploadMemoryUploadChunkMock.mockImplementation(async (_caseId: string, _uploadId: string, chunkIndex: number) => {
+      receivedChunks.add(chunkIndex);
+      return statusFor();
+    });
+    finalizeMemoryUploadMock.mockResolvedValue({
+      upload_id: "archive-upload-1", case_id: "case-1", evidence_id: "evidence-archive-1", status: "completed",
+      bytes_received: 24, expected_bytes: 24, chunk_size_bytes: 32, total_chunks: 1,
+      received_chunks: [0], missing_chunks: [], filename: "collection.zip", updated_at: new Date().toISOString(),
+      failure_code: null, failure_message: null, message: "", retryable: false,
+    });
+    getEvidenceUploadSessionMock.mockResolvedValue({
+      session: { ...sessionResponse().session, id: "archive-session-1", status: "promoted", promoted_evidence_id: "evidence-archive-1", category: "archive", backend: "unified" },
+      health: null,
+      unified: null,
+    });
+    getEvidenceMock.mockResolvedValue({ id: "evidence-archive-1", original_filename: "collection.zip", evidence_type: "velociraptor_zip" });
+    runEvidenceIndexingPlanMock.mockResolvedValue({ accepted: true, evidence_id: "evidence-archive-1", profile: "recommended", run_id: "plan-archive-1", status: "queued", queued_jobs: [{ step_id: "raw_collection", run_id: "job-1", status: "queued" }], plan: { run_id: "plan-archive-1", profile: "recommended", status: "queued", steps: [], excluded: [], queued_jobs: [] } });
+
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    const file = new File([payload], "collection.zip");
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    expect(createResumableEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", expect.objectContaining({ filename: "collection.zip", intake_category: "archive" }));
+    await waitFor(() => expect(finalizeMemoryUploadMock).toHaveBeenCalledWith("case-1", "archive-upload-1"));
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-archive-1", { profile: "recommended" }));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/evidences/evidence-archive-1"));
+  });
+
+  it("keeps a non-archive single file under Artifact Collection (e.g. a .csv) on the legacy path even with the flag enabled", async () => {
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    const file = new File(["a,b,c"], "notes.csv");
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    await waitFor(() => expect(createEvidenceUploadSessionMock).toHaveBeenCalled());
+    expect(createResumableEvidenceUploadSessionMock).not.toHaveBeenCalledWith("case-1", expect.objectContaining({ intake_category: "archive" }));
+  });
+
+  it("keeps a .zip file on the legacy path when UNIFIED_UPLOAD_EVIDENCE_ARCHIVE is disabled", async () => {
+    getIngestionReadinessMock.mockResolvedValue(readyHealth({ unified_upload_evidence_archive: false }));
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+      preflight: readyReport({ original_filename: "collection.zip" }),
+    }));
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    const file = new File([new Uint8Array(8)], "collection.zip");
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    await screen.findByTestId("preflight-report");
+    expect(createResumableEvidenceUploadSessionMock).not.toHaveBeenCalled();
+  });
+});
