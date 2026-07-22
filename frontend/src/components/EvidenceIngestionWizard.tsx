@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { api, type Evidence, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type MemoryUploadStatus, type PreflightReport, type ResumableUploadSessionRead } from "../api/client";
 import { useNotifications } from "../context/NotificationsContext";
 import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
+import { hashBlob } from "../lib/sha256";
 import { platformUploadOptions } from "../lib/platformRegistry";
 
 type IntakeType = "disk_image" | "memory_dump" | "artifact_collection" | "folder" | "server_path";
@@ -90,10 +91,14 @@ function inspectionErrorMessage(error: unknown): string {
 }
 
 async function sha256Hex(blob: Blob): Promise<string | undefined> {
+  // Pure JS (see lib/sha256.ts), not SubtleCrypto: crypto.subtle.digest is
+  // restricted to secure contexts (HTTPS/localhost) and is silently
+  // undefined the moment this is served over plain HTTP -- which is the
+  // actual deployed reality here. A hashing failure degrades to "no hash"
+  // (best-effort) rather than aborting the caller, matching how the
+  // server already treats a missing/absent client-declared chunk hash.
   try {
-    if (typeof globalThis.crypto?.subtle?.digest !== "function") return undefined;
-    const digest = await globalThis.crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
-    return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+    return await hashBlob(blob);
   } catch {
     return undefined;
   }
@@ -392,7 +397,15 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       const start = unified.verification_chunk_index * unified.chunk_size_bytes;
       const slice = file.slice(start, start + unified.verification_chunk_size);
       const digest = await sha256Hex(slice);
-      if (digest !== unified.verification_chunk_sha256) {
+      // sha256Hex returns undefined when crypto.subtle is unavailable, not
+      // just on a genuine hashing failure -- notably, browsers only expose
+      // SubtleCrypto in a secure context (HTTPS or localhost), so it is
+      // routinely undefined when Kairon is served over plain HTTP. Treat
+      // that as "verification skipped", not "mismatch": the size check
+      // above still applies, and server-side per-chunk hash verification
+      // (on the actual chunk re-upload) remains the mandatory backstop
+      // that catches a genuinely wrong file.
+      if (digest !== undefined && digest !== unified.verification_chunk_sha256) {
         return "This file's content does not match the bytes Kairon already received for this upload. Select the original file, not a different or re-exported copy.";
       }
     }

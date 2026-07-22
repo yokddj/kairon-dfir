@@ -122,6 +122,21 @@ function readBlobAsArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
   });
 }
 
+/**
+ * Hashes a single Blob/File in one shot (e.g. one upload chunk). Pure JS,
+ * not SubtleCrypto -- unlike crypto.subtle.digest(), this works over plain
+ * HTTP. Browsers restrict SubtleCrypto to secure contexts (HTTPS or
+ * localhost), so a crypto.subtle-based hash silently becomes unavailable
+ * the moment Kairon is served over HTTP, which is exactly the deployed
+ * reality this needs to hold up under.
+ */
+export async function hashBlob(blob: Blob): Promise<string> {
+  const hasher = new IncrementalSha256();
+  const buffer = await readBlobAsArrayBuffer(blob);
+  hasher.update(new Uint8Array(buffer));
+  return hasher.digestHex();
+}
+
 /** Hashes a File in chunks, reporting fractional progress (0..1) as it goes. Never loads the whole file into memory at once. */
 export async function hashFileWithProgress(file: File, onProgress?: (fraction: number) => void, chunkSize = DEFAULT_CHUNK_SIZE): Promise<string> {
   const hasher = new IncrementalSha256();
