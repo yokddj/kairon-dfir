@@ -3767,6 +3767,48 @@ export type EvidenceUploadSessionRead = {
   last_activity_at: string | null;
   failure_message: string | null;
   promoted_evidence_id: string | null;
+  category: string | null;
+  backend: string;
+};
+
+export type UnifiedResumeDetails = {
+  memory_upload_id: string;
+  chunk_size_bytes: number;
+  total_chunks: number;
+  received_chunks: number[];
+  missing_chunks: number[];
+  default_concurrency: number;
+  max_concurrency: number;
+  expected_sha256: string | null;
+  verification_chunk_index: number | null;
+  verification_chunk_size: number | null;
+  verification_chunk_sha256: string | null;
+};
+
+export type ResumableUploadSessionRead = {
+  id: string;
+  case_id: string;
+  backend: string;
+  category: string | null;
+  original_filename: string;
+  expected_size_bytes: number | null;
+  bytes_received: number;
+  progress_percent: number | null;
+  status: string;
+  current_stage: string | null;
+  created_at: string;
+  updated_at: string;
+  expires_at: string;
+  resumable: boolean;
+  cancellable: boolean;
+  promoted_evidence_id: string | null;
+  failure_message: string | null;
+  unified: UnifiedResumeDetails | null;
+};
+
+export type ResumableUploadSessionsResponse = {
+  case_id: string;
+  sessions: ResumableUploadSessionRead[];
 };
 
 export type EvidenceUploadSessionCreateResponse = {
@@ -6426,6 +6468,8 @@ export const api = {
     request<{ status: string; operation_id: string }>(`/cases/${caseId}/evidence-operations/${operationId}/dismiss`, { method: "POST" }),
   getEvidenceUploadSession: (caseId: string, sessionId: string) =>
     request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null; unified: UnifiedUploadInfo | null }>(`/cases/${caseId}/evidence-uploads/${sessionId}`),
+  listResumableEvidenceUploads: (caseId: string) =>
+    request<ResumableUploadSessionsResponse>(`/cases/${caseId}/evidence-uploads`),
   createResumableEvidenceUploadSession: (
     caseId: string,
     payload: {
