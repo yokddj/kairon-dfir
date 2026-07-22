@@ -93,7 +93,14 @@ function sliceChunk(
 
 function shouldRetryChunkUpload(error: unknown): boolean {
   if (error instanceof ApiError) {
-    if (error.status === 409) return false;
+    if (error.status === 409) {
+      // A distributed per-session lock (chunk write or finalize) was held
+      // by a concurrent request for this same upload session. This is
+      // transient - the lock holder releases within its own request - so
+      // retrying with backoff is correct, unlike other 409s (offset
+      // mismatches are reconciled separately below, not retried blindly).
+      return error.errorCode === "session_busy" || error.errorCode === "session_lock_unavailable";
+    }
     if (error.status === 408 || error.status === 425 || error.status === 429)
       return true;
     return error.status >= 500;

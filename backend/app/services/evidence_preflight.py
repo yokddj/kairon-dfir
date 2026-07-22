@@ -225,7 +225,15 @@ def _classify_warning(message: str) -> PreflightWarning:
 def _resolve_upload_limit(category: str) -> int:
     settings = get_settings()
     if category == EvidenceCategory.MEMORY_DUMP.value:
-        return int(settings.memory_max_upload_size)
+        # Mirror the resolution used by the dedicated memory upload pipeline
+        # (app.services.memory.upload_readiness/upload_sessions/validation)
+        # so a memory image is subject to the same limit regardless of
+        # whether it was uploaded via Memory Overview or the evidence
+        # wizard's memory_dump intake. memory_max_upload_size is a legacy
+        # fallback (2 GiB) that predates memory_upload_max_bytes (the
+        # actively configured, validated 32 GiB default) and must not be
+        # used as the primary limit here.
+        return int(settings.memory_upload_max_bytes or settings.memory_max_upload_size)
     return int(settings.backend_max_upload_size)
 
 
@@ -357,7 +365,13 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
     elif classification_category == EvidenceCategory.MEMORY_DUMP:
         chain.append("Memory Dump")
         platform = declared_platform or EvidencePlatform.memory.value
-        estimated_extracted_bytes = file_size
+        # Memory dumps are staged as-is and never run through extraction
+        # (app.ingest.archive._enforce_limits is never called for this
+        # category) - leaving estimated_extracted_bytes unset avoids a
+        # false "Within extraction limit" block against
+        # BACKEND_MAX_EXTRACTED_BYTES for large memory images. Staging
+        # still needs the full file size of temp storage, so that estimate
+        # is kept.
         estimated_temp_storage_bytes = file_size
         expected_parsers = []
         classification_category_value = "memory_dump"
@@ -417,11 +431,11 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
             reason=f"The selected file ({_human(file_size)}) is larger than the configured upload limit ({_human(upload_limit)}).",
             current_configuration={"limit": _human(upload_limit)},
             required_configuration={"limit": f"at least {_human(file_size)}"},
-            configuration_key="MEMORY_MAX_UPLOAD_SIZE" if classification_category_value == "memory_dump" else "BACKEND_MAX_UPLOAD_SIZE",
+            configuration_key="MEMORY_UPLOAD_MAX_BYTES" if classification_category_value == "memory_dump" else "BACKEND_MAX_UPLOAD_SIZE",
             configuration_file="backend/.env",
             how_to_fix=[
                 "Edit backend/.env",
-                f"Increase {'MEMORY_MAX_UPLOAD_SIZE' if classification_category_value == 'memory_dump' else 'BACKEND_MAX_UPLOAD_SIZE'} to at least {file_size} bytes",
+                f"Increase {'MEMORY_UPLOAD_MAX_BYTES' if classification_category_value == 'memory_dump' else 'BACKEND_MAX_UPLOAD_SIZE'} to at least {file_size} bytes",
                 "Run ./scripts/upgrade.sh",
             ],
         ))
