@@ -15,6 +15,9 @@ import asyncio
 import hashlib
 from pathlib import Path
 
+import uuid
+from datetime import datetime, timedelta, timezone
+
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -24,7 +27,11 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import routes_evidence_preflight
 from app.core.config import get_settings
-from app.core.database import Base, get_db
+from app.core.database import Base, get_db, utc_now
+from app.models.case_access import CaseAccess
+from app.models.session import Session as AuthSession
+from app.models.user import User
+from app.services.auth_utils import hash_token
 from app.models.case import Case
 from app.models.case_host import CaseHost
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
@@ -62,6 +69,20 @@ def _client(db):
     test_app.include_router(routes_evidence_preflight.router)
     test_app.dependency_overrides[get_db] = lambda: db
     return TestClient(test_app)
+
+
+def _login(db, client, *, case_id=CASE_ID, is_admin=False, grant_case_access=True):
+    user = User(id=str(uuid.uuid4()), username=f"analyst-{uuid.uuid4().hex[:8]}", password_hash="x", is_admin=is_admin)
+    db.add(user)
+    db.commit()
+    if grant_case_access and not is_admin:
+        db.add(CaseAccess(id=str(uuid.uuid4()), case_id=case_id, user_id=user.id, role="analyst"))
+        db.commit()
+    token = f"test-token-{user.id}"
+    db.add(AuthSession(id=str(uuid.uuid4()), user_id=user.id, token_hash=hash_token(token), expires_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()))
+    db.commit()
+    client.cookies.set("kairon_session", token)
+    return user
 
 
 def _case(db, *, case_id=CASE_ID):
@@ -398,3 +419,178 @@ def test_http_duplicate_active_session_returns_409(tmp_path, monkeypatch):
     assert first.status_code == 200, first.text
     second = client.post(f"/api/cases/{CASE_ID}/evidence-uploads/resumable", json=payload)
     assert second.status_code == 409, second.text
+
+
+# ---------------------------------------------------------------------------
+# Resumable session discovery (GET /{case_id}/evidence-uploads)
+# ---------------------------------------------------------------------------
+
+def test_resumable_discovery_requires_authentication(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    db = _db()
+    _case(db)
+    client = _client(db)
+    response = client.get(f"/api/cases/{CASE_ID}/evidence-uploads")
+    assert response.status_code == 401
+
+
+def test_resumable_discovery_denies_user_without_case_access(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    db = _db()
+    _case(db)
+    client = _client(db)
+    _login(db, client, grant_case_access=False)
+    response = client.get(f"/api/cases/{CASE_ID}/evidence-uploads")
+    assert response.status_code == 403
+
+
+def test_resumable_discovery_isolated_across_cases(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    db = _db()
+    other_case_id = "eeeeeeee-1111-4111-8111-eeeeeeeeeeee"
+    _case(db)
+    _case(db, case_id=other_case_id)
+    create_unified_memory_dump_session(
+        db, CASE_ID, filename="in-case.mem", expected_size_bytes=64, declared_platform=None, client_sha256=None,
+        host_id=None, provided_host="WIN-A", memory_authorization_acknowledged=True, notes=None, current_user=None,
+    )
+    client = _client(db)
+    # A user with access to a DIFFERENT case must not see this case's sessions.
+    _login(db, client, case_id=other_case_id)
+    response = client.get(f"/api/cases/{CASE_ID}/evidence-uploads")
+    assert response.status_code == 403
+
+
+def test_resumable_discovery_lists_unified_session_with_chunk_bitmap(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    db = _db()
+    _case(db)
+    payload = b"0123456789ABCDEF" * 3  # 48 bytes -> 3 chunks of 16
+    session, info = create_unified_memory_dump_session(
+        db, CASE_ID, filename="capture.mem", expected_size_bytes=len(payload), declared_platform=None, client_sha256=None,
+        host_id=None, provided_host="WIN-RAM10", memory_authorization_acknowledged=True, notes=None, current_user=None,
+    )
+    asyncio.run(
+        store_memory_upload_chunk_stream(
+            db, case_id=CASE_ID, upload_id=info.memory_upload_id, chunk_index=0,
+            chunks=_bytes_stream(payload[0:16]), headers={"content-length": "16"}, content_length_is_payload=True, expected_mode="resumable",
+        )
+    )
+    client = _client(db)
+    _login(db, client)
+    response = client.get(f"/api/cases/{CASE_ID}/evidence-uploads")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    entries = [s for s in body["sessions"] if s["id"] == session.id]
+    assert len(entries) == 1
+    entry = entries[0]
+    assert entry["backend"] == "unified"
+    assert entry["category"] == "memory_dump"
+    assert entry["status"] == "uploading"
+    assert entry["resumable"] is True
+    assert entry["cancellable"] is True
+    assert entry["unified"]["memory_upload_id"] == info.memory_upload_id
+    assert entry["unified"]["received_chunks"] == [0]
+    assert entry["unified"]["missing_chunks"] == [1, 2]
+    assert entry["unified"]["verification_chunk_index"] == 0
+    assert entry["unified"]["verification_chunk_sha256"] == hashlib.sha256(payload[0:16]).hexdigest()
+
+
+def test_resumable_discovery_excludes_cancelled_and_expired(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    db = _db()
+    _case(db)
+    cancelled_session, _ = create_unified_memory_dump_session(
+        db, CASE_ID, filename="cancelled.mem", expected_size_bytes=64, declared_platform=None, client_sha256=None,
+        host_id=None, provided_host="WIN-RAM11", memory_authorization_acknowledged=True, notes=None, current_user=None,
+    )
+    cancel_unified_memory_dump_session(db, cancelled_session)
+
+    from app.models.evidence_upload_session import EvidenceUploadSessionStatus
+    expired_session, _ = create_unified_memory_dump_session(
+        db, CASE_ID, filename="expired.mem", expected_size_bytes=64, declared_platform=None, client_sha256=None,
+        host_id=None, provided_host="WIN-RAM12", memory_authorization_acknowledged=True, notes=None, current_user=None,
+    )
+    expired_session.expires_at = utc_now() - timedelta(days=1)
+    expired_session.status = EvidenceUploadSessionStatus.expired.value
+    db.add(expired_session)
+    db.commit()
+
+    client = _client(db)
+    _login(db, client)
+    response = client.get(f"/api/cases/{CASE_ID}/evidence-uploads")
+    ids = {s["id"] for s in response.json()["sessions"]}
+    assert cancelled_session.id not in ids
+    assert expired_session.id not in ids
+
+
+def test_resumable_discovery_surfaces_recently_promoted_session_for_redirect(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    db = _db()
+    _case(db)
+    payload = b"A" * 16
+    session, info = create_unified_memory_dump_session(
+        db, CASE_ID, filename="capture.mem", expected_size_bytes=len(payload), declared_platform=None, client_sha256=hashlib.sha256(payload).hexdigest(),
+        host_id=None, provided_host="WIN-RAM13", memory_authorization_acknowledged=True, notes=None, current_user=None,
+    )
+    asyncio.run(
+        store_memory_upload_chunk_stream(
+            db, case_id=CASE_ID, upload_id=info.memory_upload_id, chunk_index=0,
+            chunks=_bytes_stream(payload), headers={"content-length": "16"}, content_length_is_payload=True, expected_mode="resumable",
+        )
+    )
+    _, evidence = finalize_memory_upload_session(db, case_id=CASE_ID, upload_id=info.memory_upload_id, expected_sha256=hashlib.sha256(payload).hexdigest())
+
+    client = _client(db)
+    _login(db, client)
+    response = client.get(f"/api/cases/{CASE_ID}/evidence-uploads")
+    entries = [s for s in response.json()["sessions"] if s["id"] == session.id]
+    assert len(entries) == 1
+    assert entries[0]["status"] == "promoted"
+    assert entries[0]["promoted_evidence_id"] == evidence.id
+    assert entries[0]["resumable"] is False
+
+
+def test_resumable_discovery_reconciles_missing_backing_memory_upload(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    db = _db()
+    _case(db)
+    session, info = create_unified_memory_dump_session(
+        db, CASE_ID, filename="orphan.mem", expected_size_bytes=64, declared_platform=None, client_sha256=None,
+        host_id=None, provided_host="WIN-RAM14", memory_authorization_acknowledged=True, notes=None, current_user=None,
+    )
+    memory_upload = db.get(MemoryUpload, info.memory_upload_id)
+    db.delete(memory_upload)
+    db.commit()
+
+    client = _client(db)
+    _login(db, client)
+    response = client.get(f"/api/cases/{CASE_ID}/evidence-uploads")
+    entries = [s for s in response.json()["sessions"] if s["id"] == session.id]
+    # Ownership-mismatch / missing-backing-session reconciliation marks the
+    # session failed with a clear message instead of leaving it silently
+    # stuck showing "uploading" forever, and a non-retryable failure isn't
+    # offered for resume.
+    if entries:
+        assert entries[0]["status"] == "failed"
+        assert entries[0]["resumable"] is False
+    refreshed = db.get(EvidenceUploadSession, session.id)
+    assert refreshed.status == "failed"
+    assert "no longer available" in (refreshed.failure_message or "")
+
+
+def test_resumable_discovery_includes_legacy_session(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    db = _db()
+    _case(db)
+    from app.services.evidence_upload_session import create_resumable_upload_session
+
+    legacy_session = create_resumable_upload_session(db, CASE_ID, filename="disk.E01", expected_size_bytes=1024, declared_platform=None, client_sha256=None)
+    client = _client(db)
+    _login(db, client)
+    response = client.get(f"/api/cases/{CASE_ID}/evidence-uploads")
+    entries = [s for s in response.json()["sessions"] if s["id"] == legacy_session.id]
+    assert len(entries) == 1
+    assert entries[0]["backend"] == "legacy"
+    assert entries[0]["resumable"] is True
+    assert entries[0]["unified"] is None

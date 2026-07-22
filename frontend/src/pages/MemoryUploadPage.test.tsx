@@ -573,6 +573,13 @@ describe("MemoryUploadPage", () => {
   it("one resume click invokes controller with existing upload ID and file", async () => {
     localStorage.setItem("kairon-memory-upload:case-1", JSON.stringify({ uploadId: "resume-1", filename: "authorized.mem", expectedBytes: 20, providedHost: "HOSTA" }));
     getMemoryUploadStatusMock.mockResolvedValue(uploadStatus({ upload_id: "resume-1", expected_bytes: 20, chunk_size_bytes: 4, total_chunks: 5, received_chunks: [0, 1], received_chunk_count: 2, bytes_received: 8, missing_chunks: [2, 3, 4], status: "uploading" }));
+    // The real (passthrough-mocked) runResumableUpload keeps running
+    // asynchronously after the assertions below. Fail it fast with a
+    // non-retryable error (rather than leaving api.uploadMemoryUploadChunk
+    // unmocked -> resolving to undefined) so it settles within this test's
+    // window instead of resolving a chunk hash later and recording a call
+    // against the *next* test's freshly-reset mocks.
+    uploadMemoryUploadChunkMock.mockRejectedValue(new ApiError(400, "MEMORY_UPLOAD_INVALID_CHUNK_INDEX", "non-retryable for this test", null));
     renderPage();
     await screen.findByText(/Memory image upload is available/i);
     fireEvent.change(screen.getByLabelText(/Source host/i), { target: { value: "HOSTA" } });
@@ -588,6 +595,14 @@ describe("MemoryUploadPage", () => {
       })
     );
     expect(createMemoryUploadSessionMock).not.toHaveBeenCalled();
+    // Wait for the UI to reflect the failure, not just for the mock to have
+    // been called once: max_parallel_chunks is 2, so two chunks race
+    // concurrently, and only waiting on the first call risks leaving the
+    // second chunk's real (now-async) hash-then-reject still in flight
+    // when this test returns -- letting it record a stray call against the
+    // *next* test's freshly-reset mocks instead.
+    await waitFor(() => expect(screen.getAllByText("non-retryable for this test").length).toBeGreaterThan(0));
+    expect(finalizeMemoryUploadMock).not.toHaveBeenCalled();
   });
 
   it("one resume click pauses on timed out chunk without creating a new session", async () => {
@@ -646,7 +661,13 @@ describe("MemoryUploadPage", () => {
     expect(createMemoryUploadSessionMock).not.toHaveBeenCalled();
     const attemptedChunks = uploadMemoryUploadChunkMock.mock.calls.map((call) => call[2]);
     expect(attemptedChunks.length).toBeGreaterThan(0);
-    expect(attemptedChunks[0]).toBe(3);
+    // max_parallel_chunks is 2, so the two lowest missing chunks (3 and 4)
+    // race concurrently -- which one's real chunk-hash promise settles
+    // first is not a guaranteed ordering, only that the attempt starts
+    // from the correct missing set (3), never an already-received or
+    // out-of-range chunk.
+    expect(attemptedChunks[0]).toBeGreaterThanOrEqual(3);
+    expect(Math.min(...attemptedChunks)).toBe(3);
     expect(finalizeMemoryUploadMock).not.toHaveBeenCalled();
   }, 10_000);
 

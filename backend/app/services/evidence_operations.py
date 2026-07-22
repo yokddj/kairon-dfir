@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import shutil
+from datetime import timezone
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -126,7 +127,18 @@ def _is_before_now(value: Any, now: Any) -> bool:
     try:
         return value < now
     except TypeError:
-        return value.timestamp() < now.timestamp()
+        # Naive/aware mix -- SQLite (tests) hands back naive datetimes for
+        # DateTime(timezone=True) columns even though the values it stored
+        # were UTC-aware (Postgres, production, preserves tzinfo and never
+        # reaches this branch). Treat a naive value as UTC, matching this
+        # codebase's own utc_now_naive() convention -- NOT as local time,
+        # which .timestamp() on a naive datetime would otherwise assume,
+        # silently corrupting the comparison by the local UTC offset.
+        if getattr(value, "tzinfo", None) is None:
+            value = value.replace(tzinfo=timezone.utc)
+        if getattr(now, "tzinfo", None) is None:
+            now = now.replace(tzinfo=timezone.utc)
+        return value < now
 
 
 def sync_upload_operation(db: Session, session: EvidenceUploadSession, *, commit: bool = True) -> EvidenceOperation:
