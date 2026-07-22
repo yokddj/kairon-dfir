@@ -347,6 +347,8 @@ async def _append_resumable_upload_chunk_stream_locked(
     # appends could both read the same current_size, both pass the offset
     # check, then interleave writes into the same staged file).
     db.refresh(session)
+    if (session.metadata_json or {}).get("backend") == "unified":
+        raise UploadSessionError("unified_session_wrong_endpoint", "This upload session is backed by the unified chunk-index backend; use the memory upload chunk endpoints, not this byte-offset endpoint.")
     if session.status not in {EvidenceUploadSessionStatus.created.value, EvidenceUploadSessionStatus.uploading.value, EvidenceUploadSessionStatus.interrupted.value}:
         raise UploadSessionError("session_not_uploading", f"Upload session is '{session.status}', not uploadable.")
     target = Path(session.staged_path)
@@ -421,6 +423,8 @@ def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSessio
 
 
 def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUploadSession) -> tuple[EvidenceUploadSession, PreflightReport]:
+    if (session.metadata_json or {}).get("backend") == "unified":
+        raise UploadSessionError("unified_session_wrong_endpoint", "This upload session is backed by the unified chunk-index backend; finalize it through the memory upload finalize endpoint, not this one.")
     if session.status == EvidenceUploadSessionStatus.staged.value:
         report = run_preflight(Path(session.staged_path), token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch")
         session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete"}
@@ -894,6 +898,11 @@ def rerun_preflight(session: EvidenceUploadSession, *, declared_platform: str | 
 def _cleanup_storage(session: EvidenceUploadSession) -> None:
     if session.is_server_path:
         return  # never delete the analyst's own file - it was never copied
+    if (session.metadata_json or {}).get("backend") == "unified":
+        # Unified sessions never stage bytes of their own -- staged_path is
+        # a sentinel, not a real path. The backing MemoryUpload session
+        # (app.services.memory.upload_sessions) owns and cleans its bytes.
+        return
     root = _session_root(session.id)
     try:
         if root.exists():

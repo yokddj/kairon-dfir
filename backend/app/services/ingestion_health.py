@@ -77,4 +77,5 @@ def check_ingestion_readiness(db: Session) -> dict:
         "configured_extraction_limit_bytes": int(settings.backend_max_extracted_bytes),
         "ready": overall_ok,
         "critical_ready": critical_ok,
+        "unified_upload_evidence_memory_dump": bool(settings.unified_upload_evidence_memory_dump),
     }

@@ -24,6 +24,7 @@ class EvidenceUploadSessionRead(BaseModel):
     updated_at: datetime
     last_activity_at: datetime | None = None
     failure_message: str | None = None
+    promoted_evidence_id: str | None = None
 
     model_config = {"from_attributes": True}
 
@@ -34,9 +35,18 @@ class EvidenceUploadSessionCreateResponse(BaseModel):
     health: dict | None = None
 
 
+class UnifiedUploadInfo(BaseModel):
+    memory_upload_id: str
+    chunk_size_bytes: int
+    total_chunks: int
+    default_concurrency: int
+    max_concurrency: int
+
+
 class EvidenceUploadSessionStageResponse(BaseModel):
     session: EvidenceUploadSessionRead
     health: dict | None = None
+    unified: UnifiedUploadInfo | None = None
 
 
 class EvidenceUploadSessionInitRequest(BaseModel):
@@ -44,6 +54,16 @@ class EvidenceUploadSessionInitRequest(BaseModel):
     expected_size_bytes: int
     declared_platform: str | None = None
     client_sha256: str | None = None
+    # Only consulted when UNIFIED_UPLOAD_EVIDENCE_MEMORY_DUMP is enabled and
+    # intake_category == "memory_dump" -- see
+    # app.services.evidence_unified_memory.create_unified_memory_dump_session.
+    # All other intake categories ignore these fields and take the
+    # unchanged legacy byte-offset path.
+    intake_category: str | None = None
+    host_id: str | None = None
+    provided_host: str | None = None
+    memory_authorization_acknowledged: bool = False
+    notes: str | None = None
 
 
 class EvidenceUploadSessionAppendResponse(BaseModel):

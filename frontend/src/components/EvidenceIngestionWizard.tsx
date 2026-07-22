@@ -88,6 +88,16 @@ function inspectionErrorMessage(error: unknown): string {
   return "Kairon could not inspect this evidence.";
 }
 
+async function sha256Hex(blob: Blob): Promise<string | undefined> {
+  try {
+    if (typeof globalThis.crypto?.subtle?.digest !== "function") return undefined;
+    const digest = await globalThis.crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
+    return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+  } catch {
+    return undefined;
+  }
+}
+
 function evidenceSessionUploadStatus(session: EvidenceUploadSessionRead, file: File, chunkSize: number): MemoryUploadStatus {
   const bytesReceived = Math.max(0, Math.min(file.size, session.bytes_received || 0));
   const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
@@ -163,6 +173,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     enabled: open && Boolean(caseId),
     staleTime: 10_000,
   });
+  const unifiedMemoryDumpEnabled = Boolean(healthQuery.data?.unified_upload_evidence_memory_dump);
+  const useUnifiedMemoryDump = intakeType === "memory_dump" && unifiedMemoryDumpEnabled;
   const restoreSessionQuery = useQuery({
     queryKey: ["evidence-upload-session", caseId, resumeSessionId],
     queryFn: () => api.getEvidenceUploadSession(caseId, resumeSessionId || ""),
@@ -265,6 +277,70 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     throw new Error(result.type === "failed" ? result.message : latestSession.failure_message || "Upload failed.");
   }
 
+  // Feature-flagged (UNIFIED_UPLOAD_EVIDENCE_MEMORY_DUMP): routes the actual
+  // byte transfer through the same chunk-index protocol, concurrency, and
+  // finalize lifecycle Memory Overview uses (see runResumableUpload and
+  // app.services.evidence_unified_memory on the backend), instead of the
+  // legacy sequential PUT .../bytes?offset=N endpoint. Host and
+  // authorization are collected up front (step 3, before this runs) so
+  // finalize can register the Evidence immediately once the transfer
+  // completes -- there is no separate "Start Processing" step for this path.
+  async function uploadUnifiedMemoryDump(file: File, onProgress: (progress: { loaded: number; total: number; lengthComputable: boolean }) => void): Promise<{ evidence: Evidence }> {
+    const hostAssignment = await resolveHostAssignment();
+    const declaredPlatform = platform === "auto" ? undefined : platform;
+    const created = await api.createResumableEvidenceUploadSession(caseId, {
+      filename: file.name,
+      expected_size_bytes: file.size,
+      declared_platform: declaredPlatform,
+      client_sha256: clientSha256 ?? undefined,
+      intake_category: "memory_dump",
+      host_id: hostAssignment.host_id,
+      provided_host: hostAssignment.provided_host,
+      memory_authorization_acknowledged: memoryAuthorizationAcknowledged,
+      notes: notes.trim() || undefined,
+    });
+    if (!created.unified) {
+      throw new Error("Kairon could not start a unified memory upload session for this file.");
+    }
+    setSession(created.session);
+    const { memory_upload_id, chunk_size_bytes, default_concurrency, max_concurrency } = created.unified;
+    const controller = new AbortController();
+    setInspectionState("uploading");
+    const result = await runResumableUpload({
+      uploadId: memory_upload_id,
+      file,
+      chunkSize: chunk_size_bytes || DEFAULT_CHUNK_SIZE,
+      getStatus: (uploadId) => api.getMemoryUploadStatus(caseId, uploadId),
+      uploadChunk: async (uploadId, chunkIndex, blob, signal, uploadProgress) => {
+        const chunkSha256 = await sha256Hex(blob);
+        return api.uploadMemoryUploadChunk(caseId, uploadId, chunkIndex, blob, { chunkSha256, signal, onProgress: uploadProgress });
+      },
+      finalize: (uploadId) => {
+        setInspectionState("finalizing_upload");
+        return api.finalizeMemoryUpload(caseId, uploadId);
+      },
+      signal: controller.signal,
+      onProgress: (progress) => onProgress({ loaded: progress.loaded, total: progress.total, lengthComputable: true }),
+      concurrency: default_concurrency,
+      maxConcurrency: max_concurrency,
+    });
+    if (result.type === "aborted") throw new Error("Upload aborted");
+    if (result.type === "stalled") throw new Error("Upload paused because the server did not acknowledge the last chunk. Resume the upload to continue.");
+    if (result.type === "failed") throw new Error(result.message);
+
+    setInspectionState("preflight_running");
+    const finalStatus = await api.getEvidenceUploadSession(caseId, created.session.id);
+    setSession(finalStatus.session);
+    if (!finalStatus.session.promoted_evidence_id) {
+      throw new Error(finalStatus.session.failure_message || "Upload finished but Kairon did not register the memory evidence. Check Activity Center for details.");
+    }
+    const evidence = await api.getEvidence(finalStatus.session.promoted_evidence_id);
+    promotedRef.current = true;
+    promotedEvidenceRef.current = evidence;
+    setInspectionState("complete");
+    return { evidence };
+  }
+
   const createSessionMutation = useMutation({
     mutationFn: async () => {
       setInspectionError(null);
@@ -282,6 +358,9 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
         setUploadProgress(fraction);
         if (fraction >= 1) setInspectionState("finalizing_upload");
       };
+      if (useUnifiedMemoryDump && !requiresFolderInput && files.length === 1) {
+        return uploadUnifiedMemoryDump(files[0], onProgress);
+      }
       if (!requiresFolderInput && files.length === 1) {
         return uploadSingleFileResumable(files[0], onProgress);
       }
@@ -291,6 +370,18 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       return api.createEvidenceUploadSession(caseId, { file: files[0] }, { declaredPlatform: platform, clientSha256: clientSha256 ?? undefined, onProgress });
     },
     onSuccess: (response) => {
+      if ("evidence" in response) {
+        const { evidence } = response;
+        setUploadProgress(1);
+        setInspectionState("complete");
+        setInspectionError(null);
+        notify({ title: "Memory evidence registered", description: `${evidence.original_filename} was uploaded and registered.`, tone: "success" });
+        void queryClient.invalidateQueries({ queryKey: ["case-processing", caseId] });
+        void queryClient.invalidateQueries({ queryKey: ["evidences", caseId] });
+        handleClose();
+        navigate(`/cases/${caseId}/memory/${evidence.id}`);
+        return;
+      }
       const preflightReport = normalizePreflightReport(response.preflight);
       setSession(response.session);
       setPreflight(preflightReport);
@@ -437,11 +528,15 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const hostStepBlockingReason = useMemo(() => {
     if (!memoryRequiresExplicitHost) return null;
     if (hostChoice === CREATE_HOST_CHOICE) {
-      return newHostName.trim() ? null : "Enter a source host name for this memory evidence.";
+      if (!newHostName.trim()) return "Enter a source host name for this memory evidence.";
+    } else if (hostChoice === "auto") {
+      return "Memory evidence requires an explicit source host, matching the legacy memory uploader.";
     }
-    if (hostChoice === "auto") return "Memory evidence requires an explicit source host, matching the legacy memory uploader.";
+    if (useUnifiedMemoryDump && !memoryAuthorizationAcknowledged) {
+      return "Confirm you are authorized to handle this RAM evidence before continuing.";
+    }
     return null;
-  }, [hostChoice, memoryRequiresExplicitHost, newHostName]);
+  }, [hostChoice, memoryAuthorizationAcknowledged, memoryRequiresExplicitHost, newHostName, useUnifiedMemoryDump]);
   const canContinueHostStep = hostStepBlockingReason === null;
 
   const canAdvanceStep4 = useMemo(() => {
@@ -606,6 +701,18 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               <p className="mt-3 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100" data-testid="memory-host-required-message">
                 Memory uploads require a source host before registration. Select an existing host or create one before continuing.
               </p>
+            ) : null}
+            {useUnifiedMemoryDump ? (
+              <div className="mt-4 space-y-3 rounded-2xl border border-line bg-abyss/60 p-4">
+                <label className="flex items-start gap-2 text-sm text-ink">
+                  <input type="checkbox" className="mt-1" checked={memoryAuthorizationAcknowledged} onChange={(event) => setMemoryAuthorizationAcknowledged(event.target.checked)} data-testid="unified-memory-authorization-checkbox" />
+                  I am authorized to handle this RAM evidence and understand it may contain highly sensitive data.
+                </label>
+                <label className="block text-xs text-muted">
+                  Evidence notes (optional)
+                  <textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="mt-1 h-16 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" />
+                </label>
+              </div>
             ) : null}
             <div className="mt-5 flex justify-between">
               <button type="button" onClick={() => setStep(2)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
