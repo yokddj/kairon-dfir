@@ -939,12 +939,13 @@ def list_resumable_upload_sessions(db: Session, *, case_id: str, limit: int = 25
     the analyst for discovery/resume.
 
     Reconciliation for unified sessions is delegated to
-    app.services.evidence_unified_memory.sync_unified_session_from_memory_upload,
-    which re-derives status/progress from the authoritative backing
-    MemoryUpload on every call -- this never trusts a stale
-    EvidenceUploadSession row on its own.
+    app.services.evidence_unified_upload.sync_unified_session, which
+    re-derives status/progress from the authoritative backing MemoryUpload
+    on every call -- this never trusts a stale EvidenceUploadSession row on
+    its own. Works for every category migrated onto the unified backend
+    (memory_dump, disk_image, ...), not just one.
     """
-    from app.services.evidence_unified_memory import is_unified_memory_dump_session, sync_unified_session_from_memory_upload
+    from app.services.evidence_unified_upload import is_unified_session, sync_unified_session
     from app.services.evidence_operations import _is_before_now
     from app.services.memory.upload_lifecycle import get_memory_upload
 
@@ -959,9 +960,9 @@ def list_resumable_upload_sessions(db: Session, *, case_id: str, limit: int = 25
     )
     results: list[EvidenceUploadSession] = []
     for session in candidates:
-        unified = is_unified_memory_dump_session(session)
+        unified = is_unified_session(session)
         if unified:
-            session = sync_unified_session_from_memory_upload(db, session)
+            session = sync_unified_session(db, session)
         else:
             sync_upload_operation(db, session)
 
