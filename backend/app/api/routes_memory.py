@@ -1445,6 +1445,20 @@ def create_memory_upload_session_endpoint(
     payload: MemoryUploadSessionCreateRequest,
     db: Session = Depends(get_db),
 ) -> dict:
+    # Documented single-file-coverage exemption: this is Memory Overview's
+    # own, always-on entry point into the exact same chunk-index engine
+    # (app.services.memory.upload_sessions) the Wizard's unified memory_dump
+    # kind wraps -- it predates that wrapping and is intentionally NOT
+    # gated by UNIFIED_UPLOAD_EVIDENCE_MEMORY_DUMP (that flag only controls
+    # whether the *Wizard's* memory_dump card routes here or to the legacy
+    # byte-offset session). No EvidenceUploadSession row is ever created
+    # for a session started here, so it is invisible to
+    # is_unified_session/sync_unified_session, the Wizard's resume panel,
+    # and Activity Center's EvidenceOperation projection -- it has its own,
+    # separate discovery (GET /memory/uploads/active,
+    # app.services.memory.upload_lifecycle.find_active_memory_upload).
+    # This satisfies "uses the unified chunk-index transport" but not
+    # "is Wizard/Activity-Center visible" -- a real, known gap, not a bug.
     _require_case(db, case_id)
     try:
         item = create_memory_upload_session(
