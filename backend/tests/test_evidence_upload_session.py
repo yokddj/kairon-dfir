@@ -1,11 +1,16 @@
-"""Temporary Upload Session coverage (v2.1 preflight refinement).
+"""Structural evidence intake + single-file legacy-compatibility upload
+session coverage (v2.1 preflight refinement; see the module docstring in
+app.services.evidence_upload_session for the current two-purpose split).
 
 Exercises app.services.evidence_upload_session (stage once, inspect,
 promote without retransmitting bytes) and the corresponding API routes in
-app.api.routes_evidence_preflight, verifying: sessions expire and clean up,
-cancel cleans up immediately, promotion reuses the exact staged bytes and
-its precomputed SHA-256 (no duplicate upload, no duplicate hash), and
-nothing is enqueued/created until promotion is explicitly confirmed.
+app.api.routes_evidence_preflight, verifying: sessions expire and clean up
+(via app.services.evidence_operations.reconcile_evidence_operations, the
+only expiry-sweep mechanism -- a since-removed dead function used to be a
+second one), cancel cleans up immediately, promotion reuses the exact
+staged bytes and its precomputed SHA-256 (no duplicate upload, no duplicate
+hash), and nothing is enqueued/created until promotion is explicitly
+confirmed.
 """
 from __future__ import annotations
 
@@ -34,6 +39,7 @@ from app.models.evidence import Evidence
 from app.models.evidence_operation import EvidenceOperation, EvidenceOperationJob
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
 from app.models.memory import MemoryUpload
+from app.services.evidence_unified_upload import is_unified_session
 from app.services.memory.upload_sessions import (
     create_memory_upload_session,
     finalize_memory_upload_session,
@@ -45,7 +51,6 @@ from app.services.evidence_upload_session import (
     append_resumable_upload_chunk,
     append_resumable_upload_chunk_stream,
     cancel_upload_session,
-    cleanup_expired_upload_sessions,
     create_resumable_upload_session,
     create_upload_session,
     finalize_resumable_upload_session,
@@ -233,10 +238,15 @@ def test_reconciliation_cleans_storage_for_sessions_expired_mid_upload(tmp_path,
     # Regression test for a production storage leak: a session abandoned
     # while `uploading` (never reaches `staged`) previously had its DB row
     # flipped to `expired` by reconcile_evidence_operations without ever
-    # cleaning its staged bytes - only cleanup_expired_upload_sessions()
-    # cleaned storage, and only for sessions that were `staged`. Several
-    # GB of orphaned-but-DB-tracked staging directories were found on the
-    # production server from exactly this gap.
+    # cleaning its staged bytes - a since-removed function
+    # (cleanup_expired_upload_sessions, deleted as dead code -- it had zero
+    # production callers) cleaned storage, but only for sessions that were
+    # already `staged`. Several GB of orphaned-but-DB-tracked staging
+    # directories were found on the production server from exactly this
+    # gap. reconcile_evidence_operations is now the ONLY expiry-cleanup
+    # path and must keep covering every non-terminal status, not just
+    # `staged` -- see test_expired_sessions_are_cleaned_up_by_sweep below
+    # for the `staged` case.
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
     db = _db()
@@ -519,7 +529,13 @@ def test_cancel_cleans_up_staged_file_immediately(tmp_path, monkeypatch):
     assert not staged_path.exists()
 
 
-def test_expired_sessions_are_cleaned_up_by_sweep(tmp_path, monkeypatch):
+def test_expired_staged_sessions_are_cleaned_up_by_reconciliation(tmp_path, monkeypatch):
+    # A `staged` (preflight already ran, awaiting analyst confirmation)
+    # session expiring is covered by the same reconcile_evidence_operations
+    # sweep as `created`/`uploading`/`interrupted` (see
+    # test_reconciliation_cleans_storage_for_sessions_expired_mid_upload) --
+    # there is deliberately no separate `staged`-only cleanup function
+    # anymore (cleanup_expired_upload_sessions was deleted as dead code).
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     db = _db()
     _case(db)
@@ -527,16 +543,28 @@ def test_expired_sessions_are_cleaned_up_by_sweep(tmp_path, monkeypatch):
     _make_zip(zip_path)
     session, _ = create_upload_session(db, CASE_ID, files=[_upload_file(zip_path)], declared_platform=None, client_sha256=None)
     staged_path = Path(session.staged_path)
+    assert session.status == EvidenceUploadSessionStatus.staged.value
 
     session.expires_at = utc_now() - timedelta(seconds=1)
     db.add(session)
     db.commit()
 
-    result = cleanup_expired_upload_sessions(db)
+    reconcile_evidence_operations(db)
 
-    assert result["expired"] == 1
     assert db.get(EvidenceUploadSession, session.id).status == EvidenceUploadSessionStatus.expired.value
     assert not staged_path.exists()
+
+
+def test_cleanup_expired_upload_sessions_and_build_session_from_staged_are_gone():
+    # Regression guard: both functions were proven dead (zero production
+    # callers -- see the legacy-backend audit) and deleted. If either
+    # reappears without deliberate intent, this fails loudly instead of a
+    # future PR silently reintroducing a second, competing expiry-sweep
+    # mechanism alongside reconcile_evidence_operations.
+    import app.services.evidence_upload_session as module
+
+    assert not hasattr(module, "cleanup_expired_upload_sessions")
+    assert not hasattr(module, "_build_session_from_staged")
 
 
 def test_get_active_session_rejects_wrong_case_or_terminal_status(tmp_path, monkeypatch):
@@ -964,6 +992,12 @@ def test_promote_disk_image_with_multiple_segments_passes_all_segments_in_order(
     session.metadata_json = {**(session.metadata_json or {}), "category": "disk_image"}
     db.add(session)
     db.commit()
+    # Structural intake invariant: multiple files always route through
+    # create_upload_session's multi-file branch, which never touches
+    # UNIFIED_UPLOAD_KINDS -- multi-segment disk_image stays on structural
+    # intake regardless of UNIFIED_UPLOAD_EVIDENCE_DISK_IMAGE, which only
+    # gates the single-file Wizard path (see routes_evidence_preflight.init_resumable_evidence_upload).
+    assert not is_unified_session(session)
     extra_segment_path = Path(session.metadata_json["extra_segments"][0]["path"])
     staged_primary_path = Path(session.staged_path)
     assert extra_segment_path.read_bytes() == b"segment-two-bytes"
@@ -1011,6 +1045,12 @@ def test_promote_folder_session(tmp_path, monkeypatch):
     ]
     session, report = create_upload_session(db, CASE_ID, files=files, is_folder=True, declared_platform=None, client_sha256=None)
     assert session.is_folder is True
+    # Structural intake invariant: create_upload_session's folder branch
+    # never touches UNIFIED_UPLOAD_KINDS at all -- there is no code path by
+    # which a folder session becomes unified-backed, by construction, not
+    # just by convention. Folder stays on structural intake permanently
+    # (no single-file chunk-index protocol models multiple files).
+    assert not is_unified_session(session)
 
     evidence = promote_upload_session(
         db, session,
@@ -1042,6 +1082,13 @@ def test_promote_server_path_session_never_deletes_original(tmp_path, monkeypatc
     _case(db)
     session, report = create_upload_session(db, CASE_ID, server_path=str(zip_path), declared_platform=None, client_sha256=None)
     assert session.is_server_path is True
+    # server_path is not an upload transport at all -- staging only
+    # validates and records the already-on-disk path (see _hash_existing_file),
+    # transfers zero client bytes, and is never unified-backed. It is
+    # therefore not a blocker to retiring the legacy byte-offset *transfer*
+    # protocol; it has nothing to do with byte transfer to begin with.
+    assert not is_unified_session(session)
+    assert session.size_bytes == zip_path.stat().st_size  # staged in-place, not copied/received
 
     evidence = promote_upload_session(
         db, session,

@@ -1,18 +1,39 @@
-"""Temporary Upload Session for the ingestion wizard.
+"""Structural evidence intake + single-file legacy-compatibility upload
+session for the ingestion wizard.
 
-Stages an evidence file once, runs Preflight Inspection against the staged
-copy (possibly more than once, e.g. after a platform override), and - only
-once the analyst confirms Start Processing - promotes the session into a
-real Evidence by routing to the same canonical backend path used by each
-evidence type. The browser never re-transmits the file for promotion.
+As of the archive migration (three single-file categories -- memory_dump,
+single-file disk_image, single-file archive -- now on the unified
+chunk-index backend, see app.services.evidence_unified_upload), this module
+is no longer "the legacy upload backend" in general. It now serves two
+architecturally distinct purposes that happen to share one session model
+and one promote() bridge:
 
-Generic evidence and disk images still delegate to the existing upload route
-functions. Memory dumps delegate to app.services.memory.upload_sessions so the
-wizard shares the same canonical registration lifecycle as the memory upload UI.
+1. Structural evidence intake -- folder uploads, server_path (already-on-disk
+   registration, never a byte transfer at all -- see register_evidence_path
+   in routes_evidence.py), and multi-segment disk images (.E01+.E02...).
+   These have no single-file equivalent to converge onto: the unified
+   backend's chunk-index protocol models exactly one file per session, and
+   these three categories are multi-object by nature. This is the permanent,
+   long-term home for this code -- see the architecture note in
+   promote_upload_session for the full classification.
 
-Sessions expire automatically (EVIDENCE_UPLOAD_SESSION_TTL_SECONDS) and are
-cleaned up by cleanup_expired_upload_sessions(), mirroring the same expiry
-pattern used by MemoryUpload sessions.
+2. Single-file legacy compatibility -- any single file NOT yet (or never)
+   migrated to a unified kind (e.g. a lone .csv/.evtx/.json/.log uploaded
+   under the Wizard's "Artifact Collection" card) still stages, runs
+   Preflight Inspection, and -- once the analyst confirms Start Processing --
+   promotes via promote_upload_session, routing to the same canonical
+   registration functions (upload_evidence, upload_disk_image,
+   upload_evidence_folder, register_evidence_path) used before any unified
+   migration existed. This half is expected to shrink as more single-file
+   categories migrate, not grow.
+
+Sessions expire automatically (EVIDENCE_UPLOAD_SESSION_TTL_SECONDS).
+Expiry-driven cleanup for staged-but-abandoned sessions happens through
+app.services.evidence_operations.reconcile_evidence_operations (called on
+every Activity Center fetch and at startup) -- NOT through any function in
+this module; an earlier same-purpose function here
+(cleanup_expired_upload_sessions) was dead code with zero production
+callers and was removed.
 """
 from __future__ import annotations
 
@@ -161,56 +182,6 @@ def _preupload_storage_check(*, session_id: str, expected_bytes: int | None, tem
         available_bytes=available,
     )
     return available
-
-
-def _build_session_from_staged(
-    db: Session,
-    *,
-    case_id: str,
-    session_id: str,
-    staged: _StagedFile,
-    original_filename: str,
-    is_folder: bool,
-    is_server_path: bool,
-    declared_platform: str | None,
-    client_sha256: str | None,
-    metadata: dict[str, Any] | None = None,
-) -> EvidenceUploadSession:
-    settings = get_settings()
-    expires_at = utc_now() + timedelta(seconds=max(60, int(settings.evidence_upload_session_ttl_seconds)))
-    session = EvidenceUploadSession(
-        id=session_id,
-        case_id=case_id,
-        status=EvidenceUploadSessionStatus.staged.value,
-        original_filename=original_filename,
-        staged_path=str(staged.path),
-        is_folder=is_folder,
-        is_server_path=is_server_path,
-        size_bytes=staged.size_bytes,
-        sha256=staged.sha256,
-        client_sha256=client_sha256,
-        declared_platform=declared_platform,
-        expires_at=expires_at,
-        metadata_json=metadata or {},
-    )
-    if client_sha256 and session.sha256 and client_sha256.strip().lower() != session.sha256.lower():
-        session.metadata_json = {**(session.metadata_json or {}), "client_sha256_mismatch": True}
-
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-
-    report = run_preflight(
-        Path(session.staged_path),
-        token=session.id,
-        original_filename=session.original_filename,
-        declared_platform=declared_platform,
-        tmp_dir=_session_root(session_id) / "scratch",
-    )
-    session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category}
-    db.add(session)
-    db.commit()
-    return session, report
 
 
 def _touch_upload_session(session: EvidenceUploadSession) -> None:
@@ -996,25 +967,6 @@ def cancel_upload_session(db: Session, session: EvidenceUploadSession) -> None:
     sync_upload_operation(db, session)
 
 
-def cleanup_expired_upload_sessions(db: Session, *, limit: int = 50) -> dict[str, int]:
-    now = utc_now()
-    expired = (
-        db.query(EvidenceUploadSession)
-        .filter(EvidenceUploadSession.status == EvidenceUploadSessionStatus.staged.value, EvidenceUploadSession.expires_at < now)
-        .order_by(EvidenceUploadSession.expires_at.asc())
-        .limit(limit)
-        .all()
-    )
-    for item in expired:
-        _cleanup_storage(item)
-        item.status = EvidenceUploadSessionStatus.expired.value
-        item.failure_message = "Upload session expired before processing was confirmed."
-        db.add(item)
-        sync_upload_operation(db, item, commit=False)
-    db.commit()
-    return {"expired": len(expired)}
-
-
 class _StagedUploadFile(UploadFile):
     """An UploadFile wrapping bytes already staged on local disk, so
     save_upload() (app.core.storage) can move rather than re-copy-and-hash
@@ -1045,6 +997,38 @@ def promote_upload_session(
     notes: str | None,
     current_user: Any,
 ) -> Evidence:
+    """The shared bridge from a staged legacy session to a real Evidence
+    row -- one function serving four architecturally distinct intake
+    kinds, dispatched in this order:
+
+    1. session.is_server_path -> register_evidence_path. Not a byte
+       transfer at all (structural intake): the file was already on disk;
+       staging only validated and recorded the path.
+    2. session.is_folder -> upload_evidence_folder. Structural intake
+       (multi-file); no single-file protocol models this.
+    3. Single file, metadata_json["category"] (preflight-classified, NOT
+       the Wizard card the analyst clicked) == "disk_image" ->
+       upload_disk_image with every staged segment in order. Structural
+       intake ONLY when there is more than one segment (.E01+.E02...);
+       the single-segment case is legacy-compatibility overlap with the
+       unified disk_image kind (same category value, different backend,
+       chosen at session-creation time by whether the flag was on and
+       exactly one file was selected).
+    4. category == "memory_dump" -> bridges into
+       app.services.memory.upload_sessions (create_memory_upload_session_from_staged_file
+       + finalize_memory_upload_session) for the SAME canonical
+       registration lifecycle the unified memory_dump kind and Memory
+       Overview use, just reached via a legacy byte-offset transfer
+       instead of chunk-index. Legacy-compatibility overlap, not
+       structural intake -- there is nothing structurally different about
+       a memory image here.
+    5. Anything else (bare else) -> upload_evidence. Single-file legacy
+       compatibility: any file not covered by a migrated unified kind
+       (currently: any non-archive single file, or archive when
+       UNIFIED_UPLOAD_EVIDENCE_ARCHIVE is off) reaches here. This is the
+       one branch expected to shrink as more single-file categories
+       migrate, not grow.
+    """
     from app.api.routes_evidence import RegisterPathRequest, _actor_label, _current_user_id, register_evidence_path, upload_disk_image, upload_evidence, upload_evidence_folder
     from app.models.evidence import EvidenceType
     from app.services.host_resolution import assign_evidence_host as service_assign_evidence_host, resolve_host
@@ -1184,6 +1168,19 @@ def promote_upload_session(
                             host_created=host_resolution.created,
                         )
                 else:
+                    # Documented single-file-coverage exemption: any single
+                    # file that is neither disk_image nor memory_dump by
+                    # preflight classification, AND was not eligible for
+                    # (or the flag was off for) the unified "archive" kind
+                    # at session-creation time, reaches here on the legacy
+                    # byte-offset transport -- e.g. a lone .csv/.evtx/.json/
+                    # .log/parsed-tool-output file selected under the
+                    # Wizard's "Artifact Collection" card. This is a real,
+                    # currently-uncovered gap against the "every eligible
+                    # single-file upload uses the unified backend" target
+                    # invariant, not a bug: no unified kind for arbitrary
+                    # single files exists yet. See the archive migration's
+                    # single-file coverage audit for the full matrix.
                     evidence = upload_evidence(
                         case_id,
                         upload,
