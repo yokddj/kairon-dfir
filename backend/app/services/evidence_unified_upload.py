@@ -1,19 +1,22 @@
-"""Unified chunk-index upload path for the Evidence Wizard's memory_dump
-intake (feature-flagged: ``settings.unified_upload_evidence_memory_dump``).
+"""Unified chunk-index upload path for the Evidence Wizard, shared by every
+evidence category migrated onto it (memory_dump first, disk_image next --
+see app.services.memory.upload_sessions.ChunkedUploadKindPolicy for how a
+category plugs in).
 
 Why this exists: the wizard's own upload session model
 (``app.services.evidence_upload_session``) is a single-shot, sequential
 byte-offset transfer. Memory Overview's model
 (``app.services.memory.upload_sessions``) is a mature chunk-index,
 parallel, resumable transfer with per-chunk locks and a received-chunk
-bitmap. The wizard's memory_dump branch previously only bridged the two
-AFTER a full sequential transfer completed (see
-``evidence_upload_session.promote_upload_session``'s
-``create_memory_upload_session_from_staged_file`` call) -- it never used
-the chunk-index protocol for the transfer itself.
+bitmap. Before the memory_dump migration, the Wizard's memory_dump branch
+only bridged the two AFTER a full sequential transfer completed -- it
+never used the chunk-index protocol for the transfer itself.
 
-This module creates the real chunk-index ``MemoryUpload`` session up
-front, at Wizard upload-init time, and keeps the Wizard's own
+This module creates the real chunk-index ``MemoryUpload`` session (the
+table name is a legacy artifact -- functionally it is now a generic
+chunked-upload-session row, see the roadmap note in
+``app.services.memory.upload_lifecycle.create_memory_upload``) up front,
+at Wizard upload-init time, and keeps the Wizard's own
 ``EvidenceUploadSession`` row (which Activity Center and the rest of the
 Wizard API already key off of) as a thin, continuously-synced projection
 of it. The frontend drives the actual transfer against the same
@@ -24,7 +27,8 @@ returned at init.
 Ownership is fixed at creation: a session created here always carries
 ``metadata_json["backend"] == "unified"`` and a ``memory_upload_id`` that
 never changes. Nothing in this module ever routes an unmodified legacy
-session through the unified path, or vice versa.
+session through the unified path, or vice versa. This holds regardless of
+which ``kind`` (evidence category) the session was created for.
 """
 from __future__ import annotations
 
@@ -42,6 +46,7 @@ from app.models.case import Case
 from app.models.evidence import EvidenceType
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
 from app.models.memory import MemoryUpload
+from app.services import evidence_disk_image_workflow  # noqa: F401 -- registers the "disk_image" workflow handler on import
 from app.services import evidence_memory_workflow  # noqa: F401 -- registers the "evidence_memory_dump" workflow handler on import
 from app.services.evidence_operations import sync_upload_operation
 from app.services.evidence_upload_session import UploadSessionError
@@ -54,7 +59,40 @@ from app.services.memory.upload_sessions import (
 )
 
 UNIFIED_BACKEND_MARKER = "unified"
-UNIFIED_MEMORY_DUMP_KIND = "memory_dump"
+
+
+@dataclass(frozen=True)
+class UnifiedUploadKindConfig:
+    """Registry entry for a category migrated onto the unified backend.
+
+    Adding a category here (and a matching ChunkedUploadKindPolicy in
+    app.services.memory.upload_sessions) is the whole integration point --
+    routes_evidence_preflight.init_resumable_evidence_upload dispatches
+    off this table instead of an if/else per category."""
+
+    workflow: str
+    evidence_type: "EvidenceType"
+    is_enabled: Any  # Callable[[Settings], bool]
+    # memory_dump canonicalizes to a fixed "memory-image{ext}" name (its
+    # original behavior, unchanged); disk_image and anything else where the
+    # original filename matters for downstream tooling (format/companion
+    # detection scans the canonical directory by filename pattern) needs it
+    # preserved instead -- see app.services.memory.upload_lifecycle.create_memory_upload.
+    preserve_original_filename: bool = False
+
+
+def _memory_dump_enabled(settings: Any) -> bool:
+    return bool(settings.unified_upload_evidence_memory_dump)
+
+
+def _disk_image_enabled(settings: Any) -> bool:
+    return bool(settings.unified_upload_evidence_disk_image)
+
+
+UNIFIED_UPLOAD_KINDS: dict[str, UnifiedUploadKindConfig] = {
+    "memory_dump": UnifiedUploadKindConfig(workflow="evidence_memory_dump", evidence_type=EvidenceType.memory_dump, is_enabled=_memory_dump_enabled),
+    "disk_image": UnifiedUploadKindConfig(workflow="disk_image", evidence_type=EvidenceType.disk_image, is_enabled=_disk_image_enabled, preserve_original_filename=True),
+}
 
 # Coarse projection of MemoryUpload's granular status onto the Wizard's
 # existing EvidenceUploadSessionStatus enum, so Activity Center's
@@ -85,9 +123,18 @@ class UnifiedUploadInfo:
     max_concurrency: int
 
 
-def is_unified_memory_dump_session(session: EvidenceUploadSession) -> bool:
+def is_unified_session(session: EvidenceUploadSession, *, kind: str | None = None) -> bool:
+    """True if this session uses the unified chunk-index backend.
+
+    Pass ``kind`` (e.g. "memory_dump", "disk_image") to check for a
+    specific category; omit it to match any unified session regardless of
+    category (used by discovery/reconciliation, which are category-agnostic
+    by design).
+    """
     metadata = session.metadata_json or {}
-    return metadata.get("backend") == UNIFIED_BACKEND_MARKER and metadata.get("unified_kind") == UNIFIED_MEMORY_DUMP_KIND
+    if metadata.get("backend") != UNIFIED_BACKEND_MARKER:
+        return False
+    return kind is None or metadata.get("unified_kind") == kind
 
 
 def unified_upload_info(session: EvidenceUploadSession, db: Session) -> UnifiedUploadInfo | None:
@@ -169,29 +216,48 @@ def unified_resume_info(session: EvidenceUploadSession, db: Session) -> UnifiedR
     )
 
 
-def create_unified_memory_dump_session(
+def create_unified_upload_session(
     db: Session,
     case_id: str,
     *,
+    kind: str,
+    workflow: str,
+    evidence_type: EvidenceType,
     filename: str,
     expected_size_bytes: int,
     declared_platform: str | None,
     client_sha256: str | None,
     host_id: str | None,
     provided_host: str | None,
-    memory_authorization_acknowledged: bool,
+    authorization_acknowledged: bool,
     notes: str | None,
     current_user: Any,
+    canonical_filename: str | None = None,
 ) -> tuple[EvidenceUploadSession, UnifiedUploadInfo]:
+    """Create a unified chunk-index session for any migrated category.
+
+    ``kind`` is the wizard-facing category string (matches
+    ``EvidenceUploadSessionInitRequest.intake_category``, stored as
+    ``metadata_json["unified_kind"]``, and read back by ``is_unified_session``).
+    ``workflow`` is the registry name ``finalize_memory_upload_session``
+    resolves at finalize time (fixed forever once the session is created --
+    see ``app.services.memory.upload_sessions.finalize_memory_upload_session``'s
+    ``_register()``). ``evidence_type`` drives host-resolution policy only.
+    """
     if not db.get(Case, case_id):
         raise UploadSessionError("case_not_found", "Case not found")
+
+    if canonical_filename is None:
+        kind_config = UNIFIED_UPLOAD_KINDS.get(kind)
+        if kind_config is not None and kind_config.preserve_original_filename:
+            canonical_filename = Path(filename or "upload.bin").name
 
     from app.api.routes_evidence import _current_user_id  # actor-id helper only, not a route function
 
     host_resolution = resolve_host(
         db,
         case_id=case_id,
-        evidence_type=EvidenceType.memory_dump,
+        evidence_type=evidence_type,
         host_id=host_id,
         provided_host=provided_host,
         allow_create=True,
@@ -199,7 +265,7 @@ def create_unified_memory_dump_session(
     resolved_host_label = (host_resolution.display_name or provided_host or "").strip() or "Unknown host"
 
     extra_metadata: dict[str, Any] = {
-        "workflow": "evidence_memory_dump",
+        "workflow": workflow,
         "provided_platform": declared_platform,
         "uploaded_by_user_id": _current_user_id(current_user),
         "wizard_notes": (notes or "").strip() or None,
@@ -217,10 +283,12 @@ def create_unified_memory_dump_session(
         filename=filename,
         expected_size_bytes=expected_size_bytes,
         provided_host=resolved_host_label,
-        authorization_acknowledged=memory_authorization_acknowledged,
+        authorization_acknowledged=authorization_acknowledged,
         expected_sha256=client_sha256,
         upload_mode="resumable",
         extra_metadata=extra_metadata,
+        kind=kind,
+        canonical_filename=canonical_filename,
     )
 
     settings = get_settings()
@@ -241,9 +309,9 @@ def create_unified_memory_dump_session(
         last_activity_at=utc_now(),
         metadata_json={
             "backend": UNIFIED_BACKEND_MARKER,
-            "unified_kind": UNIFIED_MEMORY_DUMP_KIND,
+            "unified_kind": kind,
             "memory_upload_id": memory_upload.id,
-            "category": "memory_dump",
+            "category": kind,
             "current_stage": "upload",
             "upload_mode": "resumable",
         },
@@ -258,7 +326,7 @@ def create_unified_memory_dump_session(
     return session, info
 
 
-def sync_unified_session_from_memory_upload(db: Session, session: EvidenceUploadSession) -> EvidenceUploadSession:
+def sync_unified_session(db: Session, session: EvidenceUploadSession) -> EvidenceUploadSession:
     memory_upload_id = (session.metadata_json or {}).get("memory_upload_id")
     if not memory_upload_id:
         return session
@@ -304,7 +372,7 @@ def sync_unified_session_from_memory_upload(db: Session, session: EvidenceUpload
     return session
 
 
-def cancel_unified_memory_dump_session(db: Session, session: EvidenceUploadSession) -> EvidenceUploadSession:
+def cancel_unified_session(db: Session, session: EvidenceUploadSession) -> EvidenceUploadSession:
     memory_upload_id = (session.metadata_json or {}).get("memory_upload_id")
     if memory_upload_id:
         try:

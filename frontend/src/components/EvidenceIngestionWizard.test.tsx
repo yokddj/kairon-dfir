@@ -900,3 +900,121 @@ describe("EvidenceIngestionWizard resumable upload discovery", () => {
     await waitFor(() => expect(cancelEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "resume-session-1"));
   });
 });
+
+describe("EvidenceIngestionWizard unified disk_image uploads", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navigateMock.mockReset();
+    getCaseHostsMock.mockResolvedValue({ hosts: [{ id: "host-1", display_name: "WS-01" }] });
+    getIngestionReadinessMock.mockResolvedValue(readyHealth({ unified_upload_evidence_disk_image: true }));
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [] });
+  });
+
+  it("routes a single disk image file through the unified chunk-index transport and kicks off recommended indexing", async () => {
+    const payload = new Uint8Array(24).fill(7);
+    createResumableEvidenceUploadSessionMock.mockResolvedValue({
+      session: { ...sessionResponse().session, id: "disk-session-1", status: "created", original_filename: "image.raw", size_bytes: 24, category: "disk_image", backend: "unified" },
+      health: readyHealth({ unified_upload_evidence_disk_image: true }),
+      unified: { memory_upload_id: "disk-upload-1", chunk_size_bytes: 32, total_chunks: 1, default_concurrency: 2, max_concurrency: 4 },
+    });
+    // Stateful, like the resumable-discovery tests above: runResumableUpload's
+    // own stall watchdog compares missing-chunk counts across polls, so a
+    // fixed getStatus() response that never reflects the chunk that was just
+    // uploaded reads as "no progress" and trips a false stall failure.
+    const receivedChunks = new Set<number>();
+    const statusFor = () => ({
+      upload_id: "disk-upload-1", case_id: "case-1", evidence_id: null, status: "uploading",
+      bytes_received: receivedChunks.size * 24, expected_bytes: 24, chunk_size_bytes: 32, total_chunks: 1,
+      received_chunks: Array.from(receivedChunks).sort(), missing_chunks: [0].filter((i) => !receivedChunks.has(i)),
+      filename: "image.raw", updated_at: new Date().toISOString(), failure_code: null, failure_message: null, message: "", retryable: true,
+    });
+    getMemoryUploadStatusMock.mockImplementation(async () => statusFor());
+    uploadMemoryUploadChunkMock.mockImplementation(async (_caseId: string, _uploadId: string, chunkIndex: number) => {
+      receivedChunks.add(chunkIndex);
+      return statusFor();
+    });
+    finalizeMemoryUploadMock.mockResolvedValue({
+      upload_id: "disk-upload-1", case_id: "case-1", evidence_id: "evidence-disk-1", status: "completed",
+      bytes_received: 24, expected_bytes: 24, chunk_size_bytes: 32, total_chunks: 1,
+      received_chunks: [0], missing_chunks: [], filename: "image.raw", updated_at: new Date().toISOString(),
+      failure_code: null, failure_message: null, message: "", retryable: false,
+    });
+    getEvidenceUploadSessionMock.mockResolvedValue({
+      session: { ...sessionResponse().session, id: "disk-session-1", status: "promoted", promoted_evidence_id: "evidence-disk-1", category: "disk_image", backend: "unified" },
+      health: null,
+      unified: null,
+    });
+    getEvidenceMock.mockResolvedValue({ id: "evidence-disk-1", original_filename: "image.raw", evidence_type: "disk_image" });
+    runEvidenceIndexingPlanMock.mockResolvedValue({ accepted: true, evidence_id: "evidence-disk-1", profile: "recommended", run_id: "plan-disk-1", status: "queued", queued_jobs: [{ step_id: "raw_disk_image", run_id: "job-1", status: "queued" }], plan: { run_id: "plan-disk-1", profile: "recommended", status: "queued", steps: [], excluded: [], queued_jobs: [] } });
+
+    renderWizard();
+    await goToFileStep(/Disk Image/);
+    const file = new File([payload], "image.raw");
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    expect(createResumableEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", expect.objectContaining({ filename: "image.raw", intake_category: "disk_image" }));
+    await waitFor(() => expect(uploadMemoryUploadChunkMock).toHaveBeenCalledWith("case-1", "disk-upload-1", 0, expect.anything(), expect.anything()));
+    await waitFor(() => expect(finalizeMemoryUploadMock).toHaveBeenCalledWith("case-1", "disk-upload-1"));
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-disk-1", { profile: "recommended" }));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/evidences/evidence-disk-1"));
+  });
+
+  it("keeps a multi-segment disk image selection (files.length > 1) on the legacy staged flow even with the flag enabled", async () => {
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+      preflight: readyReport({ pipeline_preview: ["Disk Image", "Evidence Classification"] }),
+    }));
+    renderWizard();
+    await goToFileStep(/Disk Image/);
+    const files = [new File(["a"], "image.E01"), new File(["b"], "image.E02")];
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, files);
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    await screen.findByTestId("preflight-report");
+    expect(createResumableEvidenceUploadSessionMock).not.toHaveBeenCalled();
+    expect(createEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", { files, folderUpload: false }, expect.objectContaining({}));
+  });
+
+  it("still registers evidence and navigates away even when automatic indexing kickoff fails", async () => {
+    const payload = new Uint8Array(8).fill(9);
+    createResumableEvidenceUploadSessionMock.mockResolvedValue({
+      session: { ...sessionResponse().session, id: "disk-session-2", status: "created", original_filename: "image2.raw", size_bytes: 8, category: "disk_image", backend: "unified" },
+      health: readyHealth({ unified_upload_evidence_disk_image: true }),
+      unified: { memory_upload_id: "disk-upload-2", chunk_size_bytes: 32, total_chunks: 1, default_concurrency: 2, max_concurrency: 4 },
+    });
+    const receivedChunks = new Set<number>();
+    const statusFor = () => ({
+      upload_id: "disk-upload-2", case_id: "case-1", evidence_id: null, status: "uploading",
+      bytes_received: receivedChunks.size * 8, expected_bytes: 8, chunk_size_bytes: 32, total_chunks: 1,
+      received_chunks: Array.from(receivedChunks).sort(), missing_chunks: [0].filter((i) => !receivedChunks.has(i)),
+      filename: "image2.raw", updated_at: new Date().toISOString(), failure_code: null, failure_message: null, message: "", retryable: true,
+    });
+    getMemoryUploadStatusMock.mockImplementation(async () => statusFor());
+    uploadMemoryUploadChunkMock.mockImplementation(async (_caseId: string, _uploadId: string, chunkIndex: number) => {
+      receivedChunks.add(chunkIndex);
+      return statusFor();
+    });
+    finalizeMemoryUploadMock.mockResolvedValue({
+      upload_id: "disk-upload-2", case_id: "case-1", evidence_id: "evidence-disk-2", status: "completed",
+      bytes_received: 8, expected_bytes: 8, chunk_size_bytes: 32, total_chunks: 1,
+      received_chunks: [0], missing_chunks: [], filename: "image2.raw", updated_at: new Date().toISOString(),
+      failure_code: null, failure_message: null, message: "", retryable: false,
+    });
+    getEvidenceUploadSessionMock.mockResolvedValue({
+      session: { ...sessionResponse().session, id: "disk-session-2", status: "promoted", promoted_evidence_id: "evidence-disk-2", category: "disk_image", backend: "unified" },
+      health: null,
+      unified: null,
+    });
+    getEvidenceMock.mockResolvedValue({ id: "evidence-disk-2", original_filename: "image2.raw", evidence_type: "disk_image" });
+    runEvidenceIndexingPlanMock.mockRejectedValue(new Error("worker unavailable"));
+
+    renderWizard();
+    await goToFileStep(/Disk Image/);
+    const file = new File([payload], "image2.raw");
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-disk-2", { profile: "recommended" }));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/evidences/evidence-disk-2"));
+  });
+});

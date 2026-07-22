@@ -8,9 +8,10 @@ import os
 import shutil
 import time
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, AsyncIterable, Iterable, Mapping
+from typing import Any, AsyncIterable, Callable, Iterable, Mapping
 from uuid import uuid4
 
 from fastapi import Request, UploadFile
@@ -240,6 +241,56 @@ def _touch_session(item: MemoryUpload) -> None:
     item.expires_at = now + timedelta(seconds=ttl)
 
 
+@dataclass(frozen=True)
+class ChunkedUploadKindPolicy:
+    """Per-evidence-category rules for the shared chunk-index session
+    bootstrap. Registry-driven on purpose: a category migrating onto the
+    unified backend (memory_dump today, disk_image next, more later) plugs
+    a policy in here instead of adding another if/else branch to
+    create_memory_upload_session -- see app.services.evidence_unified_upload
+    for the session-creation/reconciliation layer this feeds."""
+
+    is_enabled: Callable[[Any], bool]
+    disabled_error: tuple[str, str]
+    requires_authorization_ack: bool
+    max_bytes: Callable[[Any], int]
+    validate_extension: Callable[[str], str]
+    quota_evidence_type: str | None  # Evidence.evidence_type value to sum for a case-quota check; None = no case-quota policy exists for this kind
+
+
+def _disk_image_extension(filename: str) -> str:
+    # Disk image format (RAW vs EWF vs unsupported) can only be determined
+    # by reading file bytes, not the filename -- app.disk_images.service's
+    # detect_disk_image_format validates it after the chunk-index transfer
+    # finalizes, matching how the legacy upload_disk_image route also only
+    # validates format post-transfer, never from the filename alone.
+    return Path(filename).suffix.lower()
+
+
+_KIND_POLICIES: dict[str, ChunkedUploadKindPolicy] = {
+    "memory_dump": ChunkedUploadKindPolicy(
+        is_enabled=lambda settings: bool(settings.memory_upload_enabled),
+        disabled_error=("MEMORY_UPLOAD_DISABLED", "Memory image upload is disabled by server configuration."),
+        requires_authorization_ack=True,
+        max_bytes=lambda settings: int(settings.memory_upload_max_bytes or settings.memory_max_upload_size or 0),
+        validate_extension=_allowed_memory_extension,
+        quota_evidence_type="memory_dump",
+    ),
+    "disk_image": ChunkedUploadKindPolicy(
+        is_enabled=lambda settings: bool(settings.disk_image_ingest_enabled),
+        disabled_error=("MEMORY_UPLOAD_DISABLED", "Disk image ingestion is disabled by server configuration."),
+        requires_authorization_ack=False,
+        # No disk-image-specific upload cap exists in the legacy path either
+        # (disk_image_max_bytes is defined but never enforced anywhere) --
+        # reuse the same general single-file cap the legacy resumable path
+        # already applies, rather than inventing a new limit.
+        max_bytes=lambda settings: int(settings.backend_max_upload_size or 0),
+        validate_extension=_disk_image_extension,
+        quota_evidence_type=None,
+    ),
+}
+
+
 def create_memory_upload_session(
     db: Session,
     *,
@@ -252,18 +303,21 @@ def create_memory_upload_session(
     upload_mode: str | None = None,
     file_fingerprint: str | None = None,
     extra_metadata: dict[str, Any] | None = None,
+    kind: str = "memory_dump",
+    canonical_filename: str | None = None,
 ) -> MemoryUpload:
     settings = get_settings()
-    if not bool(settings.memory_upload_enabled):
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_DISABLED", "Memory image upload is disabled by server configuration.")
-    if not authorization_acknowledged:
+    policy = _KIND_POLICIES[kind]
+    if not policy.is_enabled(settings):
+        raise MemoryUploadSessionError(*policy.disabled_error)
+    if policy.requires_authorization_ack and not authorization_acknowledged:
         raise MemoryUploadSessionError("MEMORY_UPLOAD_AUTHORIZATION_REQUIRED", "Authorization acknowledgement is required before uploading RAM evidence.")
     if expected_size_bytes <= 0:
         raise MemoryUploadSessionError("MEMORY_UPLOAD_INVALID_SIZE", "Expected upload size must be greater than zero.")
-    max_bytes = int(settings.memory_upload_max_bytes or settings.memory_max_upload_size or 0)
+    max_bytes = policy.max_bytes(settings)
     if expected_size_bytes > max_bytes:
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_TOO_LARGE", "Selected file exceeds the configured memory upload size limit.")
-    extension = _allowed_memory_extension(filename)
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_TOO_LARGE", "Selected file exceeds the configured upload size limit.")
+    extension = policy.validate_extension(filename)
     safe_name = safe_display_filename(filename)
     provided_host = str(provided_host or "").strip()
     if not provided_host:
@@ -301,14 +355,15 @@ def create_memory_upload_session(
             },
         )
 
-    case_quota = int(settings.memory_upload_case_quota_bytes or 0)
-    case_usage = _case_memory_usage_bytes(db, case_id)
-    if case_usage + expected_size_bytes > case_quota:
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_CASE_QUOTA_EXCEEDED", "This case has reached its configured memory upload quota.")
+    if policy.quota_evidence_type:
+        case_quota = int(settings.memory_upload_case_quota_bytes or 0)
+        case_usage = _case_memory_usage_bytes(db, case_id)
+        if case_usage + expected_size_bytes > case_quota:
+            raise MemoryUploadSessionError("MEMORY_UPLOAD_CASE_QUOTA_EXCEEDED", "This case has reached its configured memory upload quota.")
 
     capacity = _capacity_snapshot(db, expected_bytes=expected_size_bytes)
     if not bool(capacity["can_accept_selected_size"]):
-        raise MemoryUploadSessionError("MEMORY_UPLOAD_INSUFFICIENT_SPACE", "Server storage capacity is below the safe threshold for this memory image.")
+        raise MemoryUploadSessionError("MEMORY_UPLOAD_INSUFFICIENT_SPACE", "Server storage capacity is below the safe threshold for this upload.")
 
     threshold = int(getattr(settings, "memory_upload_direct_threshold_bytes", 1073741824) or 1073741824)
     selected_mode = str(upload_mode or "resumable").strip().lower()
@@ -356,6 +411,7 @@ def create_memory_upload_session(
         total_chunks=total_chunks,
         expected_sha256=_sanitize_sha256(expected_sha256),
         staging_name=str(uuid4()),
+        canonical_filename=canonical_filename,
     )
     upload.received_chunk_count = 0
     upload.bytes_received = 0
