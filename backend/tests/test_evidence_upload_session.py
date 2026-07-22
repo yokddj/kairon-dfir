@@ -229,6 +229,37 @@ def test_operation_jobs_are_idempotent_per_operation(tmp_path, monkeypatch):
     assert second.status == "running"
 
 
+def test_reconciliation_cleans_storage_for_sessions_expired_mid_upload(tmp_path, monkeypatch):
+    # Regression test for a production storage leak: a session abandoned
+    # while `uploading` (never reaches `staged`) previously had its DB row
+    # flipped to `expired` by reconcile_evidence_operations without ever
+    # cleaning its staged bytes - only cleanup_expired_upload_sessions()
+    # cleaned storage, and only for sessions that were `staged`. Several
+    # GB of orphaned-but-DB-tracked staging directories were found on the
+    # production server from exactly this gap.
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=6)
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(b"abc"))
+    db.refresh(session)
+    assert session.status == EvidenceUploadSessionStatus.uploading.value
+    staged_path = Path(session.staged_path)
+    assert staged_path.exists()
+
+    session.expires_at = utc_now() - timedelta(seconds=1)
+    db.add(session)
+    db.commit()
+
+    reconcile_evidence_operations(db)
+    db.refresh(session)
+
+    assert session.status == EvidenceUploadSessionStatus.expired.value
+    assert not staged_path.exists()
+    assert not staged_path.parent.exists()
+
+
 def test_reconciliation_recovers_session_without_operation(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     db = _db()
