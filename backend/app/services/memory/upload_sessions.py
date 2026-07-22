@@ -251,6 +251,7 @@ def create_memory_upload_session(
     expected_sha256: str | None = None,
     upload_mode: str | None = None,
     file_fingerprint: str | None = None,
+    extra_metadata: dict[str, Any] | None = None,
 ) -> MemoryUpload:
     settings = get_settings()
     if not bool(settings.memory_upload_enabled):
@@ -347,6 +348,7 @@ def create_memory_upload_session(
                 int(getattr(settings, "memory_upload_max_concurrency", 4) or 4),
             ),
             "max_concurrency": int(getattr(settings, "memory_upload_max_concurrency", 4) or 4),
+            **(extra_metadata or {}),
         },
         db=db,
         initial_status="created",
@@ -883,7 +885,14 @@ def finalize_memory_upload_session(
             fsync_directory(path.parent)
 
         def _register() -> Evidence:
-            return get_workflow_handler("memory")(item.id, db)
+            # The handler name is fixed once, at session creation
+            # (create_memory_upload_session's extra_metadata), and never
+            # rewritten afterward -- see _set_active_chunk/_set_received_chunks,
+            # which read-modify-write the metadata dict but only ever touch
+            # their own keys. A session created under one backend can never
+            # be finalized by another.
+            workflow_name = str(_session_metadata(item).get("workflow") or "memory")
+            return get_workflow_handler(workflow_name)(item.id, db)
 
         def _cleanup() -> None:
             _cleanup_session_storage(item)

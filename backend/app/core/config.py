@@ -88,6 +88,7 @@ class Settings(BaseSettings):
     memory_upload_max_concurrency: int = 4
     memory_upload_max_parallel_chunks: int = 2
     memory_upload_allowed_extensions: str = ".raw,.mem,.dmp,.dump,.bin,.img,.vmem,.lime"
+    unified_upload_evidence_memory_dump: bool = False
     memory_job_timeout_seconds: int = 900
     memory_plugin_timeout_seconds: int = 600
     memory_plugin_output_max_bytes: int = 10485760

@@ -3744,6 +3744,7 @@ export type IngestionReadiness = {
   configured_extraction_limit_bytes: number;
   ready: boolean;
   critical_ready: boolean;
+  unified_upload_evidence_memory_dump: boolean;
 };
 
 export type EvidenceUploadSessionRead = {
@@ -3765,12 +3766,21 @@ export type EvidenceUploadSessionRead = {
   updated_at: string;
   last_activity_at: string | null;
   failure_message: string | null;
+  promoted_evidence_id: string | null;
 };
 
 export type EvidenceUploadSessionCreateResponse = {
   session: EvidenceUploadSessionRead;
   preflight: PreflightReport;
   health: IngestionReadiness | null;
+};
+
+export type UnifiedUploadInfo = {
+  memory_upload_id: string;
+  chunk_size_bytes: number;
+  total_chunks: number;
+  default_concurrency: number;
+  max_concurrency: number;
 };
 
 export type ActivityOperation = {
@@ -6415,9 +6425,22 @@ export const api = {
   dismissEvidenceOperation: (caseId: string, operationId: string) =>
     request<{ status: string; operation_id: string }>(`/cases/${caseId}/evidence-operations/${operationId}/dismiss`, { method: "POST" }),
   getEvidenceUploadSession: (caseId: string, sessionId: string) =>
-    request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null }>(`/cases/${caseId}/evidence-uploads/${sessionId}`),
-  createResumableEvidenceUploadSession: (caseId: string, payload: { filename: string; expected_size_bytes: number; declared_platform?: EvidencePlatform; client_sha256?: string }) =>
-    request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null }>(`/cases/${caseId}/evidence-uploads/resumable`, { method: "POST", body: JSON.stringify(payload) }),
+    request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null; unified: UnifiedUploadInfo | null }>(`/cases/${caseId}/evidence-uploads/${sessionId}`),
+  createResumableEvidenceUploadSession: (
+    caseId: string,
+    payload: {
+      filename: string;
+      expected_size_bytes: number;
+      declared_platform?: EvidencePlatform;
+      client_sha256?: string;
+      intake_category?: string;
+      host_id?: string;
+      provided_host?: string;
+      memory_authorization_acknowledged?: boolean;
+      notes?: string;
+    },
+  ) =>
+    request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null; unified: UnifiedUploadInfo | null }>(`/cases/${caseId}/evidence-uploads/resumable`, { method: "POST", body: JSON.stringify(payload) }),
   appendResumableEvidenceUpload: (caseId: string, sessionId: string, blob: Blob, offset: number, options?: { signal?: AbortSignal; onProgress?: (progress: UploadProgress) => void }) =>
     uploadBlob<{ session: EvidenceUploadSessionRead; offset: number }>(`/cases/${caseId}/evidence-uploads/${sessionId}/bytes?offset=${offset}`, blob, {
       method: "PUT",

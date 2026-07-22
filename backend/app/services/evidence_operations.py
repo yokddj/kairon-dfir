@@ -105,6 +105,8 @@ def _metadata(session: EvidenceUploadSession) -> dict[str, Any]:
         "is_folder": session.is_folder,
         "original_filename": session.original_filename,
         "declared_platform": session.declared_platform,
+        "backend": (session.metadata_json or {}).get("backend") or "legacy",
+        "unified_status": (session.metadata_json or {}).get("unified_status"),
     }
 
 
@@ -249,7 +251,11 @@ def reconcile_evidence_operations(db: Session, *, retention_seconds: int = 7 * 2
         before = db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).one_or_none()
         if before is None:
             stats["sessions_without_operations"] += 1
-        if session.status in {EvidenceUploadSessionStatus.created.value, EvidenceUploadSessionStatus.uploading.value, EvidenceUploadSessionStatus.interrupted.value, EvidenceUploadSessionStatus.staged.value} and _is_before_now(session.expires_at, now):
+        if (
+            (session.metadata_json or {}).get("backend") != "unified"
+            and session.status in {EvidenceUploadSessionStatus.created.value, EvidenceUploadSessionStatus.uploading.value, EvidenceUploadSessionStatus.interrupted.value, EvidenceUploadSessionStatus.staged.value}
+            and _is_before_now(session.expires_at, now)
+        ):
             # Sessions that expire from `staged` are also cleaned up by
             # cleanup_expired_upload_sessions(), but that function only
             # ever looks at `staged` sessions - one abandoned mid-upload
