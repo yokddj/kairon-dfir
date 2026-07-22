@@ -268,16 +268,15 @@ def reconcile_evidence_operations(db: Session, *, retention_seconds: int = 7 * 2
             and session.status in {EvidenceUploadSessionStatus.created.value, EvidenceUploadSessionStatus.uploading.value, EvidenceUploadSessionStatus.interrupted.value, EvidenceUploadSessionStatus.staged.value}
             and _is_before_now(session.expires_at, now)
         ):
-            # Sessions that expire from `staged` are also cleaned up by
-            # cleanup_expired_upload_sessions(), but that function only
-            # ever looks at `staged` sessions - one abandoned mid-upload
-            # (created/uploading/interrupted) reaches `expired` only here,
-            # and without this call its staged bytes would never be
-            # deleted (observed on production: several GB of staging
-            # directories for sessions with no live DB-tracked reason to
-            # keep them). Deferred import to avoid a circular import with
-            # app.services.evidence_upload_session, which already imports
-            # sync_upload_operation from this module.
+            # This is the ONLY expiry-driven cleanup path for legacy
+            # (non-unified) EvidenceUploadSession rows -- covers every
+            # non-terminal status (created/uploading/interrupted/staged),
+            # not just `staged`. Without this call, abandoned sessions'
+            # staged bytes would never be deleted (observed on production:
+            # several GB of staging directories for sessions with no live
+            # DB-tracked reason to keep them). Deferred import to avoid a
+            # circular import with app.services.evidence_upload_session,
+            # which already imports sync_upload_operation from this module.
             from app.services.evidence_upload_session import _cleanup_storage
 
             _cleanup_storage(session)

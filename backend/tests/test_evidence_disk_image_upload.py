@@ -31,6 +31,7 @@ from app.services.evidence_unified_upload import (
     sync_unified_session,
     unified_upload_info,
 )
+from app.services.evidence_upload_session import UploadSessionError, append_resumable_upload_chunk_stream, finalize_resumable_upload_session, get_upload_session
 from app.services.memory.upload_sessions import MemoryUploadSessionError, finalize_memory_upload_session, store_memory_upload_chunk_stream
 from app.services.upload_shared.workflow import get_workflow_handler, registered_workflows
 
@@ -115,6 +116,26 @@ def test_disk_image_session_does_not_require_authorization_acknowledgement(tmp_p
     assert is_unified_session(session, kind="disk_image")
     memory_upload = db.get(MemoryUpload, info.memory_upload_id)
     assert memory_upload.metadata_json["workflow"] == "disk_image"
+
+
+def test_disk_image_upload_rejects_the_legacy_byte_offset_endpoints(tmp_path, monkeypatch):
+    """Part of the single-file unified-upload invariant: a disk_image
+    session created under the unified backend must never be advanceable
+    through the legacy PUT .../bytes?offset= / finalize endpoints, only
+    through the memory-upload chunk-index endpoints."""
+    _configure(monkeypatch, tmp_path)
+    db = _db()
+    _case(db)
+    session, _info = _create_disk_image_session(db, expected_size_bytes=16)
+    fresh = get_upload_session(db, CASE_ID, session.id)
+
+    with pytest.raises(UploadSessionError) as exc_info:
+        asyncio.run(append_resumable_upload_chunk_stream(db, fresh, offset=0, chunks=_bytes_stream(b"x" * 16)))
+    assert exc_info.value.code == "unified_session_wrong_endpoint"
+
+    with pytest.raises(UploadSessionError) as exc_info:
+        finalize_resumable_upload_session(db, fresh)
+    assert exc_info.value.code == "unified_session_wrong_endpoint"
 
 
 def test_disk_image_session_uses_original_filename_as_canonical_name(tmp_path, monkeypatch):

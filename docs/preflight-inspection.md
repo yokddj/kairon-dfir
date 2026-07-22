@@ -47,8 +47,10 @@ Guarantees:
   enqueues a worker job — only `promote` does either, and only after
   explicit analyst confirmation.
 - Sessions expire automatically (`EVIDENCE_UPLOAD_SESSION_TTL_SECONDS`,
-  default 7200s) and are swept by `cleanup_expired_upload_sessions()`,
-  mirroring the existing `MemoryUpload` expiry pattern.
+  default 7200s) and are swept by
+  `app.services.evidence_operations.reconcile_evidence_operations` (run on
+  every Activity Center fetch and at startup) — not by a dedicated function
+  in this module.
 - Cancelling a session deletes its staged copy immediately; nothing is left
   behind on disk.
 - A server-path session (`is_server_path=True`) never deletes the
