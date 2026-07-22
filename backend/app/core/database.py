@@ -63,8 +63,21 @@ def get_db() -> Generator:
 
 
 def init_db() -> None:
-    from app.models import activity, app_setting, artifact, assignment_history, case, case_analysis_job, case_host, case_host_alias, case_host_identity_audit, case_report, detection_result, evidence, event_marking, finding, incident_timeline_draft, memory, rule, rule_import_run, rule_run, rule_set, tag, timeline_bookmark  # noqa: F401
+    from app.models import activity, app_setting, artifact, assignment_history, case, case_analysis_job, case_host, case_host_alias, case_host_identity_audit, case_report, detection_result, evidence, evidence_operation, event_marking, finding, incident_timeline_draft, memory, rule, rule_import_run, rule_run, rule_set, tag, timeline_bookmark  # noqa: F401
 
+    if engine.dialect.name == "postgresql":
+        with engine.connect() as lock_connection:
+            lock_connection.execute(text("SELECT pg_advisory_lock(541991337)"))
+            try:
+                _init_db_unlocked()
+            finally:
+                lock_connection.execute(text("SELECT pg_advisory_unlock(541991337)"))
+        return
+
+    _init_db_unlocked()
+
+
+def _init_db_unlocked() -> None:
     Base.metadata.create_all(bind=engine)
     _ensure_compatible_schema()
     # Run versioned migrations after the legacy in-place DDL so a

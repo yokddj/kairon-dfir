@@ -93,7 +93,14 @@ function sliceChunk(
 
 function shouldRetryChunkUpload(error: unknown): boolean {
   if (error instanceof ApiError) {
-    if (error.status === 409) return false;
+    if (error.status === 409) {
+      // A distributed per-session lock (chunk write or finalize) was held
+      // by a concurrent request for this same upload session. This is
+      // transient - the lock holder releases within its own request - so
+      // retrying with backoff is correct, unlike other 409s (offset
+      // mismatches are reconciled separately below, not retried blindly).
+      return error.errorCode === "session_busy" || error.errorCode === "session_lock_unavailable";
+    }
     if (error.status === 408 || error.status === 425 || error.status === 429)
       return true;
     return error.status >= 500;
@@ -137,6 +144,7 @@ async function uploadChunkWithRetry(
   totalChunks: number,
   signal: AbortSignal,
   uploadChunk: RunResumableUploadArgs["uploadChunk"],
+  getStatus: RunResumableUploadArgs["getStatus"],
   onProgress: ((info: { loaded: number; total: number }) => void) | undefined,
   onChunkProgress: ((chunkIndex: number, loaded: number, chunkBytes: number) => void) | undefined,
   sleep: (ms: number) => Promise<void>,
@@ -162,7 +170,36 @@ async function uploadChunkWithRetry(
       if (signal.aborted) {
         throw new Error("Upload aborted");
       }
-      if (!shouldRetryChunkUpload(error) || attempt >= CHUNK_UPLOAD_MAX_RETRIES) {
+      if (!shouldRetryChunkUpload(error)) {
+        onChunkProgress?.(chunkIndex, 0, blob.size);
+        throw error;
+      }
+      // The local request appeared to fail (timeout, network blip, 5xx),
+      // but that doesn't mean the bytes never arrived - only that this
+      // client never saw the response. Production logs have shown a real
+      // browser resending (and getting a 409 offset_mismatch for) a chunk
+      // the server had already committed minutes earlier. Reconcile
+      // against the server's authoritative chunk bitmap before resending:
+      // if this specific chunk is no longer missing, treat it as delivered
+      // instead of paying for a full retry (and possible repeat stall).
+      // Index-based (not a raw byte-count comparison) so this stays correct
+      // under concurrency, where a sibling chunk landing first can advance
+      // the cumulative byte count without this chunk being the one received.
+      try {
+        const reconciled = await getStatus(uploadId);
+        const { missingChunks: reconciledMissing } = deriveMissingChunks(reconciled, file, chunkSize);
+        if (!reconciledMissing.includes(chunkIndex)) {
+          onChunkProgress?.(chunkIndex, 0, blob.size);
+          if (onProgress) {
+            onProgress({ loaded: reconciled.bytes_received, total: reconciled.expected_bytes });
+          }
+          return reconciled;
+        }
+      } catch {
+        // Reconciliation read itself failed (e.g. offline) - fall through
+        // to the normal retry/backoff below.
+      }
+      if (attempt >= CHUNK_UPLOAD_MAX_RETRIES) {
         onChunkProgress?.(chunkIndex, 0, blob.size);
         throw error;
       }
@@ -207,6 +244,8 @@ export async function runResumableUpload(
   let effectiveConcurrency = Math.max(1, Math.min(requestedConcurrency || 1, maxConcurrency || 1, 4));
   let fallbackToSequential = false;
   let confirmedBytes = currentStatus.bytes_received || 0;
+  let offsetReconciliations = 0;
+  const MAX_OFFSET_RECONCILIATIONS = 5;
   const activeProgress = new Map<number, number>();
   const emitAggregateProgress = () => {
     if (!onProgress) return;
@@ -281,6 +320,7 @@ export async function runResumableUpload(
             totalChunks,
             signal,
             uploadChunk,
+            getStatus,
             onProgress,
             updateChunkProgress,
             sleep,
@@ -303,6 +343,23 @@ export async function runResumableUpload(
           continue;
         }
         const reason = rejected.reason;
+        if (
+          reason instanceof ApiError &&
+          reason.status === 409 &&
+          reason.errorCode === "offset_mismatch" &&
+          offsetReconciliations < MAX_OFFSET_RECONCILIATIONS
+        ) {
+          // The server rejected the chunk because its offset no longer
+          // matches the server-confirmed byte count. Our local view of
+          // progress is stale (a prior chunk we thought was unconfirmed may
+          // already be staged) - reconcile with the authoritative status
+          // instead of failing outright, since this is a resumable uploader.
+          offsetReconciliations += 1;
+          currentStatus = await getStatus(uploadId);
+          confirmedBytes = currentStatus.bytes_received || 0;
+          emitAggregateProgress();
+          continue;
+        }
         if (reason instanceof Error) throw reason;
         throw new Error("Chunk upload failed.");
       }

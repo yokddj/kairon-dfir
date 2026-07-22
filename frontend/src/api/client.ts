@@ -361,6 +361,18 @@ async function uploadFormData<T>(path: string, formData: FormData, options?: Upl
 }
 
 const UPLOAD_BLOB_DEFAULT_TIMEOUT_MS = 300_000;
+// Independent of xhr.timeout (which measures from send() to completion and
+// only fires if the browser's own timer/network stack is still servicing
+// the request). A large chunk upload legitimately produces steady
+// upload/download progress events throughout its transfer, so this instead
+// tracks *inactivity*: if no XHR event of any kind fires for this long, the
+// connection is presumed dead and we abort and retry rather than trust the
+// browser to eventually notice. This exists because production evidence
+// uploads were observed to have the server commit a chunk (200) while the
+// client's XHR promise never settled - on some browsers/networks the
+// browser's own timeout and error events are not a reliable backstop for a
+// connection that has gone silently dead after a large transfer.
+const UPLOAD_BLOB_STALL_INACTIVITY_MS = 20_000;
 
 export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBlobOptions): Promise<T> {
   let lastError: UploadAttemptError | unknown;
@@ -372,7 +384,29 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
       return await new Promise<T>((resolve, reject) => {
         const xhr = new XMLHttpRequest();
         let settled = false;
+        let lastActivityAt = Date.now();
+        const markActivity = () => {
+          lastActivityAt = Date.now();
+        };
+        const stallCheckInterval = setInterval(() => {
+          if (settled) return;
+          if (Date.now() - lastActivityAt >= UPLOAD_BLOB_STALL_INACTIVITY_MS) {
+            finish(() => {
+              const error = new Error(
+                "Upload timed out. No activity from the server connection was detected; it may have gone silently dead. Retrying.",
+              );
+              (error as UploadAttemptError).nonRetryable = false;
+              reject(error);
+            });
+            try {
+              xhr.abort();
+            } catch {
+              // abort() should not throw, but never let cleanup fail the reject above.
+            }
+          }
+        }, 1000);
         const cleanup = () => {
+          clearInterval(stallCheckInterval);
           if (options?.signal) {
             options.signal.removeEventListener("abort", onParentAbort);
           }
@@ -381,9 +415,15 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
           if (settled) return;
           settled = true;
           cleanup();
-          fn();
+          try {
+            fn();
+          } catch (settleError) {
+            reject(settleError instanceof Error ? settleError : new Error(String(settleError)));
+          }
         };
-        const onParentAbort = () => xhr.abort();
+        const onParentAbort = () => {
+          xhr.abort();
+        };
 
         if (options?.signal) {
           if (options.signal.aborted) {
@@ -413,21 +453,34 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
           xhr.setRequestHeader(key, value);
         }
         xhr.timeout = options?.timeoutMs ?? UPLOAD_BLOB_DEFAULT_TIMEOUT_MS;
-        xhr.onabort = () => finish(() => reject(new Error("Upload aborted")));
+
+        xhr.onreadystatechange = markActivity;
+        xhr.onloadstart = markActivity;
+        xhr.onprogress = markActivity;
+        xhr.onabort = () => {
+          finish(() => reject(new Error("Upload aborted")));
+        };
         if (xhr.upload) {
+          xhr.upload.onloadstart = markActivity;
           xhr.upload.onprogress = (event) => {
+            markActivity();
             if (options?.onProgress && event.lengthComputable) {
               options.onProgress({ loaded: event.loaded, total: event.total });
             }
           };
         }
-        xhr.onerror = () => finish(() => reject(new Error(`Network error while uploading to ${url}`)));
-        xhr.ontimeout = () => finish(() => {
-          const error = new Error("Upload timed out. Your network may be unavailable. Check your connection and try again.");
-          (error as UploadAttemptError).nonRetryable = false;
-          reject(error);
-        });
-        xhr.onload = () => finish(() => {
+        xhr.onerror = () => {
+          finish(() => reject(new Error(`Network error while uploading to ${url}`)));
+        };
+        xhr.ontimeout = () => {
+          finish(() => {
+            const error = new Error("Upload timed out. Your network may be unavailable. Check your connection and try again.");
+            (error as UploadAttemptError).nonRetryable = false;
+            reject(error);
+          });
+        };
+        xhr.onload = () => {
+          finish(() => {
           const contentType = xhr.getResponseHeader("content-type") ?? "";
           const bodyText = xhr.responseText || "";
           if (xhr.status < 200 || xhr.status >= 300) {
@@ -474,7 +527,8 @@ export async function uploadBlob<T>(path: string, blob: Blob, options?: UploadBl
             const message = parseError instanceof Error && parseError.message ? parseError.message : String(parseError);
             reject(new Error(`Upload response parsing failed after successful HTTP ${xhr.status}. ${message}`));
           }
-        });
+          });
+        };
         xhr.send(body);
       });
     } catch (error) {
@@ -3690,6 +3744,7 @@ export type IngestionReadiness = {
   configured_extraction_limit_bytes: number;
   ready: boolean;
   critical_ready: boolean;
+  unified_upload_evidence_memory_dump: boolean;
 };
 
 export type EvidenceUploadSessionRead = {
@@ -3711,12 +3766,21 @@ export type EvidenceUploadSessionRead = {
   updated_at: string;
   last_activity_at: string | null;
   failure_message: string | null;
+  promoted_evidence_id: string | null;
 };
 
 export type EvidenceUploadSessionCreateResponse = {
   session: EvidenceUploadSessionRead;
   preflight: PreflightReport;
   health: IngestionReadiness | null;
+};
+
+export type UnifiedUploadInfo = {
+  memory_upload_id: string;
+  chunk_size_bytes: number;
+  total_chunks: number;
+  default_concurrency: number;
+  max_concurrency: number;
 };
 
 export type ActivityOperation = {
@@ -6356,12 +6420,32 @@ export const api = {
   getEvidenceDiskImage: (evidenceId: string) => request<DiskImage>(`/evidences/${evidenceId}/disk-image`),
   getIngestionReadiness: (caseId: string) => request<IngestionReadiness>(`/cases/${caseId}/ingestion-readiness`),
   getCaseActivity: (caseId: string) => request<ActivityCenterResponse>(`/cases/${caseId}/activity`),
-  createResumableEvidenceUploadSession: (caseId: string, payload: { filename: string; expected_size_bytes: number; declared_platform?: EvidencePlatform; client_sha256?: string }) =>
-    request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null }>(`/cases/${caseId}/evidence-uploads/resumable`, { method: "POST", body: JSON.stringify(payload) }),
-  appendResumableEvidenceUpload: (caseId: string, sessionId: string, blob: Blob, offset: number, options?: { onProgress?: (progress: UploadProgress) => void }) =>
+  retryEvidenceOperation: (caseId: string, operationId: string) =>
+    request<{ status: string; operation_id: string; job_type?: string; job_id?: string }>(`/cases/${caseId}/evidence-operations/${operationId}/retry`, { method: "POST" }),
+  dismissEvidenceOperation: (caseId: string, operationId: string) =>
+    request<{ status: string; operation_id: string }>(`/cases/${caseId}/evidence-operations/${operationId}/dismiss`, { method: "POST" }),
+  getEvidenceUploadSession: (caseId: string, sessionId: string) =>
+    request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null; unified: UnifiedUploadInfo | null }>(`/cases/${caseId}/evidence-uploads/${sessionId}`),
+  createResumableEvidenceUploadSession: (
+    caseId: string,
+    payload: {
+      filename: string;
+      expected_size_bytes: number;
+      declared_platform?: EvidencePlatform;
+      client_sha256?: string;
+      intake_category?: string;
+      host_id?: string;
+      provided_host?: string;
+      memory_authorization_acknowledged?: boolean;
+      notes?: string;
+    },
+  ) =>
+    request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null; unified: UnifiedUploadInfo | null }>(`/cases/${caseId}/evidence-uploads/resumable`, { method: "POST", body: JSON.stringify(payload) }),
+  appendResumableEvidenceUpload: (caseId: string, sessionId: string, blob: Blob, offset: number, options?: { signal?: AbortSignal; onProgress?: (progress: UploadProgress) => void }) =>
     uploadBlob<{ session: EvidenceUploadSessionRead; offset: number }>(`/cases/${caseId}/evidence-uploads/${sessionId}/bytes?offset=${offset}`, blob, {
       method: "PUT",
       contentType: "application/octet-stream",
+      signal: options?.signal,
       onProgress: options?.onProgress ? (progress) => options.onProgress?.({ loaded: progress.loaded, total: progress.total, lengthComputable: true }) : undefined,
     }),
   finalizeResumableEvidenceUploadSession: (caseId: string, sessionId: string) =>

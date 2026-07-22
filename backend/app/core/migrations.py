@@ -2343,6 +2343,7 @@ def _v29_disk_image_ingestion(connection: Connection) -> None:
     inspector = _inspector_for(connection)
     dialect = connection.dialect.name
     json_type = "JSONB" if dialect == "postgresql" else "JSON"
+    json_default = "'{}'::jsonb" if dialect == "postgresql" else "'{}'"
     timestamp_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "TIMESTAMP"
     id_type = "UUID" if dialect == "postgresql" else "VARCHAR(36)"
     tables = set(inspector.get_table_names())
@@ -2456,3 +2457,87 @@ def _v30_evidence_upload_sessions_resumable_state(connection: Connection) -> Non
         if column_name not in existing:
             connection.execute(text(f"ALTER TABLE evidence_upload_sessions ADD COLUMN {column_name} {column_type}"))
     connection.execute(text("UPDATE evidence_upload_sessions SET bytes_received = size_bytes WHERE bytes_received = 0 AND size_bytes > 0"))
+
+
+@register(31, "evidence_operations")
+def _v31_evidence_operations(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    tables = set(inspector.get_table_names())
+    if "evidence_operations" in tables:
+        return
+    dialect = connection.dialect.name
+    json_type = "JSONB" if dialect == "postgresql" else "JSON"
+    json_default = "'{}'::jsonb" if dialect == "postgresql" else "'{}'"
+    timestamp_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "TIMESTAMP"
+    id_type = "UUID" if dialect == "postgresql" else "VARCHAR(36)"
+    connection.execute(text(f"""
+        CREATE TABLE evidence_operations (
+            id {id_type} PRIMARY KEY,
+            case_id {id_type} NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+            upload_session_id {id_type} REFERENCES evidence_upload_sessions(id) ON DELETE SET NULL,
+            evidence_id {id_type} REFERENCES evidences(id) ON DELETE SET NULL,
+            kind VARCHAR(64) NOT NULL,
+            status VARCHAR(32) NOT NULL,
+            stage VARCHAR(64) NOT NULL DEFAULT 'created',
+            owner VARCHAR(32) NOT NULL DEFAULT 'backend',
+            progress INTEGER,
+            bytes_received BIGINT,
+            expected_size_bytes BIGINT,
+            started_at {timestamp_type},
+            completed_at {timestamp_type},
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            metadata_json {json_type} NOT NULL DEFAULT {json_default},
+            created_at {timestamp_type} NOT NULL,
+            updated_at {timestamp_type} NOT NULL
+        )
+    """))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operations_case_id ON evidence_operations (case_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operations_upload_session_id ON evidence_operations (upload_session_id)"))
+    connection.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_evidence_operations_upload_session_kind ON evidence_operations (upload_session_id, kind)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operations_evidence_id ON evidence_operations (evidence_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operations_kind ON evidence_operations (kind)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operations_status ON evidence_operations (status)"))
+
+
+@register(32, "evidence_operation_jobs")
+def _v32_evidence_operation_jobs(connection: Connection) -> None:
+    inspector = _inspector_for(connection)
+    tables = set(inspector.get_table_names())
+    if "evidence_operation_jobs" in tables:
+        return
+    dialect = connection.dialect.name
+    json_type = "JSONB" if dialect == "postgresql" else "JSON"
+    json_default = "'{}'::jsonb" if dialect == "postgresql" else "'{}'"
+    timestamp_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "TIMESTAMP"
+    id_type = "UUID" if dialect == "postgresql" else "VARCHAR(36)"
+    connection.execute(text(f"""
+        CREATE TABLE evidence_operation_jobs (
+            id {id_type} PRIMARY KEY,
+            operation_id {id_type} NOT NULL REFERENCES evidence_operations(id) ON DELETE CASCADE,
+            case_id {id_type} NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+            evidence_id {id_type} REFERENCES evidences(id) ON DELETE SET NULL,
+            upload_session_id {id_type} REFERENCES evidence_upload_sessions(id) ON DELETE SET NULL,
+            job_type VARCHAR(64) NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'queued',
+            progress INTEGER,
+            owner VARCHAR(32) NOT NULL DEFAULT 'worker',
+            rq_job_id VARCHAR(128),
+            dedupe_key VARCHAR(128) NOT NULL,
+            started_at {timestamp_type},
+            finished_at {timestamp_type},
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT,
+            metadata_json {json_type} NOT NULL DEFAULT {json_default},
+            created_at {timestamp_type} NOT NULL,
+            updated_at {timestamp_type} NOT NULL,
+            CONSTRAINT uq_evidence_operation_jobs_dedupe UNIQUE (operation_id, job_type, dedupe_key)
+        )
+    """))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operation_jobs_operation_id ON evidence_operation_jobs (operation_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operation_jobs_case_id ON evidence_operation_jobs (case_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operation_jobs_evidence_id ON evidence_operation_jobs (evidence_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operation_jobs_upload_session_id ON evidence_operation_jobs (upload_session_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operation_jobs_job_type ON evidence_operation_jobs (job_type)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operation_jobs_status ON evidence_operation_jobs (status)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operation_jobs_rq_job_id ON evidence_operation_jobs (rq_job_id)"))
