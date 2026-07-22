@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, type DfirCase } from "../api/client";
+import { api, type DfirCase, type ResumableUploadSessionRead } from "../api/client";
 import ArtifactBadge from "../components/ArtifactBadge";
 import CreateFindingDialog from "../components/CreateFindingDialog";
 import DebugExportDialog from "../components/DebugExportDialog";
@@ -51,6 +51,7 @@ export default function CaseDetail() {
   const [metadataEditorOpen, setMetadataEditorOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [ingestionWizardOpen, setIngestionWizardOpen] = useState(false);
+  const [resumeCandidate, setResumeCandidate] = useState<ResumableUploadSessionRead | null>(null);
   const [advancedUploadOpen, setAdvancedUploadOpen] = useState(false);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
@@ -60,6 +61,11 @@ export default function CaseDetail() {
   const [editNotes, setEditNotes] = useState("");
   const caseQuery = useQuery({ queryKey: ["case", caseId], queryFn: () => api.getCase(caseId), enabled: Boolean(caseId), staleTime: 15_000, refetchOnWindowFocus: false });
   const evidencesQuery = useQuery({ queryKey: ["evidences", caseId, activeHostId, activeHost], queryFn: () => api.listEvidences(caseId, { host_id: activeHostId || undefined, host: activeHost || undefined }), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
+  // Surfaces interrupted/active uploads directly on the Evidence page, not
+  // only inside the Wizard, so a session started here is still discoverable
+  // after a browser close/reload without needing a resume_session URL param.
+  const resumableUploadsQuery = useQuery({ queryKey: ["resumable-evidence-uploads", caseId], queryFn: () => api.listResumableEvidenceUploads(caseId), enabled: Boolean(caseId), staleTime: 5_000, refetchInterval: 20_000 });
+  const resumableUploads = resumableUploadsQuery.data?.sessions ?? [];
   const artifactsQuery = useQuery({ queryKey: ["artifacts", caseId], queryFn: () => api.listArtifacts(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const findingsQuery = useQuery({ queryKey: ["findings", caseId], queryFn: () => api.listFindings(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const detectionsQuery = useQuery({ queryKey: ["detections", caseId], queryFn: () => api.listDetections(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
@@ -193,10 +199,41 @@ export default function CaseDetail() {
   const normalizedCaseStatus = caseQuery.data?.status === "open" ? "active" : caseQuery.data?.status;
   const renderGuidedIngestionPanel = (options: { includeArtifactsInvalidation?: boolean } = {}) => (
     <div className="space-y-4">
+      {resumableUploads.length ? (
+        <div className="rounded-3xl border border-amber-400/30 bg-amber-400/5 p-5 shadow-panel" data-testid="case-resumable-uploads-panel">
+          <p className="font-mono text-xs uppercase tracking-[0.18em] text-amber-300">Interrupted or active uploads</p>
+          <div className="mt-3 space-y-2">
+            {resumableUploads.map((candidate) => (
+              <div key={candidate.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-abyss/60 p-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-ink">{candidate.original_filename}</p>
+                  <p className="mt-0.5 text-xs text-muted">
+                    {candidate.category ?? "evidence"} &middot; {candidate.status}
+                    {candidate.progress_percent !== null ? ` · ${candidate.progress_percent.toFixed(0)}%` : ""}
+                  </p>
+                </div>
+                {candidate.status === "promoted" && candidate.promoted_evidence_id ? (
+                  <Link to={candidate.category === "memory_dump" ? `/cases/${caseId}/memory/${candidate.promoted_evidence_id}` : `/evidences/${candidate.promoted_evidence_id}`} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss">
+                    Open evidence
+                  </Link>
+                ) : candidate.resumable || candidate.status === "staged" ? (
+                  <button
+                    type="button"
+                    onClick={() => { setResumeCandidate(candidate); setIngestionWizardOpen(true); }}
+                    className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss"
+                  >
+                    Resume
+                  </button>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="rounded-3xl border border-accent/30 bg-accent/5 p-5 shadow-panel">
         <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Add evidence</p>
         <p className="mt-2 text-sm text-muted">A guided wizard classifies your evidence and previews exactly what Kairon is about to do before anything is processed.</p>
-        <button type="button" onClick={() => setIngestionWizardOpen(true)} className="mt-4 rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">
+        <button type="button" onClick={() => { setResumeCandidate(null); setIngestionWizardOpen(true); }} className="mt-4 rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">
           Add Evidence
         </button>
       </div>
@@ -855,8 +892,10 @@ export default function CaseDetail() {
         open={ingestionWizardOpen}
         caseId={caseId}
         resumeSessionId={searchParams.get("resume_session") ?? undefined}
+        resumeCandidate={resumeCandidate}
         onClose={() => {
           setIngestionWizardOpen(false);
+          setResumeCandidate(null);
           if (searchParams.get("resume_session")) {
             const next = new URLSearchParams(searchParams);
             next.delete("resume_session");

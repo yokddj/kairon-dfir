@@ -24,7 +24,7 @@ from app.models.evidence_operation import EvidenceOperation, EvidenceOperationJo
 from app.models.evidence_upload_session import EvidenceUploadSession
 from app.models.user import User
 from app.schemas.evidence import EvidenceRead
-from app.services.auth_dependencies import get_optional_user
+from app.services.auth_dependencies import get_optional_user, require_case_access
 from app.schemas.evidence_preflight import PreflightReport
 from app.schemas.evidence_upload_session import (
     ActivityCenterResponse,
@@ -36,6 +36,9 @@ from app.schemas.evidence_upload_session import (
     EvidenceUploadSessionRead,
     PreflightRerunRequest,
     PromoteUploadSessionRequest,
+    ResumableUploadSessionRead,
+    ResumableUploadSessionsResponse,
+    UnifiedResumeDetails,
     UnifiedUploadInfo,
 )
 from app.services.evidence_upload_session import (
@@ -48,6 +51,7 @@ from app.services.evidence_upload_session import (
     get_active_session,
     get_upload_session,
     finalize_resumable_upload_session,
+    list_resumable_upload_sessions,
     promote_upload_session,
     rerun_preflight,
 )
@@ -58,6 +62,7 @@ from app.services.evidence_unified_memory import (
     create_unified_memory_dump_session,
     is_unified_memory_dump_session,
     sync_unified_session_from_memory_upload,
+    unified_resume_info,
     unified_upload_info,
 )
 from app.services.processing_queue import list_case_processing
@@ -103,6 +108,8 @@ def _session_to_read(session: EvidenceUploadSession) -> EvidenceUploadSessionRea
         last_activity_at=session.last_activity_at,
         failure_message=session.failure_message,
         promoted_evidence_id=session.promoted_evidence_id,
+        category=(session.metadata_json or {}).get("category"),
+        backend=(session.metadata_json or {}).get("backend") or "legacy",
     )
 
 
@@ -240,6 +247,71 @@ def dismiss_evidence_operation(case_id: str, operation_id: str, db: Session = De
     db.add(operation)
     db.commit()
     return {"status": "dismissed", "operation_id": operation.id}
+
+
+def _resumable_entry(session: EvidenceUploadSession, db: Session) -> ResumableUploadSessionRead:
+    metadata = session.metadata_json or {}
+    unified = is_unified_memory_dump_session(session)
+    expected = session.expected_size_bytes or 0
+    progress_percent = round((session.bytes_received / expected) * 100, 2) if expected else None
+    resumable = session.status in {"created", "uploading", "interrupted"} or (session.status == "failed" and unified)
+    cancellable = session.status not in {"cancelled", "expired", "promoted", "failed"}
+
+    unified_details: UnifiedResumeDetails | None = None
+    if unified:
+        info = unified_resume_info(session, db)
+        if info is not None:
+            unified_details = UnifiedResumeDetails(
+                memory_upload_id=info.memory_upload_id,
+                chunk_size_bytes=info.chunk_size_bytes,
+                total_chunks=info.total_chunks,
+                received_chunks=info.received_chunks,
+                missing_chunks=info.missing_chunks,
+                default_concurrency=info.default_concurrency,
+                max_concurrency=info.max_concurrency,
+                expected_sha256=info.expected_sha256,
+                verification_chunk_index=info.verification_chunk_index,
+                verification_chunk_size=info.verification_chunk_size,
+                verification_chunk_sha256=info.verification_chunk_sha256,
+            )
+
+    return ResumableUploadSessionRead(
+        id=session.id,
+        case_id=session.case_id,
+        backend="unified" if unified else "legacy",
+        category=metadata.get("category"),
+        original_filename=session.original_filename,
+        expected_size_bytes=session.expected_size_bytes,
+        bytes_received=session.bytes_received,
+        progress_percent=progress_percent,
+        status=session.status,
+        current_stage=metadata.get("current_stage"),
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+        expires_at=session.expires_at,
+        resumable=resumable,
+        cancellable=cancellable,
+        promoted_evidence_id=session.promoted_evidence_id,
+        failure_message=session.failure_message,
+        unified=unified_details,
+    )
+
+
+@router.get("/{case_id}/evidence-uploads", response_model=ResumableUploadSessionsResponse)
+def list_resumable_evidence_uploads(
+    case_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ResumableUploadSessionsResponse:
+    """Case-scoped discovery of upload sessions worth surfacing for resume.
+
+    This is the entry point that lets a browser close/reload without the
+    upload becoming invisible: the Wizard and the case Evidence page both
+    call this on open instead of requiring a resume_session URL parameter.
+    """
+    require_case_access(case_id)(request, db)
+    sessions = list_resumable_upload_sessions(db, case_id=case_id)
+    return ResumableUploadSessionsResponse(case_id=case_id, sessions=[_resumable_entry(session, db) for session in sessions])
 
 
 @router.post("/{case_id}/evidence-uploads/resumable", response_model=EvidenceUploadSessionStageResponse)

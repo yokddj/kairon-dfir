@@ -5,9 +5,19 @@ This project deploys to the Kairon host through a Git-tracked source tree and Do
 ## Target
 
 - Host: `192.168.1.19`
-- SSH: use the existing local SSH configuration, for example the `dfir-server` host alias.
-- Project directory: `/root/DFIR_APP`
-- Compose project: `dfir_app`
+- SSH: use the existing local SSH configuration, for example the `kairon-deploy` host alias.
+- Project directory: `/root/kairon-dfir`
+- Compose project: `kairon-dfir`
+
+> **2026-07-22 correction:** this document previously named `/root/DFIR_APP`
+> (compose project `dfir_app`) as the target. That directory is stale --
+> it has no `.git` and no `.env` -- while the actual running application
+> (backend, frontend, worker, memory-worker) has been deployed from
+> `/root/kairon-dfir` (compose project `kairon-dfir`) for some time.
+> `/root/DFIR_APP` is **not** fully dead, though: it still hosts the
+> separate, unmigrated `symbol-egress-gateway` container. Do not delete it
+> or assume `docker compose` commands there are safe without checking
+> `docker compose ps` first.
 
 Do not store passwords, private keys, tokens, or server-local `.env` values in this repository.
 

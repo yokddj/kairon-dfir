@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
-import { api, type Evidence, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type MemoryUploadStatus, type PreflightReport } from "../api/client";
+import { api, type Evidence, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type MemoryUploadStatus, type PreflightReport, type ResumableUploadSessionRead } from "../api/client";
 import { useNotifications } from "../context/NotificationsContext";
 import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
 import { platformUploadOptions } from "../lib/platformRegistry";
@@ -21,6 +21,7 @@ type Props = {
   open: boolean;
   caseId: string;
   resumeSessionId?: string;
+  resumeCandidate?: ResumableUploadSessionRead | null;
   onClose: () => void;
 };
 
@@ -130,7 +131,7 @@ function hostMatchesName(host: { canonical_name?: string; display_name?: string;
   return [host.canonical_name, host.display_name, ...(host.aliases ?? []), ...(host.all_names ?? [])].some((candidate) => normalizeHostLabel(candidate) === normalized);
 }
 
-export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId, onClose }: Props) {
+export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId, resumeCandidate: resumeCandidateProp, onClose }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { notify } = useNotifications();
@@ -160,6 +161,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [nowMs, setNowMs] = useState(Date.now());
   const promotedRef = useRef(false);
   const promotedEvidenceRef = useRef<Evidence | null>(null);
+  const [resumeTarget, setResumeTarget] = useState<ResumableUploadSessionRead | null>(null);
+  const [resumeFile, setResumeFile] = useState<File | null>(null);
+  const [resumeFileError, setResumeFileError] = useState<string | null>(null);
+  const [resumeVerifying, setResumeVerifying] = useState(false);
 
   const requiresPathInput = intakeType === "server_path";
   const requiresFolderInput = intakeType === "folder";
@@ -175,12 +180,30 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   });
   const unifiedMemoryDumpEnabled = Boolean(healthQuery.data?.unified_upload_evidence_memory_dump);
   const useUnifiedMemoryDump = intakeType === "memory_dump" && unifiedMemoryDumpEnabled;
-  const restoreSessionQuery = useQuery({
-    queryKey: ["evidence-upload-session", caseId, resumeSessionId],
-    queryFn: () => api.getEvidenceUploadSession(caseId, resumeSessionId || ""),
-    enabled: open && Boolean(caseId && resumeSessionId),
-    staleTime: 0,
+  // Discovery: lists sessions the analyst can still resume/cancel/open for
+  // this case, reconciled server-side against their backing MemoryUpload.
+  // Used both for the "Interrupted or active uploads" panel below and to
+  // resolve a resumeSessionId (deep link / Activity Center) into a full
+  // candidate without a second bespoke fetch.
+  const resumableSessionsQuery = useQuery({
+    queryKey: ["resumable-evidence-uploads", caseId],
+    queryFn: () => api.listResumableEvidenceUploads(caseId),
+    enabled: open && Boolean(caseId),
+    staleTime: 5_000,
+    refetchInterval: open ? 15_000 : false,
   });
+  const resumableSessions = resumableSessionsQuery.data?.sessions ?? [];
+
+  useEffect(() => {
+    if (resumeCandidateProp) {
+      setResumeTarget(resumeCandidateProp);
+      return;
+    }
+    if (resumeSessionId) {
+      const match = resumableSessions.find((candidate) => candidate.id === resumeSessionId);
+      if (match) setResumeTarget(match);
+    }
+  }, [resumeCandidateProp, resumeSessionId, resumableSessions]);
 
   useEffect(() => {
     setClientSha256(null);
@@ -213,6 +236,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setNowMs(Date.now());
     promotedRef.current = false;
     promotedEvidenceRef.current = null;
+    setResumeTarget(null);
+    setResumeFile(null);
+    setResumeFileError(null);
+    setResumeVerifying(false);
   }
 
   function handleClose() {
@@ -285,27 +312,20 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   // authorization are collected up front (step 3, before this runs) so
   // finalize can register the Evidence immediately once the transfer
   // completes -- there is no separate "Start Processing" step for this path.
-  async function uploadUnifiedMemoryDump(file: File, onProgress: (progress: { loaded: number; total: number; lengthComputable: boolean }) => void): Promise<{ evidence: Evidence }> {
-    const hostAssignment = await resolveHostAssignment();
-    const declaredPlatform = platform === "auto" ? undefined : platform;
-    const created = await api.createResumableEvidenceUploadSession(caseId, {
-      filename: file.name,
-      expected_size_bytes: file.size,
-      declared_platform: declaredPlatform,
-      client_sha256: clientSha256 ?? undefined,
-      intake_category: "memory_dump",
-      host_id: hostAssignment.host_id,
-      provided_host: hostAssignment.provided_host,
-      memory_authorization_acknowledged: memoryAuthorizationAcknowledged,
-      notes: notes.trim() || undefined,
-    });
-    if (!created.unified) {
-      throw new Error("Kairon could not start a unified memory upload session for this file.");
-    }
-    setSession(created.session);
-    const { memory_upload_id, chunk_size_bytes, default_concurrency, max_concurrency } = created.unified;
+  // Shared by both a fresh unified upload and a resumed one: the transfer
+  // itself, finalize, and post-finalize evidence lookup are identical
+  // either way, since runResumableUpload() re-derives the missing-chunk set
+  // from the server's authoritative status on every call -- a "resume" is
+  // just calling this against a memory_upload_id that already has some
+  // chunks landed, nothing else differs.
+  async function runUnifiedMemoryDumpTransfer(
+    sessionId: string,
+    unified: { memory_upload_id: string; chunk_size_bytes: number; default_concurrency: number; max_concurrency: number },
+    file: File,
+    onProgress: (progress: { loaded: number; total: number; lengthComputable: boolean }) => void,
+  ): Promise<{ evidence: Evidence }> {
+    const { memory_upload_id, chunk_size_bytes, default_concurrency, max_concurrency } = unified;
     const controller = new AbortController();
-    setInspectionState("uploading");
     const result = await runResumableUpload({
       uploadId: memory_upload_id,
       file,
@@ -329,7 +349,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     if (result.type === "failed") throw new Error(result.message);
 
     setInspectionState("preflight_running");
-    const finalStatus = await api.getEvidenceUploadSession(caseId, created.session.id);
+    const finalStatus = await api.getEvidenceUploadSession(caseId, sessionId);
     setSession(finalStatus.session);
     if (!finalStatus.session.promoted_evidence_id) {
       throw new Error(finalStatus.session.failure_message || "Upload finished but Kairon did not register the memory evidence. Check Activity Center for details.");
@@ -341,11 +361,72 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     return { evidence };
   }
 
+  async function uploadUnifiedMemoryDump(file: File, onProgress: (progress: { loaded: number; total: number; lengthComputable: boolean }) => void): Promise<{ evidence: Evidence }> {
+    const hostAssignment = await resolveHostAssignment();
+    const declaredPlatform = platform === "auto" ? undefined : platform;
+    const created = await api.createResumableEvidenceUploadSession(caseId, {
+      filename: file.name,
+      expected_size_bytes: file.size,
+      declared_platform: declaredPlatform,
+      client_sha256: clientSha256 ?? undefined,
+      intake_category: "memory_dump",
+      host_id: hostAssignment.host_id,
+      provided_host: hostAssignment.provided_host,
+      memory_authorization_acknowledged: memoryAuthorizationAcknowledged,
+      notes: notes.trim() || undefined,
+    });
+    if (!created.unified) {
+      throw new Error("Kairon could not start a unified memory upload session for this file.");
+    }
+    setSession(created.session);
+    setInspectionState("uploading");
+    return runUnifiedMemoryDumpTransfer(created.session.id, created.unified, file, onProgress);
+  }
+
+  async function verifyResumeFile(candidate: ResumableUploadSessionRead, file: File): Promise<string | null> {
+    if (candidate.expected_size_bytes !== null && file.size !== candidate.expected_size_bytes) {
+      return `Selected file is ${bytes(file.size)}, but this upload expected ${bytes(candidate.expected_size_bytes)}. Select the original file (${candidate.original_filename}).`;
+    }
+    const unified = candidate.unified;
+    if (unified && unified.verification_chunk_index !== null && unified.verification_chunk_sha256 && unified.verification_chunk_size) {
+      const start = unified.verification_chunk_index * unified.chunk_size_bytes;
+      const slice = file.slice(start, start + unified.verification_chunk_size);
+      const digest = await sha256Hex(slice);
+      if (digest !== unified.verification_chunk_sha256) {
+        return "This file's content does not match the bytes Kairon already received for this upload. Select the original file, not a different or re-exported copy.";
+      }
+    }
+    return null;
+  }
+
   const createSessionMutation = useMutation({
     mutationFn: async () => {
       setInspectionError(null);
       setInspectionStartedAt(Date.now());
       setNowMs(Date.now());
+
+      if (resumeTarget && resumeFile) {
+        const target = resumeTarget;
+        const file = resumeFile;
+        setUploadProgress(target.expected_size_bytes ? Math.min(1, target.bytes_received / target.expected_size_bytes) : 0);
+        const onResumeProgress = (progress: { loaded: number; total: number; lengthComputable: boolean }) => {
+          if (!progress.lengthComputable || progress.total <= 0) return;
+          const fraction = Math.min(1, progress.loaded / progress.total);
+          setUploadProgress(fraction);
+          if (fraction >= 1) setInspectionState("finalizing_upload");
+        };
+        setInspectionState("uploading");
+        if (target.backend === "unified" && target.unified) {
+          return runUnifiedMemoryDumpTransfer(target.id, target.unified, file, onResumeProgress);
+        }
+        const fetched = await api.getEvidenceUploadSession(caseId, target.id);
+        if (fetched.session.original_filename !== file.name || fetched.session.expected_size_bytes !== file.size) {
+          throw new Error(`Select the original file (${fetched.session.original_filename}, ${bytes(fetched.session.expected_size_bytes)}) to resume this upload.`);
+        }
+        setSession(fetched.session);
+        return uploadSingleFileResumable(file, onResumeProgress);
+      }
+
       setUploadProgress(requiresPathInput ? null : 0);
       if (intakeType === "server_path") {
         setInspectionState("preflight_running");
@@ -378,6 +459,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
         notify({ title: "Memory evidence registered", description: `${evidence.original_filename} was uploaded and registered.`, tone: "success" });
         void queryClient.invalidateQueries({ queryKey: ["case-processing", caseId] });
         void queryClient.invalidateQueries({ queryKey: ["evidences", caseId] });
+        void queryClient.invalidateQueries({ queryKey: ["resumable-evidence-uploads", caseId] });
         handleClose();
         navigate(`/cases/${caseId}/memory/${evidence.id}`);
         return;
@@ -404,18 +486,32 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     return () => window.clearInterval(interval);
   }, [createSessionMutation.isPending]);
 
+  // Reacts to a resolved resume target (from the panel, Activity Center's
+  // Resume action via resumeSessionId, or a resumeCandidate prop) -- the
+  // single entry point for "browser closed/reloaded mid-upload" discovery,
+  // replacing the old resumeSessionId-only, unified-unaware restore path.
   useEffect(() => {
-    const restored = restoreSessionQuery.data?.session;
-    if (!restored) return;
-    setSession(restored);
-    setPlatform((restored.declared_platform as EvidencePlatform | null) ?? "auto");
-    setIntakeType(restored.is_server_path ? "server_path" : restored.is_folder ? "folder" : "artifact_collection");
-    setUploadProgress(restored.expected_size_bytes ? Math.min(1, (restored.bytes_received || 0) / restored.expected_size_bytes) : null);
-    setInspectionStartedAt(restored.created_at ? Date.parse(restored.created_at) : null);
-    if (restored.status === "staged") {
+    const target = resumeTarget;
+    if (!target) return;
+    setResumeFile(null);
+    setResumeFileError(null);
+    setIntakeType((target.category as IntakeType | null) ?? "artifact_collection");
+    setUploadProgress(target.expected_size_bytes ? Math.min(1, target.bytes_received / target.expected_size_bytes) : null);
+    setInspectionStartedAt(target.created_at ? Date.parse(target.created_at) : null);
+
+    if (target.status === "promoted" && target.promoted_evidence_id) {
+      handleClose();
+      navigate(target.category === "memory_dump" ? `/cases/${caseId}/memory/${target.promoted_evidence_id}` : `/evidences/${target.promoted_evidence_id}`);
+      return;
+    }
+    if (target.status === "staged") {
+      api.getEvidenceUploadSession(caseId, target.id).then((response) => {
+        setSession(response.session);
+        setPlatform((response.session.declared_platform as EvidencePlatform | null) ?? "auto");
+      });
       setStep(5);
       setInspectionState("preflight_running");
-      api.rerunEvidenceUploadPreflight(caseId, restored.id, (restored.declared_platform as EvidencePlatform | null) ?? null)
+      api.rerunEvidenceUploadPreflight(caseId, target.id, null)
         .then((report) => {
           setPreflight(normalizePreflightReport(report));
           setInspectionState("complete");
@@ -427,12 +523,13 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
         });
       return;
     }
-    if (["created", "uploading", "interrupted"].includes(restored.status)) {
-      setStep(4);
-      setInspectionState("failed");
-      setInspectionError(`Select ${restored.original_filename} again to continue from ${bytes(restored.bytes_received)}.`);
-    }
-  }, [caseId, restoreSessionQuery.data]);
+    // created / uploading / interrupted / retryable failed: needs the
+    // analyst to reselect the original file before any bytes move again --
+    // browsers cannot silently reopen a local File after a reload.
+    setStep(4);
+    setInspectionState("idle");
+    setInspectionError(null);
+  }, [caseId, resumeTarget]);
 
   const detectedHostname = preflight?.classification.hostname?.trim() || "";
   const detectedHostMatches = useMemo(() => caseHosts.filter((host) => hostMatchesName(host, detectedHostname)), [caseHosts, detectedHostname]);
@@ -468,6 +565,22 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     }
     return { host_id: hostChoice };
   }
+
+  const cancelResumableMutation = useMutation({
+    mutationFn: (sessionId: string) => api.cancelEvidenceUploadSession(caseId, sessionId),
+    onSuccess: (_result, sessionId) => {
+      void queryClient.invalidateQueries({ queryKey: ["resumable-evidence-uploads", caseId] });
+      if (resumeTarget?.id === sessionId) {
+        setResumeTarget(null);
+        setResumeFile(null);
+        setResumeFileError(null);
+      }
+      notify({ title: "Upload cancelled", description: "The interrupted upload was cancelled and its staged bytes were cleaned up.", tone: "success" });
+    },
+    onError: (error) => {
+      notify({ title: "Could not cancel upload", description: error instanceof Error ? error.message : "The upload could not be cancelled.", tone: "error" });
+    },
+  });
 
   const startMutation = useMutation({
     mutationFn: async (): Promise<{ evidence: Evidence; queuedJobs: number | null }> => {
@@ -622,6 +735,41 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
         {step === 1 ? (
           <section className="mt-5">
+            {resumableSessions.length ? (
+              <div className="mb-6 rounded-3xl border border-amber-400/30 bg-amber-400/5 p-4" data-testid="resumable-uploads-panel">
+                <p className="font-mono text-xs uppercase tracking-[0.16em] text-amber-300">Interrupted or active uploads</p>
+                <div className="mt-3 space-y-2">
+                  {resumableSessions.map((candidate) => (
+                    <div key={candidate.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-abyss/60 p-3" data-testid="resumable-upload-row">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-ink">{candidate.original_filename}</p>
+                        <p className="mt-0.5 text-xs text-muted">
+                          {candidate.category ?? "evidence"} &middot; {candidate.status}
+                          {candidate.progress_percent !== null ? ` · ${candidate.progress_percent.toFixed(0)}%` : ""}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        {candidate.status === "promoted" && candidate.promoted_evidence_id ? (
+                          <button type="button" onClick={() => { handleClose(); navigate(candidate.category === "memory_dump" ? `/cases/${caseId}/memory/${candidate.promoted_evidence_id}` : `/evidences/${candidate.promoted_evidence_id}`); }} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss">Open evidence</button>
+                        ) : candidate.resumable || candidate.status === "staged" ? (
+                          <button type="button" onClick={() => setResumeTarget(candidate)} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss" data-testid="resume-upload-select">Resume</button>
+                        ) : null}
+                        {candidate.cancellable ? (
+                          <button
+                            type="button"
+                            disabled={cancelResumableMutation.isPending}
+                            onClick={() => cancelResumableMutation.mutate(candidate.id)}
+                            className="rounded-xl border border-line px-3 py-1.5 text-xs text-muted"
+                          >
+                            Cancel
+                          </button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
             <h2 className="text-xl font-semibold text-ink">What are you adding?</h2>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               {INTAKE_CARDS.map((card) => (
@@ -721,7 +869,76 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
           </section>
         ) : null}
 
-        {step === 4 ? (
+        {step === 4 && resumeTarget ? (
+          <section className="mt-5" data-testid="resume-upload-step">
+            <h2 className="text-xl font-semibold text-ink">Resume upload</h2>
+            <p className="mt-1 text-sm text-muted">
+              Browsers can't silently reopen a local file after a reload. Select <strong className="text-ink">{resumeTarget.original_filename}</strong> again
+              ({bytes(resumeTarget.expected_size_bytes)}, {resumeTarget.progress_percent !== null ? `${resumeTarget.progress_percent.toFixed(0)}% already uploaded` : "in progress"}) to continue &mdash;
+              Kairon verifies it's the same file before resuming.
+            </p>
+            <label className="mt-4 flex flex-col gap-2 rounded-2xl border border-dashed border-line bg-abyss/60 p-6 text-sm text-muted">
+              <span>Select the original file</span>
+              <input
+                type="file"
+                data-testid="resume-file-input"
+                onChange={async (event) => {
+                  const file = event.target.files?.[0];
+                  setResumeFile(null);
+                  setResumeFileError(null);
+                  if (!file) return;
+                  setResumeVerifying(true);
+                  try {
+                    const error = await verifyResumeFile(resumeTarget, file);
+                    if (error) {
+                      setResumeFileError(error);
+                    } else {
+                      setResumeFile(file);
+                    }
+                  } finally {
+                    setResumeVerifying(false);
+                  }
+                }}
+              />
+              {resumeVerifying ? <span className="text-xs text-muted" data-testid="resume-verifying">Verifying selected file matches this upload session...</span> : null}
+              {resumeFileError ? <span className="text-xs text-danger" data-testid="resume-file-error">{resumeFileError}</span> : null}
+              {resumeFile && !resumeFileError && !resumeVerifying ? <span className="text-xs text-mint" data-testid="resume-file-verified">Verified &mdash; ready to resume.</span> : null}
+            </label>
+            {(createSessionMutation.isPending || inspectionState === "failed") ? (
+              <div className={`mt-5 rounded-2xl border p-4 text-sm ${inspectionState === "failed" ? "border-danger/40 bg-danger/10" : "border-line bg-abyss/60"}`} data-testid="inspection-progress-panel">
+                <p className={`font-semibold ${inspectionState === "failed" ? "text-danger" : "text-ink"}`}>{inspectionLabel}</p>
+                {inspectionState === "failed" && inspectionError ? <p className="mt-3 text-sm text-danger">{inspectionError}</p> : (
+                  <div className="mt-4 space-y-2">
+                    <div className={`rounded-xl border px-3 py-2 ${uploadProgress === 1 ? "border-mint/30 bg-mint/10 text-mint" : "border-accent/30 bg-accent/10 text-accent"}`}>
+                      Resuming upload{uploadProgress !== null ? ` ${Math.round(uploadProgress * 100)}%` : ""}
+                      {uploadProgress !== null ? <div className="mt-2 h-1.5 rounded-full bg-abyss"><div className="h-1.5 rounded-full bg-accent transition-all" style={{ width: `${Math.max(5, Math.round(uploadProgress * 100))}%` }} /></div> : null}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
+            <div className="mt-5 flex justify-between">
+              <button
+                type="button"
+                onClick={() => { setResumeTarget(null); setResumeFile(null); setResumeFileError(null); setStep(1); }}
+                className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted"
+              >
+                Start a different upload
+              </button>
+              <button
+                type="button"
+                disabled={!resumeFile || resumeVerifying || createSessionMutation.isPending}
+                onClick={() => createSessionMutation.mutate()}
+                className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
+                data-testid="resume-upload-button"
+              >
+                {createSessionMutation.isPending ? inspectionLabel : "Resume Upload"}
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {step === 4 && !resumeTarget ? (
           <section className="mt-5">
             <h2 className="text-xl font-semibold text-ink">Choose evidence</h2>
             {requiresPathInput ? (

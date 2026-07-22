@@ -924,6 +924,69 @@ def get_active_session(db: Session, case_id: str, session_id: str) -> EvidenceUp
     return session
 
 
+# Statuses worth surfacing in the resume/discovery panel. "staged" is
+# included even though it's non-terminal for the legacy flow, since a
+# staged-but-abandoned session (browser closed before Start Processing)
+# is exactly the kind of thing this list exists to surface. "promoted"
+# sessions are included only briefly (_RESUMABLE_RECENT_TERMINAL_WINDOW)
+# so a browser that reloaded right after finalize can still redirect to
+# the registered evidence instead of the upload silently vanishing.
+_RESUMABLE_RECENT_TERMINAL_WINDOW = timedelta(hours=6)
+
+
+def list_resumable_upload_sessions(db: Session, *, case_id: str, limit: int = 25) -> list[EvidenceUploadSession]:
+    """Reconciled, case-scoped list of upload sessions worth surfacing to
+    the analyst for discovery/resume.
+
+    Reconciliation for unified sessions is delegated to
+    app.services.evidence_unified_memory.sync_unified_session_from_memory_upload,
+    which re-derives status/progress from the authoritative backing
+    MemoryUpload on every call -- this never trusts a stale
+    EvidenceUploadSession row on its own.
+    """
+    from app.services.evidence_unified_memory import is_unified_memory_dump_session, sync_unified_session_from_memory_upload
+    from app.services.evidence_operations import _is_before_now
+    from app.services.memory.upload_lifecycle import get_memory_upload
+
+    now = utc_now()
+    candidates = (
+        db.query(EvidenceUploadSession)
+        .filter(EvidenceUploadSession.case_id == case_id)
+        .filter(EvidenceUploadSession.status.notin_((EvidenceUploadSessionStatus.cancelled.value, EvidenceUploadSessionStatus.expired.value)))
+        .order_by(EvidenceUploadSession.updated_at.desc())
+        .limit(max(limit, 50))
+        .all()
+    )
+    results: list[EvidenceUploadSession] = []
+    for session in candidates:
+        unified = is_unified_memory_dump_session(session)
+        if unified:
+            session = sync_unified_session_from_memory_upload(db, session)
+        else:
+            sync_upload_operation(db, session)
+
+        status = session.status
+        if status in {EvidenceUploadSessionStatus.cancelled.value, EvidenceUploadSessionStatus.expired.value}:
+            continue
+        if _is_before_now(session.expires_at, now) and status != EvidenceUploadSessionStatus.promoted.value:
+            continue
+        if status == EvidenceUploadSessionStatus.failed.value:
+            # Only surface failures the analyst can actually act on.
+            retryable = True
+            if unified:
+                memory_upload_id = (session.metadata_json or {}).get("memory_upload_id")
+                item = get_memory_upload(db, case_id, memory_upload_id) if memory_upload_id else None
+                retryable = bool(item and item.retryable)
+            if not retryable:
+                continue
+        if status == EvidenceUploadSessionStatus.promoted.value and _is_before_now(session.updated_at, now - _RESUMABLE_RECENT_TERMINAL_WINDOW):
+            continue
+        results.append(session)
+        if len(results) >= limit:
+            break
+    return results
+
+
 def cancel_upload_session(db: Session, session: EvidenceUploadSession) -> None:
     _cleanup_storage(session)
     session.status = EvidenceUploadSessionStatus.cancelled.value

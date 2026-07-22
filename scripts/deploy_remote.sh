@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REMOTE_HOST="${REMOTE_HOST:-dfir-server}"
-REMOTE_DIR="${REMOTE_DIR:-/root/DFIR_APP}"
+# /root/kairon-dfir on 192.168.1.19 is the real, currently-running
+# production checkout (compose project "kairon-dfir": backend, frontend,
+# worker, memory-worker). /root/DFIR_APP (compose project "dfir_app") is an
+# older location that is NOT dead: as of 2026-07-22 it still hosts the
+# isolated symbol-egress-gateway container, which has not been migrated.
+# Do not repoint at DFIR_APP, and do not assume it's safe to remove --
+# override with --dir/REMOTE_DIR if you are deploying a component that
+# still intentionally lives there.
+REMOTE_HOST="${REMOTE_HOST:-192.168.1.19}"
+REMOTE_DIR="${REMOTE_DIR:-/root/kairon-dfir}"
 SERVICES="${SERVICES:-backend frontend}"
 DRY_RUN=0
 ALLOW_DIRTY=0

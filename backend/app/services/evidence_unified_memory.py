@@ -108,6 +108,67 @@ def unified_upload_info(session: EvidenceUploadSession, db: Session) -> UnifiedU
     )
 
 
+@dataclass
+class UnifiedResumeInfo:
+    memory_upload_id: str
+    chunk_size_bytes: int
+    total_chunks: int
+    received_chunks: list[int]
+    missing_chunks: list[int]
+    default_concurrency: int
+    max_concurrency: int
+    expected_sha256: str | None
+    # A previously-received chunk's recorded (index, size, sha256), so the
+    # frontend can re-slice the exact same byte range out of a re-selected
+    # File and hash it client-side before resuming -- proving byte-identity
+    # for at least one already-uploaded region without hashing the whole
+    # multi-GB file. Chosen deterministically (lowest received index).
+    # Server-side per-chunk hash verification on actual re-upload remains
+    # the authoritative check regardless of what the client reports here.
+    verification_chunk_index: int | None
+    verification_chunk_size: int | None
+    verification_chunk_sha256: str | None
+
+
+def unified_resume_info(session: EvidenceUploadSession, db: Session) -> UnifiedResumeInfo | None:
+    memory_upload_id = (session.metadata_json or {}).get("memory_upload_id")
+    if not memory_upload_id:
+        return None
+    item = get_memory_upload(db, session.case_id, memory_upload_id)
+    if item is None or item.case_id != session.case_id:
+        return None
+
+    from app.services.memory.upload_sessions import upload_status_with_chunks
+
+    status = upload_status_with_chunks(item, db=db)
+    received: list[int] = sorted(status.get("received_chunks") or [])
+    missing: list[int] = sorted(status.get("missing_chunks") or [])
+
+    verification_index: int | None = None
+    verification_size: int | None = None
+    verification_sha256: str | None = None
+    chunk_metadata = dict((item.metadata_json or {}).get("received_chunks") or {})
+    if received:
+        verification_index = received[0]
+        entry = chunk_metadata.get(str(verification_index)) or {}
+        verification_size = int(entry.get("size") or 0) or None
+        verification_sha256 = entry.get("sha256") or None
+
+    return UnifiedResumeInfo(
+        memory_upload_id=item.id,
+        chunk_size_bytes=int(status.get("chunk_size_bytes") or 0),
+        total_chunks=int(status.get("total_chunks") or 0),
+        received_chunks=received,
+        missing_chunks=missing,
+        default_concurrency=int(status.get("default_concurrency") or 1),
+        max_concurrency=int(status.get("max_concurrency") or 1),
+        expected_sha256=item.expected_sha256,
+        verification_chunk_index=verification_index,
+        verification_chunk_size=verification_size,
+        verification_chunk_sha256=verification_sha256,
+    )
+
+
 def create_unified_memory_dump_session(
     db: Session,
     case_id: str,
@@ -201,8 +262,25 @@ def sync_unified_session_from_memory_upload(db: Session, session: EvidenceUpload
     memory_upload_id = (session.metadata_json or {}).get("memory_upload_id")
     if not memory_upload_id:
         return session
+    # Ownership check: a unified EvidenceUploadSession must only ever
+    # reconcile against the exact MemoryUpload it was created with, scoped
+    # to the same case. get_memory_upload already filters by case_id, so an
+    # id that resolves to a different case's MemoryUpload (or none) comes
+    # back None here -- treated as an ownership mismatch / missing backing
+    # session below, never silently adopted.
     item = get_memory_upload(db, session.case_id, memory_upload_id)
-    if item is None:
+    if item is None or item.case_id != session.case_id:
+        if session.status not in {EvidenceUploadSessionStatus.cancelled.value, EvidenceUploadSessionStatus.expired.value, EvidenceUploadSessionStatus.promoted.value}:
+            session.status = EvidenceUploadSessionStatus.failed.value
+            session.failure_message = "The chunk-index upload backing this session is no longer available. Cancel and start a new upload."
+            metadata = dict(session.metadata_json or {})
+            metadata["unified_status"] = "inconsistent"
+            metadata["current_stage"] = "backing_session_missing"
+            session.metadata_json = metadata
+            db.add(session)
+            db.commit()
+            db.refresh(session)
+            sync_upload_operation(db, session)
         return session
 
     metadata = dict(session.metadata_json or {})
