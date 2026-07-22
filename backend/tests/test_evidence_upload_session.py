@@ -260,6 +260,69 @@ def test_resumable_upload_rejects_wrong_offset_without_duplicate_bytes(tmp_path,
 
 
 @pytest.mark.anyio
+async def test_resumable_append_surfaces_lock_contention_as_session_busy(tmp_path, monkeypatch):
+    # A concurrent append (or finalize) already holding the per-session
+    # lock must not be allowed to race the TOCTOU offset check - it should
+    # be rejected with a distinct, retryable "session_busy" error rather
+    # than silently corrupting the staged file or raising offset_mismatch.
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=3)
+
+    from app.services import evidence_upload_session as evidence_upload_session_module
+    from app.services.upload_locks import UploadLockBusyError
+
+    class _BusyLock:
+        def __enter__(self):
+            raise UploadLockBusyError("busy")
+
+        def __exit__(self, *exc_info):
+            return False
+
+    monkeypatch.setattr(evidence_upload_session_module, "redis_upload_lock", lambda *a, **k: _BusyLock())
+
+    with pytest.raises(UploadSessionError) as exc:
+        await append_resumable_upload_chunk_stream(db, session, offset=0, chunks=_StreamRequest([b"abc"]).stream())
+    assert exc.value.code == "session_busy"
+
+
+def test_resumable_finalize_surfaces_lock_contention_as_session_busy(tmp_path, monkeypatch):
+    # Guards against the double-finalize race: the synchronous
+    # POST .../finalize route and the async worker-enqueued preflight job
+    # both call finalize_resumable_upload_session for the same session -
+    # the lock must reject the loser rather than let both hash/preflight
+    # the same staged file concurrently.
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+    zip_path = tmp_path / "collection.zip"
+    _make_zip(zip_path)
+    payload = zip_path.read_bytes()
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=len(payload))
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(payload))
+    db.refresh(session)
+
+    from app.services import evidence_upload_session as evidence_upload_session_module
+    from app.services.upload_locks import UploadLockBusyError
+
+    class _BusyLock:
+        def __enter__(self):
+            raise UploadLockBusyError("busy")
+
+        def __exit__(self, *exc_info):
+            return False
+
+    monkeypatch.setattr(evidence_upload_session_module, "redis_upload_lock", lambda *a, **k: _BusyLock())
+
+    with pytest.raises(UploadSessionError) as exc:
+        finalize_resumable_upload_session(db, session)
+    assert exc.value.code == "session_busy"
+
+
+@pytest.mark.anyio
 async def test_resumable_stream_append_preserves_confirmed_offset_on_disconnect(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)

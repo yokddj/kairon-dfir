@@ -82,7 +82,7 @@ def _session_to_read(session: EvidenceUploadSession) -> EvidenceUploadSessionRea
 
 
 def _http_from_upload_error(exc: UploadSessionError) -> HTTPException:
-    status_code = 404 if exc.code in {"case_not_found", "session_not_found"} else 409 if exc.code in {"offset_mismatch", "session_not_uploading"} else 400
+    status_code = 404 if exc.code in {"case_not_found", "session_not_found"} else 409 if exc.code in {"offset_mismatch", "session_not_uploading", "session_busy", "session_lock_unavailable"} else 400
     return HTTPException(status_code=status_code, detail=exc.details or {"error_code": exc.code, "code": exc.code, "message": exc.message})
 
 

@@ -42,6 +42,11 @@ from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUp
 from app.schemas.evidence_preflight import PreflightReport
 from app.services.evidence_operations import sync_upload_operation
 from app.services.evidence_preflight import run_preflight
+from app.services.upload_locks import (
+    UploadLockBusyError,
+    UploadLockUnavailableError,
+    redis_upload_lock,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -320,6 +325,28 @@ async def append_resumable_upload_chunk_stream(
     offset: int,
     chunks: AsyncIterable[bytes],
 ) -> EvidenceUploadSession:
+    try:
+        with redis_upload_lock(f"kairon:evidence_upload:{session.id}:append"):
+            return await _append_resumable_upload_chunk_stream_locked(db, session, offset=offset, chunks=chunks)
+    except UploadLockUnavailableError as exc:
+        raise UploadSessionError("session_lock_unavailable", str(exc)) from exc
+    except UploadLockBusyError as exc:
+        raise UploadSessionError("session_busy", str(exc)) from exc
+
+
+async def _append_resumable_upload_chunk_stream_locked(
+    db: Session,
+    session: EvidenceUploadSession,
+    *,
+    offset: int,
+    chunks: AsyncIterable[bytes],
+) -> EvidenceUploadSession:
+    # Re-read the session's persisted state now that the per-session lock is
+    # held, in case a prior request committed a new offset while this
+    # request was waiting for the lock (TOCTOU otherwise: two concurrent
+    # appends could both read the same current_size, both pass the offset
+    # check, then interleave writes into the same staged file).
+    db.refresh(session)
     if session.status not in {EvidenceUploadSessionStatus.created.value, EvidenceUploadSessionStatus.uploading.value, EvidenceUploadSessionStatus.interrupted.value}:
         raise UploadSessionError("session_not_uploading", f"Upload session is '{session.status}', not uploadable.")
     target = Path(session.staged_path)
@@ -376,6 +403,24 @@ async def append_resumable_upload_chunk_stream(
 
 
 def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSession) -> tuple[EvidenceUploadSession, PreflightReport]:
+    # Finalize can be triggered twice for the same session - once
+    # synchronously by the client's POST .../finalize, and once
+    # asynchronously by the background preflight job enqueued when the
+    # last byte lands (see append_resumable_evidence_upload). Without a
+    # lock both callers could pass the status guard below concurrently and
+    # both hash + preflight the same staged file, racing on the same
+    # session row and scratch directory.
+    try:
+        with redis_upload_lock(f"kairon:evidence_upload:{session.id}:finalize"):
+            db.refresh(session)
+            return _finalize_resumable_upload_session_locked(db, session)
+    except UploadLockUnavailableError as exc:
+        raise UploadSessionError("session_lock_unavailable", str(exc)) from exc
+    except UploadLockBusyError as exc:
+        raise UploadSessionError("session_busy", str(exc)) from exc
+
+
+def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUploadSession) -> tuple[EvidenceUploadSession, PreflightReport]:
     if session.status == EvidenceUploadSessionStatus.staged.value:
         report = run_preflight(Path(session.staged_path), token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch")
         session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete"}
