@@ -46,6 +46,7 @@ from app.models.case import Case
 from app.models.evidence import EvidenceType
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
 from app.models.memory import MemoryUpload
+from app.services import evidence_archive_workflow  # noqa: F401 -- registers the "archive" workflow handler on import
 from app.services import evidence_disk_image_workflow  # noqa: F401 -- registers the "disk_image" workflow handler on import
 from app.services import evidence_memory_workflow  # noqa: F401 -- registers the "evidence_memory_dump" workflow handler on import
 from app.services.evidence_operations import sync_upload_operation
@@ -71,7 +72,14 @@ class UnifiedUploadKindConfig:
     off this table instead of an if/else per category."""
 
     workflow: str
-    evidence_type: "EvidenceType"
+    # A real EvidenceType for categories that always produce that type
+    # (memory_dump, disk_image); a plain string host-policy key for
+    # categories whose real Evidence.evidence_type can only be determined
+    # from content after upload (archive -- see host_resolution.EVIDENCE_HOST_POLICIES["generic_archive"]).
+    # Either way this field drives host-resolution policy ONLY, at session
+    # creation, before the real type is known -- it is never written to the
+    # Evidence row itself.
+    evidence_type: "EvidenceType | str"
     is_enabled: Any  # Callable[[Settings], bool]
     # memory_dump canonicalizes to a fixed "memory-image{ext}" name (its
     # original behavior, unchanged); disk_image and anything else where the
@@ -89,9 +97,19 @@ def _disk_image_enabled(settings: Any) -> bool:
     return bool(settings.unified_upload_evidence_disk_image)
 
 
+def _archive_enabled(settings: Any) -> bool:
+    return bool(settings.unified_upload_evidence_archive)
+
+
 UNIFIED_UPLOAD_KINDS: dict[str, UnifiedUploadKindConfig] = {
     "memory_dump": UnifiedUploadKindConfig(workflow="evidence_memory_dump", evidence_type=EvidenceType.memory_dump, is_enabled=_memory_dump_enabled),
     "disk_image": UnifiedUploadKindConfig(workflow="disk_image", evidence_type=EvidenceType.disk_image, is_enabled=_disk_image_enabled, preserve_original_filename=True),
+    # "generic_archive" is a host-policy key (host_resolution.EVIDENCE_HOST_POLICIES),
+    # not an EvidenceType -- the real Evidence.evidence_type for an archive
+    # (velociraptor_zip vs. a generic detected type) is decided by
+    # upload_evidence()'s content-based classification post-upload, exactly
+    # as it is today for this same category on the legacy path.
+    "archive": UnifiedUploadKindConfig(workflow="archive", evidence_type="generic_archive", is_enabled=_archive_enabled, preserve_original_filename=True),
 }
 
 # Coarse projection of MemoryUpload's granular status onto the Wizard's

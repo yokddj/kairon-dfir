@@ -79,4 +79,5 @@ def check_ingestion_readiness(db: Session) -> dict:
         "critical_ready": critical_ok,
         "unified_upload_evidence_memory_dump": bool(settings.unified_upload_evidence_memory_dump),
         "unified_upload_evidence_disk_image": bool(settings.unified_upload_evidence_disk_image),
+        "unified_upload_evidence_archive": bool(settings.unified_upload_evidence_archive),
     }
