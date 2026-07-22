@@ -1,7 +1,7 @@
 """Coverage for the unified chunk-index Evidence Wizard memory_dump path
 (UNIFIED_UPLOAD_EVIDENCE_MEMORY_DUMP).
 
-Exercises app.services.evidence_unified_memory (session creation, status
+Exercises app.services.evidence_unified_upload (session creation, status
 projection onto EvidenceUploadSession/Activity Center, cancel) and
 app.services.evidence_memory_workflow (the "evidence_memory_dump" workflow
 handler), plus the ownership-fixing contract in
@@ -38,11 +38,12 @@ from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUp
 from app.models.memory import MemoryUpload
 from app.services.evidence_memory_workflow import register_evidence_memory_dump
 from app.services.evidence_operations import ALLOWED_OPERATION_TRANSITIONS
-from app.services.evidence_unified_memory import (
-    cancel_unified_memory_dump_session,
-    create_unified_memory_dump_session,
-    is_unified_memory_dump_session,
-    sync_unified_session_from_memory_upload,
+from app.services.evidence_unified_upload import (
+    UNIFIED_UPLOAD_KINDS,
+    cancel_unified_session,
+    create_unified_upload_session,
+    is_unified_session,
+    sync_unified_session,
     unified_upload_info,
 )
 from app.services.evidence_upload_session import UploadSessionError, append_resumable_upload_chunk_stream, finalize_resumable_upload_session, get_upload_session
@@ -56,6 +57,43 @@ from app.services.upload_shared.workflow import get_workflow_handler, registered
 
 settings = get_settings()
 CASE_ID = "cccccccc-1111-4111-8111-cccccccccccc"
+
+
+def create_unified_memory_dump_session(
+    db,
+    case_id,
+    *,
+    filename,
+    expected_size_bytes,
+    declared_platform,
+    client_sha256,
+    host_id,
+    provided_host,
+    memory_authorization_acknowledged,
+    notes,
+    current_user,
+):
+    """Test convenience wrapper preserving the memory_dump-specific call
+    shape most of this file's tests already use, over the generic
+    create_unified_upload_session (which every category, including
+    disk_image, now shares -- see test_evidence_disk_image_upload.py)."""
+    kind_config = UNIFIED_UPLOAD_KINDS["memory_dump"]
+    return create_unified_upload_session(
+        db,
+        case_id,
+        kind="memory_dump",
+        workflow=kind_config.workflow,
+        evidence_type=kind_config.evidence_type,
+        filename=filename,
+        expected_size_bytes=expected_size_bytes,
+        declared_platform=declared_platform,
+        client_sha256=client_sha256,
+        host_id=host_id,
+        provided_host=provided_host,
+        authorization_acknowledged=memory_authorization_acknowledged,
+        notes=notes,
+        current_user=current_user,
+    )
 
 
 def _db():
@@ -150,7 +188,7 @@ def test_create_unified_session_fixes_ownership_at_creation(tmp_path, monkeypatc
         notes="found on WS-01",
         current_user=None,
     )
-    assert is_unified_memory_dump_session(session)
+    assert is_unified_session(session)
     assert session.metadata_json["backend"] == "unified"
     assert session.metadata_json["memory_upload_id"] == info.memory_upload_id
     memory_upload = db.get(MemoryUpload, info.memory_upload_id)
@@ -235,7 +273,7 @@ def test_unified_single_chunk_upload_registers_evidence_with_wizard_metadata(tmp
     assert evidence.host_id == host.id
     assert evidence.host_assignment_method == "upload_assignment"
 
-    synced = sync_unified_session_from_memory_upload(db, db.get(EvidenceUploadSession, session.id))
+    synced = sync_unified_session(db, db.get(EvidenceUploadSession, session.id))
     assert synced.status == EvidenceUploadSessionStatus.promoted.value
     assert synced.promoted_evidence_id == evidence.id
     assert synced.bytes_received == len(payload)
@@ -301,7 +339,7 @@ def test_cancel_unified_session_cancels_backing_memory_upload(tmp_path, monkeypa
         notes=None,
         current_user=None,
     )
-    cancelled = cancel_unified_memory_dump_session(db, session)
+    cancelled = cancel_unified_session(db, session)
     assert cancelled.status == EvidenceUploadSessionStatus.cancelled.value
     memory_upload = db.get(MemoryUpload, info.memory_upload_id)
     assert memory_upload.status == "cancelled"
@@ -335,10 +373,10 @@ def test_legacy_byte_offset_endpoints_reject_unified_sessions(tmp_path, monkeypa
 
 
 def test_unified_status_projection_maps_onto_evidence_operation_state_machine(tmp_path, monkeypatch):
-    """Every status app.services.evidence_unified_memory can project must be
+    """Every status app.services.evidence_unified_upload can project must be
     a valid node in evidence_operations.ALLOWED_OPERATION_TRANSITIONS, or
     Activity Center's sync_upload_operation raises on the next poll."""
-    from app.services.evidence_unified_memory import _UNIFIED_STATUS_TO_SESSION_STATUS
+    from app.services.evidence_unified_upload import _UNIFIED_STATUS_TO_SESSION_STATUS
     from app.services.evidence_operations import _operation_status
 
     valid_operation_statuses = set(ALLOWED_OPERATION_TRANSITIONS.keys())
@@ -380,7 +418,7 @@ def test_http_init_falls_back_to_legacy_when_flag_disabled(tmp_path, monkeypatch
     body = response.json()
     assert body["unified"] is None
     session = db.get(EvidenceUploadSession, body["session"]["id"])
-    assert not is_unified_memory_dump_session(session)
+    assert not is_unified_session(session)
 
 
 def test_http_init_routes_memory_dump_intake_to_unified_backend_when_flag_enabled(tmp_path, monkeypatch):
@@ -397,7 +435,7 @@ def test_http_init_routes_memory_dump_intake_to_unified_backend_when_flag_enable
     assert body["unified"] is not None
     assert body["unified"]["total_chunks"] >= 1
     session = db.get(EvidenceUploadSession, body["session"]["id"])
-    assert is_unified_memory_dump_session(session)
+    assert is_unified_session(session)
 
     # Other intake categories are untouched by the flag: no intake_category
     # (or a non-memory_dump one) always takes the legacy path.
@@ -504,7 +542,7 @@ def test_resumable_discovery_excludes_cancelled_and_expired(tmp_path, monkeypatc
         db, CASE_ID, filename="cancelled.mem", expected_size_bytes=64, declared_platform=None, client_sha256=None,
         host_id=None, provided_host="WIN-RAM11", memory_authorization_acknowledged=True, notes=None, current_user=None,
     )
-    cancel_unified_memory_dump_session(db, cancelled_session)
+    cancel_unified_session(db, cancelled_session)
 
     from app.models.evidence_upload_session import EvidenceUploadSessionStatus
     expired_session, _ = create_unified_memory_dump_session(
