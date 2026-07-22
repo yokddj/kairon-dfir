@@ -3746,6 +3746,7 @@ export type IngestionReadiness = {
   critical_ready: boolean;
   unified_upload_evidence_memory_dump: boolean;
   unified_upload_evidence_disk_image: boolean;
+  unified_upload_evidence_archive: boolean;
 };
 
 export type EvidenceUploadSessionRead = {
