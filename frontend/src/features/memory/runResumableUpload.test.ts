@@ -471,7 +471,13 @@ describe("runResumableUpload", () => {
     expect(finalize).not.toHaveBeenCalled();
   });
 
-  it("timeout does not advance to the next chunk even when status would show it received", async () => {
+  it("reconciles via getStatus and advances when a timed-out chunk actually landed server-side", async () => {
+    // Regression test for the production evidence-upload stall: nginx logs
+    // showed the server committing a chunk (200) while the client's XHR
+    // promise never settled, so it timed out and endlessly re-sent the same
+    // already-accepted chunk. A timeout is not proof the bytes never
+    // arrived - the uploader must check the server's authoritative byte
+    // count before assuming failure and advance if it's already there.
     const uploadId = "timeout-ack";
     const file = makeFile(12);
     const chunkSize = 4;
@@ -493,12 +499,26 @@ describe("runResumableUpload", () => {
     const getStatus = vi.fn(async () => buildStatus());
     const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
       if (chunkIndex === 2) {
+        // The server actually committed this chunk before the client's
+        // XHR promise stalled - exactly the documented production symptom.
         received.push(2);
         throw new Error("Upload timed out. Your network may be unavailable.");
       }
       throw new Error("unexpected chunk");
     });
-    const finalize = vi.fn();
+    const finalize = vi.fn(async () =>
+      makeStatus({
+        upload_id: uploadId,
+        status: "completed",
+        evidence_id: "ev-timeout-ack",
+        bytes_received: file.size,
+        expected_bytes: file.size,
+        missing_chunks: [],
+        received_chunks: [0, 1, 2],
+        received_chunk_count: 3,
+        progress_percent: 100,
+      }),
+    );
     const onProgress = vi.fn();
 
     const result = await runResumableUpload({
@@ -513,14 +533,15 @@ describe("runResumableUpload", () => {
       sleep: sleepImmediate,
     });
 
-    expect(result.type).toBe("failed");
-    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([2, 2, 2, 2]);
-    expect(getStatus).toHaveBeenCalledTimes(1);
-    expect(onProgress).not.toHaveBeenCalledWith({ loaded: 12, total: 12 });
-    expect(finalize).not.toHaveBeenCalled();
+    expect(result.type).toBe("completed");
+    // Only one attempt: the timeout is reconciled via getStatus() instead
+    // of blindly retrying (and stalling again) up to three more times.
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([2]);
+    expect(onProgress).toHaveBeenCalledWith({ loaded: 12, total: 12 });
+    expect(finalize).toHaveBeenCalledTimes(1);
   });
 
-  it("network failure does not advance even if the chunk later appears in status", async () => {
+  it("reconciles via getStatus and advances when a network error's chunk actually landed server-side", async () => {
     const uploadId = "network-ack";
     const file = makeFile(8);
     const chunkSize = 4;
@@ -540,12 +561,53 @@ describe("runResumableUpload", () => {
       received.push(chunkIndex);
       throw new Error("Network error while uploading");
     });
+    const finalize = vi.fn(async () =>
+      makeStatus({
+        upload_id: uploadId,
+        status: "completed",
+        evidence_id: "ev-network-ack",
+        bytes_received: file.size,
+        expected_bytes: file.size,
+        missing_chunks: [],
+        received_chunks: [0, 1],
+        received_chunk_count: 2,
+        progress_percent: 100,
+      }),
+    );
+
+    const result = await runResumableUpload({ uploadId, file, chunkSize, getStatus, uploadChunk, finalize, signal: new AbortController().signal, sleep: sleepImmediate });
+
+    expect(result.type).toBe("completed");
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([1]);
+    expect(finalize).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not falsely reconcile when the chunk genuinely never arrived, and keeps retrying", async () => {
+    const uploadId = "network-genuine-fail";
+    const file = makeFile(8);
+    const chunkSize = 4;
+    // received never gets chunk 1 - the server truly never got the bytes.
+    const received: number[] = [0];
+    const buildStatus = () => makeStatus({
+      upload_id: uploadId,
+      expected_bytes: file.size,
+      chunk_size_bytes: chunkSize,
+      total_chunks: 2,
+      received_chunk_count: received.length,
+      received_chunks: [...received],
+      bytes_received: received.length * chunkSize,
+      missing_chunks: [0, 1].filter((i) => !received.includes(i)),
+    });
+    const getStatus = vi.fn(async () => buildStatus());
+    const uploadChunk = vi.fn(async () => {
+      throw new Error("Network error while uploading");
+    });
     const finalize = vi.fn();
 
     const result = await runResumableUpload({ uploadId, file, chunkSize, getStatus, uploadChunk, finalize, signal: new AbortController().signal, sleep: sleepImmediate });
 
     expect(result.type).toBe("failed");
-    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([1, 1, 1, 1]);
+    expect(uploadChunk).toHaveBeenCalledTimes(CHUNK_UPLOAD_MAX_RETRIES + 1);
     expect(finalize).not.toHaveBeenCalled();
   });
 
@@ -591,7 +653,7 @@ describe("runResumableUpload", () => {
     expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([1, 1]);
   });
 
-  it("HTTP 500 does not advance from status reconciliation", async () => {
+  it("reconciles via getStatus and advances when a 500's chunk actually landed server-side", async () => {
     const uploadId = "http500-ack";
     const file = makeFile(8);
     const chunkSize = 4;
@@ -602,13 +664,25 @@ describe("runResumableUpload", () => {
       received.push(chunkIndex);
       throw new ApiError(500, null, "Server error", null);
     });
-    const finalize = vi.fn();
+    const finalize = vi.fn(async () =>
+      makeStatus({
+        upload_id: uploadId,
+        status: "completed",
+        evidence_id: "ev-http500-ack",
+        bytes_received: file.size,
+        expected_bytes: file.size,
+        missing_chunks: [],
+        received_chunks: [0, 1],
+        received_chunk_count: 2,
+        progress_percent: 100,
+      }),
+    );
 
     const result = await runResumableUpload({ uploadId, file, chunkSize, getStatus, uploadChunk, finalize, signal: new AbortController().signal, sleep: sleepImmediate });
 
-    expect(result.type).toBe("failed");
-    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([1, 1, 1, 1]);
-    expect(finalize).not.toHaveBeenCalled();
+    expect(result.type).toBe("completed");
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([1]);
+    expect(finalize).toHaveBeenCalledTimes(1);
   });
 
   it("HTTP 500 with missing chunk retries", async () => {
@@ -705,6 +779,90 @@ describe("runResumableUpload", () => {
     expect(result.type).toBe("failed");
     expect(uploadChunk).toHaveBeenCalledTimes(1);
     expect(finalize).not.toHaveBeenCalled();
+  });
+
+  it("reconciles after an HTTP 409 offset_mismatch instead of failing, and continues from the server-confirmed offset", async () => {
+    const uploadId = "offset-mismatch-1";
+    const file = makeFile(8);
+    const chunkSize = 4;
+
+    // The client's local view is stale: it believes both chunks are still
+    // missing, but the server already has chunk 0 staged (e.g. from an
+    // earlier attempt whose response the client never saw).
+    const staleStatus = makeStatus({
+      upload_id: uploadId,
+      expected_bytes: file.size,
+      chunk_size_bytes: chunkSize,
+      total_chunks: 2,
+      received_chunks: [],
+      received_chunk_count: 0,
+      bytes_received: 0,
+      missing_chunks: [0, 1],
+    });
+    const reconciledStatus = makeStatus({
+      upload_id: uploadId,
+      expected_bytes: file.size,
+      chunk_size_bytes: chunkSize,
+      total_chunks: 2,
+      received_chunks: [0],
+      received_chunk_count: 1,
+      bytes_received: 4,
+      missing_chunks: [1],
+    });
+    const completeStatus = makeStatus({
+      upload_id: uploadId,
+      expected_bytes: file.size,
+      chunk_size_bytes: chunkSize,
+      total_chunks: 2,
+      received_chunks: [0, 1],
+      received_chunk_count: 2,
+      bytes_received: 8,
+      missing_chunks: [],
+    });
+
+    const getStatus = vi
+      .fn()
+      .mockResolvedValueOnce({ ...staleStatus })
+      .mockResolvedValueOnce({ ...reconciledStatus })
+      .mockResolvedValue({ ...completeStatus });
+
+    const uploadChunk = vi.fn(async (_uid: string, chunkIndex: number) => {
+      if (chunkIndex === 0) {
+        throw new ApiError(409, "offset_mismatch", "Upload offset does not match the server-confirmed offset.", null);
+      }
+      return { ...completeStatus };
+    });
+    const finalize = vi.fn(async () =>
+      makeStatus({
+        upload_id: uploadId,
+        status: "completed",
+        evidence_id: "ev-recon",
+        bytes_received: file.size,
+        expected_bytes: file.size,
+        missing_chunks: [],
+        received_chunks: [0, 1],
+        received_chunk_count: 2,
+        progress_percent: 100,
+      }),
+    );
+
+    const result = await runResumableUpload({
+      uploadId,
+      file,
+      chunkSize,
+      getStatus,
+      uploadChunk,
+      finalize,
+      signal: new AbortController().signal,
+      sleep: sleepImmediate,
+    });
+
+    expect(result.type).toBe("completed");
+    // Chunk 0 is attempted once, rejected as already-staged, and the
+    // uploader must move on to chunk 1 rather than retrying chunk 0 or
+    // giving up entirely.
+    expect(uploadChunk.mock.calls.map((c) => c[1])).toEqual([0, 1]);
+    expect(finalize).toHaveBeenCalledTimes(1);
   });
 
   it("aborts before first chunk and does not start upload", async () => {

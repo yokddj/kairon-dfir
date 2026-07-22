@@ -75,6 +75,43 @@ def test_memory_dump_classification_by_extension(tmp_path):
     assert report.resource_check.file_size_bytes == 4096
 
 
+def test_memory_dump_is_not_subject_to_extraction_limit(tmp_path, monkeypatch):
+    # Memory dumps are staged as-is - nothing is ever extracted from them
+    # (app.ingest.archive._enforce_limits is never invoked for this
+    # category) - so a memory image larger than the configured extraction
+    # limit must not be blocked by the "Within extraction limit" check.
+    # Regression test for the evidence-wizard memory_dump intake
+    # incorrectly reusing estimated_extracted_bytes=file_size.
+    monkeypatch.setattr(settings, "backend_max_extracted_bytes", 100)
+    mem_path = tmp_path / "capture.mem"
+    mem_path.write_bytes(b"\x00" * 4096)
+
+    report = run_preflight(mem_path, token="t2b", original_filename="capture.mem", declared_platform=None, tmp_dir=tmp_path / "scratch")
+
+    assert report.resource_check.estimated_extracted_bytes is None
+    assert not any(d.problem == "Extraction size exceeded" for d in report.diagnostics)
+    assert not any(c.label == "Within extraction limit" for c in report.status_checks)
+
+
+def test_memory_dump_upload_limit_matches_dedicated_memory_pipeline(tmp_path, monkeypatch):
+    # The evidence wizard's memory_dump intake must enforce the same
+    # upload-size limit as the dedicated Memory Overview pipeline
+    # (memory_upload_max_bytes), not the legacy memory_max_upload_size
+    # fallback - otherwise a memory image that uploads fine via Memory
+    # Overview can be rejected by preflight when routed through the
+    # wizard instead.
+    monkeypatch.setattr(settings, "memory_upload_max_bytes", 5000)
+    monkeypatch.setattr(settings, "memory_max_upload_size", 100)
+    mem_path = tmp_path / "capture.mem"
+    mem_path.write_bytes(b"\x00" * 4096)
+
+    report = run_preflight(mem_path, token="t2c", original_filename="capture.mem", declared_platform=None, tmp_dir=tmp_path / "scratch")
+
+    assert report.resource_check.configured_upload_limit_bytes == 5000
+    check = next(c for c in report.status_checks if c.label == "Within upload limit")
+    assert check.ok
+
+
 def test_unknown_evidence_is_low_confidence_and_not_blocking_alone(tmp_path):
     unknown_path = tmp_path / "notes.txt"
     unknown_path.write_text("just some notes, not evidence", encoding="utf-8")

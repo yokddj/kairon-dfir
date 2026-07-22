@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 import { api, type ActivityOperation, type DfirCase } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
@@ -16,19 +17,39 @@ function bytes(value: number | null | undefined): string {
 }
 
 export default function ActivityPage() {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const { activeCaseId } = useActiveCase();
   const { effectiveTimezone } = useTimezonePreference();
   const { data: cases } = useQuery({ queryKey: ["cases"], queryFn: api.listCases });
   const [caseId, setCaseId] = useState(activeCaseId);
   const activityQuery = useQuery({
     queryKey: ["activity", caseId],
-    queryFn: () => (caseId ? api.listCaseActivity(caseId) : api.listActivity()),
+    queryFn: () => api.listActivity(),
   });
   const operationsQuery = useQuery({
     queryKey: ["activity-center", caseId],
     queryFn: () => api.getCaseActivity(caseId || ""),
     enabled: Boolean(caseId),
     refetchInterval: 5000,
+  });
+  const cancelMutation = useMutation({
+    mutationFn: ({ targetCaseId, sessionId }: { targetCaseId: string; sessionId: string }) => api.cancelEvidenceUploadSession(targetCaseId, sessionId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["activity-center", caseId] });
+    },
+  });
+  const retryMutation = useMutation({
+    mutationFn: ({ targetCaseId, operationId }: { targetCaseId: string; operationId: string }) => api.retryEvidenceOperation(targetCaseId, operationId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["activity-center", caseId] });
+    },
+  });
+  const dismissMutation = useMutation({
+    mutationFn: ({ targetCaseId, operationId }: { targetCaseId: string; operationId: string }) => api.dismissEvidenceOperation(targetCaseId, operationId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["activity-center", caseId] });
+    },
   });
 
   useEffect(() => {
@@ -67,7 +88,16 @@ export default function ActivityPage() {
             ))}
           </div>
           <div className="mt-5 space-y-3">
-            {(operationsQuery.data?.operations ?? []).map((operation: ActivityOperation) => (
+            {(operationsQuery.data?.operations ?? []).map((operation: ActivityOperation) => {
+              const uploadSessionId = typeof operation.details.upload_session_id === "string" ? operation.details.upload_session_id : operation.kind === "upload" ? operation.id : null;
+              const evidenceId = typeof operation.details.promoted_evidence_id === "string" ? operation.details.promoted_evidence_id : typeof operation.details.evidence_id === "string" ? operation.details.evidence_id : null;
+              const operationId = typeof operation.details.operation_id === "string" ? operation.details.operation_id : operation.id;
+              const jobs = Array.isArray(operation.details.jobs) ? operation.details.jobs as Array<Record<string, unknown>> : [];
+              const canContinue = Boolean(uploadSessionId && operation.kind === "upload" && ["running", "paused"].includes(operation.status));
+              const canCancel = Boolean(uploadSessionId && operation.kind === "upload" && ["running", "paused"].includes(operation.status));
+              const canRetry = operation.status === "failed";
+              const canDismiss = ["completed", "cancelled", "expired"].includes(operation.status);
+              return (
               <article key={`${operation.kind}-${operation.id}`} className="rounded-2xl border border-line bg-abyss/60 p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
@@ -86,14 +116,28 @@ export default function ActivityPage() {
                     <p className="mt-1 text-xs text-muted">{operation.progress.toFixed(0)}% · {bytes(operation.bytes_received)} / {bytes(operation.expected_size_bytes)}</p>
                   </div>
                 ) : null}
+                {operation.details.failure_message ? <p className="mt-2 text-xs text-danger">Error: {String(operation.details.failure_message)}</p> : null}
+                {jobs.length ? (
+                  <div className="mt-3 rounded-xl border border-line bg-panel/40 p-3 text-xs text-muted">
+                    <p className="font-mono uppercase tracking-[0.14em] text-accent">Jobs</p>
+                    {jobs.slice(0, 4).map((job) => (
+                      <p key={String(job.id)} className="mt-1">{String(job.job_type)} · {String(job.status)} · owner {String(job.owner)}{job.rq_job_id ? ` · ${String(job.rq_job_id).slice(0, 8)}` : ""}</p>
+                    ))}
+                  </div>
+                ) : null}
                 <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                  <button type="button" className="rounded-xl border border-line px-3 py-1.5 text-muted" disabled>Resume</button>
-                  <button type="button" className="rounded-xl border border-line px-3 py-1.5 text-muted" disabled>Retry</button>
-                  <button type="button" className="rounded-xl border border-line px-3 py-1.5 text-muted" disabled>Cancel</button>
+                  <button type="button" className="rounded-xl border border-line px-3 py-1.5 text-muted disabled:opacity-50" disabled={!canContinue} onClick={() => uploadSessionId && navigate(`/cases/${operation.case_id}?tab=evidences&resume_session=${uploadSessionId}`)}>Continue wizard</button>
+                  <button type="button" className="rounded-xl border border-line px-3 py-1.5 text-muted disabled:opacity-50" disabled={!evidenceId} onClick={() => evidenceId && navigate(`/cases/${operation.case_id}?tab=processing&evidence_id=${evidenceId}`)}>Open evidence</button>
+                  <button type="button" className="rounded-xl border border-line px-3 py-1.5 text-muted disabled:opacity-50" disabled={!evidenceId} onClick={() => evidenceId && navigate(`/cases/${operation.case_id}?tab=processing&evidence_id=${evidenceId}`)}>Open processing</button>
+                  <button type="button" className="rounded-xl border border-line px-3 py-1.5 text-muted disabled:opacity-50" disabled={!canRetry || retryMutation.isPending} onClick={() => retryMutation.mutate({ targetCaseId: operation.case_id, operationId })}>Retry</button>
+                  <button type="button" className="rounded-xl border border-line px-3 py-1.5 text-muted disabled:opacity-50" disabled={!canCancel || cancelMutation.isPending} onClick={() => uploadSessionId && cancelMutation.mutate({ targetCaseId: operation.case_id, sessionId: uploadSessionId })}>Cancel</button>
+                  <button type="button" className="rounded-xl border border-line px-3 py-1.5 text-muted disabled:opacity-50" disabled={!canDismiss || dismissMutation.isPending} onClick={() => dismissMutation.mutate({ targetCaseId: operation.case_id, operationId })}>Dismiss completed</button>
+                  {jobs.some((job) => job.rq_job_id) ? <span className="rounded-xl border border-line px-3 py-1.5 text-muted">Logs: RQ job shown</span> : null}
                   <span className="rounded-xl border border-line px-3 py-1.5 text-muted">Details: {operation.id.slice(0, 8)}</span>
                 </div>
               </article>
-            ))}
+              );
+            })}
             {!operationsQuery.data?.operations?.length ? <div className="rounded-2xl border border-line bg-abyss/40 p-4 text-sm text-muted">No active lifecycle operations for this case.</div> : null}
           </div>
         </section>

@@ -145,6 +145,13 @@ export default function CaseDetail() {
   }, [searchParams, tab]);
 
   useEffect(() => {
+    if (searchParams.get("resume_session")) {
+      setIngestionWizardOpen(true);
+      setTab("evidences");
+    }
+  }, [searchParams]);
+
+  useEffect(() => {
     const requestedQuery = searchParams.get("query") ?? "";
     if (requestedQuery !== query) {
       setQuery(requestedQuery);
@@ -847,7 +854,15 @@ export default function CaseDetail() {
       <EvidenceIngestionWizard
         open={ingestionWizardOpen}
         caseId={caseId}
-        onClose={() => setIngestionWizardOpen(false)}
+        resumeSessionId={searchParams.get("resume_session") ?? undefined}
+        onClose={() => {
+          setIngestionWizardOpen(false);
+          if (searchParams.get("resume_session")) {
+            const next = new URLSearchParams(searchParams);
+            next.delete("resume_session");
+            setSearchParams(next, { replace: true });
+          }
+        }}
       />
     </div>
   );

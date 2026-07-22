@@ -25,7 +25,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, AsyncIterable, BinaryIO
 from uuid import uuid4
 
 from fastapi import Request, UploadFile
@@ -40,7 +40,13 @@ from app.models.case import Case
 from app.models.evidence import Evidence
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
 from app.schemas.evidence_preflight import PreflightReport
+from app.services.evidence_operations import sync_upload_operation
 from app.services.evidence_preflight import run_preflight
+from app.services.upload_locks import (
+    UploadLockBusyError,
+    UploadLockUnavailableError,
+    redis_upload_lock,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -252,6 +258,7 @@ def create_resumable_upload_session(
     db.add(session)
     db.commit()
     db.refresh(session)
+    sync_upload_operation(db, session)
     return session
 
 
@@ -297,6 +304,7 @@ def append_resumable_upload_chunk(
         _touch_upload_session(session)
         db.add(session)
         db.commit()
+        sync_upload_operation(db, session)
         raise
     session.bytes_received = written
     session.size_bytes = written
@@ -306,10 +314,127 @@ def append_resumable_upload_chunk(
     db.add(session)
     db.commit()
     db.refresh(session)
+    sync_upload_operation(db, session)
+    return session
+
+
+async def append_resumable_upload_chunk_stream(
+    db: Session,
+    session: EvidenceUploadSession,
+    *,
+    offset: int,
+    chunks: AsyncIterable[bytes],
+) -> EvidenceUploadSession:
+    try:
+        with redis_upload_lock(f"kairon:evidence_upload:{session.id}:append"):
+            return await _append_resumable_upload_chunk_stream_locked(db, session, offset=offset, chunks=chunks)
+    except UploadLockUnavailableError as exc:
+        raise UploadSessionError("session_lock_unavailable", str(exc)) from exc
+    except UploadLockBusyError as exc:
+        raise UploadSessionError("session_busy", str(exc)) from exc
+
+
+async def _append_resumable_upload_chunk_stream_locked(
+    db: Session,
+    session: EvidenceUploadSession,
+    *,
+    offset: int,
+    chunks: AsyncIterable[bytes],
+) -> EvidenceUploadSession:
+    # Re-read the session's persisted state now that the per-session lock is
+    # held, in case a prior request committed a new offset while this
+    # request was waiting for the lock (TOCTOU otherwise: two concurrent
+    # appends could both read the same current_size, both pass the offset
+    # check, then interleave writes into the same staged file).
+    db.refresh(session)
+    if (session.metadata_json or {}).get("backend") == "unified":
+        raise UploadSessionError("unified_session_wrong_endpoint", "This upload session is backed by the unified chunk-index backend; use the memory upload chunk endpoints, not this byte-offset endpoint.")
+    if session.status not in {EvidenceUploadSessionStatus.created.value, EvidenceUploadSessionStatus.uploading.value, EvidenceUploadSessionStatus.interrupted.value}:
+        raise UploadSessionError("session_not_uploading", f"Upload session is '{session.status}', not uploadable.")
+    target = Path(session.staged_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    current_size = target.stat().st_size if target.exists() else 0
+    if offset != current_size or offset != int(session.bytes_received or 0):
+        raise UploadSessionError("offset_mismatch", "Upload offset does not match the server-confirmed offset.", {"expected_offset": current_size, "received_offset": offset})
+    max_bytes = int(get_settings().backend_max_upload_size)
+    written = current_size
+    temp_path = target.parent / f".{target.name}.{uuid4()}.part"
+    try:
+        with temp_path.open("wb") as temp_buffer:
+            async for chunk in chunks:
+                if not chunk:
+                    continue
+                next_size = written + len(chunk)
+                if next_size > max_bytes or (session.expected_size_bytes is not None and next_size > int(session.expected_size_bytes)):
+                    raise UploadSessionError("upload_size_limit", "Upload exceeded the configured size limit.")
+                temp_buffer.write(chunk)
+                written = next_size
+            temp_buffer.flush()
+            os.fsync(temp_buffer.fileno())
+        with target.open("ab") as buffer, temp_path.open("rb") as temp_buffer:
+            shutil.copyfileobj(temp_buffer, buffer, length=1024 * 1024)
+            buffer.flush()
+            os.fsync(buffer.fileno())
+    except UploadSessionError:
+        raise
+    except Exception as exc:
+        session.status = EvidenceUploadSessionStatus.interrupted.value
+        session.failure_message = f"Upload interrupted: {exc.__class__.__name__}"
+        session.bytes_received = current_size
+        session.size_bytes = current_size
+        _touch_upload_session(session)
+        db.add(session)
+        db.commit()
+        sync_upload_operation(db, session)
+        raise
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except Exception:
+            logger.warning("evidence upload temp chunk cleanup failed", extra={"session_id": session.id, "temp_path": str(temp_path)})
+    session.bytes_received = written
+    session.size_bytes = written
+    session.status = EvidenceUploadSessionStatus.uploading.value
+    session.failure_message = None
+    _touch_upload_session(session)
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    sync_upload_operation(db, session)
     return session
 
 
 def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSession) -> tuple[EvidenceUploadSession, PreflightReport]:
+    # Finalize can be triggered twice for the same session - once
+    # synchronously by the client's POST .../finalize, and once
+    # asynchronously by the background preflight job enqueued when the
+    # last byte lands (see append_resumable_evidence_upload). Without a
+    # lock both callers could pass the status guard below concurrently and
+    # both hash + preflight the same staged file, racing on the same
+    # session row and scratch directory.
+    try:
+        with redis_upload_lock(f"kairon:evidence_upload:{session.id}:finalize"):
+            db.refresh(session)
+            return _finalize_resumable_upload_session_locked(db, session)
+    except UploadLockUnavailableError as exc:
+        raise UploadSessionError("session_lock_unavailable", str(exc)) from exc
+    except UploadLockBusyError as exc:
+        raise UploadSessionError("session_busy", str(exc)) from exc
+
+
+def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUploadSession) -> tuple[EvidenceUploadSession, PreflightReport]:
+    if (session.metadata_json or {}).get("backend") == "unified":
+        raise UploadSessionError("unified_session_wrong_endpoint", "This upload session is backed by the unified chunk-index backend; finalize it through the memory upload finalize endpoint, not this one.")
+    if session.status == EvidenceUploadSessionStatus.staged.value:
+        report = run_preflight(Path(session.staged_path), token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch")
+        session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete"}
+        session.failure_message = None
+        _touch_upload_session(session)
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        sync_upload_operation(db, session)
+        return session, report
     if session.status not in {EvidenceUploadSessionStatus.uploading.value, EvidenceUploadSessionStatus.interrupted.value, EvidenceUploadSessionStatus.created.value}:
         raise UploadSessionError("session_not_uploading", f"Upload session is '{session.status}', not ready to finalize.")
     path = Path(session.staged_path)
@@ -322,6 +447,7 @@ def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSessio
         _touch_upload_session(session)
         db.add(session)
         db.commit()
+        sync_upload_operation(db, session)
         raise UploadSessionError("upload_incomplete", session.failure_message, {"bytes_received": size, "expected_bytes": session.expected_size_bytes})
     session.status = EvidenceUploadSessionStatus.preflight_running.value
     session.bytes_received = size
@@ -341,6 +467,7 @@ def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSessio
     db.add(session)
     db.commit()
     db.refresh(session)
+    sync_upload_operation(db, session)
     return session, report
 
 
@@ -695,6 +822,7 @@ def create_upload_session(
     db.add(session)
     db.commit()
     db.refresh(session)
+    sync_upload_operation(db, session)
 
     report = run_preflight(
         Path(session.staged_path),
@@ -706,6 +834,7 @@ def create_upload_session(
     session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category}
     db.add(session)
     db.commit()
+    sync_upload_operation(db, session)
     return session, report
 
 
@@ -747,6 +876,7 @@ async def create_streamed_upload_session(
         db.add(session)
         db.commit()
         db.refresh(session)
+        sync_upload_operation(db, session)
         return session
     except Exception:
         root = _session_root(session_id)
@@ -768,6 +898,11 @@ def rerun_preflight(session: EvidenceUploadSession, *, declared_platform: str | 
 def _cleanup_storage(session: EvidenceUploadSession) -> None:
     if session.is_server_path:
         return  # never delete the analyst's own file - it was never copied
+    if (session.metadata_json or {}).get("backend") == "unified":
+        # Unified sessions never stage bytes of their own -- staged_path is
+        # a sentinel, not a real path. The backing MemoryUpload session
+        # (app.services.memory.upload_sessions) owns and cleans its bytes.
+        return
     root = _session_root(session.id)
     try:
         if root.exists():
@@ -794,6 +929,7 @@ def cancel_upload_session(db: Session, session: EvidenceUploadSession) -> None:
     session.status = EvidenceUploadSessionStatus.cancelled.value
     db.add(session)
     db.commit()
+    sync_upload_operation(db, session)
 
 
 def cleanup_expired_upload_sessions(db: Session, *, limit: int = 50) -> dict[str, int]:
@@ -810,6 +946,7 @@ def cleanup_expired_upload_sessions(db: Session, *, limit: int = 50) -> dict[str
         item.status = EvidenceUploadSessionStatus.expired.value
         item.failure_message = "Upload session expired before processing was confirmed."
         db.add(item)
+        sync_upload_operation(db, item, commit=False)
     db.commit()
     return {"expired": len(expired)}
 
@@ -1019,6 +1156,7 @@ def promote_upload_session(
     session.promoted_evidence_id = evidence.id
     db.add(session)
     db.commit()
+    sync_upload_operation(db, session)
     _cleanup_storage(session)
     _log_upload(
         "PROMOTION END",

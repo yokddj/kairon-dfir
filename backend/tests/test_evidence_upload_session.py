@@ -31,6 +31,7 @@ from app.core.config import get_settings
 from app.models.case import Case
 from app.models.case_host import CaseHost
 from app.models.evidence import Evidence
+from app.models.evidence_operation import EvidenceOperation, EvidenceOperationJob
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
 from app.models.memory import MemoryUpload
 from app.services.memory.upload_sessions import (
@@ -42,6 +43,7 @@ from app.services.evidence_upload_session import (
     UploadSessionError,
     _stage_streamed_file,
     append_resumable_upload_chunk,
+    append_resumable_upload_chunk_stream,
     cancel_upload_session,
     cleanup_expired_upload_sessions,
     create_resumable_upload_session,
@@ -50,6 +52,7 @@ from app.services.evidence_upload_session import (
     get_active_session,
     promote_upload_session,
 )
+from app.services.evidence_operations import reconcile_evidence_operations, transition_operation, upsert_operation_job
 
 settings = get_settings()
 CASE_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
@@ -176,6 +179,101 @@ def test_resumable_upload_persists_session_before_bytes_and_resumes_from_offset(
     assert Path(session.staged_path).read_bytes() == b"abc"
 
 
+def test_resumable_upload_syncs_actionable_operation_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+    operation = db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).one()
+    assert operation.status == "waiting_upload"
+    assert operation.stage == "upload"
+    assert operation.metadata_json["upload_session_id"] == session.id
+
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(b"abcde"))
+    operation = db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).one()
+    assert operation.progress == 50
+    assert operation.bytes_received == 5
+    assert operation.expected_size_bytes == 10
+
+    cancel_upload_session(db, session)
+    operation = db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).one()
+    assert operation.status == "cancelled"
+    assert operation.completed_at is not None
+
+
+def test_operation_transition_graph_rejects_impossible_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+    operation = db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).one()
+
+    with pytest.raises(ValueError):
+        transition_operation(operation, "completed")
+
+
+def test_operation_jobs_are_idempotent_per_operation(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+    operation = db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).one()
+
+    first = upsert_operation_job(db, operation, job_type="preflight", dedupe_key=session.id, status="queued")
+    second = upsert_operation_job(db, operation, job_type="preflight", dedupe_key=session.id, status="running")
+
+    assert first.id == second.id
+    assert db.query(EvidenceOperationJob).filter(EvidenceOperationJob.operation_id == operation.id).count() == 1
+    assert second.status == "running"
+
+
+def test_reconciliation_cleans_storage_for_sessions_expired_mid_upload(tmp_path, monkeypatch):
+    # Regression test for a production storage leak: a session abandoned
+    # while `uploading` (never reaches `staged`) previously had its DB row
+    # flipped to `expired` by reconcile_evidence_operations without ever
+    # cleaning its staged bytes - only cleanup_expired_upload_sessions()
+    # cleaned storage, and only for sessions that were `staged`. Several
+    # GB of orphaned-but-DB-tracked staging directories were found on the
+    # production server from exactly this gap.
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=6)
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(b"abc"))
+    db.refresh(session)
+    assert session.status == EvidenceUploadSessionStatus.uploading.value
+    staged_path = Path(session.staged_path)
+    assert staged_path.exists()
+
+    session.expires_at = utc_now() - timedelta(seconds=1)
+    db.add(session)
+    db.commit()
+
+    reconcile_evidence_operations(db)
+    db.refresh(session)
+
+    assert session.status == EvidenceUploadSessionStatus.expired.value
+    assert not staged_path.exists()
+    assert not staged_path.parent.exists()
+
+
+def test_reconciliation_recovers_session_without_operation(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=10)
+    db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).delete()
+    db.commit()
+
+    stats = reconcile_evidence_operations(db)
+
+    assert stats["sessions_without_operations"] == 1
+    assert db.query(EvidenceOperation).filter(EvidenceOperation.upload_session_id == session.id).count() == 1
+
+
 def test_resumable_upload_rejects_wrong_offset_without_duplicate_bytes(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
     monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
@@ -189,6 +287,91 @@ def test_resumable_upload_rejects_wrong_offset_without_duplicate_bytes(tmp_path,
         append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(b"abc"))
 
     assert exc.value.code == "offset_mismatch"
+    assert Path(session.staged_path).read_bytes() == b"abc"
+
+
+@pytest.mark.anyio
+async def test_resumable_append_surfaces_lock_contention_as_session_busy(tmp_path, monkeypatch):
+    # A concurrent append (or finalize) already holding the per-session
+    # lock must not be allowed to race the TOCTOU offset check - it should
+    # be rejected with a distinct, retryable "session_busy" error rather
+    # than silently corrupting the staged file or raising offset_mismatch.
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=3)
+
+    from app.services import evidence_upload_session as evidence_upload_session_module
+    from app.services.upload_locks import UploadLockBusyError
+
+    class _BusyLock:
+        def __enter__(self):
+            raise UploadLockBusyError("busy")
+
+        def __exit__(self, *exc_info):
+            return False
+
+    monkeypatch.setattr(evidence_upload_session_module, "redis_upload_lock", lambda *a, **k: _BusyLock())
+
+    with pytest.raises(UploadSessionError) as exc:
+        await append_resumable_upload_chunk_stream(db, session, offset=0, chunks=_StreamRequest([b"abc"]).stream())
+    assert exc.value.code == "session_busy"
+
+
+def test_resumable_finalize_surfaces_lock_contention_as_session_busy(tmp_path, monkeypatch):
+    # Guards against the double-finalize race: the synchronous
+    # POST .../finalize route and the async worker-enqueued preflight job
+    # both call finalize_resumable_upload_session for the same session -
+    # the lock must reject the loser rather than let both hash/preflight
+    # the same staged file concurrently.
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+    zip_path = tmp_path / "collection.zip"
+    _make_zip(zip_path)
+    payload = zip_path.read_bytes()
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=len(payload))
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(payload))
+    db.refresh(session)
+
+    from app.services import evidence_upload_session as evidence_upload_session_module
+    from app.services.upload_locks import UploadLockBusyError
+
+    class _BusyLock:
+        def __enter__(self):
+            raise UploadLockBusyError("busy")
+
+        def __exit__(self, *exc_info):
+            return False
+
+    monkeypatch.setattr(evidence_upload_session_module, "redis_upload_lock", lambda *a, **k: _BusyLock())
+
+    with pytest.raises(UploadSessionError) as exc:
+        finalize_resumable_upload_session(db, session)
+    assert exc.value.code == "session_busy"
+
+
+@pytest.mark.anyio
+async def test_resumable_stream_append_preserves_confirmed_offset_on_disconnect(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_max_upload_size", 32 * 1024 * 1024)
+    db = _db()
+    _case(db)
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=9)
+
+    await append_resumable_upload_chunk_stream(db, session, offset=0, chunks=_StreamRequest([b"abc"]).stream())
+    db.refresh(session)
+    assert session.bytes_received == 3
+    assert Path(session.staged_path).read_bytes() == b"abc"
+
+    with pytest.raises(ClientDisconnect):
+        await append_resumable_upload_chunk_stream(db, session, offset=3, chunks=_StreamRequest([b"par", ClientDisconnect()]).stream())
+
+    db.refresh(session)
+    assert session.status == EvidenceUploadSessionStatus.interrupted.value
+    assert session.bytes_received == 3
     assert Path(session.staged_path).read_bytes() == b"abc"
 
 
@@ -918,6 +1101,34 @@ def test_api_cancel_endpoint(tmp_path, monkeypatch):
     cancel_response = client.delete(f"/api/cases/{CASE_ID}/evidence-uploads/{session_id}")
     assert cancel_response.status_code == 200
     assert db.get(EvidenceUploadSession, session_id).status == "cancelled"
+
+
+def test_get_evidence_upload_status_does_not_run_ingestion_health_check(tmp_path, monkeypatch):
+    """The resumable upload loop polls this endpoint once per chunk. It must
+    stay a cheap session lookup: bundling the full infra health check (which
+    hits OpenSearch and does an unbounded Redis worker scan) here turns every
+    chunk boundary into a potential multi-second-or-longer stall, unlike the
+    Memory uploader's equivalent status endpoint, which has no such check."""
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    client = _client(db)
+
+    create_response = client.post(
+        f"/api/cases/{CASE_ID}/evidence-uploads/resumable",
+        json={"filename": "big.bin", "expected_size_bytes": 10},
+    )
+    assert create_response.status_code == 200
+    session_id = create_response.json()["session"]["id"]
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("check_ingestion_readiness must not run on the per-chunk status poll")
+
+    monkeypatch.setattr(routes_evidence_preflight, "check_ingestion_readiness", _fail_if_called)
+
+    status_response = client.get(f"/api/cases/{CASE_ID}/evidence-uploads/{session_id}")
+    assert status_response.status_code == 200
+    assert status_response.json()["health"] is None
 
 
 def test_api_rerun_preflight_with_platform_override(tmp_path, monkeypatch):
