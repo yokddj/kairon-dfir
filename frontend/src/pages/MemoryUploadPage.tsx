@@ -10,6 +10,7 @@ import {
 } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
+import { hashBlob } from "../lib/sha256";
 
 const MEMORY_EXTENSIONS = [".raw", ".mem", ".dmp", ".dump", ".bin", ".img", ".vmem", ".lime", ".aff4"];
 
@@ -95,10 +96,14 @@ function writeStoredUpload(caseId: string, value: StoredUploadSession | null) {
 }
 
 async function sha256Hex(blob: Blob): Promise<string | undefined> {
+  // Pure JS (see lib/sha256.ts), not SubtleCrypto: crypto.subtle.digest is
+  // restricted to secure contexts (HTTPS/localhost) and is silently
+  // undefined the moment this is served over plain HTTP -- which is the
+  // actual deployed reality here. A hashing failure degrades to "no hash"
+  // (best-effort) rather than aborting the caller, matching how the
+  // server already treats a missing/absent client-declared chunk hash.
   try {
-    if (typeof globalThis.crypto?.subtle?.digest !== "function") return undefined;
-    const digest = await globalThis.crypto.subtle.digest("SHA-256", await blob.arrayBuffer());
-    return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+    return await hashBlob(blob);
   } catch {
     return undefined;
   }
