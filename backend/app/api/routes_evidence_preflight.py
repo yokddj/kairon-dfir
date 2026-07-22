@@ -56,12 +56,12 @@ from app.services.evidence_upload_session import (
     rerun_preflight,
 )
 from app.services.evidence_operations import reconcile_evidence_operations, sync_upload_operation
-from app.services import evidence_memory_workflow  # noqa: F401 -- registers the "evidence_memory_dump" workflow handler on import
-from app.services.evidence_unified_memory import (
-    cancel_unified_memory_dump_session,
-    create_unified_memory_dump_session,
-    is_unified_memory_dump_session,
-    sync_unified_session_from_memory_upload,
+from app.services.evidence_unified_upload import (
+    UNIFIED_UPLOAD_KINDS,
+    cancel_unified_session,
+    create_unified_upload_session,
+    is_unified_session,
+    sync_unified_session,
     unified_resume_info,
     unified_upload_info,
 )
@@ -81,8 +81,8 @@ def _sync_session(db: Session, session: EvidenceUploadSession, *, commit: bool =
     always comes from its backing MemoryUpload, never from stale
     EvidenceUploadSession columns that nothing else writes for it.
     """
-    if is_unified_memory_dump_session(session):
-        return sync_unified_session_from_memory_upload(db, session)
+    if is_unified_session(session):
+        return sync_unified_session(db, session)
     sync_upload_operation(db, session, commit=commit)
     return session
 
@@ -133,8 +133,8 @@ def case_activity_center(case_id: str, db: Session = Depends(get_db)) -> Activit
     reconcile_evidence_operations(db)
     sessions = db.query(EvidenceUploadSession).filter(EvidenceUploadSession.case_id == case_id).order_by(EvidenceUploadSession.updated_at.desc()).limit(50).all()
     for session in sessions:
-        if is_unified_memory_dump_session(session):
-            sync_unified_session_from_memory_upload(db, session)
+        if is_unified_session(session):
+            sync_unified_session(db, session)
         else:
             sync_upload_operation(db, session, commit=False)
     db.commit()
@@ -251,7 +251,7 @@ def dismiss_evidence_operation(case_id: str, operation_id: str, db: Session = De
 
 def _resumable_entry(session: EvidenceUploadSession, db: Session) -> ResumableUploadSessionRead:
     metadata = session.metadata_json or {}
-    unified = is_unified_memory_dump_session(session)
+    unified = is_unified_session(session)
     expected = session.expected_size_bytes or 0
     progress_percent = round((session.bytes_received / expected) * 100, 2) if expected else None
     resumable = session.status in {"created", "uploading", "interrupted"} or (session.status == "failed" and unified)
@@ -322,18 +322,22 @@ def init_resumable_evidence_upload(
     current_user: User | None = Depends(get_optional_user),
 ) -> EvidenceUploadSessionStageResponse:
     declared = payload.declared_platform if payload.declared_platform and payload.declared_platform != "auto" else None
-    if get_settings().unified_upload_evidence_memory_dump and payload.intake_category == "memory_dump":
+    kind_config = UNIFIED_UPLOAD_KINDS.get(payload.intake_category or "")
+    if kind_config is not None and kind_config.is_enabled(get_settings()):
         try:
-            session, info = create_unified_memory_dump_session(
+            session, info = create_unified_upload_session(
                 db,
                 case_id,
+                kind=payload.intake_category,
+                workflow=kind_config.workflow,
+                evidence_type=kind_config.evidence_type,
                 filename=payload.filename,
                 expected_size_bytes=payload.expected_size_bytes,
                 declared_platform=declared,
                 client_sha256=payload.client_sha256,
                 host_id=payload.host_id,
                 provided_host=payload.provided_host,
-                memory_authorization_acknowledged=payload.memory_authorization_acknowledged,
+                authorization_acknowledged=payload.memory_authorization_acknowledged,
                 notes=payload.notes,
                 current_user=current_user,
             )
@@ -358,7 +362,7 @@ def get_evidence_upload(case_id: str, session_id: str, db: Session = Depends(get
     except UploadSessionError as exc:
         raise _http_from_upload_error(exc) from exc
     session = _sync_session(db, session)
-    info = unified_upload_info(session, db) if is_unified_memory_dump_session(session) else None
+    info = unified_upload_info(session, db) if is_unified_session(session) else None
     return EvidenceUploadSessionStageResponse(session=_session_to_read(session), health=None, unified=UnifiedUploadInfo(**vars(info)) if info else None)
 
 
@@ -553,8 +557,8 @@ def cancel_evidence_upload(case_id: str, session_id: str, db: Session = Depends(
         session = get_upload_session(db, case_id, session_id)
     except UploadSessionError as exc:
         raise HTTPException(status_code=404, detail=exc.message) from exc
-    if is_unified_memory_dump_session(session):
-        cancel_unified_memory_dump_session(db, session)
+    if is_unified_session(session):
+        cancel_unified_session(db, session)
     else:
         cancel_upload_session(db, session)
     return {"status": "cancelled", "session_id": session_id}

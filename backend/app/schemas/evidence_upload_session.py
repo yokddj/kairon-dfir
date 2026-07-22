@@ -58,7 +58,7 @@ class EvidenceUploadSessionInitRequest(BaseModel):
     client_sha256: str | None = None
     # Only consulted when UNIFIED_UPLOAD_EVIDENCE_MEMORY_DUMP is enabled and
     # intake_category == "memory_dump" -- see
-    # app.services.evidence_unified_memory.create_unified_memory_dump_session.
+    # app.services.evidence_unified_upload.create_unified_upload_session.
     # All other intake categories ignore these fields and take the
     # unchanged legacy byte-offset path.
     intake_category: str | None = None

@@ -107,11 +107,23 @@ def create_memory_upload(
     total_chunks: int = 0,
     expected_sha256: str | None = None,
     staging_name: str | None = None,
+    canonical_filename: str | None = None,
 ) -> MemoryUpload:
+    """Create a chunk-index upload session row.
+
+    Despite the name/table ("MemoryUpload"), this is the shared session
+    bootstrap for every evidence category migrated onto the unified
+    chunk-index backend (memory_dump, and now disk_image) -- see
+    app.services.evidence_unified_upload. ``canonical_filename`` lets a
+    caller preserve the evidence's real original filename (disk images)
+    instead of the memory-specific default below, which is kept unchanged
+    for every existing caller that doesn't pass it.
+    """
     upload_id = normalize_upload_id(upload_id)
     evidence_id = str(uuid4())
     staging_name = staging_name or f"{case_id}-{evidence_id}.memory-upload.part"
-    canonical_relative = str(Path("evidence") / case_id / evidence_id / "original" / f"memory-image{extension}")
+    canonical_name = canonical_filename or f"memory-image{extension}"
+    canonical_relative = str(Path("evidence") / case_id / evidence_id / "original" / canonical_name)
     owns_session = db is None
     db = db or SessionLocal()
     try:

@@ -1,11 +1,12 @@
 """Post-finalize workflow handler for Evidence Wizard memory_dump uploads
 routed through the unified chunk-index backend (see
 ``app.core.config.Settings.unified_upload_evidence_memory_dump`` and
-``app.services.evidence_unified_memory``).
+``app.services.evidence_unified_upload`` -- the shared session-creation/
+reconciliation layer also used by the disk_image workflow).
 
 Registered under the ``"evidence_memory_dump"`` name in
 ``app.services.upload_shared.workflow``. Session ownership is fixed at
-creation time: ``create_unified_memory_dump_session`` stamps
+creation time: ``create_unified_upload_session`` stamps
 ``MemoryUpload.metadata_json["workflow"] = "evidence_memory_dump"`` once,
 and ``finalize_memory_upload_session`` reads that key to pick the handler --
 so a session created under this workflow can never be finalized by the
