@@ -267,6 +267,32 @@ def _disk_image_extension(filename: str) -> str:
     return Path(filename).suffix.lower()
 
 
+# Unlike disk_image, archive format IS a filename-level gate here: the
+# unified path is scoped to exactly these single-file container types (per
+# the archive migration's explicit scope), so an unsupported extension is
+# rejected before any bytes transfer rather than after, at
+# app.ingest.archive.extract_archive's asynchronous extraction time.
+_ARCHIVE_SUFFIX_GROUPS: tuple[tuple[str, ...], ...] = (
+    (".zip",),
+    (".7z",),
+    (".tar", ".gz"),
+    (".tar",),
+    (".gz",),
+    (".xz",),
+)
+
+
+def _allowed_archive_extension(filename: str) -> str:
+    suffixes = tuple(part.lower() for part in Path(filename).suffixes)
+    for group in _ARCHIVE_SUFFIX_GROUPS:
+        if suffixes[-len(group):] == group:
+            return "".join(group)
+    raise MemoryUploadSessionError(
+        "MEMORY_UPLOAD_INVALID_EXTENSION",
+        "Unsupported archive extension. Supported: .zip, .7z, .tar, .tar.gz, .gz, .xz.",
+    )
+
+
 _KIND_POLICIES: dict[str, ChunkedUploadKindPolicy] = {
     "memory_dump": ChunkedUploadKindPolicy(
         is_enabled=lambda settings: bool(settings.memory_upload_enabled),
@@ -286,6 +312,20 @@ _KIND_POLICIES: dict[str, ChunkedUploadKindPolicy] = {
         # already applies, rather than inventing a new limit.
         max_bytes=lambda settings: int(settings.backend_max_upload_size or 0),
         validate_extension=_disk_image_extension,
+        quota_evidence_type=None,
+    ),
+    "archive": ChunkedUploadKindPolicy(
+        # No dedicated "archive upload enabled" setting exists in the
+        # legacy path -- single-file archive upload has always just been
+        # core upload_evidence() functionality. Eligibility is gated
+        # entirely by UNIFIED_UPLOAD_EVIDENCE_ARCHIVE (checked one layer up,
+        # in evidence_unified_upload.UNIFIED_UPLOAD_KINDS) and by
+        # _allowed_archive_extension below.
+        is_enabled=lambda settings: True,
+        disabled_error=("ARCHIVE_UPLOAD_DISABLED", "Archive upload is disabled by server configuration."),
+        requires_authorization_ack=False,
+        max_bytes=lambda settings: int(settings.backend_max_upload_size or 0),
+        validate_extension=_allowed_archive_extension,
         quota_evidence_type=None,
     ),
 }

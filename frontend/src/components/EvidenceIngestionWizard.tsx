@@ -34,6 +34,20 @@ const INTAKE_CARDS: { id: IntakeType; icon: string; title: string; examples: str
   { id: "server_path", icon: "\u{2601}", title: "Existing Server Path", examples: "Already stored locally" },
 ];
 
+// Mirrors the server-side gate exactly (app.services.memory.upload_sessions
+// _allowed_archive_extension) -- kept in sync deliberately rather than
+// derived from the API response, since this only decides which upload
+// call to make, not authoritative eligibility (the server re-validates
+// unconditionally at session creation).
+const SUPPORTED_ARCHIVE_SUFFIX_GROUPS: string[][] = [[".zip"], [".7z"], [".tar", ".gz"], [".tar"], [".gz"], [".xz"]];
+
+function isSupportedArchiveFilename(filename: string): boolean {
+  const parts = filename.toLowerCase().split(".");
+  if (parts.length < 2) return false;
+  const suffixes = parts.slice(1).map((part) => `.${part}`);
+  return SUPPORTED_ARCHIVE_SUFFIX_GROUPS.some((group) => suffixes.length >= group.length && group.every((suffix, index) => suffixes[suffixes.length - group.length + index] === suffix));
+}
+
 function bytes(value: number | null | undefined): string {
   if (value === null || value === undefined) return "unknown";
   let num = value;
@@ -192,6 +206,16 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   // already supports it (see files.length === 1 gate at the call site).
   const unifiedDiskImageEnabled = Boolean(healthQuery.data?.unified_upload_evidence_disk_image);
   const useUnifiedDiskImage = intakeType === "disk_image" && unifiedDiskImageEnabled;
+  // Single-file archives are the third migrated category, but unlike
+  // memory_dump/disk_image they have no dedicated intake card -- a ZIP/7z/
+  // tar/tar.gz/gz/xz file is selected under "Artifact Collection" today, the
+  // same card used for every other raw/parsed single-file or multi-file
+  // upload. Only when exactly one file is selected AND its extension is one
+  // of the migrated archive types does this route unified; anything else
+  // under this intake card (folders, multi-file, non-archive single files)
+  // is untouched and keeps taking the legacy staged/promote path.
+  const unifiedArchiveEnabled = Boolean(healthQuery.data?.unified_upload_evidence_archive);
+  const useUnifiedArchive = intakeType === "artifact_collection" && unifiedArchiveEnabled && files.length === 1 && isSupportedArchiveFilename(files[0].name);
   // Discovery: lists sessions the analyst can still resume/cancel/open for
   // this case, reconciled server-side against their backing MemoryUpload.
   // Used both for the "Interrupted or active uploads" panel below and to
@@ -378,12 +402,16 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   async function uploadUnifiedEvidence(file: File, onProgress: (progress: { loaded: number; total: number; lengthComputable: boolean }) => void): Promise<{ evidence: Evidence }> {
     const hostAssignment = await resolveHostAssignment();
     const declaredPlatform = platform === "auto" ? undefined : platform;
+    // "archive" has no dedicated intake card (see useUnifiedArchive) -- the
+    // Wizard's own intakeType stays "artifact_collection", but the server's
+    // UNIFIED_UPLOAD_KINDS registry key (and workflow) is "archive".
+    const unifiedKind = useUnifiedArchive ? "archive" : intakeType ?? undefined;
     const created = await api.createResumableEvidenceUploadSession(caseId, {
       filename: file.name,
       expected_size_bytes: file.size,
       declared_platform: declaredPlatform,
       client_sha256: clientSha256 ?? undefined,
-      intake_category: intakeType ?? undefined,
+      intake_category: unifiedKind,
       host_id: hostAssignment.host_id,
       provided_host: hostAssignment.provided_host,
       memory_authorization_acknowledged: memoryAuthorizationAcknowledged,
@@ -461,7 +489,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
         setUploadProgress(fraction);
         if (fraction >= 1) setInspectionState("finalizing_upload");
       };
-      if ((useUnifiedMemoryDump || useUnifiedDiskImage) && !requiresFolderInput && files.length === 1) {
+      if ((useUnifiedMemoryDump || useUnifiedDiskImage || useUnifiedArchive) && !requiresFolderInput && files.length === 1) {
         return uploadUnifiedEvidence(files[0], onProgress);
       }
       if (!requiresFolderInput && files.length === 1) {
