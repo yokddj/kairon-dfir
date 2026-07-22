@@ -15,6 +15,13 @@ const rerunEvidenceUploadPreflightMock = vi.fn();
 const getIngestionReadinessMock = vi.fn();
 const getCaseHostsMock = vi.fn();
 const createCaseHostMock = vi.fn();
+const listResumableEvidenceUploadsMock = vi.fn();
+const createResumableEvidenceUploadSessionMock = vi.fn();
+const getEvidenceUploadSessionMock = vi.fn();
+const getMemoryUploadStatusMock = vi.fn();
+const uploadMemoryUploadChunkMock = vi.fn();
+const finalizeMemoryUploadMock = vi.fn();
+const getEvidenceMock = vi.fn();
 const navigateMock = vi.fn();
 
 vi.mock("react-router-dom", async () => {
@@ -32,6 +39,13 @@ vi.mock("../api/client", () => ({
     getIngestionReadiness: (...args: unknown[]) => getIngestionReadinessMock(...args),
     getCaseHosts: (...args: unknown[]) => getCaseHostsMock(...args),
     createCaseHost: (...args: unknown[]) => createCaseHostMock(...args),
+    listResumableEvidenceUploads: (...args: unknown[]) => listResumableEvidenceUploadsMock(...args),
+    createResumableEvidenceUploadSession: (...args: unknown[]) => createResumableEvidenceUploadSessionMock(...args),
+    getEvidenceUploadSession: (...args: unknown[]) => getEvidenceUploadSessionMock(...args),
+    getMemoryUploadStatus: (...args: unknown[]) => getMemoryUploadStatusMock(...args),
+    uploadMemoryUploadChunk: (...args: unknown[]) => uploadMemoryUploadChunkMock(...args),
+    finalizeMemoryUpload: (...args: unknown[]) => finalizeMemoryUploadMock(...args),
+    getEvidence: (...args: unknown[]) => getEvidenceMock(...args),
   },
 }));
 
@@ -172,6 +186,7 @@ describe("EvidenceIngestionWizard", () => {
     createCaseHostMock.mockResolvedValue({ host: { id: "host-created", display_name: "NEW-HOST" }, created: true });
     runEvidenceIndexingPlanMock.mockResolvedValue({ accepted: true, evidence_id: "evidence-1", profile: "recommended", run_id: "plan-1", status: "queued", queued_jobs: [{ step_id: "linux_artifacts", run_id: "job-1", status: "queued" }], plan: { run_id: "plan-1", profile: "recommended", status: "queued", steps: [], excluded: [], queued_jobs: [] } });
     cancelEvidenceUploadSessionMock.mockResolvedValue({ status: "cancelled", session_id: "session-1" });
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [] });
   });
 
   it("shows the server health check first and blocks continuing when a critical dependency is down", async () => {
@@ -713,5 +728,175 @@ describe("EvidenceIngestionWizard", () => {
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ host_id: "host-1", memory_authorization_acknowledged: true })));
     expect(runEvidenceIndexingPlanMock).not.toHaveBeenCalled();
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/memory/evidence-3"));
+  });
+});
+
+async function sha256HexForTest(bytesData: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytesData);
+  return Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function resumableUnifiedSession(overrides: Partial<import("../api/client").ResumableUploadSessionRead> = {}): import("../api/client").ResumableUploadSessionRead {
+  return {
+    id: "resume-session-1",
+    case_id: "case-1",
+    backend: "unified",
+    category: "memory_dump",
+    original_filename: "capture.mem",
+    expected_size_bytes: 32,
+    bytes_received: 16,
+    progress_percent: 50,
+    status: "uploading",
+    current_stage: "uploading",
+    created_at: new Date(Date.now() - 60_000).toISOString(),
+    updated_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    resumable: true,
+    cancellable: true,
+    promoted_evidence_id: null,
+    failure_message: null,
+    unified: {
+      memory_upload_id: "memory-upload-1",
+      chunk_size_bytes: 16,
+      total_chunks: 2,
+      received_chunks: [0],
+      missing_chunks: [1],
+      default_concurrency: 2,
+      max_concurrency: 4,
+      expected_sha256: null,
+      verification_chunk_index: 0,
+      verification_chunk_size: 16,
+      verification_chunk_sha256: null, // filled per-test with the real hash of the first 16 bytes
+    },
+    ...overrides,
+  };
+}
+
+describe("EvidenceIngestionWizard resumable upload discovery", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navigateMock.mockReset();
+    getCaseHostsMock.mockResolvedValue({ hosts: [{ id: "host-1", display_name: "WS-01" }] });
+    getIngestionReadinessMock.mockResolvedValue(readyHealth({ unified_upload_evidence_memory_dump: true }));
+    cancelEvidenceUploadSessionMock.mockResolvedValue({ status: "cancelled", session_id: "resume-session-1" });
+  });
+
+  it("surfaces an interrupted upload without needing a resume_session URL parameter and lets the analyst pick it up", async () => {
+    const firstSixteen = new TextEncoder().encode("0123456789ABCDEF");
+    const verificationHash = await sha256HexForTest(firstSixteen);
+    const candidate = resumableUnifiedSession({ unified: { ...resumableUnifiedSession().unified!, verification_chunk_sha256: verificationHash } });
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [candidate] });
+
+    renderWizard();
+    await passHealthCheck();
+
+    const panel = await screen.findByTestId("resumable-uploads-panel");
+    expect(within(panel).getByText("capture.mem")).toBeInTheDocument();
+    expect(within(panel).getByText(/uploading/)).toBeInTheDocument();
+
+    await userEvent.click(within(panel).getByTestId("resume-upload-select"));
+    await screen.findByTestId("resume-upload-step");
+    expect(screen.getByText(/capture.mem/)).toBeInTheDocument();
+  });
+
+  it("rejects a re-selected file whose size does not match the original upload", async () => {
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [resumableUnifiedSession()] });
+    renderWizard();
+    await passHealthCheck();
+    await userEvent.click(await screen.findByTestId("resume-upload-select"));
+    await screen.findByTestId("resume-upload-step");
+
+    const wrongSizeFile = new File(["short"], "capture.mem");
+    await userEvent.upload(screen.getByTestId("resume-file-input"), wrongSizeFile);
+
+    expect(await screen.findByTestId("resume-file-error")).toHaveTextContent(/expected/i);
+    expect(screen.getByTestId("resume-upload-button")).toBeDisabled();
+  });
+
+  it("rejects a re-selected file with the right size but different content via the verification chunk hash", async () => {
+    const candidate = resumableUnifiedSession({
+      unified: { ...resumableUnifiedSession().unified!, verification_chunk_sha256: "f".repeat(64) },
+    });
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [candidate] });
+    renderWizard();
+    await passHealthCheck();
+    await userEvent.click(await screen.findByTestId("resume-upload-select"));
+    await screen.findByTestId("resume-upload-step");
+
+    const rightSizeWrongContent = new File(["Z".repeat(32)], "capture.mem");
+    await userEvent.upload(screen.getByTestId("resume-file-input"), rightSizeWrongContent);
+
+    expect(await screen.findByTestId("resume-file-error")).toHaveTextContent(/does not match/i);
+    expect(screen.getByTestId("resume-upload-button")).toBeDisabled();
+  });
+
+  it("resumes from the missing chunk after verifying the re-selected file, then registers evidence", async () => {
+    const chunk0 = new TextEncoder().encode("0123456789ABCDEF");
+    const chunk1 = new TextEncoder().encode("FEDCBA9876543210");
+    const wholeFile = new Uint8Array(32);
+    wholeFile.set(chunk0, 0);
+    wholeFile.set(chunk1, 16);
+    const verificationHash = await sha256HexForTest(chunk0);
+    const candidate = resumableUnifiedSession({ unified: { ...resumableUnifiedSession().unified!, verification_chunk_sha256: verificationHash } });
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [candidate] });
+
+    // Stateful: chunk 0 already landed before the reload; the mock tracks
+    // what's actually been "uploaded" so runResumableUpload's own stall
+    // detection (comparing missing-chunk counts across polls) sees real
+    // progress instead of a fixed response that never changes.
+    const receivedChunks = new Set<number>([0]);
+    const statusFor = (overrides: Partial<{ status: string; evidence_id: string | null }> = {}) => ({
+      upload_id: "memory-upload-1", case_id: "case-1", evidence_id: overrides.evidence_id ?? null, status: overrides.status ?? "uploading",
+      bytes_received: receivedChunks.size * 16, expected_bytes: 32, chunk_size_bytes: 16, total_chunks: 2,
+      received_chunks: Array.from(receivedChunks).sort(), missing_chunks: [0, 1].filter((i) => !receivedChunks.has(i)),
+      filename: "capture.mem", updated_at: new Date().toISOString(), failure_code: null, failure_message: null, message: "", retryable: true,
+    });
+    getMemoryUploadStatusMock.mockImplementation(async () => statusFor());
+    uploadMemoryUploadChunkMock.mockImplementation(async (_caseId: string, _uploadId: string, chunkIndex: number) => {
+      receivedChunks.add(chunkIndex);
+      return statusFor();
+    });
+    finalizeMemoryUploadMock.mockResolvedValue({
+      upload_id: "memory-upload-1", case_id: "case-1", evidence_id: "evidence-resumed", status: "completed",
+      bytes_received: 32, expected_bytes: 32, chunk_size_bytes: 16, total_chunks: 2,
+      received_chunks: [0, 1], missing_chunks: [], filename: "capture.mem", updated_at: new Date().toISOString(),
+      failure_code: null, failure_message: null, message: "", retryable: false,
+    });
+    getEvidenceUploadSessionMock.mockResolvedValue({
+      session: { ...sessionResponse().session, id: "resume-session-1", status: "promoted", promoted_evidence_id: "evidence-resumed", category: "memory_dump", backend: "unified" },
+      health: null,
+      unified: null,
+    });
+    getEvidenceMock.mockResolvedValue({ id: "evidence-resumed", original_filename: "capture.mem", evidence_type: "memory_dump" });
+
+    renderWizard();
+    await passHealthCheck();
+    await userEvent.click(await screen.findByTestId("resume-upload-select"));
+    await screen.findByTestId("resume-upload-step");
+
+    const file = new File([wholeFile], "capture.mem");
+    await userEvent.upload(screen.getByTestId("resume-file-input"), file);
+    const resumeButton = await screen.findByTestId("resume-upload-button");
+    await waitFor(() => expect(resumeButton).toBeEnabled());
+
+    await userEvent.click(resumeButton);
+
+    await waitFor(() => expect(uploadMemoryUploadChunkMock).toHaveBeenCalledWith("case-1", "memory-upload-1", 1, expect.anything(), expect.anything()));
+    // Only the missing chunk (index 1) is re-uploaded -- the already-received
+    // chunk 0 is never retransmitted.
+    expect(uploadMemoryUploadChunkMock).not.toHaveBeenCalledWith("case-1", "memory-upload-1", 0, expect.anything(), expect.anything());
+    await waitFor(() => expect(finalizeMemoryUploadMock).toHaveBeenCalledWith("case-1", "memory-upload-1"));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/memory/evidence-resumed"));
+  });
+
+  it("cancels an interrupted upload from the discovery panel", async () => {
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [resumableUnifiedSession()] });
+    renderWizard();
+    await passHealthCheck();
+    const panel = await screen.findByTestId("resumable-uploads-panel");
+
+    await userEvent.click(within(panel).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(cancelEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "resume-session-1"));
   });
 });

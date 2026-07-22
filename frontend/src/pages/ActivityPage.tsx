@@ -93,8 +93,15 @@ export default function ActivityPage() {
               const evidenceId = typeof operation.details.promoted_evidence_id === "string" ? operation.details.promoted_evidence_id : typeof operation.details.evidence_id === "string" ? operation.details.evidence_id : null;
               const operationId = typeof operation.details.operation_id === "string" ? operation.details.operation_id : operation.id;
               const jobs = Array.isArray(operation.details.jobs) ? operation.details.jobs as Array<Record<string, unknown>> : [];
-              const canContinue = Boolean(uploadSessionId && operation.kind === "upload" && ["running", "paused"].includes(operation.status));
-              const canCancel = Boolean(uploadSessionId && operation.kind === "upload" && ["running", "paused"].includes(operation.status));
+              // Mirrors app.services.evidence_operations._operation_status():
+              // an EvidenceUploadSession only ever projects into these
+              // non-terminal operation statuses (it never actually reaches
+              // "running", which is the fallback for other operation
+              // kinds) -- gating on "running" here meant Continue/Cancel
+              // stayed disabled for every upload except an interrupted one.
+              const activeUploadStatuses = ["waiting_upload", "uploading", "preflight", "waiting_user", "paused"];
+              const canContinue = Boolean(uploadSessionId && operation.kind === "upload" && activeUploadStatuses.includes(operation.status));
+              const canCancel = Boolean(uploadSessionId && operation.kind === "upload" && activeUploadStatuses.includes(operation.status));
               const canRetry = operation.status === "failed";
               const canDismiss = ["completed", "cancelled", "expired"].includes(operation.status);
               return (

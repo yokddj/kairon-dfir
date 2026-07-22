@@ -25,6 +25,8 @@ class EvidenceUploadSessionRead(BaseModel):
     last_activity_at: datetime | None = None
     failure_message: str | None = None
     promoted_evidence_id: str | None = None
+    category: str | None = None
+    backend: str = "legacy"
 
     model_config = {"from_attributes": True}
 
@@ -115,3 +117,43 @@ class PromoteUploadSessionRequest(BaseModel):
     folder_name: str | None = None
     labels: list[str] = []
     notes: str | None = None
+
+
+class UnifiedResumeDetails(BaseModel):
+    memory_upload_id: str
+    chunk_size_bytes: int
+    total_chunks: int
+    received_chunks: list[int] = []
+    missing_chunks: list[int] = []
+    default_concurrency: int
+    max_concurrency: int
+    expected_sha256: str | None = None
+    verification_chunk_index: int | None = None
+    verification_chunk_size: int | None = None
+    verification_chunk_sha256: str | None = None
+
+
+class ResumableUploadSessionRead(BaseModel):
+    id: str
+    case_id: str
+    backend: str
+    category: str | None = None
+    original_filename: str
+    expected_size_bytes: int | None = None
+    bytes_received: int = 0
+    progress_percent: float | None = None
+    status: str
+    current_stage: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    expires_at: datetime
+    resumable: bool
+    cancellable: bool
+    promoted_evidence_id: str | None = None
+    failure_message: str | None = None
+    unified: UnifiedResumeDetails | None = None
+
+
+class ResumableUploadSessionsResponse(BaseModel):
+    case_id: str
+    sessions: list[ResumableUploadSessionRead]
