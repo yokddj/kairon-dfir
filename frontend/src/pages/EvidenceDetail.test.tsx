@@ -548,17 +548,23 @@ describe("EvidenceDetail minimal processing UX", () => {
   });
 
   it("renders SHA-256 and empty custody state in the integrity panel", async () => {
+    const user = userEvent.setup();
     renderPage();
 
     expect(await screen.findByText("collection.zip")).toBeInTheDocument();
     expect(await screen.findByTestId("evidence-integrity-panel")).toBeInTheDocument();
-    expect(screen.getByText("abc")).toBeInTheDocument();
     expect(screen.getByText("Integrity not checked yet.")).toBeInTheDocument();
-    expect(screen.getByText("No chain-of-custody events recorded yet.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Export manifest/i })).toBeInTheDocument();
+    // SHA-256 and chain-of-custody are advanced/diagnostic detail, tucked
+    // behind "Technical details" so the primary status stays the first thing
+    // an analyst sees -- open it to assert the raw hash and empty state.
+    await user.click(screen.getByRole("button", { name: /Technical details/i }));
+    expect(screen.getByText("abc")).toBeInTheDocument();
+    expect(screen.getByText("No chain-of-custody events recorded yet.")).toBeInTheDocument();
   });
 
   it("renders verified integrity and custody events", async () => {
+    const user = userEvent.setup();
     getEvidenceIntegrityMock.mockResolvedValueOnce({ evidence_id: "evidence-1", case_id: "case-1", sha256: "abc", size_bytes: 100, integrity_status: "verified", integrity_checked_at: "2026-05-21T10:10:00Z" });
     getEvidenceCustodyEventsMock.mockResolvedValueOnce([
       { id: "event-1", evidence_id: "evidence-1", event_type: "uploaded", actor_user_id: "user-1", timestamp: "2026-05-21T10:00:00Z", summary: "Evidence uploaded and registered.", details_json: {} },
@@ -567,7 +573,11 @@ describe("EvidenceDetail minimal processing UX", () => {
 
     renderPage();
 
+    // The top-level status line already reads "SHA-256 verified." for the
+    // verified state, so this assertion passes before opening the
+    // disclosure -- the per-event custody log below it does not.
     expect((await screen.findAllByText("SHA-256 verified.")).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: /Technical details/i }));
     expect(screen.getByText("uploaded")).toBeInTheDocument();
     expect(screen.getByText("Evidence uploaded and registered.")).toBeInTheDocument();
   });
