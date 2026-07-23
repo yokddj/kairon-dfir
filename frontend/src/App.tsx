@@ -134,6 +134,7 @@ export default function App() {
                         <Route path="/cases/:caseId/incident-timeline" element={<IncidentTimelinePage />} />
                         <Route path="/cases/:caseId/validation-matrix" element={<ValidationMatrixPage />} />
                         <Route path="/cases/:caseId/evidence" element={<NavigateToCaseTab tab="evidences" />} />
+                        <Route path="/cases/:caseId/ingest" element={<NavigateToCaseTab tab="processing" />} />
                         <Route path="/cases/:caseId/detections" element={<Detections />} />
                         <Route path="/cases/:caseId/reports" element={<CaseReportsPage />} />
                         <Route path="/cases/:caseId/debug-export" element={<DebugExportPage />} />
