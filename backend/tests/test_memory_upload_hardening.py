@@ -385,3 +385,52 @@ def test_concurrent_chunk_writes_across_independent_sessions_do_not_clobber_each
     db_a.close()
     db_b.close()
     engine.dispose()
+
+
+def test_chunk_write_racing_a_concurrent_cancel_raises_clean_terminal_error_not_500(db_session, tmp_path, monkeypatch):
+    """Regression: cancel deletes the whole staging directory as soon as it
+    commits status=cancelled, with no lock against chunk uploads that already
+    passed the terminal-status check earlier in this same request. Before the
+    fix, a chunk mid-write whose staging directory disappeared underneath it
+    hit an unhandled FileNotFoundError from os.replace() -- a raw 500 instead
+    of the same clean, structured "session is terminal" error the top-of-
+    function check produces when the timing goes the other way. Reproduced
+    live against production: 4 concurrent chunk uploads all 500'd when a
+    cancel landed mid-transfer.
+    """
+    settings = _settings(tmp_path, memory_upload_chunk_size_bytes=8, memory_upload_chunk_size_min_bytes=8)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: settings)
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", _capacity)
+    item = _create(db_session, expected_size_bytes=8, upload_mode="resumable")
+    headers = {"content-length": "8"}
+
+    real_replace = os.replace
+
+    def _replace_racing_a_cancel(src, dst):
+        # Simulate a cancel landing on a different session concurrently,
+        # between this chunk's terminal-status check and its os.replace:
+        # it commits status=cancelled and deletes the whole staging dir.
+        item.status = "cancelled"
+        db_session.add(item)
+        db_session.commit()
+        import shutil
+        shutil.rmtree(upload_sessions._chunk_dir(item), ignore_errors=True)
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", _replace_racing_a_cancel)
+
+    async def _run_store():
+        return await upload_sessions.store_memory_upload_chunk_stream(
+            db_session,
+            case_id=CASE_ID,
+            upload_id=item.id,
+            chunk_index=0,
+            chunks=_chunks(b"\x01" * 8),
+            headers=headers,
+            content_length_is_payload=True,
+            expected_mode="resumable",
+        )
+
+    with pytest.raises(upload_sessions.MemoryUploadSessionError) as exc:
+        asyncio.run(_run_store())
+    assert exc.value.code == "MEMORY_UPLOAD_TERMINAL"
