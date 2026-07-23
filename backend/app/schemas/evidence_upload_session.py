@@ -67,6 +67,14 @@ class EvidenceUploadSessionInitRequest(BaseModel):
     provided_host: str | None = None
     memory_authorization_acknowledged: bool = False
     notes: str | None = None
+    # Wizard Advanced Options (WIZARD_ADVANCED_OPTIONS_ENABLED). Only
+    # consulted by unified kinds whose workflow handler actually reads them
+    # (currently: archive -- see evidence_archive_workflow.py); ignored by
+    # memory_dump/disk_image's handlers. Defaults preserve current behavior
+    # exactly (evidence_intent="raw", ingest_mode=full_forensic) when omitted.
+    evidence_intent: str | None = None
+    ingest_mode: str | None = None
+    evtx_profile: str | None = None
 
 
 class EvidenceUploadSessionAppendResponse(BaseModel):
@@ -118,6 +126,13 @@ class PromoteUploadSessionRequest(BaseModel):
     folder_name: str | None = None
     labels: list[str] = []
     notes: str | None = None
+    # Wizard Advanced Options (WIZARD_ADVANCED_OPTIONS_ENABLED). Only
+    # threaded into promote_upload_session's single-file legacy-compat
+    # (bare-else) branch -- see its docstring. Folder/server_path/disk_image/
+    # memory_dump branches ignore these; defaults preserve current behavior
+    # exactly (evidence_intent="raw", ingest_mode=full_forensic) when omitted.
+    evidence_intent: str | None = None
+    ingest_mode: str | None = None
 
 
 class UnifiedResumeDetails(BaseModel):

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
-import { api, type Evidence, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type MemoryUploadStatus, type PreflightReport, type ResumableUploadSessionRead } from "../api/client";
+import { api, type Evidence, type EvidenceIntent, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type EvtxProfile, type IngestMode, type MemoryUploadStatus, type PreflightReport, type ResumableUploadSessionRead } from "../api/client";
 import { useNotifications } from "../context/NotificationsContext";
 import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
 import { hashBlob } from "../lib/sha256";
@@ -171,6 +171,13 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [processingMode, setProcessingMode] = useState<ProcessingMode>("recommended");
   const [labels, setLabels] = useState("");
   const [notes, setNotes] = useState("");
+  // Wizard Advanced Options (WIZARD_ADVANCED_OPTIONS_ENABLED). Defaults
+  // match exactly what the backend already assumes when these are omitted
+  // (evidence_intent="raw", ingest_mode=full_forensic) -- see
+  // promote_upload_session/evidence_archive_workflow.py.
+  const [evidenceIntent, setEvidenceIntent] = useState<EvidenceIntent>("raw");
+  const [ingestMode, setIngestMode] = useState<IngestMode>("full_forensic");
+  const [evtxProfile, setEvtxProfile] = useState<EvtxProfile>("full");
   const [hashProgress, setHashProgress] = useState<number | null>(null);
   const [clientSha256, setClientSha256] = useState<string | null>(null);
   const [inspectionState, setInspectionState] = useState<InspectionState>("idle");
@@ -216,6 +223,15 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   // is untouched and keeps taking the legacy staged/promote path.
   const unifiedArchiveEnabled = Boolean(healthQuery.data?.unified_upload_evidence_archive);
   const useUnifiedArchive = intakeType === "artifact_collection" && unifiedArchiveEnabled && files.length === 1 && isSupportedArchiveFilename(files[0].name);
+  // Advanced Options (evidence_intent/ingest_mode/evtx_profile) surface
+  // only for "Artifact Collection" -- the one intake type where these
+  // concepts are meaningful (disk_image/memory_dump/folder/server_path
+  // have fixed or inapplicable classification). Captured before the
+  // upload/promote path diverges (unified archive vs. legacy) so the same
+  // state applies regardless of which one a given file ends up taking.
+  const wizardAdvancedOptionsEnabled = Boolean(healthQuery.data?.wizard_advanced_options_enabled);
+  const showAdvancedOptions = wizardAdvancedOptionsEnabled && intakeType === "artifact_collection";
+  const showEvtxProfileOption = showAdvancedOptions && files.length === 1 && (files[0].name.toLowerCase().endsWith(".evtx") || isSupportedArchiveFilename(files[0].name));
   // Discovery: lists sessions the analyst can still resume/cancel/open for
   // this case, reconciled server-side against their backing MemoryUpload.
   // Used both for the "Interrupted or active uploads" panel below and to
@@ -416,6 +432,13 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       provided_host: hostAssignment.provided_host,
       memory_authorization_acknowledged: memoryAuthorizationAcknowledged,
       notes: notes.trim() || undefined,
+      // Only consulted by the archive workflow handler (the only unified
+      // kind whose registration already calls upload_evidence()); harmless
+      // no-op metadata for memory_dump/disk_image. Defaults match today's
+      // behavior exactly when Advanced Options isn't shown for this kind.
+      evidence_intent: evidenceIntent,
+      ingest_mode: ingestMode,
+      evtx_profile: evtxProfile,
     });
     if (!created.unified) {
       throw new Error("Kairon could not start a unified upload session for this file.");
@@ -668,6 +691,13 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
           memory_authorization_acknowledged: intakeType === "memory_dump" ? memoryAuthorizationAcknowledged : undefined,
           labels: labels.split(",").map((label) => label.trim()).filter(Boolean),
           notes: notes.trim() || undefined,
+          // Only meaningful for promote_upload_session's bare-else
+          // (single-file legacy-compat) branch -- harmlessly ignored by
+          // folder/server_path/disk_image/memory_dump. Defaults match
+          // today's behavior exactly when Advanced Options isn't shown.
+          evidence_intent: evidenceIntent,
+          ingest_mode: ingestMode,
+          evtx_profile: evtxProfile,
         });
         promotedRef.current = true;
         promotedEvidenceRef.current = evidence;
@@ -1039,6 +1069,56 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 ) : null}
               </label>
             )}
+            {showAdvancedOptions ? (
+              <div className="mt-4 space-y-4 rounded-2xl border border-line bg-abyss/50 p-4" data-testid="wizard-advanced-options">
+                <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted">Advanced options</p>
+                <div>
+                  <p className="text-xs text-muted">Evidence type</p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <label className={`rounded-2xl border p-3 text-sm ${evidenceIntent === "raw" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/60 text-muted"}`}>
+                      <input type="radio" name="evidence-intent" className="mr-2" checked={evidenceIntent === "raw"} onChange={() => setEvidenceIntent("raw")} data-testid="evidence-intent-raw" />
+                      Raw
+                      <span className="mt-1 block text-xs text-muted">Source evidence requiring parsing/normalization.</span>
+                    </label>
+                    <label className={`rounded-2xl border p-3 text-sm ${evidenceIntent === "parsed" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/60 text-muted"}`}>
+                      <input type="radio" name="evidence-intent" className="mr-2" checked={evidenceIntent === "parsed"} onChange={() => setEvidenceIntent("parsed")} data-testid="evidence-intent-parsed" />
+                      Parsed
+                      <span className="mt-1 block text-xs text-muted">Already-processed or tool-generated artifacts.</span>
+                    </label>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs text-muted">Processing depth</p>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                    <label className={`rounded-2xl border p-3 text-sm ${ingestMode === "full_forensic" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/60 text-muted"}`}>
+                      <input type="radio" name="ingest-mode" className="mr-2" checked={ingestMode === "full_forensic"} onChange={() => setIngestMode("full_forensic")} data-testid="ingest-mode-full-forensic" />
+                      Full forensic <span className="text-muted">(recommended)</span>
+                      <span className="mt-1 block text-xs text-muted">Complete processing and detections.</span>
+                    </label>
+                    <label className={`rounded-2xl border p-3 text-sm ${ingestMode === "usable_search" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/60 text-muted"}`}>
+                      <input type="radio" name="ingest-mode" className="mr-2" checked={ingestMode === "usable_search"} onChange={() => setIngestMode("usable_search")} data-testid="ingest-mode-usable-search" />
+                      Usable search
+                      <span className="mt-1 block text-xs text-muted">Faster, lighter processing with reduced forensic depth &mdash; rules and detections are skipped, not just deferred.</span>
+                    </label>
+                  </div>
+                </div>
+                {showEvtxProfileOption ? (
+                  <div>
+                    <p className="text-xs text-muted">EVTX profile</p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      <label className={`rounded-2xl border p-3 text-sm ${evtxProfile === "fast_high_value" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/60 text-muted"}`}>
+                        <input type="radio" name="evtx-profile" className="mr-2" checked={evtxProfile === "fast_high_value"} onChange={() => setEvtxProfile("fast_high_value")} data-testid="evtx-profile-fast" />
+                        Fast (high-value channels)
+                      </label>
+                      <label className={`rounded-2xl border p-3 text-sm ${evtxProfile === "full" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/60 text-muted"}`}>
+                        <input type="radio" name="evtx-profile" className="mr-2" checked={evtxProfile === "full"} onChange={() => setEvtxProfile("full")} data-testid="evtx-profile-full" />
+                        Full
+                      </label>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
             {(createSessionMutation.isPending || inspectionState === "failed") ? (
               <div className={`mt-5 rounded-2xl border p-4 text-sm ${inspectionState === "failed" ? "border-danger/40 bg-danger/10" : "border-line bg-abyss/60"}`} data-testid="inspection-progress-panel">
                 <p className={`font-semibold ${inspectionState === "failed" ? "text-danger" : "text-ink"}`}>{inspectionLabel}</p>

@@ -1099,3 +1099,123 @@ describe("EvidenceIngestionWizard unified single-file archive uploads", () => {
     expect(createResumableEvidenceUploadSessionMock).not.toHaveBeenCalled();
   });
 });
+
+describe("EvidenceIngestionWizard advanced options", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    navigateMock.mockReset();
+    getCaseHostsMock.mockResolvedValue({ hosts: [{ id: "host-1", display_name: "WS-01" }] });
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [] });
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse());
+    runEvidenceIndexingPlanMock.mockResolvedValue({ accepted: true, evidence_id: "evidence-adv", profile: "recommended", run_id: "plan-adv", status: "queued", queued_jobs: [], plan: { run_id: "plan-adv", profile: "recommended", status: "queued", steps: [], excluded: [], queued_jobs: [] } });
+  });
+
+  it("hides advanced options when the flag is false", async () => {
+    getIngestionReadinessMock.mockResolvedValue(readyHealth({ wizard_advanced_options_enabled: false }));
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    const file = new File(["x"], "notes.csv");
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+
+    expect(screen.queryByTestId("wizard-advanced-options")).not.toBeInTheDocument();
+  });
+
+  it("shows advanced options for Artifact Collection when the flag is true", async () => {
+    getIngestionReadinessMock.mockResolvedValue(readyHealth({ wizard_advanced_options_enabled: true }));
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    const file = new File(["x"], "notes.csv");
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+
+    const panel = await screen.findByTestId("wizard-advanced-options");
+    expect(within(panel).getByTestId("evidence-intent-raw")).toBeInTheDocument();
+    expect(within(panel).getByTestId("ingest-mode-full-forensic")).toBeInTheDocument();
+    // notes.csv is neither .evtx nor an eligible archive -- EVTX profile
+    // must not be offered for it.
+    expect(within(panel).queryByTestId("evtx-profile-full")).not.toBeInTheDocument();
+  });
+
+  it("does not show advanced options for Disk Image even when the flag is true", async () => {
+    getIngestionReadinessMock.mockResolvedValue(readyHealth({ wizard_advanced_options_enabled: true }));
+    renderWizard();
+    await goToFileStep(/Disk Image/);
+    const file = new File(["x"], "disk.raw");
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+
+    expect(screen.queryByTestId("wizard-advanced-options")).not.toBeInTheDocument();
+  });
+
+  it("shows the EVTX profile option for a .evtx file but not for a plain single file", async () => {
+    getIngestionReadinessMock.mockResolvedValue(readyHealth({ wizard_advanced_options_enabled: true }));
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    const file = new File(["x"], "Security.evtx");
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+
+    const panel = await screen.findByTestId("wizard-advanced-options");
+    expect(within(panel).getByTestId("evtx-profile-full")).toBeInTheDocument();
+  });
+
+  it("submits raw/full_forensic defaults when advanced options are shown but left untouched", async () => {
+    getIngestionReadinessMock.mockResolvedValue(readyHealth({ wizard_advanced_options_enabled: true }));
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-adv-1", original_filename: "notes.csv" });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    const file = new File(["x"], "notes.csv");
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+    await screen.findByTestId("wizard-advanced-options");
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByText("Confirmation");
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith(
+      "case-1", "session-1",
+      expect.objectContaining({ evidence_intent: "raw", ingest_mode: "full_forensic" }),
+    ));
+  });
+
+  it("submits explicit parsed/usable_search selections through promote", async () => {
+    getIngestionReadinessMock.mockResolvedValue(readyHealth({ wizard_advanced_options_enabled: true }));
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-adv-2", original_filename: "export.csv" });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    const file = new File(["x"], "export.csv");
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+    const panel = await screen.findByTestId("wizard-advanced-options");
+    await userEvent.click(within(panel).getByTestId("evidence-intent-parsed"));
+    await userEvent.click(within(panel).getByTestId("ingest-mode-usable-search"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByText("Confirmation");
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith(
+      "case-1", "session-1",
+      expect.objectContaining({ evidence_intent: "parsed", ingest_mode: "usable_search" }),
+    ));
+  });
+
+  it("submits the selected EVTX profile through promote", async () => {
+    getIngestionReadinessMock.mockResolvedValue(readyHealth({ wizard_advanced_options_enabled: true }));
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-adv-3", original_filename: "Security.evtx" });
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+    const file = new File(["x"], "Security.evtx");
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
+    const panel = await screen.findByTestId("wizard-advanced-options");
+    await userEvent.click(within(panel).getByTestId("evtx-profile-fast"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await screen.findByText("Confirmation");
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith(
+      "case-1", "session-1",
+      expect.objectContaining({ evtx_profile: "fast_high_value" }),
+    ));
+  });
+});

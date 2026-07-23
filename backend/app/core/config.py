@@ -91,6 +91,7 @@ class Settings(BaseSettings):
     unified_upload_evidence_memory_dump: bool = False
     unified_upload_evidence_disk_image: bool = False
     unified_upload_evidence_archive: bool = False
+    wizard_advanced_options_enabled: bool = False
     memory_job_timeout_seconds: int = 900
     memory_plugin_timeout_seconds: int = 600
     memory_plugin_output_max_bytes: int = 10485760

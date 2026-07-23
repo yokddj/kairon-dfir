@@ -996,6 +996,8 @@ def promote_upload_session(
     labels: list[str] | None,
     notes: str | None,
     current_user: Any,
+    evidence_intent: str | None = None,
+    ingest_mode: str | None = None,
 ) -> Evidence:
     """The shared bridge from a staged legacy session to a real Evidence
     row -- one function serving four architecturally distinct intake
@@ -1181,14 +1183,20 @@ def promote_upload_session(
                     # invariant, not a bug: no unified kind for arbitrary
                     # single files exists yet. See the archive migration's
                     # single-file coverage audit for the full matrix.
+                    #
+                    # evidence_intent/ingest_mode: Wizard Advanced Options
+                    # (WIZARD_ADVANCED_OPTIONS_ENABLED) -- None (flag off,
+                    # or older client) preserves exactly today's behavior:
+                    # "raw" intent, upload_evidence's own full-forensic
+                    # ingest_mode default.
                     evidence = upload_evidence(
                         case_id,
                         upload,
                         folder_upload=False,
                         folder_name=None,
-                        evidence_intent="raw",
+                        evidence_intent=evidence_intent or "raw",
                         packaging=None,
-                        ingest_mode=None,
+                        ingest_mode=ingest_mode,
                         provided_host=provided_host,
                         provided_platform=provided_platform,
                         host_id=host_id,

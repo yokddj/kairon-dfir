@@ -3747,6 +3747,7 @@ export type IngestionReadiness = {
   unified_upload_evidence_memory_dump: boolean;
   unified_upload_evidence_disk_image: boolean;
   unified_upload_evidence_archive: boolean;
+  wizard_advanced_options_enabled: boolean;
 };
 
 export type EvidenceUploadSessionRead = {
@@ -6484,6 +6485,9 @@ export const api = {
       provided_host?: string;
       memory_authorization_acknowledged?: boolean;
       notes?: string;
+      evidence_intent?: EvidenceIntent;
+      ingest_mode?: IngestMode;
+      evtx_profile?: EvtxProfile;
     },
   ) =>
     request<{ session: EvidenceUploadSessionRead; health: IngestionReadiness | null; unified: UnifiedUploadInfo | null }>(`/cases/${caseId}/evidence-uploads/resumable`, { method: "POST", body: JSON.stringify(payload) }),
@@ -6531,6 +6535,8 @@ export const api = {
       folder_name?: string | null;
       labels?: string[];
       notes?: string | null;
+      evidence_intent?: EvidenceIntent;
+      ingest_mode?: IngestMode;
     },
   ) => request<Evidence>(`/cases/${caseId}/evidence-uploads/${sessionId}/promote`, { method: "POST", body: JSON.stringify(payload) }),
   cancelEvidenceUploadSession: (caseId: string, sessionId: string) =>
