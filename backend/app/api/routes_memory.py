@@ -1445,35 +1445,57 @@ def create_memory_upload_session_endpoint(
     payload: MemoryUploadSessionCreateRequest,
     db: Session = Depends(get_db),
 ) -> dict:
-    # Documented single-file-coverage exemption: this is Memory Overview's
-    # own, always-on entry point into the exact same chunk-index engine
-    # (app.services.memory.upload_sessions) the Wizard's unified memory_dump
-    # kind wraps -- it predates that wrapping and is intentionally NOT
-    # gated by UNIFIED_UPLOAD_EVIDENCE_MEMORY_DUMP (that flag only controls
-    # whether the *Wizard's* memory_dump card routes here or to the legacy
-    # byte-offset session). No EvidenceUploadSession row is ever created
-    # for a session started here, so it is invisible to
-    # is_unified_session/sync_unified_session, the Wizard's resume panel,
-    # and Activity Center's EvidenceOperation projection -- it has its own,
-    # separate discovery (GET /memory/uploads/active,
-    # app.services.memory.upload_lifecycle.find_active_memory_upload).
-    # This satisfies "uses the unified chunk-index transport" but not
-    # "is Wizard/Activity-Center visible" -- a real, known gap, not a bug.
+    # Memory Overview's own, always-on entry point into the exact same
+    # chunk-index engine (app.services.memory.upload_sessions) the Wizard's
+    # unified memory_dump kind wraps -- intentionally NOT gated by
+    # UNIFIED_UPLOAD_EVIDENCE_MEMORY_DUMP (that flag only controls whether
+    # the *Wizard's* memory_dump card routes here or to the legacy
+    # byte-offset session).
+    #
+    # This now ALSO creates the same EvidenceUploadSession/EvidenceOperation
+    # projection the Wizard's unified sessions get, via the same
+    # create_unified_upload_session used by routes_evidence_preflight --
+    # not a second projection mechanism, the same one. Ownership is fixed
+    # at creation exactly like every other unified session: workflow stays
+    # "memory" (the plain register_memory_evidence_from_upload handler this
+    # page has always used), NOT "evidence_memory_dump" (the Wizard-only
+    # handler that layers explicit-host-override/notes semantics this page
+    # has no UI for) -- see evidence_memory_workflow.py's docstring and the
+    # audit in the architecture-consolidation review for why these two
+    # workflows are a proven superset relationship, not equivalence, and
+    # must not be merged.
+    #
+    # Sessions created before this deployment have no such projection --
+    # see docs/preflight-inspection.md's "Memory Overview projection"
+    # section for the explicit non-migration compatibility strategy; they
+    # remain fully served by this page's existing direct MemoryUpload-table
+    # endpoints (GET /memory/uploads/active, /memory/uploads/{id}) exactly
+    # as before, and are never retrofitted with a projection.
     _require_case(db, case_id)
+    from app.services.evidence_unified_upload import UNIFIED_UPLOAD_KINDS, create_unified_upload_session
+
+    kind_config = UNIFIED_UPLOAD_KINDS["memory_dump"]
     try:
-        item = create_memory_upload_session(
+        session, info = create_unified_upload_session(
             db,
-            case_id=case_id,
+            case_id,
+            kind="memory_dump",
+            workflow="memory",
+            evidence_type=kind_config.evidence_type,
             filename=payload.filename,
             expected_size_bytes=payload.expected_size_bytes,
+            declared_platform=None,
+            client_sha256=payload.expected_sha256,
+            host_id=None,
             provided_host=payload.provided_host,
             authorization_acknowledged=payload.authorization_acknowledged,
-            expected_sha256=payload.expected_sha256,
-            upload_mode=payload.upload_mode,
+            notes=None,
+            current_user=None,
             file_fingerprint=payload.file_fingerprint,
         )
     except MemoryUploadSessionError as exc:
         raise _raise_upload_session_error(exc) from exc
+    item = get_memory_upload(db, case_id, info.memory_upload_id)
     payload_dict = upload_status_with_chunks(item, db=db)
     payload_dict["resumable"] = True
     return payload_dict
@@ -1660,6 +1682,17 @@ def cancel_memory_upload_endpoint(
         cancelled = cancel_memory_upload_session(db, case_id=case_id, upload_id=upload_id, reason=f"{operator}: {reason}")
     except MemoryUploadSessionError as exc:
         raise _raise_upload_session_error(exc) from exc
+    # Shared cancellation semantics: if this session was created after the
+    # Memory Overview projection went live, its EvidenceUploadSession
+    # exists and needs its own sync so Activity Center reflects the
+    # cancellation immediately rather than on the next incidental read.
+    # Pre-existing (pre-projection) sessions have none to find -- a no-op,
+    # not an error, per the explicit non-migration compatibility strategy.
+    from app.services.evidence_unified_upload import find_unified_session_for_memory_upload, sync_unified_session
+
+    projected_session = find_unified_session_for_memory_upload(db, case_id=case_id, memory_upload_id=upload_id)
+    if projected_session is not None:
+        sync_unified_session(db, projected_session)
     return upload_status_with_chunks(cancelled, db=db)
 
 

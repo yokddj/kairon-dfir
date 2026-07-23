@@ -626,6 +626,53 @@ def test_promote_reuses_staged_bytes_without_retransmission_or_rehash(tmp_path, 
     assert db.get(EvidenceUploadSession, session.id).promoted_evidence_id == evidence.id
 
 
+def test_promote_defaults_to_raw_intent_and_full_forensic_ingest_mode(tmp_path, monkeypatch):
+    """Wizard Advanced Options (WIZARD_ADVANCED_OPTIONS_ENABLED): omitting
+    evidence_intent/ingest_mode (flag off, or an older client) must produce
+    byte-for-byte the same registration as before they existed."""
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: "job-1")
+    monkeypatch.setattr("app.core.storage.settings", settings)
+    db = _db()
+    _case(db)
+    zip_path = tmp_path / "collection.zip"
+    _make_zip(zip_path)
+    session, _report = create_upload_session(db, CASE_ID, files=[_upload_file(zip_path)], declared_platform=None, client_sha256=None)
+
+    evidence = promote_upload_session(
+        db, session,
+        provided_platform=None, host_id=None, provided_host=None, evtx_profile=None,
+        memory_authorization_acknowledged=False, folder_name=None, labels=None, notes=None,
+        current_user=None,
+    )
+    assert evidence.ingest_source["evidence_intent"] == "raw"
+    assert evidence.ingest_source["ingest_mode"] == "full_forensic"
+
+
+def test_promote_honors_explicit_evidence_intent_ingest_mode_and_evtx_profile(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    monkeypatch.setattr("app.api.routes_evidence.enqueue_ingest", lambda evidence_id: "job-1")
+    monkeypatch.setattr("app.core.storage.settings", settings)
+    db = _db()
+    _case(db)
+    zip_path = tmp_path / "collection.zip"
+    _make_zip(zip_path)
+    session, _report = create_upload_session(db, CASE_ID, files=[_upload_file(zip_path)], declared_platform=None, client_sha256=None)
+
+    evidence = promote_upload_session(
+        db, session,
+        provided_platform=None, host_id=None, provided_host=None, evtx_profile="fast_high_value",
+        memory_authorization_acknowledged=False, folder_name=None, labels=None, notes=None,
+        current_user=None, evidence_intent="parsed", ingest_mode="usable_search",
+    )
+    assert evidence.ingest_source["evidence_intent"] == "parsed"
+    assert evidence.ingest_source["ingest_mode"] == "usable_search"
+    assert evidence.ingest_source["evtx_profile"] == "fast_high_value"
+    assert evidence.metadata_json.get("skip_rules") is True
+
+
 def test_promote_disk_image_category_routes_to_disk_image_upload(tmp_path, monkeypatch):
     import subprocess
 
