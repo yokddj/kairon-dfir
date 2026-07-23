@@ -65,7 +65,11 @@ export default function CaseDetail() {
   // only inside the Wizard, so a session started here is still discoverable
   // after a browser close/reload without needing a resume_session URL param.
   const resumableUploadsQuery = useQuery({ queryKey: ["resumable-evidence-uploads", caseId], queryFn: () => api.listResumableEvidenceUploads(caseId), enabled: Boolean(caseId), staleTime: 5_000, refetchInterval: 20_000 });
-  const resumableUploads = resumableUploadsQuery.data?.sessions ?? [];
+  // A session that reached 100% is neither interrupted nor still
+  // transferring -- it's done or finalizing, and listing it here just pushes
+  // the Add Evidence card down for no reason (mirrors the same fix in
+  // EvidenceIngestionWizard's own discovery panel).
+  const resumableUploads = (resumableUploadsQuery.data?.sessions ?? []).filter((candidate) => candidate.progress_percent === null || candidate.progress_percent < 100);
   const artifactsQuery = useQuery({ queryKey: ["artifacts", caseId], queryFn: () => api.listArtifacts(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const findingsQuery = useQuery({ queryKey: ["findings", caseId], queryFn: () => api.listFindings(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const detectionsQuery = useQuery({ queryKey: ["detections", caseId], queryFn: () => api.listDetections(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
