@@ -88,7 +88,11 @@ describe("workspace navigation", () => {
     expect(screen.getByText("Artifact Views")).toBeInTheDocument();
     expect(screen.queryByText(/^Timeline$/)).not.toBeInTheDocument();
     expect(screen.getByText("Execution Stories")).toBeInTheDocument();
-    expect(screen.getByText("Evidence & Ingest")).toBeInTheDocument();
+    // Evidence and Ingest have no page of their own -- they're tabs of the
+    // case, not modules -- so they nest under Investigation Home instead of
+    // sitting as a flat, independent destination (Phase 2 navigation review).
+    expect(screen.getByRole("link", { name: /^Evidence$/i })).toHaveAttribute("href", "/cases/case-1/evidence");
+    expect(screen.getByRole("link", { name: /^Ingest$/i })).toHaveAttribute("href", "/cases/case-1/ingest");
     expect(screen.getByRole("link", { name: /^Memory Overview$/i })).toHaveAttribute("href", "/cases/case-1/memory?tab=overview");
     expect(screen.getByText("Detections")).toBeInTheDocument();
     expect(screen.getByText("Reports")).toBeInTheDocument();

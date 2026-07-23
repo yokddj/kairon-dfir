@@ -39,6 +39,10 @@ type NavItem = {
   icon: typeof Home;
   requiresCase?: boolean;
   stage?: InvestigationStage;
+  // Case-management functions nested under the investigation hub they
+  // belong to (Phase 2 of the navigation review) -- always rendered, no
+  // collapse/expand state, to keep this step additive and low-risk.
+  children?: NavItem[];
 };
 
 const MEMORY_TAB_BY_LABEL: Record<string, string> = {
@@ -127,13 +131,25 @@ export default function Sidebar() {
     {
       title: "Case Overview",
       items: [
-        { to: activeCaseId ? "/cases/:caseId/overview" : "/", label: "Investigation Home", icon: Home, requiresCase: true, stage: "overview" },
+        {
+          to: activeCaseId ? "/cases/:caseId/overview" : "/",
+          label: "Investigation Home",
+          icon: Home,
+          requiresCase: true,
+          stage: "overview",
+          // Evidence and Ingest have no page of their own -- they are tabs
+          // of the case, not modules -- so they nest under the investigation
+          // hub instead of sitting as flat, independent destinations.
+          children: [
+            { to: "/cases/:caseId/evidence", label: "Evidence", icon: Database, requiresCase: true, stage: "upload" },
+            { to: "/cases/:caseId/ingest", label: "Ingest", icon: Database, requiresCase: true, stage: "upload" },
+          ],
+        },
       ],
     },
     {
       title: "Investigation",
       items: [
-        { to: "/cases/:caseId/evidence", label: "Evidence & Ingest", icon: Database, requiresCase: true, stage: "upload" },
         { to: "/cases/:caseId/search", label: "Search", icon: Search, requiresCase: true, stage: "investigate" },
         { to: "/cases/:caseId/command-history", label: "Command History", icon: Terminal, requiresCase: true, stage: "investigate" },
         { to: "/cases/:caseId/process-graph", label: "Execution Stories", icon: Waypoints, requiresCase: true, stage: "analyze" },
@@ -210,7 +226,16 @@ export default function Sidebar() {
             <p className="px-4 font-mono text-[11px] uppercase tracking-[0.18em] text-muted">{group.title}</p>
             <div className="space-y-1">
               {group.items.map((item) => (
-                <SidebarLink key={`${group.title}-${item.to}`} item={item} activeCaseId={activeCaseId} />
+                <div key={`${group.title}-${item.to}`}>
+                  <SidebarLink item={item} activeCaseId={activeCaseId} />
+                  {item.children?.length ? (
+                    <div className="ml-4 mt-1 space-y-1 border-l border-line/60 pl-3">
+                      {item.children.map((child) => (
+                        <SidebarLink key={`${group.title}-${item.to}-${child.to}`} item={child} activeCaseId={activeCaseId} />
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
               ))}
             </div>
           </section>
