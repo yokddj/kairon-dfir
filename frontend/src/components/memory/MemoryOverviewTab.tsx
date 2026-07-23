@@ -14,6 +14,7 @@ import {
 } from "../../api/client";
 import { backendBadge } from "../MemoryWorkspace";
 import type { MemoryTab } from "../../lib/memoryWorkspaceState";
+import { InvestigationChecklist, type InvestigationChecklistItem } from "../common/InvestigationChecklist";
 
 type Props = {
   caseId: string;
@@ -121,6 +122,119 @@ function buildFamilies(
   });
 }
 
+const ANALYZED_STATES = new Set<MemoryFamilyState>(["completed", "ready", "analyzed_with_results", "analyzed_empty"]);
+
+function isFamilyAnalyzed(state: MemoryFamilyState | undefined): boolean {
+  return Boolean(state && ANALYZED_STATES.has(state));
+}
+
+type DetectionReadiness = "recognized" | "needs_confirmation" | "blocked" | "unknown";
+
+function detectionReadiness(status: string | null | undefined): DetectionReadiness {
+  const s = (status || "").toLowerCase();
+  if (!s) return "unknown";
+  if (s === "confirmed_memory" || s === "probable_memory" || s === "ambiguous_raw_confirmed" || s === "probable_disk_confirmed_as_memory") return "recognized";
+  if (s === "ambiguous_raw") return "needs_confirmation";
+  if (s === "probable_disk" || s === "unsupported" || s === "invalid" || s === "probe_failed") return "blocked";
+  return "unknown";
+}
+
+/**
+ * The Memory Investigation checklist: a read-only view over state Kairon
+ * already computes (detection, host assignment, readiness, per-family
+ * analysis state). It never owns state -- it only ever walks the same
+ * `landing`/`readiness`/`families` data the rest of this tab already
+ * fetches, and stops at the first step that isn't done yet so exactly one
+ * step is ever marked "next".
+ */
+function buildInvestigationChecklist(
+  landing: MemoryEvidenceLandingItem | null,
+  readiness: MemoryEvidenceReadiness | null,
+  families: OverviewFamily[],
+  onJumpToTab: (tab: MemoryTab, artifact?: string) => void,
+): InvestigationChecklistItem[] {
+  const readinessState = detectionReadiness(landing?.detection_status);
+  const canAnalyze = landing?.can_analyze ?? readiness?.can_analyze ?? false;
+  const processesFamily = families.find((f) => f.family === "processes");
+  const suspiciousFamily = families.find((f) => f.family === "suspicious_regions");
+  const networkFamily = families.find((f) => f.family === "network");
+  const anyAnalyzed = families.some((f) => isFamilyAnalyzed(f.state));
+
+  type Step = {
+    id: string;
+    label: string;
+    done: boolean;
+    blocked?: string;
+    action?: InvestigationChecklistItem["action"];
+  };
+
+  const steps: Step[] = [
+    { id: "upload", label: "Upload completed", done: Boolean(landing) },
+    {
+      id: "recognized",
+      label: "Memory recognized",
+      done: readinessState === "recognized",
+      blocked:
+        readinessState === "blocked"
+          ? landing?.detection_reason || "Kairon could not confirm this is a memory image."
+          : readinessState === "needs_confirmation"
+            ? "Confirm the evidence type before analysis can start."
+            : undefined,
+    },
+    {
+      id: "host_assigned",
+      label: "Host assigned",
+      done: Boolean(landing?.host_id),
+      action: landing?.host_id ? undefined : { label: "Assign host", href: `/cases/${landing?.case_id ?? ""}/memory` },
+    },
+    {
+      id: "ready",
+      label: "Ready for analysis",
+      done: canAnalyze,
+      blocked: !canAnalyze && readiness?.sanitized_message ? readiness.sanitized_message : !canAnalyze ? "Not ready for analysis yet." : undefined,
+    },
+    {
+      id: "analyze",
+      label: "Analyze memory",
+      done: anyAnalyzed,
+    },
+    {
+      id: "review_processes",
+      label: "Review process tree",
+      done: isFamilyAnalyzed(processesFamily?.state),
+      action: { label: "Open processes", onClick: () => onJumpToTab("processes") },
+    },
+    {
+      id: "review_suspicious",
+      label: "Review suspicious memory",
+      done: isFamilyAnalyzed(suspiciousFamily?.state),
+      action: { label: "Open suspicious memory", onClick: () => onJumpToTab("suspicious") },
+    },
+    {
+      id: "review_network",
+      label: "Review network",
+      done: isFamilyAnalyzed(networkFamily?.state),
+      action: { label: "Open network", onClick: () => onJumpToTab("network") },
+    },
+  ];
+
+  let nextAssigned = false;
+  return steps.map((step) => {
+    if (step.done) {
+      return { id: step.id, label: step.label, status: "done" } satisfies InvestigationChecklistItem;
+    }
+    if (nextAssigned) {
+      return { id: step.id, label: step.label, status: "locked" } satisfies InvestigationChecklistItem;
+    }
+    nextAssigned = true;
+    if (step.blocked) {
+      return { id: step.id, label: step.label, status: "blocked", detail: step.blocked, action: step.action } satisfies InvestigationChecklistItem;
+    }
+    const detail = step.id === "analyze" ? 'Use "Analyze memory" above to start.' : undefined;
+    return { id: step.id, label: step.label, status: "next", detail, action: step.action } satisfies InvestigationChecklistItem;
+  });
+}
+
 export function MemoryOverviewTab({
   caseId,
   evidenceId,
@@ -177,8 +291,33 @@ export function MemoryOverviewTab({
       ? "info"
       : "warn";
 
+  const checklist = useMemo(
+    () => buildInvestigationChecklist(landing, readiness, families, onJumpToTab),
+    [landing, readiness, families, onJumpToTab],
+  );
+  const recommendedStep = checklist.find((item) => item.status === "next" || item.status === "blocked") ?? null;
+
   return (
     <div className="space-y-6" data-testid="memory-overview">
+      {/* PRIMARY: Memory Investigation checklist -- a visible read of state
+          Kairon already computes (detection, host, readiness, per-family
+          analysis). Everything below this is the same content the tab
+          always showed, just no longer the first thing an analyst sees. */}
+      <section className="rounded-[28px] border border-accent/25 bg-panel/70 p-5 shadow-panel" data-testid="memory-investigation-checklist">
+        <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Memory Investigation</p>
+        <div className="mt-3">
+          <InvestigationChecklist items={checklist} testId="memory-investigation-checklist-list" />
+        </div>
+        {recommendedStep ? (
+          <p className="mt-3 text-xs text-muted" data-testid="memory-investigation-recommendation">
+            Recommended next: <span className="text-ink">{recommendedStep.label}</span>
+            {recommendedStep.detail ? <> — {recommendedStep.detail}</> : null}
+          </p>
+        ) : (
+          <p className="mt-3 text-xs text-muted">Every step in this checklist is complete for this evidence.</p>
+        )}
+      </section>
+
       <section className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel">
         <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted">
           Showing the latest successful result for each analysis family.
