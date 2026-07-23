@@ -176,6 +176,34 @@ itself — the report offers a manual override checkbox instead of blocking
 outright, since the investigator may still know what the evidence is even
 when Kairon's classifier does not.
 
+## Memory Overview projection
+
+Memory Overview's own upload page (`/cases/{case_id}/memory/upload`) creates
+sessions through `POST /cases/{case_id}/memory/uploads`, a separate entry
+point from the Evidence Wizard. As of the architecture-consolidation phase,
+this endpoint also creates the same `EvidenceUploadSession`/
+`EvidenceOperation` projection the Wizard's unified sessions get (via the
+same `create_unified_upload_session` used by
+`routes_evidence_preflight.init_resumable_evidence_upload` — not a second
+projection mechanism), so these uploads are now visible in Activity Center
+and, in principle, discoverable through the same
+`list_resumable_upload_sessions` API the Wizard's resume panel uses.
+Registration continues to run through the plain `"memory"` workflow handler
+(`register_memory_evidence_from_upload`), never the Wizard-only
+`"evidence_memory_dump"` handler, which layers Wizard-specific concepts
+(explicit case-host override, notes) this page has no UI to populate.
+
+**Compatibility strategy for sessions created before this change**:
+explicit non-migration. A `MemoryUpload` row created before this deployment
+has no projection and never gets one retroactively — it continues to be
+served exactly as before by the page's own direct endpoints
+(`GET /memory/uploads/active`, `GET /memory/uploads/{id}`, cancel, finalize),
+which read the `MemoryUpload` table directly and were never changed. Such a
+session simply will not appear in Activity Center or the Wizard's resume
+panel; once it completes, cancels, or expires (all unaffected, existing
+mechanisms), the gap closes itself. No retrofit, no risk of a duplicate
+`Evidence` row, no orphaned session.
+
 ## Known limitations
 
 - Nested-archive depth detection is a bounded, best-effort scan: it reads

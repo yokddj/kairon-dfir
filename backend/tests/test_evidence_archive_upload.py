@@ -88,7 +88,7 @@ async def _bytes_stream(payload: bytes):
     yield payload
 
 
-def _create_archive_session(db, *, filename="evidence.zip", expected_size_bytes, host_id=None, provided_host="WIN-ARCHIVE01"):
+def _create_archive_session(db, *, filename="evidence.zip", expected_size_bytes, host_id=None, provided_host="WIN-ARCHIVE01", evidence_intent=None, ingest_mode=None, evtx_profile=None):
     kind_config = UNIFIED_UPLOAD_KINDS["archive"]
     return create_unified_upload_session(
         db,
@@ -105,6 +105,9 @@ def _create_archive_session(db, *, filename="evidence.zip", expected_size_bytes,
         authorization_acknowledged=False,  # archive has no such concept -- must not be required
         notes=None,
         current_user=None,
+        evidence_intent=evidence_intent,
+        ingest_mode=ingest_mode,
+        evtx_profile=evtx_profile,
     )
 
 
@@ -217,6 +220,60 @@ def test_archive_upload_registers_evidence_via_upload_evidence_and_repoints_evid
     synced = sync_unified_session(db, db.get(EvidenceUploadSession, session.id))
     assert synced.status == "promoted"
     assert synced.promoted_evidence_id == evidence.id
+
+
+def test_archive_upload_defaults_to_raw_intent_and_full_forensic_ingest_mode(tmp_path, monkeypatch):
+    """Wizard Advanced Options (WIZARD_ADVANCED_OPTIONS_ENABLED) are
+    additive: omitting them (flag off, or an older client) must produce
+    byte-for-byte the same registration as before they existed."""
+    _configure(monkeypatch, tmp_path)
+    db = _db()
+    _case(db)
+    payload = _real_zip_bytes()
+    known_hash = hashlib.sha256(payload).hexdigest()
+    _session, info = _create_archive_session(db, filename="default.zip", expected_size_bytes=len(payload))
+    _upload_all_chunks(db, info.memory_upload_id, payload, info.chunk_size_bytes)
+    _finalized, evidence = finalize_memory_upload_session(db, case_id=CASE_ID, upload_id=info.memory_upload_id, expected_sha256=known_hash)
+
+    assert evidence.ingest_source["evidence_intent"] == "raw"
+    assert evidence.ingest_source["ingest_mode"] == "full_forensic"
+
+
+def test_archive_upload_honors_explicit_evidence_intent_and_ingest_mode(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    db = _db()
+    _case(db)
+    payload = _real_zip_bytes()
+    known_hash = hashlib.sha256(payload).hexdigest()
+    _session, info = _create_archive_session(
+        db, filename="parsed.zip", expected_size_bytes=len(payload),
+        evidence_intent="parsed", ingest_mode="usable_search",
+    )
+    _upload_all_chunks(db, info.memory_upload_id, payload, info.chunk_size_bytes)
+    _finalized, evidence = finalize_memory_upload_session(db, case_id=CASE_ID, upload_id=info.memory_upload_id, expected_sha256=known_hash)
+
+    assert evidence.ingest_source["evidence_intent"] == "parsed"
+    assert evidence.ingest_source["ingest_mode"] == "usable_search"
+    # usable_search is a real processing-depth reduction, not cosmetic --
+    # confirm it actually reached the metadata that governs skipped stages.
+    assert evidence.metadata_json.get("skip_rules") is True
+    assert evidence.metadata_json.get("skip_detections") is True
+
+
+def test_archive_upload_preserves_explicit_evtx_profile(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    db = _db()
+    _case(db)
+    payload = _real_zip_bytes()
+    known_hash = hashlib.sha256(payload).hexdigest()
+    _session, info = _create_archive_session(
+        db, filename="evtx-collection.zip", expected_size_bytes=len(payload),
+        evtx_profile="fast_high_value",
+    )
+    _upload_all_chunks(db, info.memory_upload_id, payload, info.chunk_size_bytes)
+    _finalized, evidence = finalize_memory_upload_session(db, case_id=CASE_ID, upload_id=info.memory_upload_id, expected_sha256=known_hash)
+
+    assert evidence.ingest_source["evtx_profile"] == "fast_high_value"
 
 
 def test_archive_upload_is_idempotent_on_repeated_handler_invocation(tmp_path, monkeypatch):
