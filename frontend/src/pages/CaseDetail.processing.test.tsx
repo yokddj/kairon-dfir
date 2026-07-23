@@ -23,6 +23,7 @@ const closeCaseMock = vi.fn();
 const reopenCaseMock = vi.fn();
 const searchMock = vi.fn();
 const timelineMock = vi.fn();
+const listResumableEvidenceUploadsMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -43,6 +44,7 @@ vi.mock("../api/client", () => ({
     reopenCase: (...args: unknown[]) => reopenCaseMock(...args),
     search: (...args: unknown[]) => searchMock(...args),
     timeline: (...args: unknown[]) => timelineMock(...args),
+    listResumableEvidenceUploads: (...args: unknown[]) => listResumableEvidenceUploadsMock(...args),
   },
 }));
 
@@ -139,6 +141,7 @@ describe("CaseDetail Processing Queue", () => {
     listCaseActivityMock.mockResolvedValue([]);
     siemExternalLinksMock.mockResolvedValue({});
     getCaseProcessingMock.mockResolvedValue(processingFixture());
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [] });
   });
 
   it("renders evidences, parser counts and all core statuses", async () => {
@@ -309,5 +312,65 @@ describe("CaseDetail Processing Queue", () => {
     await userEvent.click(within(dialog).getByRole("button", { name: "Delete Case" }));
 
     await waitFor(() => expect(deleteCaseMock).toHaveBeenCalledWith("case-1"));
+  });
+
+  describe("resumable uploads panel on the Evidence tab", () => {
+    function resumableSession(overrides: Record<string, unknown> = {}) {
+      return {
+        id: "resume-1",
+        case_id: "case-1",
+        backend: "unified",
+        category: "memory_dump",
+        original_filename: "capture.mem",
+        expected_size_bytes: 32,
+        bytes_received: 16,
+        progress_percent: 50,
+        status: "uploading",
+        current_stage: "uploading",
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z",
+        expires_at: "2026-01-02T00:00:00Z",
+        resumable: true,
+        cancellable: true,
+        promoted_evidence_id: null,
+        failure_message: null,
+        unified: null,
+        ...overrides,
+      };
+    }
+
+    it("shows an in-progress upload above Add Evidence", async () => {
+      listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [resumableSession()] });
+      renderPage("/cases/case-1?tab=evidences");
+      await screen.findByRole("heading", { name: "Queue Case" });
+
+      const panel = await screen.findByTestId("case-resumable-uploads-panel");
+      expect(within(panel).getByText("capture.mem")).toBeInTheDocument();
+    });
+
+    it("excludes a session that already reached 100% -- it's done, not interrupted or active", async () => {
+      listResumableEvidenceUploadsMock.mockResolvedValue({
+        case_id: "case-1",
+        sessions: [resumableSession({ id: "resume-done", original_filename: "done.mem", progress_percent: 100, status: "staged" })],
+      });
+      renderPage("/cases/case-1?tab=evidences");
+      await screen.findByRole("heading", { name: "Queue Case" });
+      await screen.findByText("Add evidence");
+
+      expect(screen.queryByTestId("case-resumable-uploads-panel")).not.toBeInTheDocument();
+    });
+
+    it("keeps an in-progress session visible next to one that already finished", async () => {
+      listResumableEvidenceUploadsMock.mockResolvedValue({
+        case_id: "case-1",
+        sessions: [resumableSession(), resumableSession({ id: "resume-done", original_filename: "done.mem", progress_percent: 100, status: "staged" })],
+      });
+      renderPage("/cases/case-1?tab=evidences");
+      await screen.findByRole("heading", { name: "Queue Case" });
+
+      const panel = await screen.findByTestId("case-resumable-uploads-panel");
+      expect(within(panel).getByText("capture.mem")).toBeInTheDocument();
+      expect(within(panel).queryByText("done.mem")).not.toBeInTheDocument();
+    });
   });
 });
