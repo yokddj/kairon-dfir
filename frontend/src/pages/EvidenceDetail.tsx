@@ -4,6 +4,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type CaseReport, type EvidenceBenchmark, type EvidenceIndexingPlan, type EvidenceIndexingStep, type EvidencePlatformProfile, type EvidenceRun, type EvtxHealthCheckResult, type EvtxProfile, type IngestPlanCandidate, type OnDemandModule, type ProblematicArtifact, type RuleRun, type VelociraptorCandidate } from "../api/client";
 import DebugExportDialog from "../components/DebugExportDialog";
 import InvestigationContext from "../components/InvestigationContext";
+import { Disclosure } from "../components/common/Disclosure";
 import { useNotifications } from "../context/NotificationsContext";
 import { useHostContext } from "../hooks/useHostContext";
 
@@ -1881,21 +1882,25 @@ function formatReportStatus(status: string | null | undefined) {
                   <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${integrityTone}`}>{integrityStatus.replaceAll("_", " ")}</span>
                 </div>
                 <p className="mt-2 text-sm text-muted">{integrityStatusLabel}</p>
-                <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">SHA-256</p><p className="mt-1 break-all font-mono text-xs text-ink">{evidenceSha256 || "No hash recorded yet"}</p></div>
-                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Size</p><p className="mt-1 text-sm font-semibold text-ink">{formatBytes(evidenceSizeBytes)}</p></div>
-                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Uploaded by</p><p className="mt-1 truncate text-sm font-semibold text-ink">{uploadedBy || "-"}</p></div>
-                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Last integrity check</p><p className="mt-1 text-sm font-semibold text-ink">{formatDateTime(integrityCheckedAt)}</p></div>
-                </div>
               </div>
               <div className="flex shrink-0 flex-wrap gap-2">
                 <button type="button" onClick={() => verifyIntegrityMutation.mutate()} disabled={!data?.case_id || verifyIntegrityMutation.isPending} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">{verifyIntegrityMutation.isPending ? "Verifying..." : "Verify integrity"}</button>
                 <button type="button" onClick={() => exportManifestMutation.mutate()} disabled={!data?.case_id || exportManifestMutation.isPending} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted disabled:opacity-60">{exportManifestMutation.isPending ? "Exporting..." : "Export manifest"}</button>
               </div>
             </div>
-            <div className="mt-4 border-t border-line pt-4">
-              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Chain of Custody / Activity</p>
-              {custodyEvents.length ? <ol className="mt-3 space-y-2">{custodyEvents.slice(-8).reverse().map((event) => <li key={event.id} className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-mono text-[11px] uppercase tracking-[0.14em] text-accent">{event.event_type.replaceAll("_", " ")}</span><span className="text-xs text-muted">{formatDateTime(event.timestamp)}</span></div><p className="mt-1 text-sm text-ink">{event.summary}</p>{event.actor_user_id ? <p className="mt-1 text-xs text-muted">Actor: {event.actor_user_id}</p> : null}</li>)}</ol> : <p className="mt-3 rounded-2xl border border-line bg-panel/60 px-3 py-2 text-sm text-muted">No chain-of-custody events recorded yet.</p>}
+            <div className="mt-4">
+              <Disclosure label="Technical details" testId="evidence-integrity-technical-details">
+                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">SHA-256</p><p className="mt-1 break-all font-mono text-xs text-ink">{evidenceSha256 || "No hash recorded yet"}</p></div>
+                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Size</p><p className="mt-1 text-sm font-semibold text-ink">{formatBytes(evidenceSizeBytes)}</p></div>
+                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Uploaded by</p><p className="mt-1 truncate text-sm font-semibold text-ink">{uploadedBy || "-"}</p></div>
+                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Last integrity check</p><p className="mt-1 text-sm font-semibold text-ink">{formatDateTime(integrityCheckedAt)}</p></div>
+                </div>
+                <div className="mt-4 border-t border-line pt-4">
+                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Chain of Custody / Activity</p>
+                  {custodyEvents.length ? <ol className="mt-3 space-y-2">{custodyEvents.slice(-8).reverse().map((event) => <li key={event.id} className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-mono text-[11px] uppercase tracking-[0.14em] text-accent">{event.event_type.replaceAll("_", " ")}</span><span className="text-xs text-muted">{formatDateTime(event.timestamp)}</span></div><p className="mt-1 text-sm text-ink">{event.summary}</p>{event.actor_user_id ? <p className="mt-1 text-xs text-muted">Actor: {event.actor_user_id}</p> : null}</li>)}</ol> : <p className="mt-3 rounded-2xl border border-line bg-panel/60 px-3 py-2 text-sm text-muted">No chain-of-custody events recorded yet.</p>}
+                </div>
+              </Disclosure>
             </div>
           </div>
         </section>
