@@ -59,6 +59,7 @@ TERMINAL_UPLOAD_SESSION_STATUSES = {"completed", "cancelled", "expired", "failed
 _CLEANUP_LOCK_KEY = "kairon:memory_uploads:cleanup_lock"
 _CLEANUP_INTERVAL_SECONDS = 300
 _LOCK_TTL_SECONDS = 1800
+_CHUNK_METADATA_LOCK_TTL_SECONDS = 30
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +138,52 @@ def _set_received_chunks(item: MemoryUpload, chunks: dict[str, dict[str, Any]]) 
     metadata = _session_metadata(item)
     metadata["received_chunks"] = chunks
     _write_session_metadata(item, metadata)
+
+
+def _record_chunk_received(
+    db: Session,
+    item: MemoryUpload,
+    *,
+    upload_id: str,
+    chunk_index: int,
+    size: int,
+    sha256: str,
+    status: str | None = None,
+) -> MemoryUpload:
+    """Atomically merge one chunk's metadata into item.received_chunks.
+
+    Writing/hashing/fsyncing a chunk to disk can take long enough that two
+    concurrently-uploading chunk indices both read the same starting
+    received_chunks state before either commits -- a lost-update race where
+    whichever commit lands last silently drops the other chunk's record even
+    though its bytes are correctly on disk (this is what later surfaces as
+    the extra_chunks_on_disk staging-integrity failure). The per-chunk-index
+    upload lock in store_memory_upload_chunk_stream does not protect against
+    this: it does not serialize across *different* chunk indices, and
+    concurrent uploads of different indices is exactly what
+    default_concurrency/max_concurrency exist to allow.
+
+    This lock does protect against it: it wraps only the fast
+    refresh-merge-commit step below, never the slow disk I/O, scoped per
+    upload (not per chunk), so concurrent chunks always merge into the
+    latest committed state instead of a stale in-memory snapshot.
+    """
+    with _redis_upload_lock(f"kairon:memory_upload:{upload_id}:chunks_meta", ttl=_CHUNK_METADATA_LOCK_TTL_SECONDS):
+        db.refresh(item)
+        received_chunks = _received_chunks(item)
+        received_chunks[str(chunk_index)] = {"size": size, "sha256": sha256}
+        _set_received_chunks(item, received_chunks)
+        item.received_chunk_count = len(received_chunks)
+        item.bytes_received = sum(int(c.get("size") or 0) for c in received_chunks.values())
+        if status is not None:
+            item.status = status
+        item.failure_code = None
+        item.failure_message = None
+        _touch_session(item)
+        db.add(item)
+        db.commit()
+        db.refresh(item)
+    return item
 
 
 def _session_root(item: MemoryUpload) -> Path:
@@ -778,16 +825,10 @@ async def store_memory_upload_chunk_stream(
                                 file_digest.update(data)
                         if file_digest.hexdigest() == computed_sha:
                             temp_path.unlink(missing_ok=True)
-                            received_chunks[str(chunk_index)] = {"size": bytes_written, "sha256": computed_sha}
-                            _set_received_chunks(item, received_chunks)
-                            item.received_chunk_count = len(received_chunks)
-                            item.bytes_received = sum(int(c.get("size") or 0) for c in received_chunks.values())
-                            item.failure_code = None
-                            item.failure_message = None
-                            _touch_session(item)
-                            db.add(item)
-                            db.commit()
-                            db.refresh(item)
+                            item = _record_chunk_received(
+                                db, item, upload_id=upload_id, chunk_index=chunk_index,
+                                size=bytes_written, sha256=computed_sha,
+                            )
                             return item
                     except OSError:
                         pass
@@ -814,19 +855,12 @@ async def store_memory_upload_chunk_stream(
             finally:
                 os.close(dir_fd)
 
-            received_chunks[str(chunk_index)] = {"size": bytes_written, "sha256": computed_sha}
-            _set_received_chunks(item, received_chunks)
-            item.received_chunk_count = len(received_chunks)
-            item.bytes_received = sum(int(chunk.get("size") or 0) for chunk in received_chunks.values())
-            item.status = "uploading"
-            item.failure_code = None
-            item.failure_message = None
-            _touch_session(item)
-            db.add(item)
             db_started = time.monotonic()
-            db.commit()
+            item = _record_chunk_received(
+                db, item, upload_id=upload_id, chunk_index=chunk_index,
+                size=bytes_written, sha256=computed_sha, status="uploading",
+            )
             db_commit_ms = int((time.monotonic() - db_started) * 1000)
-            db.refresh(item)
         finally:
             try:
                 db.refresh(item)

@@ -320,3 +320,68 @@ def test_conflicting_session_includes_fingerprint(db_session, tmp_path, monkeypa
     assert exc.value.code == "MEMORY_UPLOAD_ACTIVE_SESSION_EXISTS"
     detail = exc.value.detail or {}
     assert detail.get("file_fingerprint") == existing_fp
+
+
+def test_concurrent_chunk_writes_across_independent_sessions_do_not_clobber_each_other(tmp_path, monkeypatch):
+    """Regression for the extra_chunks_on_disk lost-update race.
+
+    Each HTTP request gets its own SQLAlchemy Session (Depends(get_db)), so
+    two chunk-index uploads in flight at once -- exactly what
+    default_concurrency/max_concurrency exist to allow -- are handled by two
+    independent Session objects against the same MemoryUpload row. Before
+    the fix, the received_chunks merge read state once per request and
+    committed a stale in-memory copy at the end; whichever request's slow
+    disk write finished last would silently overwrite the other's already-
+    committed chunk record even though both chunks were correctly on disk.
+    _record_chunk_received now refreshes from the DB immediately before
+    merging, inside a lock scoped to the whole upload (not one chunk index),
+    so this can no longer happen regardless of which Session issues the
+    write or how the two requests interleave.
+    """
+    from sqlalchemy.pool import StaticPool
+
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+        future=True,
+    )
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
+    db_a = Session()
+    db_b = Session()
+    db_a.add(Case(id=CASE_ID, name="Concurrent chunk case"))
+    db_a.commit()
+
+    settings = _settings(tmp_path, memory_upload_chunk_size_bytes=8, memory_upload_chunk_size_min_bytes=8)
+    monkeypatch.setattr(upload_sessions, "get_settings", lambda: settings)
+    monkeypatch.setattr(upload_sessions, "_capacity_snapshot", _capacity)
+
+    item = _create(db_a, expected_size_bytes=24, upload_mode="resumable")
+    upload_id = item.id
+
+    # Two independent sessions, each fetching their own copy of the row --
+    # this is the realistic shape of two concurrent requests, not two
+    # in-process references to the same Python object.
+    item_a = db_a.get(upload_sessions.MemoryUpload, upload_id)
+    item_b = db_b.get(upload_sessions.MemoryUpload, upload_id)
+
+    item_a = upload_sessions._record_chunk_received(
+        db_a, item_a, upload_id=upload_id, chunk_index=0, size=8, sha256="a" * 64,
+    )
+    # item_b's session never saw chunk 0 land -- exactly the stale-snapshot
+    # shape that used to cause the clobber -- but _record_chunk_received
+    # refreshes from the DB itself before merging, so chunk 0 survives.
+    item_b = upload_sessions._record_chunk_received(
+        db_b, item_b, upload_id=upload_id, chunk_index=2, size=8, sha256="c" * 64,
+    )
+
+    db_a.refresh(item_a)
+    final_chunks = upload_sessions._received_chunks(item_a)
+    assert set(final_chunks.keys()) == {"0", "2"}, "chunk 0 must not be lost when chunk 2 commits from a different session"
+    assert item_a.received_chunk_count == 2
+    assert item_a.bytes_received == 16
+
+    db_a.close()
+    db_b.close()
+    engine.dispose()
