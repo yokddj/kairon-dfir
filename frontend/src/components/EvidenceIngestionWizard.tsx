@@ -27,7 +27,7 @@ type Props = {
 };
 
 const INTAKE_CARDS: { id: IntakeType; icon: string; title: string; examples: string }[] = [
-  { id: "disk_image", icon: "\u{1F5B4}", title: "Disk Image", examples: "RAW, DD, IMG, E01, Ex01, QCOW2, VMDK..." },
+  { id: "disk_image", icon: "\u{1F4BD}", title: "Disk Image", examples: "RAW, DD, IMG, E01, Ex01, QCOW2, VMDK..." },
   { id: "memory_dump", icon: "\u{1F4BE}", title: "Memory Dump", examples: "WinPmem, Lime, RAW memory..." },
   { id: "artifact_collection", icon: "\u{1F4E6}", title: "Artifact Collection", examples: "KAPE, Velociraptor, manual ZIP" },
   { id: "folder", icon: "\u{1F4C1}", title: "Folder", examples: "Directory containing artifacts" },
@@ -245,6 +245,12 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     refetchInterval: open ? 15_000 : false,
   });
   const resumableSessions = resumableSessionsQuery.data?.sessions ?? [];
+  // A session that reached 100% is neither interrupted nor still
+  // transferring -- it's done or finalizing. Only the discovery panel below
+  // is scoped to this; a resumeSessionId deep link (from a URL or Activity
+  // Center) must still resolve even for a session that happens to be at
+  // 100%, since that's an explicit targeted action, not this general list.
+  const interruptedOrActiveSessions = resumableSessions.filter((candidate) => candidate.progress_percent === null || candidate.progress_percent < 100);
 
   useEffect(() => {
     if (resumeCandidateProp) {
@@ -837,11 +843,11 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
         {step === 1 ? (
           <section className="mt-5">
-            {resumableSessions.length ? (
+            {interruptedOrActiveSessions.length ? (
               <div className="mb-6 rounded-3xl border border-amber-400/30 bg-amber-400/5 p-4" data-testid="resumable-uploads-panel">
                 <p className="font-mono text-xs uppercase tracking-[0.16em] text-amber-300">Interrupted or active uploads</p>
                 <div className="mt-3 space-y-2">
-                  {resumableSessions.map((candidate) => (
+                  {interruptedOrActiveSessions.map((candidate) => (
                     <div key={candidate.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-abyss/60 p-3" data-testid="resumable-upload-row">
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-ink">{candidate.original_filename}</p>

@@ -899,6 +899,29 @@ describe("EvidenceIngestionWizard resumable upload discovery", () => {
 
     await waitFor(() => expect(cancelEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "resume-session-1"));
   });
+
+  it("excludes a session that reached 100% from the interrupted/active uploads panel", async () => {
+    const finishedCandidate = resumableUnifiedSession({ id: "resume-session-done", progress_percent: 100, status: "staged" });
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [finishedCandidate] });
+
+    renderWizard();
+    await passHealthCheck();
+
+    expect(screen.queryByTestId("resumable-uploads-panel")).not.toBeInTheDocument();
+  });
+
+  it("keeps an in-progress session visible alongside one that already reached 100%", async () => {
+    const inProgress = resumableUnifiedSession();
+    const finishedCandidate = resumableUnifiedSession({ id: "resume-session-done", original_filename: "done.mem", progress_percent: 100, status: "staged" });
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [inProgress, finishedCandidate] });
+
+    renderWizard();
+    await passHealthCheck();
+
+    const panel = await screen.findByTestId("resumable-uploads-panel");
+    expect(within(panel).getByText("capture.mem")).toBeInTheDocument();
+    expect(within(panel).queryByText("done.mem")).not.toBeInTheDocument();
+  });
 });
 
 describe("EvidenceIngestionWizard unified disk_image uploads", () => {
