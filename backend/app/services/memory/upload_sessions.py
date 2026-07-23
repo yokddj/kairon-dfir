@@ -846,14 +846,31 @@ async def store_memory_upload_chunk_stream(
                     },
                 )
 
-            os.replace(temp_path, final_path)
-            dir_fd = os.open(str(target_dir), os.O_DIRECTORY)
             try:
-                fsync_started = time.monotonic()
-                os.fsync(dir_fd)
-                dir_fsync_ms = int((time.monotonic() - fsync_started) * 1000)
-            finally:
-                os.close(dir_fd)
+                os.replace(temp_path, final_path)
+                dir_fd = os.open(str(target_dir), os.O_DIRECTORY)
+                try:
+                    fsync_started = time.monotonic()
+                    os.fsync(dir_fd)
+                    dir_fsync_ms = int((time.monotonic() - fsync_started) * 1000)
+                finally:
+                    os.close(dir_fd)
+            except FileNotFoundError:
+                # The staging directory can vanish mid-write: cancel deletes
+                # it as soon as it commits status=cancelled, with no lock
+                # against chunk uploads already past the terminal-status
+                # check at the top of this function. That's an expected
+                # outcome of a real race, not a server error -- surface the
+                # same clean, structured error the terminal-status check
+                # itself would have raised had the timing gone the other way,
+                # instead of letting a raw FileNotFoundError 500 out.
+                db.refresh(item)
+                if item.status in TERMINAL_UPLOAD_SESSION_STATUSES:
+                    raise MemoryUploadSessionError(
+                        "MEMORY_UPLOAD_TERMINAL",
+                        "This upload session is already in a terminal state.",
+                    ) from None
+                raise
 
             db_started = time.monotonic()
             item = _record_chunk_received(
