@@ -23,11 +23,22 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useAuth } from "../context/AuthContext";
 
+// Investigation-stage tag for each destination -- preparation for the
+// future stage-based navigation redesign (see the Phase-1 UX review), not
+// yet wired into rendering. Two existing regression tests
+// ("does not remove the Memory section when no memory evidence exists" in
+// Sidebar.test.tsx, and the family/status-table coverage in
+// MemoryAnalysisPage.test.tsx) document that collapsing or conditionally
+// hiding this navigation was tried before and reverted, so this phase adds
+// only this metadata layer and makes no rendering change.
+type InvestigationStage = "overview" | "upload" | "prepare" | "analyze" | "investigate" | "report" | "tools";
+
 type NavItem = {
   to: string;
   label: string;
   icon: typeof Home;
   requiresCase?: boolean;
+  stage?: InvestigationStage;
 };
 
 const MEMORY_TAB_BY_LABEL: Record<string, string> = {
@@ -116,58 +127,58 @@ export default function Sidebar() {
     {
       title: "Case Overview",
       items: [
-        { to: activeCaseId ? "/cases/:caseId/overview" : "/", label: "Investigation Home", icon: Home, requiresCase: true },
+        { to: activeCaseId ? "/cases/:caseId/overview" : "/", label: "Investigation Home", icon: Home, requiresCase: true, stage: "overview" },
       ],
     },
     {
       title: "Investigation",
       items: [
-        { to: "/cases/:caseId/evidence", label: "Evidence & Ingest", icon: Database, requiresCase: true },
-        { to: "/cases/:caseId/search", label: "Search", icon: Search, requiresCase: true },
-        { to: "/cases/:caseId/command-history", label: "Command History", icon: Terminal, requiresCase: true },
-        { to: "/cases/:caseId/process-graph", label: "Execution Stories", icon: Waypoints, requiresCase: true },
-        { to: "/cases/:caseId/artifacts", label: "Artifact Views", icon: FolderSearch2, requiresCase: true },
-        { to: "/cases/:caseId/incident-timeline", label: "Incident Timeline", icon: Waypoints, requiresCase: true },
-        ...(showValidationMatrix ? [{ to: "/cases/:caseId/validation-matrix", label: "Validation Matrix", icon: ListChecks, requiresCase: true }] : []),
+        { to: "/cases/:caseId/evidence", label: "Evidence & Ingest", icon: Database, requiresCase: true, stage: "upload" },
+        { to: "/cases/:caseId/search", label: "Search", icon: Search, requiresCase: true, stage: "investigate" },
+        { to: "/cases/:caseId/command-history", label: "Command History", icon: Terminal, requiresCase: true, stage: "investigate" },
+        { to: "/cases/:caseId/process-graph", label: "Execution Stories", icon: Waypoints, requiresCase: true, stage: "analyze" },
+        { to: "/cases/:caseId/artifacts", label: "Artifact Views", icon: FolderSearch2, requiresCase: true, stage: "analyze" },
+        { to: "/cases/:caseId/incident-timeline", label: "Incident Timeline", icon: Waypoints, requiresCase: true, stage: "investigate" },
+        ...(showValidationMatrix ? [{ to: "/cases/:caseId/validation-matrix", label: "Validation Matrix", icon: ListChecks, requiresCase: true, stage: "tools" as InvestigationStage }] : []),
       ],
     },
     {
       title: "Findings & Reports",
       items: [
-        { to: "/cases/:caseId/findings", label: "Findings", icon: ShieldAlert, requiresCase: true },
-        { to: "/cases/:caseId/detections", label: "Detections", icon: ShieldAlert, requiresCase: true },
-        { to: "/cases/:caseId/reports", label: "Reports", icon: FileArchive, requiresCase: true },
+        { to: "/cases/:caseId/findings", label: "Findings", icon: ShieldAlert, requiresCase: true, stage: "investigate" },
+        { to: "/cases/:caseId/detections", label: "Detections", icon: ShieldAlert, requiresCase: true, stage: "investigate" },
+        { to: "/cases/:caseId/reports", label: "Reports", icon: FileArchive, requiresCase: true, stage: "report" },
       ],
     },
     {
       title: "Memory",
       items: [
-        { to: "/cases/:caseId/memory?tab=overview", label: "Memory Overview", icon: MemoryStick, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=processes", label: "Processes", icon: Terminal, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=graph", label: "Process Graph", icon: Waypoints, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=network", label: "Network", icon: Network, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=modules", label: "Modules & DLLs", icon: HardDrive, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=handles", label: "Handles", icon: HardDrive, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=suspicious", label: "Suspicious Memory", icon: ShieldAlert, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=vads", label: "VADs", icon: HardDrive, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=system", label: "System", icon: Gauge, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=runs", label: "Runs", icon: ListChecks, requiresCase: true },
-        { to: "/cases/:caseId/memory?tab=raw", label: "Raw Observations", icon: HardDrive, requiresCase: true },
+        { to: "/cases/:caseId/memory?tab=overview", label: "Memory Overview", icon: MemoryStick, requiresCase: true, stage: "analyze" },
+        { to: "/cases/:caseId/memory?tab=processes", label: "Processes", icon: Terminal, requiresCase: true, stage: "analyze" },
+        { to: "/cases/:caseId/memory?tab=graph", label: "Process Graph", icon: Waypoints, requiresCase: true, stage: "analyze" },
+        { to: "/cases/:caseId/memory?tab=network", label: "Network", icon: Network, requiresCase: true, stage: "analyze" },
+        { to: "/cases/:caseId/memory?tab=modules", label: "Modules & DLLs", icon: HardDrive, requiresCase: true, stage: "analyze" },
+        { to: "/cases/:caseId/memory?tab=handles", label: "Handles", icon: HardDrive, requiresCase: true, stage: "analyze" },
+        { to: "/cases/:caseId/memory?tab=suspicious", label: "Suspicious Memory", icon: ShieldAlert, requiresCase: true, stage: "analyze" },
+        { to: "/cases/:caseId/memory?tab=vads", label: "VADs", icon: HardDrive, requiresCase: true, stage: "analyze" },
+        { to: "/cases/:caseId/memory?tab=system", label: "System", icon: Gauge, requiresCase: true, stage: "analyze" },
+        { to: "/cases/:caseId/memory?tab=runs", label: "Runs", icon: ListChecks, requiresCase: true, stage: "analyze" },
+        { to: "/cases/:caseId/memory?tab=raw", label: "Raw Observations", icon: HardDrive, requiresCase: true, stage: "analyze" },
       ],
     },
     {
       title: "Advanced",
       items: [
-        { to: "/rules", label: "Rules", icon: ScanSearch },
-        { to: "/cases/:caseId/debug-export", label: "Debug Export", icon: FileArchive, requiresCase: true },
-        { to: "/activity", label: "Activity Center", icon: Activity },
-        { to: "/siem", label: "Diagnostics: OpenSearch Console", icon: ScanSearch },
-        { to: "/system/performance", label: "System / Performance", icon: Gauge },
+        { to: "/rules", label: "Rules", icon: ScanSearch, stage: "tools" },
+        { to: "/cases/:caseId/debug-export", label: "Debug Export", icon: FileArchive, requiresCase: true, stage: "tools" },
+        { to: "/activity", label: "Activity Center", icon: Activity, stage: "tools" },
+        { to: "/siem", label: "Diagnostics: OpenSearch Console", icon: ScanSearch, stage: "tools" },
+        { to: "/system/performance", label: "System / Performance", icon: Gauge, stage: "tools" },
       ],
     },
     {
       title: "Help",
-      items: [{ to: "/docs", label: "Docs", icon: BookOpen }],
+      items: [{ to: "/docs", label: "Docs", icon: BookOpen, stage: "tools" }],
     },
   ];
 
