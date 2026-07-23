@@ -85,13 +85,19 @@ def register_archive_evidence(upload_id: str, db: Session) -> Evidence:
             upload_file,
             folder_upload=False,
             folder_name=None,
-            evidence_intent="raw",
+            # Wizard Advanced Options (WIZARD_ADVANCED_OPTIONS_ENABLED):
+            # metadata.get(...) is None for every session created before
+            # this capability existed, or when the flag is off -- the
+            # `or "raw"` default preserves exactly today's hardcoded
+            # behavior; upload_evidence's own ingest_mode/evtx_profile
+            # already default to full-forensic behavior when None.
+            evidence_intent=metadata.get("wizard_evidence_intent") or "raw",
             packaging=None,
-            ingest_mode=None,
+            ingest_mode=metadata.get("wizard_ingest_mode"),
             provided_host=None,
             provided_platform=metadata.get("provided_platform"),
             host_id=metadata.get("wizard_host_id"),
-            evtx_profile=None,
+            evtx_profile=metadata.get("wizard_evtx_profile"),
             memory_authorization_acknowledged=False,
             memory_upload_id=None,
             db=db,

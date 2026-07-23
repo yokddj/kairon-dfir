@@ -340,6 +340,9 @@ def init_resumable_evidence_upload(
                 authorization_acknowledged=payload.memory_authorization_acknowledged,
                 notes=payload.notes,
                 current_user=current_user,
+                evidence_intent=payload.evidence_intent,
+                ingest_mode=payload.ingest_mode,
+                evtx_profile=payload.evtx_profile,
             )
         except UploadSessionError as exc:
             raise _http_from_upload_error(exc) from exc
@@ -520,6 +523,8 @@ def promote_evidence_upload(
             labels=payload.labels,
             notes=payload.notes,
             current_user=current_user,
+            evidence_intent=payload.evidence_intent,
+            ingest_mode=payload.ingest_mode,
         )
         operation = get_upload_operation(db, session)
         transition_operation(operation, "queued", stage="processing_queued", owner="worker", force=True)

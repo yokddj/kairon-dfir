@@ -80,4 +80,5 @@ def check_ingestion_readiness(db: Session) -> dict:
         "unified_upload_evidence_memory_dump": bool(settings.unified_upload_evidence_memory_dump),
         "unified_upload_evidence_disk_image": bool(settings.unified_upload_evidence_disk_image),
         "unified_upload_evidence_archive": bool(settings.unified_upload_evidence_archive),
+        "wizard_advanced_options_enabled": bool(settings.wizard_advanced_options_enabled),
     }

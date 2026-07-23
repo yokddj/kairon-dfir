@@ -251,6 +251,10 @@ def create_unified_upload_session(
     notes: str | None,
     current_user: Any,
     canonical_filename: str | None = None,
+    file_fingerprint: str | None = None,
+    evidence_intent: str | None = None,
+    ingest_mode: str | None = None,
+    evtx_profile: str | None = None,
 ) -> tuple[EvidenceUploadSession, UnifiedUploadInfo]:
     """Create a unified chunk-index session for any migrated category.
 
@@ -261,6 +265,17 @@ def create_unified_upload_session(
     resolves at finalize time (fixed forever once the session is created --
     see ``app.services.memory.upload_sessions.finalize_memory_upload_session``'s
     ``_register()``). ``evidence_type`` drives host-resolution policy only.
+
+    ``file_fingerprint`` is passed straight through to
+    ``create_memory_upload_session`` (Memory Overview's own conflict-detail
+    UX; unused/None for Wizard-originated sessions).
+
+    ``evidence_intent``/``ingest_mode``/``evtx_profile`` are Wizard Advanced
+    Options (WIZARD_ADVANCED_OPTIONS_ENABLED) -- stored as
+    ``wizard_evidence_intent``/``wizard_ingest_mode``/``wizard_evtx_profile``
+    metadata and consulted only by workflow handlers that already call
+    ``upload_evidence()`` (currently: archive). memory_dump/disk_image's
+    handlers ignore them.
     """
     if not db.get(Case, case_id):
         raise UploadSessionError("case_not_found", "Case not found")
@@ -289,6 +304,9 @@ def create_unified_upload_session(
         "wizard_notes": (notes or "").strip() or None,
         "wizard_host_id": host_resolution.host_id,
         "source_upload_session_kind": "unified_evidence_wizard",
+        "wizard_evidence_intent": evidence_intent,
+        "wizard_ingest_mode": ingest_mode,
+        "wizard_evtx_profile": evtx_profile,
     }
     # MemoryUploadSessionError intentionally propagates unwrapped -- the
     # route layer (routes_evidence_preflight.init_resumable_evidence_upload)
@@ -304,6 +322,7 @@ def create_unified_upload_session(
         authorization_acknowledged=authorization_acknowledged,
         expected_sha256=client_sha256,
         upload_mode="resumable",
+        file_fingerprint=file_fingerprint,
         extra_metadata=extra_metadata,
         kind=kind,
         canonical_filename=canonical_filename,
@@ -342,6 +361,30 @@ def create_unified_upload_session(
     info = unified_upload_info(session, db)
     assert info is not None
     return session, info
+
+
+def find_unified_session_for_memory_upload(db: Session, *, case_id: str, memory_upload_id: str) -> EvidenceUploadSession | None:
+    """Reverse lookup: given a MemoryUpload id, find its projected
+    EvidenceUploadSession, if one was created for it.
+
+    Used by entry points that create/cancel unified sessions outside the
+    Wizard's own session-id-keyed API (Memory Overview) to keep the
+    projection in sync without a second discovery/cancel implementation --
+    not a new projection mechanism, just a way to find the existing one.
+    Not indexed by design: case-scoped upload-session counts are small, and
+    this is only called on the cancel path, not per-chunk.
+    """
+    candidates = (
+        db.query(EvidenceUploadSession)
+        .filter(EvidenceUploadSession.case_id == case_id)
+        .order_by(EvidenceUploadSession.updated_at.desc())
+        .limit(200)
+        .all()
+    )
+    for candidate in candidates:
+        if (candidate.metadata_json or {}).get("memory_upload_id") == memory_upload_id:
+            return candidate
+    return None
 
 
 def sync_unified_session(db: Session, session: EvidenceUploadSession) -> EvidenceUploadSession:
