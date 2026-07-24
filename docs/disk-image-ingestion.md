@@ -363,5 +363,4 @@ If EWF is recognized but not processed, verify that:
 - EWF currently uses controlled temporary export to RAW instead of direct filesystem access.
 - Linux and Windows installation detection is content-driven and currently assumes the installation root is the filesystem root.
 - Encrypted volumes are detected and marked, but not unlocked.
-- VMDK/VHD/VHDX/QCOW/VDI are registry-prepared only, not supported in this phase.
 - The UI exposes disk image inspection in Evidence Detail, but deeper artifact provenance rendering is still minimal.
