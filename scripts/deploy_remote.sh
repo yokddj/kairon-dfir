@@ -1,15 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# /root/kairon-dfir on 192.168.1.19 is the real, currently-running
-# production checkout (compose project "kairon-dfir": backend, frontend,
-# worker, memory-worker). /root/DFIR_APP (compose project "dfir_app") is an
-# older location that is NOT dead: as of 2026-07-22 it still hosts the
-# isolated symbol-egress-gateway container, which has not been migrated.
-# Do not repoint at DFIR_APP, and do not assume it's safe to remove --
-# override with --dir/REMOTE_DIR if you are deploying a component that
-# still intentionally lives there.
-REMOTE_HOST="${REMOTE_HOST:-192.168.1.19}"
+# The deployment target is never hardcoded here -- pass --host/--dir or set
+# REMOTE_HOST/REMOTE_DIR in your own (untracked) environment. If your
+# deployment has more than one remote checkout in play (e.g. an older
+# location still hosting a component that hasn't been migrated yet), keep
+# that mapping in your own local notes, not in this tracked script.
+REMOTE_HOST="${REMOTE_HOST:-}"
 REMOTE_DIR="${REMOTE_DIR:-/root/kairon-dfir}"
 SERVICES="${SERVICES:-backend frontend}"
 DRY_RUN=0
@@ -38,6 +35,8 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
+
+: "${REMOTE_HOST:?REMOTE_HOST must be set via --host or the REMOTE_HOST env var; there is no default deployment target}"
 
 commit="$(git rev-parse HEAD)"
 branch="$(git rev-parse --abbrev-ref HEAD)"

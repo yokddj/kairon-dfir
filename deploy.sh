@@ -1,17 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REMOTE_HOST="root@192.168.1.19"
-# /root/kairon-dfir is the real, currently-running production checkout
-# (compose project "kairon-dfir"). /root/DFIR_APP (compose project
-# "dfir_app") is an older location that still hosts the separate,
-# unmigrated symbol-egress-gateway container as of 2026-07-22 -- it is not
-# safe to assume dead. Override REMOTE_DIR if you specifically mean to
-# deploy something that still lives there.
-REMOTE_DIR="/root/kairon-dfir"
+# REMOTE_HOST must include whatever SSH user is appropriate for your
+# deployment target, e.g. "deploy-user@your-server" or an ~/.ssh/config
+# alias -- there is intentionally no default here, real deployment hosts
+# must never be hardcoded in a tracked file.
+: "${REMOTE_HOST:?REMOTE_HOST must be set, e.g. REMOTE_HOST=user@host ./deploy.sh}"
+REMOTE_DIR="${REMOTE_DIR:-/root/kairon-dfir}"
 COMMIT_MESSAGE="${1:-Update Kairon}"
 
-cd /root/kairon
+cd "$(dirname "$0")"
 
 git add -A
 
