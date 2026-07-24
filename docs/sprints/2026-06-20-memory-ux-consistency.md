@@ -2,7 +2,7 @@
 
 ## Status
 Closed. Single canonical commit `fe4ba9b`. Single remote deployment on
-`192.168.1.19:/root/DFIR_APP`. 14/14 Playwright checks pass; 360 frontend
+`<remote-host>:<remote-checkout>`. 14/14 Playwright checks pass; 360 frontend
 tests pass; 132 backend tests pass.
 
 ## Cause of the duplicate "metrics at zero" row
@@ -43,7 +43,7 @@ The dedup branch in `_build_tree_response` (which previously removed
 the System root because its parent in the root set was Idle) is now
 versioned in this sprint: it is included in commit `fe4ba9b`, the
 backend test `test_no_duplicate_entities_in_tree` covers it, and the
-remote container now runs the same code as `/root/kairon`.
+remote container now runs the same code as `<local-working-tree>`.
 
 ## Files
 * `backend/app/services/memory/process_entities.py` — new roots/orphans
@@ -118,7 +118,7 @@ remote container now runs the same code as `/root/kairon`.
   frontend` and `up -d frontend`; backend via
   `docker compose restart backend`.
 
-## Playwright (against http://192.168.1.19:5173/)
+## Playwright (against http://<remote-host>:5173/)
 14/14 pass:
 * Frontend serves the new modal bundle.
 * Memory workspace loads with the tablist.
@@ -157,7 +157,7 @@ remote container now runs the same code as `/root/kairon`.
 
 ## Single deployment confirmed
 * Local commit `fe4ba9b`, pushed to `origin/main`.
-* Remote `/root/DFIR_APP` source updated via rsync (no `--delete`,
+* Remote `<remote-checkout>` source updated via rsync (no `--delete`,
   no `.env` overwrite).
 * Backend container files replaced via `docker cp` + restart;
   frontend image rebuilt and container recreated.

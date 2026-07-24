@@ -6,7 +6,7 @@
 
 The canonical entity/observation model is implemented, the UI is
 refactored, the real case is renormalized, browser validation passes
-against `http://192.168.1.19:5173/`, disk regression passes, and no
+against `http://<remote-host>:5173/`, disk regression passes, and no
 sensitive artifacts were committed.
 
 ## Root cause of `processes_basic` appearing empty
@@ -84,16 +84,16 @@ two observations with conflicting `create_time`s.
 
 ## Local repository path
 
-`/root/kairon`
+`<local-working-tree>`
 
 ## Remote deployment path
 
-`192.168.1.19:/root/DFIR_APP`
+`<remote-host>:<remote-checkout>`
 
 ## Confirmation
 
 * No local deployment was started.
-* No second Kairon instance was launched from `/root/kairon`.
+* No second Kairon instance was launched from `<local-working-tree>`.
 * The deployment script `scripts/deploy_remote.sh` was the only
   deployment mechanism used.
 * The deploy recreated only `dfir_app-backend-1` and
@@ -104,8 +104,8 @@ two observations with conflicting `create_time`s.
 ## Selected canonical repository
 
 * **Repository**: `git@github.com:yokddj/kairon-dfir.git` (canonical).
-* **Local working tree**: `/root/kairon`.
-* **Remote working tree**: `/root/DFIR_APP` (on `192.168.1.19`).
+* **Local working tree**: `<local-working-tree>`.
+* **Remote working tree**: `<remote-checkout>` (on `<remote-host>`).
 
 ## Backend test count
 
@@ -289,7 +289,7 @@ dfir-events-c01c0be4-2381-4208-8af6-266e2579a893: 1,336,751 (unchanged)
 
 ## Playwright validation
 
-16/16 validations pass against `http://192.168.1.19:5173/`:
+16/16 validations pass against `http://<remote-host>:5173/`:
 
 1. Open memory case.
 2. Canonical view section is visible.

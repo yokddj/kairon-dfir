@@ -50,11 +50,11 @@ passes; no local deployment was started.
 
 ## Local repository path
 
-`/root/kairon`
+`<local-working-tree>`
 
 ## Remote deployment path
 
-`192.168.1.19:/root/DFIR_APP`
+`<remote-host>:<remote-checkout>`
 
 ## Tests
 
@@ -120,7 +120,7 @@ passes; no local deployment was started.
 
 ## Playwright validation
 
-16/16 pass against `http://192.168.1.19:5173/`. Screenshot deleted.
+16/16 pass against `http://<remote-host>:5173/`. Screenshot deleted.
 
 ## Services recreated
 
@@ -146,8 +146,8 @@ passes; no local deployment was started.
 
 ## No local deployment
 
-* No second Kairon instance was launched from `/root/kairon`.
+* No second Kairon instance was launched from `<local-working-tree>`.
 * The only deployment mechanism was `scripts/deploy_remote.sh`
-  against `192.168.1.19:/root/DFIR_APP`.
+  against `<remote-host>:<remote-checkout>`.
 * No new memory analyses were started; renormalized data from the
   prior sprint is reused.
