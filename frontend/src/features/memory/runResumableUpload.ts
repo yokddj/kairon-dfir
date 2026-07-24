@@ -441,6 +441,28 @@ export async function runResumableUpload(
     ) {
       return { type: "aborted" };
     }
+    // finalize reassembles and re-hashes the whole file server-side before
+    // returning, so its duration scales with file size -- a proxy sitting in
+    // front of the backend can give up (502/503/504) well before the backend
+    // does, and the backend then finishes the registration anyway a short
+    // while later. Re-check the authoritative status before declaring this a
+    // failure, so a large file doesn't get reported as failed when it isn't.
+    if (error instanceof ApiError && error.status >= 500) {
+      try {
+        const reconciled = await getStatus(uploadId);
+        if (reconciled.status === "completed" && reconciled.evidence_id) {
+          return { type: "completed", status: reconciled };
+        }
+        return {
+          type: "failed",
+          message:
+            "The proxy in front of Kairon's server gave up waiting for this evidence file to finish registering (it can take a while for very large files), but the server may still be working on it in the background. Wait a moment and refresh -- if the evidence shows up as registered, this was not a real failure. If this keeps happening for large files, an administrator can raise proxy_read_timeout for the /finalize endpoint in frontend/nginx.conf (currently 1800s).",
+        };
+      } catch {
+        // Status re-check itself failed (e.g. offline) -- fall through to
+        // the original error below rather than hiding it.
+      }
+    }
     return {
       type: "failed",
       message:
