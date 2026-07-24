@@ -1,6 +1,6 @@
 # Test Baseline
 
-Baseline recorded on remote host `192.168.1.19` from `/root/DFIR_APP`.
+Baseline recorded on the deployed remote host from the project's remote checkout.
 
 ## Focused Memory Analysis Checks
 

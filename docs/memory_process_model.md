@@ -294,6 +294,6 @@ The correlation logic itself is **not** implemented in this sprint.
 * No Volatility rerun required for migration.
 * No disk index writes.
 * No NormalizedEvent creation.
-* Browser validation passes against `http://192.168.1.19:5173/`.
+* Browser validation passes against the deployed remote host's frontend URL.
 * Disk regression passes (no writes to `dfir-events-*`).
 * No sensitive artifacts committed.

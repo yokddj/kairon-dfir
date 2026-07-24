@@ -77,7 +77,7 @@ graph LR
 
 ```mermaid
 graph TB
-    subgraph REMOTE["192.168.1.19:5173 + :8000"]
+    subgraph REMOTE["deployed remote host: :5173 + :8000"]
         FE["frontend<br/>(nginx / vite)"]
         BE["backend<br/>(FastAPI / Uvicorn)<br/>git: 2c53c34"]
         PG[("PostgreSQL<br/>schema_migrations up to v11<br/>memory_analysis_batches.last_advanced_run_id = uuid")]

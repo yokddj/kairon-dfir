@@ -69,7 +69,7 @@ Frontend:
 ## Commit
 `7650a3b Add core memory artifact profiles (network/modules/handles/kernel/suspicious)`
 Pushed to `origin/main`. Single remote deployment on
-`192.168.1.19:/root/DFIR_APP`. Only `dfir_app-backend` and
+`<remote-host>:<remote-checkout>`. Only `dfir_app-backend` and
 `dfir_app-frontend` were recreated; `dfir_app-memory-worker` (39h
 uptime), `dfir_app-symbol-fetcher` (19h), `dfir_app-symbol-egress-gateway`
 (19h), `dfir_app-postgres` (22h), `dfir_app-redis` (22h),
@@ -81,7 +81,7 @@ uptime), `dfir_app-symbol-fetcher` (19h), `dfir_app-symbol-egress-gateway`
 - 3 pre-existing failures unchanged (Rules, ProcessTreePanel,
   ArtifactExplorer).
 - `tsc -b --noEmit` clean. `vite build` 7.58s.
-- Playwright against `http://192.168.1.19:5173/`: 18/18 pass.
+- Playwright against `http://<remote-host>:5173/`: 18/18 pass.
 
 ## Build artifacts / counts
 - API endpoint `GET /memory/artifacts/overview` returns 0/0/0/0/0/0/0

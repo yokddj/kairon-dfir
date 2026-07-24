@@ -4,22 +4,21 @@ This project deploys to the Kairon host through a Git-tracked source tree and Do
 
 ## Target
 
-- Host: `192.168.1.19`
-- SSH: use the existing local SSH configuration, for example the `kairon-deploy` host alias.
-- Project directory: `/root/kairon-dfir`
-- Compose project: `kairon-dfir`
+- Host: your deployment target, never hardcoded here -- set `REMOTE_HOST` (see `scripts/deploy_remote.sh`) or use a local SSH config alias, e.g. `your-host-alias`.
+- Project directory: `$REMOTE_DIR` (defaults to `/root/kairon-dfir` in `scripts/deploy_remote.sh` if unset).
+- Compose project: named after the project directory (`kairon-dfir` by default).
 
-> **2026-07-22 correction:** this document previously named `/root/DFIR_APP`
-> (compose project `dfir_app`) as the target. That directory is stale --
-> it has no `.git` and no `.env` -- while the actual running application
-> (backend, frontend, worker, memory-worker) has been deployed from
-> `/root/kairon-dfir` (compose project `kairon-dfir`) for some time.
-> `/root/DFIR_APP` is **not** fully dead, though: it still hosts the
-> separate, unmigrated `symbol-egress-gateway` container. Do not delete it
-> or assume `docker compose` commands there are safe without checking
-> `docker compose ps` first.
+> **Lesson from a real incident:** this document once continued to name an
+> old deployment directory as the target well after the actual running
+> application had moved to a new one. That old directory wasn't fully
+> dead either -- it still hosted a separate, not-yet-migrated container.
+> Before trusting this document (or any deployment doc) as current, verify
+> the *actual* running state on the host (`docker compose ps`, check which
+> directory has a live `.git`/`.env`) rather than assuming the documented
+> path is still accurate. If you have more than one checkout on a host,
+> record which one is authoritative in your own local notes, not here.
 
-Do not store passwords, private keys, tokens, or server-local `.env` values in this repository.
+Do not store passwords, private keys, tokens, real hostnames/IPs, or server-local `.env` values in this repository.
 
 ## Preflight
 
@@ -28,7 +27,7 @@ Before deployment, record:
 ```sh
 hostname
 date -Is
-cd /root/DFIR_APP
+cd "$REMOTE_DIR"
 git rev-parse --abbrev-ref HEAD
 git rev-parse HEAD
 git status --short
@@ -51,7 +50,7 @@ Preferred deployment source is a clean Git commit. Build images from the intende
 If selective file sync is required, use repository-relative paths and preserve directory structure:
 
 ```sh
-rsync -avzcR ./backend/app/api/routes_memory.py dfir-server:/root/DFIR_APP/
+rsync -avzcR ./backend/app/api/routes_memory.py "$REMOTE_HOST:$REMOTE_DIR/"
 ```
 
 Rules for selective sync:
@@ -67,7 +66,7 @@ Rules for selective sync:
 Build only affected services:
 
 ```sh
-cd /root/DFIR_APP
+cd "$REMOTE_DIR"
 docker compose build backend frontend
 docker compose up -d backend frontend
 ```
@@ -125,7 +124,7 @@ Do not publish the resulting image to a registry in this sprint. Do not install 
 Rollback should use the prior known commit or image IDs and recreate only affected services:
 
 ```sh
-cd /root/DFIR_APP
+cd "$REMOTE_DIR"
 docker compose up -d backend frontend
 ```
 

@@ -61,7 +61,7 @@ Visible, Matching, Context ancestors, Collapsed, Not loaded, Case roots, Orphans
 
 ## Playwright
 
-16/16 pass against `http://192.168.1.19:5173/`. Screenshot deleted.
+16/16 pass against `http://<remote-host>:5173/`. Screenshot deleted.
 
 ## Services recreated
 
