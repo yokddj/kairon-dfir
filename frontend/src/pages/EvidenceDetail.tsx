@@ -3,258 +3,37 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type CaseReport, type EvidenceBenchmark, type EvidenceIndexingPlan, type EvidenceIndexingStep, type EvidencePlatformProfile, type EvidenceRun, type EvtxHealthCheckResult, type EvtxProfile, type IngestPlanCandidate, type OnDemandModule, type ProblematicArtifact, type RuleRun, type VelociraptorCandidate } from "../api/client";
 import DebugExportDialog from "../components/DebugExportDialog";
+import HostAssignmentPanel from "../components/HostAssignmentPanel";
 import InvestigationContext from "../components/InvestigationContext";
 import { Disclosure } from "../components/common/Disclosure";
 import { useNotifications } from "../context/NotificationsContext";
+import { useHostAssignment } from "../hooks/useHostAssignment";
 import { useHostContext } from "../hooks/useHostContext";
-
-type ArtifactFilters = {
-  status: string;
-  artifactType: string;
-  parser: string;
-  sourcePath: string;
-};
-
-type LinuxInventoryArtifact = { key?: string; label?: string; family?: string; status?: string; paths?: string[]; reason?: string };
-type LinuxInventory = {
-  distribution?: string | null;
-  hostname?: string | null;
-  kernel?: string | null;
-  detected_artifacts?: LinuxInventoryArtifact[];
-  not_detected?: LinuxInventoryArtifact[];
-  unsupported?: LinuxInventoryArtifact[];
-  warnings?: string[];
-  coverage?: { detected?: number; total_detected?: number; supported?: number; unsupported?: number; coverage_percent?: number };
-};
-
-function asLinuxInventory(value: unknown): LinuxInventory | null {
-  if (!value || typeof value !== "object") return null;
-  return value as LinuxInventory;
-}
-
-function matchesArtifactFilter(artifact: { status: string; artifact_type: string; parser: string; source_path: string }, filters: ArtifactFilters) {
-  return (
-    (!filters.status || artifact.status === filters.status) &&
-    (!filters.artifactType || artifact.artifact_type === filters.artifactType) &&
-    (!filters.parser || artifact.parser === filters.parser) &&
-    (!filters.sourcePath || artifact.source_path.toLowerCase().includes(filters.sourcePath.toLowerCase()))
-  );
-}
-
-function formatDuration(value: unknown) {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return "-";
-  if (value < 60) return `${Math.round(value)}s`;
-  const minutes = Math.floor(value / 60);
-  const seconds = Math.round(value % 60);
-  if (minutes < 60) return `${minutes}m ${seconds}s`;
-  const hours = Math.floor(minutes / 60);
-  const remMinutes = minutes % 60;
-  return `${hours}h ${remMinutes}m`;
-}
-
-function formatDateTime(value: string | null | undefined) {
-  if (!value) return "-";
-  const timestamp = Date.parse(value);
-  if (Number.isNaN(timestamp)) return value;
-  return new Date(timestamp).toLocaleString();
-}
-
-function formatBytes(value: unknown) {
-  const bytes = typeof value === "number" && Number.isFinite(value) ? value : 0;
-  if (bytes <= 0) return "-";
-  const units = ["bytes", "KB", "MB", "GB", "TB"];
-  let size = bytes;
-  let index = 0;
-  while (size >= 1024 && index < units.length - 1) {
-    size /= 1024;
-    index += 1;
-  }
-  return `${size >= 10 || index === 0 ? Math.round(size).toLocaleString() : size.toFixed(1)} ${units[index]}`;
-}
-
-function formatHeartbeatAge(heartbeatAt: string | null) {
-  if (!heartbeatAt) return "-";
-  const timestamp = Date.parse(heartbeatAt);
-  if (Number.isNaN(timestamp)) return heartbeatAt;
-  const elapsedSeconds = Math.max(0, Math.round((Date.now() - timestamp) / 1000));
-  return formatDuration(elapsedSeconds);
-}
-
-function extractTimeoutSeconds(message: string | null | undefined) {
-  const value = String(message || "");
-  const rqMatch = value.match(/maximum timeout value \((\d+) seconds\)/i);
-  if (rqMatch?.[1]) return Number.parseInt(rqMatch[1], 10);
-  const directMatch = value.match(/timed out after (\d+)s/i);
-  if (directMatch?.[1]) return Number.parseInt(directMatch[1], 10);
-  return null;
-}
-
-function buildRunTimeoutSummary(run: EvidenceRun | null, problematicCount: number) {
-  if (!run) return null;
-  const timeoutSeconds = extractTimeoutSeconds(run.last_error);
-  if (!timeoutSeconds) return null;
-  const completed = run.artifacts_done ?? 0;
-  const total = run.artifacts_total ?? completed;
-  const problematic = problematicCount || Math.max(total - completed, run.artifacts_failed ?? 0, 0);
-  return `Run timed out after ${timeoutSeconds}s. ${completed}/${total} artifacts completed. ${problematic} artifact was marked problematic and can be retried.`;
-}
-
-function formatEvtxBackend(value: string) {
-  if (value === "evtxecmd_csv") return "EvtxECmd CSV";
-  if (value === "evtxecmd_json") return "EvtxECmd JSON";
-  if (value === "evtx_raw_python") return "Python EVTX fallback";
-  return value || "-";
-}
-
-function formatPlatform(value: string | null | undefined) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (!normalized) return "-";
-  if (normalized === "auto") return "Auto-detect";
-  if (normalized === "macos") return "macOS";
-  return normalized.replaceAll("_", " ").replace(/^./, (char) => char.toUpperCase());
-}
-
-function parseActiveBenchmarkConflict(message: string | null | undefined) {
-  const raw = String(message || "").trim();
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw) as { error?: string; active_run_id?: string; active_benchmark_id?: string; message?: string };
-    if (parsed.error !== "active_ingest_exists") return null;
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-function formatProblematicStatusLabel(status: string | null | undefined) {
-  const value = String(status || "").trim();
-  if (!value) return "unknown";
-  return value.replaceAll("_", " ");
-}
-
-function problematicStatusTone(status: string | null | undefined) {
-  switch (String(status || "").trim().toLowerCase()) {
-    case "skipped_empty":
-    case "completed_no_records":
-    case "unsupported_no_records":
-      return "border-mint/25 bg-mint/10 text-mint";
-    case "recovered":
-    case "recovered_with_warning":
-      return "border-emerald-400/30 bg-emerald-400/10 text-emerald-200";
-    case "accepted_warning":
-    case "parsed_with_warning":
-    case "health_check_only_valid":
-    case "source_missing_but_indexed":
-      return "border-amber/30 bg-amber/10 text-amber";
-    case "partially_parsed":
-    case "partial_data_loss":
-      return "border-orange-400/30 bg-orange-400/10 text-orange-200";
-    default:
-      return "border-danger/30 bg-danger/10 text-danger";
-  }
-}
-
-function problematicRecoveryText(artifact: ProblematicArtifact) {
-  const effectiveStatus = String(artifact.effective_status || artifact.status || "").trim().toLowerCase();
-  if (effectiveStatus === "recovered_with_warning" || effectiveStatus === "recovered") {
-    const recoveredCount = artifact.recovered_records ?? artifact.effective_records_indexed ?? artifact.records_indexed;
-    return `Recovered ${recoveredCount} events with deep safe mode.`;
-  }
-  if (effectiveStatus === "source_missing_but_indexed") {
-    return "The original or staged file is no longer available for health check, but indexed events are searchable.";
-  }
-  if (["skipped_empty", "completed_no_records", "unsupported_no_records"].includes(effectiveStatus)) {
-    return "No records produced. Empty or unsupported EVTX channels are not investigation blockers.";
-  }
-  if (effectiveStatus === "parsed_with_warning" || effectiveStatus === "accepted_warning" || effectiveStatus === "health_check_only_valid") {
-    return "All read records were indexed.";
-  }
-  return "No records indexed. Data loss expected.";
-}
-
-function problematicImpact(artifact: ProblematicArtifact): { group: "critical" | "warning" | "skipped" | "tooling_missing" | "informational"; label: string; action: string } {
-  const text = `${artifact.status || ""} ${artifact.effective_status || ""} ${artifact.name || ""} ${artifact.health_summary || ""} ${artifact.loss_summary || ""}`.toLowerCase();
-  if (text.includes("host_identity_skipped_for_parallel_bulk")) {
-    return { group: "informational", label: "Informational", action: "No action needed. Host alias-aware Search still applies at query time." };
-  }
-  if (text.includes("tooling_missing") || text.includes("requires windows") || text.includes("srum")) {
-    return { group: "tooling_missing", label: "Unsupported/tooling missing", action: "Requires optional parser tooling or a Windows worker." };
-  }
-  if (text.includes("skipped_empty") || text.includes("completed_no_records") || text.includes("unsupported_no_records") || text.includes("no records produced")) {
-    return { group: "informational", label: "Empty/no records", action: "No retry needed. The parser completed but the log produced no parseable records." };
-  }
-  if ((artifact.effective_records_indexed ?? artifact.records_indexed ?? 0) > 0 && !(artifact.current_data_loss_expected ?? artifact.data_loss_expected)) {
-    return { group: "warning", label: "Warning", action: "Searchable data exists. Review details only if this artifact matters." };
-  }
-  if (artifact.current_data_loss_expected ?? artifact.data_loss_expected) {
-    return { group: "critical", label: "Critical error", action: "Retry parser or inspect source if this artifact is required." };
-  }
-  return { group: "skipped", label: "Skipped/empty", action: "Usually no action unless the artifact was expected." };
-}
-
-function indexingStepTone(status: string | null | undefined) {
-  const value = String(status || "").toLowerCase();
-  if (["completed", "derived"].includes(value)) return "border-mint/25 bg-mint/10 text-mint";
-  if (["queued", "running", "processing", "ready", "advanced_available"].includes(value)) return "border-accent/30 bg-accent/10 text-accent";
-  if (value.includes("tooling") || value.includes("unsupported")) return "border-amber/30 bg-amber/10 text-amber";
-  if (value.includes("failed")) return "border-danger/30 bg-danger/10 text-danger";
-  return "border-line bg-abyss/60 text-muted";
-}
-
-function formatIndexingStatus(status: string | null | undefined) {
-  return String(status || "unknown").replaceAll("_", " ");
-}
-
-type EvidenceIndexingState = "not_started" | "action_required" | "planning_or_waiting" | "indexing" | "stale" | "completed" | "completed_with_warnings" | "completed_with_errors" | "failed";
-
-function formatEvidenceStatusForDisplay(status: string | null | undefined) {
-  const value = String(status || "unknown").replaceAll("_", " ");
-  if (value === "completed with warnings") return "ready with warnings";
-  if (value === "completed") return "ready";
-  return value;
-}
-
-function formatIndexingPhaseForDisplay(phase: string | null | undefined) {
-  const value = String(phase || "").trim();
-  switch (value) {
-    case "selection_pending":
-    case "waiting_selection":
-      return "Preparing indexing plan";
-    case "pending":
-      return "Indexing job queued";
-    case "extracting_selected":
-      return "Extracting selected artifacts";
-    case "processing":
-      return "Indexing in progress";
-    case "completed":
-      return "Evidence ready for investigation";
-    case "completed_with_errors":
-      return "Indexing completed with errors";
-    case "failed":
-      return "Indexing failed";
-    default:
-      return value ? value.replaceAll("_", " ") : "Unknown";
-  }
-}
-
-function isRawDiscoveryEvidenceLike(evidence: { evidence_type?: string; metadata_json?: Record<string, unknown> } | null | undefined, discoveryCandidatesCount: number) {
-  if (!evidence || !discoveryCandidatesCount) return false;
-  const metadata = evidence.metadata_json ?? {};
-  const collectionKind = typeof metadata.collection_kind === "string" ? metadata.collection_kind : "";
-  const sourceType = typeof metadata.source_type === "string" ? metadata.source_type : "";
-  return evidence.evidence_type === "velociraptor_zip" || collectionKind === "raw_evidence_collection" || sourceType === "raw_collection";
-}
-
-function normalizeEvidenceHostName(value: string | null | undefined) {
-  const normalized = String(value || "").trim().toLowerCase();
-  return normalized.endsWith(".local") ? normalized.slice(0, -6) : normalized;
-}
-
-function assignedHostMatchesDetected(host: { id: string; canonical_name: string; display_name: string; aliases?: string[]; all_names?: string[] } | null, detected: string | null | undefined) {
-  const target = normalizeEvidenceHostName(detected);
-  if (!host || !target) return false;
-  return [host.id, host.canonical_name, host.display_name, ...(host.aliases || []), ...(host.all_names || [])].some((name) => normalizeEvidenceHostName(name) === target);
-}
+import {
+  asLinuxInventory,
+  buildRunTimeoutSummary,
+  formatBytes,
+  formatDateTime,
+  formatDuration,
+  formatEvidenceStatusForDisplay,
+  formatEvtxBackend,
+  formatHeartbeatAge,
+  formatIndexingPhaseForDisplay,
+  formatIndexingStatus,
+  formatPlatform,
+  formatProblematicStatusLabel,
+  indexingStepTone,
+  isRawDiscoveryEvidenceLike,
+  matchesArtifactFilter,
+  normalizeEvidenceHostName,
+  parseActiveBenchmarkConflict,
+  problematicImpact,
+  problematicRecoveryText,
+  problematicStatusTone,
+  type ArtifactFilters,
+  type EvidenceIndexingState,
+  type LinuxInventory,
+} from "../lib/evidenceDetailFormatting";
 
 export default function EvidenceDetail() {
   const { evidenceId = "" } = useParams();
@@ -288,9 +67,6 @@ export default function EvidenceDetail() {
   const [benchmarkNoProgressTimeoutSeconds, setBenchmarkNoProgressTimeoutSeconds] = useState(600);
   const [benchmarkHeartbeatTimeoutSeconds, setBenchmarkHeartbeatTimeoutSeconds] = useState(300);
   const [advancedProcessingDetailsOpen, setAdvancedProcessingDetailsOpen] = useState(false);
-  const [hostAssignmentMode, setHostAssignmentMode] = useState<"existing" | "create">("existing");
-  const [hostAssignmentId, setHostAssignmentId] = useState("");
-  const [hostAssignmentName, setHostAssignmentName] = useState("");
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const evidenceQuery = useQuery({
@@ -302,13 +78,6 @@ export default function EvidenceDetail() {
       return status === "pending" || status === "processing" ? 3000 : false;
     },
     refetchIntervalInBackground: true,
-  });
-  const caseHostsQuery = useQuery({
-    queryKey: ["case-hosts", evidenceQuery.data?.case_id],
-    queryFn: () => typeof api.getCaseHosts === "function" ? api.getCaseHosts(evidenceQuery.data!.case_id) : Promise.resolve({ case_id: evidenceQuery.data!.case_id, hosts: [], host_candidates: [] }),
-    enabled: Boolean(evidenceQuery.data?.case_id),
-    staleTime: 15_000,
-    refetchOnWindowFocus: false,
   });
   const manifestQuery = useQuery({
     queryKey: ["evidence-manifest", evidenceId],
@@ -779,40 +548,20 @@ export default function EvidenceDetail() {
   });
 
   const data = evidenceQuery.data;
-  const caseHosts = caseHostsQuery.data?.hosts ?? [];
-  const assignedHost = caseHosts.find((host) => host.id === data?.host_id) ?? null;
   const evidenceHostLabel = data?.provided_host || data?.detected_host || "";
   const evidenceMatchesActiveHost = !hasHostFilter || (activeHostId && data?.host_id === activeHostId) || hostMatchesName(evidenceHostLabel);
-  const assignmentMismatch = Boolean(data?.host_id && data?.detected_host && assignedHost && !assignedHostMatchesDetected(assignedHost, data.detected_host));
   const platformMismatch = Boolean(data?.provided_platform && data.provided_platform !== "auto" && data.detected_platform && data.detected_platform !== "unknown" && data.provided_platform !== data.detected_platform);
   const isMemoryEvidence = String(data?.evidence_type || "").toLowerCase().includes("memory");
 
-  useEffect(() => {
-    if (!data) return;
-    setHostAssignmentId(data.host_id || "");
-    setHostAssignmentMode("existing");
-  }, [data?.id, data?.host_id]);
-
-  const hostAssignmentMutation = useMutation({
-    mutationFn: async () => {
-      if (!data?.case_id) throw new Error("Evidence case is not loaded.");
-      if (hostAssignmentMode === "create") {
-        const name = hostAssignmentName.trim();
-        if (!name) throw new Error("Enter a host name.");
-        return api.updateEvidenceHost(data.case_id, evidenceId, { host_name: name, reason: "Assigned from Evidence Detail" });
-      }
-      return api.updateEvidenceHost(data.case_id, evidenceId, { host_id: hostAssignmentId || null, reason: hostAssignmentId ? "Assigned from Evidence Detail" : "Marked unassigned from Evidence Detail" });
-    },
-    onSuccess: (updated) => {
-      queryClient.setQueryData(["evidence", evidenceId], updated);
-      void queryClient.invalidateQueries({ queryKey: ["case-hosts", updated.case_id] });
-      void queryClient.invalidateQueries({ queryKey: ["case-context", updated.case_id] });
-      void queryClient.invalidateQueries({ queryKey: ["evidence-custody-events", updated.case_id, evidenceId] });
-      setHostAssignmentName("");
-      notify({ title: "Host assignment updated", tone: "success" });
-    },
-    onError: (error: Error) => notify({ title: "Host assignment failed", description: error.message, tone: "error" }),
+  const hostAssignment = useHostAssignment({
+    caseId: data?.case_id,
+    evidenceId,
+    currentHostId: data?.host_id,
+    detectedHost: data?.detected_host,
+    ready: Boolean(data),
   });
+  const { caseHosts, assignedHost, assignmentMismatch } = hostAssignment;
+
   const manifest = manifestQuery.data;
   const evidenceRuns = evidenceRunsQuery.data ?? [];
   const indexingPlan: EvidenceIndexingPlan | undefined = indexingPlanQuery.data;
@@ -1795,734 +1544,73 @@ function formatReportStatus(status: string | null | undefined) {
   const findingsHref = data?.case_id ? `/cases/${data.case_id}/findings?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
   const addFindingHref = data?.case_id ? `/cases/${data.case_id}/findings?create=1&evidence_id=${encodeURIComponent(evidenceId)}&title=${encodeURIComponent("Evidence note")}&source_view=evidence${data.host_id ? `&host_id=${encodeURIComponent(data.host_id)}` : ""}` : "#";
   const deleteConfirmationValid = deleteConfirmText.trim() === "DELETE";
-  const minimalProcessingView = true;
-  if (minimalProcessingView) {
-    return (
-      <div className="min-w-0 space-y-5">
-        <section className="rounded-[28px] border border-line bg-panel/75 p-6 shadow-panel">
-          <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
-            <div className="min-w-0">
-              <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Evidence</p>
-              <h2 className="mt-2 break-words text-3xl font-semibold">{data?.original_filename}</h2>
-              <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted">
-                <span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${minimalStatusLabel === "Ready" ? "border-mint/30 bg-mint/10 text-mint" : minimalStatusLabel === "Completed with errors" ? "border-danger/30 bg-danger/10 text-danger" : minimalStatusLabel === "Ready with warnings" ? "border-amber/30 bg-amber/10 text-amber" : "border-accent/30 bg-accent/10 text-accent"}`}>{minimalStatusLabel}</span>
-                <span>Host: <span className="text-ink">{data?.provided_host || data?.detected_host || "-"}</span></span>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={() => void handleRefresh()} disabled={evidenceQuery.isFetching || manifestQuery.isFetching} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted disabled:opacity-50">
-                {evidenceQuery.isFetching || manifestQuery.isFetching ? "Refreshing..." : "Refresh"}
-              </button>
-              <button type="button" onClick={() => reprocessMutation.mutate({ mode: "previous_selection" })} disabled={activeIndexingJob || reprocessMutation.isPending || !lastSuccessfulIngestPlan} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted disabled:opacity-50">
-                {reprocessMutation.isPending ? "Queueing..." : "Re-index evidence"}
-              </button>
-              <button type="button" onClick={() => setDeleteDialogOpen(true)} className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
-                Delete evidence
-              </button>
-              {data?.case_id ? <Link to={addFindingHref} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Add finding</Link> : null}
-              {data?.case_id ? <Link to={`/cases/${data.case_id}`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back to case</Link> : null}
-            </div>
-          </div>
-
-          {(activeIndexingJob || retryActive) ? (
-            <div className="mt-5 rounded-3xl border border-accent/30 bg-accent/10 p-5">
-              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">{progressTitle}</p>
-                  <h3 className="mt-1 text-2xl font-semibold text-ink">{progressPercent}%</h3>
-                  <p className="mt-1 text-sm text-muted">{retryActive ? "Retrying failed artifacts" : formatIndexingPhaseForDisplay(displayCounts.phase)}</p>
-                </div>
-                <div className="h-3 min-w-[220px] flex-1 overflow-hidden rounded-full bg-abyss/80">
-                  <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${Math.max(0, Math.min(100, progressPercent))}%` }} />
-                </div>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
-            <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Indexed documents</p><p className="mt-1 text-lg font-semibold text-ink">{indexedDocumentsTotal.toLocaleString()}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact types</p><p className="mt-1 text-lg font-semibold text-ink">{artifactTypeCount}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Real failures</p><p className={`mt-1 text-lg font-semibold ${realFailureCount ? "text-danger" : "text-mint"}`}>{realFailureCount}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Warnings</p><p className="mt-1 text-lg font-semibold text-amber">{warningCount}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Skipped empty</p><p className="mt-1 text-lg font-semibold text-muted">{skippedEmptyCount}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Completed</p><p className="mt-1 text-sm font-semibold text-ink">{formatDateTime(completedAt)}</p></div>
-          </div>
-          <div className="mt-5 rounded-3xl border border-accent/30 bg-abyss/60 p-4" data-testid="evidence-host-assignment-panel">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Host assignment</p>
-                <p className="mt-1 text-base font-semibold text-ink">Change host assignment</p>
-                <p className="mt-2 text-xs text-muted">Detected/provided host is preserved as metadata. Assigned host controls host filters, including Memory.</p>
-              </div>
-              <span className={`rounded-full border px-3 py-1 text-xs ${data?.host_id ? (assignmentMismatch ? "border-amber/30 bg-amber/10 text-amber" : "border-mint/30 bg-mint/10 text-mint") : "border-line bg-panel/50 text-muted"}`}>
-                {data?.host_id ? (assignmentMismatch ? "mismatch" : "confirmed") : "unassigned"}
-              </span>
-            </div>
-            {isMemoryEvidence && !data?.host_id ? (
-              <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber" role="alert">
-                This memory evidence is not assigned to a case host. Host filters may not include it until assigned.
-              </div>
-            ) : null}
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3 text-sm text-muted"><p className="font-mono text-[11px] uppercase tracking-[0.16em]">Detected/provided host</p><p className="mt-1 text-base font-semibold text-ink">{data?.detected_host || data?.provided_host || "-"}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3 text-sm text-muted"><p className="font-mono text-[11px] uppercase tracking-[0.16em]">Assigned host</p><p className="mt-1 text-base font-semibold text-ink">{assignedHost?.display_name || "Unassigned"}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3 text-sm text-muted"><p className="font-mono text-[11px] uppercase tracking-[0.16em]">Actions</p><p className="mt-1 text-xs text-muted">Assign to existing host, create a new host, or mark unassigned.</p></div>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-[160px_1fr_auto] md:items-end">
-              <label className="block text-xs text-muted">Change host<select value={hostAssignmentMode} onChange={(event) => setHostAssignmentMode(event.target.value as "existing" | "create")} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink"><option value="existing">Assign to existing host</option><option value="create">Create new host</option></select></label>
-              {hostAssignmentMode === "existing" ? <label className="block text-xs text-muted">Assign to existing host<select value={hostAssignmentId} onChange={(event) => setHostAssignmentId(event.target.value)} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink"><option value="">Mark unassigned</option>{caseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}</select></label> : <label className="block text-xs text-muted">Create new host<input value={hostAssignmentName} onChange={(event) => setHostAssignmentName(event.target.value)} placeholder="WS-01" className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink" /></label>}
-              <button type="button" onClick={() => hostAssignmentMutation.mutate()} disabled={hostAssignmentMutation.isPending || (hostAssignmentMode === "create" && !hostAssignmentName.trim())} className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">{hostAssignmentMutation.isPending ? "Saving..." : hostAssignmentMode === "create" ? "Create new host" : hostAssignmentId ? "Change host" : "Mark unassigned"}</button>
-            </div>
-          </div>
-          <div className="mt-5 rounded-3xl border border-line bg-abyss/60 p-4" data-testid="evidence-integrity-panel">
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-              <div className="min-w-0">
-                <div className="flex flex-wrap items-center gap-3">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Evidence Integrity</p>
-                  <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${integrityTone}`}>{integrityStatus.replaceAll("_", " ")}</span>
-                </div>
-                <p className="mt-2 text-sm text-muted">{integrityStatusLabel}</p>
-              </div>
-              <div className="flex shrink-0 flex-wrap gap-2">
-                <button type="button" onClick={() => verifyIntegrityMutation.mutate()} disabled={!data?.case_id || verifyIntegrityMutation.isPending} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">{verifyIntegrityMutation.isPending ? "Verifying..." : "Verify integrity"}</button>
-                <button type="button" onClick={() => exportManifestMutation.mutate()} disabled={!data?.case_id || exportManifestMutation.isPending} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted disabled:opacity-60">{exportManifestMutation.isPending ? "Exporting..." : "Export manifest"}</button>
-              </div>
-            </div>
-            <div className="mt-4">
-              <Disclosure label="Technical details" testId="evidence-integrity-technical-details">
-                <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">SHA-256</p><p className="mt-1 break-all font-mono text-xs text-ink">{evidenceSha256 || "No hash recorded yet"}</p></div>
-                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Size</p><p className="mt-1 text-sm font-semibold text-ink">{formatBytes(evidenceSizeBytes)}</p></div>
-                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Uploaded by</p><p className="mt-1 truncate text-sm font-semibold text-ink">{uploadedBy || "-"}</p></div>
-                  <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Last integrity check</p><p className="mt-1 text-sm font-semibold text-ink">{formatDateTime(integrityCheckedAt)}</p></div>
-                </div>
-                <div className="mt-4 border-t border-line pt-4">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Chain of Custody / Activity</p>
-                  {custodyEvents.length ? <ol className="mt-3 space-y-2">{custodyEvents.slice(-8).reverse().map((event) => <li key={event.id} className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-mono text-[11px] uppercase tracking-[0.14em] text-accent">{event.event_type.replaceAll("_", " ")}</span><span className="text-xs text-muted">{formatDateTime(event.timestamp)}</span></div><p className="mt-1 text-sm text-ink">{event.summary}</p>{event.actor_user_id ? <p className="mt-1 text-xs text-muted">Actor: {event.actor_user_id}</p> : null}</li>)}</ol> : <p className="mt-3 rounded-2xl border border-line bg-panel/60 px-3 py-2 text-sm text-muted">No chain-of-custody events recorded yet.</p>}
-                </div>
-              </Disclosure>
-            </div>
-          </div>
-        </section>
-
-        <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
-          <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Choose what to parse</p>
-          <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-            <div className="rounded-3xl border border-accent/30 bg-accent/10 p-5">
-              <h3 className="text-lg font-semibold text-ink">Recommended indexing</h3>
-              <p className="mt-1 text-sm text-muted">Parse all supported artifact types. Recommended for most investigations.</p>
-              <button type="button" onClick={() => runIndexingPlanMutation.mutate()} disabled={primaryIndexingDisabled} className="mt-4 rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:cursor-not-allowed disabled:opacity-60">
-                {runIndexingPlanMutation.isPending ? "Queueing..." : evidenceReadyForActions ? "Run recommended indexing again" : "Start recommended indexing"}
-              </button>
-            </div>
-            <div className="rounded-3xl border border-line bg-abyss/60 p-5">
-              <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
-                <div>
-                  <h3 className="text-lg font-semibold text-ink">Selected artifact types</h3>
-                  <p className="mt-1 text-sm text-muted">Choose focused families when you do not want to parse everything.</p>
-                </div>
-                <button type="button" onClick={indexSelectedArtifactTypes} disabled={!selectedCandidateIds.length || selectedIndexingLocked || parseVelociraptorMutation.isPending} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-50">
-                  {parseVelociraptorMutation.isPending ? "Queueing..." : "Start selected parsing"}
-                </button>
-              </div>
-              <div className="mt-4 space-y-4">
-                {minimalCategoryGroups.map((group) => (
-                  <div key={group.id}>
-                    <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{group.label}</p>
-                    <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                      {group.items.map((option) => (
-                        <label key={option.id} className={`flex min-h-[70px] items-start gap-3 rounded-2xl border px-3 py-3 ${option.selectedCount ? "border-accent/40 bg-accent/10" : "border-line bg-panel/40"} ${option.disabled ? "opacity-50" : "cursor-pointer"}`}>
-                          <input type="checkbox" className="mt-1" disabled={option.disabled} checked={Boolean(option.supported && option.selectedCount === option.supported.supportedIds.length)} onChange={() => toggleCategorySelection(option.id)} />
-                          <span>
-                            <span className="block text-sm font-semibold text-ink">{option.label}</span>
-                            <span className="mt-1 block text-xs text-muted">{option.supported ? `${option.supported.supportedIds.length} candidates` : "Not detected"}</span>
-                          </span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              {mftVisibleInParseMode ? (
-                <div className={`mt-4 rounded-3xl border p-4 ${mftIndexedDocs > 0 ? "border-mint/25 bg-mint/10" : mftStatus?.status === "tooling_missing" ? "border-warning/40 bg-warning/10" : "border-accent/30 bg-accent/10"}`}>
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0">
-                      <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">NTFS / MFT</p>
-                      <h4 className="mt-1 text-base font-semibold text-ink">
-                        {mftIndexedDocs > 0 ? `MFT indexed · ${mftIndexedDocs.toLocaleString()} docs` : mftIsIndexing ? "MFT indexing in progress" : mftStatus?.status === "tooling_missing" ? "MFT detected · tooling missing" : "MFT detected · available on demand"}
-                      </h4>
-                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
-                        {mftStatus?.raw_mft_found || mftDiagnostic?.mft_present_in_evidence ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">$MFT detected{mftStatus?.raw_mft_size_bytes ? ` · ${formatBytes(mftStatus.raw_mft_size_bytes)}` : ""}</span> : null}
-                        {mftStatus?.usn_found ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">$UsnJrnl detected{mftStatus.usn_size_bytes ? ` · ${formatBytes(mftStatus.usn_size_bytes)}` : ""}</span> : null}
-                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">MFTECmd {mftToolAvailable ? "available" : "missing"}</span>
-                        {mftStatus?.mftecmd_output_found ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">MFTECmd output detected</span> : null}
-                      </div>
-                      <p className="mt-2 text-sm text-muted">
-                        {mftIndexedDocs > 0
-                          ? "Filesystem metadata is searchable and available in Artifact Views."
-                          : mftToolAvailable
-                          ? "Full MFT indexing can produce many records and may take longer. Use summary for quick triage or full indexing when file-level timeline/search is needed."
-                          : "MFTECmd is required before raw MFT can be indexed."}
-                      </p>
-                    </div>
-                    <div className="flex shrink-0 flex-wrap gap-2">
-                      {mftIndexedDocs > 0 && data?.case_id ? (
-                        <>
-                          <Link to={`/search?q=${encodeURIComponent("$MFT")}&evidence_id=${encodeURIComponent(evidenceId)}`} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">Search MFT</Link>
-                          <Link to={`/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=mft`} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">Open MFT artifacts</Link>
-                        </>
-                      ) : null}
-                      {mftToolAvailable ? (
-                        <>
-                          <button type="button" disabled={conflictingIndexingActionsDisabled || mftIsIndexing || indexMftSummaryMutation.isPending} onClick={() => indexMftSummaryMutation.mutate()} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-60">
-                            {indexMftSummaryMutation.isPending || mftDiagnostic?.mft_summary_status === "queued" ? "Queueing summary..." : mftDiagnostic?.mft_summary_status === "running" ? "Indexing summary..." : mftIndexedDocs > 0 ? "Re-index MFT summary" : "Index MFT summary"}
-                          </button>
-                          <button
-                            type="button"
-                            disabled={conflictingIndexingActionsDisabled || mftIsIndexing || indexMftFullMutation.isPending}
-                            onClick={() => {
-                              const message = mftIndexedDocs > 0
-                                ? "Re-index full MFT for this evidence? This replaces existing MFT docs scoped to this evidence only."
-                                : "Index full MFT for this evidence? This can add many filesystem records and may take longer than summary indexing.";
-                              if (window.confirm(message)) indexMftFullMutation.mutate();
-                            }}
-                            className="rounded-2xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm font-semibold text-warning disabled:opacity-60"
-                          >
-                            {indexMftFullMutation.isPending || mftDiagnostic?.mft_full_status === "queued" ? "Queueing full MFT..." : mftDiagnostic?.mft_full_status === "running" ? "Indexing full MFT..." : mftIndexedDocs > 0 ? "Re-index full MFT" : "Index full MFT"}
-                          </button>
-                        </>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-              {registryVisibleInParseMode ? (
-                <div className={`mt-4 rounded-3xl border p-4 ${registryPersistenceDocs || registryDiagnostic?.registry_docs || registryDiagnostic?.user_activity_docs ? "border-mint/25 bg-mint/10" : registryDiagnostic?.status === "tooling_missing" ? "border-warning/40 bg-warning/10" : "border-accent/30 bg-accent/10"}`}>
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div className="min-w-0">
-                      <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Registry</p>
-                      <h4 className="mt-1 text-base font-semibold text-ink">
-                        {registryPersistenceDocs
-                          ? "Registry persistence summary indexed"
-                          : registryIsIndexing
-                          ? "Registry indexing in progress"
-                          : registryDiagnostic?.status === "tooling_missing"
-                          ? "Registry hives detected · tooling missing"
-                          : "Registry hives detected · persistence summary available"}
-                      </h4>
-                      <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
-                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">{registryDiagnostic?.hive_count ?? 0} hives</span>
-                        {registryHiveList.slice(0, 6).map((hive, index) => (
-                          <span key={`${hive.name ?? hive.hive ?? index}`} className="rounded-full border border-line bg-abyss/60 px-2 py-1">{hive.name ?? hive.hive}{hive.size_bytes || hive.size ? ` · ${formatBytes(Number(hive.size_bytes ?? hive.size))}` : ""}</span>
-                        ))}
-                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Persistence summary: {registryPersistenceDocs ? `${registryPersistenceDocs.toLocaleString()} docs` : registrySummaryStatus.replaceAll("_", " ")}</span>
-                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Modification events: {registryEventDocs ? `${registryEventDocs.toLocaleString()} observed` : registryModificationStatus.replaceAll("_", " ")}</span>
-                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Registry commands: {registryCommandEvidenceCount.toLocaleString()}</span>
-                        <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Full hive: {registryDiagnostic?.registry_status?.full_hive_status?.replaceAll("_", " ") ?? "available on demand"}</span>
-                        {registryDiagnostic?.sysmon_registry_events ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Sysmon registry events: {registryDiagnostic.sysmon_registry_events.toLocaleString()}</span> : null}
-                        {registryDiagnostic?.security_4657_events ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Security 4657: {registryDiagnostic.security_4657_events.toLocaleString()}</span> : null}
-                      </div>
-                      <p className="mt-2 text-sm text-muted">
-                        {registryPersistenceDocs
-                          ? "Common autorun, service, Winlogon, IFEO, Defender and RDP registry persistence/configuration keys are indexed with LastWrite semantics."
-                          : registryDiagnostic?.tool_available
-                          ? "Extracts common persistence and configuration keys from registry hives without indexing the full registry. LastWrite is shown as key LastWrite, not a value modification event."
-                          : "The python-registry backend is required before registry hives can be parsed on demand."}
-                      </p>
-                      <p className="mt-2 text-xs text-muted">
-                        {registryEventDocs
-                          ? "Registry modification events are observed telemetry from Sysmon/Security logs."
-                          : "Registry modification events were not present in the collected event logs. Registry persistence LastWrite remains separate from observed modifications."}
-                      </p>
-                      {registryDiagnostic?.coverage_gaps?.length ? <p className="mt-2 text-xs text-muted">Coverage: {registryDiagnostic.coverage_gaps.join(", ")}</p> : null}
-                    </div>
-                    <div className="flex shrink-0 flex-wrap gap-2">
-                      {registryPersistenceDocs ? (
-                        <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=registry_persistence` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
-                          Open Registry Persistence
-                        </Link>
-                      ) : null}
-                      {registryEventDocs ? (
-                        <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=registry_event` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
-                          Open Registry Events
-                        </Link>
-                      ) : null}
-                      {registryCommandEvidenceCount ? (
-                        <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=registry_command` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
-                          Open Registry Commands
-                        </Link>
-                      ) : null}
-                      {registryDiagnostic?.tool_available ? (
-                        <button
-                          type="button"
-                          disabled={conflictingIndexingActionsDisabled || registryIsIndexing || indexRegistryPersistenceSummaryMutation.isPending}
-                          onClick={() => {
-                            const message = registryPersistenceDocs
-                              ? "Rebuild registry persistence summary? This replaces existing registry_persistence docs scoped to this evidence only."
-                              : "Index registry persistence summary? This is scoped to common persistence/configuration keys and does not index full hives.";
-                            if (window.confirm(message)) indexRegistryPersistenceSummaryMutation.mutate();
-                          }}
-                          className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-60"
-                        >
-                          {indexRegistryPersistenceSummaryMutation.isPending || registrySummaryStatus === "queued" ? "Queueing summary..." : registrySummaryStatus === "running" || registrySummaryStatus === "indexing" ? "Indexing summary..." : registryPersistenceDocs ? "Re-index persistence summary" : "Index registry persistence summary"}
-                        </button>
-                      ) : null}
-                      {registryDiagnostic?.tool_available ? (
-                        <button
-                          type="button"
-                          disabled={conflictingIndexingActionsDisabled || registryIsIndexing || indexRecmdUserActivityMutation.isPending}
-                          onClick={() => {
-                            const message = registryDiagnostic?.user_activity_docs
-                              ? "Rebuild registry user activity with RECmd? This replaces existing user activity docs scoped to this evidence."
-                              : "Index registry user activity with RECmd? This is scoped to selected user activity registry artifacts, not full hive expansion.";
-                            if (window.confirm(message)) indexRecmdUserActivityMutation.mutate();
-                          }}
-                          className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-60"
-                        >
-                          {indexRecmdUserActivityMutation.isPending || registryDiagnostic?.user_activity_status === "queued" ? "Queueing registry..." : registryDiagnostic?.user_activity_status === "running" ? "Indexing registry..." : registryDiagnostic?.user_activity_docs ? "Rebuild registry user activity" : "Index registry user activity"}
-                        </button>
-                      ) : null}
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-              <details className="mt-4 rounded-2xl border border-line bg-panel/40 p-3">
-                <summary className="cursor-pointer text-sm font-semibold text-muted">Advanced custom</summary>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <button type="button" onClick={selectAllSupported} disabled={!selectedIndexingAvailable || selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Select all supported</button>
-                  <button type="button" onClick={clearSelection} disabled={!selectedIndexingAvailable || selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Clear selection</button>
-                  {platformQuickSelects.map((quickSelect) => (
-                    <button key={quickSelect.id} type="button" onClick={() => selectCategories(quickSelect.category_ids)} disabled={selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">{quickSelect.label}</button>
-                  ))}
-                </div>
-              </details>
-            </div>
-          </div>
-        </section>
-
-        <section id="indexing-progress" data-testid="evidence-progress-primary" className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-            <div>
-              <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">{terminalProcessingResult ? "Processing result" : "Processing progress"}</p>
-              <h3 className="mt-2 text-2xl font-semibold text-ink">{progressTitle}</h3>
-              {terminalProcessingResult ? (
-                <p className="mt-1 text-sm text-muted">
-                  {finalProcessingStatus}
-                  {latestRetryRun && latestRetryRecoveredCount > 0 ? ` · ${latestRetryRecoveredCount} failed artifact${latestRetryRecoveredCount === 1 ? " was" : "s were"} recovered by retry.` : ""}
-                  {realFailureCount === 0 && retryCandidateIds.length === 0 ? " No retryable failures remain." : ""}
-                </p>
-              ) : (
-                <>
-                  <p className="mt-1 text-sm text-muted">Current step: {retryActive ? String(latestRetryRun?.status ?? "retry") : formatIndexingPhaseForDisplay(displayCounts.phase)}</p>
-                  {progressCurrentArtifact ? <p className="mt-1 max-w-3xl truncate text-sm text-muted" title={progressCurrentArtifact}>Current artifact: {progressCurrentArtifact}</p> : null}
-                </>
-              )}
-            </div>
-            {!terminalProcessingResult ? (
-              <div className="rounded-3xl border border-accent/30 bg-accent/10 px-6 py-4 text-right">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Progress</p>
-                <p className="mt-1 text-4xl font-semibold text-ink">{progressPercent}%</p>
-              </div>
-            ) : null}
-          </div>
-          <div className="mt-5 grid gap-3 md:grid-cols-3 xl:grid-cols-7">
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifacts</p><p className="mt-1 text-sm text-ink">{progressArtifactsDone} / {progressArtifactsTotal}</p></div>
-            {!terminalProcessingResult || latestRetryRun ? <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{retryActive || terminalProcessingResult ? "Retry records read" : "Records read"}</p><p className="mt-1 text-sm text-ink">{progressRecordsRead.toLocaleString()}</p></div> : null}
-            {!terminalProcessingResult || latestRetryRun ? <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{retryActive || terminalProcessingResult ? "Retry records indexed" : "Records indexed"}</p><p className="mt-1 text-sm text-ink">{progressRecordsIndexed.toLocaleString()}</p></div> : null}
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Indexed docs</p><p className="mt-1 text-sm text-ink">{displayCounts.indexedDocs.toLocaleString()}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Elapsed</p><p className="mt-1 text-sm text-ink">{formatDuration(retryActive ? latestRetryRun?.elapsed_seconds : displayedElapsedSeconds)}</p></div>
-            {!terminalProcessingResult ? <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Heartbeat</p><p className="mt-1 text-sm text-ink">{retryActive ? formatHeartbeatAge(latestRetryRun?.heartbeat_at ?? null) : lastProgressAgeLabel}</p></div> : null}
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{terminalProcessingResult ? "Last run" : "Run ID"}</p><p className="mt-1 truncate text-sm text-ink" title={retryActive ? latestRetryRun?.run_id : latestRun?.run_id}>{retryActive ? latestRetryRun?.run_id ?? "-" : latestRetryRun?.run_id ?? latestRun?.run_id ?? "-"}</p></div>
-            {terminalProcessingResult ? <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Recovered by retry</p><p className="mt-1 text-sm text-mint">{latestRetryRecoveredCount}</p></div> : null}
-          </div>
-          {latestRetryRun ? (
-            <div className="mt-4 rounded-2xl border border-line bg-abyss/60 px-4 py-3 text-sm text-muted">
-              <p className="font-semibold text-ink">{retryActive ? "Retry in progress" : latestRetryRecoveredCount > 0 && latestRetryStillFailedCount === 0 ? "Retry completed successfully" : "Latest retry outcome"}</p>
-              <p className="mt-1">
-                Recovered {latestRetryRecoveredCount} · Still failing {latestRetryStillFailedCount} · Skipped {latestRetrySkippedCount}
-              </p>
-              {retryRunData.final_message ? <p className="mt-1 text-muted">{retryRunData.final_message}</p> : latestRetryRecoveredCount === 0 && latestRetryStillFailedCount === 0 ? <p className="mt-1 text-muted">No retryable failures remain.</p> : null}
-            </div>
-          ) : null}
-        </section>
-
-        <section id="problematic-artifacts" className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
-            <div>
-              <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Real failures / retry</p>
-              <h3 className="mt-2 text-2xl font-semibold text-ink">{realFailureCount ? `${realFailureCount} parser failure${realFailureCount === 1 ? "" : "s"} need attention` : "No real parser failures"}</h3>
-              {skippedEmptyCount ? <p className="mt-1 text-sm text-muted">{skippedEmptyCount} empty/no-record logs skipped. These are informational and hidden from the main failures list.</p> : null}
-            </div>
-            {retryCandidateIds.length ? (
-              <button type="button" onClick={() => retryProblematicArtifactsMutation.mutate({ artifactIds: retryCandidateIds, mode: "higher_timeout" })} disabled={activeIndexingJob || retryProblematicArtifactsMutation.isPending} className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:opacity-50">
-                {retryProblematicArtifactsMutation.isPending ? `Retrying ${retryCandidateIds.length} failed artifacts` : "Retry failed artifacts"}
-              </button>
-            ) : null}
-          </div>
-          {realFailureArtifacts.length ? (
-            <div className="mt-5 overflow-x-auto rounded-3xl border border-line">
-              <table className="min-w-full divide-y divide-line text-sm">
-                <thead className="bg-abyss/70">
-                  <tr className="text-left text-xs uppercase tracking-[0.16em] text-muted">
-                    <th className="px-3 py-3">Artifact</th>
-                    <th className="px-3 py-3">Type</th>
-                    <th className="px-3 py-3">Reason</th>
-                    <th className="px-3 py-3">Data loss</th>
-                    <th className="px-3 py-3">Retryable</th>
-                    <th className="px-3 py-3">Last attempt</th>
-                    <th className="px-3 py-3">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line">
-                  {realFailureArtifacts.map((artifact, index) => (
-                    <tr key={`${artifact.artifact_id ?? `${artifact.source_path}:${artifact.parser}`}:${index}`} className="bg-panel/40">
-                      <td className="px-3 py-3 align-top"><p className="font-semibold text-ink">{artifact.name}</p><p className="mt-1 max-w-[420px] break-all text-xs text-muted">{artifact.source_path}</p></td>
-                      <td className="px-3 py-3 align-top text-muted">{artifact.artifact_type || artifact.parser || "-"}</td>
-                      <td className="px-3 py-3 align-top text-muted">{artifact.error_message || artifact.health_summary || formatProblematicStatusLabel(artifact.effective_status ?? artifact.status)}</td>
-                      <td className="px-3 py-3 align-top text-muted">{artifact.current_data_loss_expected ?? artifact.data_loss_expected ? "Yes" : "No"}</td>
-                      <td className="px-3 py-3 align-top text-muted">{artifact.retryable ? "Yes" : "No"}</td>
-                      <td className="px-3 py-3 align-top text-muted">{artifact.latest_retry?.finished_at ? formatDateTime(String(artifact.latest_retry.finished_at)) : artifact.latest_retry?.status ? String(artifact.latest_retry.status) : "-"}</td>
-                      <td className="px-3 py-3 align-top">
-                        <div className="flex flex-wrap gap-2">
-                          {artifact.retryable && artifact.artifact_id ? <button type="button" onClick={() => retryProblematicArtifactsMutation.mutate({ singleArtifactId: artifact.artifact_id!, mode: "higher_timeout" })} disabled={activeIndexingJob || retryProblematicArtifactsMutation.isPending} className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 text-xs text-accent disabled:opacity-50">Retry</button> : null}
-                          <details className="rounded-full border border-line bg-abyss/80 px-3 py-1 text-xs text-muted">
-                            <summary className="cursor-pointer">View logs/details</summary>
-                            <pre className="mt-3 max-w-xl whitespace-pre-wrap rounded-2xl border border-line bg-panel/80 p-3 text-left text-[11px] text-muted">{JSON.stringify({ status: artifact.status, effective_status: artifact.effective_status, error_type: artifact.error_type, error_message: artifact.error_message, health_summary: artifact.health_summary, retry_history: artifact.retry_history }, null, 2)}</pre>
-                          </details>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="mt-4 rounded-2xl border border-mint/25 bg-mint/10 px-4 py-3 text-sm text-mint">No real parser failures.</p>
-          )}
-          <details className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4">
-            <summary className="cursor-pointer text-sm font-semibold text-muted">Warnings and informational skipped items</summary>
-            <div className="mt-3 grid gap-3 md:grid-cols-2">
-              <div className="rounded-2xl border border-amber/30 bg-amber/10 p-3"><p className="font-semibold text-amber">Warnings</p><p className="mt-1 text-sm text-muted">{warningCount} warnings, including fully indexed artifacts with non-critical parser warnings.</p></div>
-              <div className="rounded-2xl border border-mint/25 bg-mint/10 p-3"><p className="font-semibold text-mint">Informational skipped</p><p className="mt-1 text-sm text-muted">{skippedEmptyCount} empty/no-record artifacts skipped.</p></div>
-            </div>
-          </details>
-        </section>
-
-        {evidenceReadyForActions ? (
-          <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
-            <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Investigation actions</p>
-            <div className="mt-4 flex flex-wrap gap-3">
-              <Link to={coreSearchHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Search</Link>
-              <Link to={commandHistoryHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Command History</Link>
-              <Link to={artifactViewsHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Artifact Views</Link>
-              <Link to={timelineHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Timeline</Link>
-              <Link to={findingsHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Findings</Link>
-              <Link to={reportsHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Report</Link>
-            </div>
-          </section>
-        ) : null}
-
-        <details className="rounded-[28px] border border-line bg-panel/50 p-5">
-          <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.18em] text-muted">Advanced diagnostics</summary>
-          <div className="mt-4 grid gap-4 xl:grid-cols-2">
-            <div className="rounded-2xl border border-line bg-abyss/60 p-4">
-              <p className="font-semibold text-ink">Ingest & reprocess runs</p>
-              <div className="mt-3 space-y-2">
-                {evidenceRuns.slice(0, 6).map((run) => (
-                  <div key={run.run_id} className="rounded-xl border border-line bg-panel/40 px-3 py-2 text-xs text-muted">
-                    <p className="font-semibold text-ink">{run.run_type} · {run.status}</p>
-                    <p>Artifacts {run.artifacts_done ?? 0}/{run.artifacts_total ?? 0} · records {run.records_read ?? 0}/{run.records_indexed ?? run.events_indexed ?? 0}</p>
-                    {run.current_artifact ? <p className="truncate" title={run.current_artifact}>{run.current_artifact}</p> : null}
-                  </div>
-                ))}
-              </div>
-            </div>
-            <div className="rounded-2xl border border-line bg-abyss/60 p-4">
-              <p className="font-semibold text-ink">Raw discovery inventory</p>
-              <p className="mt-1 text-sm text-muted">Hidden from the main flow. Discovery found {discoveryCandidates.length} candidates across {supportedCategoryOptions.length} supported categories.</p>
-              <div className="mt-3 max-h-80 overflow-auto rounded-xl border border-line bg-panel/40 p-3 text-xs text-muted">
-                {supportedCategoryOptions.map((option) => <p key={option.category}>{option.label}: {option.supportedIds.length} supported</p>)}
-              </div>
-            </div>
-          </div>
-        </details>
-
-        {deleteDialogOpen ? (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-            <div className="w-full max-w-xl rounded-[28px] border border-danger/40 bg-panel p-6 shadow-panel">
-              <p className="font-mono text-xs uppercase tracking-[0.24em] text-danger">Delete evidence</p>
-              <h3 className="mt-2 text-2xl font-semibold text-ink">{data?.original_filename}</h3>
-              <p className="mt-3 text-sm text-muted">
-                This removes the evidence record, parsed artifacts and indexed documents for this evidence. Original uploaded archive removal depends on storage policy.
-              </p>
-              <div className="mt-4 grid gap-2 text-sm text-muted">
-                <p>Host: <span className="text-ink">{data?.provided_host || data?.detected_host || "-"}</span></p>
-                <p>Indexed docs: <span className="text-ink">{indexedDocumentsTotal.toLocaleString()}</span></p>
-              </div>
-              <label className="mt-5 block text-sm text-muted">
-                Type DELETE to confirm.
-                <input value={deleteConfirmText} onChange={(event) => setDeleteConfirmText(event.target.value)} className="mt-2 w-full rounded-2xl border border-line bg-abyss px-4 py-3 font-mono text-sm text-ink outline-none focus:border-danger" />
-              </label>
-              <div className="mt-5 flex flex-wrap justify-end gap-2">
-                <button type="button" onClick={() => { setDeleteDialogOpen(false); setDeleteConfirmText(""); }} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Cancel</button>
-                <button type="button" onClick={() => deleteMutation.mutate()} disabled={!deleteConfirmationValid || deleteMutation.isPending} className="rounded-2xl bg-danger px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
-                  {deleteMutation.isPending ? "Deleting..." : "Delete evidence"}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
   return (
-    <div className="min-w-0 space-y-6">
-      <InvestigationContext
-        caseId={data?.case_id}
-        hostId={activeHostId || data?.host_id}
-        host={activeHost || evidenceHostLabel}
-        evidenceId={evidenceId}
-        evidenceName={data?.original_filename}
-        current="Evidence"
-        breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: "Case", to: data?.case_id ? `/cases/${data.case_id}` : undefined }, { label: "Evidence", to: data?.case_id ? `/cases/${data.case_id}/evidence` : undefined }, { label: data?.original_filename || "Evidence" }]}
-        actions={[
-          { label: "Search", to: coreSearchHref, description: "Search indexed events from this evidence" },
-          { label: "Timeline", to: timelineHref, description: "Timeline scoped to this evidence" },
-          { label: "Artifact Views", to: artifactViewsHref, description: "Artifact views scoped to this evidence" },
-          { label: "Processing", to: processingHref, description: "Open processing queue for this evidence" },
-          { label: "Memory", to: memoryHref, description: "Open memory workspace if this is memory evidence" },
-          { label: "Parser Coverage", to: "/parser-coverage", description: "Review supported parsers and known gaps" },
-        ]}
-      />
-      {hasHostFilter && !evidenceMatchesActiveHost ? (
-        <div className="rounded-3xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">
-          This evidence is associated with {evidenceHostLabel || "no host"}, not active host {activeHost}. <button type="button" onClick={clearHostFilter} className="underline underline-offset-4">Clear host filter</button> to inspect it without host scope.
-        </div>
-      ) : null}
-      <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
+    <div className="min-w-0 space-y-5">
+      <section className="rounded-[28px] border border-line bg-panel/75 p-6 shadow-panel">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
-            <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Evidence summary</p>
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Evidence</p>
             <h2 className="mt-2 break-words text-3xl font-semibold">{data?.original_filename}</h2>
-            <div className="mt-4 flex flex-wrap items-center gap-3">
-              <span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${indexingState === "completed" ? "border-mint/30 bg-mint/10 text-mint" : indexingState === "completed_with_warnings" || indexingState === "completed_with_errors" ? "border-amber/30 bg-amber/10 text-amber" : indexingState === "failed" ? "border-danger/30 bg-danger/10 text-danger" : "border-accent/30 bg-accent/10 text-accent"}`}>{formatEvidenceStatusForDisplay(displayStatus)}</span>
-              <span className="rounded-full border border-line bg-abyss/60 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{productModeLabel}</span>
-              <span className="font-mono text-xs text-muted">{activeIndexingJob ? "Auto-refresh every 3s" : "Stable state"}</span>
+            <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-muted">
+              <span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${minimalStatusLabel === "Ready" ? "border-mint/30 bg-mint/10 text-mint" : minimalStatusLabel === "Completed with errors" ? "border-danger/30 bg-danger/10 text-danger" : minimalStatusLabel === "Ready with warnings" ? "border-amber/30 bg-amber/10 text-amber" : "border-accent/30 bg-accent/10 text-accent"}`}>{minimalStatusLabel}</span>
+              <span>Host: <span className="text-ink">{data?.provided_host || data?.detected_host || "-"}</span></span>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button onClick={() => void handleRefresh()} disabled={evidenceQuery.isFetching || manifestQuery.isFetching} className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50">
+            <button type="button" onClick={() => void handleRefresh()} disabled={evidenceQuery.isFetching || manifestQuery.isFetching} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted disabled:opacity-50">
               {evidenceQuery.isFetching || manifestQuery.isFetching ? "Refreshing..." : "Refresh"}
             </button>
-            <button onClick={openReprocessDialog} disabled={reprocessMutation.isPending} className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50">
-              {reprocessMutation.isPending ? "Re-indexing..." : "Re-index evidence"}
+            <button type="button" onClick={() => reprocessMutation.mutate({ mode: "previous_selection" })} disabled={activeIndexingJob || reprocessMutation.isPending || !lastSuccessfulIngestPlan} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted disabled:opacity-50">
+              {reprocessMutation.isPending ? "Queueing..." : "Re-index evidence"}
             </button>
-            {data?.case_id ? <Link to={`/cases/${data.case_id}`} className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Back to case</Link> : null}
+            <button type="button" onClick={() => setDeleteDialogOpen(true)} className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
+              Delete evidence
+            </button>
+            {data?.case_id ? <Link to={addFindingHref} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Add finding</Link> : null}
+            {data?.case_id ? <Link to={`/cases/${data.case_id}`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back to case</Link> : null}
           </div>
         </div>
 
-        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-7">
-          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Host</p>
-            <p className="mt-1 truncate text-sm font-semibold text-ink" title={data?.provided_host || data?.detected_host || "-"}>{data?.provided_host || data?.detected_host || "-"}</p>
-          </div>
-          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{activeIndexingJob ? "Status" : "Completed"}</p>
-            <p className="mt-1 text-sm font-semibold text-ink">{activeIndexingJob ? "Indexing" : formatDateTime(completedAt)}</p>
-          </div>
-          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{activeIndexingJob ? "Indexed this run" : "Indexed documents"}</p>
-            <p className="mt-1 text-lg font-semibold text-ink">{displayCounts.indexedDocs.toLocaleString()}</p>
-          </div>
-          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{activeIndexingJob ? "Artifacts" : "Artifact types"}</p>
-            <p className="mt-1 text-lg font-semibold text-ink">{activeIndexingJob ? `${displayCounts.artifactsDone} / ${displayCounts.artifactsTotal}` : artifactTypeCount}</p>
-          </div>
-          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{activeIndexingJob ? "Problems" : "Problems/deferred"}</p>
-            <p className={`mt-1 ${activeIndexingJob ? "text-sm" : "text-lg"} font-semibold ${activeIndexingJob || problemsCount ? "text-amber" : "text-mint"}`}>
-              {activeIndexingJob ? "Pending review" : problemsCount}
-            </p>
-          </div>
-          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Platform</p>
-            <p className="mt-1 truncate text-sm font-semibold text-ink" title={`Provided: ${formatPlatform(data?.provided_platform)} · Detected: ${formatPlatform(data?.detected_platform)}`}>{formatPlatform(data?.effective_platform)}</p>
-          </div>
-          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">EVTX</p>
-            <p className={`mt-1 text-sm font-semibold ${evtxCoverageIsFull ? "text-mint" : evtxDeferredCount || evtxPartialCount ? "text-amber" : "text-ink"}`}>{evtxCoverageLabel}</p>
-          </div>
-        </div>
-
-        {platformMismatch ? (
-          <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 px-4 py-3 text-sm text-amber">
-            Platform override differs from detection: provided {formatPlatform(data?.provided_platform)}, detected {formatPlatform(data?.detected_platform)}, effective {formatPlatform(data?.effective_platform)}.
-          </div>
-        ) : null}
-
-        {linuxInventory ? (
-          <div className="mt-5 grid gap-4 xl:grid-cols-[1.4fr_0.8fr]" data-testid="linux-collection-summary">
-            <div className="rounded-3xl border border-mint/25 bg-mint/10 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-mint">Linux Collection Summary</p>
-                  <h3 className="mt-1 text-xl font-semibold text-ink">{linuxInventory.distribution || "Linux collection"}</h3>
-                  <p className="mt-1 text-sm text-muted">Host <span className="font-semibold text-ink">{linuxInventory.hostname || data?.detected_host || "Unknown"}</span> · Kernel <span className="font-semibold text-ink">{linuxInventory.kernel || "Unknown"}</span></p>
-                </div>
-                <span className="rounded-full border border-mint/30 bg-mint/10 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-mint">{formatPlatform(data?.effective_platform)}</span>
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Artifacts detected</p>
-                  <p className="mt-1 text-lg font-semibold text-ink">{linuxCoverage?.detected ?? linuxCoverage?.total_detected ?? linuxDetectedArtifacts.length + linuxUnsupportedArtifacts.length}</p>
-                </div>
-                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Artifacts parsed</p>
-                  <p className="mt-1 text-lg font-semibold text-ink">{linuxCoverage?.supported ?? linuxDetectedArtifacts.length}</p>
-                </div>
-                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Unsupported</p>
-                  <p className="mt-1 text-lg font-semibold text-amber">{linuxCoverage?.unsupported ?? linuxUnsupportedArtifacts.length}</p>
-                </div>
-              </div>
-              <div className="mt-4 flex flex-wrap gap-2">
-                {linuxDetectedArtifacts.slice(0, 12).map((artifact) => <span key={artifact.key || artifact.label} className="rounded-full border border-mint/25 bg-abyss/60 px-2 py-1 text-xs text-mint">{artifact.label || artifact.key}</span>)}
-              </div>
-              {linuxWarnings.length ? <div className="mt-4 rounded-2xl border border-amber/30 bg-amber/10 px-3 py-2 text-xs text-amber">Warnings: {linuxWarnings.slice(0, 4).join(" · ")}</div> : null}
-            </div>
-            <div className="rounded-3xl border border-line bg-abyss/70 p-4" data-testid="linux-coverage-card">
-              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Linux Coverage</p>
-              <dl className="mt-3 space-y-2 text-sm">
-                <div className="flex justify-between gap-3"><dt className="text-muted">Detected artifacts</dt><dd className="font-semibold text-ink">{linuxCoverage?.detected ?? linuxCoverage?.total_detected ?? 0}</dd></div>
-                <div className="flex justify-between gap-3"><dt className="text-muted">Supported</dt><dd className="font-semibold text-mint">{linuxCoverage?.supported ?? 0}</dd></div>
-                <div className="flex justify-between gap-3"><dt className="text-muted">Unsupported</dt><dd className="font-semibold text-amber">{linuxCoverage?.unsupported ?? 0}</dd></div>
-                <div className="flex justify-between gap-3 border-t border-line pt-2"><dt className="text-muted">Coverage</dt><dd className="font-semibold text-ink">{linuxCoverage?.coverage_percent ?? 0}%</dd></div>
-              </dl>
-              <p className="mt-3 text-xs text-muted">Calculated as supported detected artifacts divided by all detected artifacts. Not found artifacts are not counted as detected.</p>
-            </div>
-          </div>
-        ) : null}
-
-        {diskImage ? (
-          <div className="mt-5 rounded-3xl border border-cyan-400/25 bg-cyan-400/10 p-4" data-testid="disk-image-summary">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+        {(activeIndexingJob || retryActive) ? (
+          <div className="mt-5 rounded-3xl border border-accent/30 bg-accent/10 p-5">
+            <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
-                <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-cyan-200">Disk Image</p>
-                <h3 className="mt-1 text-xl font-semibold text-ink">{diskImage.original_filename}</h3>
-                <p className="mt-1 text-sm text-muted">Format <span className="font-semibold text-ink">{String(diskImage.format || "unknown").toUpperCase()}</span> · Segments <span className="font-semibold text-ink">{diskImage.segment_count}</span></p>
+                <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">{progressTitle}</p>
+                <h3 className="mt-1 text-2xl font-semibold text-ink">{progressPercent}%</h3>
+                <p className="mt-1 text-sm text-muted">{retryActive ? "Retrying failed artifacts" : formatIndexingPhaseForDisplay(displayCounts.phase)}</p>
               </div>
-              <span className="rounded-full border border-cyan-300/30 bg-abyss/60 px-3 py-1 text-xs text-cyan-100">{diskImage.status.replaceAll("_", " ")}</span>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-4">
-              <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">SHA-256</p><p className="mt-1 break-all font-mono text-xs text-ink">{diskImage.sha256 || "-"}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Size</p><p className="mt-1 text-sm font-semibold text-ink">{formatBytes(diskImage.size_bytes)}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Volumes</p><p className="mt-1 text-sm font-semibold text-ink">{diskImage.volumes?.length ?? 0}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Warnings</p><p className="mt-1 text-sm font-semibold text-amber">{diskImage.warnings_json?.length ?? 0}</p></div>
-            </div>
-            {(diskImage.metadata_json?.virtual_size || diskImage.tool_metadata?.adapter) ? (
-              <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">
-                <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-accent">Image metadata</p>
-                <div className="mt-2 grid gap-1 md:grid-cols-3">
-                  {diskImage.metadata_json?.virtual_size ? <p>Virtual: <span className="text-ink">{formatBytes(diskImage.metadata_json.virtual_size as number)}</span></p> : null}
-                  {diskImage.metadata_json?.physical_size ? <p>Physical: <span className="text-ink">{formatBytes(diskImage.metadata_json.physical_size as number)}</span></p> : null}
-                  {diskImage.metadata_json?.allocation_type ? <p>Allocation: <span className="text-ink">{diskImage.metadata_json.allocation_type as string}</span></p> : null}
-                  {diskImage.metadata_json?.variant ? <p>Variant: <span className="text-ink">{diskImage.metadata_json.variant as string}</span></p> : null}
-                  {diskImage.metadata_json?.backing_file ? <p>Backing: <span className="text-ink">{diskImage.metadata_json.backing_file as string}</span></p> : null}
-                  {diskImage.metadata_json?.extents ? <p>Extents: <span className="text-ink">{(diskImage.metadata_json.extents as string[]).join(", ")}</span></p> : null}
-                  {diskImage.tool_metadata?.adapter ? <p>Tool: <span className="text-ink">{diskImage.tool_metadata.adapter as string}</span></p> : null}
-                </div>
+              <div className="h-3 min-w-[220px] flex-1 overflow-hidden rounded-full bg-abyss/80">
+                <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${Math.max(0, Math.min(100, progressPercent))}%` }} />
               </div>
-            ) : null}
-            <div className="mt-4 space-y-3">
-              {(diskImage.volumes ?? []).map((volume) => (
-                <div key={volume.id} className="rounded-2xl border border-line bg-abyss/60 p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-semibold text-ink">Volume {volume.partition_index}</p>
-                      <p className="mt-1 text-xs text-muted">Partition {volume.partition_type || "unknown"} · Filesystem {volume.filesystem_type || "unknown"} · Offset {volume.offset_bytes.toLocaleString()} · Length {volume.length_bytes.toLocaleString()}</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2 text-xs">
-                      {volume.encrypted ? <span className="rounded-full border border-amber/30 bg-amber/10 px-2 py-1 text-amber">Encrypted</span> : null}
-                      <span className={`rounded-full border px-2 py-1 ${volume.readable ? "border-mint/30 bg-mint/10 text-mint" : "border-danger/30 bg-danger/10 text-danger"}`}>{volume.readable ? "Readable" : "Unreadable"}</span>
-                    </div>
-                  </div>
-                  {(volume.installations ?? []).length ? (
-                    <div className="mt-3 grid gap-2 md:grid-cols-2">
-                      {volume.installations.map((installation) => (
-                        <div key={installation.id} className="rounded-2xl border border-line bg-panel/50 px-3 py-2 text-sm text-muted">
-                          <p className="font-semibold text-ink">{formatPlatform(installation.platform)}{installation.hostname ? ` · ${installation.hostname}` : ""}</p>
-                          <p className="mt-1 text-xs">{installation.distro || installation.version || "Unknown version"} · Root {installation.root_path}</p>
-                        </div>
-                      ))}
-                    </div>
-                  ) : <p className="mt-3 text-xs text-muted">No operating system installation detected on this volume.</p>}
-                  {volume.warnings_json?.length ? <p className="mt-2 text-xs text-amber">Warnings: {volume.warnings_json.join(" · ")}</p> : null}
-                  {Object.keys(volume.error_json || {}).length ? <p className="mt-2 text-xs text-danger">Error: {JSON.stringify(volume.error_json)}</p> : null}
-                </div>
-              ))}
             </div>
           </div>
         ) : null}
 
-        <div className="mt-5 rounded-3xl border border-accent/30 bg-abyss/60 p-4" data-testid="evidence-host-assignment-panel">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Host assignment</p>
-              <p className="mt-1 text-base font-semibold text-ink">Change host assignment</p>
-              <p className="mt-2 text-xs text-muted">Detected/provided host is preserved as metadata. Assigned host controls host filters, including Memory.</p>
-            </div>
-            <span className={`rounded-full border px-3 py-1 text-xs ${data?.host_id ? (assignmentMismatch ? "border-amber/30 bg-amber/10 text-amber" : "border-mint/30 bg-mint/10 text-mint") : "border-line bg-panel/50 text-muted"}`}>
-              {data?.host_id ? (assignmentMismatch ? "mismatch" : "confirmed") : "unassigned"}
-            </span>
-          </div>
-          {isMemoryEvidence && !data?.host_id ? (
-            <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber" role="alert">
-              This memory evidence is not assigned to a case host. Host filters may not include it until assigned.
-            </div>
-          ) : null}
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3 text-sm text-muted">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Detected/provided host</p>
-              <p className="mt-1 text-base font-semibold text-ink">{data?.detected_host || data?.provided_host || "-"}</p>
-            </div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3 text-sm text-muted">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Assigned host</p>
-              <p className="mt-1 text-base font-semibold text-ink">{assignedHost?.display_name || "Unassigned"}</p>
-            </div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3 text-sm text-muted">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Actions</p>
-              <p className="mt-1 text-xs text-muted">Assign to existing host, create a new host, or mark unassigned.</p>
-            </div>
-          </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-[160px_1fr_auto] md:items-end">
-            <label className="block text-xs text-muted">
-              Change host
-              <select value={hostAssignmentMode} onChange={(event) => setHostAssignmentMode(event.target.value as "existing" | "create")} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink">
-                <option value="existing">Assign to existing host</option>
-                <option value="create">Create new host</option>
-              </select>
-            </label>
-            {hostAssignmentMode === "existing" ? (
-              <label className="block text-xs text-muted">
-                Assign to existing host
-                <select value={hostAssignmentId} onChange={(event) => setHostAssignmentId(event.target.value)} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink">
-                  <option value="">Mark unassigned</option>
-                  {caseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
-                </select>
-              </label>
-            ) : (
-              <label className="block text-xs text-muted">
-                Create new host
-                <input value={hostAssignmentName} onChange={(event) => setHostAssignmentName(event.target.value)} placeholder="WS-01" className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink" />
-              </label>
-            )}
-            <button type="button" onClick={() => hostAssignmentMutation.mutate()} disabled={hostAssignmentMutation.isPending || (hostAssignmentMode === "create" && !hostAssignmentName.trim())} className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">
-              {hostAssignmentMutation.isPending ? "Saving..." : hostAssignmentMode === "create" ? "Create new host" : hostAssignmentId ? "Change host" : "Mark unassigned"}
-            </button>
-          </div>
+        <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-6">
+          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Indexed documents</p><p className="mt-1 text-lg font-semibold text-ink">{indexedDocumentsTotal.toLocaleString()}</p></div>
+          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact types</p><p className="mt-1 text-lg font-semibold text-ink">{artifactTypeCount}</p></div>
+          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Real failures</p><p className={`mt-1 text-lg font-semibold ${realFailureCount ? "text-danger" : "text-mint"}`}>{realFailureCount}</p></div>
+          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Warnings</p><p className="mt-1 text-lg font-semibold text-amber">{warningCount}</p></div>
+          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Skipped empty</p><p className="mt-1 text-lg font-semibold text-muted">{skippedEmptyCount}</p></div>
+          <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Completed</p><p className="mt-1 text-sm font-semibold text-ink">{formatDateTime(completedAt)}</p></div>
         </div>
-
+        <HostAssignmentPanel
+          hostId={data?.host_id}
+          detectedHost={data?.detected_host}
+          providedHost={data?.provided_host}
+          assignmentMismatch={assignmentMismatch}
+          isMemoryEvidence={isMemoryEvidence}
+          assignedHostDisplayName={assignedHost?.display_name}
+          caseHosts={caseHosts}
+          hostAssignmentMode={hostAssignment.mode}
+          onHostAssignmentModeChange={hostAssignment.setMode}
+          hostAssignmentId={hostAssignment.selectedHostId}
+          onHostAssignmentIdChange={hostAssignment.setSelectedHostId}
+          hostAssignmentName={hostAssignment.newHostName}
+          onHostAssignmentNameChange={hostAssignment.setNewHostName}
+          onSubmit={hostAssignment.submit}
+          isSubmitting={hostAssignment.isSubmitting}
+        />
         <div className="mt-5 rounded-3xl border border-line bg-abyss/60 p-4" data-testid="evidence-integrity-panel">
           <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
             <div className="min-w-0">
@@ -2531,1714 +1619,313 @@ function formatReportStatus(status: string | null | undefined) {
                 <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${integrityTone}`}>{integrityStatus.replaceAll("_", " ")}</span>
               </div>
               <p className="mt-2 text-sm text-muted">{integrityStatusLabel}</p>
-              <dl className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
-                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">SHA-256</dt>
-                  <dd className="mt-1 break-all font-mono text-xs text-ink">{evidenceSha256 || "No hash recorded yet"}</dd>
-                </div>
-                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
-                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Size</dt>
-                  <dd className="mt-1 text-sm font-semibold text-ink">{formatBytes(evidenceSizeBytes)}</dd>
-                </div>
-                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
-                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Uploaded by</dt>
-                  <dd className="mt-1 truncate text-sm font-semibold text-ink" title={uploadedBy || "-"}>{uploadedBy || "-"}</dd>
-                </div>
-                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
-                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Uploaded at</dt>
-                  <dd className="mt-1 text-sm font-semibold text-ink">{formatDateTime(uploadedAt)}</dd>
-                </div>
-                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
-                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Original filename</dt>
-                  <dd className="mt-1 truncate text-sm font-semibold text-ink" title={data?.original_filename || "-"}>{data?.original_filename || "-"}</dd>
-                </div>
-                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
-                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Evidence type</dt>
-                  <dd className="mt-1 text-sm font-semibold text-ink">{data?.evidence_type || manifest?.evidence_type || "unknown"}</dd>
-                </div>
-                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
-                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Host</dt>
-                  <dd className="mt-1 truncate text-sm font-semibold text-ink" title={manifest?.host?.name || data?.provided_host || data?.detected_host || "-"}>{manifest?.host?.name || data?.provided_host || data?.detected_host || "-"}</dd>
-                </div>
-                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
-                  <dt className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Last integrity check</dt>
-                  <dd className="mt-1 text-sm font-semibold text-ink">{formatDateTime(integrityCheckedAt)}</dd>
-                </div>
-              </dl>
             </div>
             <div className="flex shrink-0 flex-wrap gap-2">
-              <button type="button" onClick={() => verifyIntegrityMutation.mutate()} disabled={!data?.case_id || verifyIntegrityMutation.isPending} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">
-                {verifyIntegrityMutation.isPending ? "Verifying..." : "Verify integrity"}
-              </button>
-              <button type="button" onClick={() => exportManifestMutation.mutate()} disabled={!data?.case_id || exportManifestMutation.isPending} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted disabled:opacity-60">
-                {exportManifestMutation.isPending ? "Exporting..." : "Export manifest"}
-              </button>
+              <button type="button" onClick={() => verifyIntegrityMutation.mutate()} disabled={!data?.case_id || verifyIntegrityMutation.isPending} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">{verifyIntegrityMutation.isPending ? "Verifying..." : "Verify integrity"}</button>
+              <button type="button" onClick={() => exportManifestMutation.mutate()} disabled={!data?.case_id || exportManifestMutation.isPending} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted disabled:opacity-60">{exportManifestMutation.isPending ? "Exporting..." : "Export manifest"}</button>
             </div>
           </div>
-          <div className="mt-4 border-t border-line pt-4">
-            <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Chain of Custody / Activity</p>
-            {custodyEvents.length ? (
-              <ol className="mt-3 space-y-2">
-                {custodyEvents.slice(-8).reverse().map((event) => (
-                  <li key={event.id} className="rounded-2xl border border-line bg-panel/60 px-3 py-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-accent">{event.event_type.replaceAll("_", " ")}</span>
-                      <span className="text-xs text-muted">{formatDateTime(event.timestamp)}</span>
-                    </div>
-                    <p className="mt-1 text-sm text-ink">{event.summary}</p>
-                    {event.actor_user_id ? <p className="mt-1 text-xs text-muted">Actor: {event.actor_user_id}</p> : null}
-                  </li>
-                ))}
-              </ol>
-            ) : (
-              <p className="mt-3 rounded-2xl border border-line bg-panel/60 px-3 py-2 text-sm text-muted">No chain-of-custody events recorded yet.</p>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-5 rounded-3xl border border-accent/30 bg-accent/10 p-4" data-testid="indexing-profile-card">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-            <div className="min-w-0">
-              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Investigation indexing</p>
-              <h3 className="mt-1 text-xl font-semibold text-ink">{indexingStateTitle}</h3>
-              <p className="mt-1 max-w-4xl text-sm text-muted">
-                {indexingStateSubcopy}
-              </p>
-              {activeIndexingJob ? (
-                <>
-                  {activeRecommendedIndexing ? <p className="mt-2 text-sm font-semibold text-amber">Recommended indexing is running</p> : null}
-                  {activeRunCategoryNames.length ? (
-                    <p className="mt-1 text-sm text-muted">Categories in this run: <span className="font-semibold text-ink">{activeRunCategoryNames.join(", ")}</span></p>
-                  ) : null}
-                  <p className="mt-2 text-sm text-amber">Active step: {formatIndexingPhaseForDisplay(displayCounts.phase)}</p>
-                </>
-              ) : waitingSelectionNeedsAction ? (
-                <p className="mt-2 text-sm text-amber">{rawDiscoveryCandidateCountForState} discovered artifacts · {indexingPlan?.supported_candidate_count ?? 0} supported for recommended indexing</p>
-              ) : staleIndexingState ? (
-                <p className="mt-2 text-sm text-amber">No active worker run is visible for this evidence state.</p>
-              ) : plannedNotStarted ? (
-                <p className="mt-2 text-sm text-amber">Indexing plan prepared · {indexingPlan?.supported_candidate_count ?? 0} supported artifacts detected</p>
-              ) : null}
-              {!evidenceReadyForActions ? <div className="mt-3 flex flex-wrap gap-2" role="group" aria-label="Indexing profiles">
-                {(["recommended", "fast", "advanced_custom"] as const).map((profile) => (
-                  <button
-                    key={profile}
-                    type="button"
-                    onClick={() => setIndexingProfile(profile)}
-                    disabled={conflictingIndexingActionsDisabled}
-                    className={`rounded-full border px-3 py-1 text-xs font-semibold ${indexingProfile === profile ? "border-accent bg-accent text-abyss" : "border-line bg-abyss/70 text-muted"}`}
-                  >
-                    {profile === "recommended" ? "Recommended" : profile === "fast" ? "Fast indexing" : "Advanced custom"}
-                  </button>
-                ))}
-              </div> : null}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {activeIndexingJob ? (
-                <>
-                  <a href="#indexing-progress" className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">View progress</a>
-                  <a href="#jobs-activity" className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted">Open Jobs & Activity</a>
-                </>
-              ) : waitingSelectionNeedsAction ? (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => runIndexingPlanMutation.mutate()}
-                    disabled={primaryIndexingDisabled}
-                    className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {runIndexingPlanMutation.isPending ? "Queueing plan..." : "Continue with recommended indexing"}
-                  </button>
-                  <button type="button" onClick={scrollToParseSelection} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted">
-                    Choose categories
-                  </button>
-                  <button type="button" onClick={() => cancelIndexingMutation.mutate()} disabled={cancelIndexingMutation.isPending} className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger disabled:opacity-60">
-                    {cancelIndexingMutation.isPending ? "Cancelling..." : "Cancel indexing"}
-                  </button>
-                </>
-              ) : staleIndexingState ? (
-                <>
-                  <button type="button" onClick={() => cancelIndexingMutation.mutate()} disabled={cancelIndexingMutation.isPending} className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:opacity-60">
-                    {cancelIndexingMutation.isPending ? "Clearing..." : "Mark stale and retry"}
-                  </button>
-                  <a href="#jobs-activity" className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted">Open logs</a>
-                </>
-              ) : evidenceReadyForActions ? (
-                <>
-                  <Link to={coreSearchHref} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">Search this evidence</Link>
-                  <Link to={artifactViewsHref} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted">View artifacts</Link>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    onClick={() => runIndexingPlanMutation.mutate()}
-                    disabled={primaryIndexingDisabled}
-                    className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {runIndexingPlanMutation.isPending ? "Queueing plan..." : plannedNotStarted ? "Start recommended indexing" : "Index evidence for investigation"}
-                  </button>
-                  <button type="button" onClick={scrollToParseSelection} disabled={conflictingIndexingActionsDisabled} className="rounded-2xl border border-line bg-panel/60 px-4 py-2 text-sm text-muted disabled:opacity-60">
-                    Index selected types
-                  </button>
-                </>
-              )}
-            </div>
-          </div>
-
-          {indexingPlanQuery.isLoading ? (
-            <p className="mt-4 text-sm text-muted">Loading indexing plan...</p>
-          ) : indexingPlan ? (
-            <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.45fr)]">
-              <div className="rounded-2xl border border-line bg-panel/60 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-ink">{indexingPlan.label}</p>
-                    <p className="mt-1 text-xs text-muted">{indexingPlan.subcopy}</p>
-                  </div>
-                  {indexingPlan.active ? (
-                    <span className="rounded-full border border-amber/30 bg-amber/10 px-3 py-1 text-xs text-amber">
-                      Active: {formatIndexingStatus(indexingPlan.active_job?.step || indexingPlan.active_job?.status)}
-                    </span>
-                  ) : null}
-                </div>
-                <div className="mt-3 grid gap-2 md:grid-cols-2">
-                  {indexingPlan.steps.map((step: EvidenceIndexingStep) => (
-                    <div key={step.id} className="rounded-2xl border border-line bg-abyss/60 px-3 py-2">
-                      <div className="flex items-start justify-between gap-2">
-                        <p className="text-sm font-semibold text-ink">{step.name}</p>
-                        <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[11px] ${indexingStepTone(step.status)}`}>{formatIndexingStatus(step.status)}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-muted">{step.reason}</p>
-                    </div>
-                  ))}
-                </div>
+          <div className="mt-4">
+            <Disclosure label="Technical details" testId="evidence-integrity-technical-details">
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">SHA-256</p><p className="mt-1 break-all font-mono text-xs text-ink">{evidenceSha256 || "No hash recorded yet"}</p></div>
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Size</p><p className="mt-1 text-sm font-semibold text-ink">{formatBytes(evidenceSizeBytes)}</p></div>
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Uploaded by</p><p className="mt-1 truncate text-sm font-semibold text-ink">{uploadedBy || "-"}</p></div>
+                <div className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">Last integrity check</p><p className="mt-1 text-sm font-semibold text-ink">{formatDateTime(integrityCheckedAt)}</p></div>
               </div>
-              <div className="rounded-2xl border border-line bg-panel/60 p-4">
-                <p className="text-sm font-semibold text-ink">Excluded from indexing</p>
-                <div className="mt-3 space-y-2">
-                  {indexingPlan.excluded.map((item) => (
-                    <div key={`${item.name}-${item.reason}`} className="rounded-2xl border border-line bg-abyss/60 px-3 py-2">
-                      <p className="text-sm font-semibold text-ink">{item.name}</p>
-                      <p className="mt-1 text-xs text-muted">{item.reason}</p>
-                    </div>
-                  ))}
-                </div>
-                <p className="mt-3 text-xs text-muted">Individual rebuilds, SRUM retries, rules and diagnostics remain available under advanced actions.</p>
+              <div className="mt-4 border-t border-line pt-4">
+                <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Chain of Custody / Activity</p>
+                {custodyEvents.length ? <ol className="mt-3 space-y-2">{custodyEvents.slice(-8).reverse().map((event) => <li key={event.id} className="rounded-2xl border border-line bg-panel/60 px-3 py-2"><div className="flex flex-wrap items-center justify-between gap-2"><span className="font-mono text-[11px] uppercase tracking-[0.14em] text-accent">{event.event_type.replaceAll("_", " ")}</span><span className="text-xs text-muted">{formatDateTime(event.timestamp)}</span></div><p className="mt-1 text-sm text-ink">{event.summary}</p>{event.actor_user_id ? <p className="mt-1 text-xs text-muted">Actor: {event.actor_user_id}</p> : null}</li>)}</ol> : <p className="mt-3 rounded-2xl border border-line bg-panel/60 px-3 py-2 text-sm text-muted">No chain-of-custody events recorded yet.</p>}
               </div>
-            </div>
-          ) : (
-            <p className="mt-4 text-sm text-muted">Indexing plan is unavailable for this evidence.</p>
-          )}
-        </div>
-
-        <div ref={selectedArtifactTypesRef} className="mt-5 rounded-3xl border border-line bg-panel/60 p-5" data-testid="selected-artifact-types-section">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-            <div className="min-w-0">
-              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Selected artifact types</p>
-              <h3 className="mt-1 text-xl font-semibold text-ink">Index selected artifact types</h3>
-              <p className="mt-1 max-w-4xl text-sm text-muted">
-                Use this when you only want to parse specific artifact families, such as EVTX, Scheduled Tasks, Services or Shimcache.
-              </p>
-              {selectedIndexingLocked ? (
-                <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 px-4 py-3 text-sm text-amber">
-                  <p>{activeRecommendedIndexing ? "Manual selected indexing is locked while recommended indexing is running." : "Manual selected indexing is locked while another indexing job is running."}</p>
-                  {!manualSelectionActive ? <p className="mt-1 text-muted">No manual selection is active.</p> : null}
-                </div>
-              ) : !selectedIndexingAvailable ? (
-                <p className="mt-3 rounded-2xl border border-line bg-abyss/60 px-4 py-3 text-sm text-muted">
-                  No supported raw discovery artifact types are available for selected indexing.
-                </p>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={selectAllSupported} disabled={!selectedIndexingAvailable || selectedIndexingLocked} className="rounded-2xl border border-line bg-panel/50 px-4 py-2 text-sm text-muted disabled:opacity-60">
-                Select all supported
-              </button>
-              <button type="button" onClick={clearSelection} disabled={!selectedIndexingAvailable || selectedIndexingLocked} className="rounded-2xl border border-line bg-panel/50 px-4 py-2 text-sm text-muted disabled:opacity-60">
-                Clear selection
-              </button>
-            </div>
-          </div>
-
-          {selectedIndexingAvailable ? (
-            <>
-              <div className="mt-4 flex flex-wrap gap-2">
-                {platformQuickSelects.map((quickSelect) => (
-                  <button key={quickSelect.id} type="button" onClick={() => selectCategories(quickSelect.category_ids)} disabled={selectedIndexingLocked} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-muted disabled:opacity-60">
-                    {quickSelect.label}
-                  </button>
-                ))}
-              </div>
-
-              <div className="mt-4 space-y-4">
-                {supportedCategoryGroups.map((group) => (
-                  <div key={group.id}>
-                    <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{group.label}</p>
-                    <div className="mt-2 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-                      {group.items.map((option) => {
-                        const selectedCount = option.supportedIds.filter((id) => selectedCandidateIds.includes(id)).length;
-                        const fullySelected = selectedCount === option.supportedIds.length;
-                        return (
-                          <label key={option.category} className={`flex min-h-[96px] cursor-pointer items-start gap-3 rounded-2xl border px-4 py-3 transition ${fullySelected ? "border-accent/40 bg-accent/10" : "border-line bg-abyss/60 hover:border-accent/20"} ${selectedIndexingLocked ? "cursor-not-allowed opacity-60" : ""}`}>
-                            <input
-                              type="checkbox"
-                              className="mt-1"
-                              checked={fullySelected}
-                              disabled={selectedIndexingLocked}
-                              onChange={() => toggleCategorySelection(option.category)}
-                            />
-                            <div className="min-w-0">
-                              <p className="text-sm font-semibold text-ink">{option.label}</p>
-                              <p className="mt-1 text-xs text-muted">
-                                {option.parseableCount} parseable
-                                {option.partialCount ? ` · ${option.partialCount} partial` : ""}
-                                {` · ${option.supportedIds.length} selectable`}
-                              </p>
-                            </div>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {manualSelectionActive ? (
-                <div className="mt-4 rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm text-muted">
-                  <p>
-                    Selected preview: <span className="font-semibold text-ink">{selectedCandidateIds.length}</span> candidates
-                  </p>
-                  {selectedCategoryNames.length ? <p className="mt-1">Selected categories: <span className="font-semibold text-ink">{selectedCategoryNames.join(", ")}</span></p> : null}
-                </div>
-              ) : selectedIndexingLocked ? null : (
-                <div className="mt-4 rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm text-muted">
-                  No manual selection is active.
-                </div>
-              )}
-
-              {hasPowerShellCategory ? (
-                <div className="mt-3 rounded-2xl border border-cyan-400/25 bg-cyan-400/10 px-4 py-3 text-sm text-cyan-100">
-                  PowerShell selection covers PSReadLine, transcripts, script files and PowerShell exports. PowerShell events stored inside EVTX files are only scanned when you also select EVTX.
-                </div>
-              ) : null}
-              {hasEvtxCategory && !evtxecmdAvailable ? (
-                <div className="mt-3 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
-                  <p className="font-semibold text-ink">EVTX indexing profile</p>
-                  <p className="mt-1">Full EVTX indexing is unavailable because EvtxECmd is not available. Limited EVTX triage mode is partial and should only be used as a fallback.</p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button type="button" onClick={() => setParseEvtxProfile("fast_high_value")} disabled={selectedIndexingLocked} className={`rounded-2xl border px-4 py-2 text-sm ${parseEvtxProfile === "fast_high_value" ? "border-accent bg-accent/10 text-ink" : "border-line bg-panel/40 text-muted"}`}>
-                      Fast EVTX Search
-                    </button>
-                    <button type="button" onClick={() => setParseEvtxProfile("full")} disabled={selectedIndexingLocked} className={`rounded-2xl border px-4 py-2 text-sm ${parseEvtxProfile === "full" ? "border-amber bg-amber/10 text-ink" : "border-line bg-panel/40 text-muted"}`}>
-                      Full EVTX Indexing
-                    </button>
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="mt-4 flex justify-end">
-                <button
-                  type="button"
-                  onClick={indexSelectedArtifactTypes}
-                  disabled={!selectedCandidateIds.length || selectedIndexingLocked || parseVelociraptorMutation.isPending}
-                  className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {parseVelociraptorMutation.isPending ? "Queueing selected types..." : "Index selected types"}
-                </button>
-              </div>
-              {parseVelociraptorMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{parseVelociraptorMutation.error.message}</p> : null}
-            </>
-          ) : null}
-        </div>
-
-        <details className="mt-5 rounded-3xl border border-line bg-panel/50 p-4">
-          <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Advanced recovery & diagnostics</summary>
-          <p className="mt-2 text-sm text-muted">Use these scoped actions for rebuilds, parser diagnostics or explicit artifact-level control. They are intentionally outside the recommended indexing flow.</p>
-
-        <div className={`mt-5 rounded-3xl border p-4 ${userActivityTotal > 0 ? "border-mint/25 bg-mint/10" : "border-line bg-panel/50"}`}>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">User Activity</p>
-              <p className="mt-1 text-sm font-semibold text-ink">
-                {userActivityTotal > 0 ? `RECmd user activity indexed · ${userActivityTotal.toLocaleString()} docs` : userActivityStatus === "queued" || userActivityStatus === "running" ? "RECmd user activity indexing queued" : "User activity artifacts not indexed"}
-              </p>
-              <p className="mt-1 text-sm text-muted">
-                Extract Shellbags, UserAssist, RecentDocs, RunMRU and OpenSaveMRU from NTUSER.DAT / UsrClass.dat. This is scoped and does not re-index EVTX or MFT.
-              </p>
-              {userActivityTotal > 0 ? (
-                <p className="mt-2 text-xs text-muted">
-                  Shellbags {(userActivityCounts.shellbag ?? 0).toLocaleString()} · UserAssist {(userActivityCounts.userassist ?? 0).toLocaleString()} · RecentDocs {(userActivityCounts.recentdocs ?? 0).toLocaleString()} · RunMRU {(userActivityCounts.runmru ?? 0).toLocaleString()} · OpenSaveMRU {(userActivityCounts.opensavemru ?? 0).toLocaleString()}
-                </p>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {userActivityTotal > 0 && data?.case_id ? (
-                <Link to={`/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=shellbag`} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
-                  Open User Activity
-                </Link>
-              ) : null}
-              <button
-                type="button"
-                disabled={conflictingIndexingActionsDisabled || indexRecmdUserActivityMutation.isPending || userActivityStatus === "queued" || userActivityStatus === "running"}
-                onClick={() => {
-                  const message = userActivityTotal > 0 ? "Rebuild RECmd user activity artifacts for this evidence? Existing RECmd user activity docs for this evidence will be replaced." : "Index RECmd user activity artifacts for this evidence?";
-                  if (window.confirm(message)) indexRecmdUserActivityMutation.mutate();
-                }}
-                className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent disabled:opacity-60"
-              >
-                {indexRecmdUserActivityMutation.isPending || userActivityStatus === "queued" ? "Queueing..." : userActivityStatus === "running" ? "Indexing..." : userActivityTotal > 0 ? "Rebuild user activity" : "Index user activity"}
-              </button>
-            </div>
+            </Disclosure>
           </div>
         </div>
+      </section>
 
-        <div className={`mt-5 rounded-3xl border p-4 ${defenderDocs > 0 ? "border-mint/25 bg-mint/10" : defenderNoData ? "border-line bg-panel/50" : "border-line bg-panel/50"}`}>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Microsoft Defender</p>
-              <p className="mt-1 text-sm font-semibold text-ink">
-                {defenderDocs > 0
-                  ? `Defender events indexed · ${defenderDocs.toLocaleString()} docs`
-                  : defenderStatus === "queued" || defenderStatus === "running"
-                    ? "Defender EVTX indexing queued"
-                    : defenderNoData
-                      ? "Defender log present, no relevant detection events found"
-                      : "Defender artifact view not indexed"}
-              </p>
-              <p className="mt-1 text-sm text-muted">
-                Extract Defender detections, remediation, action failures and configuration changes from Windows Defender Operational EVTX.
-              </p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {defenderDocs > 0 && data?.case_id ? (
-                <Link to={`/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=defender`} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
-                  Open Defender view
-                </Link>
-              ) : null}
-              <button
-                type="button"
-                disabled={conflictingIndexingActionsDisabled || indexDefenderEvtxMutation.isPending || defenderStatus === "queued" || defenderStatus === "running"}
-                onClick={() => {
-                  const message = defenderDocs > 0 ? "Rebuild Defender EVTX artifact docs for this evidence? Existing Defender docs for this evidence will be replaced." : "Index Defender EVTX artifact docs for this evidence?";
-                  if (window.confirm(message)) indexDefenderEvtxMutation.mutate();
-                }}
-                className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent disabled:opacity-60"
-              >
-                {indexDefenderEvtxMutation.isPending || defenderStatus === "queued" ? "Queueing..." : defenderStatus === "running" ? "Indexing..." : defenderDocs > 0 ? "Rebuild Defender" : "Index Defender"}
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div className={`mt-5 rounded-3xl border p-4 ${srumDocs > 0 ? "border-mint/25 bg-mint/10" : srumToolingMissing ? "border-amber/30 bg-amber/10" : "border-line bg-panel/50"}`}>
-          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">SRUM</p>
-              <p className="mt-1 text-sm font-semibold text-ink">
-                {srumDocs > 0
-                  ? `SRUM indexed · ${srumDocs.toLocaleString()} docs`
-                  : srumStatus === "queued" || srumStatus === "running"
-                    ? "SRUM indexing queued"
-                    : srumToolingMissing
-                      ? "Requires Windows parser worker"
-                      : srumNoData
-                        ? "SRUM database present, no records indexed"
-                        : "SRUM not indexed"}
-              </p>
-              <p className="mt-1 text-sm text-muted">
-                Extract application and network usage from SRUDB.dat with SrumECmd. This scoped action does not re-index EVTX, MFT or rules.
-              </p>
-              {srumDocs > 0 ? (
-                <p className="mt-2 text-xs text-muted">
-                  Tables: {Object.entries(srumTables).slice(0, 4).map(([name, count]) => `${name} ${Number(count).toLocaleString()}`).join(" · ") || "indexed"}.
-                </p>
-              ) : null}
-              {srumToolingMissing ? (
-                <p className="mt-2 text-xs text-amber">
-                  SRUM source detected, but this parser requires a Windows-capable worker because the Linux runtime lacks Windows ESE libraries. Evidence status is not affected.
-                </p>
-              ) : null}
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {srumDocs > 0 && data?.case_id ? (
-                <Link to={`/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=srum`} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
-                  Open SRUM view
-                </Link>
-              ) : null}
-              <button
-                type="button"
-                disabled={conflictingIndexingActionsDisabled || indexSrumMutation.isPending || srumStatus === "queued" || srumStatus === "running"}
-                onClick={() => {
-                  const message = srumDocs > 0 ? "Rebuild SRUM artifact docs for this evidence? Existing SRUM docs for this evidence will be replaced." : "Index SRUM artifact docs for this evidence?";
-                  if (window.confirm(message)) indexSrumMutation.mutate();
-                }}
-                className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent disabled:opacity-60"
-              >
-                {indexSrumMutation.isPending || srumStatus === "queued"
-                  ? "Queueing..."
-                  : srumStatus === "running"
-                    ? "Indexing..."
-                    : srumToolingMissing
-                      ? "Retry when worker available"
-                      : srumDocs > 0
-                        ? "Rebuild SRUM"
-                        : "Index SRUM"}
-              </button>
-            </div>
-          </div>
-        </div>
-        </details>
-
-        {evidenceReadyForActions ? (
-          <div className="mt-5 flex flex-wrap gap-3">
-            {coreActions.slice(0, 4).map((action) => (
-              <Link key={action.id} to={action.href} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm text-muted transition hover:border-accent hover:text-ink">
-                <span className="font-medium text-ink">{action.label}</span>
-                <span className="ml-2 text-xs text-muted">{action.description}</span>
-              </Link>
-            ))}
-            <button type="button" onClick={() => onDemandRulesMutation.mutate()} disabled={rulesLaunchDisabled} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-medium text-ink disabled:opacity-60">
-              {onDemandRulesMutation.isPending ? "Launching rules..." : activeEvidenceRuleRun ? "Rules running" : "Run rules"}
+      <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
+        <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Choose what to parse</p>
+        <div className="mt-4 grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+          <div className="rounded-3xl border border-accent/30 bg-accent/10 p-5">
+            <h3 className="text-lg font-semibold text-ink">Recommended indexing</h3>
+            <p className="mt-1 text-sm text-muted">Parse all supported artifact types. Recommended for most investigations.</p>
+            <button type="button" onClick={() => runIndexingPlanMutation.mutate()} disabled={primaryIndexingDisabled} className="mt-4 rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:cursor-not-allowed disabled:opacity-60">
+              {runIndexingPlanMutation.isPending ? "Queueing..." : evidenceReadyForActions ? "Run recommended indexing again" : "Start recommended indexing"}
             </button>
-            <button type="button" onClick={() => generateReportMutation.mutate()} disabled={reportLaunchDisabled} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-medium text-ink disabled:opacity-60">
-              {generateReportMutation.isPending ? "Generating report..." : activeEvidenceReport ? "Report running" : "Generate report"}
-            </button>
-            <Link to={data?.case_id ? `/cases/${data.case_id}/evidence` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-medium text-ink">
-              Add more evidence
-            </Link>
           </div>
-        ) : null}
-
-        <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
-          <div className="rounded-3xl border border-line bg-panel/60 p-4">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Indexed data</p>
-            {indexedArtifactTypeCounts.length ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {indexedArtifactTypeCounts.map(([artifactType, count]) => (
-                  <Link
-                    key={artifactType}
-                    to={data?.case_id ? `/cases/${data.case_id}/search?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=${encodeURIComponent(artifactType)}&tab=results` : "#"}
-                    className="rounded-full border border-line bg-abyss/70 px-3 py-1 text-xs text-muted transition hover:border-accent hover:text-ink"
-                  >
-                    {artifactType} · {count}
-                  </Link>
-                ))}
-              </div>
-            ) : (
-              <p className="mt-2 text-sm text-muted">No indexed artifact counts are available yet.</p>
-            )}
-            {indexedParserCounts.length ? (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {indexedParserCounts.map(([parserName, count]) => (
-                  <Link
-                    key={parserName}
-                    to={data?.case_id ? `/cases/${data.case_id}/search?evidence_id=${encodeURIComponent(evidenceId)}&parser=${encodeURIComponent(parserName)}&tab=results` : "#"}
-                    className="rounded-full border border-line bg-abyss/70 px-3 py-1 text-xs text-muted transition hover:border-accent hover:text-ink"
-                  >
-                    {parserName} · {count}
-                  </Link>
-                ))}
-              </div>
-            ) : null}
-          </div>
-          <div className="rounded-3xl border border-line bg-panel/60 p-4">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Problems</p>
-            {problemsCount ? (
-              <p className="mt-2 text-sm text-amber">{problemsCount} item(s) need review. Deferred and problematic artifacts are preserved for explicit follow-up.</p>
-            ) : (
-              <p className="mt-2 text-sm text-mint">No deferred artifacts reported.</p>
-            )}
-          </div>
-        </div>
-
-        <div className="mt-5 rounded-3xl border border-line bg-panel/50 p-4 text-sm text-muted">
-          {selectionPending
-            ? "Raw discovery inventory is available below. Use Index selected artifact types for scoped parsing."
-            : activeIndexingJob
-              ? "Raw discovery inventory remains readable while indexing is running; selected indexing is locked until the job finishes."
-              : "Raw discovery inventory is preserved for candidate counts, support status and parser availability."}
-        </div>
-        {selectionPending ? (
-          <details className="mt-3 rounded-3xl border border-line bg-panel/50 p-4">
-            <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Raw discovery inventory</summary>
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center">
+          <div className="rounded-3xl border border-line bg-abyss/60 p-5">
+            <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
               <div>
-                <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Raw discovery inventory</p>
-                <p className="mt-1 text-sm font-semibold text-ink">Supported artifacts detected</p>
-                <p className="mt-1 text-sm text-muted">
-                  Read-only inventory of discovered candidates, support status and parser availability. Use Index selected artifact types above for scoped parsing.
-                </p>
-                <div className="mt-3 grid gap-2 text-sm text-muted md:grid-cols-2 xl:grid-cols-4">
-                  <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2">
-                    <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">Case</p>
-                    <p className="mt-1 truncate text-ink" title={data?.case_id ?? "-"}>{data?.case_id ?? "-"}</p>
-                  </div>
-                  <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2">
-                    <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">Host</p>
-                    <p className="mt-1 truncate text-ink" title={data?.provided_host || data?.detected_host || "-"}>{data?.provided_host || data?.detected_host || "-"}</p>
-                  </div>
-                  <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2">
-                    <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">Supported data</p>
-                    <p className="mt-1 text-ink">{supportedCategoryOptions.length} categories · {discoveryCandidates.length} candidates</p>
-                  </div>
-                  <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2">
-                    <p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">Event logs</p>
-                    <p className="mt-1 text-ink">{hasEvtxCategory ? evtxecmdAvailable ? "Full coverage with EvtxECmd" : "EVTX fallback available" : "None detected"}</p>
-                  </div>
-                </div>
-                <div className="mt-3 rounded-2xl border border-line bg-panel/40 px-4 py-3 text-sm text-muted">
-                  <p className="font-semibold text-ink">Inventory only</p>
-                  <p className="mt-1">Discovered candidates are preserved for traceability. Scoped parsing controls live in Index selected artifact types.</p>
-                </div>
+                <h3 className="text-lg font-semibold text-ink">Selected artifact types</h3>
+                <p className="mt-1 text-sm text-muted">Choose focused families when you do not want to parse everything.</p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <button onClick={scrollToParseSelection} disabled={conflictingIndexingActionsDisabled} className="rounded-2xl border border-line bg-panel/50 px-4 py-2 text-sm text-muted disabled:opacity-60">
-                  Index selected types
-                </button>
-              </div>
-            </div>
-          </details>
-        ) : null}
-        {!selectionPending && selectedArtifactTypes.length ? (
-          <div className="mt-3 rounded-3xl border border-line bg-panel/60 p-4 text-sm text-muted">
-            Parsed artifacts in this run are limited to the selected categories: <span className="font-semibold text-ink">{selectedArtifactTypes.join(", ")}</span>. Detected candidates can still include other categories that were not selected for extraction.
-          </div>
-        ) : null}
-        {evtxDeferredCount > 0 || evtxPartialCount > 0 ? (
-          <div className="mt-3 rounded-3xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">
-            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em]">EVTX Fast Search profile</p>
-                <p className="mt-1 font-semibold">
-                  {evtxSelectedFiles.length ? `${evtxSelectedFiles.length} EVTX indexed or selected · ` : ""}
-                  {evtxDeferredCount} deferred · {evtxPartialCount} partial
-                </p>
-                <p className="mt-1 text-xs text-muted">
-                  Fast profile: partial EVTX coverage. Large logs may be partially indexed; nothing is deleted.
-                </p>
-                {evtxCoverageStatus ? <p className="mt-1 text-xs text-muted">Coverage status: {evtxCoverageStatus}</p> : null}
-                {evtxParserBackend ? <p className="mt-1 text-xs text-muted">EVTX parser: {formatEvtxBackend(evtxParserBackend)}{evtxParserBackendVersion ? ` ${evtxParserBackendVersion}` : ""}</p> : null}
-              </div>
-              <button disabled className="rounded-2xl border border-amber/30 bg-abyss/40 px-4 py-2 text-sm text-amber opacity-70">
-                Continue EVTX indexing · Advanced/Beta
+              <button type="button" onClick={indexSelectedArtifactTypes} disabled={!selectedCandidateIds.length || selectedIndexingLocked || parseVelociraptorMutation.isPending} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-50">
+                {parseVelociraptorMutation.isPending ? "Queueing..." : "Start selected parsing"}
               </button>
             </div>
-          </div>
-        ) : evtxProfile || evtxParserBackend || evtxCoverageStatus ? (
-          <div className="mt-3 rounded-3xl border border-line bg-panel/60 p-4 text-sm text-muted">
-            <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p>
-                  EVTX coverage: <span className="font-semibold text-ink">{evtxProfile === "fast_high_value" ? "Partial triage" : "Full coverage"}</span>
-                </p>
-                {evtxParserBackend ? <p className="mt-1 text-xs">EVTX parser: <span className="font-semibold text-ink">{formatEvtxBackend(evtxParserBackend)}{evtxParserBackendVersion ? ` ${evtxParserBackendVersion}` : ""}</span></p> : null}
-                {evtxParserBackendFallback ? <p className="mt-1 text-xs text-amber">Python EVTX parser fallback may be slow on large evidence.</p> : null}
-              </div>
-              {evtxCoverageIsFull ? (
-                <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-emerald-200">Full EVTX coverage</span>
-              ) : evtxCoverageStatus ? (
-                <span className="rounded-full border border-line bg-abyss/50 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{evtxCoverageStatus}</span>
-              ) : null}
-            </div>
-          </div>
-        ) : null}
-
-        <div id="indexing-progress" data-testid="evidence-progress-primary" className="mt-5 rounded-3xl border border-accent/30 bg-panel/70 p-4 shadow-panel">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Indexing progress</p>
-              <h3 className="mt-1 text-lg font-semibold text-ink">{activeIndexingJob ? indexingStateTitle : formatIndexingPhaseForDisplay(displayCounts.phase)}</h3>
-              <p className="mt-1 text-xs text-muted">Current step: {formatIndexingPhaseForDisplay(displayCounts.phase)}</p>
-              <p className="mt-1 text-sm text-muted">{progressStatusLabel}</p>
-              {currentDisplayArtifact ? <p className="mt-1 max-w-[760px] truncate text-xs text-muted" title={currentDisplayArtifact}>Current artifact: {currentDisplayArtifact}</p> : null}
-              {effectiveCurrentArtifactLabel ? <p className="mt-1 text-xs text-muted">Current artifact progress: {effectiveCurrentArtifactLabel}</p> : null}
-              {showExtractingSelected ? <p className="mt-1 text-xs text-muted">Preparing selected artifacts before parser workers start.</p> : null}
-              {currentSelectedPath ? <p className="mt-1 max-w-[760px] truncate text-xs text-muted" title={currentSelectedPath}>Current selected file: {currentSelectedPath}</p> : null}
-              {currentAction ? <p className="mt-1 text-xs text-muted">Current action: {currentAction}</p> : null}
-              {currentBottleneck ? <p className="mt-1 text-xs text-muted">Current bottleneck: {currentBottleneck}</p> : null}
-              {showMissingProgressWarning ? (
-                <p className="mt-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-                  Worker heartbeat is alive but progress metadata is missing. The job may still be running, but the backend is not reporting artifact progress correctly yet.
-                </p>
-              ) : null}
-              {showExtractionStallWarning ? (
-                <p className="mt-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-                  No extraction progress detected yet. The worker is still preparing selected artifacts before parsing can start.
-                </p>
-              ) : null}
-            </div>
-            <div className="min-w-[180px] rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-right">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Progress</p>
-              <p className="mt-1 text-3xl font-semibold text-ink">{displayCounts.progressPct}%</p>
-            </div>
-          </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-5">
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Status</p><p className="mt-1 text-sm text-ink">{indexingStateTitle}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifacts</p><p className="mt-1 text-sm text-ink">{displayCounts.artifactsDone} / {displayCounts.artifactsTotal}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Indexed docs</p><p className="mt-1 text-sm text-ink">{displayCounts.indexedDocs.toLocaleString()}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Last progress</p><p className="mt-1 text-sm text-ink">{lastProgressAgeLabel}</p></div>
-            <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Mode</p><p className="mt-1 text-sm text-ink">{productModeLabel}</p></div>
-          </div>
-        </div>
-
-        <details className="mt-5 rounded-3xl border border-line bg-abyss/60 p-4 text-sm text-muted">
-          <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Advanced details</summary>
-          <div className="mt-4 space-y-3">
-        <div className="rounded-3xl border border-line bg-abyss/70 p-4">
-          {activeIndexingJob ? (
-            <p className="rounded-2xl border border-accent/20 bg-accent/10 px-3 py-2 text-xs text-muted">
-              Live counters are shown once in Indexing progress above. Advanced details below are diagnostics only while the run is active.
-            </p>
-          ) : null}
-          <div className="mt-3 flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">{activeIndexingJob ? "Processing diagnostics" : "Progress summary"}</p>
-              <p className="mt-1 text-sm text-ink">
-                {ingestModeLabel === "full forensic" ? "Advanced processing" : "Core indexing"} · {currentPhase}
-              </p>
-              <p className="mt-1 text-xs text-muted">{progressStatusLabel}</p>
-              <p className="mt-1 text-xs text-slate-300">{effectivePlanSummary}</p>
-              {data?.metadata_json?.current_artifact ? <p className="mt-1 text-xs text-muted">Current artifact: {String(data.metadata_json.current_artifact)}</p> : null}
-              {hasLongTail ? <p className="mt-1 text-xs text-muted">Tail running {tailArtifactsRunning} · queued {tailArtifactsQueued}</p> : null}
-              {currentBottleneck ? <p className="mt-1 text-xs text-muted">Current bottleneck: {currentBottleneck}</p> : null}
-              {ingestModeLabel === "full forensic" ? <p className="mt-2 text-xs text-amber">Advanced processing can take significantly longer.</p> : null}
-            </div>
-            {!activeIndexingJob ? <div className="min-w-[180px] rounded-2xl border border-line bg-panel/50 px-4 py-3 text-right">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Progress</p>
-              <p className="mt-1 text-2xl font-semibold text-ink">{progressPct}%</p>
-            </div> : null}
-          </div>
-          {!activeIndexingJob ? <div className="mt-4 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Mode</p><p className="mt-1 text-sm text-ink">{ingestModeLabel}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifacts</p><p className="mt-1 text-sm text-ink">{artifactsDone} / {String(data?.metadata_json?.artifacts_total ?? 0)}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Failed</p><p className="mt-1 text-sm text-ink">{artifactsFailed}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Indexed docs</p><p className="mt-1 text-sm text-ink">{String(data?.metadata_json?.events_indexed ?? manifest?.stats?.indexed_events ?? 0)}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Last progress</p><p className="mt-1 text-sm text-ink">{lastProgressAgeLabel}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Current artifact</p><p className="mt-1 truncate text-sm text-ink" title={String(data?.metadata_json?.current_artifact ?? effectiveCurrentArtifactPath ?? "-")}>{String(data?.metadata_json?.current_artifact ?? effectiveCurrentArtifactPath ?? "-")}</p></div>
-          </div> : null}
-          <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-2xl border border-line bg-panel/40 px-4 py-3 text-sm text-muted">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Activity</p>
-              <p className="mt-1 font-semibold text-ink">{recentActivityState}</p>
-              <p className="mt-1 text-xs text-muted">{recentActivityDetail}</p>
-            </div>
-            <div className="rounded-2xl border border-line bg-panel/40 px-4 py-3 text-sm text-muted">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Extractor</p>
-              <p className="mt-1 font-semibold text-ink">{String(data?.metadata_json?.extractor_used ?? "-").replaceAll("_", " ")}</p>
-              <p className="mt-1 text-xs text-muted">Phase timings are tracked in metadata while the run is active.</p>
-            </div>
-            <div className="rounded-2xl border border-line bg-panel/40 px-4 py-3 text-sm text-muted">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Effective plan</p>
-              <p className="mt-1 font-semibold text-ink">{modeEffectivePlan?.ingest_mode ? String(modeEffectivePlan.ingest_mode).replaceAll("_", " ") : ingestModeLabel}</p>
-              <p className="mt-1 text-xs text-muted">{skippedFeatures.length ? `Skipped: ${skippedFeatures.join(", ").replaceAll("_", " ")}` : "No heavy features skipped in this mode."}</p>
-            </div>
-            <div className="rounded-2xl border border-line bg-panel/40 px-4 py-3 text-sm text-muted">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Artifact scope</p>
-              <p className="mt-1 font-semibold text-ink">{enabledArtifactCategories.length || selectedArtifactTypes.length || 0} categories</p>
-              <p className="mt-1 text-xs text-muted">
-                {(enabledArtifactCategories.length ? enabledArtifactCategories : selectedArtifactTypes).slice(0, 4).join(", ") || "Not scoped by category"}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-3 grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
-          <div className="rounded-3xl border border-line bg-panel/60 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Core flow</p>
-                <p className="mt-1 text-sm text-muted">Evidence → Usable Search ingest → Search/Timeline. Index data first, then decide which advanced modules to run.</p>
-              </div>
-              <span className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-accent">
-                {String(onDemandModulesQuery.data?.core_flow.recommended_ingest_mode ?? (data?.metadata_json?.ingest_mode ?? "usable_search")).replaceAll("_", " ")}
-              </span>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              {coreActions.map((action) => (
-                <Link key={action.id} to={action.href} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm text-muted transition hover:border-accent hover:text-ink">
-                  <p className="font-medium text-ink">{action.label}</p>
-                  <p className="mt-1 text-xs text-muted">{action.description}</p>
-                </Link>
+            <div className="mt-4 space-y-4">
+              {minimalCategoryGroups.map((group) => (
+                <div key={group.id}>
+                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{group.label}</p>
+                  <div className="mt-2 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+                    {group.items.map((option) => (
+                      <label key={option.id} className={`flex min-h-[70px] items-start gap-3 rounded-2xl border px-3 py-3 ${option.selectedCount ? "border-accent/40 bg-accent/10" : "border-line bg-panel/40"} ${option.disabled ? "opacity-50" : "cursor-pointer"}`}>
+                        <input type="checkbox" className="mt-1" disabled={option.disabled} checked={Boolean(option.supported && option.selectedCount === option.supported.supportedIds.length)} onChange={() => toggleCategorySelection(option.id)} />
+                        <span>
+                          <span className="block text-sm font-semibold text-ink">{option.label}</span>
+                          <span className="mt-1 block text-xs text-muted">{option.supported ? `${option.supported.supportedIds.length} candidates` : "Not detected"}</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-3">
-              <div className="rounded-2xl border border-line bg-abyss/50 px-4 py-3 text-sm text-muted">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{activeIndexingJob ? "Indexed documents" : "Indexed documents"}</p>
-                <p className={`${activeIndexingJob ? "text-sm" : "text-lg"} mt-1 font-semibold text-ink`}>{activeIndexingJob ? "See live progress" : (searchSummaryQuery.data?.total_indexed_docs ?? 0)}</p>
-              </div>
-              <div className="rounded-2xl border border-line bg-abyss/50 px-4 py-3 text-sm text-muted">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Latest ingest</p>
-                <p className="mt-1 text-lg font-semibold text-ink">{data?.ingest_status ?? "-"}</p>
-              </div>
-              <div className="rounded-2xl border border-line bg-abyss/50 px-4 py-3 text-sm text-muted">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact types ready</p>
-                <p className="mt-1 text-lg font-semibold text-ink">{Object.keys(searchSummaryQuery.data?.artifact_type_counts ?? {}).length || indexedArtifactTypeCounts.length}</p>
-              </div>
-            </div>
-            <div className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4 text-sm text-muted">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Host assignment</p>
-                  <p className="mt-1 text-base font-semibold text-ink">Change host assignment</p>
-                  <p className="mt-2 text-xs text-muted">Detected/provided host is preserved from parsers or metadata. Assigned host controls host filtering, including Memory.</p>
-                </div>
-                <span className={`rounded-full border px-3 py-1 text-xs ${data?.host_id ? (assignmentMismatch ? "border-amber/30 bg-amber/10 text-amber" : "border-mint/30 bg-mint/10 text-mint") : "border-line bg-panel/50 text-muted"}`}>
-                  {data?.host_id ? (assignmentMismatch ? "mismatch" : "confirmed") : "unassigned"}
-                </span>
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Detected/provided host</p>
-                  <p className="mt-1 text-base font-semibold text-ink">{data?.detected_host || data?.provided_host || "-"}</p>
-                </div>
-                <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Assigned host</p>
-                  <p className="mt-1 text-base font-semibold text-ink">{assignedHost?.display_name || "Unassigned"}</p>
-                </div>
-                <div className="rounded-2xl border border-line bg-panel/50 px-4 py-3">
-                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Assignment method</p>
-                  <p className="mt-1 text-base font-semibold text-ink">{data?.host_assignment_method?.replaceAll("_", " ") || "-"}</p>
-                </div>
-              </div>
-              {assignmentMismatch ? (
-                <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber">
-                  Detected host differs from assigned host. This can happen with aliases, FQDNs, renamed systems or memory images. The assigned host controls filtering.
-                </div>
-              ) : null}
-              {isMemoryEvidence && !data?.host_id ? (
-                <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber" role="alert">
-                  This memory evidence is not assigned to a case host. Host filters may not include it until assigned.
-                </div>
-              ) : null}
-              <div className="mt-4 grid gap-3 md:grid-cols-[160px_1fr_auto] md:items-end">
-                <label className="block text-xs text-muted">
-                  Change host
-                  <select value={hostAssignmentMode} onChange={(event) => setHostAssignmentMode(event.target.value as "existing" | "create")} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink">
-                    <option value="existing">Assign to existing host</option>
-                    <option value="create">Create new host</option>
-                  </select>
-                </label>
-                {hostAssignmentMode === "existing" ? (
-                  <label className="block text-xs text-muted">
-                    Assign to existing host
-                    <select value={hostAssignmentId} onChange={(event) => setHostAssignmentId(event.target.value)} className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink">
-                      <option value="">Mark unassigned</option>
-                      {caseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
-                    </select>
-                  </label>
-                ) : (
-                  <label className="block text-xs text-muted">
-                    Create new host
-                    <input value={hostAssignmentName} onChange={(event) => setHostAssignmentName(event.target.value)} placeholder="WS-01" className="mt-1 w-full rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-ink" />
-                  </label>
-                )}
-                <button type="button" onClick={() => hostAssignmentMutation.mutate()} disabled={hostAssignmentMutation.isPending || (hostAssignmentMode === "create" && !hostAssignmentName.trim())} className="rounded-xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60">
-                  {hostAssignmentMutation.isPending ? "Saving..." : hostAssignmentMode === "create" ? "Create new host" : hostAssignmentId ? "Change host" : "Mark unassigned"}
-                </button>
-              </div>
-            </div>
-            {indexedArtifactTypeCounts.length ? (
-              <div className="mt-4">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search by artifact type</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {indexedArtifactTypeCounts.map(([artifactType, count]) => (
-                    <Link
-                      key={artifactType}
-                      to={data?.case_id ? `/cases/${data.case_id}/search?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=${encodeURIComponent(artifactType)}&tab=results` : "#"}
-                      className="rounded-full border border-line bg-abyss/70 px-3 py-1 text-xs text-muted transition hover:border-accent hover:text-ink"
-                    >
-                      {artifactType} · {count}
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            {indexedParserCounts.length ? (
-              <div className="mt-4">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search by parser backend</p>
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {indexedParserCounts.map(([parserName, count]) => (
-                    <Link
-                      key={parserName}
-                      to={data?.case_id ? `/cases/${data.case_id}/search?evidence_id=${encodeURIComponent(evidenceId)}&parser=${encodeURIComponent(parserName)}&tab=results` : "#"}
-                      className="rounded-full border border-line bg-abyss/70 px-3 py-1 text-xs text-muted transition hover:border-accent hover:text-ink"
-                    >
-                      {parserName} · {count}
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="rounded-3xl border border-line bg-panel/60 p-4">
-            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">On-demand modules</p>
-            <p className="mt-1 text-sm text-muted">Stable follow-up actions run only when you launch them manually after data is already indexed.</p>
-            <div className="mt-4 space-y-3">
-              {stableOnDemandEntries.map((entry) => {
-                if (entry.id === "rules") {
-                  return (
-                    <div key={entry.id} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="font-medium text-ink">{entry.label}</p>
-                        <span className="rounded-full border border-line px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted">{entry.badge ?? entry.status}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-muted">{entry.description}</p>
-                      {entry.warning ? <p className="mt-2 text-xs text-accent">{entry.warning}</p> : null}
-                      {entry.disabled_reason ? <p className="mt-2 text-xs text-amber">{entry.disabled_reason}</p> : null}
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <label className="text-xs text-muted" htmlFor="rules-engine-selection">
-                          Engine
-                        </label>
-                        <select
-                          id="rules-engine-selection"
-                          value={rulesEngineSelection}
-                          onChange={(event) => setRulesEngineSelection(event.target.value as "sigma" | "yara" | "all")}
-                          disabled={rulesLaunchDisabled}
-                          className="rounded-full border border-line bg-panel px-3 py-1 text-xs text-ink disabled:opacity-60"
-                        >
-                          <option value="sigma">Sigma</option>
-                          <option value="yara">YARA</option>
-                          <option value="all">All</option>
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => onDemandRulesMutation.mutate()}
-                          disabled={rulesLaunchDisabled}
-                          className="rounded-full border border-line bg-panel px-3 py-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink disabled:opacity-60"
-                        >
-                          {onDemandRulesMutation.isPending ? "Launching..." : activeEvidenceRuleRun ? "Run in progress" : "Run now"}
-                        </button>
-                        {rulesWorkspaceHref !== "#" ? (
-                          <Link to={rulesWorkspaceHref} className="rounded-full border border-line bg-transparent px-3 py-1 font-mono text-[11px] uppercase tracking-[0.14em] text-muted transition hover:border-accent hover:text-ink">
-                            Open rules workspace
-                          </Link>
-                        ) : null}
-                      </div>
-                      {latestEvidenceRuleRun ? (
-                        <div className="mt-3 rounded-2xl border border-line bg-panel/60 px-3 py-3 text-xs text-muted">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="font-mono uppercase tracking-[0.14em] text-muted">Latest rules run</p>
-                            <span className="rounded-full border border-line px-2 py-0.5 font-mono uppercase tracking-[0.14em] text-muted">
-                              {formatRuleRunStatus(latestEvidenceRuleRun.status)}
-                            </span>
-                          </div>
-                          <div className="mt-2 grid gap-2 md:grid-cols-2">
-                            <p>Run ID: <span className="text-ink">{latestEvidenceRuleRun.id}</span></p>
-                            <p>Detections created: <span className="text-ink">{latestEvidenceRuleRun.created_detections ?? 0}</span></p>
-                            <p>Rules processed: <span className="text-ink">{latestEvidenceRuleRun.processed_rules ?? 0}/{latestEvidenceRuleRun.total_rules ?? 0}</span></p>
-                            <p>Events scanned: <span className="text-ink">{latestEvidenceRuleRun.scanned_events ?? 0}</span></p>
-                          </div>
-                          {latestEvidenceRuleRun.current_phase ? <p className="mt-2">Phase: <span className="text-ink">{latestEvidenceRuleRun.current_phase}</span></p> : null}
-                          {latestEvidenceRuleRun.last_error ? <p className="mt-2 text-amber">{latestEvidenceRuleRun.last_error}</p> : null}
-                          <div className="mt-3 flex flex-wrap items-center gap-2">
-                            {ruleRunDetectionsHref !== "#" ? (
-                              <Link to={ruleRunDetectionsHref} className="rounded-full border border-line bg-transparent px-3 py-1 font-mono text-[11px] uppercase tracking-[0.14em] text-muted transition hover:border-accent hover:text-ink">
-                                View detections
-                              </Link>
-                            ) : null}
-                            {latestEvidenceRuleRun.can_retry && rulesWorkspaceHref !== "#" ? (
-                              <Link to={rulesWorkspaceHref} className="rounded-full border border-line bg-transparent px-3 py-1 font-mono text-[11px] uppercase tracking-[0.14em] text-muted transition hover:border-accent hover:text-ink">
-                                Open previous runs
-                              </Link>
-                            ) : null}
-                          </div>
-                        </div>
-                      ) : (
-                        <p className="mt-3 text-xs text-muted">No on-demand rules runs yet. Rules execute against already indexed data and do not reprocess the evidence.</p>
-                      )}
+            {mftVisibleInParseMode ? (
+              <div className={`mt-4 rounded-3xl border p-4 ${mftIndexedDocs > 0 ? "border-mint/25 bg-mint/10" : mftStatus?.status === "tooling_missing" ? "border-warning/40 bg-warning/10" : "border-accent/30 bg-accent/10"}`}>
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">NTFS / MFT</p>
+                    <h4 className="mt-1 text-base font-semibold text-ink">
+                      {mftIndexedDocs > 0 ? `MFT indexed · ${mftIndexedDocs.toLocaleString()} docs` : mftIsIndexing ? "MFT indexing in progress" : mftStatus?.status === "tooling_missing" ? "MFT detected · tooling missing" : "MFT detected · available on demand"}
+                    </h4>
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
+                      {mftStatus?.raw_mft_found || mftDiagnostic?.mft_present_in_evidence ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">$MFT detected{mftStatus?.raw_mft_size_bytes ? ` · ${formatBytes(mftStatus.raw_mft_size_bytes)}` : ""}</span> : null}
+                      {mftStatus?.usn_found ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">$UsnJrnl detected{mftStatus.usn_size_bytes ? ` · ${formatBytes(mftStatus.usn_size_bytes)}` : ""}</span> : null}
+                      <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">MFTECmd {mftToolAvailable ? "available" : "missing"}</span>
+                      {mftStatus?.mftecmd_output_found ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">MFTECmd output detected</span> : null}
                     </div>
-                  );
-                }
-                if (entry.id === "reports") {
-                  return (
-                    <div key={entry.id} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="font-medium text-ink">{entry.label}</p>
-                        <span className="rounded-full border border-line px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted">{entry.badge ?? entry.status}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-muted">Generates a summary from already indexed data. This does not reprocess evidence.</p>
-                      {entry.warning ? <p className="mt-2 text-xs text-accent">{entry.warning}</p> : null}
-                      {entry.disabled_reason ? <p className="mt-2 text-xs text-amber">{entry.disabled_reason}</p> : null}
-                      <div className="mt-3 flex flex-wrap items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => generateReportMutation.mutate()}
-                          disabled={reportLaunchDisabled}
-                          className="rounded-full border border-line bg-panel px-3 py-1 font-mono text-[11px] uppercase tracking-[0.14em] text-ink disabled:opacity-60"
-                        >
-                          {generateReportMutation.isPending ? "Generating..." : activeEvidenceReport ? "Report in progress" : "Generate summary"}
-                        </button>
-                        {latestEvidenceReport ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => void handleDownloadReport(latestEvidenceReport.id, (latestEvidenceReport.format as "json" | "markdown" | "html" | undefined) ?? "markdown")}
-                              className="rounded-full border border-line bg-transparent px-3 py-1 font-mono text-[11px] uppercase tracking-[0.14em] text-muted transition hover:border-accent hover:text-ink"
-                            >
-                              Download
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleDownloadReport(latestEvidenceReport.id, "json")}
-                              className="rounded-full border border-line bg-transparent px-3 py-1 font-mono text-[11px] uppercase tracking-[0.14em] text-muted transition hover:border-accent hover:text-ink"
-                            >
-                              Download JSON
-                            </button>
-                          </>
-                        ) : null}
-                        {reportsWorkspaceHref !== "#" ? (
-                          <Link to={reportsWorkspaceHref} className="rounded-full border border-line bg-transparent px-3 py-1 font-mono text-[11px] uppercase tracking-[0.14em] text-muted transition hover:border-accent hover:text-ink">
-                            Open reports workspace
-                          </Link>
-                        ) : null}
-                      </div>
-                      {latestEvidenceReport ? (
-                        <div className="mt-3 rounded-2xl border border-line bg-panel/60 px-3 py-3 text-xs text-muted">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <p className="font-mono uppercase tracking-[0.14em] text-muted">Latest report</p>
-                            <span className="rounded-full border border-line px-2 py-0.5 font-mono uppercase tracking-[0.14em] text-muted">
-                              {formatReportStatus(latestEvidenceReport.status)}
-                            </span>
-                          </div>
-                          <div className="mt-2 grid gap-2 md:grid-cols-2">
-                            <p>Report ID: <span className="text-ink">{latestEvidenceReport.id}</span></p>
-                            <p>Format: <span className="text-ink">{latestEvidenceReport.format ?? "markdown"}</span></p>
-                            <p>Type: <span className="text-ink">{latestEvidenceReport.report_type ?? "summary"}</span></p>
-                            <p>Size: <span className="text-ink">{latestEvidenceReport.size_bytes ?? 0} bytes</span></p>
-                          </div>
-                          {Array.isArray(latestEvidenceReport.metadata_json?.warnings) && latestEvidenceReport.metadata_json?.warnings.length ? (
-                            <p className="mt-2 text-amber">{String((latestEvidenceReport.metadata_json?.warnings as unknown[]).join(" | "))}</p>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <p className="mt-3 text-xs text-muted">No on-demand reports yet. Reports summarize indexed data and remain separate from the ingest path.</p>
-                      )}
-                    </div>
-                  );
-                }
-              })}
-            </div>
-            <div className="mt-6 rounded-2xl border border-amber/20 bg-amber/5 p-4">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div>
-                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-amber">Advanced / Beta</p>
-                  <p className="mt-1 text-sm text-muted">Potentially slower, noisier or debugging-oriented paths. These do not run automatically from usable_search.</p>
-                </div>
-                <span className="rounded-full border border-amber/30 bg-amber/10 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-amber">Use only when needed</span>
-              </div>
-              <div className="mt-4 space-y-3">
-                {advancedEntries.map((entry) => {
-                  const href = entry.case_route || entry.evidence_route || "#";
-                  const actionable = entry.status !== "disabled" && href !== "#";
-                  const content = (
-                    <>
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="font-medium text-ink">{entry.label}</p>
-                        <span className="rounded-full border border-line px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-muted">{entry.badge ?? entry.status}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-muted">{entry.description}</p>
-                      {entry.warning ? <p className="mt-2 text-xs text-amber">{entry.warning}</p> : null}
-                      {entry.disabled_reason ? <p className="mt-2 text-xs text-amber">{entry.disabled_reason}</p> : null}
-                    </>
-                  );
-                  return actionable ? (
-                    <Link key={entry.id} to={href} className="block rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm transition hover:border-amber hover:text-ink">
-                      {content}
-                    </Link>
-                  ) : (
-                    <div key={entry.id} className="rounded-2xl border border-line bg-abyss/40 px-4 py-3 text-sm opacity-80">
-                      {content}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-3 rounded-3xl border border-line bg-panel/60 p-4 text-sm text-muted">
-          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Storage mode</p>
-              <p className="mt-1 text-ink">{storageMode}</p>
-            </div>
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">External</p>
-              <p className="mt-1 text-ink">{String(data?.is_external ?? false)}</p>
-            </div>
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Copy to storage</p>
-              <p className="mt-1 text-ink">{String(data?.copy_to_storage ?? true)}</p>
-            </div>
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">File count</p>
-              <p className="mt-1 text-ink">{data?.file_count ?? "-"}</p>
-            </div>
-          </div>
-          <div className="mt-3 grid gap-3 xl:grid-cols-2">
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Original path</p>
-              <p className="mt-1 break-all text-ink">{originalPath}</p>
-            </div>
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Storage path</p>
-              <p className="mt-1 break-all text-ink">{storagePath}</p>
-            </div>
-          </div>
-        </div>
-
-        <div className="mt-3 rounded-3xl border border-line bg-panel/60 p-4 text-sm text-muted">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Ingest plan</p>
-              <p className="mt-1 text-sm text-muted">
-                {lastSuccessfulIngestPlan
-                  ? "Reprocess reuses this stored parser selection by default."
-                  : "No ingest plan is stored for this evidence yet."}
-              </p>
-            </div>
-            {lastSuccessfulIngestPlan ? (
-              <span className="rounded-full border border-line px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">
-                {String(lastSuccessfulIngestPlan.discovery_mode ?? "previous_selection")}
-              </span>
-            ) : null}
-          </div>
-          {lastSuccessfulIngestPlan ? (
-            <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-              <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Last successful selected</p>
-                <p className="mt-1 text-sm text-ink">{Array.isArray(lastSuccessfulIngestPlan.selected_candidates) ? lastSuccessfulIngestPlan.selected_candidates.length : 0}</p>
-              </div>
-              <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Disabled candidates</p>
-                <p className="mt-1 text-sm text-ink">{Array.isArray(lastSuccessfulIngestPlan.disabled_candidates) ? lastSuccessfulIngestPlan.disabled_candidates.length : 0}</p>
-              </div>
-              <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Last run summary</p>
-                <p className="mt-1 text-sm text-ink">{String((lastSuccessfulIngestPlan.last_reprocess_summary as { parsed_candidates?: number } | undefined)?.parsed_candidates ?? "-")} parsed</p>
-              </div>
-              <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Updated</p>
-                <p className="mt-1 text-sm text-ink">{typeof lastSuccessfulIngestPlan.updated_at === "string" ? lastSuccessfulIngestPlan.updated_at : "-"}</p>
-              </div>
-            </div>
-          ) : null}
-        </div>
-
-        <div className="mt-5 rounded-3xl border border-line bg-abyss/70 p-4">
-          {!activeIndexingJob ? (
-            <>
-          <div className="mb-3 flex items-center justify-between gap-4">
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Progress</p>
-              <p className="mt-1 text-sm text-muted">Current phase: {currentPhase}</p>
-              {showExtractingSelected ? <p className="mt-1 text-xs text-muted">Preparing selected artifacts before parser workers start.</p> : null}
-              {currentItem ? <p className="mt-1 max-w-[720px] truncate text-xs text-muted" title={currentItem}>Current item: {currentItem}</p> : null}
-              {currentSelectedPath ? <p className="mt-1 max-w-[720px] truncate text-xs text-muted" title={currentSelectedPath}>Current selected file: {currentSelectedPath}</p> : null}
-              {currentAction ? <p className="mt-1 text-xs text-muted">Current action: {currentAction}</p> : null}
-              {effectiveCurrentArtifactPath ? <p className="mt-1 max-w-[720px] truncate text-xs text-muted" title={effectiveCurrentArtifactPath}>Current artifact: {effectiveCurrentArtifactPath}</p> : null}
-              {effectiveCurrentArtifactLabel ? <p className="mt-1 text-xs text-muted">Current artifact progress: {effectiveCurrentArtifactLabel}</p> : null}
-              {parallelIngest ? (
-                <p className="mt-1 text-xs text-muted">
-                  Parallel artifact ingest {parallelIngest.enabled ? "enabled" : "disabled"} · effective parallelism {parallelIngest.effective_parallelism ?? 1}
-                  {parallelIngest.limitation_reason ? ` · ${parallelIngest.limitation_reason}` : ""}
-                </p>
-              ) : null}
-              {showMissingProgressWarning ? (
-                <p className="mt-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-                  Worker heartbeat is alive but progress metadata is missing. The job may still be running, but the backend is not reporting artifact progress correctly yet.
-                </p>
-              ) : null}
-              {showExtractionStallWarning ? (
-                <p className="mt-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-                  No extraction progress detected yet. The worker is still preparing selected artifacts before parsing can start.
-                </p>
-              ) : null}
-            </div>
-            <p className="font-mono text-lg text-ink">{progressPct}%</p>
-          </div>
-          <div className="h-3 overflow-hidden rounded-full bg-panel">
-            <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${progressPct}%` }} />
-          </div>
-          <div className="mt-3 grid gap-3 md:grid-cols-3 xl:grid-cols-8">
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifacts</p><p className="mt-1 text-sm text-ink">{String(artifactsDone)} / {String(data?.metadata_json?.artifacts_total ?? 0)}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Indexed events</p><p className="mt-1 text-sm text-ink">{String(data?.metadata_json?.events_indexed ?? manifest?.stats?.indexed_events ?? 0)}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Records/sec</p><p className="mt-1 text-sm text-ink">{String(data?.metadata_json?.records_per_second ?? "-")}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Current artifact records</p><p className="mt-1 text-sm text-ink">{currentArtifactRecordsRead ?? "-"}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Current indexed</p><p className="mt-1 text-sm text-ink">{currentArtifactRecordsIndexed ?? "-"}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Elapsed</p><p className="mt-1 text-sm text-ink">{formatDuration(displayedElapsedSeconds)}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Heartbeat age</p><p className="mt-1 text-sm text-ink">{formatHeartbeatAge(heartbeatAt)}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifacts failed</p><p className="mt-1 text-sm text-ink">{artifactsFailed}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Raw not parsed</p><p className="mt-1 text-sm text-ink">{String(data?.metadata_json?.raw_artifacts_not_parsed ?? manifest?.stats?.raw_artifacts_not_parsed ?? 0)}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Detected host</p><p className="mt-1 text-sm text-ink">{data?.detected_host ?? "-"}</p></div>
-            {parallelIngest ? <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Effective parallelism</p><p className="mt-1 text-sm text-ink">{parallelIngest.effective_parallelism ?? 1} / {parallelIngest.desired_parallelism ?? parallelIngest.effective_parallelism ?? 1}</p></div> : null}
-            {parallelIngest ? <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Running artifact types</p><p className="mt-1 text-sm text-ink">{(parallelIngest.running_artifact_types ?? []).filter(Boolean).join(", ") || "-"}</p></div> : null}
-            {parallelIngest ? <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Queued parallel</p><p className="mt-1 text-sm text-ink">{parallelIngest.queued_artifacts ?? 0}</p></div> : null}
-            {parallelIngest ? <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Bottleneck</p><p className="mt-1 text-sm text-ink">{parallelIngest.bottleneck ?? "-"}</p></div> : null}
-            {showExtractingSelected ? <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Selected files</p><p className="mt-1 text-sm text-ink">{selectedFilesProcessed ?? "-"} / {selectedFilesTotal ?? "-"}</p></div> : null}
-            {showExtractingSelected ? <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Extraction rate</p><p className="mt-1 text-sm text-ink">{extractionRateFiles !== null ? `${extractionRateFiles} files/s` : "-"}</p></div> : null}
-            {showExtractingSelected ? <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Transfer rate</p><p className="mt-1 text-sm text-ink">{extractionRateMb !== null ? `${extractionRateMb} MB/s` : "-"}</p></div> : null}
-            {showExtractingSelected ? <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Staging reuse</p><p className="mt-1 text-sm text-ink">{filesSkippedExisting ?? 0} reused / {filesMaterialized ?? 0} ready</p></div> : null}
-            {showExtractingSelected ? <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Extraction errors</p><p className="mt-1 text-sm text-ink">{extractionErrors ?? 0}</p></div> : null}
-          </div>
-            </>
-          ) : (
-            <div className="rounded-2xl border border-line bg-panel/30 px-3 py-3 text-sm text-muted">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Worker diagnostics</p>
-              <p className="mt-1">Detailed scheduler, long-tail and extraction diagnostics are shown here without repeating the live progress summary.</p>
-              {parallelIngest ? (
-                <p className="mt-1">
-                  Effective parallelism {parallelIngest.effective_parallelism ?? 1} / {parallelIngest.desired_parallelism ?? parallelIngest.effective_parallelism ?? 1}
-                  {typeof parallelIngest.queued_artifacts === "number" ? ` · Queued parallel ${parallelIngest.queued_artifacts}` : ""}
-                  {parallelIngest.bottleneck ? ` · Bottleneck ${parallelIngest.bottleneck}` : ""}
-                </p>
-              ) : null}
-              {showExtractingSelected ? (
-                <p className="mt-1">
-                  Selected files {selectedFilesProcessed ?? "-"} / {selectedFilesTotal ?? "-"}
-                  {extractionRateFiles !== null ? ` · ${extractionRateFiles} files/s` : ""}
-                  {extractionRateMb !== null ? ` · ${extractionRateMb} MB/s` : ""}
-                  {filesSkippedExisting !== null || filesMaterialized !== null ? ` · ${filesSkippedExisting ?? 0} reused / ${filesMaterialized ?? 0} ready` : ""}
-                </p>
-              ) : null}
-            </div>
-          )}
-          {parallelIngest ? (
-            <div className="mt-3 rounded-2xl border border-line bg-panel/30 px-3 py-3 text-sm text-muted">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Artifact Scheduler</p>
-              <p className="mt-1">Parallel-safe queue: {Object.entries(parallelIngest.artifacts_parallelized_by_type ?? {}).map(([key, value]) => `${key} (${value})`).join(", ") || "None"}</p>
-              <p className="mt-1">Sequential safety fallback: {Object.entries(parallelIngest.artifacts_sequential_by_type ?? {}).map(([key, value]) => `${key} (${value})`).join(", ") || "None"}</p>
-            </div>
-          ) : null}
-          {hasLongTail ? (
-            <div className="mt-3 rounded-2xl border border-line bg-panel/30 px-3 py-3 text-sm text-muted">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Long-tail artifacts still processing</p>
-              <p className="mt-1">
-                Running {longTailSummary?.running_count ?? tailArtifactsRunning} · queued {longTailSummary?.queued_count ?? tailArtifactsQueued} · remaining {longTailSummary?.tail_artifacts_total ?? tailArtifactsTotal}
-                {tailLastProgressAt ? ` · last progress ${formatHeartbeatAge(tailLastProgressAt)} ago` : ""}
-              </p>
-              {(tailRecordsRead !== null || tailRecordsIndexed !== null) ? (
-                <p className="mt-1">Tail progress: {tailRecordsRead ?? 0} records read / {tailRecordsIndexed ?? 0} indexed</p>
-              ) : null}
-              {longTailSummary ? (
-                <p className="mt-1">
-                  High-value {longTailSummary.high_value_count} · partial indexed {longTailSummary.partial_indexed_count} · stalled {longTailSummary.stalled_count}
-                </p>
-              ) : null}
-              <div className="mt-3 space-y-2">
-                {(longTailArtifacts.length ? longTailArtifacts : tailCurrentArtifacts).slice(0, 6).map((artifact, index) => (
-                  <div key={`${String((artifact as Record<string, unknown>).artifact_id ?? (artifact as Record<string, unknown>).artifact ?? "artifact")}-${index}`} className="rounded-2xl border border-line bg-abyss/60 px-3 py-2">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <p className="break-all text-ink">{String((artifact as Record<string, unknown>).source_path ?? (artifact as Record<string, unknown>).artifact ?? "-")}</p>
-                      <div className="flex flex-wrap gap-2 text-[11px] uppercase tracking-[0.14em]">
-                        <span className="rounded-full border border-line px-2 py-0.5 text-muted">{String((artifact as Record<string, unknown>).long_tail_state ?? "active_progressing").replaceAll("_", " ")}</span>
-                        {String((artifact as Record<string, unknown>).importance ?? "") === "high" ? <span className="rounded-full border border-amber-400/40 px-2 py-0.5 text-amber-200">High value</span> : null}
-                      </div>
-                    </div>
-                    <p className="mt-1 text-xs text-muted">
-                      {String((artifact as Record<string, unknown>).parser ?? (artifact as Record<string, unknown>).artifact_type ?? "unknown")} · {Number((artifact as Record<string, unknown>).records_read ?? 0)} read / {Number((artifact as Record<string, unknown>).records_indexed ?? 0)} indexed
-                      {typeof (artifact as Record<string, unknown>).elapsed_seconds === "number" ? ` · ${Number((artifact as Record<string, unknown>).elapsed_seconds).toFixed(0)}s elapsed` : ""}
-                      {typeof (artifact as Record<string, unknown>).no_progress_seconds === "number" ? ` · ${Number((artifact as Record<string, unknown>).no_progress_seconds).toFixed(0)}s since progress` : ""}
+                    <p className="mt-2 text-sm text-muted">
+                      {mftIndexedDocs > 0
+                        ? "Filesystem metadata is searchable and available in Artifact Views."
+                        : mftToolAvailable
+                        ? "Full MFT indexing can produce many records and may take longer. Use summary for quick triage or full indexing when file-level timeline/search is needed."
+                        : "MFTECmd is required before raw MFT can be indexed."}
                     </p>
-                    {Boolean((artifact as Record<string, unknown>).partial_coverage_warning) ? <p className="mt-1 text-xs text-amber-200">Partial coverage warning: indexed events are preserved but the artifact has not completed yet.</p> : null}
-                    {Boolean((artifact as Record<string, unknown>).defer_recommended) ? <p className="mt-1 text-xs text-amber-200">Defer is recommended if you want to finish the main ingest and retry this artifact later in deep safe mode.</p> : null}
-                    {Boolean((artifact as Record<string, unknown>).artifact_id) ? (
-                      <div className="mt-2">
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    {mftIndexedDocs > 0 && data?.case_id ? (
+                      <>
+                        <Link to={`/search?q=${encodeURIComponent("$MFT")}&evidence_id=${encodeURIComponent(evidenceId)}`} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">Search MFT</Link>
+                        <Link to={`/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=mft`} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">Open MFT artifacts</Link>
+                      </>
+                    ) : null}
+                    {mftToolAvailable ? (
+                      <>
+                        <button type="button" disabled={conflictingIndexingActionsDisabled || mftIsIndexing || indexMftSummaryMutation.isPending} onClick={() => indexMftSummaryMutation.mutate()} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-60">
+                          {indexMftSummaryMutation.isPending || mftDiagnostic?.mft_summary_status === "queued" ? "Queueing summary..." : mftDiagnostic?.mft_summary_status === "running" ? "Indexing summary..." : mftIndexedDocs > 0 ? "Re-index MFT summary" : "Index MFT summary"}
+                        </button>
                         <button
                           type="button"
-                          onClick={() => deferLongTailMutation.mutate({ artifactId: String((artifact as Record<string, unknown>).artifact_id) })}
-                          disabled={deferLongTailMutation.isPending}
-                          className="rounded-xl border border-line px-3 py-1 text-xs text-ink transition hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-60"
+                          disabled={conflictingIndexingActionsDisabled || mftIsIndexing || indexMftFullMutation.isPending}
+                          onClick={() => {
+                            const message = mftIndexedDocs > 0
+                              ? "Re-index full MFT for this evidence? This replaces existing MFT docs scoped to this evidence only."
+                              : "Index full MFT for this evidence? This can add many filesystem records and may take longer than summary indexing.";
+                            if (window.confirm(message)) indexMftFullMutation.mutate();
+                          }}
+                          className="rounded-2xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm font-semibold text-warning disabled:opacity-60"
                         >
-                          Defer and finish later
+                          {indexMftFullMutation.isPending || mftDiagnostic?.mft_full_status === "queued" ? "Queueing full MFT..." : mftDiagnostic?.mft_full_status === "running" ? "Indexing full MFT..." : mftIndexedDocs > 0 ? "Re-index full MFT" : "Index full MFT"}
                         </button>
-                      </div>
+                      </>
                     ) : null}
                   </div>
+                </div>
+              </div>
+            ) : null}
+            {registryVisibleInParseMode ? (
+              <div className={`mt-4 rounded-3xl border p-4 ${registryPersistenceDocs || registryDiagnostic?.registry_docs || registryDiagnostic?.user_activity_docs ? "border-mint/25 bg-mint/10" : registryDiagnostic?.status === "tooling_missing" ? "border-warning/40 bg-warning/10" : "border-accent/30 bg-accent/10"}`}>
+                <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Registry</p>
+                    <h4 className="mt-1 text-base font-semibold text-ink">
+                      {registryPersistenceDocs
+                        ? "Registry persistence summary indexed"
+                        : registryIsIndexing
+                        ? "Registry indexing in progress"
+                        : registryDiagnostic?.status === "tooling_missing"
+                        ? "Registry hives detected · tooling missing"
+                        : "Registry hives detected · persistence summary available"}
+                    </h4>
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted">
+                      <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">{registryDiagnostic?.hive_count ?? 0} hives</span>
+                      {registryHiveList.slice(0, 6).map((hive, index) => (
+                        <span key={`${hive.name ?? hive.hive ?? index}`} className="rounded-full border border-line bg-abyss/60 px-2 py-1">{hive.name ?? hive.hive}{hive.size_bytes || hive.size ? ` · ${formatBytes(Number(hive.size_bytes ?? hive.size))}` : ""}</span>
+                      ))}
+                      <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Persistence summary: {registryPersistenceDocs ? `${registryPersistenceDocs.toLocaleString()} docs` : registrySummaryStatus.replaceAll("_", " ")}</span>
+                      <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Modification events: {registryEventDocs ? `${registryEventDocs.toLocaleString()} observed` : registryModificationStatus.replaceAll("_", " ")}</span>
+                      <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Registry commands: {registryCommandEvidenceCount.toLocaleString()}</span>
+                      <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Full hive: {registryDiagnostic?.registry_status?.full_hive_status?.replaceAll("_", " ") ?? "available on demand"}</span>
+                      {registryDiagnostic?.sysmon_registry_events ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Sysmon registry events: {registryDiagnostic.sysmon_registry_events.toLocaleString()}</span> : null}
+                      {registryDiagnostic?.security_4657_events ? <span className="rounded-full border border-line bg-abyss/60 px-2 py-1">Security 4657: {registryDiagnostic.security_4657_events.toLocaleString()}</span> : null}
+                    </div>
+                    <p className="mt-2 text-sm text-muted">
+                      {registryPersistenceDocs
+                        ? "Common autorun, service, Winlogon, IFEO, Defender and RDP registry persistence/configuration keys are indexed with LastWrite semantics."
+                        : registryDiagnostic?.tool_available
+                        ? "Extracts common persistence and configuration keys from registry hives without indexing the full registry. LastWrite is shown as key LastWrite, not a value modification event."
+                        : "The python-registry backend is required before registry hives can be parsed on demand."}
+                    </p>
+                    <p className="mt-2 text-xs text-muted">
+                      {registryEventDocs
+                        ? "Registry modification events are observed telemetry from Sysmon/Security logs."
+                        : "Registry modification events were not present in the collected event logs. Registry persistence LastWrite remains separate from observed modifications."}
+                    </p>
+                    {registryDiagnostic?.coverage_gaps?.length ? <p className="mt-2 text-xs text-muted">Coverage: {registryDiagnostic.coverage_gaps.join(", ")}</p> : null}
+                  </div>
+                  <div className="flex shrink-0 flex-wrap gap-2">
+                    {registryPersistenceDocs ? (
+                      <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=registry_persistence` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
+                        Open Registry Persistence
+                      </Link>
+                    ) : null}
+                    {registryEventDocs ? (
+                      <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=registry_event` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
+                        Open Registry Events
+                      </Link>
+                    ) : null}
+                    {registryCommandEvidenceCount ? (
+                      <Link to={data?.case_id ? `/cases/${data.case_id}/artifacts?evidence_id=${encodeURIComponent(evidenceId)}&artifact_type=registry_command` : "#"} className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink">
+                        Open Registry Commands
+                      </Link>
+                    ) : null}
+                    {registryDiagnostic?.tool_available ? (
+                      <button
+                        type="button"
+                        disabled={conflictingIndexingActionsDisabled || registryIsIndexing || indexRegistryPersistenceSummaryMutation.isPending}
+                        onClick={() => {
+                          const message = registryPersistenceDocs
+                            ? "Rebuild registry persistence summary? This replaces existing registry_persistence docs scoped to this evidence only."
+                            : "Index registry persistence summary? This is scoped to common persistence/configuration keys and does not index full hives.";
+                          if (window.confirm(message)) indexRegistryPersistenceSummaryMutation.mutate();
+                        }}
+                        className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-60"
+                      >
+                        {indexRegistryPersistenceSummaryMutation.isPending || registrySummaryStatus === "queued" ? "Queueing summary..." : registrySummaryStatus === "running" || registrySummaryStatus === "indexing" ? "Indexing summary..." : registryPersistenceDocs ? "Re-index persistence summary" : "Index registry persistence summary"}
+                      </button>
+                    ) : null}
+                    {registryDiagnostic?.tool_available ? (
+                      <button
+                        type="button"
+                        disabled={conflictingIndexingActionsDisabled || registryIsIndexing || indexRecmdUserActivityMutation.isPending}
+                        onClick={() => {
+                          const message = registryDiagnostic?.user_activity_docs
+                            ? "Rebuild registry user activity with RECmd? This replaces existing user activity docs scoped to this evidence."
+                            : "Index registry user activity with RECmd? This is scoped to selected user activity registry artifacts, not full hive expansion.";
+                          if (window.confirm(message)) indexRecmdUserActivityMutation.mutate();
+                        }}
+                        className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent disabled:opacity-60"
+                      >
+                        {indexRecmdUserActivityMutation.isPending || registryDiagnostic?.user_activity_status === "queued" ? "Queueing registry..." : registryDiagnostic?.user_activity_status === "running" ? "Indexing registry..." : registryDiagnostic?.user_activity_docs ? "Rebuild registry user activity" : "Index registry user activity"}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+            <details className="mt-4 rounded-2xl border border-line bg-panel/40 p-3">
+              <summary className="cursor-pointer text-sm font-semibold text-muted">Advanced custom</summary>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button type="button" onClick={selectAllSupported} disabled={!selectedIndexingAvailable || selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Select all supported</button>
+                <button type="button" onClick={clearSelection} disabled={!selectedIndexingAvailable || selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">Clear selection</button>
+                {platformQuickSelects.map((quickSelect) => (
+                  <button key={quickSelect.id} type="button" onClick={() => selectCategories(quickSelect.category_ids)} disabled={selectedIndexingLocked} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted disabled:opacity-50">{quickSelect.label}</button>
                 ))}
               </div>
-            </div>
-          ) : null}
-          {(isActive || selectionPending) && (etaSeconds !== null || discoveryFilesScanned !== null || discoveryCandidatesDetected !== null || totalZipEntries !== null || selectedFilesTotal !== null) ? (
-            <div className="mt-3 grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-              <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">ETA</p>
-                <p className="mt-1 text-sm text-ink">{formatDuration(etaSeconds)}</p>
-              </div>
-              <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Total ZIP entries</p>
-                <p className="mt-1 text-sm text-ink">{totalZipEntries ?? "-"}</p>
-              </div>
-              <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Ignored entries</p>
-                <p className="mt-1 text-sm text-ink">{ignoredEntries ?? "-"}</p>
-              </div>
-              <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Files scanned</p>
-                <p className="mt-1 text-sm text-ink">
-                  {discoveryFilesScanned !== null ? `${discoveryFilesScanned}` : "-"}
-                  {discoveryTotalFiles !== null ? ` / ${discoveryTotalFiles}` : ""}
-                </p>
-              </div>
-              <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Candidates detected</p>
-                <p className="mt-1 text-sm text-ink">{discoveryCandidatesDetected ?? "-"}</p>
-              </div>
-              <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Selected files to extract</p>
-                <p className="mt-1 text-sm text-ink">{selectedFilesTotal ?? candidateFiles ?? "-"}</p>
-              </div>
-              <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Extracted selected files</p>
-                <p className="mt-1 text-sm text-ink">{selectedFilesExtracted ?? "-"}</p>
-              </div>
-            </div>
-          ) : null}
-        </div>
+            </details>
           </div>
-        </details>
+        </div>
       </section>
 
-      <section id="jobs-activity" className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      <section id="indexing-progress" data-testid="evidence-progress-primary" className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
           <div>
-            <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Ingest &amp; Reprocess Runs</p>
-            <p className="mt-1 text-sm text-muted">Track ingest, reprocess and artifact retry execution with status, phase, heartbeat and recent errors.</p>
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">{terminalProcessingResult ? "Processing result" : "Processing progress"}</p>
+            <h3 className="mt-2 text-2xl font-semibold text-ink">{progressTitle}</h3>
+            {terminalProcessingResult ? (
+              <p className="mt-1 text-sm text-muted">
+                {finalProcessingStatus}
+                {latestRetryRun && latestRetryRecoveredCount > 0 ? ` · ${latestRetryRecoveredCount} failed artifact${latestRetryRecoveredCount === 1 ? " was" : "s were"} recovered by retry.` : ""}
+                {realFailureCount === 0 && retryCandidateIds.length === 0 ? " No retryable failures remain." : ""}
+              </p>
+            ) : (
+              <>
+                <p className="mt-1 text-sm text-muted">Current step: {retryActive ? String(latestRetryRun?.status ?? "retry") : formatIndexingPhaseForDisplay(displayCounts.phase)}</p>
+                {progressCurrentArtifact ? <p className="mt-1 max-w-3xl truncate text-sm text-muted" title={progressCurrentArtifact}>Current artifact: {progressCurrentArtifact}</p> : null}
+              </>
+            )}
           </div>
-          {latestStartedRunId ? <p className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Latest requested run {latestStartedRunId}</p> : null}
+          {!terminalProcessingResult ? (
+            <div className="rounded-3xl border border-accent/30 bg-accent/10 px-6 py-4 text-right">
+              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Progress</p>
+              <p className="mt-1 text-4xl font-semibold text-ink">{progressPercent}%</p>
+            </div>
+          ) : null}
         </div>
-        {latestRun ? (
-          <div className="mt-4 rounded-2xl border border-line bg-abyss/70 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{latestRun.run_type} · {latestRun.mode ?? "default"}</p>
-                <p className="mt-1 text-sm font-semibold text-ink">{latestRun.run_id}</p>
-              </div>
-              <span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${latestRun.status === "completed" ? "border-mint/30 bg-mint/10 text-mint" : latestRun.status === "completed_with_errors" ? "border-amber/30 bg-amber/10 text-amber" : latestRun.status === "failed" ? "border-danger/30 bg-danger/10 text-danger" : "border-accent/30 bg-accent/10 text-accent"}`}>{latestRun.status}</span>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-4">
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Phase</p><p className="mt-1 text-sm text-ink">{latestRun.phase ?? "-"}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Progress</p><p className="mt-1 text-sm text-ink">{typeof latestRun.progress === "number" ? `${latestRun.progress}%` : "-"}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Heartbeat</p><p className="mt-1 text-sm text-ink">{formatHeartbeatAge(latestRun.heartbeat_at ?? null)}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Elapsed</p><p className="mt-1 text-sm text-ink">{formatDuration(latestRun.elapsed_seconds ?? null)}</p></div>
-            </div>
-            <div className="mt-3 grid gap-3 md:grid-cols-3">
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Current artifact</p><p className="mt-1 break-all text-sm text-ink">{latestRun.current_artifact ?? "-"}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Records</p><p className="mt-1 text-sm text-ink">{latestRun.records_read ?? 0} read / {latestRun.records_indexed ?? 0} indexed</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifacts</p><p className="mt-1 text-sm text-ink">{latestRun.artifacts_done ?? 0} / {latestRun.artifacts_total ?? 0} done · {latestRun.artifacts_failed ?? 0} failed</p></div>
-            </div>
-            {timeoutRunSummary ? <p className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-sm text-amber">{timeoutRunSummary}</p> : latestRun.last_error ? <p className="mt-3 rounded-2xl border border-danger/30 bg-danger/10 p-3 text-sm text-danger">{latestRun.last_error}</p> : null}
-            {timeoutRunSummary && indexedEventsCoherent ? <p className="mt-3 text-sm text-mint">Indexed events are coherent with OpenSearch.</p> : null}
-            {latestRun.status === "completed_with_errors" ? <p className="mt-3 text-sm text-amber">This run completed with errors. Review Problematic artifacts for retryable failures.</p> : null}
-          </div>
-        ) : (
-          <div className="mt-4 rounded-2xl border border-line bg-abyss/70 p-4 text-sm text-muted">No ingest or reprocess runs recorded yet.</div>
-        )}
-        {evidenceRuns.length > 1 ? (
-          <div className="mt-4 overflow-x-auto rounded-3xl border border-line">
-            <table className="min-w-full divide-y divide-line text-sm">
-              <thead className="bg-abyss/70">
-                <tr className="text-left text-xs uppercase tracking-[0.16em] text-muted">
-                  <th className="px-3 py-3">Run</th>
-                  <th className="px-3 py-3">Type</th>
-                  <th className="px-3 py-3">Status</th>
-                  <th className="px-3 py-3">Phase</th>
-                  <th className="px-3 py-3">Artifacts</th>
-                  <th className="px-3 py-3">Records</th>
-                  <th className="px-3 py-3">Elapsed</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-line">
-                {evidenceRuns.map((run) => (
-                  <tr key={run.run_id} className="bg-panel/40">
-                    <td className="px-3 py-3 font-mono text-xs text-ink">{run.run_id}</td>
-                    <td className="px-3 py-3 text-muted">{run.run_type} {run.mode ? `· ${run.mode}` : ""}</td>
-                    <td className="px-3 py-3 text-muted">{run.status}</td>
-                    <td className="px-3 py-3 text-muted">{run.phase ?? "-"}</td>
-                    <td className="px-3 py-3 text-muted">{run.artifacts_done ?? 0} / {run.artifacts_total ?? 0}</td>
-                    <td className="px-3 py-3 text-muted">{run.records_read ?? 0} / {run.records_indexed ?? 0}</td>
-                    <td className="px-3 py-3 text-muted">{formatDuration(run.elapsed_seconds ?? null)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="mt-5 grid gap-3 md:grid-cols-3 xl:grid-cols-7">
+          <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifacts</p><p className="mt-1 text-sm text-ink">{progressArtifactsDone} / {progressArtifactsTotal}</p></div>
+          {!terminalProcessingResult || latestRetryRun ? <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{retryActive || terminalProcessingResult ? "Retry records read" : "Records read"}</p><p className="mt-1 text-sm text-ink">{progressRecordsRead.toLocaleString()}</p></div> : null}
+          {!terminalProcessingResult || latestRetryRun ? <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{retryActive || terminalProcessingResult ? "Retry records indexed" : "Records indexed"}</p><p className="mt-1 text-sm text-ink">{progressRecordsIndexed.toLocaleString()}</p></div> : null}
+          <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Indexed docs</p><p className="mt-1 text-sm text-ink">{displayCounts.indexedDocs.toLocaleString()}</p></div>
+          <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Elapsed</p><p className="mt-1 text-sm text-ink">{formatDuration(retryActive ? latestRetryRun?.elapsed_seconds : displayedElapsedSeconds)}</p></div>
+          {!terminalProcessingResult ? <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Heartbeat</p><p className="mt-1 text-sm text-ink">{retryActive ? formatHeartbeatAge(latestRetryRun?.heartbeat_at ?? null) : lastProgressAgeLabel}</p></div> : null}
+          <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{terminalProcessingResult ? "Last run" : "Run ID"}</p><p className="mt-1 truncate text-sm text-ink" title={retryActive ? latestRetryRun?.run_id : latestRun?.run_id}>{retryActive ? latestRetryRun?.run_id ?? "-" : latestRetryRun?.run_id ?? latestRun?.run_id ?? "-"}</p></div>
+          {terminalProcessingResult ? <div className="rounded-2xl border border-line bg-abyss/60 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Recovered by retry</p><p className="mt-1 text-sm text-mint">{latestRetryRecoveredCount}</p></div> : null}
+        </div>
+        {latestRetryRun ? (
+          <div className="mt-4 rounded-2xl border border-line bg-abyss/60 px-4 py-3 text-sm text-muted">
+            <p className="font-semibold text-ink">{retryActive ? "Retry in progress" : latestRetryRecoveredCount > 0 && latestRetryStillFailedCount === 0 ? "Retry completed successfully" : "Latest retry outcome"}</p>
+            <p className="mt-1">
+              Recovered {latestRetryRecoveredCount} · Still failing {latestRetryStillFailedCount} · Skipped {latestRetrySkippedCount}
+            </p>
+            {retryRunData.final_message ? <p className="mt-1 text-muted">{retryRunData.final_message}</p> : latestRetryRecoveredCount === 0 && latestRetryStillFailedCount === 0 ? <p className="mt-1 text-muted">No retryable failures remain.</p> : null}
           </div>
         ) : null}
       </section>
 
-      {benchmarkToolsEnabled ? (
-      <details className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-        <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.18em] text-accent">Benchmark &amp; tuning · Developer/Performance</summary>
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+      <section id="problematic-artifacts" className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
           <div>
-            <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Benchmark &amp; Tuning · Advanced/Beta</p>
-            <p className="mt-1 text-sm text-muted">Advanced module for test or demo evidence. This is not part of the recommended ingest path.</p>
-            <p className="mt-2 text-xs text-amber">Benchmark reprocesses evidence and may reconcile indexed events. Use test/demo evidence if you do not want to alter investigation state.</p>
-            <p className="mt-1 text-xs text-muted">Rules and detections are skipped by default for benchmark runs to reduce analyst-facing side effects.</p>
-            <label className="mt-3 flex items-center gap-2 text-xs text-muted">
-              <input type="checkbox" checked={benchmarkAutopilot} onChange={(event) => setBenchmarkAutopilot(event.target.checked)} />
-              <span>Run with autopilot</span>
-            </label>
-            <div className="mt-2 grid gap-2 md:grid-cols-4">
-              <label className="text-xs text-muted">
-                <span className="block font-mono uppercase tracking-[0.14em] text-[10px]">Max attempts</span>
-                <input type="number" min={1} max={5} value={benchmarkMaxAttempts} onChange={(event) => setBenchmarkMaxAttempts(Number(event.target.value) || 1)} className="mt-1 w-full rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm text-ink" />
-              </label>
-              <label className="text-xs text-muted">
-                <span className="block font-mono uppercase tracking-[0.14em] text-[10px]">Max wall time</span>
-                <input type="number" min={300} step={60} value={benchmarkMaxWallTimeSeconds} onChange={(event) => setBenchmarkMaxWallTimeSeconds(Number(event.target.value) || 300)} className="mt-1 w-full rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm text-ink" />
-              </label>
-              <label className="text-xs text-muted">
-                <span className="block font-mono uppercase tracking-[0.14em] text-[10px]">No progress timeout</span>
-                <input type="number" min={60} step={30} value={benchmarkNoProgressTimeoutSeconds} onChange={(event) => setBenchmarkNoProgressTimeoutSeconds(Number(event.target.value) || 60)} className="mt-1 w-full rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm text-ink" />
-              </label>
-              <label className="text-xs text-muted">
-                <span className="block font-mono uppercase tracking-[0.14em] text-[10px]">Heartbeat timeout</span>
-                <input type="number" min={60} step={30} value={benchmarkHeartbeatTimeoutSeconds} onChange={(event) => setBenchmarkHeartbeatTimeoutSeconds(Number(event.target.value) || 60)} className="mt-1 w-full rounded-xl border border-line bg-abyss/70 px-2 py-1 text-sm text-ink" />
-              </label>
-            </div>
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Real failures / retry</p>
+            <h3 className="mt-2 text-2xl font-semibold text-ink">{realFailureCount ? `${realFailureCount} parser failure${realFailureCount === 1 ? "" : "s"} need attention` : "No real parser failures"}</h3>
+            {skippedEmptyCount ? <p className="mt-1 text-sm text-muted">{skippedEmptyCount} empty/no-record logs skipped. These are informational and hidden from the main failures list.</p> : null}
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => benchmarkMutation.mutate({ profile: "safe", label: "baseline-safe" })}
-              disabled={benchmarkLaunchDisabled}
-              className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50"
-            >
-              Run safe baseline
+          {retryCandidateIds.length ? (
+            <button type="button" onClick={() => retryProblematicArtifactsMutation.mutate({ artifactIds: retryCandidateIds, mode: "higher_timeout" })} disabled={activeIndexingJob || retryProblematicArtifactsMutation.isPending} className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss disabled:opacity-50">
+              {retryProblematicArtifactsMutation.isPending ? `Retrying ${retryCandidateIds.length} failed artifacts` : "Retry failed artifacts"}
             </button>
-            <button
-              onClick={() => benchmarkMutation.mutate({ profile: "performance", label: "benchmark-performance" })}
-              disabled={benchmarkLaunchDisabled}
-              className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50"
-            >
-              Run performance benchmark
-            </button>
-            <button
-              onClick={() => benchmarkMutation.mutate({ profile: "max", label: "benchmark-max" })}
-              disabled={benchmarkLaunchDisabled}
-              className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50"
-            >
-              Run max benchmark
-            </button>
-            <button
-              onClick={() => benchmarkCompareMutation.mutate(compareableBenchmarks.map((item) => item.benchmark_id))}
-              disabled={compareableBenchmarks.length < 2 || benchmarkCompareMutation.isPending}
-              className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50"
-            >
-              Compare benchmarks
-            </button>
-          </div>
+          ) : null}
         </div>
-        {latestBenchmark ? (
-          <div className="mt-4 rounded-2xl border border-line bg-abyss/70 p-4">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{latestBenchmark.profile} · {latestBenchmark.mode}</p>
-                <p className="mt-1 text-sm font-semibold text-ink">{latestBenchmark.label ?? latestBenchmark.benchmark_id}</p>
-              </div>
-              <span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${latestBenchmark.status === "completed" ? "border-mint/30 bg-mint/10 text-mint" : latestBenchmark.status === "completed_with_errors" ? "border-amber/30 bg-amber/10 text-amber" : latestBenchmark.status === "failed" ? "border-danger/30 bg-danger/10 text-danger" : "border-accent/30 bg-accent/10 text-accent"}`}>{latestBenchmark.status}</span>
-            </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-4">
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Duration</p><p className="mt-1 text-sm text-ink">{formatDuration(latestBenchmark.total_duration_seconds ?? null)}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Records/sec</p><p className="mt-1 text-sm text-ink">{latestBenchmark.records_per_sec ?? 0}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifacts/sec</p><p className="mt-1 text-sm text-ink">{latestBenchmark.artifacts_per_sec ?? 0}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Effective parallelism</p><p className="mt-1 text-sm text-ink">{latestBenchmark.effective_parallelism ?? "-"}</p></div>
-            </div>
-            <div className="mt-3 grid gap-3 md:grid-cols-3">
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Phase</p><p className="mt-1 text-sm text-ink">{latestBenchmark.phase ?? "-"}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Current action</p><p className="mt-1 text-sm text-ink">{latestBenchmark.current_action ?? "-"}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Last progress</p><p className="mt-1 text-sm text-ink">{latestBenchmark.last_progress_at ? `${formatHeartbeatAge(latestBenchmark.last_progress_at)} ago` : "-"}</p></div>
-            </div>
-            <div className="mt-3 grid gap-3 md:grid-cols-4">
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Watchdog</p><p className="mt-1 text-sm text-ink">{latestBenchmark.watchdog_status ?? (latestBenchmark.autopilot_enabled ? "healthy" : "disabled")}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Attempt</p><p className="mt-1 text-sm text-ink">{latestBenchmark.current_attempt ?? 1}/{Math.max(latestBenchmarkAttempts.length, latestBenchmark.current_attempt ?? 1, 1)}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Last watchdog check</p><p className="mt-1 text-sm text-ink">{latestBenchmark.last_watchdog_check_at ? `${formatHeartbeatAge(latestBenchmark.last_watchdog_check_at)} ago` : "-"}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Last action</p><p className="mt-1 text-sm text-ink">{typeof latestWatchdogAction?.action === "string" ? latestWatchdogAction.action : "-"}</p></div>
-            </div>
-            {latestBenchmark.current_phase_stalled ? (
-              <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-sm text-amber">
-                <p className="font-medium text-amber">Benchmark appears stalled in {latestBenchmark.phase ?? latestBenchmark.current_action ?? "the current phase"}.</p>
-                <p className="mt-1">{latestBenchmark.stalled_phase_warning ?? "No progress has been observed recently."}</p>
-              </div>
-            ) : null}
-            {latestBenchmark.watchdog_status === "orphaned_reconciled" ? (
-              <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-sm text-amber">
-                <p className="font-medium text-amber">The benchmark run became orphaned and was automatically reconciled.</p>
-                <p className="mt-1">{latestBenchmark.final_recommendation ?? "Autopilot completed a safe reconciliation of the stalled run."}</p>
-              </div>
-            ) : null}
-            {latestBenchmark.watchdog_status === "retrying" ? (
-              <div className="mt-3 rounded-2xl border border-accent/30 bg-accent/10 p-3 text-sm text-accent">
-                Retrying benchmark attempt {latestBenchmark.current_attempt ?? 1}/{Math.max(latestBenchmarkAttempts.length, latestBenchmark.current_attempt ?? 1, 1)}.
-              </div>
-            ) : null}
-            <div className="mt-3 grid gap-3 md:grid-cols-3">
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">First event indexed</p><p className="mt-1 text-sm text-ink">{formatDuration(latestBenchmark.time_to_first_event_indexed ?? null)}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Problematic</p><p className="mt-1 text-sm text-ink">{latestBenchmark.problematic_count ?? 0}</p></div>
-              <div className="rounded-2xl border border-line bg-panel/40 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Metadata delta</p><p className="mt-1 text-sm text-ink">{latestBenchmark.metadata_opensearch_delta ?? 0}</p></div>
-            </div>
-            <div className="mt-3 rounded-2xl border border-line bg-panel/40 p-3 text-sm text-muted">
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Bottleneck</p>
-              <p className="mt-1 text-ink">{latestBenchmark.bottleneck_report?.bottleneck ?? "unknown"} {latestBenchmark.bottleneck_report?.confidence ? `· ${latestBenchmark.bottleneck_report.confidence}` : ""}</p>
-              {latestBenchmark.bottleneck_report?.reasons?.length ? <p className="mt-1">{latestBenchmark.bottleneck_report.reasons[0]}</p> : null}
-              {latestBenchmark.bottleneck_report?.recommendations?.length ? <p className="mt-1 text-amber">{latestBenchmark.bottleneck_report.recommendations[0]}</p> : null}
-            </div>
-            {latestBenchmark.final_recommendation ? <p className="mt-3 text-sm text-mint">{latestBenchmark.final_recommendation}</p> : null}
-            {benchmarkComparison ? <p className="mt-3 text-sm text-mint">Recommendation: {benchmarkComparison.profile_recommendation ?? "-"} · {benchmarkComparison.reason ?? ""}</p> : null}
-            {activeBenchmark ? <p className="mt-3 text-sm text-amber">A benchmark or ingest is already running for this evidence. Active run: {activeBenchmark.run_id ?? latestRun?.run_id ?? "-"}.</p> : null}
-            <div className="mt-4 overflow-x-auto">
-              <table className="min-w-full divide-y divide-line text-sm">
-                <thead>
-                  <tr className="text-left text-[11px] uppercase tracking-[0.16em] text-muted">
-                    <th className="px-3 py-2">Label</th>
-                    <th className="px-3 py-2">Profile</th>
-                    <th className="px-3 py-2">Status</th>
-                    <th className="px-3 py-2">Duration</th>
-                    <th className="px-3 py-2">Records/sec</th>
-                    <th className="px-3 py-2">Artifacts/sec</th>
-                    <th className="px-3 py-2">Parallelism</th>
-                    <th className="px-3 py-2">Bottleneck</th>
-                    <th className="px-3 py-2">Watchdog</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line/80">
-                  {benchmarks.slice(0, 6).map((benchmark) => (
-                    <tr key={benchmark.benchmark_id}>
-                      <td className="px-3 py-2 text-ink">{benchmark.label ?? benchmark.benchmark_id}</td>
-                      <td className="px-3 py-2 text-muted">{benchmark.profile}</td>
-                      <td className="px-3 py-2 text-muted">{benchmark.status}</td>
-                      <td className="px-3 py-2 text-muted">{formatDuration(benchmark.total_duration_seconds ?? null)}</td>
-                      <td className="px-3 py-2 text-muted">{benchmark.records_per_sec ?? 0}</td>
-                      <td className="px-3 py-2 text-muted">{benchmark.artifacts_per_sec ?? 0}</td>
-                      <td className="px-3 py-2 text-muted">{benchmark.effective_parallelism ?? "-"}</td>
-                      <td className="px-3 py-2 text-muted">{benchmark.bottleneck_report?.bottleneck ?? "-"}</td>
-                      <td className="px-3 py-2 text-muted">{benchmark.watchdog_status ?? "-"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        ) : (
-          <div className="mt-4 rounded-2xl border border-line bg-abyss/70 p-4 text-sm text-muted">No benchmarks recorded yet.</div>
-        )}
-      </details>
-      ) : null}
-
-      {retryCandidateIds.length > 0 ? (
-        <section className="rounded-3xl border border-danger/30 bg-danger/10 p-5 shadow-panel">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div className="max-w-3xl">
-              <p className="font-mono text-xs uppercase tracking-[0.18em] text-danger">Retryable parser failures</p>
-              <h3 className="mt-1 text-lg font-semibold text-ink">{retryCandidateIds.length} retryable failures</h3>
-              <p className="mt-2 text-sm text-muted">
-                Some selected artifacts could not be indexed. You can retry only these failed artifacts without reprocessing the whole evidence.
-              </p>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                <span className="rounded-full border border-danger/30 bg-abyss/80 px-3 py-1 text-danger">{problematicSummary?.data_loss_expected_count ?? retryCandidateIds.length} data loss expected</span>
-                {retryAffectedFamilies.map((family) => (
-                  <span key={family} className="rounded-full border border-line bg-abyss/80 px-3 py-1 text-muted">{family === "windows_event" ? "EVTX" : family}</span>
-                ))}
-              </div>
-              {retryCandidateExamples.length ? (
-                <div className="mt-3 text-sm text-muted">
-                  <span className="font-semibold text-ink">Affected artifacts:</span> {retryCandidateExamples.join(", ")}
-                </div>
-              ) : null}
-              <p className="mt-2 text-xs text-muted">Extended timeout will be used for timeout-related failures.</p>
-            </div>
-            <div className="flex flex-wrap gap-2">
-              <button
-                onClick={() => retryProblematicArtifactsMutation.mutate({ artifactIds: retryCandidateIds, mode: "higher_timeout" })}
-                disabled={activeIndexingJob || retryProblematicArtifactsMutation.isPending}
-                className="rounded-full border border-danger/40 bg-danger/20 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.16em] text-danger disabled:opacity-50"
-              >
-                {retryProblematicArtifactsMutation.isPending ? `Retrying ${retryCandidateIds.length} failed artifacts` : "Retry failed artifacts"}
-              </button>
-              <a href="#problematic-artifacts" className="rounded-full border border-line bg-abyss/80 px-4 py-2 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">
-                View details
-              </a>
-            </div>
-          </div>
-        </section>
-      ) : null}
-
-      {problematicSummary && problematicSummary.problematic_count > 0 ? (
-        <section id="problematic-artifacts" className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Problematic artifacts</p>
-              <p className="mt-1 text-sm text-muted">
-                These artifacts had issues during ingest. Historical failures stay visible, but the current status below reflects health checks, retries and recovered indexed data.
-              </p>
-              {(problematicSummary.skipped_empty ?? 0) > 0 ? (
-                <p className="mt-2 text-sm text-muted">
-                  Some Windows event log files do not contain parseable records. These are informational and do not block investigation.
-                </p>
-              ) : null}
-              <p className="mt-2 text-sm text-ink">
-                {problematicSummary.problematic_count} artifacts had issues during ingest. {problematicSummary.indexed_with_warning + problematicSummary.recovered_count + problematicSummary.source_missing_but_indexed} have indexed records available; {problematicSummary.recovered_count} recovered by retry; {problematicSummary.unresolved_count} still unresolved.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                aria-label="Problematic retry mode"
-                value={problematicRetryMode}
-                onChange={(event) => setProblematicRetryMode(event.target.value)}
-                className="rounded-full border border-line bg-abyss/80 px-3 py-2 text-xs text-ink"
-              >
-                <option value="higher_timeout">Retry: higher timeout</option>
-                <option value="no_detections">Retry: no detections</option>
-                <option value="deep_safe_mode">Retry: deep safe mode</option>
-                <option value="parse_only">Retry: parse only</option>
-                <option value="safe_mode">Retry: safe mode</option>
-                <option value="default">Retry: default</option>
-              </select>
-              <span className="text-xs text-muted">{retryModeDescriptions[problematicRetryMode] ?? ""}</span>
-              <button
-                onClick={() => retryProblematicArtifactsMutation.mutate({ artifactIds: selectedProblematicArtifactIds, mode: problematicRetryMode })}
-                disabled={activeIndexingJob || !selectedProblematicArtifactIds.length || retryProblematicArtifactsMutation.isPending}
-                className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50"
-              >
-                Retry selected
-              </button>
-            </div>
-          </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-6">
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Critical errors</p><p className="mt-1 text-sm text-danger">{problemImpactCounts.critical ?? 0}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Warnings</p><p className="mt-1 text-sm text-amber">{problemImpactCounts.warning ?? 0}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Skipped/empty</p><p className="mt-1 text-sm text-muted">{problemImpactCounts.skipped ?? 0}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Tooling missing</p><p className="mt-1 text-sm text-amber">{problemImpactCounts.tooling_missing ?? 0}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Informational</p><p className="mt-1 text-sm text-mint">{problemImpactCounts.informational ?? 0}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Problematic</p><p className="mt-1 text-sm text-ink">{problematicSummary.problematic_count}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Indexed with warning</p><p className="mt-1 text-sm text-amber">{problematicSummary.indexed_with_warning}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Recovered</p><p className="mt-1 text-sm text-emerald-200">{problematicSummary.recovered_count}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Unresolved</p><p className="mt-1 text-sm text-danger">{problematicSummary.unresolved_count}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Data loss expected</p><p className="mt-1 text-sm text-orange-300">{problematicSummary.data_loss_expected_count}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source missing, indexed</p><p className="mt-1 text-sm text-amber">{problematicSummary.source_missing_but_indexed}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Retryable</p><p className="mt-1 text-sm text-ink">{problematicSummary.retryable}</p></div>
-            <div className="rounded-2xl border border-line bg-panel/50 px-3 py-2"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">No records</p><p className="mt-1 text-sm text-mint">{problematicSummary.skipped_empty ?? 0}</p></div>
-          </div>
-          <div className="mt-4 grid gap-4 lg:grid-cols-3">
-            <div className="rounded-2xl border border-danger/30 bg-danger/10 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-danger">Requires attention</p>
-                <span className="rounded-full border border-danger/30 px-2 py-1 text-xs text-danger">{retryCandidateIds.length}</span>
-              </div>
-              <p className="mt-2 text-sm text-muted">Real parser failures with retry available and expected data loss.</p>
-              <p className="mt-2 text-xs text-muted">Retryability: yes · Data loss: yes</p>
-              {retryCandidateExamples.length ? <p className="mt-2 text-xs text-ink">Examples: {retryCandidateExamples.join(", ")}</p> : null}
-            </div>
-            <div className="rounded-2xl border border-amber/30 bg-amber/10 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-amber">Warnings</p>
-                <span className="rounded-full border border-amber/30 px-2 py-1 text-xs text-amber">{warningProblems.length}</span>
-              </div>
-              <p className="mt-2 text-sm text-muted">Artifacts completed with warning or fully indexed despite timeout/stall.</p>
-              <p className="mt-2 text-xs text-muted">Retryability: no · Data loss: no</p>
-              {warningProblems[0] ? <p className="mt-2 text-xs text-ink">Example: {warningProblems[0].name}</p> : null}
-            </div>
-            <div className="rounded-2xl border border-mint/25 bg-mint/10 p-4">
-              <div className="flex items-center justify-between gap-3">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mint">Informational / skipped</p>
-                <span className="rounded-full border border-mint/25 px-2 py-1 text-xs text-mint">{informationalProblems.length}</span>
-              </div>
-              <p className="mt-2 text-sm text-muted">Empty/no-record logs and optional unsupported artifacts that do not block investigation.</p>
-              <p className="mt-2 text-xs text-muted">Retryability: no · Data loss: no</p>
-              {informationalProblems[0] ? <p className="mt-2 text-xs text-ink">Example: {informationalProblems[0].name}</p> : null}
-            </div>
-          </div>
-          <div className="mt-4 overflow-x-auto rounded-3xl border border-line">
+        {realFailureArtifacts.length ? (
+          <div className="mt-5 overflow-x-auto rounded-3xl border border-line">
             <table className="min-w-full divide-y divide-line text-sm">
               <thead className="bg-abyss/70">
                 <tr className="text-left text-xs uppercase tracking-[0.16em] text-muted">
-                  <th className="px-3 py-3">Select</th>
                   <th className="px-3 py-3">Artifact</th>
-                  <th className="px-3 py-3">Original status</th>
-                  <th className="px-3 py-3">Current status</th>
-                  <th className="px-3 py-3">Read / Indexed</th>
+                  <th className="px-3 py-3">Type</th>
+                  <th className="px-3 py-3">Reason</th>
                   <th className="px-3 py-3">Data loss</th>
-                  <th className="px-3 py-3">Recovery</th>
+                  <th className="px-3 py-3">Retryable</th>
+                  <th className="px-3 py-3">Last attempt</th>
                   <th className="px-3 py-3">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
-                {problematicArtifacts.map((artifact) => (
-                  <tr key={`${artifact.source_path}:${artifact.parser}`} className="bg-panel/40">
-                    <td className="px-3 py-3 align-top">
-                      {artifact.retryable && artifact.artifact_id ? <input type="checkbox" checked={selectedProblematicArtifactIds.includes(artifact.artifact_id)} onChange={() => toggleProblematicArtifact(artifact.artifact_id!)} aria-label={`Select problematic artifact ${artifact.name}`} /> : null}
-                    </td>
-                    <td className="px-3 py-3 align-top">
-                      <p className="font-semibold text-ink">{artifact.name}</p>
-                      <p className="mt-1 max-w-[440px] break-all text-xs text-muted">{artifact.source_path}</p>
-                    </td>
-                    <td className="px-3 py-3 align-top">
-                      <span className={`rounded-full border px-2 py-1 font-mono text-[11px] uppercase tracking-[0.14em] ${problematicStatusTone(artifact.original_status ?? artifact.status)}`}>
-                        {formatProblematicStatusLabel(artifact.original_status ?? artifact.status)}
-                      </span>
-                    </td>
-                    <td className="px-3 py-3 align-top text-muted">
-                      <span className={`rounded-full border px-2 py-1 font-mono text-[11px] uppercase tracking-[0.14em] ${problematicStatusTone(artifact.effective_status ?? artifact.status)}`}>
-                        {artifact.effective_status === "parsed_with_warning" ? "Indexed with warning" : artifact.effective_status === "recovered_with_warning" ? "Recovered by retry" : artifact.effective_status === "source_missing_but_indexed" ? "Source missing, indexed data available" : artifact.effective_status === "skipped_empty" || artifact.effective_status === "completed_no_records" || artifact.effective_status === "unsupported_no_records" ? "No records produced" : artifact.effective_status === "unresolved_timeout" || artifact.effective_status === "unresolved_failed" || artifact.effective_status === "health_check_failed" ? "Still unresolved" : formatProblematicStatusLabel(artifact.effective_status ?? artifact.status)}
-                      </span>
-                      {artifact.health_summary ? <p className="mt-2 text-xs">{artifact.health_summary}</p> : null}
-                    </td>
-                    <td className="px-3 py-3 align-top text-muted">{artifact.effective_records_read ?? artifact.records_read} / {artifact.effective_records_indexed ?? artifact.records_indexed}</td>
-                    <td className="px-3 py-3 align-top text-muted">
-                      <p>{artifact.current_data_loss_expected ?? artifact.data_loss_expected ? "Expected data loss" : "No expected data loss"}</p>
-                      {artifact.loss_summary ? <p className="mt-1 text-xs">{artifact.loss_summary}</p> : null}
-                    </td>
-                    <td className="px-3 py-3 align-top text-xs text-muted">
-                      <p>{problematicRecoveryText(artifact)}</p>
-                      <p className="mt-2 text-ink">{problematicImpact(artifact).label}: {problematicImpact(artifact).action}</p>
-                      {artifact.accepted_warning ? <p className="mt-2 text-emerald-300">Warning accepted by analyst.</p> : null}
-                      {renderHealthCheckSummary(artifact.health_check)}
-                    </td>
+                {realFailureArtifacts.map((artifact, index) => (
+                  <tr key={`${artifact.artifact_id ?? `${artifact.source_path}:${artifact.parser}`}:${index}`} className="bg-panel/40">
+                    <td className="px-3 py-3 align-top"><p className="font-semibold text-ink">{artifact.name}</p><p className="mt-1 max-w-[420px] break-all text-xs text-muted">{artifact.source_path}</p></td>
+                    <td className="px-3 py-3 align-top text-muted">{artifact.artifact_type || artifact.parser || "-"}</td>
+                    <td className="px-3 py-3 align-top text-muted">{artifact.error_message || artifact.health_summary || formatProblematicStatusLabel(artifact.effective_status ?? artifact.status)}</td>
+                    <td className="px-3 py-3 align-top text-muted">{artifact.current_data_loss_expected ?? artifact.data_loss_expected ? "Yes" : "No"}</td>
+                    <td className="px-3 py-3 align-top text-muted">{artifact.retryable ? "Yes" : "No"}</td>
+                    <td className="px-3 py-3 align-top text-muted">{artifact.latest_retry?.finished_at ? formatDateTime(String(artifact.latest_retry.finished_at)) : artifact.latest_retry?.status ? String(artifact.latest_retry.status) : "-"}</td>
                     <td className="px-3 py-3 align-top">
                       <div className="flex flex-wrap gap-2">
-                        {(artifact.effective_records_indexed ?? artifact.records_indexed) > 0 ? (
-                          <Link to={problematicSearchHref(artifact)} className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">
-                            Search indexed events
-                          </Link>
-                        ) : null}
-                        {artifact.retryable && artifact.artifact_id ? (
-                          <button
-                            onClick={() => evtxHealthCheckMutation.mutate({ artifactId: artifact.artifact_id! })}
-                            disabled={activeIndexingJob || evtxHealthCheckMutation.isPending}
-                            className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50"
-                          >
-                            Check EVTX health
-                          </button>
-                        ) : null}
-                        {(artifact.effective_status === "unresolved_timeout" || artifact.effective_status === "unresolved_failed" || artifact.effective_status === "health_check_only_valid" || artifact.effective_status === "health_check_failed") && artifact.artifact_id ? (
-                          <button
-                            onClick={() => retryProblematicArtifactsMutation.mutate({ singleArtifactId: artifact.artifact_id!, mode: "deep_safe_mode" })}
-                            disabled={activeIndexingJob || retryProblematicArtifactsMutation.isPending}
-                            className="rounded-full border border-amber/30 bg-amber/10 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-amber disabled:opacity-50"
-                          >
-                            Retry deep safe mode
-                          </button>
-                        ) : null}
-                        {!artifact.accepted_warning && !(artifact.current_data_loss_expected ?? artifact.data_loss_expected) && artifact.artifact_id ? (
-                          <button
-                            onClick={() => acceptProblematicWarningMutation.mutate({ artifactId: artifact.artifact_id! })}
-                            disabled={activeIndexingJob || acceptProblematicWarningMutation.isPending}
-                            className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50"
-                          >
-                            Accept warning
-                          </button>
-                        ) : null}
-                        {artifact.retryable && artifact.artifact_id ? (
-                          <button
-                            onClick={() => retryProblematicArtifactsMutation.mutate({ singleArtifactId: artifact.artifact_id!, mode: problematicRetryMode })}
-                            disabled={activeIndexingJob || retryProblematicArtifactsMutation.isPending}
-                            className="rounded-full border border-line bg-abyss/80 px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-muted disabled:opacity-50"
-                          >
-                            Retry artifact
-                          </button>
-                        ) : null}
+                        {artifact.retryable && artifact.artifact_id ? <button type="button" onClick={() => retryProblematicArtifactsMutation.mutate({ singleArtifactId: artifact.artifact_id!, mode: "higher_timeout" })} disabled={activeIndexingJob || retryProblematicArtifactsMutation.isPending} className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 text-xs text-accent disabled:opacity-50">Retry</button> : null}
+                        <details className="rounded-full border border-line bg-abyss/80 px-3 py-1 text-xs text-muted">
+                          <summary className="cursor-pointer">View logs/details</summary>
+                          <pre className="mt-3 max-w-xl whitespace-pre-wrap rounded-2xl border border-line bg-panel/80 p-3 text-left text-[11px] text-muted">{JSON.stringify({ status: artifact.status, effective_status: artifact.effective_status, error_type: artifact.error_type, error_message: artifact.error_message, health_summary: artifact.health_summary, retry_history: artifact.retry_history }, null, 2)}</pre>
+                        </details>
                       </div>
                     </td>
                   </tr>
@@ -4246,537 +1933,80 @@ function formatReportStatus(status: string | null | undefined) {
               </tbody>
             </table>
           </div>
+        ) : (
+          <p className="mt-4 rounded-2xl border border-mint/25 bg-mint/10 px-4 py-3 text-sm text-mint">No real parser failures.</p>
+        )}
+        <details className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4">
+          <summary className="cursor-pointer text-sm font-semibold text-muted">Warnings and informational skipped items</summary>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            <div className="rounded-2xl border border-amber/30 bg-amber/10 p-3"><p className="font-semibold text-amber">Warnings</p><p className="mt-1 text-sm text-muted">{warningCount} warnings, including fully indexed artifacts with non-critical parser warnings.</p></div>
+            <div className="rounded-2xl border border-mint/25 bg-mint/10 p-3"><p className="font-semibold text-mint">Informational skipped</p><p className="mt-1 text-sm text-muted">{skippedEmptyCount} empty/no-record artifacts skipped.</p></div>
+          </div>
+        </details>
+      </section>
+
+      {evidenceReadyForActions ? (
+        <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
+          <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Investigation actions</p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Link to={coreSearchHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Search</Link>
+            <Link to={commandHistoryHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Command History</Link>
+            <Link to={artifactViewsHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Artifact Views</Link>
+            <Link to={timelineHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Timeline</Link>
+            <Link to={findingsHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Findings</Link>
+            <Link to={reportsHref} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm font-semibold text-ink">Report</Link>
+          </div>
         </section>
       ) : null}
 
-      {selectionPending ? (
-        <details
-          id="parse-selection"
-          ref={parseSelectionRef}
-          open={advancedProcessingDetailsOpen}
-          onToggle={(event) => setAdvancedProcessingDetailsOpen(event.currentTarget.open)}
-          className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel"
-        >
-          <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.18em] text-accent">Raw discovery candidate details</summary>
-          <div className="mt-4 rounded-3xl border border-line bg-abyss/80 p-5">
-            <div className="flex flex-col gap-2">
-              <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Candidate inventory</p>
-              <p className="text-lg font-semibold text-ink">Discovered artifact candidates</p>
-              <p className="text-sm text-muted">
-                Category-level indexing controls are available in Index selected artifact types. This detail view is for inspecting individual raw candidates and parser status.
-              </p>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Detected evidences</p>
-            <p className="text-sm text-muted">
-              Collection root: {discovery?.collection_root ?? "-"} · Files scanned: {String(discovery?.total_files_scanned ?? 0)} · Host: {discovery?.hostname ?? "-"}
-            </p>
-          </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-            {categoryRows.map(([category, counts]) => (
-              <div key={category} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{category}</p>
-                <p className="mt-2 text-sm text-ink">total {counts.total}</p>
-                <p className="text-xs text-muted">supported {counts.supported} · partial {counts.partial} · not implemented {counts.notImplemented} · warnings {counts.warnings}</p>
-              </div>
-            ))}
-          </div>
-          {candidatesByCategory.map(([category, candidates]) => {
-            const supportedCount = candidates.filter((candidate) => candidate.supported).length;
-            const categoryLabel = formatCategoryLabel(category);
-            const parseableCount = candidates.filter((candidate) => candidate.supported && candidate.parser_status !== "partial").length;
-            const partialCount = candidates.filter((candidate) => candidate.supported && candidate.parser_status === "partial").length;
-            const notImplementedCount = candidates.filter((candidate) => !candidate.supported).length;
-            const isExpanded = Boolean(expandedCategories[category]);
-            return (
-              <div key={category} className="mt-5 rounded-2xl border border-line bg-abyss/70 p-4">
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div>
-                    <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">{categoryLabel}</p>
-                    <p className="mt-1 text-xs text-muted">
-                      total {candidates.length} · parseable {parseableCount} · partial {partialCount} · not implemented {notImplementedCount}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {supportedCount ? (
-                      <button onClick={() => selectCategory(category)} className="rounded-2xl border border-line bg-panel/40 px-3 py-2 text-xs text-muted">
-                        {`Select ${categoryLabel}`}
-                      </button>
-                    ) : null}
-                    <button onClick={() => toggleCategoryExpanded(category)} className="rounded-2xl border border-line bg-panel/40 px-3 py-2 text-xs text-muted">
-                      {isExpanded ? "Hide details" : "Show details"}
-                    </button>
-                  </div>
+      <details className="rounded-[28px] border border-line bg-panel/50 p-5">
+        <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.18em] text-muted">Advanced diagnostics</summary>
+        <div className="mt-4 grid gap-4 xl:grid-cols-2">
+          <div className="rounded-2xl border border-line bg-abyss/60 p-4">
+            <p className="font-semibold text-ink">Ingest & reprocess runs</p>
+            <div className="mt-3 space-y-2">
+              {evidenceRuns.slice(0, 6).map((run) => (
+                <div key={run.run_id} className="rounded-xl border border-line bg-panel/40 px-3 py-2 text-xs text-muted">
+                  <p className="font-semibold text-ink">{run.run_type} · {run.status}</p>
+                  <p>Artifacts {run.artifacts_done ?? 0}/{run.artifacts_total ?? 0} · records {run.records_read ?? 0}/{run.records_indexed ?? run.events_indexed ?? 0}</p>
+                  {run.current_artifact ? <p className="truncate" title={run.current_artifact}>{run.current_artifact}</p> : null}
                 </div>
-                {!supportedCount ? (
-                  <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 px-4 py-3 text-sm text-amber">
-                    {getNoParseableMessage(category, candidates)}
-                  </div>
-                ) : null}
-                {category === "jumplist" && supportedCount ? (
-                  <div className="mt-3 rounded-2xl border border-mint/20 bg-mint/10 px-4 py-3 text-sm text-mint">
-                    Raw automaticDestinations files can be parsed directly. CustomDestinations support is partial.
-                  </div>
-                ) : null}
-                {!isExpanded ? (
-                  <div className="mt-3 rounded-2xl border border-line/60 bg-panel/30 px-4 py-3 text-sm text-muted">
-                    {supportedCount
-                      ? `This category is collapsed to reduce noise. Expand it to review the ${candidates.length} detected artifacts and choose them one by one if needed.`
-                      : `This category is collapsed. Expand it if you want to inspect the ${candidates.length} detected artifacts and their warnings.`}
-                  </div>
-                ) : null}
-                {isExpanded ? (
-                  <div className="mt-3 space-y-3">
-                  {candidates.map((candidate) => (
-                    <div key={candidate.id} className="rounded-2xl border border-line/70 bg-panel/40 p-3">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-3">
-                            <input type="checkbox" checked={selectedCandidateIds.includes(candidate.id)} disabled={!candidate.supported} onChange={() => toggleCandidate(candidate.id)} />
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold text-ink">{candidate.display_name}</p>
-                              <p className="mt-1 font-mono text-[11px] text-muted">
-                                {candidate.artifact_type} · {candidate.parser_status}
-                                {candidate.parser ? ` · ${candidate.parser}` : ""}
-                                {candidate.user ? ` · user ${candidate.user}` : ""}
-                                {candidate.profile ? ` · profile ${candidate.profile}` : ""}
-                                {candidate.task_path ? ` · ${candidate.task_path}` : ""}
-                                {candidate.sid ? ` · ${candidate.sid}` : ""}
-                              </p>
-                            </div>
-                          </div>
-                        </div>
-                        <span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] ${candidate.supported && candidate.parser_status !== "partial" ? "border-mint/30 bg-mint/10 text-mint" : candidate.supported ? "border-cyan-400/30 bg-cyan-400/10 text-cyan-200" : "border-amber/30 bg-amber/10 text-amber"}`}>
-                          {candidateStatusLabel(candidate)}
-                        </span>
-                      </div>
-                      <p className="mt-2 break-all text-xs text-muted">{candidatePrimaryPath(candidate)}</p>
-                      {candidate.original_r_path && candidate.original_r_path !== candidatePrimaryPath(candidate) ? <p className="mt-1 break-all text-xs text-muted">Content: {candidate.original_r_path}</p> : null}
-                      <div className="mt-2 flex flex-wrap gap-3 text-xs text-muted">
-                        <span>size {candidate.size ?? "-"}</span>
-                        <span>{candidate.normalized_windows_path || candidate.normalized_windows_i_path || "-"}</span>
-                      </div>
-                      {candidate.reason ? <p className="mt-2 text-sm text-amber">{candidate.reason}</p> : null}
-                      {candidate.warnings.length ? (
-                        <div className="mt-2 space-y-1">
-                          {candidate.warnings.map((warning) => (
-                            <p key={warning} className="text-xs text-amber/90">{warning}</p>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  ))}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-          {parseVelociraptorMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{parseVelociraptorMutation.error.message}</p> : null}
-        </details>
-      ) : null}
-
-      <details className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-        <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.18em] text-accent">Raw discovery inventory</summary>
-      <section className="mt-4 grid min-w-0 gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-        <div className="space-y-6">
-          <div id="artifact-manifest" className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-            <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Manifest summary</p>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <div className="rounded-2xl border border-line bg-abyss/80 p-4 text-sm text-muted">Processed result artifacts: {manifest?.stats?.results_artifacts_parsed ?? 0} / {manifest?.stats?.results_artifacts_detected ?? 0}</div>
-              <div className="rounded-2xl border border-line bg-abyss/80 p-4 text-sm text-muted">Preserved raw artifacts: {manifest?.stats?.raw_artifacts_not_parsed ?? 0}</div>
-              <div className="rounded-2xl border border-line bg-abyss/80 p-4 text-sm text-muted">Indexed events: {manifest?.stats?.indexed_events ?? 0}</div>
-              <div className="rounded-2xl border border-line bg-abyss/80 p-4 text-sm text-muted">Failed artifacts: {manifest?.stats?.failed_artifacts ?? 0}</div>
+              ))}
             </div>
-            {Object.keys(notSelectedCandidatesCountByCategory).length ? (
-              <div className="mt-3 rounded-2xl border border-line bg-abyss/80 p-4 text-sm text-muted">
-                Detected but not selected: {Object.entries(notSelectedCandidatesCountByCategory).map(([category, count]) => `${category} ${count}`).join(" · ")}
-              </div>
-            ) : null}
           </div>
-          <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-            <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Original files</p>
-            <div className="mt-4 max-h-[420px] overflow-auto rounded-2xl border border-line bg-abyss/80 p-4 font-mono text-xs text-muted">
-              {(manifest?.files ?? []).length ? (
-                (manifest?.files ?? []).map((item) => (
-                  <div key={item.path} className="mb-2 rounded-xl border border-line/50 p-3">
-                    <p>{item.path}</p>
-                    <p className="mt-1 text-[11px] text-muted">{item.size} bytes · {item.extension || "no ext"} · {item.ignored ? `ignored (${item.reason})` : "included"}</p>
-                  </div>
-                ))
-              ) : (
-                <p>No file tree available yet.</p>
-              )}
+          <div className="rounded-2xl border border-line bg-abyss/60 p-4">
+            <p className="font-semibold text-ink">Raw discovery inventory</p>
+            <p className="mt-1 text-sm text-muted">Hidden from the main flow. Discovery found {discoveryCandidates.length} candidates across {supportedCategoryOptions.length} supported categories.</p>
+            <div className="mt-3 max-h-80 overflow-auto rounded-xl border border-line bg-panel/40 p-3 text-xs text-muted">
+              {supportedCategoryOptions.map((option) => <p key={option.category}>{option.label}: {option.supportedIds.length} supported</p>)}
             </div>
           </div>
         </div>
-
-        <div className="space-y-6">
-          <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="min-w-[150px] flex-1">
-                <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Status</p>
-                <select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} className="w-full rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm">
-                  <option value="">All</option>
-                  {statuses.map((status) => <option key={status} value={status}>{status}</option>)}
-                </select>
-              </div>
-              <div className="min-w-[150px] flex-1">
-                <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact type</p>
-                <select value={filters.artifactType} onChange={(event) => setFilters((current) => ({ ...current, artifactType: event.target.value }))} className="w-full rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm">
-                  <option value="">All</option>
-                  {artifactTypes.map((artifactType) => <option key={artifactType} value={artifactType}>{artifactType}</option>)}
-                </select>
-              </div>
-              <div className="min-w-[150px] flex-1">
-                <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Parser</p>
-                <select value={filters.parser} onChange={(event) => setFilters((current) => ({ ...current, parser: event.target.value }))} className="w-full rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm">
-                  <option value="">All</option>
-                  {parsers.map((parser) => <option key={parser} value={parser}>{parser}</option>)}
-                </select>
-              </div>
-              <div className="min-w-[220px] flex-[2]">
-                <p className="mb-2 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source path</p>
-                <input value={filters.sourcePath} onChange={(event) => setFilters((current) => ({ ...current, sourcePath: event.target.value }))} className="w-full rounded-2xl border border-line bg-abyss/80 px-3 py-2 text-sm" placeholder="uploads/... or results/..." />
-              </div>
-            </div>
-          </div>
-
-          {([
-            ["Processed artifacts", processedArtifacts],
-            ["Preserved raw artifacts", preservedRawArtifacts],
-            ["Unsupported or not parsed yet", otherArtifacts],
-          ] as Array<[string, typeof filteredArtifacts]>).map(([title, artifacts]) => (
-            <div key={title} className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-              <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">{title}</p>
-              <div className="mt-4 max-h-[300px] space-y-3 overflow-auto">
-                {(artifacts as typeof filteredArtifacts).length ? (
-                  (artifacts as typeof filteredArtifacts).map((artifact) => (
-                    <div key={`${artifact.source_path}-${artifact.name}`} className="rounded-2xl border border-line bg-abyss/80 p-4">
-                      <div className="flex items-center justify-between gap-3">
-                        <p className="text-sm font-semibold">{artifact.name}</p>
-                        <span className="rounded-full border border-line px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-accent">{artifact.status}</span>
-                      </div>
-                      <p className="mt-2 font-mono text-xs text-muted">{artifact.source_path}</p>
-                      <p className="mt-2 text-xs text-muted">{artifact.parser} · {artifact.artifact_type} · {artifact.record_count} records</p>
-                      {artifact.reason ? <p className="mt-2 text-xs text-amber">{artifact.reason}</p> : null}
-                      {artifact.planned_parser ? <p className="mt-2 text-xs text-muted">Planned parser: {artifact.planned_parser}</p> : null}
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-sm text-muted">No artifacts in this group for the current filters.</p>
-                )}
-              </div>
-            </div>
-          ))}
-
-          <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-            <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Errors</p>
-            <div className="mt-4 max-h-[240px] overflow-auto rounded-2xl border border-line bg-abyss/80 p-4 text-xs text-muted">
-              {(manifest?.errors ?? []).length ? <pre className="whitespace-pre-wrap break-words">{JSON.stringify(manifest?.errors ?? [], null, 2)}</pre> : <p>No errors recorded.</p>}
-            </div>
-          </div>
-        </div>
-      </section>
       </details>
-      {data?.case_id ? (
-        <DebugExportDialog
-          open={debugExportOpen}
-          onClose={() => setDebugExportOpen(false)}
-          caseId={data.case_id}
-          title="Export evidence debug pack"
-          defaultRequest={{
-            scope: "evidence",
-            evidence_id: evidenceId,
-            include_raw_samples: false,
-            include_raw_xml: false,
-            include_source_paths: true,
-            include_full_raw: false,
-            max_events_per_type: 25,
-            max_field_length: 2000,
-            redact_secrets: true,
-            ui_context: {
-              page: "EvidenceDetail",
-              selected_case: data.case_id,
-              selected_evidence: evidenceId,
-              filters,
-              current_phase: currentPhase,
-            },
-          }}
-        />
-      ) : null}
-      {reprocessDialogOpen ? (
-        <div data-testid="reprocess-modal-overlay" className="fixed inset-0 z-50 flex overflow-hidden bg-abyss/80 px-4 py-6 backdrop-blur-sm">
-          <div className="flex min-h-full items-start justify-center">
-            <div className="flex max-h-[calc(100vh-3rem)] w-full max-w-4xl flex-col overflow-hidden overscroll-contain rounded-[28px] border border-line bg-panel/95 p-6 shadow-panel">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Re-index evidence</p>
-                <h3 className="mt-2 text-2xl font-semibold text-ink">{data?.original_filename}</h3>
-                <p className="mt-2 max-w-3xl text-sm text-muted">
-                  {supportsGranularReprocess
-                    ? "Recommended: run core indexing again using the previous supported artifact selection. Advanced controls are available if you need to change the selection."
-                    : "This evidence does not expose raw discovery candidates. Re-indexing will reuse the generic core ingest plan for the full evidence."}
-                </p>
-              </div>
-              <button onClick={() => setReprocessDialogOpen(false)} className="rounded-full border border-line px-3 py-1 text-sm text-muted">Close</button>
+
+      {deleteDialogOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-xl rounded-[28px] border border-danger/40 bg-panel p-6 shadow-panel">
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-danger">Delete evidence</p>
+            <h3 className="mt-2 text-2xl font-semibold text-ink">{data?.original_filename}</h3>
+            <p className="mt-3 text-sm text-muted">
+              This removes the evidence record, parsed artifacts and indexed documents for this evidence. Original uploaded archive removal depends on storage policy.
+            </p>
+            <div className="mt-4 grid gap-2 text-sm text-muted">
+              <p>Host: <span className="text-ink">{data?.provided_host || data?.detected_host || "-"}</span></p>
+              <p>Indexed docs: <span className="text-ink">{indexedDocumentsTotal.toLocaleString()}</span></p>
             </div>
-
-            <div data-testid="reprocess-modal-content" className="mt-5 min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
-              {supportsGranularReprocess ? (
-                <>
-                  <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                  <button
-                    type="button"
-                    onClick={() => setReprocessMode("previous_selection")}
-                    className={`rounded-2xl border px-4 py-4 text-left ${reprocessMode === "previous_selection" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}
-                  >
-                    <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Use previous parser selection</p>
-                    <p className="mt-2 text-sm">Recommended. Use core indexing with the same supported artifacts that were used last time.</p>
-                  </button>
-                  <details className="rounded-2xl border border-line bg-abyss/70 px-4 py-4 text-muted md:col-span-2 xl:col-span-2">
-                    <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Advanced re-index options</summary>
-                    <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <button
-                    type="button"
-                    onClick={() => setReprocessMode("choose_again")}
-                    className={`rounded-2xl border px-4 py-4 text-left ${reprocessMode === "choose_again" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}
-                  >
-                    <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Choose artifacts again</p>
-                    <p className="mt-2 text-sm">Review detected candidates again, with the previous successful selection preselected.</p>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setReprocessMode("manual_selection")}
-                    className={`rounded-2xl border px-4 py-4 text-left ${reprocessMode === "manual_selection" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}
-                  >
-                    <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Edit selection manually</p>
-                    <p className="mt-2 text-sm">Choose exactly which artifact candidates and parsers to run in this reprocess.</p>
-                  </button>
-                    </div>
-                  </details>
-                  </div>
-
-                  <details className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
-                    <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Start from scratch</summary>
-                    <p className="mt-3">Full rediscovery ignores the last successful plan and can produce a different selection. Use it only when you really want to rebuild the candidate set from zero.</p>
-                    <button
-                      type="button"
-                      onClick={() => setReprocessMode("full_rediscovery")}
-                      className={`mt-3 rounded-2xl border px-4 py-3 text-left ${reprocessMode === "full_rediscovery" ? "border-accent bg-accent/10 text-ink" : "border-line bg-panel/40 text-muted"}`}
-                    >
-                      <p className="font-mono text-[11px] uppercase tracking-[0.16em]">Start from scratch / Full rediscovery</p>
-                      <p className="mt-2 text-sm">Requires explicit confirmation and will not silently replace the last successful parser selection.</p>
-                    </button>
-                  </details>
-
-                  <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
-                    <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Processing</p>
-                    <p className="mt-2 text-sm text-muted">
-                      Default: re-index evidence with core indexing. Rules, reports and enrichment stay manual.
-                    </p>
-                    <details className="mt-4 rounded-2xl border border-amber/30 bg-amber/10 p-4">
-                      <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-amber">Experimental processing</summary>
-                      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                        <p className="text-sm text-muted">Enables deeper parser tiers and inline detections. Use only when needed.</p>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const nextMode = reprocessIngestMode === "full_forensic" ? "usable_search" : "full_forensic";
-                            setReprocessIngestMode(nextMode);
-                            if (nextMode === "full_forensic") setReprocessEvtxProfile("full");
-                          }}
-                          className={`rounded-2xl border px-4 py-2 text-sm font-semibold ${reprocessIngestMode === "full_forensic" ? "border-amber bg-amber/20 text-amber" : "border-line bg-panel/40 text-muted"}`}
-                        >
-                          {reprocessIngestMode === "full_forensic" ? "Advanced selected" : "Select Advanced"}
-                        </button>
-                      </div>
-                    </details>
-                    <label className="mt-4 block">
-                      <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Hostname / host label (optional)</span>
-                      <input value={reprocessProvidedHost} onChange={(event) => setReprocessProvidedHost(event.target.value)} placeholder="HOSTA / TEST-WIN10-01" className="w-full rounded-2xl border border-line bg-panel/40 px-3 py-2 text-sm text-ink" />
-                      <span className="mt-2 block text-xs text-muted">Used as preferred host metadata only when the evidence does not already provide a clearer forensic host.</span>
-                    </label>
-                  </div>
-
-                  <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
-                    <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Selected ingest mode</p>
-                    <p className="mt-3 text-sm text-muted">
-                      {reprocessIngestMode === "usable_search"
-                        ? "Core indexing will be launched. Rules, reports and enrichment stay manual."
-                        : "Experimental advanced processing will be launched. This can take significantly longer."}
-                    </p>
-                  </div>
-
-                  {reprocessHasEvtx && !evtxecmdAvailable ? (
-                    <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
-                      <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">EVTX indexing profile</p>
-                      <p className="mt-2">
-                        EvtxECmd is not available for this evidence. Limited EVTX triage mode is partial; use it only as a fallback.
-                      </p>
-                      {evtxParserBackend ? <p className="mt-1 text-xs text-muted">Current EVTX parser: <span className="font-semibold text-ink">{formatEvtxBackend(evtxParserBackend)}{evtxParserBackendVersion ? ` ${evtxParserBackendVersion}` : ""}</span></p> : null}
-                      <div className="mt-3 grid gap-3 md:grid-cols-2">
-                        <button
-                          type="button"
-                          onClick={() => setReprocessEvtxProfile("fast_high_value")}
-                          className={`rounded-2xl border px-4 py-3 text-left ${reprocessEvtxProfile === "fast_high_value" ? "border-accent bg-accent/10 text-ink" : "border-line bg-panel/40 text-muted"}`}
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="text-sm font-semibold">Fast EVTX Search</span>
-                            <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Beta / Triage</span>
-                          </div>
-                          <p className="mt-2 text-xs">Bounded fast-profile coverage for large EVTX files. This is not full EVTX coverage.</p>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setReprocessEvtxProfile("full")}
-                          className={`rounded-2xl border px-4 py-3 text-left ${reprocessEvtxProfile === "full" ? "border-amber bg-amber/10 text-ink" : "border-line bg-panel/40 text-muted"}`}
-                        >
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="text-sm font-semibold">Full EVTX Indexing</span>
-                            <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-amber">{evtxParserBackend === "evtxecmd_csv" ? "Recommended with EvtxECmd" : "Full coverage"}</span>
-                          </div>
-                        </button>
-                      </div>
-                      {reprocessEvtxProfile === "full" ? <p className="mt-3 text-xs text-amber">This can take a long time on evidence with many EVTX files.</p> : null}
-                    </div>
-                  ) : reprocessHasEvtx ? (
-                    <div className="mt-4 rounded-2xl border border-mint/20 bg-mint/10 p-4 text-sm text-mint">
-                      Event logs will be fully indexed with EvtxECmd automatically during re-indexing.
-                    </div>
-                  ) : null}
-
-                  {reprocessMode === "full_rediscovery" ? (
-                    <div className="mt-4 rounded-2xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">
-                      Full rediscovery may parse a different set of artifacts than the previous ingest. Type <span className="font-mono">REDISCOVER</span> to confirm.
-                      <input
-                        value={rediscoveryConfirmText}
-                        onChange={(event) => setRediscoveryConfirmText(event.target.value)}
-                        placeholder="Type REDISCOVER"
-                        className="mt-3 block w-full rounded-2xl border border-amber/40 bg-abyss/70 px-3 py-2 text-sm text-ink"
-                      />
-                    </div>
-                  ) : null}
-
-                  {reprocessPreviewQuery.isLoading ? (
-                    <div className="mt-5 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">Previewing reprocess plan...</div>
-                  ) : reprocessPreview ? (
-                    <div className="mt-5 space-y-4">
-                      <div className="grid gap-3 md:grid-cols-3 xl:grid-cols-6">
-                        <div className="rounded-2xl border border-line bg-abyss/60 p-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Previously selected</p><p className="mt-1 text-sm text-ink">{reprocessPreview.summary.previous_selected}</p></div>
-                        <div className="rounded-2xl border border-line bg-abyss/60 p-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Available again</p><p className="mt-1 text-sm text-ink">{reprocessPreview.summary.available_again}</p></div>
-                        <div className="rounded-2xl border border-line bg-abyss/60 p-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Missing</p><p className="mt-1 text-sm text-ink">{reprocessPreview.summary.missing}</p></div>
-                        <div className="rounded-2xl border border-line bg-abyss/60 p-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Changed</p><p className="mt-1 text-sm text-ink">{reprocessPreview.summary.changed}</p></div>
-                        <div className="rounded-2xl border border-line bg-abyss/60 p-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">New candidates</p><p className="mt-1 text-sm text-ink">{reprocessPreview.summary.new_candidates}</p></div>
-                        <div className="rounded-2xl border border-line bg-abyss/60 p-3"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Unsupported</p><p className="mt-1 text-sm text-ink">{reprocessPreview.summary.unsupported}</p></div>
-                      </div>
-
-                      {!reprocessPreview.previous_plan_available ? (
-                        <div className="rounded-2xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">
-                          No previous ingest plan is stored for this evidence. Use Choose artifacts again to build a selection or start discovery from scratch.
-                        </div>
-                      ) : null}
-
-                      {reprocessPreview.warnings.length ? (
-                        <div className="rounded-2xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">
-                          {reprocessPreview.warnings.join(" ")}
-                        </div>
-                      ) : null}
-
-                      <div className="rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
-                        <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">What will be reprocessed</p>
-                        <p className="mt-2">
-                          {reprocessMode === "previous_selection"
-                            ? "This mode reuses the same parser selection that was used previously. New candidates are not selected automatically."
-                            : reprocessMode === "choose_again"
-                              ? "This mode shows current discovery candidates with the previous successful selection preselected so you can review and change it."
-                              : reprocessMode === "manual_selection"
-                                ? "This mode lets you choose the exact candidates and parsers before reprocessing."
-                                : "This mode rebuilds the candidate list from scratch using the current discovery logic."}
-                        </p>
-                      </div>
-
-                      <div className="grid gap-3 xl:grid-cols-2">
-                        <div className="rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
-                          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Selected by artifact type</p>
-                          <div className="mt-3 space-y-2">
-                            {Object.entries(previewSelectedByArtifactType).length ? (
-                              Object.entries(previewSelectedByArtifactType).map(([artifactType, count]) => (
-                                <div key={artifactType} className="flex items-center justify-between gap-3 rounded-2xl border border-line/70 bg-panel/30 px-3 py-2">
-                                  <span className="truncate text-ink">{artifactType}</span>
-                                  <span className="font-mono text-xs text-muted">{count}</span>
-                                </div>
-                              ))
-                            ) : (
-                              <p>No typed candidates are available for this preview.</p>
-                            )}
-                          </div>
-                        </div>
-                        <div className="rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
-                          <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Selected by parser</p>
-                          <div className="mt-3 space-y-2">
-                            {Object.entries(previewSelectedByParser).length ? (
-                              Object.entries(previewSelectedByParser).map(([parserName, count]) => (
-                                <div key={parserName} className="flex items-center justify-between gap-3 rounded-2xl border border-line/70 bg-panel/30 px-3 py-2">
-                                  <span className="truncate text-ink">{parserName}</span>
-                                  <span className="font-mono text-xs text-muted">{count}</span>
-                                </div>
-                              ))
-                            ) : (
-                              <p>No parser-level selection details are available for this preview.</p>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-
-                      <div className="max-h-[320px] space-y-3 overflow-y-auto overscroll-contain rounded-2xl border border-line bg-abyss/60 p-3">
-                        {(reprocessPreview.selected_candidates as IngestPlanCandidate[]).map((candidate) => (
-                          <div key={`${candidate.candidate_id}-${candidate.status}`} className="rounded-2xl border border-line bg-panel/40 p-3 text-sm text-muted">
-                            <p className="truncate font-medium text-ink">{candidate.display_name || candidate.relative_path || candidate.source_path}</p>
-                            <p className="mt-1 break-all text-xs">{candidate.source_path}</p>
-                            <p className="mt-1 text-xs text-muted">{candidate.artifact_type} · {candidate.parser} · {candidate.status}</p>
-                          </div>
-                        ))}
-                      </div>
-
-                      {reprocessMode === "manual_selection" || reprocessMode === "choose_again" ? (
-                        <div className="max-h-[320px] space-y-3 overflow-y-auto overscroll-contain rounded-2xl border border-line bg-abyss/60 p-3">
-                          {([...(reprocessPreview.selected_candidates || []), ...(reprocessPreview.new_candidates || [])] as IngestPlanCandidate[]).map((candidate) => (
-                            <label key={`${candidate.candidate_id}-${candidate.status}`} className="flex items-start gap-3 rounded-2xl border border-line bg-panel/40 p-3 text-sm text-muted">
-                              <input
-                                type="checkbox"
-                                checked={reprocessSelectionIds.includes(candidate.candidate_id)}
-                                onChange={() => toggleReprocessCandidate(candidate.candidate_id)}
-                                className="mt-1"
-                              />
-                              <div className="min-w-0">
-                                <p className="truncate font-medium text-ink">{candidate.display_name || candidate.relative_path || candidate.source_path}</p>
-                                <p className="mt-1 break-all text-xs">{candidate.source_path}</p>
-                                <p className="mt-1 text-xs text-muted">{candidate.artifact_type} · {candidate.parser} · {candidate.status}</p>
-                              </div>
-                            </label>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </>
-              ) : (
-                <div className="rounded-2xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">
-                  This evidence does not have raw discovery candidates. It will reuse the generic core indexing plan and index the evidence again.
-                </div>
-              )}
-            </div>
-
-            <div className="sticky bottom-0 z-10 mt-6 flex justify-end gap-3 border-t border-line bg-panel/95 pt-4 backdrop-blur">
-              <button onClick={() => setReprocessDialogOpen(false)} className="rounded-2xl border border-line px-4 py-2 text-sm text-muted">Cancel</button>
-              <button onClick={confirmReprocess} disabled={reprocessMutation.isPending} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50">
-                {reprocessMutation.isPending ? "Re-indexing..." : "Start re-indexing"}
+            <label className="mt-5 block text-sm text-muted">
+              Type DELETE to confirm.
+              <input value={deleteConfirmText} onChange={(event) => setDeleteConfirmText(event.target.value)} className="mt-2 w-full rounded-2xl border border-line bg-abyss px-4 py-3 font-mono text-sm text-ink outline-none focus:border-danger" />
+            </label>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={() => { setDeleteDialogOpen(false); setDeleteConfirmText(""); }} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Cancel</button>
+              <button type="button" onClick={() => deleteMutation.mutate()} disabled={!deleteConfirmationValid || deleteMutation.isPending} className="rounded-2xl bg-danger px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                {deleteMutation.isPending ? "Deleting..." : "Delete evidence"}
               </button>
             </div>
           </div>
-        </div>
         </div>
       ) : null}
     </div>
