@@ -29,6 +29,19 @@ Do not publish these ports publicly:
 - Never commit `.env`, certificates, private keys, tokens or service passwords.
 - Rotate secrets before sharing logs or screenshots if exposure is suspected.
 
+## Deployment Metadata
+
+Never commit real deployment infrastructure: hostnames, IP addresses, SSH usernames, or server-specific filesystem paths. This is a public repository — anything committed here is permanently, publicly disclosed, regardless of later edits or history rewrites.
+
+- Deployment scripts (`deploy.sh`, `scripts/deploy_remote.sh`, `scripts/backup.sh`, `scripts/restore.sh`) take the real target via environment variables (`REMOTE_HOST`, `REMOTE_DIR`, `APP_DIR`, `POSTGRES_CONTAINER`) and fail with a clear error if a required one is missing. Never add a hardcoded fallback to a real value — an empty/required default that fails loudly is correct; a real value that "just works" is not.
+- Documentation and examples that need to show an IP address must use an RFC 5737 documentation range, never a real or guessed private address:
+  - `192.0.2.0/24`
+  - `198.51.100.0/24`
+  - `203.0.113.0/24`
+- `127.0.0.1`, `0.0.0.0`, and `localhost` are always fine to use literally — they're standard binds/loopback, not infrastructure disclosure.
+- DFIR test fixtures are the one deliberate exception: this project's test suite legitimately uses realistic-looking private (RFC 1918) IPs and Linux/Windows paths as simulated victim-machine data. That's expected test content, not a leak — `scripts/check-infra-metadata.sh` already excludes `backend/tests/**` and `*.test.ts(x)` files for exactly this reason.
+- Run `bash scripts/check-infra-metadata.sh` (also wired into CI) before committing anything that touches deployment scripts or docs, if you're ever unsure.
+
 ## Evidence Data
 
 Do not commit or upload private evidence to GitHub:
