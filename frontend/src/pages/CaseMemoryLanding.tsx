@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useHostContext } from "../hooks/useHostContext";
+import { assignedHostMatchesDetected, normalizeEvidenceHostName } from "../lib/evidenceDetailFormatting";
 import type { CaseContextHostSummary, MemoryEvidenceLandingItem } from "../api/client";
 
 function shortId(id: string): string {
@@ -67,23 +68,17 @@ function sizeLabel(bytes: number): string {
   return `${bytes} B`;
 }
 
-function normalizeHostName(value: string | null | undefined): string {
-  const normalized = String(value || "").trim().toLowerCase();
-  return normalized.endsWith(".local") ? normalized.slice(0, -6) : normalized;
-}
-
 function assignedHost(item: MemoryEvidenceLandingItem, hosts: CaseContextHostSummary[]): CaseContextHostSummary | null {
   if (!item.host_id) return null;
   return hosts.find((host) => host.id === item.host_id) ?? null;
 }
 
 function assignmentStatus(item: MemoryEvidenceLandingItem, hosts: CaseContextHostSummary[]): { label: string; tone: "ok" | "warn" | "muted" } {
-  const host = assignedHost(item, hosts);
   if (!item.host_id) return { label: "Unassigned", tone: "muted" };
-  const detected = normalizeHostName(item.detected_host);
+  const host = assignedHost(item, hosts);
+  const detected = normalizeEvidenceHostName(item.detected_host);
   if (!host || !detected) return { label: "Assigned", tone: "ok" };
-  const names = [host.id, host.canonical_name, host.display_name, ...(host.aliases || []), ...(host.all_names || [])];
-  return names.some((name) => normalizeHostName(name) === detected)
+  return assignedHostMatchesDetected(host, item.detected_host)
     ? { label: "Assigned", tone: "ok" }
     : { label: "Mismatch", tone: "warn" };
 }
