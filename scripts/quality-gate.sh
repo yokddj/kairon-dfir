@@ -92,7 +92,6 @@ check "no secrets exposed" "! grep -E 'echo.*SECRET=|echo.*PASSWORD=' scripts/se
 # ---- Docs checks ----
 echo ""
 echo "--- Documentation ---"
-check "no IP 192.168.1.19" "! grep -rPn '192\.168\.1\.19' --include='*.md' --include='*.yml' README.md .env.example config/ docs/first-run.md docs/roles-and-permissions.md docs/deployment-modes.md docs/windows-wsl.md 2>/dev/null | grep -q ."
 check "no 'assigned cases only'" "! grep -rPi 'assigned cases only|read.only role' README.md docs/ 2>/dev/null | grep -q ."
 check "no 'default password'" "! grep -rPin 'default password' README.md docs/ 2>/dev/null | grep -q ."
 check "no PowerShell as supported" "! grep -rPin 'Native PowerShell (deployment|is supported|CMD.*supported)' README.md docs/ 2>/dev/null | grep -v 'not supported' | grep -q ."
@@ -143,6 +142,7 @@ fi
 # ---- Security ----
 echo ""
 echo "--- Security ---"
+check "no real infrastructure metadata" "bash scripts/check-infra-metadata.sh"
 check "no private keys" "! grep -rP 'BEGIN (RSA |EC |DSA |OPENSSH )PRIVATE KEY' --include='*.py' --include='*.sh' --include='*.yml' --include='*.json' --include='*.md' backend/ scripts/ config/ .github/ 2>/dev/null | grep -q ."
 check "no .env tracked" "! git ls-files 2>/dev/null | grep -qx '^.env$'"
 check "no CHANGE_ME in defaults" "! grep -q CHANGE_ME config/defaults.env 2>/dev/null"
