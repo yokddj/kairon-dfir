@@ -353,7 +353,7 @@ export function MemoryCanonicalView({
         onOpenDetail={(entityId) => setSelectedEntityId(entityId)}
       />
 
-      <ProcessTreePanel tree={tree} onSelect={(entityId) => setSelectedEntityId(entityId)} />
+      <CanonicalProcessTreeTable tree={tree} onSelect={(entityId) => setSelectedEntityId(entityId)} />
     </section>
   );
 }
@@ -571,7 +571,7 @@ function DetailRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function ProcessTreePanel({ tree, onSelect }: { tree: MemoryProcessTreeEntity | undefined; onSelect: (entityId: string) => void }) {
+function CanonicalProcessTreeTable({ tree, onSelect }: { tree: MemoryProcessTreeEntity | undefined; onSelect: (entityId: string) => void }) {
   if (!tree) return null;
   if (tree.total_entities > 200) {
     return (
