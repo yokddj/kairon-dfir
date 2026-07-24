@@ -98,7 +98,7 @@ def register_disk_image_evidence(upload_id: str, db: Session) -> Evidence:
     format_probe = detect_disk_image_format(canonical, [canonical])
     if not format_probe:
         raise MemoryUploadSessionError("unknown_format", "Kairon could not recognize this disk image format.")
-    if str(format_probe.get("format") or "") not in {"raw", "ewf"}:
+    if not format_probe.get("supported"):
         raise MemoryUploadSessionError("unsupported_format", f"{format_probe.get('format')} is recognized but not supported in this release.")
 
     metadata = dict(item.metadata_json or {})

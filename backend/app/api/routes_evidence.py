@@ -2451,7 +2451,7 @@ def upload_disk_image(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not format_probe:
         raise HTTPException(status_code=400, detail={"error_code": "unknown_format", "message": "Kairon could not recognize this disk image format."})
-    if str(format_probe.get("format") or "") not in {"raw", "ewf"}:
+    if not format_probe.get("supported"):
         raise HTTPException(status_code=400, detail={"error_code": "unsupported_format", "message": f"{format_probe.get('format')} is recognized but not supported in this release."})
     resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(
         provided_platform,
