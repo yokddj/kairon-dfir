@@ -289,38 +289,57 @@ def test_run_all_still_requires_its_own_authorization(db: Session, monkeypatch) 
 
 
 def test_preflight_confirm_endpoint() -> None:
-    """OPTIONS on /confirm-memory-type returns CORS headers."""
-    import urllib.request
-    req = urllib.request.Request(
-        f"http://192.168.1.19:8000/api/cases/00000000-0000-0000-0000-000000000000/evidences/00000000-0000-0000-0000-000000000000/confirm-memory-type",
-        method="OPTIONS",
+    """OPTIONS on /confirm-memory-type returns CORS headers.
+
+    Exercises the real app's CORSMiddleware in-process via TestClient rather
+    than opening a socket to a real host: CORS preflight is handled entirely
+    by the middleware before any route/DB code runs, so this is a faithful
+    (and hermetic, CI-safe) test of the same behavior.
+    """
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.options(
+        "/api/cases/00000000-0000-0000-0000-000000000000/evidences/00000000-0000-0000-0000-000000000000/confirm-memory-type",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
     )
-    req.add_header("Origin", "http://192.168.1.19:5173")
-    req.add_header("Access-Control-Request-Method", "POST")
-    req.add_header("Access-Control-Request-Headers", "content-type")
-    with urllib.request.urlopen(req, timeout=10) as response:
-        assert response.status in {200, 204}
-        assert response.headers.get("access-control-allow-origin") == "*"
-        allow_methods = response.headers.get("access-control-allow-methods", "")
-        assert "POST" in allow_methods
-        assert "OPTIONS" in allow_methods
+    assert response.status_code in {200, 204}
+    # app.main sets allow_credentials=True whenever CORS_ORIGINS isn't a bare
+    # "*" (the default here, per config/defaults.env), and a credentialed
+    # CORS response must echo the specific request Origin rather than "*" --
+    # returning a literal wildcard with credentials enabled is invalid per
+    # the CORS spec and rejected by browsers.
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    allow_methods = response.headers.get("access-control-allow-methods", "")
+    assert "POST" in allow_methods
+    assert "OPTIONS" in allow_methods
 
 
 def test_preflight_run_all_endpoint() -> None:
-    """OPTIONS on /run-all returns CORS headers."""
-    import urllib.request
-    req = urllib.request.Request(
-        f"http://192.168.1.19:8000/api/cases/00000000-0000-0000-0000-000000000000/evidences/00000000-0000-0000-0000-000000000000/run-all",
-        method="OPTIONS",
+    """OPTIONS on /run-all returns CORS headers. See test_preflight_confirm_endpoint."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    response = client.options(
+        "/api/cases/00000000-0000-0000-0000-000000000000/evidences/00000000-0000-0000-0000-000000000000/run-all",
+        headers={
+            "Origin": "http://localhost:5173",
+            "Access-Control-Request-Method": "POST",
+            "Access-Control-Request-Headers": "content-type",
+        },
     )
-    req.add_header("Origin", "http://192.168.1.19:5173")
-    req.add_header("Access-Control-Request-Method", "POST")
-    req.add_header("Access-Control-Request-Headers", "content-type")
-    with urllib.request.urlopen(req, timeout=10) as response:
-        assert response.status in {200, 204}
-        assert response.headers.get("access-control-allow-origin") == "*"
-        allow_methods = response.headers.get("access-control-allow-methods", "")
-        assert "POST" in allow_methods
+    assert response.status_code in {200, 204}
+    # See test_preflight_confirm_endpoint for why this is the echoed Origin,
+    # not "*".
+    assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    allow_methods = response.headers.get("access-control-allow-methods", "")
+    assert "POST" in allow_methods
 
 
 # ---------------------------------------------------------------------------

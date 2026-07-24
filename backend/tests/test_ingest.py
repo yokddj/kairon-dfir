@@ -15469,7 +15469,6 @@ def test_wmi_frontend_routes_to_wmi_view() -> None:
     candidates = [
         Path(__file__).resolve().parents[2],
         Path(__file__).resolve().parents[1],
-        Path("/root/DFIR_APP"),
         Path("/app"),
     ]
     repo_root = next((candidate for candidate in candidates if (candidate / "frontend" / "src" / "pages" / "ArtifactExplorer.tsx").exists()), None)
@@ -15700,7 +15699,6 @@ def test_autoruns_frontend_routes_to_autoruns_view() -> None:
     candidates = [
         Path(__file__).resolve().parents[2],
         Path(__file__).resolve().parents[1],
-        Path("/root/DFIR_APP"),
         Path("/app"),
     ]
     repo_root = next((candidate for candidate in candidates if (candidate / "frontend" / "src" / "pages" / "ArtifactExplorer.tsx").exists()), None)
