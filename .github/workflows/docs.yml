@@ -12,18 +12,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check no personal IPs
-        run: |
-          set -e
-          if grep -rPn '192\.168\.1\.19' --include='*.md' --include='*.yml' \
-            README.md .env.example config/ docker-compose.yml \
-            docs/first-run.md docs/roles-and-permissions.md \
-            docs/deployment-modes.md docs/windows-wsl.md 2>/dev/null; then
-            echo "ERROR: personal IP 192.168.1.19 found in active docs"
-            exit 1
-          fi
-          echo "OK: no personal IPs in active docs"
-
       - name: Check no legacy role claims
         run: |
           set -e

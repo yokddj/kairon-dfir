@@ -16,6 +16,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Check no real infrastructure metadata
+        run: bash scripts/check-infra-metadata.sh
+
       - name: Check for accidental .env
         run: |
           if git ls-files | grep -q '^\.env$'; then
