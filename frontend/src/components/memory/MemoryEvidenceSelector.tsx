@@ -1,4 +1,5 @@
 import type { CaseContextHostSummary, MemoryEvidenceLandingItem } from "../../api/client";
+import { assignedHostMatchesDetected, normalizeEvidenceHostName } from "../../lib/evidenceDetailFormatting";
 
 type Props = {
   caseId: string;
@@ -8,23 +9,17 @@ type Props = {
   onChange: (evidenceId: string) => void;
 };
 
-function normalizeHostName(value: string | null | undefined): string {
-  const normalized = String(value || "").trim().toLowerCase();
-  return normalized.endsWith(".local") ? normalized.slice(0, -6) : normalized;
-}
-
 function assignedHost(item: MemoryEvidenceLandingItem, hosts: CaseContextHostSummary[]): CaseContextHostSummary | null {
   if (!item.host_id) return null;
   return hosts.find((host) => host.id === item.host_id) ?? null;
 }
 
 function hostAssignmentStatus(item: MemoryEvidenceLandingItem, hosts: CaseContextHostSummary[]): string {
-  const host = assignedHost(item, hosts);
   if (!item.host_id) return "Unassigned";
-  const detected = normalizeHostName(item.detected_host);
+  const host = assignedHost(item, hosts);
+  const detected = normalizeEvidenceHostName(item.detected_host);
   if (!host || !detected) return "Assigned";
-  const names = [host.id, host.canonical_name, host.display_name, ...(host.aliases || []), ...(host.all_names || [])];
-  return names.some((name) => normalizeHostName(name) === detected) ? "Assigned" : "Mismatch";
+  return assignedHostMatchesDetected(host, item.detected_host) ? "Assigned" : "Mismatch";
 }
 
 function readinessBadge(item: MemoryEvidenceLandingItem): string | null {
