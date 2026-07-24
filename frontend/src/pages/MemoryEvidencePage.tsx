@@ -14,6 +14,7 @@ import { MemoryTypeConfirmationModal } from "../components/memory/MemoryTypeConf
 import { MemorySymbolResolutionPanel } from "../components/memory/MemorySymbolResolutionPanel";
 import { MemoryExperimentalResultsPanel } from "../components/memory/MemoryExperimentalResultsPanel";
 import { MemoryPreparationCard } from "../components/memory/MemoryPreparationCard";
+import { assignedHostMatchesDetected, normalizeEvidenceHostName } from "../lib/evidenceDetailFormatting";
 import { capabilityEnabled } from "../lib/platformRegistry";
 import { MEMORY_TABS, isMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 import { memoryQueryKeys } from "../lib/memoryQueryKeys";
@@ -35,23 +36,17 @@ function familyForTab(tab: MemoryTab, _artifact?: string | null): string {
   return ARTIFACT_FAMILY_FROM_TAB[tab] || "processes";
 }
 
-function normalizeHostName(value: string | null | undefined): string {
-  const normalized = String(value || "").trim().toLowerCase();
-  return normalized.endsWith(".local") ? normalized.slice(0, -6) : normalized;
-}
-
 function assignedHost(item: MemoryEvidenceLandingItem | null, hosts: CaseContextHostSummary[]): CaseContextHostSummary | null {
   if (!item?.host_id) return null;
   return hosts.find((host) => host.id === item.host_id) ?? null;
 }
 
 function hostAssignmentStatus(item: MemoryEvidenceLandingItem | null, hosts: CaseContextHostSummary[]): { label: string; tone: string } {
-  const host = assignedHost(item, hosts);
   if (!item?.host_id) return { label: "Unassigned", tone: "border-line bg-panel/50 text-muted" };
-  const detected = normalizeHostName(item.detected_host);
+  const host = assignedHost(item, hosts);
+  const detected = normalizeEvidenceHostName(item.detected_host);
   if (!host || !detected) return { label: "Assigned", tone: "border-mint/30 bg-mint/10 text-mint" };
-  const names = [host.id, host.canonical_name, host.display_name, ...(host.aliases || []), ...(host.all_names || [])];
-  return names.some((name) => normalizeHostName(name) === detected)
+  return assignedHostMatchesDetected(host, item.detected_host)
     ? { label: "Assigned", tone: "border-mint/30 bg-mint/10 text-mint" }
     : { label: "Mismatch", tone: "border-amber/30 bg-amber/10 text-amber" };
 }
