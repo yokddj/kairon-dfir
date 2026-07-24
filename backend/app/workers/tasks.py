@@ -1482,6 +1482,103 @@ PARSER_CAPABILITIES: dict[str, dict] = {
         "requires_ordering": False,
         "shared_state": False,
     },
+    # Linux parsers (app/ingest/linux/*.py) are all pure functions -- read a
+    # file's content, return a list of records -- with no shared mutable
+    # state (only read-only precompiled regexes at module scope), the same
+    # shape as the Windows parsers above. Without this, every artifact on a
+    # Linux disk image or collection is forced through single-threaded
+    # sequential parsing regardless of available CPU cores.
+    "linux_journal_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_auth_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_syslog_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_audit_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_shell_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_cron_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_systemd_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_ssh_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_identity_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_sudoers_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_packages_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_network_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
+    "linux_os_info_raw": {
+        "parallel_safe": True,
+        "resource_class": "cpu_io",
+        "max_parallelism": 4,
+        "requires_ordering": False,
+        "shared_state": False,
+    },
 }
 
 
