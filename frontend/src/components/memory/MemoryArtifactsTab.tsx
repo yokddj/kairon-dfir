@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   type MemoryArtifactDetail,
@@ -21,6 +21,7 @@ import {
   Search,
 } from "lucide-react";
 import { HostFilter } from "../HostFilter";
+import { MemoryPaginationControls } from "./MemoryPaginationControls";
 
 type Props = {
   caseId: string;
@@ -193,26 +194,13 @@ function Pagination({
   return (
     <div className="flex items-center justify-between text-xs" data-testid={testId}>
       <span className="text-muted">Page {page} of {totalPages}</span>
-      <div className="flex gap-2">
-        <button
-          type="button"
-          onClick={() => onPage(Math.max(1, page - 1))}
-          disabled={page <= 1}
-          className="rounded-md border border-line bg-abyss/70 px-2 py-1 disabled:opacity-50"
-          data-testid={`${testId}-prev`}
-        >
-          Previous
-        </button>
-        <button
-          type="button"
-          onClick={() => onPage(Math.min(totalPages, page + 1))}
-          disabled={page >= totalPages}
-          className="rounded-md border border-line bg-abyss/70 px-2 py-1 disabled:opacity-50"
-          data-testid={`${testId}-next`}
-        >
-          Next
-        </button>
-      </div>
+      <MemoryPaginationControls
+        page={page}
+        totalPages={totalPages}
+        onPage={onPage}
+        prevTestId={`${testId}-prev`}
+        nextTestId={`${testId}-next`}
+      />
     </div>
   );
 }
@@ -293,6 +281,14 @@ function ProcessActions({ entity, onOpen, onGraph, onTree, onModal, testId }: {
   );
 }
 
+function SubviewEmptyState({ testId, children }: { testId: string; children: ReactNode }) {
+  return (
+    <p className="rounded-2xl border border-line bg-abyss/40 p-3 text-xs text-muted" data-testid={testId}>
+      {children}
+    </p>
+  );
+}
+
 function NetworkTable({ items, onModal, onOpen, onGraph, onTree }: {
   items: Array<Record<string, unknown> & { document_id: string }>;
   onModal: (id: string) => void;
@@ -301,7 +297,7 @@ function NetworkTable({ items, onModal, onOpen, onGraph, onTree }: {
   onTree: (id: string) => void;
 }) {
   if (!items.length) {
-    return <p className="rounded-2xl border border-line bg-abyss/40 p-3 text-xs text-muted" data-testid="memory-artifacts-network-empty">No network connections indexed for this run.</p>;
+    return <SubviewEmptyState testId="memory-artifacts-network-empty">No network connections indexed for this run.</SubviewEmptyState>;
   }
   return (
     <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
@@ -404,7 +400,7 @@ function ModulesTable({ items, onModal, onOpen, onGraph, onTree }: {
   onTree: (id: string) => void;
 }) {
   if (!items.length) {
-    return <p className="rounded-2xl border border-line bg-abyss/40 p-3 text-xs text-muted" data-testid="memory-artifacts-modules-empty">No process modules indexed for this run.</p>;
+    return <SubviewEmptyState testId="memory-artifacts-modules-empty">No process modules indexed for this run.</SubviewEmptyState>;
   }
   return (
     <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
@@ -439,7 +435,7 @@ function HandlesTable({ items, onModal, onOpen, onGraph, onTree }: {
   onTree: (id: string) => void;
 }) {
   if (!items.length) {
-    return <p className="rounded-2xl border border-line bg-abyss/40 p-3 text-xs text-muted" data-testid="memory-artifacts-handles-empty">No handles indexed for this run.</p>;
+    return <SubviewEmptyState testId="memory-artifacts-handles-empty">No handles indexed for this run.</SubviewEmptyState>;
   }
   return (
     <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
@@ -497,7 +493,11 @@ function DriversTable({ items, onModal, testId, type }: {
   type: "drivers" | "kernel";
 }) {
   if (!items.length) {
-    return <p className="rounded-2xl border border-line bg-abyss/40 p-3 text-xs text-muted" data-testid={`memory-artifacts-${type}-empty`}>{type === "drivers" ? "No drivers indexed for this run." : "No kernel modules indexed for this run."}</p>;
+    return (
+      <SubviewEmptyState testId={`memory-artifacts-${type}-empty`}>
+        {type === "drivers" ? "No drivers indexed for this run." : "No kernel modules indexed for this run."}
+      </SubviewEmptyState>
+    );
   }
   return (
     <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
@@ -554,7 +554,7 @@ function SuspiciousTable({ items, onModal, onOpen, onGraph, onTree }: {
   onTree: (id: string) => void;
 }) {
   if (!items.length) {
-    return <p className="rounded-2xl border border-line bg-abyss/40 p-3 text-xs text-muted" data-testid="memory-artifacts-suspicious-empty">No suspicious regions indexed for this run.</p>;
+    return <SubviewEmptyState testId="memory-artifacts-suspicious-empty">No suspicious regions indexed for this run.</SubviewEmptyState>;
   }
   return (
     <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
@@ -621,7 +621,7 @@ function VadsTable({ items, onModal, onOpen, onGraph, onTree }: {
   onTree: (id: string) => void;
 }) {
   if (!items.length) {
-    return <p className="rounded-2xl border border-line bg-abyss/40 p-3 text-xs text-muted" data-testid="memory-artifacts-vads-empty">No VAD observations were normalized for this Evidence.</p>;
+    return <SubviewEmptyState testId="memory-artifacts-vads-empty">No VAD observations were normalized for this Evidence.</SubviewEmptyState>;
   }
   return (
     <div className="max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
