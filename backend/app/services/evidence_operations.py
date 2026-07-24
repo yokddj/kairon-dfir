@@ -156,7 +156,14 @@ def sync_upload_operation(db: Session, session: EvidenceUploadSession, *, commit
             started_at=session.created_at or now,
         )
     operation.case_id = session.case_id
-    operation.evidence_id = _uuid_or_none(session.promoted_evidence_id)
+    promoted_evidence_id = _uuid_or_none(session.promoted_evidence_id)
+    if promoted_evidence_id is not None and db.get(Evidence, promoted_evidence_id) is None:
+        # The promoted Evidence row can be deleted after promotion (operator
+        # cleanup, re-upload, etc.); evidence_operations.evidence_id has an FK
+        # to evidences, so writing a dangling id here would abort every future
+        # reconciliation pass and any request that reads this operation.
+        promoted_evidence_id = None
+    operation.evidence_id = promoted_evidence_id
     next_status = _operation_status(session.status)
     next_owner = "browser" if session.status in {"created", "uploading", "interrupted"} else "backend" if session.status in {"preflight_running", "staged"} else "database"
     transition_operation(operation, next_status, stage=_operation_stage(session), owner=next_owner, error=session.failure_message, force=True)
