@@ -34,7 +34,11 @@ FAILED=0
 # Both backend/tests/** and any *.test.ts(x) file (this project's DFIR
 # test suites routinely embed realistic-looking private IPs and paths as
 # simulated victim-machine data across both backend and frontend tests).
-FIXTURE_EXCLUDES=(':!backend/tests/**' ':!**/*.test.ts' ':!**/*.test.tsx')
+# This script itself is also excluded: its own labels and patterns
+# necessarily contain the literal strings being searched for (e.g. the
+# pattern 'root@' passed to git grep below), which would otherwise match
+# itself on every run.
+FIXTURE_EXCLUDES=(':!backend/tests/**' ':!**/*.test.ts' ':!**/*.test.tsx' ':!scripts/check-infra-metadata.sh')
 
 report() {
   local label="$1"; shift
