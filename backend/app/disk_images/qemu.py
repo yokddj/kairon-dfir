@@ -178,10 +178,14 @@ def _tool_functional(name: str) -> bool:
 
 
 def _parse_vmdk_descriptor(descriptor_path: Path) -> dict[str, Any]:
-    try:
-        content = descriptor_path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
+    # Single-file VMDKs (monolithicSparse, streamOptimized) embed a small
+    # text descriptor at the start of the same file that also holds the
+    # (potentially multi-GB) binary sparse extent data, so this must never
+    # read the whole file -- a real descriptor is always a few KB at most.
+    header = _read_header(descriptor_path, 1024 * 1024)
+    if not header:
         return {"valid": False, "error": "cannot_read_descriptor"}
+    content = header.decode("utf-8", errors="replace")
     lines = content.splitlines()
     extents = []
     errors = []
