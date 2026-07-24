@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type MemoryProcess, type MemoryRunSelector, api } from "../../api/client";
+import { MemoryPaginationControls } from "./MemoryPaginationControls";
 import { ProcessDetailModal } from "./ProcessDetailModal";
 
 type Props = {
@@ -235,27 +236,16 @@ export function MemoryRawTab({ caseId, evidenceId, runId, runOptions, selectedRu
             </div>
             <div className="mt-3 flex items-center justify-between text-xs" data-testid="raw-pagination">
               <span className="text-muted">{processQuery.data.items.length === 0 ? "No rows." : `Showing ${(page - 1) * pageSize + 1}-${(page - 1) * pageSize + processQuery.data.items.length} of ${processQuery.data.total}`}</span>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page <= 1}
-                  className="rounded-md border border-line bg-abyss/70 px-2 py-1 text-xs disabled:opacity-50"
-                  data-testid="raw-prev-page"
-                >
-                  Previous
-                </button>
+              <MemoryPaginationControls
+                page={page}
+                totalPages={totalPages}
+                onPage={setPage}
+                prevTestId="raw-prev-page"
+                nextTestId="raw-next-page"
+                className="flex items-center gap-2"
+              >
                 <span>Page {page} / {totalPages}</span>
-                <button
-                  type="button"
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  disabled={page >= totalPages}
-                  className="rounded-md border border-line bg-abyss/70 px-2 py-1 text-xs disabled:opacity-50"
-                  data-testid="raw-next-page"
-                >
-                  Next
-                </button>
-              </div>
+              </MemoryPaginationControls>
             </div>
           </>
         ) : null}
