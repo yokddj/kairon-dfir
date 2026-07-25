@@ -627,6 +627,14 @@ export default function EvidenceDetail() {
   const liveRunHeartbeatAt = activeRun?.tail_last_progress_at || activeRun?.heartbeat_at || (typeof metadata.heartbeat_at === "string" ? (metadata.heartbeat_at as string) : null);
   const liveRunCurrentArtifact = activeRun?.current_artifact || (typeof metadata.current_artifact === "string" ? (metadata.current_artifact as string) : null);
   const activeRecommendedIndexing = activeIndexingJob && (indexingPlan?.profile === "recommended" || indexingProfile === "recommended");
+  // Matches the backend watchdog's own no_progress_timeout_seconds default (job_watchdog.py):
+  // a worker that stops sending heartbeats for 10+ minutes while ingest_status is still
+  // active/processing is a dead work-horse, not "just slow". activeIndexingJob/indexingState
+  // treat any active ingest_status as "active" regardless of heartbeat freshness, so this is
+  // computed independently to reliably surface the recovery action.
+  const heartbeatStaleThresholdMs = 10 * 60 * 1000;
+  const heartbeatAgeMs = liveRunHeartbeatAt ? Date.now() - new Date(liveRunHeartbeatAt).getTime() : null;
+  const heartbeatStale = isActive && heartbeatAgeMs !== null && heartbeatAgeMs > heartbeatStaleThresholdMs;
   const displayStatus = String(data?.display_status ?? metadata.display_status ?? data?.ingest_status ?? "unknown");
   const investigationReady = Boolean(data?.investigation_ready ?? metadata.investigation_ready ?? false);
   const hasSearchableDocs = Number(searchSummaryQuery.data?.total_indexed_docs ?? metadata.events_indexed ?? manifest?.stats?.indexed_events ?? 0) > 0;
@@ -1582,6 +1590,25 @@ function formatReportStatus(status: string | null | undefined) {
               <div className="h-3 min-w-[220px] flex-1 overflow-hidden rounded-full bg-abyss/80">
                 <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${Math.max(0, Math.min(100, progressPercent))}%` }} />
               </div>
+            </div>
+          </div>
+        ) : null}
+
+        {heartbeatStale ? (
+          <div className="mt-5 rounded-3xl border border-warning/40 bg-warning/10 p-5" data-testid="evidence-heartbeat-stale-banner">
+            <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-warning">Indexing appears stuck</p>
+                <p className="mt-1 text-sm text-ink">No worker activity since {formatDateTime(liveRunHeartbeatAt)}. Cancel the stale state, then retry indexing.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => cancelIndexingMutation.mutate()}
+                disabled={cancelIndexingMutation.isPending}
+                className="rounded-2xl border border-warning/50 bg-warning/20 px-4 py-2 text-sm font-semibold text-warning disabled:opacity-60"
+              >
+                {cancelIndexingMutation.isPending ? "Cancelling..." : "Cancel stuck indexing"}
+              </button>
             </div>
           </div>
         ) : null}
