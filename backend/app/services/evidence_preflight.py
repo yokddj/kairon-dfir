@@ -27,7 +27,7 @@ import shutil
 import tarfile
 import zipfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from app.core.timing import timed_phase
 
@@ -239,13 +239,27 @@ def _resolve_upload_limit(category: str) -> int:
     return int(settings.backend_max_upload_size)
 
 
-def run_preflight(path: Path, *, token: str, original_filename: str, declared_platform: str | None, tmp_dir: Path) -> PreflightReport:
+def run_preflight(
+    path: Path,
+    *,
+    token: str,
+    original_filename: str,
+    declared_platform: str | None,
+    tmp_dir: Path,
+    on_stage: Callable[[str], None] | None = None,
+) -> PreflightReport:
     """Inspect a staged evidence file/folder and return a full preflight report.
 
     path: the staged file or directory to inspect (already on local disk).
     tmp_dir: a disposable scratch directory owned by the caller; this
       function may write small peek files under it but never anything
       resembling a real extraction, and never touches the database.
+    on_stage: optional best-effort progress callback, fired right before
+      each of this function's real (already timed_phase-instrumented) work
+      phases starts. Purely observational -- exists so a DB-aware caller
+      can mirror live stage progress into something a client can poll
+      (see evidence_upload_session.py's finalize path), without this
+      module importing a Session or knowing anything about persistence.
     """
     settings = get_settings()
     classifier = get_evidence_classifier()
@@ -255,6 +269,8 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
     diagnostics: list[PreflightDiagnostic] = []
     status_checks: list[PreflightStatusCheck] = []
 
+    if on_stage:
+        on_stage("classifying")
     if is_directory:
         classification_category = EvidenceCategory.ARCHIVE
         classification_confidence = "high"
@@ -286,6 +302,8 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
     is_openable_container = is_directory or classification_category == EvidenceCategory.ARCHIVE
     if is_openable_container:
         chain.append("Archive" if not is_directory else "Folder")
+        if on_stage:
+            on_stage("inspecting_evidence")
         try:
             with timed_phase("preflight.inspect_archive_or_folder", token=token, file_size=file_size):
                 info = _inspect_archive_or_folder(path, declared_platform=declared_platform, tmp_dir=tmp_dir)
@@ -324,6 +342,8 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
     elif classification_category == EvidenceCategory.DISK_IMAGE:
         chain.append("Disk Image")
         workspace = tmp_dir / "disk_image_workspace"
+        if on_stage:
+            on_stage("inspecting_evidence")
         with timed_phase("preflight.inspect_disk_image_readonly", token=token, file_size=file_size):
             result = inspect_disk_image_readonly(path, workspace=workspace)
         if not result.get("supported", True):

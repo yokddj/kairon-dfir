@@ -397,8 +397,20 @@ def finalize_resumable_upload_session(db: Session, session: EvidenceUploadSessio
 def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUploadSession) -> tuple[EvidenceUploadSession, PreflightReport]:
     if (session.metadata_json or {}).get("backend") == "unified":
         raise UploadSessionError("unified_session_wrong_endpoint", "This upload session is backed by the unified chunk-index backend; finalize it through the memory upload finalize endpoint, not this one.")
+
+    # Best-effort progress checkpoint: mirrors the caller's current phase
+    # into metadata_json.current_stage with its own commit, so a concurrent
+    # GET on this session (polled by the wizard while this synchronous
+    # finalize call is still in flight) can observe real progress. Purely
+    # observational -- never changes session.status or control flow.
+    def _report_stage(stage: str) -> None:
+        session.metadata_json = {**(session.metadata_json or {}), "current_stage": stage}
+        _touch_upload_session(session)
+        db.add(session)
+        db.commit()
+
     if session.status == EvidenceUploadSessionStatus.staged.value:
-        report = run_preflight(Path(session.staged_path), token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch")
+        report = run_preflight(Path(session.staged_path), token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch", on_stage=_report_stage)
         session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete"}
         session.failure_message = None
         _touch_upload_session(session)
@@ -424,6 +436,7 @@ def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUplo
     session.status = EvidenceUploadSessionStatus.preflight_running.value
     session.bytes_received = size
     session.size_bytes = size
+    session.metadata_json = {**(session.metadata_json or {}), "current_stage": "verifying_integrity"}
     with timed_phase("finalize.mark_preflight_running", session_id=session.id):
         _touch_upload_session(session)
         db.add(session)
@@ -434,7 +447,8 @@ def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUplo
     if session.client_sha256 and digest and session.client_sha256.strip().lower() != digest.lower():
         session.metadata_json = {**(session.metadata_json or {}), "client_sha256_mismatch": True}
     with timed_phase("finalize.run_preflight", session_id=session.id, size_bytes=size):
-        report = run_preflight(path, token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch")
+        report = run_preflight(path, token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch", on_stage=_report_stage)
+    _report_stage("preparing_evidence")
     session.status = EvidenceUploadSessionStatus.staged.value
     session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete"}
     session.failure_message = None

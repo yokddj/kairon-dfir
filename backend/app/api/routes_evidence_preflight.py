@@ -111,6 +111,7 @@ def _session_to_read(session: EvidenceUploadSession) -> EvidenceUploadSessionRea
         promoted_evidence_id=session.promoted_evidence_id,
         category=(session.metadata_json or {}).get("category"),
         backend=(session.metadata_json or {}).get("backend") or "legacy",
+        current_stage=(session.metadata_json or {}).get("current_stage"),
     )
 
 

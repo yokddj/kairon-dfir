@@ -3772,6 +3772,7 @@ export type EvidenceUploadSessionRead = {
   promoted_evidence_id: string | null;
   category: string | null;
   backend: string;
+  current_stage: string | null;
 };
 
 export type UnifiedResumeDetails = {
