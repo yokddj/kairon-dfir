@@ -1,9 +1,19 @@
 import csv
+import os
 from pathlib import Path
 
 from app.ingest.detector import classify_artifact
 from app.ingest.eztools.base import ensure_csv_field_limit
 from app.ingest.scheduled_tasks.helpers import looks_like_scheduled_task_xml_path
+
+# Directories that hold third-party dependency/build trees rather than forensic
+# artifacts. A mounted disk image can contain venvs, node_modules, etc. with
+# thousands of files that have no investigative value and only add ingest time
+# and false-positive risk (see linux/helpers.py marker matching).
+_EXCLUDED_DIR_NAMES = {
+    "site-packages", "dist-packages", "node_modules", ".git",
+    "__pycache__", "venv", ".venv", "env",
+}
 
 
 def list_kape_artifacts(root: Path) -> list[dict]:
@@ -11,7 +21,12 @@ def list_kape_artifacts(root: Path) -> list[dict]:
     ACCEPTED_EXTENSIONS = {".csv", ".json", ".jsonl", ".txt", ".xml", ".log", ".yaml", ".yml", ".conf", ".service", ".timer"}
     EXPERIMENTAL_EXTENSIONS = {".pyc", ".pyo"}
     artifacts = []
-    for path in sorted(root.rglob("*")):
+    candidate_paths: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = [d for d in dirnames if d not in _EXCLUDED_DIR_NAMES]
+        for filename in filenames:
+            candidate_paths.append(Path(dirpath) / filename)
+    for path in sorted(candidate_paths):
         if not path.is_file() or path.suffix.lower() in EXPERIMENTAL_EXTENSIONS:
             continue
         ext = path.suffix.lower()
