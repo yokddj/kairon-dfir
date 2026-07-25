@@ -3,9 +3,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SETUP_SH="$SCRIPT_DIR/setup.sh"
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
+
+# setup.sh derives ROOT_DIR (and therefore where it writes .env) from its
+# own script location, not the caller's cwd -- running the real
+# scripts/setup.sh directly would write/overwrite this actual checkout's
+# .env. Run a copy from inside TMPDIR instead so every invocation below
+# is fully isolated from the real repo.
+mkdir -p "$TMPDIR/scripts"
+cp "$SCRIPT_DIR/setup.sh" "$SCRIPT_DIR/prepare_memory_storage_permissions.sh" "$TMPDIR/scripts/"
+SETUP_SH="$TMPDIR/scripts/setup.sh"
 
 pass=0
 fail=0
@@ -51,8 +59,24 @@ echo 'POSTGRES_PASSWORD=test-postgres-pwd' >> .env
 echo 'KAIRON_PUBLIC_URL=http://localhost:5173' >> .env
 echo 'KAIRON_AUTH_ENABLED=true' >> .env
 
-bash "$SETUP_SH" --non-interactive --mode localhost --no-start 2>/dev/null
+# --no-build avoids depending on a reachable Docker daemon for what is
+# fundamentally a .env-content assertion (DO_BUILD=true alone would still
+# invoke `docker compose build`).
+bash "$SETUP_SH" --non-interactive --mode localhost --no-build --no-start 2>/dev/null
 assert_contains "secrets preserved" "$TMPDIR/.env" "test-secret-value"
+
+# Test 3b: MEMORY_EVIDENCE_SHARED_GID is written (defaults to the caller's
+# own primary group, never a hardcoded container-internal GID) and is
+# preserved across a second run rather than re-derived.
+assert_contains "MEMORY_EVIDENCE_SHARED_GID written" "$TMPDIR/.env" "MEMORY_EVIDENCE_SHARED_GID=$(id -g)"
+first_gid="$(grep '^MEMORY_EVIDENCE_SHARED_GID=' "$TMPDIR/.env")"
+bash "$SETUP_SH" --non-interactive --mode localhost --no-build --no-start 2>/dev/null
+second_gid="$(grep '^MEMORY_EVIDENCE_SHARED_GID=' "$TMPDIR/.env")"
+if [[ "$first_gid" == "$second_gid" ]]; then
+  ((pass++)); echo "PASS: MEMORY_EVIDENCE_SHARED_GID preserved across reruns"
+else
+  ((fail++)); echo "FAIL: MEMORY_EVIDENCE_SHARED_GID preserved across reruns ($first_gid vs $second_gid)"
+fi
 
 # Test 4: No destructive commands
 assert_contains "no down -v" "$SETUP_SH" "docker compose down -v"
