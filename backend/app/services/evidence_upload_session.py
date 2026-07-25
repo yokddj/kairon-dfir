@@ -57,6 +57,7 @@ from app.core.config import get_settings
 from app.core.database import utc_now
 from app.core.evidence_paths import validate_external_path
 from app.core.storage import ensure_within_directory, sanitize_relative_path
+from app.core.timing import timed_phase
 from app.models.case import Case
 from app.models.evidence import Evidence
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
@@ -423,22 +424,26 @@ def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUplo
     session.status = EvidenceUploadSessionStatus.preflight_running.value
     session.bytes_received = size
     session.size_bytes = size
-    _touch_upload_session(session)
-    db.add(session)
-    db.commit()
-    digest = _hash_existing_file(path)
+    with timed_phase("finalize.mark_preflight_running", session_id=session.id):
+        _touch_upload_session(session)
+        db.add(session)
+        db.commit()
+    with timed_phase("finalize.hash_verification", session_id=session.id, size_bytes=size):
+        digest = _hash_existing_file(path)
     session.sha256 = digest
     if session.client_sha256 and digest and session.client_sha256.strip().lower() != digest.lower():
         session.metadata_json = {**(session.metadata_json or {}), "client_sha256_mismatch": True}
-    report = run_preflight(path, token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch")
+    with timed_phase("finalize.run_preflight", session_id=session.id, size_bytes=size):
+        report = run_preflight(path, token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch")
     session.status = EvidenceUploadSessionStatus.staged.value
     session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete"}
     session.failure_message = None
-    _touch_upload_session(session)
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-    sync_upload_operation(db, session)
+    with timed_phase("finalize.persist_preflight_result", session_id=session.id):
+        _touch_upload_session(session)
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        sync_upload_operation(db, session)
     return session, report
 
 

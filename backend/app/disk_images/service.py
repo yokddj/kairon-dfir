@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.core.artifact_registry import artifact_registry_entry
 from app.core.config import get_settings
 from app.core.storage import sanitize_relative_path
+from app.core.timing import timed_phase
 from app.disk_images.registry import ewf_series_members, get_image_format_registry
 from app.ingest.linux.helpers import looks_like_linux_artifact
 from app.ingest.linux.os_detection import detect_linux_release
@@ -705,26 +706,36 @@ def inspect_disk_image_readonly(path: Path, *, workspace: Path) -> dict[str, Any
     before any processing job exists. Caller owns workspace and must remove it
     after use; this function always calls adapter.cleanup() on its own context.
     """
+    file_size = path.stat().st_size if path.exists() else 0
     companions = _ewf_companions(path)
-    registry = get_image_format_registry()
-    detected = registry.detect(path, companions)
+    with timed_phase("disk_image.detect", path=path.name, file_size=file_size):
+        registry = get_image_format_registry()
+        detected = registry.detect(path, companions)
     if not detected:
         return {"supported": False, "error": "unknown_format"}
     adapter = registry.get(str(detected.get("format") or ""))
     if adapter is None:
         return {"supported": False, "error": "unknown_format"}
-    validation = adapter.validate_segments(path, companions)
+    with timed_phase("disk_image.validate_segments", path=path.name):
+        validation = adapter.validate_segments(path, companions)
     if not validation.get("valid", True):
         return {"supported": False, "format": adapter.key, "error": validation.get("error"), "validation": validation}
-    inspect_metadata = adapter.inspect(path, companions)
+    with timed_phase("disk_image.inspect", path=path.name):
+        inspect_metadata = adapter.inspect(path, companions)
     workspace.mkdir(parents=True, exist_ok=True)
     context: dict[str, Any] = {}
     try:
-        context = adapter.expose_readonly(evidence_id="preflight", path=path, companions=companions, workspace=workspace)
+        # The expensive step for formats like VMDK: converts the entire
+        # image to a temporary raw file (see qemu_img_convert_to_raw) so
+        # the raw volumes below can be read. Cost scales with the
+        # image's allocated data, not just the file's on-disk size.
+        with timed_phase("disk_image.expose_readonly", path=path.name, format=adapter.key, file_size=file_size):
+            context = adapter.expose_readonly(evidence_id="preflight", path=path, companions=companions, workspace=workspace)
         if not context.get("supported", True):
             return {"supported": False, "format": adapter.key, "error": context.get("error") or "missing_dependency", "context": context}
         raw_path = Path(str(context.get("exported_raw_path") or context.get("image_path") or path))
-        volumes, installs, warnings = _discover_raw_volumes(raw_path)
+        with timed_phase("disk_image.discover_raw_volumes", path=path.name):
+            volumes, installs, warnings = _discover_raw_volumes(raw_path)
         return {
             "supported": True,
             "format": adapter.key,
@@ -734,9 +745,10 @@ def inspect_disk_image_readonly(path: Path, *, workspace: Path) -> dict[str, Any
             "warnings": warnings,
         }
     finally:
-        if context:
-            try:
-                adapter.cleanup(context)
-            except Exception:  # noqa: BLE001
-                pass
-        shutil.rmtree(workspace, ignore_errors=True)
+        with timed_phase("disk_image.cleanup", path=path.name):
+            if context:
+                try:
+                    adapter.cleanup(context)
+                except Exception:  # noqa: BLE001
+                    pass
+            shutil.rmtree(workspace, ignore_errors=True)

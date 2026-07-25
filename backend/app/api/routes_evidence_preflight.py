@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.timing import timed_phase
 from app.models.evidence_operation import EvidenceOperation, EvidenceOperationJob
 from app.models.evidence_upload_session import EvidenceUploadSession
 from app.models.user import User
@@ -394,12 +395,16 @@ async def append_resumable_evidence_upload(case_id: str, session_id: str, reques
 
 @router.post("/{case_id}/evidence-uploads/{session_id}/finalize", response_model=EvidenceUploadSessionFinalizeResponse)
 def finalize_resumable_evidence_upload(case_id: str, session_id: str, db: Session = Depends(get_db)) -> EvidenceUploadSessionFinalizeResponse:
-    try:
-        session = get_upload_session(db, case_id, session_id)
-        session, report = finalize_resumable_upload_session(db, session)
-    except UploadSessionError as exc:
-        raise _http_from_upload_error(exc) from exc
-    return EvidenceUploadSessionFinalizeResponse(session=_session_to_read(session), preflight=report, health=check_ingestion_readiness(db))
+    with timed_phase("finalize.http_request", case_id=case_id, session_id=session_id):
+        try:
+            with timed_phase("finalize.get_upload_session", session_id=session_id):
+                session = get_upload_session(db, case_id, session_id)
+            session, report = finalize_resumable_upload_session(db, session)
+        except UploadSessionError as exc:
+            raise _http_from_upload_error(exc) from exc
+        with timed_phase("finalize.build_response", session_id=session_id):
+            response = EvidenceUploadSessionFinalizeResponse(session=_session_to_read(session), preflight=report, health=check_ingestion_readiness(db))
+    return response
 
 
 @router.post("/{case_id}/evidence-uploads", response_model=EvidenceUploadSessionCreateResponse)
