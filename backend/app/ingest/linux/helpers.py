@@ -66,9 +66,22 @@ _AUTH_PATTERNS = [
 def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
     """Detect Linux artifact family, type, and parser from a path."""
     path_str = str(path).replace("\\", "/").lower()
+    name = path_str.rsplit("/", 1)[-1]
     for marker, (family, artifact_type, parser) in _LINUX_ARTIFACT_MAP.items():
-        if marker in path_str:
-            return (family, artifact_type, parser)
+        if "/" in marker:
+            # Directory-scoped marker: full relative-path context is required,
+            # so a plain substring match is safe (low collision risk).
+            if marker in path_str:
+                return (family, artifact_type, parser)
+        else:
+            # Filename-scoped marker: match the basename only (optionally with a
+            # log-rotation suffix like ".1" or "-20230101"), never a raw
+            # substring of the full path — otherwise unrelated files that merely
+            # contain the marker word (e.g. "more_messages_pb2.py" containing
+            # "messages", or "group_utils.py" containing "group") get
+            # misclassified as forensic log artifacts.
+            if name == marker or name.startswith(marker + ".") or name.startswith(marker + "-"):
+                return (family, artifact_type, parser)
     return None
 
 

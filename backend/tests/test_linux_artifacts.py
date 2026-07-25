@@ -772,3 +772,52 @@ class TestSecretsAreNeverStored:
         assert "hashes not stored" in entry.get("message", "")
         username_field = entry.get("username", "")
         assert "$" not in username_field
+
+
+class TestArtifactMarkerMatching:
+    """Filename-scoped markers must match the basename, not any substring of
+    the full path — otherwise unrelated dependency files (venvs, node_modules,
+    site-packages) that happen to contain a marker word get misclassified as
+    forensic artifacts and fed to the wrong parser."""
+
+    def test_python_protobuf_file_not_misclassified_as_syslog(self):
+        from app.ingest.linux.helpers import looks_like_linux_artifact
+        path = "home/user/.venv/lib/python3.12/site-packages/google/protobuf/more_messages_pb2.py"
+        assert looks_like_linux_artifact(path) is None
+
+    def test_group_helper_module_not_misclassified_as_identity(self):
+        from app.ingest.linux.helpers import looks_like_linux_artifact
+        path = "home/user/.venv/lib/python3.12/site-packages/somepkg/group_utils.py"
+        assert looks_like_linux_artifact(path) is None
+
+    def test_exact_basename_still_matches(self):
+        from app.ingest.linux.helpers import looks_like_linux_artifact
+        assert looks_like_linux_artifact("var/log/messages") == ("linux_syslog", "syslog", "linux_syslog_raw")
+        assert looks_like_linux_artifact("etc/passwd") == ("linux_identity", "passwd", "linux_identity_raw")
+        assert looks_like_linux_artifact("etc/group") == ("linux_identity", "group", "linux_identity_raw")
+
+    def test_rotated_log_suffix_still_matches(self):
+        from app.ingest.linux.helpers import looks_like_linux_artifact
+        assert looks_like_linux_artifact("var/log/messages.1") is not None
+        assert looks_like_linux_artifact("var/log/messages-20230101") is not None
+        assert looks_like_linux_artifact("var/log/auth.log.1") is not None
+
+    def test_directory_scoped_marker_still_matches(self):
+        from app.ingest.linux.helpers import looks_like_linux_artifact
+        assert looks_like_linux_artifact("etc/cron.d/backup") is not None
+        assert looks_like_linux_artifact("var/lib/dpkg/status") is not None
+
+
+class TestKapeArtifactExclusions:
+    def test_site_packages_and_venv_dirs_pruned(self, tmp_path):
+        from app.ingest.kape import list_kape_artifacts
+        noisy = tmp_path / ".venv" / "lib" / "site-packages" / "google" / "protobuf"
+        noisy.mkdir(parents=True)
+        (noisy / "more_messages_pb2.py").write_text("# generated\n")
+        real_log = tmp_path / "var" / "log"
+        real_log.mkdir(parents=True)
+        (real_log / "syslog").write_text("Jan 1 00:00:00 host kernel: boot\n")
+        artifacts = list_kape_artifacts(tmp_path)
+        names = {a["name"] for a in artifacts}
+        assert "more_messages_pb2.py" not in names
+        assert "syslog" in names
