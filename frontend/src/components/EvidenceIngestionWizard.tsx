@@ -116,6 +116,13 @@ function finalizeStageLabel(stage: string): string {
       return "Preparing evidence";
     case "preflight_complete":
       return "Ready for ingestion";
+    case "preflight_failed":
+      // Should not normally render: once the operation/session is failed,
+      // the wizard shows the dedicated error branch instead of this stage
+      // list (see inspectionState === "failed" below). Kept honest rather
+      // than falling through to the generic label, in case a future caller
+      // ever renders finalizeStageHistory outside that branch.
+      return "Finalize failed";
     default:
       return "Finalizing upload on the server";
   }
@@ -215,6 +222,12 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [finalizeStageHistory, setFinalizeStageHistory] = useState<string[]>([]);
   const promotedRef = useRef(false);
   const promotedEvidenceRef = useRef<Evidence | null>(null);
+  // Holds the current finalize-stage poller's stop function (see
+  // startFinalizeStagePolling) so it can be stopped from outside the
+  // finalize call itself -- on unmount, or when the wizard is closed/reset
+  // mid-finalize (cancellation). Success/failure of the finalize call
+  // itself already stops it via its own try/finally.
+  const stopFinalizePollingRef = useRef<(() => void) | null>(null);
   const [resumeTarget, setResumeTarget] = useState<ResumableUploadSessionRead | null>(null);
   const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [resumeFileError, setResumeFileError] = useState<string | null>(null);
@@ -296,6 +309,12 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setHashProgress(null);
   }, [files, requiresPathInput]);
 
+  useEffect(() => {
+    return () => {
+      stopFinalizePollingRef.current?.();
+    };
+  }, []);
+
   function reset() {
     setStep(0);
     setIntakeType(null);
@@ -315,6 +334,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setNotes("");
     setHashProgress(null);
     setClientSha256(null);
+    stopFinalizePollingRef.current?.();
+    stopFinalizePollingRef.current = null;
     setFinalizeStageHistory([]);
     setInspectionState("idle");
     setInspectionError(null);
@@ -351,6 +372,12 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       if (stopped) return;
       try {
         const response = await api.getEvidenceUploadSession(targetCaseId, sessionId);
+        // Re-check after the await: stopPolling() may have run while this
+        // request was in flight (finalize resolved/rejected, or the wizard
+        // closed/unmounted) -- a response landing after that point must
+        // never be applied, or a stale stage could render as active right
+        // after the operation has already failed or succeeded.
+        if (stopped) return;
         const stage = response.session.current_stage;
         if (stage) {
           setFinalizeStageHistory((previous) => (previous[previous.length - 1] === stage ? previous : [...previous, stage]));
@@ -409,10 +436,12 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
         setInspectionState("finalizing_upload");
         setFinalizeStageHistory([]);
         const stopPolling = startFinalizeStagePolling(caseId, activeSession.id);
+        stopFinalizePollingRef.current = stopPolling;
         try {
           finalizedResponse = await api.finalizeResumableEvidenceUploadSession(caseId, activeSession.id);
         } finally {
           stopPolling();
+          if (stopFinalizePollingRef.current === stopPolling) stopFinalizePollingRef.current = null;
         }
         latestSession = finalizedResponse.session;
         setSession(finalizedResponse.session);

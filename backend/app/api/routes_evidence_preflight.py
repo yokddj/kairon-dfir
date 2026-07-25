@@ -56,7 +56,7 @@ from app.services.evidence_upload_session import (
     promote_upload_session,
     rerun_preflight,
 )
-from app.services.evidence_operations import reconcile_evidence_operations, sync_upload_operation
+from app.services.evidence_operations import PREFLIGHT_SUBSTAGES, derive_operation_stage, get_operation_for_session, get_operation_stage, reconcile_evidence_operations, sync_upload_operation, transition_operation
 from app.services.evidence_unified_upload import (
     UNIFIED_UPLOAD_KINDS,
     cancel_unified_session,
@@ -88,7 +88,15 @@ def _sync_session(db: Session, session: EvidenceUploadSession, *, commit: bool =
     return session
 
 
-def _session_to_read(session: EvidenceUploadSession) -> EvidenceUploadSessionRead:
+def _session_to_read(db: Session, session: EvidenceUploadSession) -> EvidenceUploadSessionRead:
+    # Legacy sessions: current_stage is derived read-only from the
+    # associated EvidenceOperation.stage (the canonical persisted source --
+    # see app.services.evidence_operations), never stored a second time on
+    # the session itself. Unified sessions are untouched by this sprint --
+    # they still read their own pre-existing metadata_json.current_stage,
+    # populated by app.services.evidence_unified_upload, a separate code
+    # path this change does not touch.
+    current_stage = (session.metadata_json or {}).get("current_stage") if is_unified_session(session) else get_operation_stage(db, session)
     return EvidenceUploadSessionRead(
         id=session.id,
         case_id=session.case_id,
@@ -111,7 +119,7 @@ def _session_to_read(session: EvidenceUploadSession) -> EvidenceUploadSessionRea
         promoted_evidence_id=session.promoted_evidence_id,
         category=(session.metadata_json or {}).get("category"),
         backend=(session.metadata_json or {}).get("backend") or "legacy",
-        current_stage=(session.metadata_json or {}).get("current_stage"),
+        current_stage=current_stage,
     )
 
 
@@ -169,7 +177,13 @@ def case_activity_center(case_id: str, db: Session = Depends(get_db)) -> Activit
             category = "Completed"
         elif operation.status in {"failed", "cancelled", "expired"}:
             category = "Failed"
-        elif operation.stage in {"preflight_running", "preflight_complete", "staged"}:
+        elif operation.stage in {"preflight_running", "preflight_complete", "staged", *PREFLIGHT_SUBSTAGES}:
+            # PREFLIGHT_SUBSTAGES covers the fine-grained checkpoints finalize
+            # now writes directly onto operation.stage (verifying_integrity,
+            # classifying, inspecting_evidence, preparing_evidence) -- without
+            # this, an operation mid-finalize would fall through to the
+            # default "Uploads" bucket the moment its stage moved past the
+            # old coarse "preflight_running" label.
             category = "Processing"
         started = operation.started_at or operation.created_at
         elapsed = (now - started).total_seconds() if started and getattr(started, "tzinfo", None) else None
@@ -254,6 +268,9 @@ def dismiss_evidence_operation(case_id: str, operation_id: str, db: Session = De
 def _resumable_entry(session: EvidenceUploadSession, db: Session) -> ResumableUploadSessionRead:
     metadata = session.metadata_json or {}
     unified = is_unified_session(session)
+    # See _session_to_read: legacy sessions derive current_stage from
+    # EvidenceOperation.stage read-only; unified sessions are untouched.
+    current_stage = metadata.get("current_stage") if unified else get_operation_stage(db, session)
     expected = session.expected_size_bytes or 0
     progress_percent = round((session.bytes_received / expected) * 100, 2) if expected else None
     resumable = session.status in {"created", "uploading", "interrupted"} or (session.status == "failed" and unified)
@@ -287,7 +304,7 @@ def _resumable_entry(session: EvidenceUploadSession, db: Session) -> ResumableUp
         bytes_received=session.bytes_received,
         progress_percent=progress_percent,
         status=session.status,
-        current_stage=metadata.get("current_stage"),
+        current_stage=current_stage,
         created_at=session.created_at,
         updated_at=session.updated_at,
         expires_at=session.expires_at,
@@ -352,12 +369,12 @@ def init_resumable_evidence_upload(
             detail = {"error_code": exc.code, "code": exc.code, "message": exc.message, **(exc.detail or {})}
             status_code = 409 if exc.code in {"MEMORY_UPLOAD_ACTIVE_SESSION_EXISTS", "MEMORY_UPLOAD_CASE_QUOTA_EXCEEDED"} else 413 if exc.code == "MEMORY_UPLOAD_TOO_LARGE" else 400
             raise HTTPException(status_code=status_code, detail=detail) from exc
-        return EvidenceUploadSessionStageResponse(session=_session_to_read(session), health=check_ingestion_readiness(db), unified=UnifiedUploadInfo(**vars(info)))
+        return EvidenceUploadSessionStageResponse(session=_session_to_read(db, session), health=check_ingestion_readiness(db), unified=UnifiedUploadInfo(**vars(info)))
     try:
         session = create_resumable_upload_session(db, case_id, filename=payload.filename, expected_size_bytes=payload.expected_size_bytes, declared_platform=declared, client_sha256=payload.client_sha256)
     except UploadSessionError as exc:
         raise _http_from_upload_error(exc) from exc
-    return EvidenceUploadSessionStageResponse(session=_session_to_read(session), health=check_ingestion_readiness(db))
+    return EvidenceUploadSessionStageResponse(session=_session_to_read(db, session), health=check_ingestion_readiness(db))
 
 
 @router.get("/{case_id}/evidence-uploads/{session_id}", response_model=EvidenceUploadSessionStageResponse)
@@ -368,7 +385,7 @@ def get_evidence_upload(case_id: str, session_id: str, db: Session = Depends(get
         raise _http_from_upload_error(exc) from exc
     session = _sync_session(db, session)
     info = unified_upload_info(session, db) if is_unified_session(session) else None
-    return EvidenceUploadSessionStageResponse(session=_session_to_read(session), health=None, unified=UnifiedUploadInfo(**vars(info)) if info else None)
+    return EvidenceUploadSessionStageResponse(session=_session_to_read(db, session), health=None, unified=UnifiedUploadInfo(**vars(info)) if info else None)
 
 
 @router.put("/{case_id}/evidence-uploads/{session_id}/bytes", response_model=EvidenceUploadSessionAppendResponse)
@@ -391,7 +408,7 @@ async def append_resumable_evidence_upload(case_id: str, session_id: str, reques
             db.commit()
     except UploadSessionError as exc:
         raise _http_from_upload_error(exc) from exc
-    return EvidenceUploadSessionAppendResponse(session=_session_to_read(session), offset=int(session.bytes_received or 0))
+    return EvidenceUploadSessionAppendResponse(session=_session_to_read(db, session), offset=int(session.bytes_received or 0))
 
 
 @router.post("/{case_id}/evidence-uploads/{session_id}/finalize", response_model=EvidenceUploadSessionFinalizeResponse)
@@ -403,8 +420,30 @@ def finalize_resumable_evidence_upload(case_id: str, session_id: str, db: Sessio
             session, report = finalize_resumable_upload_session(db, session)
         except UploadSessionError as exc:
             raise _http_from_upload_error(exc) from exc
+        except Exception as exc:
+            # Mirrors the background retry worker's own failure handling
+            # (app.workers.tasks.run_evidence_upload_preflight): the
+            # operation -- not session.status, deliberately left untouched
+            # here to match that existing convention -- transitions to
+            # "failed", so nothing can keep presenting this as an active
+            # operation (UI activeness is governed by status, never by the
+            # stage string alone). Unlike the worker's own hardcoded
+            # "preflight_failed" label, this preserves whatever real
+            # checkpoint (verifying_integrity/classifying/inspecting_evidence/
+            # preparing_evidence) was last reached, via the same
+            # derive_operation_stage derivation sync_upload_operation already
+            # uses -- useful forensic detail on *where* it broke, not just
+            # that it broke. Progress checkpoints are observational only
+            # and must never make finalize's actual result partially
+            # successful; only this outcome commit does.
+            operation = get_operation_for_session(db, session)
+            if operation is not None:
+                transition_operation(operation, "failed", stage=derive_operation_stage(session, operation.stage), owner="backend", error=f"{exc.__class__.__name__}: {exc}", force=True)
+                db.add(operation)
+                db.commit()
+            raise
         with timed_phase("finalize.build_response", session_id=session_id):
-            response = EvidenceUploadSessionFinalizeResponse(session=_session_to_read(session), preflight=report, health=check_ingestion_readiness(db))
+            response = EvidenceUploadSessionFinalizeResponse(session=_session_to_read(db, session), preflight=report, health=check_ingestion_readiness(db))
     return response
 
 
@@ -436,7 +475,7 @@ def create_evidence_upload(
         logger.exception("Preflight inspection failed for case %s", case_id)
         raise HTTPException(status_code=500, detail=f"Preflight inspection failed: {exc.__class__.__name__}") from exc
 
-    return EvidenceUploadSessionCreateResponse(session=_session_to_read(session), preflight=report, health=check_ingestion_readiness(db))
+    return EvidenceUploadSessionCreateResponse(session=_session_to_read(db, session), preflight=report, health=check_ingestion_readiness(db))
 
 
 @router.post("/{case_id}/evidence-uploads/stream", response_model=EvidenceUploadSessionStageResponse)
@@ -471,7 +510,7 @@ async def create_evidence_upload_stream(
         logger.exception("Streaming evidence upload failed for case %s", case_id)
         raise HTTPException(status_code=500, detail={"error_code": "staging_failed", "code": "staging_failed", "message": f"Upload staging failed: {exc.__class__.__name__}"}) from exc
 
-    return EvidenceUploadSessionStageResponse(session=_session_to_read(session), health=check_ingestion_readiness(db))
+    return EvidenceUploadSessionStageResponse(session=_session_to_read(db, session), health=check_ingestion_readiness(db))
 
 
 @router.post("/{case_id}/evidence-uploads/{session_id}/preflight", response_model=PreflightReport)

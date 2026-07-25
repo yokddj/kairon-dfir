@@ -22,6 +22,26 @@ TERMINAL_UPLOAD_STATUSES = {"cancelled", "expired", "promoted", "failed"}
 TERMINAL_OPERATION_STATUSES = {"completed", "failed", "cancelled", "expired"}
 ACTIVE_JOB_STATUSES = {"queued", "running"}
 
+# Fine-grained finalize checkpoints written directly onto EvidenceOperation.stage
+# by evidence_upload_session._finalize_resumable_upload_session_locked (via
+# transition_operation), in addition to the coarser stage labels session.status
+# already implied (preflight_running/staged/etc.) and the "preflight_failed"
+# label the background retry worker (app.workers.tasks.run_evidence_upload_preflight)
+# already writes on its own failure path. Kept in one place so both the
+# stage-preservation guard below and the Activity Center category bucketing
+# (routes_evidence_preflight.case_activity_center) recognize the same values.
+PREFLIGHT_SUBSTAGES = {"verifying_integrity", "classifying", "inspecting_evidence", "preparing_evidence", "preflight_complete"}
+
+# Session statuses during which a fresher PREFLIGHT_SUBSTAGES value on the
+# operation should be preferred over the coarser session-status-derived
+# stage -- i.e. the window a finalize call (sync or the background retry
+# worker) is actively narrating. "failed" is included so the last real
+# checkpoint survives on operation.stage for diagnosis after a crash,
+# matching the "preflight_failed"-with-stage-preserved intent; operation
+# *status* (not stage) is what actually governs "is this active" for any
+# reader -- see transition_operation's own "failed" status.
+_STAGE_PRESERVING_SESSION_STATUSES = {"preflight_running", "staged", "failed"}
+
 ALLOWED_OPERATION_TRANSITIONS: dict[str, set[str]] = {
     "created": {"waiting_upload", "uploading", "cancelled", "failed"},
     "waiting_upload": {"uploading", "paused", "cancelled", "expired", "failed"},
@@ -80,7 +100,22 @@ def transition_operation(operation: EvidenceOperation, status: str, *, stage: st
         operation.completed_at = None
 
 
-def _operation_stage(session: EvidenceUploadSession) -> str:
+def derive_operation_stage(session: EvidenceUploadSession, operation_stage: str | None = None) -> str:
+    """Derive the operation's stage label.
+
+    operation_stage is the operation's OWN current (pre-update) value,
+    passed by the caller so a fine-grained PREFLIGHT_SUBSTAGES checkpoint
+    already written directly onto the operation (see
+    _advance_operation_stage in evidence_upload_session.py, and the
+    background retry worker's own transition_operation calls) is preserved
+    rather than clobbered back to a coarser session.status-derived label
+    the next time something generic (e.g. an Activity Center poll landing
+    mid-finalize) calls sync_upload_operation. Falls back to the
+    pre-existing behavior (session.metadata_json["current_stage"], then
+    session.status) exactly as before for every other case.
+    """
+    if operation_stage in PREFLIGHT_SUBSTAGES and session.status in _STAGE_PRESERVING_SESSION_STATUSES:
+        return operation_stage
     return str((session.metadata_json or {}).get("current_stage") or session.status)
 
 
@@ -141,12 +176,32 @@ def _is_before_now(value: Any, now: Any) -> bool:
         return value < now
 
 
-def sync_upload_operation(db: Session, session: EvidenceUploadSession, *, commit: bool = True) -> EvidenceOperation:
-    operation = (
+def get_operation_for_session(db: Session, session: EvidenceUploadSession) -> EvidenceOperation | None:
+    """Pure lookup -- the same query sync_upload_operation uses internally,
+    exposed standalone so read-only callers (the upload-session GET
+    response, the resumable-uploads discovery list) can derive a display
+    value from the operation without creating or writing one."""
+    return (
         db.query(EvidenceOperation)
         .filter(EvidenceOperation.upload_session_id == session.id, EvidenceOperation.kind == "upload")
         .one_or_none()
     )
+
+
+def get_operation_stage(db: Session, session: EvidenceUploadSession) -> str | None:
+    """Read-only current_stage derivation for API responses: reads the
+    associated EvidenceOperation.stage (the canonical persisted source)
+    without storing a second independent copy anywhere. Returns None only
+    if no operation row exists yet for this session -- see the module
+    docstring note in evidence_upload_session about every creation path
+    already calling sync_upload_operation, but this must not assume that
+    invariant holds for every possible caller."""
+    operation = get_operation_for_session(db, session)
+    return operation.stage if operation is not None else None
+
+
+def sync_upload_operation(db: Session, session: EvidenceUploadSession, *, commit: bool = True) -> EvidenceOperation:
+    operation = get_operation_for_session(db, session)
     now = utc_now()
     if operation is None:
         operation = EvidenceOperation(
@@ -166,7 +221,7 @@ def sync_upload_operation(db: Session, session: EvidenceUploadSession, *, commit
     operation.evidence_id = promoted_evidence_id
     next_status = _operation_status(session.status)
     next_owner = "browser" if session.status in {"created", "uploading", "interrupted"} else "backend" if session.status in {"preflight_running", "staged"} else "database"
-    transition_operation(operation, next_status, stage=_operation_stage(session), owner=next_owner, error=session.failure_message, force=True)
+    transition_operation(operation, next_status, stage=derive_operation_stage(session, operation.stage), owner=next_owner, error=session.failure_message, force=True)
     operation.progress = _operation_progress(session)
     operation.bytes_received = int(session.bytes_received or session.size_bytes or 0)
     operation.expected_size_bytes = int(session.expected_size_bytes or session.size_bytes or 0) or None

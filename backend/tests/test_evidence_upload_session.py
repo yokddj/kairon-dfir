@@ -57,7 +57,13 @@ from app.services.evidence_upload_session import (
     get_active_session,
     promote_upload_session,
 )
-from app.services.evidence_operations import reconcile_evidence_operations, transition_operation, upsert_operation_job
+from app.services.evidence_operations import (
+    PREFLIGHT_SUBSTAGES,
+    get_operation_for_session,
+    reconcile_evidence_operations,
+    transition_operation,
+    upsert_operation_job,
+)
 
 settings = get_settings()
 CASE_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
@@ -1254,3 +1260,219 @@ def test_ingestion_readiness_endpoint_reports_structured_checks(tmp_path, monkey
     assert {"Storage", "Search", "Database", "Workers", "Memory Worker"}.issubset(labels)
     assert "available_disk_space_bytes" in payload
     assert "configured_upload_limit_bytes" in payload
+
+
+# ---------------------------------------------------------------------------
+# EvidenceOperation.stage as the canonical finalize progress source
+#
+# Following the "Route Upload Finalization Progress Through EvidenceOperation"
+# revision: finalize no longer writes fine-grained progress checkpoints to
+# EvidenceUploadSession.metadata_json (that would recreate the exact
+# dual-source-of-truth problem this revision removed). Instead it writes
+# directly onto the session's associated EvidenceOperation.stage via
+# transition_operation, and the upload-session GET response derives
+# current_stage from that operation read-only (see
+# app.services.evidence_operations.get_operation_stage).
+# ---------------------------------------------------------------------------
+
+def _finalize_with_stage_spy(db, session):
+    """Finalize while recording every (operation.status, operation.stage)
+    pair actually committed along the way, by wrapping db.commit -- proves
+    the real, persisted sequence a concurrent poller would observe, not
+    just the final state."""
+    observed: list[tuple[str, str]] = []
+    orig_commit = db.commit
+
+    def spy_commit():
+        orig_commit()
+        operation = get_operation_for_session(db, session)
+        if operation is not None:
+            observed.append((operation.status, operation.stage))
+
+    db.commit = spy_commit
+    try:
+        result = finalize_resumable_upload_session(db, session)
+    finally:
+        db.commit = orig_commit
+    return result, observed
+
+
+def _substage_order(observed: list[tuple[str, str]]) -> list[str]:
+    order: list[str] = []
+    for _status, stage in observed:
+        if stage in PREFLIGHT_SUBSTAGES and (not order or order[-1] != stage):
+            order.append(stage)
+    return order
+
+
+def test_finalize_archive_emits_expected_operation_stage_sequence(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    zip_path = tmp_path / "collection.zip"
+    _make_zip(zip_path)
+    data = zip_path.read_bytes()
+
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=len(data), declared_platform=None, client_sha256=None)
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(data))
+
+    (session, report), observed = _finalize_with_stage_spy(db, session)
+
+    assert report.classification.category == "archive"
+    assert _substage_order(observed) == ["verifying_integrity", "classifying", "inspecting_evidence", "preparing_evidence", "preflight_complete"]
+
+    operation = get_operation_for_session(db, session)
+    assert operation is not None
+    assert operation.status == "waiting_user"
+    assert operation.stage == "preflight_complete"
+
+
+def test_finalize_disk_image_emits_expected_operation_stage_sequence(tmp_path, monkeypatch):
+    import subprocess
+
+    def _require_tools(*names):
+        missing = [n for n in names if subprocess.run(["bash", "-lc", f"command -v {n} >/dev/null 2>&1"], check=False).returncode != 0]
+        if missing:
+            pytest.skip(f"Missing required tool(s): {', '.join(missing)}")
+
+    _require_tools("qemu-img")
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+
+    vmdk_path = tmp_path / "disk.vmdk"
+    subprocess.run(["qemu-img", "create", "-f", "vmdk", str(vmdk_path), "10M"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    data = vmdk_path.read_bytes()
+
+    session = create_resumable_upload_session(db, CASE_ID, filename="disk.vmdk", expected_size_bytes=len(data), declared_platform=None, client_sha256=None)
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(data))
+
+    (session, report), observed = _finalize_with_stage_spy(db, session)
+
+    assert report.classification.category == "disk_image"
+    assert _substage_order(observed) == ["verifying_integrity", "classifying", "inspecting_evidence", "preparing_evidence", "preflight_complete"]
+
+
+def test_finalize_memory_dump_skips_inspecting_evidence(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    mem_path = tmp_path / "capture.mem"
+    mem_path.write_bytes(b"\x00" * 4096)
+    data = mem_path.read_bytes()
+
+    session = create_resumable_upload_session(db, CASE_ID, filename="capture.mem", expected_size_bytes=len(data), declared_platform=None, client_sha256=None)
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(data))
+
+    (session, report), observed = _finalize_with_stage_spy(db, session)
+
+    assert report.classification.category == "memory_dump"
+    order = _substage_order(observed)
+    assert "inspecting_evidence" not in order
+    assert order == ["verifying_integrity", "classifying", "preparing_evidence", "preflight_complete"]
+
+
+def test_finalize_does_not_duplicate_stage_checkpoints_in_session_metadata(tmp_path, monkeypatch):
+    """EvidenceOperation.stage is canonical; the session's own
+    metadata_json must never accumulate the new fine-grained checkpoint
+    values -- only its pre-existing (unrelated to this revision) terminal
+    "preflight_complete" value may appear there."""
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    zip_path = tmp_path / "collection.zip"
+    _make_zip(zip_path)
+    data = zip_path.read_bytes()
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=len(data), declared_platform=None, client_sha256=None)
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(data))
+
+    session, report = finalize_resumable_upload_session(db, session)
+
+    session_current_stage = (session.metadata_json or {}).get("current_stage")
+    assert session_current_stage in {None, "preflight_complete"}
+    assert session_current_stage != "inspecting_evidence"
+    assert session_current_stage != "verifying_integrity"
+    assert session_current_stage != "classifying"
+    assert session_current_stage != "preparing_evidence"
+
+    operation = get_operation_for_session(db, session)
+    assert operation is not None
+    assert operation.stage == "preflight_complete"
+
+
+def test_finalize_failure_transitions_operation_to_failed_with_diagnostic_stage(tmp_path, monkeypatch):
+    """A genuine preflight failure must mark the operation failed (so
+    nothing can keep presenting it as active) while preserving the last
+    real checkpoint reached on operation.stage for diagnosis -- exercised
+    through the actual HTTP route, since that is where this failure
+    handling lives (mirroring app.workers.tasks.run_evidence_upload_preflight's
+    own pattern for the background retry path)."""
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    zip_path = tmp_path / "collection.zip"
+    _make_zip(zip_path)
+    data = zip_path.read_bytes()
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=len(data), declared_platform=None, client_sha256=None)
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(data))
+
+    def _boom(*args, **kwargs):
+        raise RuntimeError("synthetic preflight failure")
+
+    monkeypatch.setattr("app.services.evidence_upload_session.run_preflight", _boom)
+
+    # TestClient re-raises unhandled server exceptions by default (rather
+    # than returning a 500 response) -- exactly what we want to trigger
+    # here, since the assertion is about the DB-side failure bookkeeping
+    # the route's except block performs before re-raising, not about the
+    # HTTP response body.
+    client = _client(db)
+    with pytest.raises(RuntimeError, match="synthetic preflight failure"):
+        client.post(f"/api/cases/{CASE_ID}/evidence-uploads/{session.id}/finalize")
+
+    operation = get_operation_for_session(db, session)
+    assert operation is not None
+    assert operation.status == "failed"
+    # The mocked failure happens after "verifying_integrity" was already
+    # committed (hashing succeeds; run_preflight is what's mocked to
+    # raise) -- that real checkpoint should survive on stage for diagnosis.
+    assert operation.stage == "verifying_integrity"
+    assert "synthetic preflight failure" in (operation.last_error or "")
+
+
+def test_activity_center_and_resumable_list_agree_with_operation_stage(tmp_path, monkeypatch):
+    """Activity Center (direct EvidenceOperation query) and the wizard's
+    own polling target (the resumable-uploads discovery list, deriving
+    current_stage from the same operation) must observe the same
+    stage/status combination -- both are reading the single canonical
+    source, not two independently-updated fields."""
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path)
+    db = _db()
+    _case(db)
+    zip_path = tmp_path / "collection.zip"
+    _make_zip(zip_path)
+    data = zip_path.read_bytes()
+    session = create_resumable_upload_session(db, CASE_ID, filename="collection.zip", expected_size_bytes=len(data), declared_platform=None, client_sha256=None)
+    append_resumable_upload_chunk(db, session, offset=0, body=BytesIO(data))
+    finalize_resumable_upload_session(db, session)
+
+    client = _client(db)
+    activity = client.get(f"/api/cases/{CASE_ID}/activity")
+    assert activity.status_code == 200
+    activity_ops = [op for op in activity.json()["operations"] if op.get("details", {}).get("upload_session_id") == session.id]
+    assert activity_ops, "expected the upload's operation to appear in Activity Center"
+    assert activity_ops[0]["stage"] == "preflight_complete"
+    # session.status "staged" maps to operation.status "waiting_user" (not
+    # yet promoted), and operation.stage "preflight_complete" is in the
+    # bucketing set that resolves to category "Processing" -- see the
+    # PREFLIGHT_SUBSTAGES fix in case_activity_center's category logic.
+    assert activity_ops[0]["status"] == "waiting_user"
+    assert activity_ops[0]["category"] == "Processing"
+
+    # The single-session GET (not the case-list discovery endpoint, which
+    # requires authentication -- see test_resumable_discovery_requires_authentication
+    # in test_evidence_unified_upload.py) is what the wizard's own polling
+    # loop actually calls (api.getEvidenceUploadSession).
+    single = client.get(f"/api/cases/{CASE_ID}/evidence-uploads/{session.id}")
+    assert single.status_code == 200
+    assert single.json()["session"]["current_stage"] == "preflight_complete"
