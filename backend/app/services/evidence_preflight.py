@@ -29,6 +29,8 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+from app.core.timing import timed_phase
+
 from app.core.artifact_registry import artifact_registry_entries
 from app.core.config import get_settings
 from app.core.evidence_platforms import EvidencePlatform, detect_evidence_platform
@@ -259,7 +261,8 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
         classification_reason = "Folder selected for ingestion"
         format_key = "folder"
     else:
-        result = classifier.classify(path)
+        with timed_phase("preflight.classify", token=token, file_size=file_size):
+            result = classifier.classify(path)
         classification_category = result.category
         classification_confidence = result.confidence
         classification_reason = result.reason
@@ -284,7 +287,8 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
     if is_openable_container:
         chain.append("Archive" if not is_directory else "Folder")
         try:
-            info = _inspect_archive_or_folder(path, declared_platform=declared_platform, tmp_dir=tmp_dir)
+            with timed_phase("preflight.inspect_archive_or_folder", token=token, file_size=file_size):
+                info = _inspect_archive_or_folder(path, declared_platform=declared_platform, tmp_dir=tmp_dir)
         except Exception as exc:  # noqa: BLE001
             info = {}
             warnings.append(f"Could not fully inspect contents: {exc}")
@@ -320,7 +324,8 @@ def run_preflight(path: Path, *, token: str, original_filename: str, declared_pl
     elif classification_category == EvidenceCategory.DISK_IMAGE:
         chain.append("Disk Image")
         workspace = tmp_dir / "disk_image_workspace"
-        result = inspect_disk_image_readonly(path, workspace=workspace)
+        with timed_phase("preflight.inspect_disk_image_readonly", token=token, file_size=file_size):
+            result = inspect_disk_image_readonly(path, workspace=workspace)
         if not result.get("supported", True):
             error = str(result.get("error") or "unsupported_format")
             warnings.append(f"Disk image inspection failed: {error}")

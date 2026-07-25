@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.core.config import get_settings
+from app.core.timing import timed_phase
 
 
 settings = get_settings()
@@ -142,7 +143,9 @@ def qemu_img_convert_to_raw(
     if not _qemu_img_exists():
         return {"supported": False, "error": "missing_dependency", "reason": "qemu-img missing"}
     command = ["qemu-img", "convert", "-O", "raw", str(input_path), str(output_path)]
-    completed = subprocess.run(command, capture_output=True, text=True, shell=False, timeout=timeout)
+    input_size = input_path.stat().st_size if input_path.exists() else 0
+    with timed_phase("disk_image.qemu_img_convert_to_raw", input=input_path.name, input_size_bytes=input_size, timeout=timeout):
+        completed = subprocess.run(command, capture_output=True, text=True, shell=False, timeout=timeout)
     return {
         "format": "raw",
         "supported": completed.returncode == 0,
