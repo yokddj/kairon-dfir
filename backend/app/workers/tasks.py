@@ -52,7 +52,7 @@ from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classi
 from app.ingest.browser.normalizer import BrowserAudit, normalize_browser_event
 from app.ingest.browser.sqlite_chromium import parse_chromium_history_sqlite
 from app.ingest.browser.sqlite_firefox import parse_firefox_places_sqlite
-from app.ingest.archive import copy_folder, extract_archive, inventory_folder, write_tree_metadata
+from app.ingest.archive import ArchiveExtractionError, copy_folder, extract_archive, inventory_folder, write_tree_metadata
 from app.ingest.csv_json import list_generic_artifacts
 from app.ingest.detector import detect_evidence_type
 from app.ingest.host_detection import detect_host_from_artifacts, detect_host_from_velociraptor_collection, normalize_hostname
@@ -1209,6 +1209,12 @@ def _classify_ingest_abort(exc: Exception) -> tuple[str, str, str]:
         return "infrastructure_blocked_opensearch", "failed_aborted", str(exc)
     if isinstance(exc, EvidenceSourceUnavailableError):
         return "source_unavailable", "failed_source_unavailable", exc.user_message
+    if isinstance(exc, ArchiveExtractionError):
+        # .message is the classified, analyst-facing diagnosis (corrupted /
+        # password-protected / unsupported format / tool missing / timeout /
+        # disk space / generic); .detail stays out of this analyst-visible
+        # path and is only ever written to the server log at the raise site.
+        return exc.code, "failed_aborted", exc.message
     message = str(exc)
     lowered = message.lower()
     if "task exceeded maximum timeout value" in lowered:

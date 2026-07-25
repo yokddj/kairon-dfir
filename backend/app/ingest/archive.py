@@ -1,3 +1,4 @@
+import errno
 import json
 import logging
 import shutil
@@ -28,6 +29,115 @@ SEVEN_ZIP_ARCHIVE_SUFFIXES: tuple[tuple[str, ...], ...] = (
     (".tar", ".bz2"),
     (".tar", ".xz"),
 )
+
+class ArchiveExtractionError(RuntimeError):
+    """A classified archive extraction failure.
+
+    ``message`` is analyst-facing (no internal paths, commands, or raw
+    subprocess output) and is what callers should surface in the API.
+    ``detail`` is technical (exit codes, truncated tool output) and is
+    for server logs only -- it is never returned to the analyst.
+    """
+
+    def __init__(self, code: str, message: str, *, detail: str | None = None):
+        self.code = code
+        self.message = message
+        self.detail = detail
+        super().__init__(message)
+
+
+def _is_disk_space_error(exc: OSError) -> bool:
+    return getattr(exc, "errno", None) == errno.ENOSPC
+
+
+def _decode_process_output(exc: subprocess.CalledProcessError) -> str:
+    stderr = exc.stderr if isinstance(exc.stderr, bytes) else (exc.stderr or b"").encode()
+    stdout = exc.stdout if isinstance(exc.stdout, bytes) else (exc.stdout or b"").encode()
+    return (stderr + b"\n" + stdout).decode("utf-8", "ignore")
+
+
+def _classify_seven_zip_failure(exc: Exception, source: Path) -> ArchiveExtractionError:
+    if isinstance(exc, FileNotFoundError):
+        return ArchiveExtractionError(
+            "archive_tool_missing",
+            "The server is missing the 7z tool required to extract this archive type.",
+            detail=str(exc),
+        )
+    if isinstance(exc, subprocess.TimeoutExpired):
+        return ArchiveExtractionError(
+            "archive_extraction_timeout",
+            f"Extraction of {source.name} took too long and was stopped.",
+            detail=str(exc),
+        )
+    if isinstance(exc, subprocess.CalledProcessError):
+        output = _decode_process_output(exc).lower()
+        if "wrong password" in output or "enter password" in output:
+            return ArchiveExtractionError(
+                "archive_password_protected",
+                f"{source.name} is password-protected. Provide the password or extract it before uploading.",
+                detail=output[:2000],
+            )
+        if "no space left" in output or "not enough space" in output or "disk full" in output:
+            return ArchiveExtractionError(
+                "archive_insufficient_disk_space",
+                "The server ran out of disk space while extracting this archive.",
+                detail=output[:2000],
+            )
+        if ("cannot open" in output and "as archive" in output) or "is not supported archive" in output or "unsupported method" in output:
+            return ArchiveExtractionError(
+                "archive_unsupported_format",
+                f"{source.name}'s format is not recognized or is not supported.",
+                detail=output[:2000],
+            )
+        if "data error" in output or "crc failed" in output or "headers error" in output or "unexpected end of archive" in output:
+            return ArchiveExtractionError(
+                "archive_corrupted",
+                f"{source.name} appears to be corrupted or incomplete.",
+                detail=output[:2000],
+            )
+        return ArchiveExtractionError(
+            "archive_extraction_failed",
+            f"The archive extraction tool could not process {source.name}.",
+            detail=f"exit_code={exc.returncode} output={output[:2000]!r}",
+        )
+    if isinstance(exc, OSError) and _is_disk_space_error(exc):
+        return ArchiveExtractionError(
+            "archive_insufficient_disk_space",
+            "The server ran out of disk space while extracting this archive.",
+            detail=str(exc),
+        )
+    return ArchiveExtractionError(
+        "archive_extraction_failed",
+        f"Extraction of {source.name} failed unexpectedly.",
+        detail=f"{type(exc).__name__}: {exc}",
+    )
+
+
+def _classify_zip_failure(exc: Exception, source: Path) -> ArchiveExtractionError:
+    if isinstance(exc, zipfile.BadZipFile):
+        return ArchiveExtractionError(
+            "archive_corrupted",
+            f"{source.name} is corrupted or is not a valid ZIP file.",
+            detail=str(exc),
+        )
+    if isinstance(exc, RuntimeError) and "password" in str(exc).lower():
+        return ArchiveExtractionError(
+            "archive_password_protected",
+            f"{source.name} is password-protected. Provide the password or extract it before uploading.",
+            detail=str(exc),
+        )
+    if isinstance(exc, OSError) and _is_disk_space_error(exc):
+        return ArchiveExtractionError(
+            "archive_insufficient_disk_space",
+            "The server ran out of disk space while extracting this archive.",
+            detail=str(exc),
+        )
+    return ArchiveExtractionError(
+        "archive_extraction_failed",
+        f"Extraction of {source.name} failed unexpectedly.",
+        detail=f"{type(exc).__name__}: {exc}",
+    )
+
 
 def should_ignore_path(path: Path, *, size: int | None = None, is_dir: bool = False) -> tuple[bool, str | None]:
     lowered_parts = [part.lower() for part in path.parts]
@@ -117,19 +227,53 @@ def _safe_members_zip(archive: zipfile.ZipFile, dest_dir: Path, progress_cb: Cal
     return manifest_entries
 
 
-def extract_archive(source: Path, dest_dir: Path, progress_cb: Callable[[dict], None] | None = None) -> tuple[list[str], list[dict]]:
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    extracted: list[str] = []
-    manifest_entries: list[dict] = []
-    suffix = source.suffix.lower()
-    if suffix == ".zip":
+def _raise_classified(classified: ArchiveExtractionError, source: Path, from_exc: Exception) -> None:
+    # The classified .message is what reaches the analyst; .detail (and the
+    # chained original exception, preserved via `from`) stays in the log so
+    # administrators keep full technical diagnostics.
+    logger.error(
+        "archive extraction failed source=%s code=%s detail=%s",
+        source.name, classified.code, classified.detail,
+    )
+    raise classified from from_exc
+
+
+def _classify_limit_exceeded(exc: ValueError, source: Path) -> ArchiveExtractionError | None:
+    if "limit exceeded" not in str(exc).lower():
+        return None
+    return ArchiveExtractionError(
+        "archive_extraction_limit_exceeded",
+        f"{source.name} extracts to more files or bytes than the configured safety limit allows.",
+        detail=str(exc),
+    )
+
+
+def _extract_zip(source: Path, dest_dir: Path, progress_cb: Callable[[dict], None] | None) -> tuple[list[str], list[dict]]:
+    try:
         with zipfile.ZipFile(source) as archive:
             manifest_entries = _safe_members_zip(archive, dest_dir, progress_cb=progress_cb)
             extracted = [entry["path"] for entry in manifest_entries if not entry["ignored"]]
-    elif _is_seven_zip_supported_archive(source):
+            return extracted, manifest_entries
+    except ArchiveExtractionError:
+        raise
+    except ValueError as exc:
+        classified = _classify_limit_exceeded(exc, source) or _classify_zip_failure(exc, source)
+        _raise_classified(classified, source, exc)
+    except Exception as exc:  # noqa: BLE001
+        _raise_classified(_classify_zip_failure(exc, source), source, exc)
+
+
+def _extract_seven_zip(source: Path, dest_dir: Path, progress_cb: Callable[[dict], None] | None) -> tuple[list[str], list[dict]]:
+    manifest_entries: list[dict] = []
+    try:
         with tempfile.TemporaryDirectory(dir=settings.backend_temp_dir) as tmp_dir:
             temp_extract_dir = Path(tmp_dir)
-            subprocess.run(["7z", "x", str(source), f"-o{temp_extract_dir}", "-y"], check=True, capture_output=True)
+            subprocess.run(
+                ["7z", "x", str(source), f"-o{temp_extract_dir}", "-y"],
+                check=True,
+                capture_output=True,
+                timeout=settings.archive_extraction_timeout_seconds,
+            )
             paths = [path for path in temp_extract_dir.rglob("*") if path.is_file()]
             total_files = len(paths)
             total_bytes = sum(path.stat().st_size for path in paths)
@@ -163,8 +307,29 @@ def extract_archive(source: Path, dest_dir: Path, progress_cb: Callable[[dict], 
                     progress_cb({"processed_files": processed_files, "total_files": total_files, "processed_bytes": processed_bytes, "total_bytes": total_bytes, "current_path": str(relative)})
             _enforce_limits(manifest_entries)
             extracted = [entry["path"] for entry in manifest_entries if not entry["ignored"]]
+            return extracted, manifest_entries
+    except ArchiveExtractionError:
+        raise
+    except ValueError as exc:
+        classified = _classify_limit_exceeded(exc, source) or _classify_seven_zip_failure(exc, source)
+        _raise_classified(classified, source, exc)
+    except Exception as exc:  # noqa: BLE001
+        _raise_classified(_classify_seven_zip_failure(exc, source), source, exc)
+
+
+def extract_archive(source: Path, dest_dir: Path, progress_cb: Callable[[dict], None] | None = None) -> tuple[list[str], list[dict]]:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    suffix = source.suffix.lower()
+    if suffix == ".zip":
+        extracted, manifest_entries = _extract_zip(source, dest_dir, progress_cb)
+    elif _is_seven_zip_supported_archive(source):
+        extracted, manifest_entries = _extract_seven_zip(source, dest_dir, progress_cb)
     else:
-        raise ValueError(f"Unsupported archive type: {''.join(source.suffixes) or source.suffix}")
+        raise ArchiveExtractionError(
+            "archive_unsupported_format",
+            f"{source.name}'s file type is not a supported archive format.",
+            detail=f"suffix={''.join(source.suffixes) or source.suffix!r}",
+        )
     return extracted, manifest_entries
 
 
