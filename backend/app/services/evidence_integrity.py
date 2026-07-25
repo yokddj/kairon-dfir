@@ -21,6 +21,38 @@ def compute_sha256_stream(path: Path, *, chunk_size: int = 1024 * 1024) -> tuple
     return digest.hexdigest(), size
 
 
+EVIDENCE_DUPLICATE_ERROR_CODE = "EVIDENCE_DUPLICATE"
+
+
+def find_duplicate_evidence(db: Session, *, case_id: str, sha256: str | None) -> Evidence | None:
+    """Case-scoped, content-based duplicate lookup.
+
+    Mirrors the pattern already used for Memory and disk-image uploads
+    (``MEMORY_EVIDENCE_DUPLICATE``): identical bytes already registered
+    in the same case are a duplicate regardless of filename, upload
+    path, or evidence-type label. The same content in a *different*
+    case is not a duplicate -- duplicates are intentionally scoped per
+    case, matching how investigations are isolated everywhere else.
+    """
+    if not sha256:
+        return None
+    return (
+        db.query(Evidence)
+        .filter(Evidence.case_id == case_id, Evidence.sha256 == sha256)
+        .first()
+    )
+
+
+def duplicate_evidence_error_detail(duplicate: Evidence) -> dict[str, Any]:
+    return {
+        "error_code": EVIDENCE_DUPLICATE_ERROR_CODE,
+        "duplicate": True,
+        "existing_evidence_id": duplicate.id,
+        "existing_filename": duplicate.original_filename,
+        "message": "Identical evidence (same SHA-256) already exists in this case.",
+    }
+
+
 def record_evidence_event(
     db: Session,
     evidence: Evidence,

@@ -67,7 +67,7 @@ from app.services.evidence_runs import (
     upsert_ingest_run,
 )
 from app.services.auth_dependencies import get_optional_user
-from app.services.evidence_integrity import build_evidence_integrity_payload, build_evidence_manifest, record_evidence_event, serialize_evidence_event, verify_evidence_integrity
+from app.services.evidence_integrity import build_evidence_integrity_payload, build_evidence_manifest, duplicate_evidence_error_detail, find_duplicate_evidence, record_evidence_event, serialize_evidence_event, verify_evidence_integrity
 from app.services.processing_queue import get_evidence_processing, get_evidence_processing_run, list_case_processing
 from app.services.ingest_benchmarks import (
     benchmark_mode_to_reprocess_mode,
@@ -2273,6 +2273,9 @@ def upload_evidence(
             uploaded_sha256 = sha256_file(stored_path)
         else:
             evidence_id, stored_path, size, uploaded_sha256 = upload_result
+    duplicate = find_duplicate_evidence(db, case_id=case_id, sha256=uploaded_sha256)
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail=duplicate_evidence_error_detail(duplicate))
     raw_collection = False
     folder_entries: list[dict] = []
     file_count: int | None = None
@@ -2461,6 +2464,9 @@ def upload_disk_image(
         format_probe = detect_disk_image_format(stored_path if stored_path.exists() else storage_root / Path(original_name).name, [storage_root / entry["path"] for entry in segment_entries if not entry.get("ignored")])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    duplicate = find_duplicate_evidence(db, case_id=case_id, sha256=combined_sha256)
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail=duplicate_evidence_error_detail(duplicate))
     if not format_probe:
         raise HTTPException(status_code=400, detail={"error_code": "unknown_format", "message": "Kairon could not recognize this disk image format."})
     if not format_probe.get("supported"):
@@ -2576,6 +2582,9 @@ def upload_evidence_folder(
     if not db.get(Case, case_id):
         raise HTTPException(status_code=404, detail="Case not found")
     evidence_id, folder_path, total_size, folder_sha256, folder_entries, folder_label = save_folder_uploads(case_id, files)
+    duplicate = find_duplicate_evidence(db, case_id=case_id, sha256=folder_sha256)
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail=duplicate_evidence_error_detail(duplicate))
     entry_paths = [str(item.get("path") or "") for item in folder_entries]
     raw_collection = _should_route_to_raw_collection_discovery(folder_path, entry_paths)
     resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(provided_platform, filename=folder_label, paths=entry_paths)
@@ -2712,6 +2721,15 @@ def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Sessi
         size_bytes = int(validation.get("size_bytes") or 0)
         sha256 = sha256_file(resolved_path) if resolved_path.is_file() else fingerprint_external_path(resolved_path)
         is_external = True
+
+    # fingerprint_external_path() is path/size/mtime-derived, not
+    # content-based (it's the fallback for directories, where a single
+    # content hash isn't well-defined) -- only a genuine sha256_file()
+    # result is eligible for content-based duplicate detection.
+    content_sha256 = sha256 if stored_path.is_file() else None
+    duplicate = find_duplicate_evidence(db, case_id=case_id, sha256=content_sha256)
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail=duplicate_evidence_error_detail(duplicate))
 
     entry_paths = None
     if stored_path.is_dir():
