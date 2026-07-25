@@ -2541,3 +2541,39 @@ def _v32_evidence_operation_jobs(connection: Connection) -> None:
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operation_jobs_job_type ON evidence_operation_jobs (job_type)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operation_jobs_status ON evidence_operation_jobs (status)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_operation_jobs_rq_job_id ON evidence_operation_jobs (rq_job_id)"))
+
+
+# ---------------------------------------------------------------------------
+# v33: assignment_history.evidence_id cascades on evidence deletion
+# ---------------------------------------------------------------------------
+
+
+@register(33, "assignment_history_evidence_cascade_delete")
+def _v33_assignment_history_evidence_cascade_delete(connection: Connection) -> None:
+    """DELETE /api/evidences/{id} deletes the evidence's OpenSearch events and
+    on-disk files unconditionally, then deletes the Evidence row last. The v21
+    migration created assignment_history.evidence_id without ON DELETE CASCADE
+    (and a fresh install's Base.metadata.create_all follows the ORM model,
+    which had the same gap), so any evidence with host-assignment history hit
+    a ForeignKeyViolation on that final step -- leaving an orphaned Evidence
+    row with no files or indexed data behind it. Recreate the constraint with
+    ON DELETE CASCADE so the delete is atomic again.
+    """
+    if connection.dialect.name != "postgresql":
+        return
+    inspector = _inspector_for(connection)
+    if "assignment_history" not in inspector.get_table_names():
+        return
+    for fk in inspector.get_foreign_keys("assignment_history"):
+        if fk.get("constrained_columns") == ["evidence_id"]:
+            constraint_name = fk.get("name")
+            if constraint_name:
+                connection.execute(text(f'ALTER TABLE assignment_history DROP CONSTRAINT "{constraint_name}"'))
+            break
+    connection.execute(
+        text(
+            "ALTER TABLE assignment_history "
+            "ADD CONSTRAINT assignment_history_evidence_id_fkey "
+            "FOREIGN KEY (evidence_id) REFERENCES evidences(id) ON DELETE CASCADE"
+        )
+    )
