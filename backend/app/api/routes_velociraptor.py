@@ -22,7 +22,7 @@ from app.models.user import User
 from app.schemas.evidence import EvidenceRead
 from app.services.evidence_runs import mark_opensearch_infrastructure_block, merge_evidence_metadata
 from app.services.auth_dependencies import get_optional_user
-from app.services.evidence_integrity import record_evidence_event
+from app.services.evidence_integrity import duplicate_evidence_error_detail, find_duplicate_evidence, record_evidence_event
 from app.services.host_resolution import normalize_provided_host, record_host_assignment_event, require_provided_host, resolve_host
 from app.services.ingest_plan import build_plan, persist_plan
 from app.services.usable_ingest import ingest_mode_metadata, normalize_ingest_mode
@@ -332,6 +332,9 @@ def discover_velociraptor_zip(
         raise HTTPException(status_code=404, detail="Case not found")
     normalized_provided_host = _require_provided_host(provided_host)
     evidence_id, stored_path, size, uploaded_sha256 = save_upload(case_id, file)
+    duplicate = find_duplicate_evidence(db, case_id=case_id, sha256=uploaded_sha256)
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail=duplicate_evidence_error_detail(duplicate))
     resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(provided_platform, filename=file.filename or stored_path.name)
     normalized_ingest_mode = normalize_ingest_mode(ingest_mode)
     normalized_evtx_profile = str(evtx_profile or "").strip() or None
@@ -433,6 +436,9 @@ def discover_velociraptor_folder(
         raise HTTPException(status_code=404, detail="Case not found")
     normalized_provided_host = _require_provided_host(provided_host)
     evidence_id, folder_path, total_size, folder_sha256, folder_entries, folder_label = save_folder_uploads(case_id, files)
+    duplicate = find_duplicate_evidence(db, case_id=case_id, sha256=folder_sha256)
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail=duplicate_evidence_error_detail(duplicate))
     entry_paths = [str(item.get("path") or "") for item in folder_entries]
     resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(provided_platform, filename=folder_label, paths=entry_paths)
     normalized_ingest_mode = normalize_ingest_mode(ingest_mode)
@@ -505,12 +511,19 @@ def discover_velociraptor_path(payload: VelociraptorDiscoverPathRequest, db: Ses
     if source_path.is_dir():
         paths = [str(path.relative_to(source_path)) for path in source_path.rglob("*") if path.is_file()][:1000]
     resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(payload.provided_platform, filename=source_path.name, paths=paths)
+    # "folder" is a placeholder, not a content fingerprint -- duplicate
+    # detection only applies when a real per-file SHA-256 is available,
+    # otherwise every directory-based registration would collide.
+    path_sha256 = sha256_file(source_path) if source_path.is_file() else None
+    duplicate = find_duplicate_evidence(db, case_id=payload.case_id, sha256=path_sha256)
+    if duplicate is not None:
+        raise HTTPException(status_code=409, detail=duplicate_evidence_error_detail(duplicate))
     evidence = Evidence(
         case_id=payload.case_id,
         original_filename=source_path.name,
         stored_path=str(source_path),
         evidence_type=EvidenceType.velociraptor_zip,
-        sha256=sha256_file(source_path) if source_path.is_file() else "folder",
+        sha256=path_sha256 or "folder",
         size_bytes=source_path.stat().st_size if source_path.is_file() else 0,
         provided_platform=resolved_provided_platform,
         detected_platform=resolved_detected_platform,

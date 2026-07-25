@@ -58,6 +58,13 @@ class FakeSession:
             def all(inner_self):  # noqa: ANN001
                 return list(getattr(self, "artifacts", []))
 
+            def first(inner_self):  # noqa: ANN001
+                # These fakes only ever model a single case's own
+                # evidence-under-test, never a second pre-existing
+                # evidence to collide with -- duplicate lookups always
+                # find nothing here, matching a fresh upload.
+                return None
+
         return _FakeQuery()
 
 
