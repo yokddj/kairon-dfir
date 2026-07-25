@@ -342,6 +342,10 @@ class Settings(BaseSettings):
     backend_max_extracted_files: int = 50000
     backend_max_extracted_bytes: int = 10737418240
     max_archive_depth: int = 5
+    # Bounds the external `7z` extraction subprocess so a hung or
+    # pathologically slow archive produces a classified timeout error
+    # instead of blocking the ingest worker indefinitely.
+    archive_extraction_timeout_seconds: int = 1800
     backend_data_dir: Path = Path("/app/data")
     backend_temp_dir: Path = Path("/app/data/tmp")
     evidence_upload_session_ttl_seconds: int = 7200

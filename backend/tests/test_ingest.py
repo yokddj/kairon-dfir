@@ -39,7 +39,7 @@ from app.core.opensearch import (
 from app.core.detections import create_detection_if_missing
 from app.core.storage import sanitize_relative_path
 from app.core.rules import load_suspicious_keywords, load_yaml_rule_file
-from app.ingest.archive import extract_archive
+from app.ingest.archive import ArchiveExtractionError, extract_archive
 from app.ingest.csv_json import list_generic_artifacts
 from app.ingest.detector import classify_artifact, detect_evidence_type
 from app.ingest.identity_extraction import extract_user_from_path, is_valid_username
@@ -2420,8 +2420,11 @@ def test_secure_zip_extraction_blocks_traversal(tmp_path: Path) -> None:
     dest = tmp_path / "dest"
     try:
         extract_archive(archive_path, dest)
-    except ValueError as exc:
-        assert "Unsafe" in str(exc) or "Absolute" in str(exc)
+    except ArchiveExtractionError as exc:
+        # Protection itself (path-traversal rejection) is unchanged; the
+        # exception is now classified rather than a raw ValueError, so the
+        # technical reason lives in .detail, not the analyst-facing message.
+        assert "Unsafe" in (exc.detail or "") or "Absolute" in (exc.detail or "")
     else:
         raise AssertionError("Expected unsafe extraction to fail")
 
