@@ -1,9 +1,11 @@
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from fastapi import HTTPException
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
+from app.api.routes_evidence import pause_evidence_indexing
 from app.core.database import Base
 from app.models.case import Case, CaseStatus
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
@@ -146,3 +148,62 @@ def test_reconcile_stale_ingests_sweeps_multiple_evidences(monkeypatch: pytest.M
     db.refresh(fresh)
     assert stuck.ingest_status == IngestStatus.failed
     assert fresh.ingest_status == IngestStatus.processing
+
+
+def test_pause_stops_a_live_job_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _make_db()
+    evidence = _make_stuck_evidence(db, heartbeat_age_seconds=2)  # fresh heartbeat: genuinely running
+    stop_calls: list[str] = []
+    monkeypatch.setattr(
+        "app.api.routes_evidence._find_ingest_job",
+        lambda _evidence_id: {"exists": True, "status": "started", "job_id": "job-live-1"},
+    )
+    monkeypatch.setattr(
+        "app.api.routes_evidence.send_stop_job_command",
+        lambda _conn, job_id: stop_calls.append(job_id),
+    )
+
+    result = pause_evidence_indexing(evidence.id, payload=None, db=db)
+
+    assert stop_calls == ["job-live-1"]
+    assert result["stopped_live_job"] is True
+    assert result["retry_allowed"] is True
+    db.refresh(evidence)
+    assert evidence.ingest_status == IngestStatus.failed
+    assert evidence.metadata_json.get("current_phase") == "paused"
+    assert evidence.metadata_json.get("current_ingest_run_id") is None
+
+
+def test_pause_cancels_a_queued_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    db = _make_db()
+    evidence = _make_stuck_evidence(db, heartbeat_age_seconds=2)
+    cancelled: list[str] = []
+
+    class _FakeJob:
+        def cancel(self) -> None:
+            cancelled.append("cancelled")
+
+    monkeypatch.setattr(
+        "app.api.routes_evidence._find_ingest_job",
+        lambda _evidence_id: {"exists": True, "status": "queued", "job_id": "job-queued-1"},
+    )
+    monkeypatch.setattr("app.api.routes_evidence.Job.fetch", lambda *_args, **_kwargs: _FakeJob())
+
+    result = pause_evidence_indexing(evidence.id, payload=None, db=db)
+
+    assert cancelled == ["cancelled"]
+    assert result["stopped_live_job"] is False
+    db.refresh(evidence)
+    assert evidence.metadata_json.get("current_phase") == "paused"
+
+
+def test_pause_rejects_evidence_that_is_not_actively_indexing() -> None:
+    db = _make_db()
+    evidence = _make_stuck_evidence(db, heartbeat_age_seconds=2)
+    evidence.ingest_status = IngestStatus.completed
+    db.commit()
+
+    with pytest.raises(HTTPException) as exc_info:
+        pause_evidence_indexing(evidence.id, payload=None, db=db)
+
+    assert exc_info.value.status_code == 409

@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from redis import Redis
 from rq import Queue
 from rq.command import send_stop_job_command
+from rq.exceptions import InvalidJobOperation
 from rq.job import Job
 from rq.registry import StartedJobRegistry
 from sqlalchemy.orm import Session
@@ -89,7 +90,7 @@ from app.services.ingest_plan import (
     rebuild_ingest_plan_from_last_run,
 )
 from app.services.indexing_profiles import build_indexing_plan, create_indexing_plan_run, evidence_has_active_indexing, normalize_indexing_profile
-from app.services.job_watchdog import maybe_reconcile_stale_ingest, release_stale_ingest_lock, run_benchmark_watchdog
+from app.services.job_watchdog import _find_ingest_job, maybe_reconcile_stale_ingest, redis_conn, release_stale_ingest_lock, run_benchmark_watchdog
 from app.services.on_demand_modules import build_on_demand_module_registry
 from app.services.parser_registry import (
     build_indexed_field_coverage_by_artifact_type,
@@ -4467,6 +4468,55 @@ def cancel_evidence_indexing(evidence_id: str, payload: EvidenceIndexingCancelRe
         "status": "cancelled",
         "previous_status": result["previous_status"],
         "previous_phase": result["previous_phase"],
+        "lock_released": True,
+        "retry_allowed": True,
+    }
+
+
+class EvidenceIndexingPauseRequest(BaseModel):
+    reason: str | None = None
+
+
+@router.post("/api/evidences/{evidence_id}/indexing/pause")
+def pause_evidence_indexing(evidence_id: str, payload: EvidenceIndexingPauseRequest | None = None, db: Session = Depends(get_db)) -> dict:
+    """Immediately stop a running ingest job so it can be resumed later.
+
+    Unlike /indexing/cancel (which only cleans up an already-dead job), this
+    actively halts a live RQ work-horse via RQ's own stop-job pubsub command
+    -- the same mechanism that lets `rq` itself interrupt a running job -- so
+    the analyst does not wait for the current artifact to finish. The evidence
+    stays retryable: reprocess(mode=previous_selection) resumes using the
+    already-discovered artifact list.
+    """
+    item = db.get(Evidence, evidence_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    if item.ingest_status not in (IngestStatus.pending, IngestStatus.processing):
+        raise HTTPException(status_code=409, detail="Evidence is not actively indexing.")
+    reason = str((payload.reason if payload else None) or "Paused by analyst.").strip()
+    job_state = _find_ingest_job(evidence_id)
+    stopped_live_job = False
+    if job_state["exists"] and job_state["status"] == "started" and job_state["job_id"]:
+        try:
+            send_stop_job_command(redis_conn, job_state["job_id"])
+            stopped_live_job = True
+        except InvalidJobOperation:
+            pass
+    elif job_state["exists"] and job_state["status"] == "queued" and job_state["job_id"]:
+        try:
+            Job.fetch(job_state["job_id"], connection=redis_conn).cancel()
+        except Exception:  # noqa: BLE001
+            pass
+    result = release_stale_ingest_lock(item, reason=reason, phase="paused")
+    db.commit()
+    db.refresh(item)
+    return {
+        "accepted": True,
+        "evidence_id": item.id,
+        "status": "paused",
+        "previous_status": result["previous_status"],
+        "previous_phase": result["previous_phase"],
+        "stopped_live_job": stopped_live_job,
         "lock_released": True,
         "retry_allowed": True,
     }

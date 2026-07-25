@@ -156,6 +156,19 @@ export default function EvidenceDetail() {
       notify({ title: "Cancel indexing failed", description: error instanceof Error ? error.message : "The indexing state could not be cancelled.", tone: "error" });
     },
   });
+  const pauseIndexingMutation = useMutation({
+    mutationFn: () => api.pauseEvidenceIndexing(evidenceId, { reason: "Paused by analyst from Evidence Detail." }),
+    onSuccess: async () => {
+      notify({ title: "Indexing paused", description: "The running job was stopped. Use \"Re-index evidence\" to resume from where it left off.", tone: "success" });
+      await queryClient.invalidateQueries({ queryKey: ["evidence-indexing-plan", evidenceId] });
+      await queryClient.invalidateQueries({ queryKey: ["evidence", evidenceId] });
+      await queryClient.invalidateQueries({ queryKey: ["evidence-runs", evidenceId] });
+      await queryClient.invalidateQueries({ queryKey: ["evidence-search-summary", evidenceId] });
+    },
+    onError: (error) => {
+      notify({ title: "Pause failed", description: error instanceof Error ? error.message : "The indexing job could not be paused.", tone: "error" });
+    },
+  });
   const verifyIntegrityMutation = useMutation({
     mutationFn: () => api.verifyEvidenceIntegrity(evidenceQuery.data!.case_id, evidenceId),
     onSuccess: async (result) => {
@@ -1571,6 +1584,11 @@ function formatReportStatus(status: string | null | undefined) {
             <button type="button" onClick={() => reprocessMutation.mutate({ mode: "previous_selection" })} disabled={activeIndexingJob || reprocessMutation.isPending || !lastSuccessfulIngestPlan} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted disabled:opacity-50">
               {reprocessMutation.isPending ? "Queueing..." : "Re-index evidence"}
             </button>
+            {activeIndexingJob ? (
+              <button type="button" onClick={() => pauseIndexingMutation.mutate()} disabled={pauseIndexingMutation.isPending} className="rounded-2xl border border-warning/40 bg-warning/10 px-4 py-2 text-sm font-semibold text-warning disabled:opacity-50">
+                {pauseIndexingMutation.isPending ? "Pausing..." : "Pause indexing"}
+              </button>
+            ) : null}
             <button type="button" onClick={() => setDeleteDialogOpen(true)} className="rounded-2xl border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
               Delete evidence
             </button>
