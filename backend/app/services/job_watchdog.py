@@ -11,6 +11,7 @@ from rq import Queue
 from rq.job import Job
 from rq.registry import FailedJobRegistry, StartedJobRegistry
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.activity import log_activity
 from app.core.config import get_settings
@@ -50,6 +51,11 @@ DEFAULT_AUTOPILOT_POLICY = {
 
 ACTIVE_RUN_STATUSES = {"queued", "pending", "running", "processing"}
 TERMINAL_RUN_STATUSES = {"completed", "completed_with_errors", "failed", "cancelled", "stale"}
+
+# How long an ingest can go without a heartbeat before it's treated as an
+# orphaned work-horse (matches DEFAULT_AUTOPILOT_POLICY's heartbeat_timeout_seconds,
+# already used for benchmark runs) rather than just a slow one.
+STALE_INGEST_HEARTBEAT_SECONDS = 600
 
 
 def _utcnow_iso() -> str:
@@ -719,3 +725,131 @@ def run_benchmark_watchdog(db: Session, evidence_id: str, benchmark_id: str) -> 
     evidence.metadata_json = merge_evidence_metadata(evidence.metadata_json or {}, metadata)
     db.commit()
     return benchmark
+
+
+def release_stale_ingest_lock(item: Evidence, *, reason: str) -> dict[str, Any]:
+    """Clear an orphaned active-ingest lock so retry becomes possible again.
+
+    Shared mutation logic behind the analyst-triggered
+    POST /api/evidences/{id}/indexing/cancel endpoint and the automatic
+    stale-ingest reconciliation below. Only touches the evidence's own
+    processing-state metadata -- never indexed data -- so it is safe to run
+    without a human confirming first, as long as the caller has already
+    established the job is actually dead (see reconcile_stale_ingests).
+    """
+    metadata = dict(item.metadata_json or {})
+    now = _utcnow_iso()
+    previous_status = str(getattr(item.ingest_status, "value", item.ingest_status) or "")
+    previous_phase = str(metadata.get("current_phase") or metadata.get("phase") or "")
+    run_id = str(metadata.get("current_ingest_run_id") or metadata.get("latest_ingest_run_id") or "").strip()
+    if run_id:
+        metadata = upsert_ingest_run(
+            metadata,
+            run_id,
+            {
+                "status": "cancelled",
+                "phase": "cancelled",
+                "finished_at": now,
+                "last_error": reason,
+            },
+        )
+    metadata["current_ingest_run_id"] = None
+    metadata["reprocess_request"] = None
+    metadata["benchmark_request"] = None
+    metadata["indexing_plan_run"] = {
+        **dict(metadata.get("indexing_plan_run") or {}),
+        "status": "cancelled",
+        "updated_at": now,
+        "cancelled_at": now,
+        "cancel_reason": reason,
+    }
+    metadata["current_phase"] = "cancelled"
+    metadata["progress_pct"] = 0 if int(metadata.get("events_indexed") or 0) <= 0 else metadata.get("progress_pct", 0)
+    metadata["status_reason"] = reason
+    metadata["stale_recovery"] = {
+        "previous_status": previous_status,
+        "previous_phase": previous_phase,
+        "reason": reason,
+        "recovered_at": now,
+    }
+    if int(metadata.get("events_indexed") or metadata.get("searchable_documents_count") or 0) > 0:
+        item.ingest_status = IngestStatus.completed_with_errors
+    else:
+        item.ingest_status = IngestStatus.failed
+    item.metadata_json = metadata
+    item.error_log = dict(item.error_log or {})
+    item.processed_at = datetime.now(UTC).replace(tzinfo=None)
+    flag_modified(item, "metadata_json")
+    return {"previous_status": previous_status, "previous_phase": previous_phase}
+
+
+def _ingest_job_is_alive(evidence_id: str) -> bool:
+    job_state = _find_ingest_job(evidence_id)
+    return bool(job_state["exists"] and job_state["status"] in {"started", "queued"})
+
+
+def maybe_reconcile_stale_ingest(db: Session, item: Evidence) -> bool:
+    """Heal a single evidence's stuck lock the moment someone looks at it.
+
+    Called from the evidence detail GET route (which the frontend polls
+    every few seconds while an ingest is active), so a work-horse that died
+    silently -- e.g. OOM-killed mid-artifact, no exception ever raised in
+    ingest_evidence to update the row -- gets released as soon as an analyst
+    opens or refreshes that evidence's page, with no manual "Cancel" click
+    and no operator SSH'd into the box required.
+    """
+    if item.ingest_status not in (IngestStatus.pending, IngestStatus.processing):
+        return False
+    metadata = dict(item.metadata_json or {})
+    heartbeat_age = _elapsed_seconds_since(metadata.get("heartbeat_at"))
+    if heartbeat_age is None or heartbeat_age < STALE_INGEST_HEARTBEAT_SECONDS:
+        return False
+    if _ingest_job_is_alive(item.id):
+        return False
+    release_stale_ingest_lock(
+        item,
+        reason=(
+            f"Automatic watchdog: no worker heartbeat for {int(heartbeat_age)}s "
+            "and no active job found for this evidence."
+        ),
+    )
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return True
+
+
+def reconcile_stale_ingests(db: Session, *, max_evidences: int = 200) -> dict[str, int]:
+    """Bulk sweep for evidences nobody is actively looking at.
+
+    Run at backend startup (mirrors the existing reconcile_evidence_operations
+    / reconcile_stale_probes pattern) so evidence stuck by a dead work-horse
+    is released even if no analyst opens its page before the next restart.
+    """
+    candidates = (
+        db.query(Evidence)
+        .filter(Evidence.ingest_status.in_([IngestStatus.pending, IngestStatus.processing]))
+        .limit(max_evidences)
+        .all()
+    )
+    inspected = 0
+    reconciled = 0
+    for item in candidates:
+        metadata = dict(item.metadata_json or {})
+        heartbeat_age = _elapsed_seconds_since(metadata.get("heartbeat_at"))
+        if heartbeat_age is None or heartbeat_age < STALE_INGEST_HEARTBEAT_SECONDS:
+            continue
+        inspected += 1
+        if _ingest_job_is_alive(item.id):
+            continue
+        release_stale_ingest_lock(
+            item,
+            reason=(
+                f"Automatic watchdog: no worker heartbeat for {int(heartbeat_age)}s "
+                "and no active job found for this evidence."
+            ),
+        )
+        db.add(item)
+        db.commit()
+        reconciled += 1
+    return {"inspected": inspected, "reconciled": reconciled}

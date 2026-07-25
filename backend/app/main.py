@@ -300,6 +300,23 @@ def on_startup() -> None:
     finally:
         db.close()
 
+    # Stale-ingest reconciliation: releases evidences left in pending/processing
+    # by a worker that died without updating the row (e.g. the RQ work-horse
+    # was OOM-killed mid-artifact). Also runs opportunistically whenever an
+    # analyst opens an evidence's detail page (see maybe_reconcile_stale_ingest
+    # in routes_evidence.get_evidence); this startup pass is the safety net
+    # for evidences nobody is actively viewing.
+    from app.services.job_watchdog import reconcile_stale_ingests
+    db = SessionLocal()
+    try:
+        ingest_stats = reconcile_stale_ingests(db)
+        if ingest_stats.get("reconciled", 0) > 0:
+            logger.info("stale ingest reconciliation: %s", ingest_stats)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stale ingest reconciliation skipped: %s", exc)
+    finally:
+        db.close()
+
     from app.services.memory.upload_sessions import (
         cleanup_expired_memory_upload_sessions,
         schedule_periodic_cleanup_if_needed,
