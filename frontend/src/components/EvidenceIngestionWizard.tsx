@@ -99,6 +99,28 @@ function inspectionStateLabel(state: InspectionState, options: { isServerPath: b
   }
 }
 
+// Maps the backend's current_stage checkpoints (see
+// evidence_upload_session._report_stage / evidence_preflight.run_preflight's
+// on_stage callback) to analyst-facing labels. Falls back to the old
+// generic label when a session predates this field or hasn't reported a
+// stage yet -- never invents a stage the server didn't report.
+function finalizeStageLabel(stage: string): string {
+  switch (stage) {
+    case "verifying_integrity":
+      return "Verifying evidence integrity";
+    case "classifying":
+      return "Classifying evidence";
+    case "inspecting_evidence":
+      return "Inspecting evidence";
+    case "preparing_evidence":
+      return "Preparing evidence";
+    case "preflight_complete":
+      return "Ready for ingestion";
+    default:
+      return "Finalizing upload on the server";
+  }
+}
+
 function inspectionErrorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return "Kairon could not inspect this evidence.";
@@ -185,6 +207,12 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [uploadProgress, setUploadProgress] = useState<number | null>(null);
   const [inspectionStartedAt, setInspectionStartedAt] = useState<number | null>(null);
   const [nowMs, setNowMs] = useState(Date.now());
+  // Real, server-reported finalize checkpoints only (see current_stage on
+  // EvidenceUploadSessionRead) -- appended in the order they're observed
+  // while polling an in-flight finalize call, never guessed or timed
+  // client-side. Stages the backend skips for a given evidence type (e.g.
+  // memory dumps skip "inspecting_evidence") simply never appear here.
+  const [finalizeStageHistory, setFinalizeStageHistory] = useState<string[]>([]);
   const promotedRef = useRef(false);
   const promotedEvidenceRef = useRef<Evidence | null>(null);
   const [resumeTarget, setResumeTarget] = useState<ResumableUploadSessionRead | null>(null);
@@ -287,6 +315,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setNotes("");
     setHashProgress(null);
     setClientSha256(null);
+    setFinalizeStageHistory([]);
     setInspectionState("idle");
     setInspectionError(null);
     setUploadProgress(null);
@@ -303,6 +332,39 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   function handleClose() {
     reset();
     onClose();
+  }
+
+  // Finalize (POST .../evidence-uploads/{id}/finalize) is a single
+  // synchronous call that can legitimately run for minutes on large disk
+  // images/archives (hashing + preflight inspection scale with file size --
+  // see the nginx 1800s timeout and the finalize instrumentation this was
+  // diagnosed from). It is not made asynchronous and no new endpoint is
+  // introduced here: this only polls the existing session GET concurrently
+  // while that POST is still in flight, purely to surface the real
+  // current_stage checkpoints the backend already commits along the way.
+  // A transient poll failure never affects the outstanding finalize call --
+  // it just means one fewer progress update.
+  function startFinalizeStagePolling(targetCaseId: string, sessionId: string): () => void {
+    let stopped = false;
+    let timeoutId: number | undefined;
+    const poll = async () => {
+      if (stopped) return;
+      try {
+        const response = await api.getEvidenceUploadSession(targetCaseId, sessionId);
+        const stage = response.session.current_stage;
+        if (stage) {
+          setFinalizeStageHistory((previous) => (previous[previous.length - 1] === stage ? previous : [...previous, stage]));
+        }
+      } catch {
+        // best-effort only; the outstanding finalize POST is unaffected
+      }
+      if (!stopped) timeoutId = window.setTimeout(poll, 1500);
+    };
+    timeoutId = window.setTimeout(poll, 1500);
+    return () => {
+      stopped = true;
+      if (timeoutId !== undefined) window.clearTimeout(timeoutId);
+    };
   }
 
   async function uploadSingleFileResumable(file: File, onProgress: (progress: { loaded: number; total: number; lengthComputable: boolean }) => void) {
@@ -345,7 +407,13 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       },
       finalize: async () => {
         setInspectionState("finalizing_upload");
-        finalizedResponse = await api.finalizeResumableEvidenceUploadSession(caseId, activeSession.id);
+        setFinalizeStageHistory([]);
+        const stopPolling = startFinalizeStagePolling(caseId, activeSession.id);
+        try {
+          finalizedResponse = await api.finalizeResumableEvidenceUploadSession(caseId, activeSession.id);
+        } finally {
+          stopPolling();
+        }
         latestSession = finalizedResponse.session;
         setSession(finalizedResponse.session);
         return evidenceSessionUploadStatus(finalizedResponse.session, file, chunkSize);
@@ -1145,11 +1213,22 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                         {uploadProgress !== null ? <div className="mt-2 h-1.5 rounded-full bg-abyss"><div className="h-1.5 rounded-full bg-accent transition-all" style={{ width: `${Math.max(5, Math.round(uploadProgress * 100))}%` }} /></div> : null}
                       </div>
                     ) : null}
-                    {!requiresPathInput ? (
+                    {!requiresPathInput && finalizeStageHistory.length === 0 ? (
                       <p className={`rounded-xl border px-3 py-2 ${inspectionState === "finalizing_upload" ? "border-accent/30 bg-accent/10 text-accent" : uploadProgress === 1 ? "border-mint/30 bg-mint/10 text-mint" : "border-line text-muted"}`}>
                         {inspectionState === "finalizing_upload" ? "Active:" : uploadProgress === 1 ? "Done:" : "Queued:"} Finalizing upload on the server
                       </p>
                     ) : null}
+                    {!requiresPathInput
+                      ? finalizeStageHistory.map((stage, index) => {
+                          const isLast = index === finalizeStageHistory.length - 1;
+                          const active = isLast && inspectionState === "finalizing_upload";
+                          return (
+                            <p key={stage} data-testid="finalize-stage-row" className={`rounded-xl border px-3 py-2 ${active ? "border-accent/30 bg-accent/10 text-accent" : "border-mint/30 bg-mint/10 text-mint"}`}>
+                              {active ? "Active:" : "Done:"} {finalizeStageLabel(stage)}
+                            </p>
+                          );
+                        })
+                      : null}
                     <p className={`rounded-xl border px-3 py-2 ${inspectionState === "preflight_running" ? "border-accent/30 bg-accent/10 text-accent" : "border-line text-muted"}`}>
                       {inspectionState === "preflight_running" ? "Active:" : "Queued:"} Scanning contents, detecting platform, discovering hosts, and estimating processing
                     </p>

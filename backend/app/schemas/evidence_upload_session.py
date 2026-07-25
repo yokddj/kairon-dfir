@@ -27,6 +27,10 @@ class EvidenceUploadSessionRead(BaseModel):
     promoted_evidence_id: str | None = None
     category: str | None = None
     backend: str = "legacy"
+    # Best-effort finalize progress checkpoint (see
+    # evidence_upload_session._report_stage); None until finalize starts
+    # writing it, and not meaningful outside of an in-flight finalize call.
+    current_stage: str | None = None
 
     model_config = {"from_attributes": True}
 
