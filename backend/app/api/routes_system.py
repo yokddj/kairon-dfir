@@ -51,6 +51,19 @@ def system_version() -> dict:
     }
 
 
+@router.get("/api/system/capabilities")
+def system_capabilities() -> dict:
+    """Declarative activation state for optional capabilities.
+
+    Read-only and dependency-free by design (no DB/Redis/OpenSearch
+    access) so the frontend can check it cheaply and early, the same
+    way it already checks /api/system/version and /api/system/health.
+    """
+    return {
+        "memory": {"enabled": bool(settings.memory_enabled)},
+    }
+
+
 @router.get("/api/system/health")
 def system_health() -> dict:
     return {"status": "ok"}

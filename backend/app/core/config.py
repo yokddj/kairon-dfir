@@ -59,6 +59,13 @@ class Settings(BaseSettings):
     csrf_secret: str = os.getenv("KAIRON_CSRF_SECRET", "CHANGE_ME_CSRF_SECRET")
     backend_max_upload_size: int = Field(default=34359738368)
     backend_upload_idle_timeout_seconds: int = 60
+    # Sole authority for activating the Memory capability at application-composition
+    # level (router mounting, startup reconciliation, evidence-integration paths).
+    # Defaults to True to preserve current deployment behavior, where Memory has
+    # always been mounted unconditionally; this is distinct from
+    # memory_analysis_enabled below, which gates actual analysis execution
+    # (Volatility/MemProcFS) once the capability is already active.
+    memory_enabled: bool = True
     memory_analysis_enabled: bool = False
     volatility3_command: str = "vol"
     memprocfs_command: str = "memprocfs"
