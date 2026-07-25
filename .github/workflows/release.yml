@@ -32,14 +32,24 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    env:
+      KAIRON_AUTH_ENABLED: "false"
+      BACKEND_DATA_DIR: ${{ runner.temp }}/kairon-ci-data
+      BACKEND_TEMP_DIR: ${{ runner.temp }}/kairon-ci-data/tmp
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
-      - run: python -m pytest tests/ -q --ignore=tests/test_demo_pack.py -k "not (eml or edr_cache)" --timeout=60 2>&1 | tail -10
-        continue-on-error: true
+      # Known pre-existing failures are marked xfail via
+      # tests/conftest.py + tests/known_failures.txt, so a tagged release
+      # genuinely fails this job on any regression instead of being
+      # advisory. (--timeout=60 was previously passed here without the
+      # pytest-timeout plugin installed, which made this job error out on
+      # argument parsing before running a single test, entirely hidden by
+      # continue-on-error; removed to match the working ci.yml invocation.)
+      - run: python -m pytest tests/ -q --ignore=tests/test_demo_pack.py -k "not (eml or edr_cache)"
 
   frontend:
     needs: validate-tag

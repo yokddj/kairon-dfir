@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Highlights
+
+- Memory Analysis promoted from Experimental to an optional Core DFIR Capability, with a real activation boundary.
+- General evidence uploads now detect duplicates the same way Memory uploads already did.
+- Archive extraction failures are classified instead of surfacing raw tool errors.
+
+### Added
+
+- A single `memory_enabled` setting as the sole authority for activating Memory at the application-composition level (default true, preserving existing deployment behavior).
+- A dependency-free `GET /api/system/capabilities` endpoint exposing declarative capability activation state.
+- Case-scoped, content-based (SHA-256) duplicate evidence detection across every general evidence-creation path: direct upload, disk-image upload, folder upload, register-by-path, and the legacy Velociraptor upload routes.
+- Classified archive extraction errors (`archive_corrupted`, `archive_password_protected`, `archive_unsupported_format`, `archive_tool_missing`, `archive_extraction_timeout`, `archive_insufficient_disk_space`, `archive_extraction_limit_exceeded`, and a generic fallback) with analyst-facing messages separate from technical detail kept for logs.
+- A configurable extraction timeout for the 7z-family archive backend (previously unbounded).
+
+### Changed
+
+- Memory's routers and startup reconciliation hooks are now mounted/run only when `memory_enabled` is true, instead of unconditionally.
+- Duplicate evidence requests now return `409` with `{error_code: EVIDENCE_DUPLICATE, duplicate: true, existing_evidence_id, existing_filename}` instead of silently creating a second Evidence row.
+- The top-level ingest failure classifier now recognizes classified archive extraction errors and surfaces their analyst-facing message through the existing evidence-status path, instead of a raw exception string.
+
 ## 0.9.0-beta - 2026-07-18
 
 ### Highlights

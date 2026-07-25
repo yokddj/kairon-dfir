@@ -12,6 +12,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
     # postgres is also reachable from the symbol-internal network so the
     # symbol-fetcher can record MemorySymbolAcquisition rows without
     # traversing the default network.
@@ -49,6 +50,7 @@ services:
       interval: 20s
       timeout: 10s
       retries: 10
+    restart: unless-stopped
 
   opensearch-dashboards:
     profiles:
@@ -64,6 +66,7 @@ services:
         condition: service_healthy
     ports:
       - "5601:5601"
+    restart: unless-stopped
 
   backend:
     build:
@@ -127,6 +130,7 @@ services:
       - ./data/local-mounts/data-evidence:/data/evidence:ro
       - ./data/local-mounts/cases:/cases:ro
     command: ["python", "-m", "app.workers.worker"]
+    restart: unless-stopped
 
   memory-worker:
     profiles:
