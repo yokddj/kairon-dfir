@@ -1905,6 +1905,8 @@ def probe_memory_image(
     verdict with the new one.  The file is not re-read in full; only
     the first 1 MiB and last 64 KiB are sampled.
     """
+    if not getattr(settings, "memory_enabled", True):
+        raise HTTPException(status_code=404, detail="Memory Analysis capability is not available on this server.")
     from app.services.memory.probe import probe_memory_image as _probe
     from app.core.database import utc_now_naive
 
@@ -1985,6 +1987,11 @@ def confirm_memory_type(
     a recent enough version.  The override is audited via
     ``operator_override`` and ``operator_override_reason`` fields.
     """
+    if not getattr(settings, "memory_enabled", True):
+        raise HTTPException(status_code=404, detail={
+            "error_code": "MEMORY_CAPABILITY_DISABLED",
+            "message": "Memory Analysis capability is not available on this server.",
+        })
     if not db.get(Case, case_id):
         raise HTTPException(status_code=404, detail={
             "error_code": "EVIDENCE_NOT_FOUND",
@@ -2111,6 +2118,8 @@ def upload_evidence(
     normalized_ingest_mode = normalize_ingest_mode(ingest_mode)
     normalized_evtx_profile = str(evtx_profile or "").strip() or None
     if memory_upload:
+        if not getattr(settings, "memory_enabled", True):
+            raise HTTPException(status_code=404, detail="Memory Analysis capability is not available on this server.")
         if not settings.memory_upload_enabled:
             raise HTTPException(status_code=403, detail="Memory image upload is disabled by server configuration.")
         if not memory_authorization_acknowledged:
@@ -2290,6 +2299,8 @@ def upload_evidence(
         paths=entry_paths,
     )
     detected_warnings = _evidence_intent_warnings(evidence_intent=normalized_intent, detected_type=detected_type, path=stored_path)
+    if not raw_collection and not folder_upload and detected_type == EvidenceType.memory_dump and not getattr(settings, "memory_enabled", True):
+        raise HTTPException(status_code=404, detail="Memory Analysis capability is not available on this server.")
     source_tool = "raw_collection" if raw_collection else _source_tool_for_detected_evidence_type(detected_type)
     host_resolution = _resolve_upload_host(
         db,
@@ -2720,6 +2731,8 @@ def register_evidence_path(case_id: str, payload: RegisterPathRequest, db: Sessi
         paths=entry_paths or [],
     )
     detected_warnings = _evidence_intent_warnings(evidence_intent=normalized_intent, detected_type=detected_type, path=stored_path)
+    if not raw_collection and detected_type == EvidenceType.memory_dump and not getattr(settings, "memory_enabled", True):
+        raise HTTPException(status_code=404, detail="Memory Analysis capability is not available on this server.")
     host_resolution = _resolve_upload_host(
         db,
         case_id=case_id,

@@ -7,7 +7,7 @@ from starlette._utils import AwaitableOrContextManagerWrapper
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
-from app.api import routes_activity, routes_admin, routes_auth, routes_cases, routes_command_history, routes_email_artifacts, routes_evidence, routes_evidence_preflight, routes_events, routes_findings, routes_hosts, routes_hunting, routes_indicators, routes_memory, routes_memory_experimental, routes_memory_recovery, routes_motw, routes_persistence, routes_reports, routes_rules, routes_search, routes_system, routes_tags, routes_timeline, routes_velociraptor
+from app.api import routes_activity, routes_admin, routes_auth, routes_cases, routes_command_history, routes_email_artifacts, routes_evidence, routes_evidence_preflight, routes_events, routes_findings, routes_hosts, routes_hunting, routes_indicators, routes_motw, routes_persistence, routes_reports, routes_rules, routes_search, routes_system, routes_tags, routes_timeline, routes_velociraptor
 from app.core.config import get_settings
 from app.core.database import init_db
 from app.core.opensearch import ensure_events_indices_safe_settings
@@ -72,6 +72,7 @@ PUBLIC_PATH_PREFIXES = [
     "/api/system/version",
     "/api/system/health",
     "/api/system/status",
+    "/api/system/capabilities",
     "/api/docs",
     "/api/openapi.json",
     "/api/redoc",
@@ -147,9 +148,25 @@ app.include_router(routes_hunting.router)
 app.include_router(routes_findings.router)
 app.include_router(routes_hosts.router)
 app.include_router(routes_indicators.router)
-app.include_router(routes_memory.router)
-app.include_router(routes_memory_experimental.router)
-app.include_router(routes_memory_recovery.router)
+
+
+def _configure_memory_capability(target_app: FastAPI) -> None:
+    """Mount every router that belongs to the Memory capability.
+
+    Called only when ``settings.memory_enabled`` is true. Imports are
+    local so that disabling the capability keeps these route modules
+    out of the process entirely, not merely unreachable.
+    """
+    from app.api import routes_memory, routes_memory_experimental, routes_memory_recovery
+
+    target_app.include_router(routes_memory.router)
+    target_app.include_router(routes_memory_experimental.router)
+    target_app.include_router(routes_memory_recovery.router)
+
+
+if settings.memory_enabled:
+    _configure_memory_capability(app)
+
 app.include_router(routes_motw.router)
 app.include_router(routes_persistence.router)
 app.include_router(routes_reports.router)
@@ -161,25 +178,17 @@ app.include_router(routes_tags.router)
 app.include_router(routes_velociraptor.router)
 
 
-@app.on_event("startup")
-def on_startup() -> None:
-    try:
-        from app.services.bootstrap import bootstrap_admin
-        created = bootstrap_admin()
-        if created:
-            import logging
-            logger = logging.getLogger("uvicorn")
-            logger.warning("Bootstrap admin created from environment variables. Remove KAIRON_BOOTSTRAP_ADMIN_* after setup.")
-    except Exception as e:
-        import logging
-        logging.getLogger("uvicorn").error("Bootstrap admin failed: %s", e)
+def _reconcile_memory_startup_state(logger: logging.Logger) -> None:
+    """Run every Memory-specific startup reconciliation pass.
 
-    init_db()
-    ensure_events_indices_safe_settings()
-    auto_bootstrap_dashboards()
+    Called only when ``settings.memory_enabled`` is true. Each pass is
+    independently wrapped so a failure in one never prevents the API
+    from starting, matching the original (unconditional) behavior.
+    """
+    from app.core.database import SessionLocal
+
     # Reconcile in-flight memory analysis batches so a restart
     # does not leave a batch with no next profile enqueued.
-    from app.core.database import SessionLocal
     from app.services.memory.batch import reconcile_memory_batches
 
     db = SessionLocal()
@@ -192,8 +201,6 @@ def on_startup() -> None:
     # valid requirement, never executes Volatility and never
     # downloads symbols.  A failure here MUST NOT prevent the API
     # from starting; we log and continue.
-    import logging
-    logger = logging.getLogger(__name__)
     from app.services.memory.symbol_backfill import backfill_memory_symbol_readiness
     from app.services.memory.symbol_preparation import reconcile_memory_symbol_readiness
     db = SessionLocal()
@@ -289,6 +296,61 @@ def on_startup() -> None:
     except Exception as exc:  # noqa: BLE001
         logger.warning("native probe periodic reconciliation scheduling skipped: %s", exc)
 
+
+def _cleanup_memory_upload_sessions_startup(logger: logging.Logger) -> None:
+    """Expire/purge stale Memory upload sessions at startup.
+
+    Called only when ``settings.memory_enabled`` is true.
+    """
+    from app.core.database import SessionLocal
+    from app.services.memory.upload_sessions import (
+        cleanup_expired_memory_upload_sessions,
+        schedule_periodic_cleanup_if_needed,
+    )
+
+    db = SessionLocal()
+    try:
+        upload_cleanup = cleanup_expired_memory_upload_sessions(db)
+        if upload_cleanup.get("expired", 0) > 0 or upload_cleanup.get("purged", 0) > 0:
+            logger.info("memory upload cleanup: %s", upload_cleanup)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory upload cleanup skipped: %s", exc)
+    finally:
+        db.close()
+
+    try:
+        scheduled = schedule_periodic_cleanup_if_needed()
+        if scheduled:
+            logger.info("memory upload periodic cleanup scheduled")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("memory upload periodic cleanup scheduling skipped: %s", exc)
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    try:
+        from app.services.bootstrap import bootstrap_admin
+        created = bootstrap_admin()
+        if created:
+            import logging
+            logger = logging.getLogger("uvicorn")
+            logger.warning("Bootstrap admin created from environment variables. Remove KAIRON_BOOTSTRAP_ADMIN_* after setup.")
+    except Exception as e:
+        import logging
+        logging.getLogger("uvicorn").error("Bootstrap admin failed: %s", e)
+
+    init_db()
+    ensure_events_indices_safe_settings()
+    auto_bootstrap_dashboards()
+
+    from app.core.database import SessionLocal
+
+    import logging
+    logger = logging.getLogger(__name__)
+
+    if settings.memory_enabled:
+        _reconcile_memory_startup_state(logger)
+
     from app.services.evidence_operations import reconcile_evidence_operations
     db = SessionLocal()
     try:
@@ -317,27 +379,8 @@ def on_startup() -> None:
     finally:
         db.close()
 
-    from app.services.memory.upload_sessions import (
-        cleanup_expired_memory_upload_sessions,
-        schedule_periodic_cleanup_if_needed,
-    )
-
-    db = SessionLocal()
-    try:
-        upload_cleanup = cleanup_expired_memory_upload_sessions(db)
-        if upload_cleanup.get("expired", 0) > 0 or upload_cleanup.get("purged", 0) > 0:
-            logger.info("memory upload cleanup: %s", upload_cleanup)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("memory upload cleanup skipped: %s", exc)
-    finally:
-        db.close()
-
-    try:
-        scheduled = schedule_periodic_cleanup_if_needed()
-        if scheduled:
-            logger.info("memory upload periodic cleanup scheduled")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("memory upload periodic cleanup scheduling skipped: %s", exc)
+    if settings.memory_enabled:
+        _cleanup_memory_upload_sessions_startup(logger)
 
 
 @app.get("/health")
