@@ -727,15 +727,20 @@ def run_benchmark_watchdog(db: Session, evidence_id: str, benchmark_id: str) -> 
     return benchmark
 
 
-def release_stale_ingest_lock(item: Evidence, *, reason: str) -> dict[str, Any]:
-    """Clear an orphaned active-ingest lock so retry becomes possible again.
+def release_stale_ingest_lock(item: Evidence, *, reason: str, phase: str = "cancelled") -> dict[str, Any]:
+    """Clear an orphaned or intentionally-stopped active-ingest lock so retry
+    becomes possible again.
 
     Shared mutation logic behind the analyst-triggered
-    POST /api/evidences/{id}/indexing/cancel endpoint and the automatic
-    stale-ingest reconciliation below. Only touches the evidence's own
-    processing-state metadata -- never indexed data -- so it is safe to run
-    without a human confirming first, as long as the caller has already
-    established the job is actually dead (see reconcile_stale_ingests).
+    POST /api/evidences/{id}/indexing/cancel and .../pause endpoints and the
+    automatic stale-ingest reconciliation below. Only touches the evidence's
+    own processing-state metadata -- never indexed data.
+
+    `phase` distinguishes *why* the lock was released in the UI/metadata
+    ("cancelled" for a dead/orphaned job the caller already confirmed is not
+    running, "paused" for a live job the caller just stopped on purpose) --
+    the resulting terminal ingest_status is the same either way, since both
+    leave the evidence retryable via reprocess(mode=previous_selection).
     """
     metadata = dict(item.metadata_json or {})
     now = _utcnow_iso()
@@ -747,8 +752,8 @@ def release_stale_ingest_lock(item: Evidence, *, reason: str) -> dict[str, Any]:
             metadata,
             run_id,
             {
-                "status": "cancelled",
-                "phase": "cancelled",
+                "status": phase,
+                "phase": phase,
                 "finished_at": now,
                 "last_error": reason,
             },
@@ -756,14 +761,15 @@ def release_stale_ingest_lock(item: Evidence, *, reason: str) -> dict[str, Any]:
     metadata["current_ingest_run_id"] = None
     metadata["reprocess_request"] = None
     metadata["benchmark_request"] = None
+    metadata["pause_requested"] = False
     metadata["indexing_plan_run"] = {
         **dict(metadata.get("indexing_plan_run") or {}),
-        "status": "cancelled",
+        "status": phase,
         "updated_at": now,
         "cancelled_at": now,
         "cancel_reason": reason,
     }
-    metadata["current_phase"] = "cancelled"
+    metadata["current_phase"] = phase
     metadata["progress_pct"] = 0 if int(metadata.get("events_indexed") or 0) <= 0 else metadata.get("progress_pct", 0)
     metadata["status_reason"] = reason
     metadata["stale_recovery"] = {
