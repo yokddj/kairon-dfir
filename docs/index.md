@@ -63,6 +63,11 @@ Esta documentación describe el estado real de la plataforma. Las capacidades pa
 - [maintenance/documentation-maintenance.md](maintenance/documentation-maintenance.md)
 - [maintenance/documentation-inventory.md](maintenance/documentation-inventory.md)
 
+## Arquitectura y decisiones
+
+- [architecture/optional-capability-boundary.md](architecture/optional-capability-boundary.md): RFC/ADR — qué significa técnicamente que una capability sea opcional en Kairon (Memory hoy, AI en el futuro).
+- [architecture/backlog.md](architecture/backlog.md): backlog de seguimiento de la revisión de arquitectura, con items verificables independientemente.
+
 ## Roadmap
 
 - [roadmap.md](roadmap.md)
