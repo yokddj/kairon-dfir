@@ -9,7 +9,7 @@ from app.core.database import Base, UUIDMixin
 class AssignmentHistory(UUIDMixin, Base):
     __tablename__ = "assignment_history"
 
-    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
     case_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
     previous_host_id: Mapped[str | None] = mapped_column(ForeignKey("case_hosts.id"), nullable=True)
     new_host_id: Mapped[str | None] = mapped_column(ForeignKey("case_hosts.id"), nullable=True)
