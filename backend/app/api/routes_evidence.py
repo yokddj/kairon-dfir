@@ -89,7 +89,7 @@ from app.services.ingest_plan import (
     rebuild_ingest_plan_from_last_run,
 )
 from app.services.indexing_profiles import build_indexing_plan, create_indexing_plan_run, evidence_has_active_indexing, normalize_indexing_profile
-from app.services.job_watchdog import run_benchmark_watchdog
+from app.services.job_watchdog import maybe_reconcile_stale_ingest, release_stale_ingest_lock, run_benchmark_watchdog
 from app.services.on_demand_modules import build_on_demand_module_registry
 from app.services.parser_registry import (
     build_indexed_field_coverage_by_artifact_type,
@@ -2849,6 +2849,7 @@ def get_evidence(evidence_id: str, db: Session = Depends(get_db)) -> Evidence:
     item = db.get(Evidence, evidence_id)
     if not item:
         raise HTTPException(status_code=404, detail="Evidence not found")
+    maybe_reconcile_stale_ingest(db, item)
     return _ensure_rebuilt_ingest_plan(db, item)
 
 
@@ -4456,58 +4457,16 @@ def cancel_evidence_indexing(evidence_id: str, payload: EvidenceIndexingCancelRe
     item = db.get(Evidence, evidence_id)
     if not item:
         raise HTTPException(status_code=404, detail="Evidence not found")
-    metadata = dict(item.metadata_json or {})
-    now = datetime.now(UTC).isoformat()
-    previous_status = str(getattr(item.ingest_status, "value", item.ingest_status) or "")
-    previous_phase = str(metadata.get("current_phase") or metadata.get("phase") or "")
-    run_id = str(metadata.get("current_ingest_run_id") or metadata.get("latest_ingest_run_id") or "").strip()
     reason = str((payload.reason if payload else None) or "Cancelled by analyst to recover indexing state.").strip()
-    if run_id:
-        metadata = upsert_ingest_run(
-            metadata,
-            run_id,
-            {
-                "status": "cancelled",
-                "phase": "cancelled",
-                "finished_at": now,
-                "last_error": reason,
-            },
-        )
-    metadata["current_ingest_run_id"] = None
-    metadata["reprocess_request"] = None
-    metadata["benchmark_request"] = None
-    metadata["indexing_plan_run"] = {
-        **dict(metadata.get("indexing_plan_run") or {}),
-        "status": "cancelled",
-        "updated_at": now,
-        "cancelled_at": now,
-        "cancel_reason": reason,
-    }
-    metadata["current_phase"] = "cancelled"
-    metadata["progress_pct"] = 0 if int(metadata.get("events_indexed") or 0) <= 0 else metadata.get("progress_pct", 0)
-    metadata["status_reason"] = reason
-    metadata["stale_recovery"] = {
-        "previous_status": previous_status,
-        "previous_phase": previous_phase,
-        "reason": reason,
-        "recovered_at": now,
-    }
-    if int(metadata.get("events_indexed") or metadata.get("searchable_documents_count") or 0) > 0:
-        item.ingest_status = IngestStatus.completed_with_errors
-    else:
-        item.ingest_status = IngestStatus.failed
-    item.metadata_json = metadata
-    item.error_log = dict(item.error_log or {})
-    item.processed_at = datetime.now(UTC).replace(tzinfo=None)
-    flag_modified(item, "metadata_json")
+    result = release_stale_ingest_lock(item, reason=reason)
     db.commit()
     db.refresh(item)
     return {
         "accepted": True,
         "evidence_id": item.id,
         "status": "cancelled",
-        "previous_status": previous_status,
-        "previous_phase": previous_phase,
+        "previous_status": result["previous_status"],
+        "previous_phase": result["previous_phase"],
         "lock_released": True,
         "retry_allowed": True,
     }
