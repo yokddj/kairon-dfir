@@ -79,8 +79,9 @@ conflict_output="$TMPDIR/conflict.out"
 set +e
 PREPARE_MEMORY_STORAGE_PERMISSIONS_TEST=1 bash -c '
   . "'"$TARGET"'"
-  _is_owned_by_current_user() { return 1; }
-  _owner_name() { echo "10001"; }
+  _is_owned_by_expected_user() { return 1; }
+  _dir_owner_name() { echo "10001"; }
+  _dir_owner_uid() { echo "10001"; }
   prepare_shared_dir "'"$case_dir3"'/memory-output" 2770
 ' >"$conflict_output" 2>&1
 conflict_exit=$?
@@ -128,10 +129,98 @@ if grep -rEn 'chown[[:space:]]+-[a-zA-Z]*R[a-zA-Z]*[[:space:]].*memory-output' \
 else
   ok "no script/Dockerfile performs an unrestricted recursive chown on memory-output"
 fi
-if grep -n 'chown' "$TARGET" | grep -v 'echo' | grep -vE ':[[:space:]]*#' | grep -q .; then
-  bad "prepare_memory_storage_permissions.sh never invokes chown (chgrp-only by design; mentions of it are comments/recovery-command text)"
+# The only legitimate chown left is the root-plus-sudo repair path,
+# which always targets the dynamically-resolved expected identity
+# ($(_expected_uid):$(_expected_gid)) -- never a hardcoded UID like the
+# container's 10001, which was the actual bug.
+if grep -n 'chown' "$TARGET" | grep -v 'echo' | grep -vE ':[[:space:]]*#' | grep -v '_expected_uid' | grep -q .; then
+  bad "any chown in prepare_memory_storage_permissions.sh targets only the dynamic expected identity, never a hardcoded UID"
 else
-  ok "prepare_memory_storage_permissions.sh never invokes chown (chgrp-only by design; mentions of it are comments/recovery-command text)"
+  ok "any chown in prepare_memory_storage_permissions.sh targets only the dynamic expected identity, never a hardcoded UID"
+fi
+if grep -v '^[[:space:]]*#' "$TARGET" | grep -E 'chown.*10001' | grep -q .; then
+  bad "no chown call hardcodes the container UID (10001)"
+else
+  ok "no chown call hardcodes the container UID (10001)"
+fi
+
+# --- 8. Regression (the exact bug just reported): running under sudo
+#        (root process, but a directory ALREADY correctly owned by the
+#        real invoking user) must be accepted silently -- no error, no
+#        "repair" noise, nothing chowned. ------------------------------
+case_dir5="$TMPDIR/case5"
+mkdir -p "$case_dir5/memory-output"
+real_uid="$(id -u)"
+real_gid="$(id -g)"
+sudo_output="$TMPDIR/sudo_ok.out"
+set +e
+PREPARE_MEMORY_STORAGE_PERMISSIONS_TEST=1 SUDO_UID="$real_uid" SUDO_GID="$real_gid" bash -c '
+  . "'"$TARGET"'"
+  _running_as_root() { return 0; }
+  prepare_shared_dir "'"$case_dir5"'/memory-output" 2770
+' >"$sudo_output" 2>&1
+sudo_exit=$?
+set -e
+if [[ "$sudo_exit" -eq 0 ]]; then
+  ok "sudo + directory already owned by the real invoking user succeeds"
+else
+  bad "sudo + directory already owned by the real invoking user succeeds (exit $sudo_exit): $(cat "$sudo_output")"
+fi
+if grep -q "NOTE:" "$sudo_output"; then
+  bad "no spurious 'restoring ownership' NOTE when nothing was actually broken"
+else
+  ok "no spurious 'restoring ownership' NOTE when nothing was actually broken"
+fi
+if grep -qi "ERROR" "$sudo_output"; then
+  bad "no error printed when the directory is already correctly owned under sudo"
+else
+  ok "no error printed when the directory is already correctly owned under sudo"
+fi
+
+# --- 9. sudo + directory left owned by a stale UID (e.g. a previous
+#        broken run's 10001): auto-repaired to the real invoking user,
+#        then succeeds. --------------------------------------------------
+case_dir6="$TMPDIR/case6"
+mkdir -p "$case_dir6/memory-output"
+repair_output="$TMPDIR/sudo_repair.out"
+set +e
+PREPARE_MEMORY_STORAGE_PERMISSIONS_TEST=1 SUDO_UID="$real_uid" SUDO_GID="$real_gid" bash -c '
+  . "'"$TARGET"'"
+  _running_as_root() { return 0; }
+  _is_owned_by_expected_user() { return 1; }
+  _dir_owner_uid() { echo "10001"; }
+  _dir_owner_name() { echo "10001"; }
+  prepare_shared_dir "'"$case_dir6"'/memory-output" 2770
+' >"$repair_output" 2>&1
+repair_exit=$?
+set -e
+if [[ "$repair_exit" -eq 0 ]] && grep -q "NOTE:.*restoring ownership" "$repair_output"; then
+  ok "sudo + stale-UID directory is auto-repaired to the real invoking user and succeeds"
+else
+  bad "sudo + stale-UID directory is auto-repaired to the real invoking user and succeeds (exit $repair_exit): $(cat "$repair_output")"
+fi
+
+# --- 10. Error message reports the real expected owner, never a raw
+#         "root" label caused by comparing against the elevated
+#         process identity instead of the expected operator. -----------
+normal_user_output="$TMPDIR/normal_conflict.out"
+case_dir7="$TMPDIR/case7"
+mkdir -p "$case_dir7/memory-output"
+set +e
+PREPARE_MEMORY_STORAGE_PERMISSIONS_TEST=1 bash -c '
+  . "'"$TARGET"'"
+  _running_as_root() { return 1; }
+  _is_owned_by_expected_user() { return 1; }
+  _dir_owner_uid() { echo "10001"; }
+  _dir_owner_name() { echo "10001"; }
+  prepare_shared_dir "'"$case_dir7"'/memory-output" 2770
+' >"$normal_user_output" 2>&1
+normal_user_exit=$?
+set -e
+if [[ "$normal_user_exit" -eq 3 ]] && grep -q "Expected owner: $(id -un)" "$normal_user_output"; then
+  ok "non-root conflict reports the real expected owner (not root, not a raw \$(id -un) of an elevated process)"
+else
+  bad "non-root conflict reports the real expected owner (got): $(cat "$normal_user_output")"
 fi
 
 echo ""
