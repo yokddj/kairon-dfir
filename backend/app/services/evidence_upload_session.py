@@ -62,7 +62,7 @@ from app.models.case import Case
 from app.models.evidence import Evidence
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
 from app.schemas.evidence_preflight import PreflightReport
-from app.services.evidence_operations import sync_upload_operation
+from app.services.evidence_operations import get_operation_for_session, sync_upload_operation, transition_operation
 from app.services.evidence_preflight import run_preflight
 from app.services.upload_locks import (
     UploadLockBusyError,
@@ -398,19 +398,31 @@ def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUplo
     if (session.metadata_json or {}).get("backend") == "unified":
         raise UploadSessionError("unified_session_wrong_endpoint", "This upload session is backed by the unified chunk-index backend; finalize it through the memory upload finalize endpoint, not this one.")
 
-    # Best-effort progress checkpoint: mirrors the caller's current phase
-    # into metadata_json.current_stage with its own commit, so a concurrent
-    # GET on this session (polled by the wizard while this synchronous
-    # finalize call is still in flight) can observe real progress. Purely
-    # observational -- never changes session.status or control flow.
-    def _report_stage(stage: str) -> None:
-        session.metadata_json = {**(session.metadata_json or {}), "current_stage": stage}
-        _touch_upload_session(session)
-        db.add(session)
+    # Best-effort progress checkpoint: writes directly onto the session's
+    # associated EvidenceOperation.stage (the canonical persisted progress
+    # source -- see app.services.evidence_operations, and the background
+    # retry worker's own transition_operation calls in
+    # app.workers.tasks.run_evidence_upload_preflight, which this mirrors),
+    # with its own commit, so a concurrent GET on this session (polled by
+    # the wizard while this synchronous finalize call is still in flight,
+    # deriving current_stage from the operation) can observe real progress.
+    # Deliberately does NOT touch session.metadata_json -- that would
+    # recreate the exact dual-source-of-truth problem this was designed to
+    # avoid. A missing operation row (should not normally happen; every
+    # session-creation path already calls sync_upload_operation) degrades
+    # to a silent no-op rather than failing finalize over an observational
+    # side channel.
+    operation = get_operation_for_session(db, session)
+
+    def _advance_operation_stage(stage: str) -> None:
+        if operation is None:
+            return
+        transition_operation(operation, operation.status, stage=stage, owner=operation.owner, error=operation.last_error, force=True)
+        db.add(operation)
         db.commit()
 
     if session.status == EvidenceUploadSessionStatus.staged.value:
-        report = run_preflight(Path(session.staged_path), token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch", on_stage=_report_stage)
+        report = run_preflight(Path(session.staged_path), token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch", on_stage=_advance_operation_stage)
         session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete"}
         session.failure_message = None
         _touch_upload_session(session)
@@ -418,6 +430,7 @@ def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUplo
         db.commit()
         db.refresh(session)
         sync_upload_operation(db, session)
+        _advance_operation_stage("preflight_complete")
         return session, report
     if session.status not in {EvidenceUploadSessionStatus.uploading.value, EvidenceUploadSessionStatus.interrupted.value, EvidenceUploadSessionStatus.created.value}:
         raise UploadSessionError("session_not_uploading", f"Upload session is '{session.status}', not ready to finalize.")
@@ -436,19 +449,19 @@ def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUplo
     session.status = EvidenceUploadSessionStatus.preflight_running.value
     session.bytes_received = size
     session.size_bytes = size
-    session.metadata_json = {**(session.metadata_json or {}), "current_stage": "verifying_integrity"}
     with timed_phase("finalize.mark_preflight_running", session_id=session.id):
         _touch_upload_session(session)
         db.add(session)
         db.commit()
+    _advance_operation_stage("verifying_integrity")
     with timed_phase("finalize.hash_verification", session_id=session.id, size_bytes=size):
         digest = _hash_existing_file(path)
     session.sha256 = digest
     if session.client_sha256 and digest and session.client_sha256.strip().lower() != digest.lower():
         session.metadata_json = {**(session.metadata_json or {}), "client_sha256_mismatch": True}
     with timed_phase("finalize.run_preflight", session_id=session.id, size_bytes=size):
-        report = run_preflight(path, token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch", on_stage=_report_stage)
-    _report_stage("preparing_evidence")
+        report = run_preflight(path, token=session.id, original_filename=session.original_filename, declared_platform=session.declared_platform, tmp_dir=_session_root(session.id) / "scratch", on_stage=_advance_operation_stage)
+    _advance_operation_stage("preparing_evidence")
     session.status = EvidenceUploadSessionStatus.staged.value
     session.metadata_json = {**(session.metadata_json or {}), "category": report.classification.category, "current_stage": "preflight_complete"}
     session.failure_message = None
@@ -458,6 +471,7 @@ def _finalize_resumable_upload_session_locked(db: Session, session: EvidenceUplo
         db.commit()
         db.refresh(session)
         sync_upload_operation(db, session)
+    _advance_operation_stage("preflight_complete")
     return session, report
 
 

@@ -27,8 +27,10 @@ class EvidenceUploadSessionRead(BaseModel):
     promoted_evidence_id: str | None = None
     category: str | None = None
     backend: str = "legacy"
-    # Best-effort finalize progress checkpoint (see
-    # evidence_upload_session._report_stage); None until finalize starts
+    # Best-effort finalize progress checkpoint, derived read-only from the
+    # session's associated EvidenceOperation.stage (the canonical persisted
+    # source -- see app.services.evidence_operations.get_operation_stage);
+    # never stored a second time on this row. None until finalize starts
     # writing it, and not meaningful outside of an in-flight finalize call.
     current_stage: str | None = None
 
