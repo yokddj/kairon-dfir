@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import shutil
 import subprocess
+import time
 from typing import Any
 
 import pytsk3
@@ -433,6 +434,13 @@ def _should_materialize(path: str) -> bool:
     return any(pattern in lower_path for pattern in legacy_patterns)
 
 
+# How often (wall-clock seconds) _materialize_volume_installation's walk
+# below touches progress_cb, purely to keep the ingest heartbeat alive --
+# see that function's own comment for why this exists. Generous margin
+# under job_watchdog.py's STALE_INGEST_HEARTBEAT_SECONDS (600s).
+_MATERIALIZE_PROGRESS_INTERVAL_SECONDS = 5.0
+
+
 def _materialize_volume_installation(
     *,
     fs_info: pytsk3.FS_Info,
@@ -440,6 +448,7 @@ def _materialize_volume_installation(
     disk_image: DiskImage,
     volume: DiskVolume,
     destination_root: Path,
+    progress_cb=None,
 ) -> tuple[list[str], list[dict[str, Any]], dict[str, dict[str, Any]], list[str]]:
     extracted_files: list[str] = []
     manifest_entries: list[dict[str, Any]] = []
@@ -449,7 +458,36 @@ def _materialize_volume_installation(
     install_dir.mkdir(parents=True, exist_ok=True)
     file_count = 0
     bytes_written = 0
+    last_progress_emit = time.monotonic()
     for full_path, entry, is_dir in _iter_directory(fs_info, install.root_path, depth=0, max_depth=settings.disk_image_max_directory_depth):
+        if progress_cb and (time.monotonic() - last_progress_emit) >= _MATERIALIZE_PROGRESS_INTERVAL_SECONDS:
+            # This walk can run long on a real filesystem with many
+            # directory entries that never match _should_materialize below
+            # -- file_count alone (which only advances on an actual match)
+            # can go a long stretch without moving, so this check is keyed
+            # on wall-clock time, not file_count, and fires unconditionally
+            # on every entry visited, matched or not. Before PR3 (LVM
+            # integration), a Logical Volume's own root filesystem was
+            # never walked at all (always "unreadable"), so this gap in
+            # heartbeat coverage during a long walk never had a chance to
+            # matter; a real Linux installation's full root filesystem
+            # inside a Logical Volume can now take longer than the ingest
+            # watchdog's stale-heartbeat timeout to fully walk, which
+            # without this would make the watchdog wrongly declare a
+            # perfectly healthy, still-working ingest "orphaned" partway
+            # through. The percentage this reports is not meant to be
+            # precise -- see extraction_progress in app.workers.tasks,
+            # which already treats total_files<=0 as "unknown, don't try
+            # to compute a real percentage from these numbers".
+            progress_cb(
+                {
+                    "current_action": "materializing_disk_image_files",
+                    "processed_files": file_count,
+                    "total_files": 0,
+                    "current_path": full_path,
+                }
+            )
+            last_progress_emit = time.monotonic()
         meta = getattr(entry.info, "meta", None)
         if meta and meta.type != pytsk3.TSK_FS_META_TYPE_REG:
             continue
@@ -828,6 +866,7 @@ def materialize_disk_image_sources(db: Session, evidence: Evidence, *, extract_d
                         disk_image=disk_image,
                         volume=volume,
                         destination_root=extract_dir,
+                        progress_cb=progress_cb,
                     )
                     extracted_files.extend(volume_files)
                     manifest_entries.extend(volume_manifest)
