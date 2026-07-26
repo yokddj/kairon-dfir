@@ -1303,7 +1303,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 {preflight.classification.contained_object ? <p>Contained object: <span className="text-ink">{preflight.classification.contained_object}</span></p> : null}
                 {preflight.classification.hostname ? <p>Hostname: <span className="text-ink">{preflight.classification.hostname}</span></p> : null}
                 {preflight.classification.distro ? <p>Distribution: <span className="text-ink">{preflight.classification.distro}{preflight.classification.version ? ` (${preflight.classification.version})` : ""}</span></p> : null}
-                {preflight.classification.volumes !== null ? <p>Volumes: <span className="text-ink">{preflight.classification.volumes}</span></p> : null}
+                {/* "Volumes" and "Partitions" are the same count today (Kairon
+                    discovers physical partitions only -- see Partition
+                    Discovery below); showing both labels for one number was
+                    confusing, so only the more precise term is shown. */}
                 {preflight.classification.partitions !== null ? <p>Partitions: <span className="text-ink">{preflight.classification.partitions}</span></p> : null}
                 {preflight.classification.filesystems.length ? <p>Filesystems: <span className="text-ink">{preflight.classification.filesystems.join(", ")}</span></p> : null}
                 {preflight.classification.installations !== null ? <p>Installations: <span className="text-ink">{preflight.classification.installations}</span></p> : null}
@@ -1332,19 +1335,19 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
             {preflight.classification.volume_diagnostics.length ? (
               <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4" data-testid="volume-diagnostics">
-                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Volume Discovery</p>
-                <p className="mt-1 text-xs text-muted">Per-volume detection results -- explains which volumes contributed to the classification above, and why any that didn't could not be read.</p>
+                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Partition Discovery</p>
+                <p className="mt-1 text-xs text-muted">Per-partition detection results -- explains which partitions contributed to the classification above, and why any that didn't could not be read. Kairon does not yet discover logical volumes (e.g. LVM) individually -- see the container format note below when one is detected.</p>
                 <div className="mt-3 space-y-2">
-                  {preflight.classification.volume_diagnostics.map((volume) => (
+                  {preflight.classification.volume_diagnostics.map((volume, index) => (
                     <div key={volume.volume_id} className={`rounded-xl border px-3 py-2 text-sm ${volume.ok ? "border-mint/30 bg-mint/10" : "border-amber/30 bg-amber/10"}`} data-testid="volume-diagnostic-row">
                       <p className={`font-semibold ${volume.ok ? "text-mint" : "text-amber"}`}>
-                        {volume.ok ? "✓" : "⚠"} Volume {volume.volume_id}
+                        {volume.ok ? "✓" : "⚠"} Partition {index + 1}
                         {volume.size_bytes !== null ? ` · ${bytes(volume.size_bytes)}` : ""}
                         {volume.filesystem ? ` · ${volume.filesystem}` : ""}
                       </p>
                       <p className="mt-1 text-xs text-muted">{volume.explanation}</p>
                       {volume.detected_signature ? (
-                        <p className="mt-1 text-xs text-muted">Detected signature: <span className="text-ink">{volume.detected_signature}</span></p>
+                        <p className="mt-1 text-xs text-muted">Container format: <span className="text-ink">{volume.detected_signature}</span></p>
                       ) : null}
                     </div>
                   ))}
