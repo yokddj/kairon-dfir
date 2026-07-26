@@ -18,6 +18,8 @@ from app.core.artifact_registry import artifact_registry_entry
 from app.core.config import get_settings
 from app.core.storage import sanitize_relative_path
 from app.core.timing import timed_phase
+from app.disk_images.lvm import LogicalVolumeReader, LVMMetadataError, parse_physical_volume_metadata
+from app.disk_images.lvm.img_info import LogicalVolumeImgInfo
 from app.disk_images.registry import ewf_series_members, get_image_format_registry
 from app.ingest.linux.helpers import looks_like_linux_artifact
 from app.ingest.linux.os_detection import detect_linux_release
@@ -230,6 +232,141 @@ def _detect_installations(fs_info: pytsk3.FS_Info, volume_id: str) -> list[dict[
     return installations
 
 
+# Base + per-container multiplier for a logical volume's synthetic
+# partition_index (see _logical_volume_partition_index below). Real
+# partition_index values come from pytsk3.Volume_Info's own entry count,
+# which is always small (a real partition table never has anywhere close
+# to 10,000,000 entries), so this range can never collide with one.
+_LVM_LOGICAL_VOLUME_INDEX_BASE = 10_000_000
+_LVM_LOGICAL_VOLUME_INDEX_STRIDE = 100_000
+
+
+def _logical_volume_partition_index(container_partition_index: int, lv_sequence: int) -> int:
+    """A deterministic, collision-free partition_index for the lv_sequence-th
+    (1-based) logical volume found inside the Physical Volume at
+    container_partition_index. Logical volumes need their own partition_index
+    values (DiskVolume.partition_index is the join key installs/materialize
+    use to find their volume) that can never collide with a real
+    partition-table entry's own index."""
+    return _LVM_LOGICAL_VOLUME_INDEX_BASE + container_partition_index * _LVM_LOGICAL_VOLUME_INDEX_STRIDE + lv_sequence
+
+
+def _open_logical_volume_fs_info(read_physical, logical_volume_name: str) -> pytsk3.FS_Info:
+    """Parse a Physical Volume's metadata (via read_physical, an
+    offset-0-relative ByteRangeReader already bound to that PV's own start)
+    and build a pytsk3.FS_Info for the one logical volume named
+    logical_volume_name. Used only by _open_persisted_volume_fs_info (see
+    below), for materialize_disk_image_sources's second, independent open --
+    that call site only has a persisted DiskVolume's metadata_json to
+    reconstruct from, not the original in-memory PhysicalVolumeMetadata/
+    VolumeGroup objects _discover_logical_volumes built the first time.
+    _discover_logical_volumes itself does not call this: it already has the
+    parsed VolumeGroup in hand and constructs each logical volume's reader
+    directly, without a second parse."""
+    pv_metadata = parse_physical_volume_metadata(read_physical)
+    logical_volume = next((lv for lv in pv_metadata.volume_group.logical_volumes if lv.name == logical_volume_name), None)
+    if logical_volume is None:
+        raise ValueError(f"logical volume {logical_volume_name!r} not found while reparsing volume group {pv_metadata.volume_group.name!r}")
+    reader = LogicalVolumeReader(logical_volume, pv_metadata.volume_group, read_physical)
+    return pytsk3.FS_Info(LogicalVolumeImgInfo(reader))
+
+
+def _discover_logical_volumes(
+    img: "_PytskFileReader",
+    *,
+    container_offset_bytes: int,
+    container_partition_index: int,
+    volumes: list[dict[str, Any]],
+    installs: list[dict[str, Any]],
+) -> None:
+    """If the Physical Volume at container_offset_bytes (within img) has
+    parseable LVM2 metadata, attempt to open every logical volume it
+    declares independently, appending a "volume" dict (and any detected
+    installation) to volumes/installs in exactly the same shape
+    _discover_raw_volumes already uses for a real partition-table entry --
+    no downstream code (installation detection, materialization, the
+    DiskVolume/OSInstallation models, preflight's diagnostic translation)
+    needs to know a given entry came from a logical volume rather than a
+    partition.
+
+    Deliberately silent on any failure: a metadata parse failure, a Volume
+    Group spanning more than one Physical Volume (multi-PV logical-volume
+    reading is out of scope for V1 -- see the architecture RFC), or any
+    other unexpected exception all simply return without adding anything,
+    leaving the caller's own diagnostic for container_partition_index (the
+    existing "possible LVM physical volume" unreadable-volume diagnostic)
+    completely untouched. There is deliberately no separate "partially
+    supported" status -- either every logical volume gets attempted, or
+    none of them do.
+    """
+
+    def read_physical(offset: int, size: int) -> bytes:
+        return img.read(container_offset_bytes + offset, size)
+
+    try:
+        pv_metadata = parse_physical_volume_metadata(read_physical)
+    except Exception:
+        return
+
+    volume_group = pv_metadata.volume_group
+    if len(volume_group.physical_volumes) > 1:
+        return
+
+    for lv_sequence, logical_volume in enumerate(volume_group.logical_volumes, start=1):
+        lv_index = _logical_volume_partition_index(container_partition_index, lv_sequence)
+        lv_size_bytes = logical_volume.extent_count * volume_group.extent_size_bytes
+        lv_metadata = {
+            "lvm": {
+                "container_partition_index": container_partition_index,
+                "container_offset_bytes": container_offset_bytes,
+                "volume_group": volume_group.name,
+                "logical_volume": logical_volume.name,
+            }
+        }
+        try:
+            reader = LogicalVolumeReader(logical_volume, volume_group, read_physical)
+            fs_info = pytsk3.FS_Info(LogicalVolumeImgInfo(reader))
+            lv_volume = {
+                "partition_index": lv_index,
+                "offset_bytes": container_offset_bytes,
+                "length_bytes": lv_size_bytes,
+                "partition_type": "lvm2_logical_volume",
+                "filesystem_type": _filesystem_type(fs_info),
+                "label": _filesystem_label(fs_info),
+                "uuid": logical_volume.id,
+                "encrypted": False,
+                "readable": True,
+                "status": "readable",
+                "warnings": [],
+                "error": {},
+                "metadata": lv_metadata,
+            }
+            detected = _detect_installations(fs_info, str(lv_index))
+            for install in detected:
+                installs.append({**install, "partition_index": lv_index})
+        except Exception as exc:
+            lv_volume = {
+                "partition_index": lv_index,
+                "offset_bytes": container_offset_bytes,
+                "length_bytes": lv_size_bytes,
+                "partition_type": "lvm2_logical_volume",
+                "filesystem_type": None,
+                "label": None,
+                "uuid": logical_volume.id,
+                "encrypted": False,
+                "readable": False,
+                "status": "unreadable_volume",
+                "warnings": [],
+                # error.message is server-side/log-only, same convention as
+                # every other unreadable-volume diagnostic in this module --
+                # never surfaced raw to the analyst (see
+                # evidence_preflight._translate_volume_diagnostic).
+                "error": {"code": "unsupported_filesystem", "message": str(exc)},
+                "metadata": lv_metadata,
+            }
+        volumes.append(lv_volume)
+
+
 def _iter_directory(fs_info: pytsk3.FS_Info, directory_path: str, *, depth: int, max_depth: int):
     if depth > max_depth:
         return
@@ -389,6 +526,7 @@ def _discover_raw_volumes(image_path: Path) -> tuple[list[dict[str, Any]], list[
                     "error": {},
                     "metadata": {},
                 }
+                is_lvm_physical_volume = False
                 try:
                     fs_info = pytsk3.FS_Info(img, offset=offset_bytes)
                     volume["filesystem_type"] = _filesystem_type(fs_info)
@@ -405,6 +543,7 @@ def _discover_raw_volumes(image_path: Path) -> tuple[list[dict[str, Any]], list[
                     volume["metadata"]["encryption_type"] = encryption_type
                     if not encrypted and _detect_lvm_signature(blob):
                         volume["metadata"]["container_signature"] = "lvm2_physical_volume"
+                        is_lvm_physical_volume = True
                     # error.message is retained for server-side logs/support
                     # only -- evidence_preflight.py's volume-diagnostic
                     # translation never surfaces this raw exception text to
@@ -412,6 +551,17 @@ def _discover_raw_volumes(image_path: Path) -> tuple[list[dict[str, Any]], list[
                     volume["error"] = {"code": "unsupported_filesystem", "message": str(exc)}
                     volume["status"] = "encrypted_volume" if encrypted else "unreadable_volume"
                 volumes.append(volume)
+                if is_lvm_physical_volume:
+                    # Appended after the partition's own (unchanged) diagnostic
+                    # entry, so a logical volume's row always follows the
+                    # Physical Volume it was found inside of.
+                    _discover_logical_volumes(
+                        img,
+                        container_offset_bytes=offset_bytes,
+                        container_partition_index=index,
+                        volumes=volumes,
+                        installs=installs,
+                    )
         except Exception:
             try:
                 fs_info = pytsk3.FS_Info(img)
@@ -458,6 +608,14 @@ def _discover_raw_volumes(image_path: Path) -> tuple[list[dict[str, Any]], list[
                     "error": {"code": "encrypted_volume" if encrypted else "unsupported_filesystem", "message": str(exc)},
                     "metadata": {"encryption_type": encryption_type, **({"container_signature": container_signature} if container_signature else {})},
                 })
+                if container_signature:
+                    _discover_logical_volumes(
+                        img,
+                        container_offset_bytes=0,
+                        container_partition_index=0,
+                        volumes=volumes,
+                        installs=installs,
+                    )
         return volumes, installs, warnings
     finally:
         img.close()
@@ -498,6 +656,30 @@ def upsert_disk_image_record(db: Session, evidence: Evidence, *, format_key: str
         disk_image.updated_at = now
         db.flush()
     return disk_image
+
+
+def _open_persisted_volume_fs_info(image_reader: "_PytskFileReader", volume: DiskVolume) -> pytsk3.FS_Info:
+    """Reopen a pytsk3.FS_Info for an already-persisted DiskVolume, for
+    materialization. A plain partition is reopened exactly as before (a flat
+    byte offset into the raw image); a logical volume -- identified by the
+    "lvm" marker _discover_logical_volumes left in metadata_json -- is not a
+    single contiguous byte range in the raw image in general, so its owning
+    Physical Volume's metadata is reparsed (cheap: a few KB of text) and the
+    same LogicalVolumeReader/LogicalVolumeImgInfo chain is rebuilt instead.
+    Callers already treat any exception from this the same way regardless of
+    which path was taken (skip materializing this volume this run)."""
+    lvm_marker = (volume.metadata_json or {}).get("lvm")
+    if lvm_marker:
+        container_offset_bytes = int(lvm_marker["container_offset_bytes"])
+        logical_volume_name = str(lvm_marker["logical_volume"])
+
+        def read_physical(offset: int, size: int) -> bytes:
+            return image_reader.read(container_offset_bytes + offset, size)
+
+        return _open_logical_volume_fs_info(read_physical, logical_volume_name)
+    if volume.partition_index != 0 or volume.offset_bytes:
+        return pytsk3.FS_Info(image_reader, offset=int(volume.offset_bytes))
+    return pytsk3.FS_Info(image_reader)
 
 
 def materialize_disk_image_sources(db: Session, evidence: Evidence, *, extract_dir: Path, image_path: Path | None = None, progress_cb=None) -> MaterializedDiskImage:
@@ -633,7 +815,7 @@ def materialize_disk_image_sources(db: Session, evidence: Evidence, *, extract_d
                 if not volume.readable:
                     continue
                 try:
-                    fs_info = pytsk3.FS_Info(image_reader, offset=int(volume.offset_bytes)) if volume.partition_index != 0 or volume.offset_bytes else pytsk3.FS_Info(image_reader)
+                    fs_info = _open_persisted_volume_fs_info(image_reader, volume)
                 except Exception:
                     continue
                 installs_for_volume = [install for install in persisted_installs if install.disk_volume_id == volume.id]
