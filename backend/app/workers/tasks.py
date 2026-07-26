@@ -970,64 +970,140 @@ def _run_memory_upload_cleanup() -> str:
     return run_periodic_cleanup()
 
 
-def _metadata_phase_timings_snapshot(metadata: dict) -> list[dict]:
-    snapshot = [dict(item) for item in metadata.get("phase_timings") or [] if isinstance(item, dict)]
-    current = metadata.get("current_phase_timing")
-    if isinstance(current, dict):
-        current_snapshot = dict(current)
-        started_at = current_snapshot.get("started_at")
-        if started_at and not current_snapshot.get("finished_at"):
-            try:
-                current_snapshot["duration_seconds"] = round(
-                    max((utc_now() - datetime.fromisoformat(str(started_at))).total_seconds(), 0.0),
-                    2,
-                )
-            except Exception:  # noqa: BLE001
-                current_snapshot["duration_seconds"] = current_snapshot.get("duration_seconds") or 0.0
-        snapshot.append(current_snapshot)
-    return snapshot
+# The current_action values app.disk_images.service reports during disk-image
+# materialization (see materialize_disk_image_sources and
+# _materialize_volume_installation). extraction_progress uses membership in
+# this set to recognize a disk-image-sourced progress_cb call -- regular
+# archive/velociraptor extraction never sets current_action to any of these,
+# so this check never affects those paths (see the ingest progress-stall
+# investigation and app/lib/evidenceDetailFormatting.ts's
+# formatIndexingPhaseForDisplay, the frontend's single canonical mapping of
+# these identifiers to analyst-facing labels).
+DISK_IMAGE_PROGRESS_ACTIONS = frozenset(
+    {
+        "detecting_format",
+        "hashing",
+        "inspecting_image",
+        "discovering_volumes",
+        "materializing_disk_image_files",
+    }
+)
+
+
+def _compute_extraction_progress(
+    *,
+    is_selected_velociraptor: bool,
+    streaming_materialization_enabled: bool,
+    current_action: str,
+    total_files: int,
+    processed_files: int,
+) -> tuple[int, str, bool]:
+    """Pure decision logic for extraction_progress's phase/percentage/
+    indeterminate-flag choice, factored out so it is directly testable
+    without needing to invoke the whole ingest_evidence task.
+
+    Returns (extraction_pct, phase_name, progress_indeterminate).
+
+    Regular archive/velociraptor extraction always knows total_files
+    ahead of time (from the archive's own manifest), so it always gets a
+    real, moving percentage and progress_indeterminate=False -- this
+    function's disk-image branch only ever applies when current_action is
+    one of DISK_IMAGE_PROGRESS_ACTIONS, which those paths never set.
+    """
+    if is_selected_velociraptor:
+        extraction_pct = 30 if total_files <= 0 else min(45, 30 + int((processed_files / max(total_files, 1)) * 15))
+        phase_name = "materializing_and_parsing" if streaming_materialization_enabled else "extracting_selected"
+        return extraction_pct, phase_name, False
+    if current_action in DISK_IMAGE_PROGRESS_ACTIONS:
+        # Disk-image materialization cannot know total_files ahead of
+        # completing a pytsk3 directory walk (see the ingest
+        # progress-stall investigation), so a moving percentage can never
+        # be computed honestly here. Use the real current_action as the
+        # phase -- so the UI reflects what is actually happening
+        # (detecting format, hashing, discovering volumes, extracting
+        # filesystem contents...) instead of one hardcoded generic label
+        # for the entire disk-image stage -- and mark progress
+        # indeterminate instead of inventing a percentage from an unknown
+        # denominator. extraction_pct is still populated (at the existing
+        # floor) for any caller that only reads it as a plain number;
+        # progress_indeterminate is the new, additive signal the frontend
+        # uses to avoid showing a percentage that falsely implies
+        # measurable completion.
+        phase_name = current_action
+        if total_files <= 0:
+            return 5, phase_name, True
+        return min(18, 5 + int((processed_files / max(total_files, 1)) * 13)), phase_name, False
+    extraction_pct = 5 if total_files <= 0 else min(18, 5 + int((processed_files / max(total_files, 1)) * 13))
+    return extraction_pct, "extracting", False
 
 
 def _transition_metadata_phase_timing(metadata: dict, phase: str) -> None:
+    """Move the open phase-timing entry to `phase`, or refresh it in place
+    if `phase` is already the open one.
+
+    Invariant this maintains: metadata["phase_timings"] holds at most one
+    *open* entry (finished_at is None) at any time, and it is always the
+    last element. A repeated call with the same phase (a heartbeat tick
+    during a long-running phase) updates that one entry's duration in
+    place -- it never appends a new entry. A call with a different phase
+    finalizes the previous open entry (finished_at set, appended exactly
+    once) before opening a new one for `phase`. This is what keeps
+    phase_timings bounded by the number of real phase transitions, not by
+    how many times a long phase's heartbeat fires.
+
+    Self-healing: any *other* stray open entries already present (left
+    over from before this fix, or from any other inconsistency) are
+    dropped whenever a transition happens, without requiring a database
+    migration -- going forward, at most one open entry can ever exist.
+    """
     now_iso = utc_now().isoformat()
     current = metadata.get("current_phase_timing")
+    phase_timings = [dict(item) for item in (metadata.get("phase_timings") or []) if isinstance(item, dict)]
+
     if isinstance(current, dict) and str(current.get("phase") or "") == phase:
-        current["duration_seconds"] = round(
-            max((utc_now() - datetime.fromisoformat(str(current.get("started_at") or now_iso))).total_seconds(), 0.0),
-            2,
-        )
+        try:
+            started = datetime.fromisoformat(str(current.get("started_at") or now_iso))
+            current["duration_seconds"] = round(max((utc_now() - started).total_seconds(), 0.0), 2)
+        except Exception:  # noqa: BLE001
+            pass
         metadata["current_phase_timing"] = current
-        metadata["phase_timings"] = _metadata_phase_timings_snapshot(metadata)
+        if phase_timings and phase_timings[-1].get("phase") == phase and phase_timings[-1].get("finished_at") is None:
+            phase_timings[-1] = dict(current)
+        else:
+            phase_timings = [item for item in phase_timings if item.get("finished_at") is not None]
+            phase_timings.append(dict(current))
+        metadata["phase_timings"] = phase_timings
         return
+
     if isinstance(current, dict):
         try:
             started = datetime.fromisoformat(str(current.get("started_at") or now_iso))
             duration = round(max((utc_now() - started).total_seconds(), 0.0), 2)
         except Exception:  # noqa: BLE001
             duration = float(current.get("duration_seconds") or 0.0)
-        finished = {
-            **current,
-            "finished_at": now_iso,
-            "duration_seconds": duration,
-        }
-        metadata.setdefault("phase_timings", []).append(finished)
-    metadata["current_phase_timing"] = {
-        "phase": phase,
-        "started_at": now_iso,
-        "finished_at": None,
-        "duration_seconds": 0.0,
-    }
-    metadata["phase_timings"] = _metadata_phase_timings_snapshot(metadata)
+        finished = {**current, "finished_at": now_iso, "duration_seconds": duration}
+        phase_timings = [item for item in phase_timings if item.get("finished_at") is not None]
+        phase_timings.append(finished)
+    else:
+        phase_timings = [item for item in phase_timings if item.get("finished_at") is not None]
+
+    new_current = {"phase": phase, "started_at": now_iso, "finished_at": None, "duration_seconds": 0.0}
+    phase_timings.append(new_current)
+    metadata["current_phase_timing"] = new_current
+    metadata["phase_timings"] = phase_timings
 
 
 def _finish_metadata_phase_timing(metadata: dict, *, phase: str | None = None, finished_at: datetime | None = None) -> None:
+    """Close out whatever phase is currently open (called at a terminal
+    ingest state: completed/completed_with_errors/failed). Applies the
+    same self-healing as _transition_metadata_phase_timing: any stray
+    open entries are dropped, and exactly one finished entry is appended
+    for the phase being closed."""
     finished = finished_at or utc_now()
     current = metadata.get("current_phase_timing")
     if not isinstance(current, dict):
-        metadata["phase_timings"] = _metadata_phase_timings_snapshot(metadata)
         return
     if phase and str(current.get("phase") or "") != phase:
-        metadata["phase_timings"] = _metadata_phase_timings_snapshot(metadata)
         return
     started_at = str(current.get("started_at") or finished.isoformat())
     try:
@@ -1035,24 +1111,11 @@ def _finish_metadata_phase_timing(metadata: dict, *, phase: str | None = None, f
         duration = round(max((finished - started).total_seconds(), 0.0), 2)
     except Exception:  # noqa: BLE001
         duration = float(current.get("duration_seconds") or 0.0)
-    completed = {
-        **current,
-        "finished_at": finished.isoformat(),
-        "duration_seconds": duration,
-    }
-    phase_timings = []
-    current_phase = str(current.get("phase") or "")
-    current_started = str(current.get("started_at") or "")
-    for item in metadata.get("phase_timings") or []:
-        if not isinstance(item, dict):
-            continue
-        if str(item.get("phase") or "") == current_phase and str(item.get("started_at") or "") == current_started and not item.get("finished_at"):
-            continue
-        phase_timings.append(dict(item))
+    completed = {**current, "finished_at": finished.isoformat(), "duration_seconds": duration}
+    phase_timings = [dict(item) for item in (metadata.get("phase_timings") or []) if isinstance(item, dict) and item.get("finished_at") is not None]
     phase_timings.append(completed)
     metadata["phase_timings"] = phase_timings
     metadata["current_phase_timing"] = None
-    metadata["phase_timings"] = _metadata_phase_timings_snapshot(metadata)
 
 
 def _update_progress(db: Session, evidence: Evidence, *, phase: str, progress_pct: int, phases: list[str] | None = None, extra: dict | None = None) -> None:
@@ -1074,7 +1137,6 @@ def _update_progress(db: Session, evidence: Evidence, *, phase: str, progress_pc
             except Exception:  # noqa: BLE001
                 finished_at = None
         _finish_metadata_phase_timing(metadata, phase=phase, finished_at=finished_at)
-    metadata["phase_timings"] = _metadata_phase_timings_snapshot(metadata)
     run_id = str(metadata.get("current_ingest_run_id") or (metadata.get("reprocess_request") or {}).get("run_id") or "")
     if run_id:
         metadata = sync_ingest_run_from_metadata(
@@ -4384,12 +4446,14 @@ def ingest_evidence(evidence_id: str) -> None:
             processed_files = int(extra.get("processed_files") or 0)
             total_files = int(extra.get("total_files") or 0)
             now_iso = utc_now().isoformat()
-            if is_selected_velociraptor:
-                extraction_pct = 30 if total_files <= 0 else min(45, 30 + int((processed_files / max(total_files, 1)) * 15))
-                phase_name = "materializing_and_parsing" if streaming_materialization_enabled else "extracting_selected"
-            else:
-                extraction_pct = 5 if total_files <= 0 else min(18, 5 + int((processed_files / max(total_files, 1)) * 13))
-                phase_name = "extracting"
+            current_action = str(extra.get("current_action") or "")
+            extraction_pct, phase_name, progress_indeterminate = _compute_extraction_progress(
+                is_selected_velociraptor=is_selected_velociraptor,
+                streaming_materialization_enabled=streaming_materialization_enabled,
+                current_action=current_action,
+                total_files=total_files,
+                processed_files=processed_files,
+            )
             estimated_remaining = _estimate_remaining_seconds(elapsed_seconds=elapsed_seconds, progress_pct=extraction_pct)
             now_monotonic = time.perf_counter()
             should_emit = (
@@ -4435,6 +4499,7 @@ def ingest_evidence(evidence_id: str) -> None:
                     "extraction_errors": int(extra.get("extraction_errors") or 0),
                     "extraction_rate_files_per_sec": round(processed_files / elapsed_seconds, 2),
                     "extraction_rate_mb_per_sec": round((processed_bytes / (1024 * 1024)) / elapsed_seconds, 2),
+                    "progress_indeterminate": progress_indeterminate,
                 },
             )
             _safe_persist_benchmark_snapshot(
