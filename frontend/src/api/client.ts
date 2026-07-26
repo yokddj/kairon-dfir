@@ -3663,6 +3663,16 @@ export type PreflightEvidenceOption = {
   size_bytes: number | null;
 };
 
+export type PreflightVolumeDiagnostic = {
+  volume_id: number;
+  size_bytes: number | null;
+  filesystem: string | null;
+  ok: boolean;
+  status: "readable" | "unreadable" | "encrypted";
+  explanation: string;
+  detected_signature: string | null;
+};
+
 export type PreflightClassification = {
   category: "disk_image" | "memory_dump" | "archive" | "unknown";
   format_key: string | null;
@@ -3681,6 +3691,7 @@ export type PreflightClassification = {
   installations: number | null;
   expected_parsers: string[];
   warnings: PreflightWarning[];
+  volume_diagnostics: PreflightVolumeDiagnostic[];
 };
 
 export type PreflightResourceCheck = {

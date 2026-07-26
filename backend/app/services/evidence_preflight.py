@@ -45,6 +45,7 @@ from app.schemas.evidence_preflight import (
     PreflightReport,
     PreflightResourceCheck,
     PreflightStatusCheck,
+    PreflightVolumeDiagnostic,
     PreflightWarning,
 )
 
@@ -224,6 +225,57 @@ def _classify_warning(message: str) -> PreflightWarning:
     return PreflightWarning(message=message, severity="information")
 
 
+_DETECTED_SIGNATURE_LABELS = {
+    "lvm2_physical_volume": "LVM2 physical volume",
+}
+
+
+def _translate_volume_diagnostic(volume: dict) -> PreflightVolumeDiagnostic:
+    """Translate one raw volume dict from
+    app.disk_images.service._discover_raw_volumes into analyst-facing
+    language. Never surfaces volume["error"]["message"] (a raw
+    pytsk3/Python exception string) -- only the small set of
+    already-computed, already-known fields (status, filesystem_type,
+    encrypted, metadata.encryption_type, metadata.container_signature) is
+    used to build a plain-language explanation."""
+    status = str(volume.get("status") or "unknown")
+    filesystem = volume.get("filesystem_type")
+    # pytsk3's filesystem-type detection occasionally yields a bare numeric
+    # code instead of a name (an underlying pytsk3 binding quirk, not
+    # something this translation layer changes or investigates further) --
+    # a raw number is exactly the kind of internal detail this function
+    # exists to avoid surfacing, so treat it the same as "no known name".
+    if filesystem and str(filesystem).isdigit():
+        filesystem = None
+    metadata = volume.get("metadata") or {}
+    signature_key = metadata.get("container_signature")
+    detected_signature = _DETECTED_SIGNATURE_LABELS.get(signature_key) if signature_key else None
+
+    if status == "readable":
+        explanation = f"Readable {filesystem} filesystem." if filesystem else "Readable filesystem."
+    elif status == "encrypted_volume":
+        encryption_type = str(metadata.get("encryption_type") or "").upper()
+        label = {"luks": "LUKS", "bitlocker": "BitLocker"}.get(metadata.get("encryption_type"), encryption_type or "an unknown scheme")
+        explanation = f"Encrypted volume ({label}). Kairon cannot inspect an encrypted volume's contents without the decryption key or passphrase."
+    elif status == "unreadable_volume":
+        if detected_signature:
+            explanation = f"Detected signature: {detected_signature}. Kairon does not currently parse this container format, so operating system detection cannot continue inside this volume."
+        else:
+            explanation = "Unsupported filesystem. Kairon could not identify a supported filesystem in this volume, so operating system detection cannot continue inside it."
+    else:
+        explanation = "This volume could not be inspected."
+
+    return PreflightVolumeDiagnostic(
+        volume_id=int(volume.get("partition_index") or 0),
+        size_bytes=volume.get("length_bytes"),
+        filesystem=filesystem,
+        ok=status == "readable",
+        status={"readable": "readable", "encrypted_volume": "encrypted", "unreadable_volume": "unreadable"}.get(status, "unreadable"),
+        explanation=explanation,
+        detected_signature=detected_signature,
+    )
+
+
 def _resolve_upload_limit(category: str) -> int:
     settings = get_settings()
     if category == EvidenceCategory.MEMORY_DUMP.value:
@@ -298,6 +350,7 @@ def run_preflight(
     detected_backing_chain_depth: int | None = None
     estimated_artifact_count: int | None = None
     warnings: list[str] = []
+    volume_diagnostics: list[PreflightVolumeDiagnostic] = []
 
     is_openable_container = is_directory or classification_category == EvidenceCategory.ARCHIVE
     if is_openable_container:
@@ -360,6 +413,7 @@ def run_preflight(
             filesystems = list(dict.fromkeys(v["filesystem_type"] for v in volumes if v.get("filesystem_type")))
             estimated_extracted_bytes = sum(int(v.get("length_bytes") or 0) for v in volumes)
             estimated_temp_storage_bytes = estimated_extracted_bytes if format_key != "raw" else 0
+            volume_diagnostics = [_translate_volume_diagnostic(v) for v in volumes]
             if installs:
                 first = installs[0]
                 platform = str(first.get("platform") or platform)
@@ -373,6 +427,9 @@ def run_preflight(
             container_label = f"{(format_key or 'disk').upper()} disk image"
             if installs:
                 contained_object = f"{installations_count} OS installation(s) across {volumes_count} volume(s)"
+            elif any(not d.ok for d in volume_diagnostics):
+                unreadable = sum(1 for d in volume_diagnostics if not d.ok)
+                contained_object = f"{volumes_count} volume(s), no OS installation detected ({unreadable} of {volumes_count} could not be read as a supported filesystem)"
             else:
                 contained_object = f"{volumes_count} volume(s), no OS installation detected"
         classification_category_value = "disk_image"
@@ -594,6 +651,7 @@ def run_preflight(
         installations=installations_count,
         expected_parsers=expected_parsers,
         warnings=[_classify_warning(message) for message in warnings],
+        volume_diagnostics=volume_diagnostics,
     )
 
     return PreflightReport(

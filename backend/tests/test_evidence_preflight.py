@@ -93,16 +93,20 @@ def test_memory_dump_is_not_subject_to_extraction_limit(tmp_path, monkeypatch):
     assert not any(c.label == "Within extraction limit" for c in report.status_checks)
 
 
-def _make_minimal_mbr_disk_image(path: Path, *, partition_bytes: int) -> None:
+def _make_minimal_mbr_disk_image(path: Path, *, partition_bytes: int, partition_content: bytes | None = None) -> None:
     """Hand-crafted MBR with one allocated partition -- avoids depending on
     parted/mkfs.vfat (not installed in every environment) purely to get
     pytsk3.Volume_Info to recognize a partition table with a known,
     controllable declared size. The partition's filesystem is deliberately
-    left unrecognizable (all zero bytes): this only needs the volume to be
-    *discovered* (and its declared length counted), not readable --
-    matching the real-world case this fix targets (e.g. an LVM physical
-    volume Kairon's OS discovery cannot parse, so no installation is found
-    but the volume and its size are still reported)."""
+    left unrecognizable (all zero bytes, unless partition_content is given):
+    this only needs the volume to be *discovered* (and its declared length
+    counted), not readable -- matching the real-world case this fix targets
+    (e.g. an LVM physical volume Kairon's OS discovery cannot parse, so no
+    installation is found but the volume and its size are still reported).
+    partition_content, if given, is written starting at the partition's
+    first byte (offset 0 relative to the partition, i.e. disk sector
+    start_lba) -- used to plant a recognizable container signature (e.g.
+    LVM2's "LABELONE") for the signature-detection test."""
     sector_size = 512
     start_lba = 2048
     num_sectors = partition_bytes // sector_size
@@ -119,6 +123,9 @@ def _make_minimal_mbr_disk_image(path: Path, *, partition_bytes: int) -> None:
         fh.write(bytes(mbr))
         fh.seek(total_size - 1)
         fh.write(b"\x00")
+        if partition_content:
+            fh.seek(start_lba * sector_size)
+            fh.write(partition_content)
 
 
 def test_disk_image_is_not_subject_to_extraction_limit(tmp_path, monkeypatch):
@@ -163,6 +170,62 @@ def test_archive_still_blocked_by_extraction_limit_disk_image_is_not(tmp_path, m
     _make_minimal_mbr_disk_image(disk_path, partition_bytes=8 * 1024 * 1024)
     disk_report = run_preflight(disk_path, token="t15b", original_filename="disk.dd", declared_platform=None, tmp_dir=tmp_path / "scratch_disk")
     assert not any(c.label == "Within extraction limit" for c in disk_report.status_checks)
+
+
+def test_volume_diagnostics_explain_unreadable_volume_without_leaking_exception_text(tmp_path):
+    # Regression coverage for the CyberDefenders "Webserver.E01" case (real
+    # investigation): an unreadable volume (there, an LVM physical volume
+    # with no matching signature check at the time) must be explained, not
+    # silently reflected as "0 installations" with no context, and must
+    # never leak the raw pytsk3/Python exception text into analyst-facing
+    # output.
+    disk_path = tmp_path / "disk.dd"
+    _make_minimal_mbr_disk_image(disk_path, partition_bytes=8 * 1024 * 1024)
+
+    report = run_preflight(disk_path, token="t16", original_filename="disk.dd", declared_platform=None, tmp_dir=tmp_path / "scratch")
+
+    assert report.classification.volumes == 1
+    assert report.classification.installations == 0
+    diagnostics = report.classification.volume_diagnostics
+    assert len(diagnostics) == 1
+    diag = diagnostics[0]
+    # pytsk3.Volume_Info enumerates the partition table and unallocated-
+    # space entries too, not just the real partition, so its 1-based index
+    # (used as volume_id here) isn't guaranteed to be 1 -- only that it's
+    # a real, positive identifier.
+    assert diag.volume_id > 0
+    assert diag.ok is False
+    assert diag.status == "unreadable"
+    assert diag.detected_signature is None
+    assert "Unsupported filesystem" in diag.explanation
+    assert diag.size_bytes == 8 * 1024 * 1024
+    # Never leak internal exception text (tsk3.cpp, FS_Info_Con, etc.)
+    for leaked_marker in ("tsk3", "Traceback", "Exception", "FS_Info_Con"):
+        assert leaked_marker not in diag.explanation
+    # The rolled-up summary should also explain the volume-vs-installation
+    # mismatch, not just state a bare count.
+    assert "could not be read as a supported filesystem" in report.classification.contained_object
+
+
+def test_volume_diagnostics_detect_lvm_signature_without_parsing_lvm(tmp_path):
+    # "Possible LVM physical volume" is only ever shown when the
+    # well-known, fixed LVM2 "LABELONE" magic string is actually present in
+    # the bytes Kairon already reads for encryption-signature detection --
+    # this is identification, not LVM support: nothing about volume
+    # groups, logical volumes, or extents is parsed or read.
+    disk_path = tmp_path / "disk.dd"
+    # LVM2's label header lives at sector 1 relative to the physical
+    # volume start, beginning with the 8-byte "LABELONE" magic.
+    lvm_label_header = b"\x00" * 512 + b"LABELONE" + b"\x00" * 100
+    _make_minimal_mbr_disk_image(disk_path, partition_bytes=8 * 1024 * 1024, partition_content=lvm_label_header)
+
+    report = run_preflight(disk_path, token="t17", original_filename="disk.dd", declared_platform=None, tmp_dir=tmp_path / "scratch")
+
+    diag = report.classification.volume_diagnostics[0]
+    assert diag.ok is False
+    assert diag.detected_signature == "LVM2 physical volume"
+    assert "LVM2 physical volume" in diag.explanation
+    assert "does not currently parse" in diag.explanation
 
 
 def test_memory_dump_upload_limit_matches_dedicated_memory_pipeline(tmp_path, monkeypatch):
@@ -293,6 +356,10 @@ def test_disk_image_volume_discovery(tmp_path):
     assert report.classification.contained_object and "volume" in report.classification.contained_object
     assert len(report.classification.filesystems) == 1
     assert report.resource_check.estimated_extracted_bytes and report.resource_check.estimated_extracted_bytes > 0
+    assert len(report.classification.volume_diagnostics) == 1
+    assert report.classification.volume_diagnostics[0].ok is True
+    assert report.classification.volume_diagnostics[0].status == "readable"
+    assert report.classification.volume_diagnostics[0].explanation.startswith("Readable")
 
 
 # ---------------------------------------------------------------------------
