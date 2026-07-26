@@ -254,30 +254,30 @@ def test_encrypted_volume_detected(sqlite_session, tmp_path: Path) -> None:
     assert result.volumes[0].status == "encrypted_volume"
 
 
-def test_ewf_adapter_uses_subprocess_without_shell(monkeypatch, tmp_path: Path) -> None:
+def test_ewf_expose_readonly_streams_via_pyewf_without_materializing_raw(monkeypatch, tmp_path: Path) -> None:
+    # Regression coverage for the pyewf streaming sprint: expose_readonly
+    # must never shell out (no more ewfexport) and must never write a
+    # temporary RAW file to the workspace -- bytes come directly from
+    # pyewf via EwfImgInfo instead. Uses a real EWF built with
+    # ewfacquire, not a fake header, so pyewf genuinely opens it.
+    raw_image = tmp_path / "ewf-source.raw"
+    _create_fat_filesystem_image(raw_image, {"etc/os-release": 'PRETTY_NAME="Ubuntu 24.04 LTS"\n'})
+    segments = _create_segmented_ewf(raw_image, tmp_path / "case-ewf")
     adapter = EwfImageAdapter()
-    source = tmp_path / "case.E01"
-    source.write_bytes(b"EVF\t\r\n\xff\x00")
-    captured: dict[str, Any] = {}
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
 
-    class Completed:
-        returncode = 0
-        stdout = "ok"
-        stderr = ""
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("EWF expose_readonly must not invoke subprocess.run anymore -- pyewf reads directly, no ewfexport")
 
-    def fake_run(command, capture_output, text, shell, timeout, cwd=None):
-        captured["command"] = command
-        captured["shell"] = shell
-        (tmp_path / "ev-1-ewf-export.raw").write_bytes(b"raw")
-        return Completed()
+    monkeypatch.setattr(subprocess, "run", fail_if_called)
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr(adapter, "readiness", lambda: {"key": "ewf", "ready": True, "supported": True, "reason": None})
+    result = adapter.expose_readonly(evidence_id="ev-1", path=segments[0], companions=segments, workspace=workspace)
 
-    result = adapter.expose_readonly(evidence_id="ev-1", path=source, companions=[source], workspace=tmp_path)
-
-    assert captured["shell"] is False
-    assert result["access_strategy"] == "ewfexport_to_temporary_raw_readonly"
+    assert result["supported"] is True
+    assert result["access_strategy"] == "pyewf_streaming_readonly"
+    assert result["exported_raw_path"] is None
+    assert list(workspace.iterdir()) == []  # nothing was ever written to the workspace
 
 
 def test_cleanup_on_exception_removes_workspace(monkeypatch, sqlite_session, tmp_path: Path) -> None:

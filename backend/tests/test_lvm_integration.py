@@ -126,6 +126,15 @@ def _write_disk_with_lvm_partition(path: Path, pv_bytes: bytes) -> None:
         fh.write(pv_bytes)
 
 
+def _raw_context(path: Path) -> dict:
+    """_discover_raw_volumes takes the same context dict
+    adapter.expose_readonly() returns (see
+    app.disk_images.service._open_disk_image_reader) -- this mirrors
+    RawImageAdapter.expose_readonly()'s own shape for these RAW-format
+    synthetic fixtures."""
+    return {"image_path": str(path), "exported_raw_path": None, "access_strategy": "pytsk3_direct_readonly"}
+
+
 # ---------------------------------------------------------------------------
 # Discovery-level tests (_discover_raw_volumes directly) -- no external tools
 # ---------------------------------------------------------------------------
@@ -141,7 +150,7 @@ def test_lvm_signature_without_valid_metadata_leaves_todays_diagnostic_unchanged
     garbage_pv = b"\x00" * 512 + b"LABELONE" + b"\x00" * 4096
     _write_disk_with_lvm_partition(disk_path, garbage_pv)
 
-    volumes, installs, warnings = _discover_raw_volumes(disk_path)
+    volumes, installs, warnings = _discover_raw_volumes(_raw_context(disk_path))
 
     assert len(volumes) == 1
     assert volumes[0]["status"] == "unreadable_volume"
@@ -172,7 +181,7 @@ def test_valid_single_lv_metadata_adds_readable_lv_entry_when_no_filesystem_reco
     disk_path = tmp_path / "disk.dd"
     _write_disk_with_lvm_partition(disk_path, bytes(pv_bytes))
 
-    volumes, installs, warnings = _discover_raw_volumes(disk_path)
+    volumes, installs, warnings = _discover_raw_volumes(_raw_context(disk_path))
 
     assert len(volumes) == 2
     parent, lv = volumes
@@ -212,7 +221,7 @@ def test_multiple_logical_volumes_are_each_attempted_independently(tmp_path):
     disk_path = tmp_path / "disk.dd"
     _write_disk_with_lvm_partition(disk_path, bytes(pv_bytes))
 
-    volumes, installs, warnings = _discover_raw_volumes(disk_path)
+    volumes, installs, warnings = _discover_raw_volumes(_raw_context(disk_path))
 
     lv_volumes = [v for v in volumes if v["partition_type"] == "lvm2_logical_volume"]
     assert len(lv_volumes) == 2
@@ -246,7 +255,7 @@ def test_multi_pv_volume_group_is_treated_as_unsupported(tmp_path):
     disk_path = tmp_path / "disk.dd"
     _write_disk_with_lvm_partition(disk_path, bytes(pv_bytes))
 
-    volumes, installs, warnings = _discover_raw_volumes(disk_path)
+    volumes, installs, warnings = _discover_raw_volumes(_raw_context(disk_path))
 
     assert len(volumes) == 1  # only the parent PV's own (unchanged) diagnostic
     assert volumes[0]["status"] == "unreadable_volume"
@@ -261,7 +270,7 @@ def test_normal_partition_discovery_is_unaffected_by_lvm_integration(tmp_path):
     plain_partition = b"\x00" * (4 * 1024 * 1024)
     _write_disk_with_lvm_partition(disk_path, plain_partition)
 
-    volumes, installs, warnings = _discover_raw_volumes(disk_path)
+    volumes, installs, warnings = _discover_raw_volumes(_raw_context(disk_path))
 
     assert len(volumes) == 1
     assert volumes[0]["status"] == "unreadable_volume"

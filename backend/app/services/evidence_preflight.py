@@ -524,7 +524,17 @@ def run_preflight(
             installations_count = len(installs)
             filesystems = _collect_display_filesystems(volumes)
             estimated_extracted_bytes = sum(int(v.get("length_bytes") or 0) for v in volumes)
-            estimated_temp_storage_bytes = estimated_extracted_bytes if format_key != "raw" else 0
+            # RAW never materializes a temporary file (pytsk3 reads the
+            # upload directly). EWF no longer does either, as of the
+            # pyewf streaming sprint: app.disk_images.ewf_img_info.EwfImgInfo
+            # reads directly through pyewf, so there is no flat RAW export
+            # left to reserve space for -- see
+            # app.disk_images.service._open_disk_image_reader. Every other
+            # non-raw format (vmdk/vhd/vhdx/qcow2/vdi) is unchanged: it
+            # still fully materializes a temporary RAW file via
+            # qemu-img convert, so this estimate is still the right one
+            # to warn about for those.
+            estimated_temp_storage_bytes = 0 if format_key in {"raw", "ewf"} else estimated_extracted_bytes
             volume_diagnostics = _translate_volume_diagnostics(volumes)
             if installs:
                 first = installs[0]

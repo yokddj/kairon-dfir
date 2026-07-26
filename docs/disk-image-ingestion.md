@@ -79,9 +79,12 @@ Unsupported future formats are registered explicitly as unsupported, not silentl
 Current implementation:
 
 - RAW: direct read-only access through `pytsk3`
-- EWF: validated segment set, then controlled `ewfexport` to a temporary RAW file, then read-only access through `pytsk3`
+- EWF: validated segment set, then direct random-access reads through `pyewf` (see `EwfImgInfo`) -- no temporary RAW file is created
+- VMDK/VHD/VHDX/QCOW/QCOW2/VDI: validated, then `qemu-img convert` to a temporary RAW file, then read-only access through `pytsk3`
 
-This EWF export is a current limitation, not the final long-term architecture.
+EWF previously used a controlled `ewfexport` conversion to a temporary RAW file, sized to the disk's logical size, before any byte was read. It now reads directly through `pyewf`'s own random-access `seek()`/`read()`, via a dedicated `EwfImgInfo` (`backend/app/disk_images/ewf_img_info.py`) that satisfies `pytsk3.Img_Info` the same way `_PytskFileReader` and the LVM logical-volume reader already do. No downstream component (volume discovery, installation detection, materialization) needed to change to support this -- they already only require `read(offset, size)`.
+
+The `qemu-img`-backed formats (VMDK/VHD/VHDX/QCOW2/VDI) still materialize a temporary RAW file; no comparable pure-Python binding exists for them today, and reaching streaming for those would need either `qemu-nbd` (a network block device) or dedicated format parsers -- a materially larger undertaking than EWF's.
 
 ## Security Model
 
@@ -186,8 +189,8 @@ Current EWF behavior:
 - group sibling segments in the same directory
 - validate contiguous numbering
 - reject duplicates and missing segments
-- use `ewfexport` to a temporary RAW representation
-- process the exported RAW through the common RAW pipeline
+- open the segment set directly through `pyewf` (`EwfImgInfo`) -- no temporary RAW file
+- pytsk3 reads volumes/filesystems through `EwfImgInfo` exactly as it would through any other `Img_Info`
 
 ## VMDK
 
@@ -272,7 +275,7 @@ Virtual size is checked against the configured limit (1 TiB by default) before c
 Examples:
 
 - RAW adapter ready when `pytsk3` is available
-- EWF adapter ready when `ewfinfo` and `ewfexport` are available
+- EWF adapter ready when `pyewf` (the `libewf-python` package) is importable
 - VMDK/VHD/VHDX/QCOW/QCOW2/VDI adapters ready when `qemu-img` is available
 
 Optional dependencies do not mark the whole system unhealthy.
@@ -324,7 +327,7 @@ Once files are materialized from a detected installation, the following are reus
 Examples:
 
 - RAW adapter ready when `pytsk3` is available
-- EWF adapter ready when `ewfinfo` and `ewfexport` are available
+- EWF adapter ready when `pyewf` (the `libewf-python` package) is importable
 
 Optional dependencies do not mark the whole system unhealthy.
 
@@ -354,13 +357,12 @@ If a disk image returns zero artifacts, check:
 
 If EWF is recognized but not processed, verify that:
 
-- `ewfinfo` exists
-- `ewfexport` exists
+- `pyewf` (the `libewf-python` package) is installed and importable
 - the segment set is complete and in one directory
 
 ## Known limitations
 
-- EWF currently uses controlled temporary export to RAW instead of direct filesystem access.
+- VMDK/VHD/VHDX/QCOW/QCOW2/VDI still use a controlled `qemu-img convert` temporary export to RAW instead of direct filesystem access (EWF no longer does -- see the Read-only access section above).
 - Linux and Windows installation detection is content-driven and currently assumes the installation root is the filesystem root.
 - Encrypted volumes are detected and marked, but not unlocked.
 - The UI exposes disk image inspection in Evidence Detail, but deeper artifact provenance rendering is still minimal.

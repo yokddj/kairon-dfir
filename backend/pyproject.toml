@@ -30,6 +30,7 @@ dependencies = [
   "psutil>=6.0.0",
   "yara-python>=4.5.1",
   "pytsk3>=20260702",
+  "libewf-python>=20240506",
 ]
 
 [project.optional-dependencies]
