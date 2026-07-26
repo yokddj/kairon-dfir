@@ -93,6 +93,78 @@ def test_memory_dump_is_not_subject_to_extraction_limit(tmp_path, monkeypatch):
     assert not any(c.label == "Within extraction limit" for c in report.status_checks)
 
 
+def _make_minimal_mbr_disk_image(path: Path, *, partition_bytes: int) -> None:
+    """Hand-crafted MBR with one allocated partition -- avoids depending on
+    parted/mkfs.vfat (not installed in every environment) purely to get
+    pytsk3.Volume_Info to recognize a partition table with a known,
+    controllable declared size. The partition's filesystem is deliberately
+    left unrecognizable (all zero bytes): this only needs the volume to be
+    *discovered* (and its declared length counted), not readable --
+    matching the real-world case this fix targets (e.g. an LVM physical
+    volume Kairon's OS discovery cannot parse, so no installation is found
+    but the volume and its size are still reported)."""
+    sector_size = 512
+    start_lba = 2048
+    num_sectors = partition_bytes // sector_size
+    mbr = bytearray(512)
+    entry_offset = 446
+    mbr[entry_offset + 0] = 0x00
+    mbr[entry_offset + 4] = 0x83  # Linux partition type
+    mbr[entry_offset + 8:entry_offset + 12] = start_lba.to_bytes(4, "little")
+    mbr[entry_offset + 12:entry_offset + 16] = num_sectors.to_bytes(4, "little")
+    mbr[510] = 0x55
+    mbr[511] = 0xAA
+    total_size = (start_lba + num_sectors) * sector_size
+    with path.open("wb") as fh:
+        fh.write(bytes(mbr))
+        fh.seek(total_size - 1)
+        fh.write(b"\x00")
+
+
+def test_disk_image_is_not_subject_to_extraction_limit(tmp_path, monkeypatch):
+    # BACKEND_MAX_EXTRACTED_BYTES guards app.ingest.archive's real
+    # decompression-bomb risk -- a risk that does not exist for disk
+    # images (you cannot extract more bytes than the image physically
+    # contains), which are already bounded by their own dedicated settings
+    # (disk_image_max_bytes_per_volume, disk_image_virtual_size_max_bytes).
+    # A tiny configured limit here proves the check is skipped entirely
+    # for this category, not merely satisfied because the estimate happens
+    # to be small -- the discovered volume is deliberately made to exceed
+    # it by a wide margin.
+    monkeypatch.setattr(settings, "backend_max_extracted_bytes", 100)
+    disk_path = tmp_path / "disk.dd"
+    _make_minimal_mbr_disk_image(disk_path, partition_bytes=8 * 1024 * 1024)
+
+    report = run_preflight(disk_path, token="t14", original_filename="disk.dd", declared_platform=None, tmp_dir=tmp_path / "scratch")
+
+    assert report.classification.category == "disk_image"
+    assert report.classification.volumes == 1
+    assert report.classification.installations == 0  # unreadable filesystem, matching the LVM real-world case
+    assert report.resource_check.estimated_extracted_bytes is not None
+    assert report.resource_check.estimated_extracted_bytes > 100
+    assert not any(c.label == "Within extraction limit" for c in report.status_checks)
+    assert not any(d.problem == "Extraction size exceeded" for d in report.diagnostics)
+    assert report.status != "blocked"
+
+
+def test_archive_still_blocked_by_extraction_limit_disk_image_is_not(tmp_path, monkeypatch):
+    # Same tiny limit applied to both categories in one test: proves the
+    # fix is scoped precisely to disk images, not a blanket disable of the
+    # archive decompression-bomb guard.
+    monkeypatch.setattr(settings, "backend_max_extracted_bytes", 10)
+
+    zip_path = tmp_path / "collection.zip"
+    _make_linux_zip(zip_path)
+    archive_report = run_preflight(zip_path, token="t15a", original_filename="collection.zip", declared_platform=None, tmp_dir=tmp_path / "scratch_archive")
+    assert archive_report.status == "blocked"
+    assert any(c.label == "Within extraction limit" and not c.ok for c in archive_report.status_checks)
+
+    disk_path = tmp_path / "disk.dd"
+    _make_minimal_mbr_disk_image(disk_path, partition_bytes=8 * 1024 * 1024)
+    disk_report = run_preflight(disk_path, token="t15b", original_filename="disk.dd", declared_platform=None, tmp_dir=tmp_path / "scratch_disk")
+    assert not any(c.label == "Within extraction limit" for c in disk_report.status_checks)
+
+
 def test_memory_dump_upload_limit_matches_dedicated_memory_pipeline(tmp_path, monkeypatch):
     # The evidence wizard's memory_dump intake must enforce the same
     # upload-size limit as the dedicated Memory Overview pipeline
