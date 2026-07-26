@@ -25,9 +25,12 @@ class PreflightVolumeDiagnostic(BaseModel):
     size_bytes: int | None = None
     filesystem: str | None = None
     ok: bool
-    status: str  # "readable" | "unreadable" | "encrypted"
+    status: str  # "readable" | "unreadable" | "encrypted" | "container"
     explanation: str
     detected_signature: str | None = None
+    kind: str = "partition"  # "partition" | "logical_volume"
+    name: str | None = None  # the logical volume's own name, kind == "logical_volume" only
+    container_volume_id: int | None = None  # kind == "logical_volume": which volume_id it was found inside
 
 
 class PreflightClassification(BaseModel):
@@ -44,6 +47,7 @@ class PreflightClassification(BaseModel):
     version: str | None = None
     volumes: int | None = None
     partitions: int | None = None
+    logical_volumes: int | None = None
     filesystems: list[str] = []
     installations: int | None = None
     expected_parsers: list[str] = []

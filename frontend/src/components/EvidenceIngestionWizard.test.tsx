@@ -349,8 +349,8 @@ describe("EvidenceIngestionWizard", () => {
           filesystems: [],
           installations: 0,
           volume_diagnostics: [
-            { volume_id: 3, size_bytes: 254803968, filesystem: null, ok: true, status: "readable", explanation: "Readable filesystem.", detected_signature: null },
-            { volume_id: 7, size_bytes: 33568063488, filesystem: null, ok: false, status: "unreadable", explanation: "Detected signature: LVM2 physical volume. Kairon does not currently parse this container format, so operating system detection cannot continue inside this volume.", detected_signature: "LVM2 physical volume" },
+            { volume_id: 3, size_bytes: 254803968, filesystem: null, ok: true, status: "readable", explanation: "Readable filesystem.", detected_signature: null, kind: "partition", name: null, container_volume_id: null },
+            { volume_id: 7, size_bytes: 33568063488, filesystem: null, ok: false, status: "unreadable", explanation: "Detected signature: LVM2 physical volume. Kairon does not currently parse this container format, so operating system detection cannot continue inside this volume.", detected_signature: "LVM2 physical volume", kind: "partition", name: null, container_volume_id: null },
           ],
         },
       }),
@@ -382,6 +382,84 @@ describe("EvidenceIngestionWizard", () => {
     // as a source description, not a raw technical term.
     expect(within(diagnostics).getByText("Container format:")).toBeInTheDocument();
     expect(within(diagnostics).getByText("LVM2 physical volume")).toBeInTheDocument();
+  });
+
+  it("presents a successfully-parsed LVM container and its logical volumes as a discovery, not a warning (LVM V1 UX alignment)", async () => {
+    // Modeled directly on the real CyberDefenders Webserver.E01 result:
+    // partition 7 is the LVM Physical Volume (VulnOSv2-vg), containing a
+    // readable "root" logical volume and an unreadable "swap_1" one.
+    createEvidenceUploadSessionMock.mockResolvedValueOnce(sessionResponse({
+      preflight: readyReport({
+        classification: {
+          ...readyReport().classification,
+          category: "disk_image",
+          container: "EWF disk image",
+          contained_object: "1 OS installation(s) across 4 volume(s)",
+          platform: "linux",
+          hostname: "VulnOSv2",
+          distro: "Ubuntu 14.04.4 LTS",
+          volumes: 4,
+          partitions: 2,
+          logical_volumes: 2,
+          filesystems: ["ext4"],
+          installations: 1,
+          volume_diagnostics: [
+            { volume_id: 3, size_bytes: 254803968, filesystem: "ext4", ok: true, status: "readable", explanation: "Readable ext4 filesystem.", detected_signature: null, kind: "partition", name: null, container_volume_id: null },
+            {
+              volume_id: 7,
+              size_bytes: 33568063488,
+              filesystem: null,
+              ok: true,
+              status: "container",
+              explanation: "LVM2 physical volume, parsed successfully. 1 of 2 logical volumes found inside were read as supported filesystems -- see below.",
+              detected_signature: "LVM2 physical volume",
+              kind: "partition",
+              name: null,
+              container_volume_id: null,
+            },
+            { volume_id: 10700001, size_bytes: 8000000000, filesystem: "ext4", ok: true, status: "readable", explanation: "Readable ext4 filesystem.", detected_signature: null, kind: "logical_volume", name: "root", container_volume_id: 7 },
+            { volume_id: 10700002, size_bytes: 1000000000, filesystem: null, ok: false, status: "unreadable", explanation: "Kairon could not identify a supported filesystem inside this logical volume, so operating system detection cannot continue inside it.", detected_signature: null, kind: "logical_volume", name: "swap_1", container_volume_id: 7 },
+          ],
+        },
+      }),
+    }));
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["disk-bytes"], "webserver.e01"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    const report = await screen.findByTestId("preflight-report");
+    expect(within(report).getByText("Logical volumes:")).toBeInTheDocument();
+    // "Partitions" counts real partitions only -- the two logical volumes
+    // are counted and labeled separately.
+    expect(within(report).getByText("Partitions:").closest("p")).toHaveTextContent("Partitions: 2");
+    expect(within(report).getByText("Logical volumes:").closest("p")).toHaveTextContent("Logical volumes: 2");
+
+    const diagnostics = within(report).getByTestId("volume-diagnostics");
+    // The obsolete "Kairon does not yet discover logical volumes" wording
+    // must never appear anywhere in this section.
+    expect(within(diagnostics).queryByText(/does not yet discover/i)).not.toBeInTheDocument();
+    expect(within(diagnostics).queryByText(/does not currently parse this container format/i)).not.toBeInTheDocument();
+
+    // The container itself is presented as a successful discovery.
+    expect(within(diagnostics).getByText(/parsed successfully/i)).toBeInTheDocument();
+    expect(within(diagnostics).getByText(/1 of 2 logical volumes found inside were read/i)).toBeInTheDocument();
+    const containerRow = within(diagnostics).getByText(/parsed successfully/i).closest('[data-testid="volume-diagnostic-row"]') as HTMLElement;
+    expect(containerRow).toHaveClass("border-mint/30"); // success styling, not a warning
+
+    // Logical volumes are labeled distinctly from partitions, and reference
+    // the partition (container) they were found inside of.
+    expect(within(diagnostics).getByText(/Logical Volume — root/)).toBeInTheDocument();
+    expect(within(diagnostics).getByText(/Logical Volume — swap_1/)).toBeInTheDocument();
+    expect(within(diagnostics).getAllByText(/inside Partition 2/).length).toBe(2);
+
+    // Partial success is shown, not total failure: "root" reads as
+    // successful (mint), "swap_1" as a specific, non-alarming failure (amber).
+    const rootRow = within(diagnostics).getByText(/Logical Volume — root/).closest('[data-testid="volume-diagnostic-row"]') as HTMLElement;
+    const swapRow = within(diagnostics).getByText(/Logical Volume — swap_1/).closest('[data-testid="volume-diagnostic-row"]') as HTMLElement;
+    expect(rootRow).toHaveClass("border-mint/30");
+    expect(swapRow).toHaveClass("border-amber/30");
   });
 
   it("renders preflight when the backend includes empty evidence options", async () => {

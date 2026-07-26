@@ -3668,9 +3668,12 @@ export type PreflightVolumeDiagnostic = {
   size_bytes: number | null;
   filesystem: string | null;
   ok: boolean;
-  status: "readable" | "unreadable" | "encrypted";
+  status: "readable" | "unreadable" | "encrypted" | "container";
   explanation: string;
   detected_signature: string | null;
+  kind: "partition" | "logical_volume";
+  name: string | null;
+  container_volume_id: number | null;
 };
 
 export type PreflightClassification = {
@@ -3687,6 +3690,7 @@ export type PreflightClassification = {
   version: string | null;
   volumes: number | null;
   partitions: number | null;
+  logical_volumes: number | null;
   filesystems: string[];
   installations: number | null;
   expected_parsers: string[];

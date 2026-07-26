@@ -229,28 +229,129 @@ _DETECTED_SIGNATURE_LABELS = {
     "lvm2_physical_volume": "LVM2 physical volume",
 }
 
+_STATUS_LABELS = {"readable": "readable", "encrypted_volume": "encrypted", "unreadable_volume": "unreadable"}
 
-def _translate_volume_diagnostic(volume: dict) -> PreflightVolumeDiagnostic:
-    """Translate one raw volume dict from
+
+def _is_raw_numeric_identifier(value: Any) -> bool:
+    """pytsk3's filesystem-type detection occasionally yields a bare numeric
+    code instead of a name (an underlying pytsk3 binding quirk, not
+    something this translation layer changes or investigates further) --
+    never surface that raw number to an analyst; treat it the same as "no
+    known name" everywhere a filesystem name is shown."""
+    return bool(value) and str(value).isdigit()
+
+
+def _collect_display_filesystems(volumes: list[dict]) -> list[str]:
+    """The distinct, analyst-facing filesystem names across every
+    discovered volume (partition or logical volume) -- used for the
+    classification summary's "Filesystems:" line. Excludes a raw numeric
+    filesystem-type code the same way _translate_volume_diagnostic does
+    for a single volume's own row, and preserves first-seen order."""
+    return list(dict.fromkeys(str(v["filesystem_type"]) for v in volumes if v.get("filesystem_type") and not _is_raw_numeric_identifier(v.get("filesystem_type"))))
+
+
+def _translate_volume_diagnostics(volumes: list[dict]) -> list[PreflightVolumeDiagnostic]:
+    """Translate every raw volume dict from
     app.disk_images.service._discover_raw_volumes into analyst-facing
-    language. Never surfaces volume["error"]["message"] (a raw
-    pytsk3/Python exception string) -- only the small set of
+    diagnostics, as a batch (rather than one at a time) so an LVM
+    container can be correlated with the logical volumes discovered
+    inside it (see _discover_logical_volumes' "lvm" metadata marker) --
+    a container that was successfully parsed, with its logical volumes
+    opened, is presented as a successful discovery rather than a warning,
+    and a logical volume itself is labeled distinctly from a partition."""
+    children_by_container: dict[int, list[dict]] = {}
+    for entry in volumes:
+        lvm_marker = (entry.get("metadata") or {}).get("lvm")
+        if lvm_marker:
+            children_by_container.setdefault(int(lvm_marker["container_partition_index"]), []).append(entry)
+    return [
+        _translate_volume_diagnostic(volume, children=children_by_container.get(int(volume.get("partition_index") or 0), []))
+        for volume in volumes
+    ]
+
+
+def _translate_volume_diagnostic(volume: dict, *, children: list[dict]) -> PreflightVolumeDiagnostic:
+    """Translate one raw volume dict. Never surfaces volume["error"]["message"]
+    (a raw pytsk3/Python exception string) -- only the small set of
     already-computed, already-known fields (status, filesystem_type,
-    encrypted, metadata.encryption_type, metadata.container_signature) is
-    used to build a plain-language explanation."""
+    encrypted, metadata.encryption_type, metadata.container_signature,
+    metadata.lvm) is used to build a plain-language explanation.
+
+    children is every logical-volume entry _discover_logical_volumes found
+    inside this volume, if this volume is itself an LVM Physical Volume --
+    always empty for a plain partition or a logical volume."""
     status = str(volume.get("status") or "unknown")
     filesystem = volume.get("filesystem_type")
-    # pytsk3's filesystem-type detection occasionally yields a bare numeric
-    # code instead of a name (an underlying pytsk3 binding quirk, not
-    # something this translation layer changes or investigates further) --
-    # a raw number is exactly the kind of internal detail this function
-    # exists to avoid surfacing, so treat it the same as "no known name".
-    if filesystem and str(filesystem).isdigit():
+    if _is_raw_numeric_identifier(filesystem):
         filesystem = None
     metadata = volume.get("metadata") or {}
     signature_key = metadata.get("container_signature")
     detected_signature = _DETECTED_SIGNATURE_LABELS.get(signature_key) if signature_key else None
+    lvm_marker = metadata.get("lvm")
 
+    if lvm_marker:
+        # This volume IS a logical volume, not a partition -- its own
+        # readable/unreadable/encrypted outcome is translated the same way
+        # a partition's is, just labeled distinctly (see kind/name/
+        # container_volume_id below) so the UI can show it nested under
+        # the Physical Volume it was found inside of.
+        if status == "readable":
+            explanation = f"Readable {filesystem} filesystem." if filesystem else "Readable filesystem."
+        elif status == "encrypted_volume":
+            encryption_type = str(metadata.get("encryption_type") or "").upper()
+            label = {"luks": "LUKS", "bitlocker": "BitLocker"}.get(metadata.get("encryption_type"), encryption_type or "an unknown scheme")
+            explanation = f"Encrypted logical volume ({label}). Kairon cannot inspect an encrypted volume's contents without the decryption key or passphrase."
+        else:
+            explanation = "Kairon could not identify a supported filesystem inside this logical volume, so operating system detection cannot continue inside it."
+        return PreflightVolumeDiagnostic(
+            volume_id=int(volume.get("partition_index") or 0),
+            size_bytes=volume.get("length_bytes"),
+            filesystem=filesystem,
+            ok=status == "readable",
+            status=_STATUS_LABELS.get(status, "unreadable"),
+            explanation=explanation,
+            detected_signature=None,
+            kind="logical_volume",
+            name=str(lvm_marker.get("logical_volume") or "") or None,
+            container_volume_id=int(lvm_marker.get("container_partition_index") or 0),
+        )
+
+    if signature_key == "lvm2_physical_volume" and children:
+        # Parsing succeeded and at least one logical volume was found
+        # inside -- a real, successful discovery, not a warning, even
+        # though this container row itself was never opened as a
+        # filesystem (see _discover_logical_volumes). Do not imply total
+        # failure when only some logical volumes were readable.
+        readable_children = sum(1 for child in children if child.get("status") == "readable")
+        total_children = len(children)
+        if readable_children == total_children:
+            explanation = (
+                "LVM2 physical volume, parsed successfully. Its logical volume was read as a supported filesystem -- see below."
+                if total_children == 1
+                else f"LVM2 physical volume, parsed successfully. All {total_children} logical volumes found inside were read as supported filesystems -- see below."
+            )
+        elif readable_children > 0:
+            explanation = f"LVM2 physical volume, parsed successfully. {readable_children} of {total_children} logical volumes found inside were read as supported filesystems -- see below."
+        else:
+            explanation = f"LVM2 physical volume, parsed successfully. {total_children} logical volume(s) were found inside, but none could be read as a supported filesystem -- see below."
+        return PreflightVolumeDiagnostic(
+            volume_id=int(volume.get("partition_index") or 0),
+            size_bytes=volume.get("length_bytes"),
+            filesystem=None,
+            ok=readable_children > 0,
+            status="container",
+            explanation=explanation,
+            detected_signature=detected_signature,
+            kind="partition",
+            name=None,
+            container_volume_id=None,
+        )
+
+    # A plain partition, or an LVM signature that could not be parsed (or
+    # had no logical volumes discovered inside it -- e.g. a Volume Group
+    # spanning more than one Physical Volume, out of scope for V1) --
+    # unchanged from before PR3: today's diagnostic exactly as it always
+    # was, since nothing new was actually discovered in that case.
     if status == "readable":
         explanation = f"Readable {filesystem} filesystem." if filesystem else "Readable filesystem."
     elif status == "encrypted_volume":
@@ -270,9 +371,12 @@ def _translate_volume_diagnostic(volume: dict) -> PreflightVolumeDiagnostic:
         size_bytes=volume.get("length_bytes"),
         filesystem=filesystem,
         ok=status == "readable",
-        status={"readable": "readable", "encrypted_volume": "encrypted", "unreadable_volume": "unreadable"}.get(status, "unreadable"),
+        status=_STATUS_LABELS.get(status, "unreadable"),
         explanation=explanation,
         detected_signature=detected_signature,
+        kind="partition",
+        name=None,
+        container_volume_id=None,
     )
 
 
@@ -339,7 +443,7 @@ def run_preflight(
     chain: list[str] = []
     platform = declared_platform or EvidencePlatform.unknown.value
     hostname = distro = version = None
-    volumes_count = installations_count = partitions_count = None
+    volumes_count = installations_count = partitions_count = logical_volumes_count = None
     container_label: str | None = None
     contained_object: str | None = None
     filesystems: list[str] = []
@@ -408,12 +512,20 @@ def run_preflight(
             volumes = result.get("volumes") or []
             installs = result.get("installations") or []
             volumes_count = len(volumes)
-            partitions_count = volumes_count
+            logical_volume_entries = [v for v in volumes if v.get("partition_type") == "lvm2_logical_volume"]
+            # "Partitions" means real partition-table entries only -- a
+            # Logical Volume is not one (see _discover_logical_volumes), so
+            # it must not inflate this count. logical_volumes_count is
+            # deliberately left None (hidden by the frontend) rather than 0
+            # when there is nothing LVM-related to report, so a Windows/
+            # macOS/non-LVM Linux image's preview is completely unchanged.
+            partitions_count = volumes_count - len(logical_volume_entries)
+            logical_volumes_count = len(logical_volume_entries) or None
             installations_count = len(installs)
-            filesystems = list(dict.fromkeys(v["filesystem_type"] for v in volumes if v.get("filesystem_type")))
+            filesystems = _collect_display_filesystems(volumes)
             estimated_extracted_bytes = sum(int(v.get("length_bytes") or 0) for v in volumes)
             estimated_temp_storage_bytes = estimated_extracted_bytes if format_key != "raw" else 0
-            volume_diagnostics = [_translate_volume_diagnostic(v) for v in volumes]
+            volume_diagnostics = _translate_volume_diagnostics(volumes)
             if installs:
                 first = installs[0]
                 platform = str(first.get("platform") or platform)
@@ -647,6 +759,7 @@ def run_preflight(
         version=version,
         volumes=volumes_count,
         partitions=partitions_count,
+        logical_volumes=logical_volumes_count,
         filesystems=filesystems,
         installations=installations_count,
         expected_parsers=expected_parsers,

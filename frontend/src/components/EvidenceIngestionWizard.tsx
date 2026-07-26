@@ -733,6 +733,23 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setInspectionError(null);
   }, [caseId, resumeTarget]);
 
+  // Friendly, sequential 1-based display numbers for real partitions only
+  // (pytsk3's own partition_index has gaps -- unallocated-space/partition-
+  // table entries are counted too -- and a logical volume's synthetic
+  // partition_index is not a partition at all; see
+  // app.services.evidence_preflight's PreflightVolumeDiagnostic.kind).
+  const partitionDisplayNumbers = useMemo(() => {
+    const numbers = new Map<number, number>();
+    let next = 1;
+    for (const volume of preflight?.classification.volume_diagnostics ?? []) {
+      if (volume.kind !== "logical_volume") {
+        numbers.set(volume.volume_id, next);
+        next += 1;
+      }
+    }
+    return numbers;
+  }, [preflight?.classification.volume_diagnostics]);
+
   const detectedHostname = preflight?.classification.hostname?.trim() || "";
   const detectedHostMatches = useMemo(() => caseHosts.filter((host) => hostMatchesName(host, detectedHostname)), [caseHosts, detectedHostname]);
   const filteredCaseHosts = useMemo(() => {
@@ -1306,8 +1323,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 {/* "Volumes" and "Partitions" are the same count today (Kairon
                     discovers physical partitions only -- see Partition
                     Discovery below); showing both labels for one number was
-                    confusing, so only the more precise term is shown. */}
+                    confusing, so only the more precise term is shown. Logical
+                    volumes are counted separately -- they are not partitions. */}
                 {preflight.classification.partitions !== null ? <p>Partitions: <span className="text-ink">{preflight.classification.partitions}</span></p> : null}
+                {preflight.classification.logical_volumes !== null ? <p>Logical volumes: <span className="text-ink">{preflight.classification.logical_volumes}</span></p> : null}
                 {preflight.classification.filesystems.length ? <p>Filesystems: <span className="text-ink">{preflight.classification.filesystems.join(", ")}</span></p> : null}
                 {preflight.classification.installations !== null ? <p>Installations: <span className="text-ink">{preflight.classification.installations}</span></p> : null}
                 <p>Confidence: <span className="text-ink">{preflight.classification.confidence}</span></p>
@@ -1336,21 +1355,31 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
             {preflight.classification.volume_diagnostics.length ? (
               <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4" data-testid="volume-diagnostics">
                 <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Partition Discovery</p>
-                <p className="mt-1 text-xs text-muted">Per-partition detection results -- explains which partitions contributed to the classification above, and why any that didn't could not be read. Kairon does not yet discover logical volumes (e.g. LVM) individually -- see the container format note below when one is detected.</p>
+                <p className="mt-1 text-xs text-muted">Per-partition detection results -- explains which partitions contributed to the classification above, and why any that didn't could not be read. When a partition is an LVM container, any logical volumes Kairon discovered and processed inside it are listed beneath it.</p>
                 <div className="mt-3 space-y-2">
-                  {preflight.classification.volume_diagnostics.map((volume, index) => (
-                    <div key={volume.volume_id} className={`rounded-xl border px-3 py-2 text-sm ${volume.ok ? "border-mint/30 bg-mint/10" : "border-amber/30 bg-amber/10"}`} data-testid="volume-diagnostic-row">
-                      <p className={`font-semibold ${volume.ok ? "text-mint" : "text-amber"}`}>
-                        {volume.ok ? "✓" : "⚠"} Partition {index + 1}
-                        {volume.size_bytes !== null ? ` · ${bytes(volume.size_bytes)}` : ""}
-                        {volume.filesystem ? ` · ${volume.filesystem}` : ""}
-                      </p>
-                      <p className="mt-1 text-xs text-muted">{volume.explanation}</p>
-                      {volume.detected_signature ? (
-                        <p className="mt-1 text-xs text-muted">Container format: <span className="text-ink">{volume.detected_signature}</span></p>
-                      ) : null}
-                    </div>
-                  ))}
+                  {preflight.classification.volume_diagnostics.map((volume) => {
+                    const isLogicalVolume = volume.kind === "logical_volume";
+                    const containerNumber = volume.container_volume_id !== null ? partitionDisplayNumbers.get(volume.container_volume_id) : undefined;
+                    const label = isLogicalVolume ? `Logical Volume${volume.name ? ` — ${volume.name}` : ""}` : `Partition ${partitionDisplayNumbers.get(volume.volume_id) ?? "?"}`;
+                    return (
+                      <div
+                        key={volume.volume_id}
+                        className={`rounded-xl border px-3 py-2 text-sm ${volume.ok ? "border-mint/30 bg-mint/10" : "border-amber/30 bg-amber/10"} ${isLogicalVolume ? "ml-4 border-l-2 border-l-line" : ""}`}
+                        data-testid="volume-diagnostic-row"
+                      >
+                        <p className={`font-semibold ${volume.ok ? "text-mint" : "text-amber"}`}>
+                          {volume.ok ? "✓" : "⚠"} {label}
+                          {isLogicalVolume && containerNumber !== undefined ? ` (inside Partition ${containerNumber})` : ""}
+                          {volume.size_bytes !== null ? ` · ${bytes(volume.size_bytes)}` : ""}
+                          {volume.filesystem ? ` · ${volume.filesystem}` : ""}
+                        </p>
+                        <p className="mt-1 text-xs text-muted">{volume.explanation}</p>
+                        {volume.detected_signature ? (
+                          <p className="mt-1 text-xs text-muted">Container format: <span className="text-ink">{volume.detected_signature}</span></p>
+                        ) : null}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             ) : null}
