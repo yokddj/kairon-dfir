@@ -282,9 +282,19 @@ def _build_fat_image_bytes(tmp_path: Path, files: dict[str, str], *, size_kib: i
         source = tmp_path / "src" / relative_path
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text(contents, encoding="utf-8")
-        directory = Path(relative_path).parent
-        if str(directory) not in {"", "."}:
-            subprocess.run(["mmd", "-i", str(fs_image), f"::/{directory}"], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # Create every ancestor directory shallowest-first (mmd cannot create a
+    # nested directory before its own parent exists) -- same technique as
+    # test_disk_image_ingestion.py's _create_fat_filesystem_image.
+    directories: set[str] = set()
+    for relative_path in files:
+        current = Path(relative_path).parent
+        while str(current) not in {"", "."}:
+            directories.add(str(current).replace("\\", "/"))
+            current = current.parent
+    for directory in sorted(directories, key=lambda item: (item.count("/"), item)):
+        subprocess.run(["mmd", "-i", str(fs_image), f"::/{directory}"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for relative_path in files:
+        source = tmp_path / "src" / relative_path
         subprocess.run(["mcopy", "-i", str(fs_image), str(source), f"::/{relative_path}"], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     return fs_image.read_bytes()
 
