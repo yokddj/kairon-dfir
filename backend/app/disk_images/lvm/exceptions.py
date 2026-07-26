@@ -102,3 +102,66 @@ class InconsistentMetadataError(LVMMetadataError):
     physical volume's UUID recorded in its own header does not match the
     UUID the Volume Group's metadata declares for it.
     """
+
+
+# ---------------------------------------------------------------------------
+# Reader-layer errors (see reader.py) -- a distinct hierarchy from
+# LVMMetadataError above. These are raised while *reading* an already
+# (successfully) parsed Logical Volume's bytes, not while parsing its
+# metadata; a LogicalVolumeReader is deliberately not required to have
+# been built from a validated parser.py output (see reader.py's module
+# docstring), so it re-checks the invariants it depends on rather than
+# assuming PR1's own validation always ran.
+# ---------------------------------------------------------------------------
+
+
+class LogicalVolumeReadError(Exception):
+    """Base class for every error LogicalVolumeReader (and the pytsk3
+    Img_Info adapter built on it) can raise."""
+
+
+class InvalidReadRequestError(LogicalVolumeReadError):
+    """The requested read is not a request this reader can ever satisfy,
+    regardless of the extent map's contents.
+
+    Raised when: offset is negative, size is negative, or the requested
+    range [offset, offset + size) extends beyond the logical volume's
+    declared size (the sum of every segment's extent_count).
+    """
+
+
+class ExtentMapGapError(LogicalVolumeReadError):
+    """The Logical Volume's segments do not form a contiguous, zero-based,
+    non-overlapping range covering the whole declared size.
+
+    Raised at LogicalVolumeReader construction time (not lazily, only when
+    a read happens to touch the gap) -- a reader built over a
+    discontiguous extent map is not usable at all, not merely partially
+    usable. app.disk_images.lvm.parser already enforces this same
+    invariant when building a LogicalVolume from real metadata text; this
+    is a defensive, independent re-check for this layer, which does not
+    assume its input necessarily came from that validated path.
+    """
+
+
+class UnresolvedPhysicalVolumeError(LogicalVolumeReadError):
+    """A segment references a physical volume name that was not provided
+    to this reader.
+
+    Raised at construction time, for the same "fail fast, not partway
+    through a read" reason as ExtentMapGapError.
+    """
+
+
+class UnderlyingReadError(LogicalVolumeReadError):
+    """The underlying physical byte-range reader returned fewer bytes than
+    requested, without raising its own exception.
+
+    This is distinct from the underlying reader raising an exception
+    itself -- that case is never caught here and propagates completely
+    unchanged (see reader.py's read() docstring). This error exists only
+    for the case where the underlying reader returns *some* bytes, just
+    not as many as it was asked for, silently -- treated as a hard error
+    rather than a short/partial result, since fabricating or truncating
+    evidence bytes is never acceptable.
+    """
