@@ -391,26 +391,167 @@ def _discover_logical_volumes(
         volumes.append(lv_volume)
 
 
-def _iter_directory(fs_info: pytsk3.FS_Info, directory_path: str, *, depth: int, max_depth: int):
+@dataclass
+class WalkStats:
+    """Counters for one _iter_directory walk. Exists so the two conditions
+    this walker now refuses to follow (deleted names, traversal cycles) are
+    *reported as numbers* rather than as one log line per occurrence -- on
+    this sprint's Webserver.E01, 95,894 of the 180,691 directory entries
+    inspected (53%) are deleted, so per-entry logging would be pure spam."""
+
+    directories_opened: int = 0
+    entries_inspected: int = 0
+    allocated_entries_followed: int = 0
+    unallocated_entries_skipped: int = 0
+    cycles_prevented: int = 0
+    max_depth_truncations: int = 0
+
+
+def _is_allocated_entry(entry) -> bool:
+    """Whether a pytsk3 directory entry is a *live* name in the filesystem.
+
+    TSK reports a deleted directory entry with TSK_FS_NAME_FLAG_UNALLOC on
+    the name (independently of the inode's own allocation state: the name
+    can be deleted while the inode it once pointed to has already been
+    recycled by a completely unrelated, live object). Materialization
+    reproduces the *live* filesystem, so a deleted name is not a path that
+    exists and must not be followed -- see _iter_directory for what
+    following one actually did.
+
+    Deliberately conservative: only a positively-set UNALLOC bit makes this
+    return False. Missing or malformed flags mean "we do not know", and the
+    walker then keeps the entry, because wrongly dropping a live forensic
+    path is a far worse failure than wrongly keeping a dead one. Recovering
+    deleted files is explicitly not what this path does -- that would be a
+    separate capability with its own provenance semantics."""
+    name = getattr(getattr(entry, "info", None), "name", None)
+    flags = getattr(name, "flags", None)
+    if flags is None:
+        return True
+    try:
+        return not (int(flags) & int(pytsk3.TSK_FS_NAME_FLAG_UNALLOC))
+    except (TypeError, ValueError):
+        return True
+
+
+def _entry_inode(entry) -> int | None:
+    """Inode address behind a directory entry, or None when unavailable."""
+    meta = getattr(getattr(entry, "info", None), "meta", None)
+    addr = getattr(meta, "addr", None)
+    if addr is None:
+        return None
+    try:
+        return int(addr)
+    except (TypeError, ValueError):
+        return None
+
+
+def _directory_inode(directory) -> int | None:
+    """Inode address of an already-opened pytsk3 Directory, or None."""
+    meta = getattr(getattr(getattr(directory, "info", None), "fs_file", None), "meta", None)
+    addr = getattr(meta, "addr", None)
+    if addr is None:
+        return None
+    try:
+        return int(addr)
+    except (TypeError, ValueError):
+        return None
+
+
+def _iter_directory(
+    fs_info: pytsk3.FS_Info,
+    directory_path: str,
+    *,
+    depth: int,
+    max_depth: int,
+    ancestor_inodes: set[int] | None = None,
+    stats: WalkStats | None = None,
+):
+    """Walk the live allocated tree under directory_path.
+
+    Two rules keep this walk linear in the size of the *live* tree, and both
+    exist because of a measured failure on a real ext4 image (see this
+    sprint's report):
+
+    1. Deleted names are not followed (_is_allocated_entry). A deleted entry
+       whose inode has since been recycled points at whatever object owns
+       that inode *now* -- which can be a directory somewhere else entirely,
+       including one of this path's own ancestors.
+
+    2. A directory whose inode is already on the current ancestor chain is
+       not descended into. Rule 1 removes the known cause of that situation,
+       but the guard is what makes the walk terminate by construction rather
+       than by luck: any future path that produces a loop (corrupt metadata,
+       an image type with different semantics) is bounded here instead of
+       replicating whole subtrees.
+
+    Before both rules, one such recycled-inode entry made the walker re-enter
+    an ancestor and reproduce the entire root tree beneath a phantom path,
+    recursively, bounded only by max_depth -- 97% of the files it produced
+    were duplicates living at paths that do not exist in the filesystem.
+
+    The guard is an *ancestor chain*, not a global visited set: a directory
+    reachable from two unrelated branches is still walked in both, so nothing
+    legitimately reachable is suppressed. max_depth stays exactly as it was,
+    as an independent bound, and is no longer load-bearing for termination."""
+    if stats is None:
+        stats = WalkStats()
+    if ancestor_inodes is None:
+        ancestor_inodes = set()
     if depth > max_depth:
+        stats.max_depth_truncations += 1
         return
     try:
         directory = fs_info.open_dir(path=directory_path)
     except Exception:
         return
-    for entry in directory:
-        try:
-            name = entry.info.name.name.decode("utf-8", errors="replace")
-        except Exception:
-            continue
-        if name in {".", ".."}:
-            continue
-        meta = getattr(entry.info, "meta", None)
-        full_path = f"{directory_path.rstrip('/')}/{name}" if directory_path != "/" else f"/{name}"
-        is_dir = bool(meta and meta.type == pytsk3.TSK_FS_META_TYPE_DIR)
-        yield full_path, entry, is_dir
-        if is_dir:
-            yield from _iter_directory(fs_info, full_path, depth=depth + 1, max_depth=max_depth)
+    stats.directories_opened += 1
+    own_inode = _directory_inode(directory)
+    # An inode we cannot identify cannot be guarded against; the walk still
+    # terminates on max_depth in that case, exactly as it always did.
+    pushed = own_inode is not None and own_inode not in ancestor_inodes
+    if pushed:
+        ancestor_inodes.add(own_inode)
+    try:
+        for entry in directory:
+            try:
+                name = entry.info.name.name.decode("utf-8", errors="replace")
+            except Exception:
+                continue
+            if name in {".", ".."}:
+                continue
+            stats.entries_inspected += 1
+            if not _is_allocated_entry(entry):
+                # Skipped before the entry is yielded and before it is ever
+                # opened as a directory, so a deleted name never reaches the
+                # extractor and never costs a directory read.
+                stats.unallocated_entries_skipped += 1
+                continue
+            stats.allocated_entries_followed += 1
+            meta = getattr(entry.info, "meta", None)
+            full_path = f"{directory_path.rstrip('/')}/{name}" if directory_path != "/" else f"/{name}"
+            is_dir = bool(meta and meta.type == pytsk3.TSK_FS_META_TYPE_DIR)
+            yield full_path, entry, is_dir
+            if is_dir:
+                child_inode = _entry_inode(entry)
+                if child_inode is not None and child_inode in ancestor_inodes:
+                    stats.cycles_prevented += 1
+                    continue
+                yield from _iter_directory(
+                    fs_info,
+                    full_path,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    ancestor_inodes=ancestor_inodes,
+                    stats=stats,
+                )
+    finally:
+        # Unwinding must drop this directory's identity even when the caller
+        # abandons the generator early (_materialize_volume_installation
+        # breaks out of the walk on its max-files/max-bytes limits), so a
+        # later sibling branch is never wrongly treated as a cycle.
+        if pushed:
+            ancestor_inodes.discard(own_inode)
 
 
 _LINUX_DISK_EXTRA_SOURCE_PATTERNS = (
@@ -482,7 +623,14 @@ def _materialize_volume_installation(
     file_count = 0
     bytes_written = 0
     last_progress_emit = time.monotonic()
-    for full_path, entry, is_dir in _iter_directory(fs_info, install.root_path, depth=0, max_depth=settings.disk_image_max_directory_depth):
+    walk_stats = WalkStats()
+    for full_path, entry, is_dir in _iter_directory(
+        fs_info,
+        install.root_path,
+        depth=0,
+        max_depth=settings.disk_image_max_directory_depth,
+        stats=walk_stats,
+    ):
         if progress_cb and (time.monotonic() - last_progress_emit) >= _MATERIALIZE_PROGRESS_INTERVAL_SECONDS:
             # This walk can run long on a real filesystem with many
             # directory entries that never match _should_materialize below
@@ -553,6 +701,11 @@ def _materialize_volume_installation(
             "logical_source_path": relative_output,
             "acquisition_method": "pytsk3_readonly_materialization",
         }
+    # One summary line per condition, never one per entry -- see WalkStats.
+    if walk_stats.unallocated_entries_skipped:
+        warnings.append(f"skipped_deleted_directory_entries:{walk_stats.unallocated_entries_skipped}")
+    if walk_stats.cycles_prevented:
+        warnings.append(f"prevented_directory_cycles:{walk_stats.cycles_prevented}")
     return extracted_files, manifest_entries, source_map, warnings
 
 
