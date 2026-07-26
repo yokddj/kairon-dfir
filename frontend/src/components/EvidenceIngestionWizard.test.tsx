@@ -333,6 +333,57 @@ describe("EvidenceIngestionWizard", () => {
     expect(within(report).getByText("Ready to process")).toBeInTheDocument();
   });
 
+  it("labels partitions with friendly sequential numbers and a container-format hint, distinct from logical volumes", async () => {
+    createEvidenceUploadSessionMock.mockResolvedValueOnce(sessionResponse({
+      preflight: readyReport({
+        classification: {
+          ...readyReport().classification,
+          category: "disk_image",
+          container: "EWF disk image",
+          contained_object: "2 volume(s), no OS installation detected (1 of 2 could not be read as a supported filesystem)",
+          platform: "unknown",
+          hostname: null,
+          distro: null,
+          volumes: 2,
+          partitions: 2,
+          filesystems: [],
+          installations: 0,
+          volume_diagnostics: [
+            { volume_id: 3, size_bytes: 254803968, filesystem: null, ok: true, status: "readable", explanation: "Readable filesystem.", detected_signature: null },
+            { volume_id: 7, size_bytes: 33568063488, filesystem: null, ok: false, status: "unreadable", explanation: "Detected signature: LVM2 physical volume. Kairon does not currently parse this container format, so operating system detection cannot continue inside this volume.", detected_signature: "LVM2 physical volume" },
+          ],
+        },
+      }),
+    }));
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["disk-bytes"], "disk.dd"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+
+    const report = await screen.findByTestId("preflight-report");
+    // Only "Partitions" is shown -- not a redundant duplicate "Volumes" line
+    // for what is, today, the same count.
+    expect(within(report).getByText("Partitions:")).toBeInTheDocument();
+    expect(within(report).queryByText("Volumes:")).not.toBeInTheDocument();
+
+    const diagnostics = within(report).getByTestId("volume-diagnostics");
+    expect(within(diagnostics).getByText("Partition Discovery")).toBeInTheDocument();
+    // Friendly, sequential display numbering (1, 2) rather than raw pytsk3
+    // partition indices (3, 7) -- pytsk3 enumerates partition-table and
+    // unallocated-space entries too, so its own indices are not sequential.
+    expect(within(diagnostics).getByText(/Partition 1/)).toBeInTheDocument();
+    expect(within(diagnostics).getByText(/Partition 2/)).toBeInTheDocument();
+    expect(within(diagnostics).queryByText(/Partition 3/)).not.toBeInTheDocument();
+    expect(within(diagnostics).queryByText(/Partition 7/)).not.toBeInTheDocument();
+    expect(within(diagnostics).queryByText(/Volume 3/)).not.toBeInTheDocument();
+    expect(within(diagnostics).queryByText(/Volume 7/)).not.toBeInTheDocument();
+    // The container-format hint (renamed from "Detected signature") reads
+    // as a source description, not a raw technical term.
+    expect(within(diagnostics).getByText("Container format:")).toBeInTheDocument();
+    expect(within(diagnostics).getByText("LVM2 physical volume")).toBeInTheDocument();
+  });
+
   it("renders preflight when the backend includes empty evidence options", async () => {
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
     createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
