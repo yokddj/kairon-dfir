@@ -2,16 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-import shutil
-import subprocess
 from typing import Any
+
+from app.disk_images.ewf_img_info import EwfImgInfo, EwfOpenError, pyewf_available
 
 
 EWF_SIGNATURES = {b"EVF\t\r\n\xff\x00", b"LVF\t\r\n\xff\x00"}
-
-
-def _tool_exists(name: str) -> bool:
-    return shutil.which(name) is not None
 
 
 class EwfImageAdapter:
@@ -75,43 +71,44 @@ class EwfImageAdapter:
         }
 
     def expose_readonly(self, *, evidence_id: str, path: Path, companions: list[Path], workspace: Path) -> dict[str, Any]:
+        # No temporary RAW file is written here (see
+        # app.disk_images.ewf_img_info.EwfImgInfo) -- this validates the
+        # segment set, then opens (and immediately closes) a real
+        # EwfImgInfo purely to confirm pyewf can actually parse this
+        # image, the same correctness check `ewfexport` used to perform
+        # by actually converting it. service.py opens its own EwfImgInfo
+        # for real use afterwards -- exactly how the old flow already
+        # opened the exported RAW file independently for discovery and
+        # for materialization.
         readiness = self.readiness()
         if not readiness["ready"]:
             return {"format": self.key, "supported": False, "error": "missing_dependency", "reason": readiness["reason"]}
         validation = self.validate_segments(path, companions)
         if not validation.get("valid"):
             return {"format": self.key, "supported": False, "error": validation.get("error"), "validation": validation}
-        output_prefix = workspace / f"{evidence_id}-ewf-export"
-        command = ["ewfexport", "-u", "-t", str(output_prefix), "-f", "raw", str(path)]
-        completed = subprocess.run(command, capture_output=True, text=True, shell=False, timeout=7200)
-        if completed.returncode != 0:
-            return {
-                "format": self.key,
-                "supported": False,
-                "error": "corrupt_image",
-                "stderr": completed.stderr[-4000:],
-                "stdout": completed.stdout[-4000:],
-                "command": command,
-            }
-        raw_path = output_prefix.with_suffix(".raw")
-        if not raw_path.exists():
-            candidates = sorted(workspace.glob(f"{output_prefix.name}*"))
-            raw_path = next((candidate for candidate in candidates if candidate.is_file() and candidate.suffix.lower() in {".raw", ".img", ".dd"}), raw_path)
+        series = self._series(path, companions)
+        try:
+            probe = EwfImgInfo(series)
+            probe.close()
+        except EwfOpenError as exc:
+            return {"format": self.key, "supported": False, "error": "corrupt_image", "reason": str(exc)}
         return {
             "format": self.key,
             "supported": True,
             "image_path": str(path),
-            "segments": [str(item) for item in companions or [path]],
+            "segments": [str(item) for item in series],
             "workspace": str(workspace),
-            "exported_raw_path": str(raw_path),
-            "command": command,
-            "access_strategy": "ewfexport_to_temporary_raw_readonly",
+            "exported_raw_path": None,
+            "access_strategy": "pyewf_streaming_readonly",
         }
 
     def cleanup(self, context: dict[str, Any]) -> None:
-        raw_path = Path(str(context.get("exported_raw_path") or ""))
-        if raw_path.exists() and raw_path.is_file():
-            raw_path.unlink(missing_ok=True)
+        # Nothing to clean up: expose_readonly never wrote a temporary
+        # RAW file for EWF. Kept as a no-op (rather than removed) so this
+        # adapter still satisfies the ImageFormatAdapter Protocol exactly
+        # like every other adapter.
+        return None
 
     def readiness(self) -> dict[str, Any]:
-        return {"key": self.key, "ready": _tool_exists("ewfexport") and _tool_exists("ewfinfo"), "supported": True, "reason": None if _tool_exists("ewfexport") and _tool_exists("ewfinfo") else "ewf-tools missing"}
+        ready = pyewf_available()
+        return {"key": self.key, "ready": ready, "supported": True, "reason": None if ready else "pyewf (libewf-python) not installed"}

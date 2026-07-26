@@ -19,6 +19,7 @@ from app.core.artifact_registry import artifact_registry_entry
 from app.core.config import get_settings
 from app.core.storage import sanitize_relative_path
 from app.core.timing import timed_phase
+from app.disk_images.ewf_img_info import EwfImgInfo, pyewf_available, pyewf_version
 from app.disk_images.lvm import LogicalVolumeReader, LVMMetadataError, parse_physical_volume_metadata
 from app.disk_images.lvm.img_info import LogicalVolumeImgInfo
 from app.disk_images.registry import ewf_series_members, get_image_format_registry
@@ -65,6 +66,26 @@ class _PytskFileReader(pytsk3.Img_Info):
         return self._size
 
 
+def _open_disk_image_reader(context: dict[str, Any]) -> "_PytskFileReader | EwfImgInfo":
+    """Build the pytsk3.Img_Info every downstream reader (volume/LVM
+    discovery, installation detection, materialization) will read every
+    byte through, based on what adapter.expose_readonly() returned.
+
+    EWF's own adapter (see app.disk_images.ewf.EwfImageAdapter) never
+    writes a temporary RAW file -- context["access_strategy"] ==
+    "pyewf_streaming_readonly" is how it signals that bytes should come
+    directly from EwfImgInfo (pyewf) instead. Every other format
+    (raw, vmdk, vhd/vhdx, qcow/qcow2, vdi) is unchanged: it already wrote
+    a real file (or, for raw, never needed to), so _PytskFileReader over
+    that path is exactly what ran before this sprint.
+    """
+    if context.get("access_strategy") == "pyewf_streaming_readonly":
+        segments = [Path(item) for item in context.get("segments") or []]
+        return EwfImgInfo(segments)
+    raw_path = Path(str(context.get("exported_raw_path") or context.get("image_path") or ""))
+    return _PytskFileReader(raw_path)
+
+
 def _now() -> datetime:
     return datetime.now(UTC)
 
@@ -95,8 +116,7 @@ def disk_image_readiness() -> dict[str, Any]:
         "formats": registry.list_capabilities(),
         "tools": {
             "pytsk3": getattr(pytsk3, "__version__", "available"),
-            "ewfinfo": _tool_version("ewfinfo"),
-            "ewfexport": _tool_version("ewfexport"),
+            "pyewf": pyewf_version() or ("available" if pyewf_available() else None),
             "mmls": _tool_version("mmls", ["-V"]),
             "fls": _tool_version("fls", ["-V"]),
             "icat": _tool_version("icat", ["-V"]),
@@ -137,12 +157,15 @@ def _filesystem_type(fs_info: pytsk3.FS_Info) -> str | None:
         return None
 
 
-def _read_image_bytes(image_path: Path, offset: int, length: int = 4096) -> bytes:
+def _safe_reader_read(img: "_PytskFileReader | EwfImgInfo", offset: int, length: int = 4096) -> bytes:
+    """Best-effort signature-detection read (encryption/LVM magic bytes)
+    against a volume pytsk3 already failed to open as a filesystem --
+    never raises, since an unreadable range here just means no signature
+    can be identified, not a reason to abort discovery of the rest of
+    the image."""
     try:
-        with image_path.open("rb") as handle:
-            handle.seek(max(offset, 0))
-            return handle.read(length)
-    except OSError:
+        return img.read(max(offset, 0), length)
+    except Exception:
         return b""
 
 
@@ -533,8 +556,8 @@ def _materialize_volume_installation(
     return extracted_files, manifest_entries, source_map, warnings
 
 
-def _discover_raw_volumes(image_path: Path) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
-    img = _PytskFileReader(image_path)
+def _discover_raw_volumes(context: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+    img = _open_disk_image_reader(context)
     volumes: list[dict[str, Any]] = []
     installs: list[dict[str, Any]] = []
     warnings: list[str] = []
@@ -575,7 +598,7 @@ def _discover_raw_volumes(image_path: Path) -> tuple[list[dict[str, Any]], list[
                     for install in detected:
                         installs.append({**install, "partition_index": index})
                 except Exception as exc:
-                    blob = _read_image_bytes(image_path, offset_bytes)
+                    blob = _safe_reader_read(img, offset_bytes)
                     encrypted, encryption_type = _detect_encryption_signature(blob)
                     volume["encrypted"] = encrypted
                     volume["metadata"]["encryption_type"] = encryption_type
@@ -606,7 +629,7 @@ def _discover_raw_volumes(image_path: Path) -> tuple[list[dict[str, Any]], list[
                 volume = {
                     "partition_index": 0,
                     "offset_bytes": 0,
-                    "length_bytes": image_path.stat().st_size,
+                    "length_bytes": img.get_size(),
                     "partition_type": "filesystem_image",
                     "filesystem_type": _filesystem_type(fs_info),
                     "label": _filesystem_label(fs_info),
@@ -623,7 +646,7 @@ def _discover_raw_volumes(image_path: Path) -> tuple[list[dict[str, Any]], list[
                     installs.append({**install, "partition_index": 0})
                 volumes.append(volume)
             except Exception as exc:
-                blob = _read_image_bytes(image_path, 0)
+                blob = _safe_reader_read(img, 0)
                 encrypted, encryption_type = _detect_encryption_signature(blob)
                 container_signature = None if encrypted else (_detect_lvm_signature(blob) and "lvm2_physical_volume")
                 # Whichever branch: still record this as a discovered
@@ -634,7 +657,7 @@ def _discover_raw_volumes(image_path: Path) -> tuple[list[dict[str, Any]], list[
                 volumes.append({
                     "partition_index": 0,
                     "offset_bytes": 0,
-                    "length_bytes": image_path.stat().st_size,
+                    "length_bytes": img.get_size(),
                     "partition_type": "filesystem_image",
                     "filesystem_type": None,
                     "label": None,
@@ -787,10 +810,9 @@ def materialize_disk_image_sources(db: Session, evidence: Evidence, *, extract_d
             disk_image.tool_metadata = {**(disk_image.tool_metadata or {}), "operations": [*(disk_image.tool_metadata or {}).get("operations", []), {"step": "expose_readonly", **context}]}
             db.commit()
             raise ValueError(str(context.get("error") or "missing_dependency"))
-        raw_path = Path(str(context.get("exported_raw_path") or context.get("image_path") or stored_path))
         if progress_cb:
             progress_cb({"current_action": "discovering_volumes"})
-        volume_specs, install_specs, warnings = _discover_raw_volumes(raw_path)
+        volume_specs, install_specs, warnings = _discover_raw_volumes(context)
         for installation in db.query(OSInstallation).join(DiskVolume, OSInstallation.disk_volume_id == DiskVolume.id).filter(DiskVolume.disk_image_id == disk_image.id).all():
             db.delete(installation)
         for volume in db.query(DiskVolume).filter(DiskVolume.disk_image_id == disk_image.id).all():
@@ -847,7 +869,7 @@ def materialize_disk_image_sources(db: Session, evidence: Evidence, *, extract_d
         extracted_files: list[str] = []
         manifest_entries: list[dict[str, Any]] = []
         source_map: dict[str, dict[str, Any]] = {}
-        image_reader = _PytskFileReader(raw_path)
+        image_reader = _open_disk_image_reader(context)
         try:
             for volume in persisted_volumes:
                 if not volume.readable:
@@ -973,14 +995,16 @@ def inspect_disk_image_readonly(path: Path, *, workspace: Path) -> dict[str, Any
         # The expensive step for formats like VMDK: converts the entire
         # image to a temporary raw file (see qemu_img_convert_to_raw) so
         # the raw volumes below can be read. Cost scales with the
-        # image's allocated data, not just the file's on-disk size.
+        # image's allocated data, not just the file's on-disk size. EWF
+        # is the one exception (see app.disk_images.ewf.EwfImageAdapter
+        # and EwfImgInfo): it reads directly through pyewf, so this step
+        # is cheap for EWF regardless of the disk's logical size.
         with timed_phase("disk_image.expose_readonly", path=path.name, format=adapter.key, file_size=file_size):
             context = adapter.expose_readonly(evidence_id="preflight", path=path, companions=companions, workspace=workspace)
         if not context.get("supported", True):
             return {"supported": False, "format": adapter.key, "error": context.get("error") or "missing_dependency", "context": context}
-        raw_path = Path(str(context.get("exported_raw_path") or context.get("image_path") or path))
         with timed_phase("disk_image.discover_raw_volumes", path=path.name):
-            volumes, installs, warnings = _discover_raw_volumes(raw_path)
+            volumes, installs, warnings = _discover_raw_volumes(context)
         return {
             "supported": True,
             "format": adapter.key,

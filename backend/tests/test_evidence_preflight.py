@@ -228,6 +228,31 @@ def test_volume_diagnostics_detect_lvm_signature_without_parsing_lvm(tmp_path):
     assert "does not currently parse" in diag.explanation
 
 
+def test_ewf_preflight_estimates_zero_temp_storage_no_flat_raw_needed(tmp_path):
+    # Regression coverage for the pyewf streaming sprint: EWF no longer
+    # materializes a temporary flat RAW file (see
+    # app.disk_images.ewf_img_info.EwfImgInfo), so the preflight estimate
+    # must stop reserving space for one -- matching RAW's own estimate,
+    # not the full logical-disk-size estimate other virtual formats
+    # (vmdk/vhd/qcow2/vdi) still correctly need.
+    _require_tools("ewfacquire")
+    raw_path = tmp_path / "disk.dd"
+    _make_minimal_mbr_disk_image(raw_path, partition_bytes=8 * 1024 * 1024)
+    ewf_prefix = tmp_path / "case-ewf"
+    subprocess.run(["ewfacquire", "-u", "-q", "-t", str(ewf_prefix), str(raw_path)], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    segments = sorted(tmp_path.glob("case-ewf.E*"))
+    assert segments, "ewfacquire did not produce an E01 segment"
+
+    report = run_preflight(segments[0], token="t-ewf-storage", original_filename=segments[0].name, declared_platform=None, tmp_dir=tmp_path / "scratch")
+
+    assert report.classification.format_key == "ewf"
+    assert report.resource_check.estimated_temp_storage_bytes == 0
+    # estimated_extracted_bytes (the logical-disk-size figure) is still
+    # computed and shown -- only the *temp storage* reservation changes.
+    assert report.resource_check.estimated_extracted_bytes is not None
+    assert report.resource_check.estimated_extracted_bytes > 0
+
+
 def test_memory_dump_upload_limit_matches_dedicated_memory_pipeline(tmp_path, monkeypatch):
     # The evidence wizard's memory_dump intake must enforce the same
     # upload-size limit as the dedicated Memory Overview pipeline
