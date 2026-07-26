@@ -151,6 +151,19 @@ def _detect_encryption_signature(blob: bytes) -> tuple[bool, str | None]:
     return False, None
 
 
+def _detect_lvm_signature(blob: bytes) -> bool:
+    """Best-effort identification only -- not LVM support. LVM2's on-disk
+    label header carries a fixed "LABELONE" magic string within the first
+    few sectors of a physical volume; checking for it is the same
+    lightweight, read-only signature match as _detect_encryption_signature
+    above. It does not parse any LVM metadata (volume groups, logical
+    volumes, extents) and cannot be used to read anything inside the
+    container -- it only lets an otherwise-unreadable volume be labeled
+    "possible LVM physical volume" instead of a bare "unsupported
+    filesystem", when the signature happens to be present."""
+    return b"LABELONE" in blob[:4096]
+
+
 def _read_small_file(fs_info: pytsk3.FS_Info, path: str, limit: int = 32768) -> str:
     try:
         file_obj = fs_info.open(path)
@@ -386,9 +399,16 @@ def _discover_raw_volumes(image_path: Path) -> tuple[list[dict[str, Any]], list[
                     for install in detected:
                         installs.append({**install, "partition_index": index})
                 except Exception as exc:
-                    encrypted, encryption_type = _detect_encryption_signature(_read_image_bytes(image_path, offset_bytes))
+                    blob = _read_image_bytes(image_path, offset_bytes)
+                    encrypted, encryption_type = _detect_encryption_signature(blob)
                     volume["encrypted"] = encrypted
                     volume["metadata"]["encryption_type"] = encryption_type
+                    if not encrypted and _detect_lvm_signature(blob):
+                        volume["metadata"]["container_signature"] = "lvm2_physical_volume"
+                    # error.message is retained for server-side logs/support
+                    # only -- evidence_preflight.py's volume-diagnostic
+                    # translation never surfaces this raw exception text to
+                    # the analyst.
                     volume["error"] = {"code": "unsupported_filesystem", "message": str(exc)}
                     volume["status"] = "encrypted_volume" if encrypted else "unreadable_volume"
                 volumes.append(volume)
@@ -415,25 +435,29 @@ def _discover_raw_volumes(image_path: Path) -> tuple[list[dict[str, Any]], list[
                     installs.append({**install, "partition_index": 0})
                 volumes.append(volume)
             except Exception as exc:
-                encrypted, encryption_type = _detect_encryption_signature(_read_image_bytes(image_path, 0))
-                if encrypted:
-                    volumes.append({
-                        "partition_index": 0,
-                        "offset_bytes": 0,
-                        "length_bytes": image_path.stat().st_size,
-                        "partition_type": "filesystem_image",
-                        "filesystem_type": None,
-                        "label": None,
-                        "uuid": None,
-                        "encrypted": True,
-                        "readable": False,
-                        "status": "encrypted_volume",
-                        "warnings": [],
-                        "error": {"code": "encrypted_volume", "message": encryption_type or "encrypted"},
-                        "metadata": {"encryption_type": encryption_type},
-                    })
-                else:
-                    warnings.append(f"no_supported_partition_or_filesystem:{exc}")
+                blob = _read_image_bytes(image_path, 0)
+                encrypted, encryption_type = _detect_encryption_signature(blob)
+                container_signature = None if encrypted else (_detect_lvm_signature(blob) and "lvm2_physical_volume")
+                # Whichever branch: still record this as a discovered
+                # (whole-image) volume with a translated status, rather
+                # than only a bare warning string containing the raw
+                # exception -- evidence_preflight.py's volume-diagnostic
+                # translation is what turns this into analyst-facing text.
+                volumes.append({
+                    "partition_index": 0,
+                    "offset_bytes": 0,
+                    "length_bytes": image_path.stat().st_size,
+                    "partition_type": "filesystem_image",
+                    "filesystem_type": None,
+                    "label": None,
+                    "uuid": None,
+                    "encrypted": encrypted,
+                    "readable": False,
+                    "status": "encrypted_volume" if encrypted else "unreadable_volume",
+                    "warnings": [],
+                    "error": {"code": "encrypted_volume" if encrypted else "unsupported_filesystem", "message": str(exc)},
+                    "metadata": {"encryption_type": encryption_type, **({"container_signature": container_signature} if container_signature else {})},
+                })
         return volumes, installs, warnings
     finally:
         img.close()

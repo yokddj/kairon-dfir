@@ -75,7 +75,11 @@ function durationBucketLabel(bucket: string | null): string | null {
 
 function normalizePreflightReport(report: PreflightReport): PreflightReport {
   const maybeReport = report as PreflightReport & { evidence_options?: PreflightReport["evidence_options"] };
-  return { ...report, evidence_options: maybeReport.evidence_options ?? [] };
+  return {
+    ...report,
+    evidence_options: maybeReport.evidence_options ?? [],
+    classification: { ...report.classification, volume_diagnostics: report.classification.volume_diagnostics ?? [] },
+  };
 }
 
 function normalizeHostLabel(value: string | null | undefined): string {
@@ -1325,6 +1329,28 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 </div>
               ) : null}
             </div>
+
+            {preflight.classification.volume_diagnostics.length ? (
+              <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4" data-testid="volume-diagnostics">
+                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Volume Discovery</p>
+                <p className="mt-1 text-xs text-muted">Per-volume detection results -- explains which volumes contributed to the classification above, and why any that didn't could not be read.</p>
+                <div className="mt-3 space-y-2">
+                  {preflight.classification.volume_diagnostics.map((volume) => (
+                    <div key={volume.volume_id} className={`rounded-xl border px-3 py-2 text-sm ${volume.ok ? "border-mint/30 bg-mint/10" : "border-amber/30 bg-amber/10"}`} data-testid="volume-diagnostic-row">
+                      <p className={`font-semibold ${volume.ok ? "text-mint" : "text-amber"}`}>
+                        {volume.ok ? "✓" : "⚠"} Volume {volume.volume_id}
+                        {volume.size_bytes !== null ? ` · ${bytes(volume.size_bytes)}` : ""}
+                        {volume.filesystem ? ` · ${volume.filesystem}` : ""}
+                      </p>
+                      <p className="mt-1 text-xs text-muted">{volume.explanation}</p>
+                      {volume.detected_signature ? (
+                        <p className="mt-1 text-xs text-muted">Detected signature: <span className="text-ink">{volume.detected_signature}</span></p>
+                      ) : null}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4">
               <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Processing Pipeline Preview</p>

@@ -15,6 +15,21 @@ class PreflightEvidenceOption(BaseModel):
     size_bytes: int | None = None
 
 
+class PreflightVolumeDiagnostic(BaseModel):
+    """Per-volume disk-image discovery result, translated into
+    analyst-facing language -- see
+    app.services.evidence_preflight._translate_volume_diagnostic. Never
+    carries a raw Python/pytsk3 exception message."""
+
+    volume_id: int
+    size_bytes: int | None = None
+    filesystem: str | None = None
+    ok: bool
+    status: str  # "readable" | "unreadable" | "encrypted"
+    explanation: str
+    detected_signature: str | None = None
+
+
 class PreflightClassification(BaseModel):
     category: str
     format_key: str | None = None
@@ -33,6 +48,7 @@ class PreflightClassification(BaseModel):
     installations: int | None = None
     expected_parsers: list[str] = []
     warnings: list[PreflightWarning] = []
+    volume_diagnostics: list[PreflightVolumeDiagnostic] = []
 
 
 class PreflightResourceCheck(BaseModel):
