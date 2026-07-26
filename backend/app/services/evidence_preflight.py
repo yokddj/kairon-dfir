@@ -487,8 +487,22 @@ def run_preflight(
             ],
         ))
 
-    extraction_ok = estimated_extracted_bytes is None or estimated_extracted_bytes <= settings.backend_max_extracted_bytes
-    if estimated_extracted_bytes is not None:
+    # BACKEND_MAX_EXTRACTED_BYTES guards app.ingest.archive._enforce_limits'
+    # real decompression-bomb risk (a small archive expanding to an
+    # unbounded number of real bytes on disk) -- a risk that only exists
+    # for the "archive" category, which is the only one that ever actually
+    # calls that function. Disk images have no such risk (you cannot
+    # extract more bytes than the image physically contains) and are
+    # already bounded by their own, dedicated, more generous settings
+    # (disk_image_max_bytes_per_volume, disk_image_max_files_per_volume,
+    # disk_image_virtual_size_max_bytes) -- applying this archive-specific
+    # limit to a disk image's total volume size rejected large-but-entirely
+    # normal forensic images against the wrong guard. Memory dumps and
+    # unknown files already never set estimated_extracted_bytes at all (see
+    # above), so this only needed to additionally exclude disk_image.
+    extraction_limit_applies = classification_category_value == "archive"
+    extraction_ok = not extraction_limit_applies or estimated_extracted_bytes is None or estimated_extracted_bytes <= settings.backend_max_extracted_bytes
+    if extraction_limit_applies and estimated_extracted_bytes is not None:
         status_checks.append(PreflightStatusCheck(
             label="Within extraction limit",
             ok=extraction_ok,
