@@ -835,6 +835,31 @@ describe("EvidenceDetail minimal processing UX", () => {
     expect(within(panel).getByRole("button", { name: /Mark unassigned/i })).toBeInTheDocument();
     expect(panel).toHaveTextContent("This memory evidence is not assigned to a case host");
   });
+
+  it("shows indeterminate progress instead of a frozen percentage during disk-image materialization", async () => {
+    getEvidenceMock.mockResolvedValueOnce({
+      ...evidencePayload,
+      ingest_status: "processing",
+      metadata_json: {
+        ...evidencePayload.metadata_json,
+        current_phase: "materializing_disk_image_files",
+        progress_pct: 5,
+        progress_indeterminate: true,
+        heartbeat_at: new Date().toISOString(),
+      },
+    });
+    getEvidenceRunsMock.mockResolvedValueOnce([]);
+
+    renderPage();
+
+    await screen.findByText("collection.zip");
+
+    const primaryProgress = screen.getByTestId("evidence-progress-primary");
+    expect(within(primaryProgress).getByText("Active")).toBeInTheDocument();
+    expect(within(primaryProgress).queryByText("5%")).not.toBeInTheDocument();
+    expect(within(primaryProgress).getByText(/Extracting filesystem contents/i)).toBeInTheDocument();
+    expect(within(primaryProgress).getByText(/Progress can't be shown as a percentage yet/i)).toBeInTheDocument();
+  });
 });
 
 describe.skip("EvidenceDetail reprocess UX", () => {

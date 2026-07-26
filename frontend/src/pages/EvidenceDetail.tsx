@@ -890,6 +890,15 @@ export default function EvidenceDetail() {
   const etaSeconds = typeof data?.metadata_json?.estimated_remaining_seconds === "number" ? (data.metadata_json.estimated_remaining_seconds as number) : null;
   const currentItem = typeof data?.metadata_json?.current_item === "string" ? (data.metadata_json.current_item as string) : null;
   const currentAction = typeof data?.metadata_json?.current_action === "string" ? (data.metadata_json.current_action as string) : null;
+  // Set by app.workers.tasks.extraction_progress specifically during
+  // disk-image materialization, where the total file count genuinely
+  // isn't known until a pytsk3 directory walk completes -- a percentage
+  // computed from an unknown denominator would be a floor value, not a
+  // real measurement, so it is not shown as one (see the progress/phase
+  // timing sprint this addresses). Not set (falsy) for every other
+  // ingest path, which continues to show its own real, moving percentage
+  // exactly as before.
+  const progressIndeterminate = data?.metadata_json?.progress_indeterminate === true;
   const currentSelectedPath = typeof data?.metadata_json?.current_selected_path === "string" ? (data.metadata_json.current_selected_path as string) : null;
   const currentArtifactPath = typeof data?.metadata_json?.current_artifact_path === "string" ? (data.metadata_json.current_artifact_path as string) : null;
   const currentArtifactLabel = typeof data?.metadata_json?.current_artifact_progress_label === "string" ? (data.metadata_json.current_artifact_progress_label as string) : null;
@@ -1602,11 +1611,18 @@ function formatReportStatus(status: string | null | undefined) {
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
                 <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">{progressTitle}</p>
-                <h3 className="mt-1 text-2xl font-semibold text-ink">{progressPercent}%</h3>
+                <h3 className="mt-1 text-2xl font-semibold text-ink">{progressIndeterminate ? "Active" : `${progressPercent}%`}</h3>
                 <p className="mt-1 text-sm text-muted">{retryActive ? "Retrying failed artifacts" : formatIndexingPhaseForDisplay(displayCounts.phase)}</p>
+                {progressIndeterminate ? (
+                  <p className="mt-1 text-xs text-muted">Progress can't be shown as a percentage yet -- the file count is unknown until the walk finishes. {liveRunHeartbeatAt ? `Last activity: ${formatDateTime(liveRunHeartbeatAt)}.` : ""}</p>
+                ) : null}
               </div>
               <div className="h-3 min-w-[220px] flex-1 overflow-hidden rounded-full bg-abyss/80">
-                <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${Math.max(0, Math.min(100, progressPercent))}%` }} />
+                {progressIndeterminate ? (
+                  <div className="h-full w-full animate-pulse rounded-full bg-accent/50" data-testid="evidence-progress-indeterminate-bar" />
+                ) : (
+                  <div className="h-full rounded-full bg-accent transition-all duration-500" style={{ width: `${Math.max(0, Math.min(100, progressPercent))}%` }} />
+                )}
               </div>
             </div>
           </div>
@@ -1897,13 +1913,16 @@ function formatReportStatus(status: string | null | undefined) {
               <>
                 <p className="mt-1 text-sm text-muted">Current step: {retryActive ? String(latestRetryRun?.status ?? "retry") : formatIndexingPhaseForDisplay(displayCounts.phase)}</p>
                 {progressCurrentArtifact ? <p className="mt-1 max-w-3xl truncate text-sm text-muted" title={progressCurrentArtifact}>Current artifact: {progressCurrentArtifact}</p> : null}
+                {progressIndeterminate ? (
+                  <p className="mt-1 text-sm text-muted">Progress can't be shown as a percentage yet -- the file count is unknown until the walk finishes. {liveRunHeartbeatAt ? `Last activity: ${formatDateTime(liveRunHeartbeatAt)}.` : ""}</p>
+                ) : null}
               </>
             )}
           </div>
           {!terminalProcessingResult ? (
             <div className="rounded-3xl border border-accent/30 bg-accent/10 px-6 py-4 text-right">
               <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Progress</p>
-              <p className="mt-1 text-4xl font-semibold text-ink">{progressPercent}%</p>
+              <p className="mt-1 text-4xl font-semibold text-ink">{progressIndeterminate ? "Active" : `${progressPercent}%`}</p>
             </div>
           ) : null}
         </div>

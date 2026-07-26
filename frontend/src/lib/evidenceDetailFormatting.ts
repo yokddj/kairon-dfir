@@ -206,8 +206,26 @@ export function formatEvidenceStatusForDisplay(status: string | null | undefined
   return value;
 }
 
+// Backend identifiers for the disk-image ingest stages (see
+// app.workers.tasks.DISK_IMAGE_PROGRESS_ACTIONS and
+// app.disk_images.service's progress_cb current_action values) --
+// current_phase is set to one of these directly during disk-image
+// materialization, since the total file count isn't known ahead of a
+// pytsk3 directory walk and no single generic phase label can honestly
+// describe every stage of it. This is the single canonical place these
+// identifiers are translated to analyst-facing text -- keep it here
+// rather than duplicating a second mapping anywhere else.
+const DISK_IMAGE_PHASE_LABELS: Record<string, string> = {
+  detecting_format: "Detecting image format",
+  hashing: "Hashing evidence",
+  inspecting_image: "Inspecting disk image",
+  discovering_volumes: "Discovering volumes",
+  materializing_disk_image_files: "Extracting filesystem contents",
+};
+
 export function formatIndexingPhaseForDisplay(phase: string | null | undefined) {
   const value = String(phase || "").trim();
+  if (value in DISK_IMAGE_PHASE_LABELS) return DISK_IMAGE_PHASE_LABELS[value];
   switch (value) {
     case "selection_pending":
     case "waiting_selection":
