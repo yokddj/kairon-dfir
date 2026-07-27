@@ -6,7 +6,6 @@ import ArtifactBadge from "../components/ArtifactBadge";
 import CreateFindingDialog from "../components/CreateFindingDialog";
 import DebugExportDialog from "../components/DebugExportDialog";
 import EvidenceIngestionWizard from "../components/EvidenceIngestionWizard";
-import EvidenceUpload from "../components/EvidenceUpload";
 import EventTable from "../components/EventTable";
 import FindingsWorkspace from "../components/FindingsWorkspace";
 import InvestigationContext from "../components/InvestigationContext";
@@ -17,6 +16,13 @@ import { useHostContext } from "../hooks/useHostContext";
 import DeleteCaseDialog from "../components/DeleteCaseDialog";
 
 const tabs = ["overview", "evidences", "processing", "artifacts", "artifact_explorer", "search", "process_tree", "investigation_timeline", "detections", "findings", "activity"] as const;
+type ExpectedEvidenceKind = "disk_image" | "memory_dump" | "collection" | "archive" | "unknown";
+
+function expectedEvidenceKind(value: string | null): ExpectedEvidenceKind | null {
+  if (value === "disk_image" || value === "memory_dump" || value === "collection" || value === "archive" || value === "unknown") return value;
+  return null;
+}
+
 const tabLabels: Record<(typeof tabs)[number], string> = {
   overview: "Overview",
   evidences: "Evidence & Ingest",
@@ -39,6 +45,7 @@ export default function CaseDetail() {
   const { activeCaseId, setActiveCase, caseContext } = useActiveCase();
   const { activeHost, activeHostId, hasHostFilter, clearHostFilter } = useHostContext();
   const initialTab = searchParams.get("tab");
+  const expectedKind = expectedEvidenceKind(searchParams.get("expected_kind"));
   const [tab, setTab] = useState<(typeof tabs)[number]>(tabs.includes(initialTab as (typeof tabs)[number]) ? (initialTab as (typeof tabs)[number]) : "overview");
   const [caseTimezone, setCaseTimezone] = useState("");
   const [query, setQuery] = useState(searchParams.get("query") ?? "");
@@ -52,7 +59,6 @@ export default function CaseDetail() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [ingestionWizardOpen, setIngestionWizardOpen] = useState(false);
   const [resumeCandidate, setResumeCandidate] = useState<ResumableUploadSessionRead | null>(null);
-  const [advancedUploadOpen, setAdvancedUploadOpen] = useState(false);
   const [editName, setEditName] = useState("");
   const [editDescription, setEditDescription] = useState("");
   const [editPriority, setEditPriority] = useState("medium");
@@ -155,7 +161,7 @@ export default function CaseDetail() {
   }, [searchParams, tab]);
 
   useEffect(() => {
-    if (searchParams.get("resume_session")) {
+    if (searchParams.get("resume_session") || searchParams.get("add_evidence")) {
       setIngestionWizardOpen(true);
       setTab("evidences");
     }
@@ -201,7 +207,7 @@ export default function CaseDetail() {
   );
   const selectedProcessing = processingQuery.data?.items.find((item) => item.evidence_id === selectedProcessingId) ?? processingQuery.data?.items[0] ?? null;
   const normalizedCaseStatus = caseQuery.data?.status === "open" ? "active" : caseQuery.data?.status;
-  const renderGuidedIngestionPanel = (options: { includeArtifactsInvalidation?: boolean } = {}) => (
+  const renderGuidedIngestionPanel = () => (
     <div className="space-y-4">
       {resumableUploads.length ? (
         <div className="rounded-3xl border border-amber-400/30 bg-amber-400/5 p-5 shadow-panel" data-testid="case-resumable-uploads-panel">
@@ -241,19 +247,9 @@ export default function CaseDetail() {
           Add Evidence
         </button>
       </div>
-      <details open={advancedUploadOpen} onToggle={(event) => setAdvancedUploadOpen(event.currentTarget.open)} className="rounded-3xl border border-line bg-panel/50 p-4">
-        <summary className="cursor-pointer font-mono text-xs uppercase tracking-[0.16em] text-muted">Advanced upload (Velociraptor selection, EVTX profile, folder discovery)</summary>
-        {advancedUploadOpen ? <div className="mt-4">
-          <EvidenceUpload
-            caseId={caseId}
-            onUploaded={() => {
-              void queryClient.invalidateQueries({ queryKey: ["evidences", caseId] });
-              if (options.includeArtifactsInvalidation) void queryClient.invalidateQueries({ queryKey: ["artifacts", caseId] });
-              void queryClient.invalidateQueries({ queryKey: ["case-processing", caseId] });
-            }}
-          />
-        </div> : null}
-      </details>
+      <div className="rounded-3xl border border-line bg-panel/50 p-4 text-sm text-muted">
+        Specialized disk, memory, archive, collection, EVTX, folder, and server-path intake now starts from the same Add Evidence wizard. Select the evidence first; Kairon detects the route before asking for confirmation.
+      </div>
     </div>
   );
 
@@ -332,7 +328,7 @@ export default function CaseDetail() {
 
       {tab === "overview" ? (
         <section className="grid gap-6 lg:grid-cols-[1.1fr_1.9fr]">
-          {renderGuidedIngestionPanel({ includeArtifactsInvalidation: true })}
+          {renderGuidedIngestionPanel()}
           <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
             <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">What happened?</p>
             <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -507,7 +503,7 @@ export default function CaseDetail() {
           {renderGuidedIngestionPanel()}
           {!evidencesQuery.data?.length ? (
             <div className="rounded-3xl border border-line bg-panel/40 p-5 text-sm text-muted">
-              {hasHostFilter ? <>No evidence associated with {activeHost}. <button type="button" onClick={clearHostFilter} className="text-accent underline underline-offset-4">Clear host filter</button> to see all evidence, including unassigned evidence.</> : "This is the evidence workspace for the case. Use Add Evidence for guided ingestion, or expand Advanced upload for specialized Velociraptor, EVTX, folder discovery, and server-path flows."}
+              {hasHostFilter ? <>No evidence associated with {activeHost}. <button type="button" onClick={clearHostFilter} className="text-accent underline underline-offset-4">Clear host filter</button> to see all evidence, including unassigned evidence.</> : "This is the evidence workspace for the case. Use Add Evidence for guided ingestion, including specialized Velociraptor, EVTX, folder discovery, and server-path flows."}
             </div>
           ) : null}
           {(evidencesQuery.data ?? []).map((item) => {
@@ -897,12 +893,15 @@ export default function CaseDetail() {
         caseId={caseId}
         resumeSessionId={searchParams.get("resume_session") ?? undefined}
         resumeCandidate={resumeCandidate}
+        expectedKind={expectedKind}
         onClose={() => {
           setIngestionWizardOpen(false);
           setResumeCandidate(null);
-          if (searchParams.get("resume_session")) {
+          if (searchParams.get("resume_session") || searchParams.get("add_evidence") || searchParams.get("expected_kind")) {
             const next = new URLSearchParams(searchParams);
             next.delete("resume_session");
+            next.delete("add_evidence");
+            next.delete("expected_kind");
             setSearchParams(next, { replace: true });
           }
         }}

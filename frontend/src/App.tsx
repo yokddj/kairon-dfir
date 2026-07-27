@@ -38,7 +38,6 @@ const DebugExportPage = lazy(() => import("./pages/DebugExportPage"));
 const MemoryAnalysisPage = lazy(() => import("./pages/MemoryAnalysisPage"));
 const MemoryEvidencePage = lazy(() => import("./pages/MemoryEvidencePage"));
 const CaseMemoryLanding = lazy(() => import("./pages/CaseMemoryLanding"));
-const MemoryUploadPage = lazy(() => import("./pages/MemoryUploadPage"));
 
 function WorkspaceLoadingFallback() {
   return (
@@ -88,6 +87,14 @@ function CaseSearchViewRedirect({ view }: { view: "timeline" | "artifact_views" 
     params.set("order", "asc");
   }
   return <Navigate to={`/cases/${caseId}/search?${params.toString()}`} replace />;
+}
+
+function AddEvidenceRedirect({ expectedKind }: { expectedKind?: string }) {
+  const { caseId = "" } = useParams();
+  if (!caseId) return <Navigate to="/cases" replace />;
+  const params = new URLSearchParams({ tab: "evidences", add_evidence: "1" });
+  if (expectedKind) params.set("expected_kind", expectedKind);
+  return <Navigate to={`/cases/${caseId}?${params.toString()}`} replace />;
 }
 
 function ActiveCaseSearchViewRedirect({ view }: { view: "timeline" | "artifact_views" }) {
@@ -140,7 +147,7 @@ export default function App() {
                         <Route path="/cases/:caseId/debug-export" element={<DebugExportPage />} />
                         <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
                         <Route path="/cases/:caseId/memory/landing" element={<CaseMemoryLanding />} />
-                        <Route path="/cases/:caseId/memory/upload" element={<MemoryUploadPage />} />
+                        <Route path="/cases/:caseId/memory/upload" element={<AddEvidenceRedirect expectedKind="memory_dump" />} />
                         <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/process-tree" element={<LegacyCaseParamRedirect suffix="/process-graph" />} />

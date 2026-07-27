@@ -6,7 +6,6 @@ import { api, type Evidence, type EvidenceIntent, type EvidencePlatform, type Ev
 import { useNotifications } from "../context/NotificationsContext";
 import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
 import { hashBlob } from "../lib/sha256";
-import { platformUploadOptions } from "../lib/platformRegistry";
 
 type IntakeType = "disk_image" | "memory_dump" | "artifact_collection" | "folder" | "server_path";
 type WizardStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
@@ -26,16 +25,9 @@ type Props = {
   caseId: string;
   resumeSessionId?: string;
   resumeCandidate?: ResumableUploadSessionRead | null;
+  expectedKind?: ForcedRoute | null;
   onClose: () => void;
 };
-
-const INTAKE_CARDS: { id: IntakeType; icon: string; title: string; examples: string }[] = [
-  { id: "disk_image", icon: "\u{1F4BD}", title: "Disk Image", examples: "RAW, DD, IMG, E01, Ex01, QCOW2, VMDK..." },
-  { id: "memory_dump", icon: "\u{1F4BE}", title: "Memory Dump", examples: "WinPmem, Lime, RAW memory..." },
-  { id: "artifact_collection", icon: "\u{1F4E6}", title: "Artifact Collection", examples: "KAPE, Velociraptor, manual ZIP" },
-  { id: "folder", icon: "\u{1F4C1}", title: "Folder", examples: "Directory containing artifacts" },
-  { id: "server_path", icon: "\u{2601}", title: "Existing Server Path", examples: "Already stored locally" },
-];
 
 const OVERRIDE_OPTIONS: Array<{ value: ForcedRoute; label: string }> = [
   { value: "disk_image", label: "Disk" },
@@ -246,7 +238,7 @@ function hostMatchesName(host: { canonical_name?: string; display_name?: string;
   return [host.canonical_name, host.display_name, ...(host.aliases ?? []), ...(host.all_names ?? [])].some((candidate) => normalizeHostLabel(candidate) === normalized);
 }
 
-export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId, resumeCandidate: resumeCandidateProp, onClose }: Props) {
+export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId, resumeCandidate: resumeCandidateProp, expectedKind, onClose }: Props) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { notify } = useNotifications();
@@ -992,20 +984,6 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
   const blocked = activePreflightReports.some((report) => report.status === "blocked" && !manualOverrideAccepted && !needsManualOverride(report));
   const hasMemoryEvidence = activePreflightReports.some((report) => report.classification.category === "memory_dump") || intakeType === "memory_dump";
-  const memoryRequiresExplicitHost = hasMemoryEvidence;
-  const hostStepBlockingReason = useMemo(() => {
-    if (!memoryRequiresExplicitHost) return null;
-    if (hostChoice === CREATE_HOST_CHOICE) {
-      if (!newHostName.trim()) return "Enter a source host name for this memory evidence.";
-    } else if (hostChoice === "auto") {
-      return "Memory evidence requires an explicit source host, matching the legacy memory uploader.";
-    }
-    if (useUnifiedMemoryDump && !memoryAuthorizationAcknowledged) {
-      return "Confirm you are authorized to handle this RAM evidence before continuing.";
-    }
-    return null;
-  }, [hostChoice, memoryAuthorizationAcknowledged, memoryRequiresExplicitHost, newHostName, useUnifiedMemoryDump]);
-  const canContinueHostStep = hostStepBlockingReason === null;
 
   const canAdvanceStep4 = useMemo(() => {
     if (requiresPathInput) return serverPath.trim().length > 0;
@@ -1096,144 +1074,6 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
           </section>
         ) : null}
 
-        {step === 1 ? (
-          <section className="mt-5">
-            {interruptedOrActiveSessions.length ? (
-              <div className="mb-6 rounded-3xl border border-amber-400/30 bg-amber-400/5 p-4" data-testid="resumable-uploads-panel">
-                <p className="font-mono text-xs uppercase tracking-[0.16em] text-amber-300">Interrupted or active uploads</p>
-                <div className="mt-3 space-y-2">
-                  {interruptedOrActiveSessions.map((candidate) => (
-                    <div key={candidate.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-abyss/60 p-3" data-testid="resumable-upload-row">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-ink">{candidate.original_filename}</p>
-                        <p className="mt-0.5 text-xs text-muted">
-                          {candidate.category ?? "evidence"} &middot; {candidate.status}
-                          {candidate.progress_percent !== null ? ` · ${candidate.progress_percent.toFixed(0)}%` : ""}
-                        </p>
-                      </div>
-                      <div className="flex shrink-0 gap-2">
-                        {candidate.status === "promoted" && candidate.promoted_evidence_id ? (
-                          <button type="button" onClick={() => { handleClose(); navigate(candidate.category === "memory_dump" ? `/cases/${caseId}/memory/${candidate.promoted_evidence_id}` : `/evidences/${candidate.promoted_evidence_id}`); }} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss">Open evidence</button>
-                        ) : candidate.resumable || candidate.status === "staged" ? (
-                          <button type="button" onClick={() => setResumeTarget(candidate)} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss" data-testid="resume-upload-select">Resume</button>
-                        ) : null}
-                        {candidate.cancellable ? (
-                          <button
-                            type="button"
-                            disabled={cancelResumableMutation.isPending}
-                            onClick={() => cancelResumableMutation.mutate(candidate.id)}
-                            className="rounded-xl border border-line px-3 py-1.5 text-xs text-muted"
-                          >
-                            Cancel
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
-            <h2 className="text-xl font-semibold text-ink">What are you adding?</h2>
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              {INTAKE_CARDS.map((card) => (
-                <button
-                  key={card.id}
-                  type="button"
-                  onClick={() => { setIntakeType(card.id); setStep(2); }}
-                  className="rounded-2xl border border-line bg-abyss/60 p-4 text-left transition hover:border-accent/50"
-                >
-                  <p className="text-2xl">{card.icon}</p>
-                  <p className="mt-2 font-semibold text-ink">{card.title}</p>
-                  <p className="mt-1 text-xs text-muted">{card.examples}</p>
-                </button>
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        {step === 2 ? (
-          <section className="mt-5">
-            <h2 className="text-xl font-semibold text-ink">Platform</h2>
-            <p className="mt-1 text-sm text-muted">Auto Detect is recommended &mdash; Kairon classifies the platform from the evidence itself during the next step.</p>
-            <div className="mt-4 grid gap-3">
-              {platformUploadOptions().map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  disabled={option.disabled}
-                  onClick={() => setPlatform(option.id as EvidencePlatform)}
-                  className={`rounded-2xl border p-4 text-left transition disabled:cursor-not-allowed disabled:opacity-50 ${platform === option.id ? "border-accent bg-accent/10" : "border-line bg-abyss/60 hover:border-accent/40"}`}
-                >
-                  <p className="font-semibold text-ink">{option.label}{option.id === "auto" ? " (Recommended)" : ""}</p>
-                  <p className="mt-1 text-xs text-muted">{option.description}</p>
-                </button>
-              ))}
-            </div>
-            <div className="mt-5 flex justify-between">
-              <button type="button" onClick={() => setStep(1)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
-              <button type="button" onClick={() => setStep(3)} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">Continue</button>
-            </div>
-          </section>
-        ) : null}
-
-        {step === 3 ? (
-          <section className="mt-5">
-            <h2 className="text-xl font-semibold text-ink">Host</h2>
-            <p className="mt-1 text-sm text-muted">
-              {memoryRequiresExplicitHost
-                ? "Memory evidence follows the legacy uploader contract and requires an explicit source host."
-                : "Auto Assign lets Kairon match or create a host once the evidence is inspected."}
-            </p>
-            <div className="mt-4 grid gap-3">
-              {!memoryRequiresExplicitHost ? (
-                <label className={`rounded-2xl border p-4 ${hostChoice === "auto" ? "border-accent bg-accent/10" : "border-line bg-abyss/60"}`}>
-                  <input type="radio" name="host-choice" className="mr-2" checked={hostChoice === "auto"} onChange={() => setHostChoice("auto")} />
-                  Auto Assign
-                </label>
-              ) : null}
-              <label className={`rounded-2xl border p-4 ${hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10" : "border-line bg-abyss/60"}`}>
-                <input type="radio" name="host-choice" className="mr-2" checked={hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(caseHosts[0]?.id ?? "auto")} disabled={!caseHosts.length} />
-                Assign existing host
-                {hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? (
-                  <select value={hostChoice} onChange={(event) => setHostChoice(event.target.value)} className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink">
-                    {caseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
-                  </select>
-                ) : null}
-              </label>
-              <label className={`rounded-2xl border p-4 ${hostChoice === CREATE_HOST_CHOICE ? "border-accent bg-accent/10" : "border-line bg-abyss/60"}`}>
-                <input type="radio" name="host-choice" className="mr-2" checked={hostChoice === CREATE_HOST_CHOICE} onChange={() => setHostChoice(CREATE_HOST_CHOICE)} />
-                Create new host
-                {hostChoice === CREATE_HOST_CHOICE ? (
-                  <input value={newHostName} onChange={(event) => setNewHostName(event.target.value)} placeholder="WS-01" className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" />
-                ) : null}
-              </label>
-            </div>
-            {memoryRequiresExplicitHost ? (
-              <p className="mt-3 rounded-2xl border border-amber-400/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-100" data-testid="memory-host-required-message">
-                Memory uploads require a source host before registration. Select an existing host or create one before continuing.
-              </p>
-            ) : null}
-            {useUnifiedMemoryDump || useUnifiedDiskImage ? (
-              <div className="mt-4 space-y-3 rounded-2xl border border-line bg-abyss/60 p-4">
-                {useUnifiedMemoryDump ? (
-                  <label className="flex items-start gap-2 text-sm text-ink">
-                    <input type="checkbox" className="mt-1" checked={memoryAuthorizationAcknowledged} onChange={(event) => setMemoryAuthorizationAcknowledged(event.target.checked)} data-testid="unified-memory-authorization-checkbox" />
-                    I am authorized to handle this RAM evidence and understand it may contain highly sensitive data.
-                  </label>
-                ) : null}
-                <label className="block text-xs text-muted">
-                  Evidence notes (optional)
-                  <textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="mt-1 h-16 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" />
-                </label>
-              </div>
-            ) : null}
-            <div className="mt-5 flex justify-between">
-              <button type="button" onClick={() => setStep(2)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
-              <button type="button" onClick={() => setStep(4)} disabled={!canContinueHostStep} title={hostStepBlockingReason ?? undefined} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50">Continue</button>
-            </div>
-          </section>
-        ) : null}
-
         {step === 4 && resumeTarget ? (
           <section className="mt-5" data-testid="resume-upload-step">
             <h2 className="text-xl font-semibold text-ink">Resume upload</h2>
@@ -1285,7 +1125,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
             <div className="mt-5 flex justify-between">
               <button
                 type="button"
-                onClick={() => { setResumeTarget(null); setResumeFile(null); setResumeFileError(null); setStep(1); }}
+                onClick={() => { setResumeTarget(null); setResumeFile(null); setResumeFileError(null); setStep(4); }}
                 className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted"
               >
                 Start a different upload
@@ -1485,6 +1325,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 const forcedRoute = forcedRoutes[report.token];
                 const selectedRoute = forcedRoute ?? detectedRoute;
                 const wrongRoute = forcedRoute && detectedRoute && forcedRoute !== detectedRoute && [forcedRoute, detectedRoute].includes("disk_image") && [forcedRoute, detectedRoute].includes("memory_dump");
+                const expectedMismatch = expectedKind && detectedRoute && expectedKind !== detectedRoute;
                 const decisiveSignals = [report.classification.reason, ...report.classification.warnings.map((warning) => warning.message)].filter(Boolean);
                 const conflictingSignals = hasConflictingSignals(report) ? report.diagnostics.map((diag) => diag.reason).filter(Boolean) : [];
                 return (
@@ -1504,6 +1345,12 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                       <p>Selected route: <span className="text-ink">{selectedRoute ? evidenceKindLabel(selectedRoute) : "No ingest route"}</span></p>
                       <p>Status: <span className={report.status === "ready" ? "text-mint" : report.status === "warning" ? "text-amber" : "text-danger"}>{report.status}</span></p>
                     </div>
+                    {expectedMismatch ? (
+                      <div className="mt-3 rounded-xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber" data-testid="expected-kind-warning">
+                        <p className="font-semibold">Expected {evidenceKindLabel(expectedKind)}, detected {evidenceKindLabel(detectedRoute)}.</p>
+                        <p className="mt-1">Kairon will use the detected route unless you choose a manual override below.</p>
+                      </div>
+                    ) : null}
                     {decisiveSignals.length ? (
                       <div className="mt-3">
                         <p className="text-xs text-muted">Decisive signals</p>

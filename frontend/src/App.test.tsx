@@ -147,9 +147,10 @@ describe("memory routes are registered", () => {
     expect(await screen.findByText("Memory Analysis Page")).toBeInTheDocument();
   });
 
-  it("renders Memory Upload at /cases/:caseId/memory/upload", async () => {
+  it("redirects Memory Upload to the canonical Add Evidence wizard", async () => {
     renderApp("/cases/case-1/memory/upload");
-    expect(await screen.findByText("Memory Upload Page")).toBeInTheDocument();
+    expect(await screen.findByText("Case Detail Page")).toBeInTheDocument();
+    expect(screen.queryByText("Memory Upload Page")).not.toBeInTheDocument();
   });
 
   it("does not collapse /cases/:caseId/memory onto another route", async () => {
@@ -159,7 +160,7 @@ describe("memory routes are registered", () => {
     expect(screen.queryByText("Detections Page")).not.toBeInTheDocument();
   });
 
-  it("does not collapse /cases/:caseId/memory/upload onto another route", async () => {
+  it("does not collapse /cases/:caseId/memory/upload onto memory analysis", async () => {
     renderApp("/cases/case-1/memory/upload");
     expect(screen.queryByText("Overview Page")).not.toBeInTheDocument();
     expect(screen.queryByText("Memory Analysis Page")).not.toBeInTheDocument();

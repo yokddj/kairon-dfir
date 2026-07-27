@@ -172,15 +172,13 @@ describe("CaseDetail Processing Queue", () => {
     expect(screen.getByRole("dialog", { name: "Add Evidence" })).toBeInTheDocument();
   });
 
-  it("keeps advanced upload available from the evidences tab", async () => {
+  it("replaces advanced upload with guidance to the canonical wizard", async () => {
     renderPage("/cases/case-1?tab=evidences");
 
     await screen.findByRole("heading", { name: "Queue Case" });
     expect(screen.queryByTestId("evidence-upload")).not.toBeInTheDocument();
-
-    await userEvent.click(screen.getByText(/Advanced upload/i, { selector: "summary" }));
-
-    expect(screen.getByTestId("evidence-upload")).toBeInTheDocument();
+    expect(screen.queryByText(/Advanced upload/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/intake now starts from the same Add Evidence wizard/i)).toBeInTheDocument();
   });
 
   it("returns to the evidences tab when the guided wizard is closed", async () => {
