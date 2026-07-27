@@ -163,16 +163,19 @@ function renderWizard(props: Partial<React.ComponentProps<typeof EvidenceIngesti
 }
 
 async function passHealthCheck() {
-  await screen.findByTestId("health-check");
-  const continueButton = await screen.findByRole("button", { name: "Continue" });
-  await waitFor(() => expect(continueButton).toBeEnabled());
-  await userEvent.click(continueButton);
+  await screen.findByTestId("ingestion-health-chip");
+  await screen.findByRole("heading", { name: "Add Evidence" });
 }
 
 async function goToFileStep(cardName: RegExp) {
   void cardName;
   await passHealthCheck();
-  expect(await screen.findByText("Select evidence")).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Add Evidence" })).toBeInTheDocument();
+}
+
+async function openEvidenceAdvancedOptions() {
+  await userEvent.click(screen.getByText(/Advanced — evidence options/i));
+  return screen.findByTestId("host-assignment-panel");
 }
 
 describe("EvidenceIngestionWizard", () => {
@@ -188,7 +191,7 @@ describe("EvidenceIngestionWizard", () => {
     listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [] });
   });
 
-  it("shows the server health check first and blocks continuing when a critical dependency is down", async () => {
+  it("shows a critical health interruption only when a critical dependency is down", async () => {
     getIngestionReadinessMock.mockResolvedValue(readyHealth({
       critical_ready: false,
       ready: false,
@@ -204,28 +207,27 @@ describe("EvidenceIngestionWizard", () => {
 
     await screen.findByTestId("health-check");
     expect(await screen.findByText(/Temp storage is not writable/)).toBeInTheDocument();
-    expect(screen.getByText(/Processing cannot begin/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Continue" })).toBeDisabled();
+    expect(screen.getByText(/Critical dependency unavailable/)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Add Evidence" })).not.toBeInTheDocument();
   });
 
-  it("allows continuing past health check once critical dependencies are ready", async () => {
+  it("shows Add Evidence immediately when critical dependencies are ready", async () => {
     renderWizard();
-    await passHealthCheck();
-    expect(await screen.findByText("Select evidence")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Add Evidence" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("ingestion-health-chip")).toHaveTextContent("All systems ready"));
   });
 
-  it("navigates forward and back through the auto-detect evidence selection step", async () => {
+  it("does not render a step counter or a health-check step on the golden path", async () => {
     renderWizard();
     await passHealthCheck();
-    expect(screen.getByText("Select evidence")).toBeInTheDocument();
-
-    await userEvent.click(screen.getByRole("button", { name: "Back" }));
-    expect(await screen.findByText("Server Health Check")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Add Evidence" })).toBeInTheDocument();
+    expect(screen.queryByText(/Step \d+ of \d+/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Server Health Check")).not.toBeInTheDocument();
   });
 
   it("cancel closes the wizard", async () => {
     const { onClose } = renderWizard();
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -238,7 +240,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
 
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
 
     expect(cancelEvidenceUploadSessionMock).not.toHaveBeenCalled();
     expect(onClose).toHaveBeenCalled();
@@ -254,7 +256,7 @@ describe("EvidenceIngestionWizard", () => {
     renderWizard();
     await passHealthCheck();
 
-    expect(await screen.findByRole("heading", { name: "Select evidence" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Add Evidence" })).toBeInTheDocument();
     expect(screen.queryByText(/What are you adding\?/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Disk Image")).not.toBeInTheDocument();
     expect(screen.queryByText("Memory Dump")).not.toBeInTheDocument();
@@ -331,7 +333,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
 
     const report = await screen.findByTestId("preflight-report");
-    expect(within(report).getByText(/web01/)).toBeInTheDocument();
+    expect(within(report).getAllByText(/web01/).length).toBeGreaterThan(0);
     expect(within(report).getByText(/Archive → Evidence Classification → Linux Discovery/)).toBeInTheDocument();
     expect(within(report).getAllByText("ZIP archive").length).toBeGreaterThan(0);
     expect(within(report).getByText(/artifact collection/)).toBeInTheDocument();
@@ -540,12 +542,12 @@ describe("EvidenceIngestionWizard", () => {
 
     await screen.findByTestId("preflight-report");
     expect(screen.getByText(/Recommendation: Low confidence classification/)).toBeInTheDocument();
-    const continueButton = screen.getByRole("button", { name: "Continue" });
-    expect(continueButton).toBeDisabled();
+    const startButton = screen.getByRole("button", { name: "Start Processing" });
+    expect(startButton).toBeDisabled();
 
     await userEvent.selectOptions(within(screen.getByTestId("manual-override-panel")).getByRole("combobox"), "collection");
     await userEvent.click(screen.getByRole("checkbox", { name: /Continue with a manual override/i }));
-    expect(continueButton).toBeEnabled();
+    expect(startButton).toBeEnabled();
   });
 
   it("promotes each detected file separately in a multi-file auto-detect batch", async () => {
@@ -586,8 +588,7 @@ describe("EvidenceIngestionWizard", () => {
     expect(screen.getByText("collection.zip")).toBeInTheDocument();
     expect(screen.getByText("disk.E01")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-    await screen.findByText("Confirmation");
+    await screen.findByRole("heading", { name: "Confirm evidence" });
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     expect(createEvidenceUploadSessionMock).toHaveBeenNthCalledWith(1, "case-1", { file: archiveFile }, expect.objectContaining({ declaredPlatform: "auto" }));
@@ -620,13 +621,14 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
 
     await screen.findByTestId("preflight-report");
-    const continueButton = screen.getByRole("button", { name: "Continue" });
+    const startButton = screen.getByRole("button", { name: "Start Processing" });
     await userEvent.selectOptions(within(screen.getByTestId("manual-override-panel")).getByRole("combobox"), "disk_image");
     expect(screen.getByTestId("wrong-route-warning")).toBeInTheDocument();
-    expect(continueButton).toBeDisabled();
+    expect(startButton).toBeDisabled();
 
     await userEvent.click(screen.getByRole("checkbox", { name: /Process anyway/i }));
-    expect(continueButton).toBeEnabled();
+    await userEvent.click(screen.getByRole("checkbox", { name: /authorized to handle this RAM evidence/i }));
+    expect(startButton).toBeEnabled();
   });
 
   it("shows a blocking diagnostic with configuration guidance for a disk-full / storage warning", async () => {
@@ -669,9 +671,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    await screen.findByText("Confirmation");
+    await screen.findByRole("heading", { name: "Confirm evidence" });
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-disk", expect.objectContaining({})));
@@ -686,9 +686,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    await screen.findByText("Confirmation");
+    await screen.findByRole("heading", { name: "Confirm evidence" });
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({})));
@@ -703,9 +701,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    expect(await screen.findByTestId("detected-hostname")).toHaveTextContent("web01");
+    expect(screen.getAllByText(/web01/).length).toBeGreaterThan(0);
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ provided_host: "web01" })));
@@ -720,9 +716,8 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    expect(await screen.findByLabelText(/Auto assign to web01/i)).toBeChecked();
+    const hostPanel = await openEvidenceAdvancedOptions();
+    expect(within(hostPanel).getByLabelText(/Auto assign to web01/i)).toBeChecked();
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ host_id: "host-web01" })));
@@ -739,12 +734,11 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    expect(await screen.findByTestId("multiple-host-matches")).toBeInTheDocument();
+    const hostPanel = await openEvidenceAdvancedOptions();
+    expect(within(hostPanel).getByTestId("host-assignment-guidance")).toHaveTextContent(/Multiple hosts match/i);
     expect(screen.getByRole("button", { name: "Start Processing" })).toBeDisabled();
-    await userEvent.click(screen.getByRole("radio", { name: /Assign to existing host/i }));
-    await userEvent.selectOptions(screen.getByRole("combobox"), "host-b");
+    await userEvent.click(within(hostPanel).getByRole("radio", { name: /Existing host/i }));
+    await userEvent.selectOptions(within(hostPanel).getByRole("combobox"), "host-b");
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ host_id: "host-b" })));
@@ -758,12 +752,11 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    expect(await screen.findByTestId("missing-hostname")).toBeInTheDocument();
+    const hostPanel = await openEvidenceAdvancedOptions();
+    expect(within(hostPanel).getByTestId("host-assignment-guidance")).toHaveTextContent(/Enter a hostname/i);
     const startButton = screen.getByRole("button", { name: "Start Processing" });
     expect(startButton).toBeDisabled();
-    await userEvent.type(screen.getByPlaceholderText("WS-01"), "NEW-HOST");
+    await userEvent.type(within(hostPanel).getByPlaceholderText("DESKTOP-7FQ2A1"), "NEW-HOST");
     expect(startButton).toBeEnabled();
     await userEvent.click(startButton);
 
@@ -779,10 +772,9 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    await userEvent.click(screen.getByRole("radio", { name: /Save without indexing/i }));
-    await userEvent.click(screen.getByRole("radio", { name: /Keep unassigned/i }));
+    const hostPanel = await openEvidenceAdvancedOptions();
+    await userEvent.click(screen.getByRole("radio", { name: /Save only/i }));
+    await userEvent.click(within(hostPanel).getByRole("radio", { name: /Keep unassigned/i }));
     await userEvent.click(screen.getByRole("button", { name: "Save Evidence" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.not.objectContaining({ host_id: expect.any(String), provided_host: expect.any(String) })));
@@ -798,8 +790,6 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
     await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledTimes(1));
     expect(await screen.findByText("worker unavailable")).toBeInTheDocument();
@@ -818,10 +808,9 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    await screen.findByText("Confirmation");
-    await userEvent.click(screen.getByRole("radio", { name: /Custom indexing/i }));
+    await screen.findByRole("heading", { name: "Confirm evidence" });
+    await openEvidenceAdvancedOptions();
+    await userEvent.click(screen.getByRole("radio", { name: /Custom/i }));
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(runEvidenceIndexingPlanMock).toHaveBeenCalledWith("evidence-custom", { profile: "fast" }));
@@ -834,10 +823,9 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    await screen.findByText("Confirmation");
-    await userEvent.click(screen.getByRole("radio", { name: /Save without indexing/i }));
+    await screen.findByRole("heading", { name: "Confirm evidence" });
+    await openEvidenceAdvancedOptions();
+    await userEvent.click(screen.getByRole("radio", { name: /Save only/i }));
     await userEvent.click(screen.getByRole("button", { name: "Save Evidence" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({})));
@@ -928,9 +916,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-
-    await screen.findByText("Confirmation");
+    await screen.findByRole("heading", { name: "Confirm evidence" });
     const startButton = screen.getByRole("button", { name: "Start Processing" });
     expect(startButton).toBeDisabled();
 
@@ -1405,8 +1391,7 @@ describe("EvidenceIngestionWizard advanced options", () => {
     await screen.findByTestId("wizard-advanced-options");
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-    await screen.findByText("Confirmation");
+    await screen.findByRole("heading", { name: "Confirm evidence" });
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith(
@@ -1428,8 +1413,7 @@ describe("EvidenceIngestionWizard advanced options", () => {
     await userEvent.click(within(panel).getByTestId("ingest-mode-usable-search"));
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-    await screen.findByText("Confirmation");
+    await screen.findByRole("heading", { name: "Confirm evidence" });
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith(
@@ -1450,8 +1434,7 @@ describe("EvidenceIngestionWizard advanced options", () => {
     await userEvent.click(within(panel).getByTestId("evtx-profile-fast"));
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
-    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
-    await screen.findByText("Confirmation");
+    await screen.findByRole("heading", { name: "Confirm evidence" });
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith(
