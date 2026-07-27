@@ -4,7 +4,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
 
-from sqlalchemy import create_engine
+import pytest
+from sqlalchemy import create_engine, event
 from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import sessionmaker
@@ -15,10 +16,13 @@ from app.ingest.fingerprints import compute_event_fingerprint
 from app.models.case import Case
 from app.models.case_host import CaseHost
 from app.models.case_host_alias import CaseHostAlias
+from app.models.evidence import Evidence, EvidenceType
 from app.services import host_identity
 
 
 CASE_ID = "a1111111-1111-4111-8111-111111111111"
+EVIDENCE_ID = "b1111111-1111-4111-8111-111111111111"
+EVIDENCE_ID_2 = "b2222222-2222-4222-8222-222222222222"
 
 
 def _session(database_url: str = "sqlite:///:memory:"):
@@ -39,6 +43,86 @@ def _session_factory(db_path: Path):
         db.add(Case(id=CASE_ID, name="Case Alpha"))
         db.commit()
     return Session
+
+
+def _session_factory_with_engine(db_path: Path):
+    engine = create_engine(f"sqlite:///{db_path}", future=True, connect_args={"check_same_thread": False})
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
+    with Session() as db:
+        db.add(Case(id=CASE_ID, name="Case Alpha"))
+        db.commit()
+    return Session, engine
+
+
+def _add_evidence(db, evidence_id: str, *, provided_host: str | None = "ProvidedHost", detected_host: str | None = "DetectedHost", host_id: str | None = None) -> None:  # noqa: ANN001
+    db.add(
+        Evidence(
+            id=evidence_id,
+            case_id=CASE_ID,
+            original_filename=f"{evidence_id}.E01",
+            stored_path=f"/tmp/{evidence_id}.E01",
+            evidence_type=EvidenceType.disk_image,
+            size_bytes=1,
+            detected_host=detected_host,
+            host_id=host_id,
+            metadata_json={"provided_host": provided_host} if provided_host is not None else {},
+        )
+    )
+
+
+def _bulk_doc(evidence_id: str, idx: int = 1, *, host_name: str | None = None) -> dict:
+    doc = {
+        "case_id": CASE_ID,
+        "evidence_id": evidence_id,
+        "event_id": f"evt-{evidence_id}-{idx}",
+        "@timestamp": "2026-05-20T08:00:00Z",
+        "artifact": {"type": "evtx_raw", "parser": "evtx_raw"},
+        "event": {"type": "process_start"},
+    }
+    if host_name is not None:
+        doc["host"] = {"name": host_name}
+        doc["observed_host"] = {"name": host_name}
+    return doc
+
+
+class _CapturingClient:
+    def __init__(self) -> None:
+        self.docs: list[dict] = []
+
+    def bulk(self, *, body, refresh):  # noqa: ANN001, ARG002
+        self.docs.extend(body[1::2])
+        return {"errors": False, "items": [{"index": {"_id": action["index"]["_id"]}} for action in body[0::2]]}
+
+
+def _run_bulk(monkeypatch: pytest.MonkeyPatch, Session, docs: list[dict], client: _CapturingClient | None = None) -> _CapturingClient:  # noqa: ANN001, N803
+    from app.core import opensearch as opensearch_module
+
+    client = client or _CapturingClient()
+    monkeypatch.setattr(opensearch_module, "SessionLocal", Session)
+    bulk_index_events_with_report(
+        CASE_ID,
+        docs,
+        index="dfir-events-test",
+        client=client,
+        refresh=False,
+        max_bulk_docs=1000,
+        max_bulk_bytes=1024 * 1024,
+        apply_fingerprint=False,
+    )
+    return client
+
+
+def _evidence_select_counter(engine):  # noqa: ANN001
+    counts = {"evidence_selects": 0}
+
+    @event.listens_for(engine, "before_cursor_execute")
+    def _count_evidence_selects(_conn, _cursor, statement, _parameters, _context, _executemany):  # noqa: ANN001
+        normalized = " ".join(str(statement).lower().split())
+        if normalized.startswith("select") and "from evidences" in normalized:
+            counts["evidence_selects"] += 1
+
+    return counts
 
 
 def _observed_counts(host_name: str) -> dict[str, dict]:
@@ -247,6 +331,145 @@ def test_parallel_bulk_ingest_same_host_does_not_fail(tmp_path: Path, monkeypatc
     assert all(report["success"] for report in reports)
     with Session() as db:
         assert db.query(CaseHost).filter(CaseHost.case_id == CASE_ID, CaseHost.canonical_name == "pc01").count() == 1
+
+
+def test_bulk_host_identity_looks_up_evidence_once_for_many_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    Session, engine = _session_factory_with_engine(tmp_path / "bulk-host-cache.sqlite")
+    with Session() as db:
+        _add_evidence(db, EVIDENCE_ID, provided_host="WebServer01", detected_host="DetectedWeb")
+        db.commit()
+    counts = _evidence_select_counter(engine)
+
+    client = _run_bulk(monkeypatch, Session, [_bulk_doc(EVIDENCE_ID, idx) for idx in range(1000)])
+
+    assert counts["evidence_selects"] == 1
+    assert len(client.docs) == 1000
+
+
+def test_bulk_host_identity_reuses_same_host_data_for_many_documents(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    Session, _engine = _session_factory_with_engine(tmp_path / "bulk-host-reuse.sqlite")
+    host_id = "c1111111-1111-4111-8111-111111111111"
+    with Session() as db:
+        _add_evidence(db, EVIDENCE_ID, provided_host="WebServer01", detected_host="DetectedWeb", host_id=host_id)
+        db.commit()
+
+    client = _run_bulk(monkeypatch, Session, [_bulk_doc(EVIDENCE_ID, idx) for idx in range(10)])
+
+    hosts = [doc["host"] for doc in client.docs]
+    assert all(host["name"] == "WebServer01" for host in hosts)
+    assert all(host["hostname"] == "WebServer01" for host in hosts)
+    assert all(host["canonical"] == "WebServer01" for host in hosts)
+    assert all(host["evidence_host_id"] == host_id for host in hosts)
+    assert all(host["identity_id"] == host_id for host in hosts)
+
+
+def test_bulk_host_identity_resolves_different_evidence_ids_independently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    Session, engine = _session_factory_with_engine(tmp_path / "bulk-host-evidence-ids.sqlite")
+    with Session() as db:
+        _add_evidence(db, EVIDENCE_ID, provided_host="WebServer01")
+        _add_evidence(db, EVIDENCE_ID_2, provided_host="DbServer01")
+        db.commit()
+    counts = _evidence_select_counter(engine)
+
+    client = _run_bulk(monkeypatch, Session, [_bulk_doc(EVIDENCE_ID, 1), _bulk_doc(EVIDENCE_ID_2, 1), _bulk_doc(EVIDENCE_ID, 2), _bulk_doc(EVIDENCE_ID_2, 2)])
+
+    assert counts["evidence_selects"] == 2
+    assert [doc["host"]["name"] for doc in client.docs] == ["WebServer01", "DbServer01", "WebServer01", "DbServer01"]
+
+
+def test_bulk_host_identity_resolves_separate_bulks_independently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    Session, engine = _session_factory_with_engine(tmp_path / "bulk-host-separate-bulks.sqlite")
+    with Session() as db:
+        _add_evidence(db, EVIDENCE_ID, provided_host="WebServer01")
+        db.commit()
+    counts = _evidence_select_counter(engine)
+
+    _run_bulk(monkeypatch, Session, [_bulk_doc(EVIDENCE_ID, 1)])
+    _run_bulk(monkeypatch, Session, [_bulk_doc(EVIDENCE_ID, 2)])
+
+    assert counts["evidence_selects"] == 2
+
+
+def test_bulk_host_identity_caches_missing_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    Session, engine = _session_factory_with_engine(tmp_path / "bulk-host-missing-evidence.sqlite")
+    counts = _evidence_select_counter(engine)
+
+    client = _run_bulk(monkeypatch, Session, [_bulk_doc(EVIDENCE_ID, idx) for idx in range(5)])
+
+    assert counts["evidence_selects"] == 1
+    assert all(doc["host"] == {"source": "unknown", "confidence": "unknown"} for doc in client.docs)
+    assert all(doc["observed_host"] == {} for doc in client.docs)
+
+
+def test_bulk_host_identity_caches_missing_host_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    Session, engine = _session_factory_with_engine(tmp_path / "bulk-host-missing-metadata.sqlite")
+    with Session() as db:
+        _add_evidence(db, EVIDENCE_ID, provided_host=None, detected_host=None)
+        db.commit()
+    counts = _evidence_select_counter(engine)
+
+    client = _run_bulk(monkeypatch, Session, [_bulk_doc(EVIDENCE_ID, idx) for idx in range(5)])
+
+    assert counts["evidence_selects"] == 1
+    assert all(doc["host"] == {"source": "unknown", "confidence": "unknown"} for doc in client.docs)
+    assert all(doc["observed_host"] == {} for doc in client.docs)
+
+
+def test_bulk_host_fields_match_uncached_host_identity_application(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    Session, _engine = _session_factory_with_engine(tmp_path / "bulk-host-equivalence.sqlite")
+    host_id = "c2222222-2222-4222-8222-222222222222"
+    with Session() as db:
+        _add_evidence(db, EVIDENCE_ID, provided_host="WebServer01", detected_host="DetectedWeb", host_id=host_id)
+        db.commit()
+    expected = _bulk_doc(EVIDENCE_ID, 1, host_name="artifact-web")
+    with Session() as db:
+        host_identity.apply_case_host_identity(db, CASE_ID, expected)
+
+    client = _run_bulk(monkeypatch, Session, [_bulk_doc(EVIDENCE_ID, 1, host_name="artifact-web")])
+
+    assert client.docs[0]["host"] == expected["host"]
+    assert client.docs[0]["observed_host"] == expected["observed_host"]
+
+
+def test_bulk_index_timer_includes_host_identity_work(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    from app.core import opensearch as opensearch_module
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.info: dict = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):  # noqa: ANN001
+            return False
+
+    class _FakeSessionLocal:
+        def __call__(self):
+            return _FakeSession()
+
+    class _FakeClient:
+        def bulk(self, *, body, refresh):  # noqa: ANN001, ARG002
+            return {"errors": False, "items": [{"index": {"_id": body[0]["index"]["_id"]}}]}
+
+    calls = iter([10.0, 17.0])
+    monkeypatch.setattr(opensearch_module, "SessionLocal", _FakeSessionLocal())
+    monkeypatch.setattr(opensearch_module, "apply_case_host_identity", lambda _db, _case_id, event: event)
+    monkeypatch.setattr(opensearch_module.time, "perf_counter", lambda: next(calls))
+
+    with caplog.at_level("INFO", logger="app.core.opensearch"):
+        bulk_index_events_with_report(
+            CASE_ID,
+            [_bulk_doc(EVIDENCE_ID, 1)],
+            index="dfir-events-test",
+            client=_FakeClient(),
+            refresh=False,
+            max_bulk_docs=1000,
+            max_bulk_bytes=1024 * 1024,
+            apply_fingerprint=False,
+        )
+
+    assert "over 7.00s" in caplog.text
 
 
 def test_apply_case_host_identity_preserves_observed_name_and_aliases(monkeypatch) -> None:

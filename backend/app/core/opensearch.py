@@ -1813,6 +1813,7 @@ def bulk_index_events_with_report(
     apply_host_identity: bool = True,
     apply_fingerprint: bool = True,
 ) -> dict:
+    start = time.perf_counter()
     index = index or ensure_case_index(case_id)
     if max_bulk_docs is None or max_bulk_bytes is None:
         with SessionLocal() as db:
@@ -1824,11 +1825,15 @@ def bulk_index_events_with_report(
     if apply_host_identity:
         with SessionLocal() as db:
             _debug_db_trace("bulk_index_events_with_report.host_identity", db=db, case_id=case_id)
-            for document in docs_list:
-                if isinstance(document, dict):
-                    apply_case_host_identity(db, case_id, document)
-                    apply_event_fingerprint(document)
-            host_identity_stats = get_host_identity_runtime_stats(db)
+            db.info["bulk_evidence_hosts"] = {}
+            try:
+                for document in docs_list:
+                    if isinstance(document, dict):
+                        apply_case_host_identity(db, case_id, document)
+                        apply_event_fingerprint(document)
+                host_identity_stats = get_host_identity_runtime_stats(db)
+            finally:
+                db.info.pop("bulk_evidence_hosts", None)
     else:
         for document in docs_list:
             if isinstance(document, dict) and apply_fingerprint:
@@ -1864,7 +1869,6 @@ def bulk_index_events_with_report(
     for warning in host_identity_stats.get("warnings") or []:
         if warning not in report["warnings"]:
             report["warnings"].append(warning)
-    start = time.perf_counter()
     batches = 0
     max_attempts = max(int(attempts), 1)
     pending_chunks = [body for body in _iter_bulk_chunks(index, docs_list, max_bulk_docs=max_bulk_docs, max_bulk_bytes=max_bulk_bytes)]
