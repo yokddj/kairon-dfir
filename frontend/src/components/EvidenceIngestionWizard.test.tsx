@@ -164,13 +164,13 @@ function renderWizard(props: Partial<React.ComponentProps<typeof EvidenceIngesti
 
 async function passHealthCheck() {
   await screen.findByTestId("ingestion-health-chip");
-  await screen.findByRole("heading", { name: "Add Evidence" });
+  await screen.findByRole("heading", { name: "Select Evidence" });
 }
 
 async function goToFileStep(cardName: RegExp) {
   void cardName;
   await passHealthCheck();
-  expect(await screen.findByRole("heading", { name: "Add Evidence" })).toBeInTheDocument();
+  expect(await screen.findByRole("heading", { name: "Select Evidence" })).toBeInTheDocument();
 }
 
 async function openEvidenceAdvancedOptions() {
@@ -208,19 +208,39 @@ describe("EvidenceIngestionWizard", () => {
     await screen.findByTestId("health-check");
     expect(await screen.findByText(/Temp storage is not writable/)).toBeInTheDocument();
     expect(screen.getByText(/Critical dependency unavailable/)).toBeInTheDocument();
-    expect(screen.queryByRole("heading", { name: "Add Evidence" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Select Evidence" })).not.toBeInTheDocument();
   });
 
-  it("shows Add Evidence immediately when critical dependencies are ready", async () => {
+  it("shows Select Evidence immediately when critical dependencies are ready", async () => {
     renderWizard();
-    expect(await screen.findByRole("heading", { name: "Add Evidence" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Select Evidence" })).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("ingestion-health-chip")).toHaveTextContent("All systems ready"));
+  });
+
+  it("keeps Select Evidence available when only non-critical dependencies warn", async () => {
+    getIngestionReadinessMock.mockResolvedValue(readyHealth({
+      critical_ready: true,
+      ready: false,
+      checks: [
+        { label: "Storage", ok: true, detail: "100.0 GB available" },
+        { label: "Search", ok: false, detail: "OpenSearch cluster status: yellow" },
+        { label: "Database", ok: true, detail: "Reachable" },
+        { label: "Workers", ok: true, detail: "Active worker(s)" },
+        { label: "Memory Worker", ok: true, detail: "Active worker" },
+      ],
+    }));
+    renderWizard();
+
+    expect(await screen.findByRole("heading", { name: "Select Evidence" })).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByTestId("ingestion-health-chip")).toHaveTextContent("Partial systems ready"));
+    expect(screen.queryByTestId("health-check")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Inspect evidence" })).toBeDisabled();
   });
 
   it("does not render a step counter or a health-check step on the golden path", async () => {
     renderWizard();
     await passHealthCheck();
-    expect(screen.getByRole("heading", { name: "Add Evidence" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Select Evidence" })).toBeInTheDocument();
     expect(screen.queryByText(/Step \d+ of \d+/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Server Health Check")).not.toBeInTheDocument();
   });
@@ -256,7 +276,7 @@ describe("EvidenceIngestionWizard", () => {
     renderWizard();
     await passHealthCheck();
 
-    expect(await screen.findByRole("heading", { name: "Add Evidence" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Select Evidence" })).toBeInTheDocument();
     expect(screen.queryByText(/What are you adding\?/i)).not.toBeInTheDocument();
     expect(screen.queryByText("Disk Image")).not.toBeInTheDocument();
     expect(screen.queryByText("Memory Dump")).not.toBeInTheDocument();
@@ -1107,7 +1127,7 @@ describe("EvidenceIngestionWizard resumable upload discovery", () => {
 
     expect(screen.queryByTestId("resumable-uploads-panel")).not.toBeInTheDocument();
     expect(screen.queryByText(/Interrupted uploads/i)).not.toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Add Evidence" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Select Evidence" })).toBeInTheDocument();
   });
 
   it("filters completed and promoted evidence out of the interrupted uploads panel", async () => {
