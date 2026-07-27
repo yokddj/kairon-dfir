@@ -1177,7 +1177,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 </div>
               </div>
             ) : null}
-            <h2 className="text-xl font-semibold text-ink">Add Evidence</h2>
+            <h2 className="text-xl font-semibold text-ink">Select Evidence</h2>
             <p className="mt-1 text-sm text-muted">Select one or more files. Kairon will inspect each item and decide the evidence kind before processing.</p>
             <div
               className="mt-4 rounded-3xl border border-dashed border-line bg-abyss/60 p-8 text-center text-sm text-muted"
