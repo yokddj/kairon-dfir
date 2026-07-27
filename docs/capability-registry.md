@@ -29,3 +29,24 @@ If memory evidence still has `effective_platform = "memory"`, the registry uses 
 - `empty`: matching artifacts exist but have no records.
 - `has_data`: matching records exist.
 - `degraded`: matching data exists, but parser/plugin status indicates partial failure.
+
+## Sidebar Generation
+
+The sidebar consumes `GET /api/cases/{case_id}/capabilities` for all workbench content. It no longer owns platform logic, workbench visibility, capability visibility, or capability ordering.
+
+Frontend responsibilities:
+
+- Render the fixed shell groups: `Investigation` and `Case Tools`.
+- Render registry-provided `workbenches`, `domains`, and visible `capabilities` generically.
+- Respect `nav.order` and backend-provided workbench/domain grouping.
+- Preserve existing routes by using each capability's declared `route` unchanged, with `:caseId` substitution only.
+- Show loading, failure, and capability state indicators without deciding whether a platform or capability should exist.
+
+Backend responsibilities:
+
+- Declare capabilities, labels, routes, domains, parent paths, and ordering metadata.
+- Evaluate platform/domain scope, readiness, and `visible` per case.
+- Keep memory modeled as `evidence_domain = "memory"` while projecting its OS platform separately.
+- Add future workbenches or capabilities by extending the registry, not Sidebar code.
+
+Phase 1 intentionally does not migrate URLs, redesign Search, or change route redirects. Canonical route migration is deferred to Phase 2.
