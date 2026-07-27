@@ -20,6 +20,7 @@ const CaseOverviewPage = lazy(() => import("./pages/CaseOverviewPage"));
 const CaseHostsPage = lazy(() => import("./pages/CaseHostsPage"));
 const CaseProcessGraphPage = lazy(() => import("./pages/CaseProcessGraphPage"));
 const CommandHistoryPage = lazy(() => import("./pages/CommandHistoryPage"));
+const LinuxAuthenticationPage = lazy(() => import("./pages/LinuxAuthenticationPage"));
 const IncidentTimelinePage = lazy(() => import("./pages/IncidentTimelinePage"));
 const ValidationMatrixPage = lazy(() => import("./pages/ValidationMatrixPage"));
 const CaseReportsPage = lazy(() => import("./pages/CaseReportsPage"));
@@ -136,6 +137,7 @@ export default function App() {
                         <Route path="/cases/:caseId/timeline" element={<CaseSearchViewRedirect view="timeline" />} />
                         <Route path="/cases/:caseId/process-graph" element={<CaseProcessGraphPage />} />
                         <Route path="/cases/:caseId/command-history" element={<CommandHistoryPage />} />
+                        <Route path="/cases/:caseId/linux-authentication" element={<LinuxAuthenticationPage />} />
                         <Route path="/cases/:caseId/artifact-search" element={<LegacyCaseParamRedirect suffix="/artifacts" />} />
                         <Route path="/cases/:caseId/artifacts" element={<ArtifactExplorer />} />
                         <Route path="/cases/:caseId/incident-timeline" element={<IncidentTimelinePage />} />

@@ -1,5 +1,6 @@
 import pytest
 from pathlib import Path
+import struct
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "linux"
 
@@ -92,6 +93,49 @@ class TestAuthLogParser:
         results = parse_auth(auth_log_content, source_path="/var/log/auth.log")
         for result in results:
             assert result["timestamp"] is not None
+
+    def test_source_port_and_attempted_username_extracted(self):
+        from app.ingest.linux.auth import parse_auth
+        rows = parse_auth("Feb  6 15:16:26 victoria sshd[2085]: Failed password for invalid user ulysses from 192.168.56.1 port 34431 ssh2\n", source_path="/var/log/auth.log")
+        assert rows[0]["auth_event_type"] == "login_failure"
+        assert rows[0]["attempted_username"] == "ulysses"
+        assert rows[0]["source_ip"] == "192.168.56.1"
+        assert rows[0]["source_port"] == 34431
+
+    def test_pam_aggregate_failure_count_extracted(self):
+        from app.ingest.linux.auth import parse_auth
+        rows = parse_auth("Feb  6 15:16:40 victoria sshd[2085]: PAM 2 more authentication failures; logname= uid=0 euid=0 tty=ssh ruser= rhost=192.168.56.1\n", source_path="/var/log/auth.log")
+        assert rows[0]["auth_event_type"] == "authentication_failure"
+        assert rows[0]["effective_failure_count"] == 2
+        assert rows[0]["terminal"] == "ssh"
+
+    def test_wtmp_parsing(self):
+        from app.ingest.linux.auth import parse_auth
+        record = struct.pack("hi32s4s32s256shhiii4i20s", 7, 1234, b"pts/0\0", b"id\0", b"mail\0", b"192.168.1.5\0", 0, 0, 0, 1710000000, 0, 0, 0, 0, 0, b"\0" * 20)
+        rows = parse_auth(record, source_path="/var/log/wtmp")
+        assert rows[0]["artifact_type"] == "wtmp"
+        assert rows[0]["auth_event_type"] == "login_success"
+        assert rows[0]["username"] == "mail"
+
+    def test_btmp_parsing(self):
+        from app.ingest.linux.auth import parse_auth
+        record = struct.pack("hi32s4s32s256shhiii4i20s", 7, 1234, b"ssh\0", b"id\0", b"root\0", b"10.0.0.9\0", 0, 0, 0, 1710000000, 0, 0, 0, 0, 0, b"\0" * 20)
+        rows = parse_auth(record, source_path="/var/log/btmp")
+        assert rows[0]["artifact_type"] == "btmp"
+        assert rows[0]["auth_event_type"] == "login_failure"
+
+    def test_lastlog_parsing(self):
+        from app.ingest.linux.auth import parse_auth
+        empty = b"\0" * 292
+        record = struct.pack("i32s256s", 1710000000, b"pts/1\0", b"10.0.0.10\0")
+        rows = parse_auth(empty + record, source_path="/var/log/lastlog")
+        assert rows[0]["artifact_type"] == "lastlog"
+        assert rows[0]["uid"] == 1
+        assert rows[0]["source_ip"] == "10.0.0.10"
+
+    def test_unsupported_binary_layout_returns_empty(self):
+        from app.ingest.linux.auth import parse_auth
+        assert parse_auth(b"not-a-valid-utmp", source_path="/var/log/wtmp") == []
 
 
 class TestSyslogParser:

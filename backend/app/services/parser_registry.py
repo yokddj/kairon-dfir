@@ -201,7 +201,7 @@ _REGISTRY: dict[str, dict[str, Any]] = {
         "artifact_type": "linux_auth",
         "parser_name": "linux_auth_raw",
         "supported_extensions": [".log"],
-        "source_patterns": ["*/var/log/auth.log*", "*/var/log/secure*"],
+        "source_patterns": ["*/var/log/auth.log*", "*/var/log/secure*", "*/var/log/wtmp*", "*/var/log/btmp*", "*/var/log/lastlog*"],
         "enabled_for_usable_search": True,
         "searchable": True,
         "maturity": "partial",
