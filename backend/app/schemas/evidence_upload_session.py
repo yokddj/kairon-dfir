@@ -80,6 +80,7 @@ class EvidenceUploadSessionInitRequest(BaseModel):
     # exactly (evidence_intent="raw", ingest_mode=full_forensic) when omitted.
     evidence_intent: str | None = None
     ingest_mode: str | None = None
+    forced_evidence_kind: str | None = None
     evtx_profile: str | None = None
 
 
@@ -139,6 +140,7 @@ class PromoteUploadSessionRequest(BaseModel):
     # exactly (evidence_intent="raw", ingest_mode=full_forensic) when omitted.
     evidence_intent: str | None = None
     ingest_mode: str | None = None
+    forced_evidence_kind: str | None = None
 
 
 class UnifiedResumeDetails(BaseModel):

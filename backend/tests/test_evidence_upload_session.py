@@ -35,7 +35,7 @@ from app.core.database import Base, get_db, utc_now
 from app.core.config import get_settings
 from app.models.case import Case
 from app.models.case_host import CaseHost
-from app.models.evidence import Evidence
+from app.models.evidence import Evidence, EvidenceType
 from app.models.evidence_operation import EvidenceOperation, EvidenceOperationJob
 from app.models.evidence_upload_session import EvidenceUploadSession, EvidenceUploadSessionStatus
 from app.models.memory import MemoryUpload
@@ -1115,6 +1115,43 @@ def test_promote_folder_session(tmp_path, monkeypatch):
     assert evidence.host_id == host.id
     assert (evidence.metadata_json or {}).get("provided_host") == "WS-FOLDER"
     assert not Path(session.staged_path).exists()
+
+
+def test_forced_route_metadata_is_written_to_promoted_evidence(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "backend_temp_dir", tmp_path / "tmp")
+    monkeypatch.setattr(settings, "backend_data_dir", tmp_path / "data")
+    db = _db()
+    _case(db)
+
+    source = tmp_path / "collection.zip"
+    _make_zip(source)
+    session, _report = create_upload_session(db, CASE_ID, files=[_upload_file(source)], declared_platform=None, client_sha256=None)
+    assert (session.metadata_json or {}).get("category") == "archive"
+
+    def _fake_upload_evidence(case_id, upload_file, **_kwargs):
+        return Evidence(
+            id="cccccccc-3333-4333-8333-cccccccccccc",
+            case_id=case_id,
+            original_filename=upload_file.filename,
+            stored_path="/tmp/evidence-forced-route",
+            evidence_type=EvidenceType.unknown,
+            size_bytes=source.stat().st_size,
+            metadata_json={},
+        )
+
+    import app.api.routes_evidence as routes_evidence
+    monkeypatch.setattr(routes_evidence, "upload_evidence", _fake_upload_evidence)
+
+    evidence = promote_upload_session(
+        db, session,
+        provided_platform=None, host_id=None, provided_host=None, evtx_profile=None,
+        memory_authorization_acknowledged=False, folder_name=None, labels=None, notes=None,
+        current_user=None,
+        forced_evidence_kind="collection",
+    )
+
+    assert evidence.metadata_json["forced_evidence_kind"] == "collection"
+    assert evidence.metadata_json["detected_category_before_override"] == "archive"
 
 
 def test_promote_server_path_session_never_deletes_original(tmp_path, monkeypatch):
