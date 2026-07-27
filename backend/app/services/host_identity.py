@@ -114,14 +114,24 @@ def canonicalize_host(
 def _evidence_hosts(db: Session, evidence_id: str | None) -> tuple[str | None, str | None, str | None]:
     if not evidence_id:
         return None, None, None
+    info = getattr(db, "info", None)
+    cache = info.get("bulk_evidence_hosts") if isinstance(info, dict) else None
+    if isinstance(cache, dict) and evidence_id in cache:
+        return cache[evidence_id]
     evidence = db.get(Evidence, evidence_id)
     if not evidence:
-        return None, None, None
+        hosts = (None, None, None)
+        if isinstance(cache, dict):
+            cache[evidence_id] = hosts
+        return hosts
     metadata = dict(evidence.metadata_json or {})
     provided = str(metadata.get("provided_host") or "").strip() or None
     detected = str(getattr(evidence, "detected_host", None) or "").strip() or None
     host_id = str(evidence.host_id or "").strip() or None
-    return provided, detected, host_id
+    hosts = (provided, detected, host_id)
+    if isinstance(cache, dict):
+        cache[evidence_id] = hosts
+    return hosts
 
 
 def _apply_host_canonicalization(event: dict[str, Any], result: dict[str, Any]) -> dict[str, Any]:
