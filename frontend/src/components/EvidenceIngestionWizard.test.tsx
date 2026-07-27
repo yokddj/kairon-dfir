@@ -1099,27 +1099,84 @@ describe("EvidenceIngestionWizard resumable upload discovery", () => {
     await waitFor(() => expect(cancelEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "resume-session-1"));
   });
 
-  it("excludes a session that reached 100% from the interrupted/active uploads panel", async () => {
-    const finishedCandidate = resumableUnifiedSession({ id: "resume-session-done", progress_percent: 100, status: "staged" });
-    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [finishedCandidate] });
+  it("hides the entire interrupted uploads section when there are no unfinished uploads", async () => {
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [] });
 
     renderWizard();
     await passHealthCheck();
 
     expect(screen.queryByTestId("resumable-uploads-panel")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Interrupted uploads/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Add Evidence" })).toBeInTheDocument();
   });
 
-  it("keeps an in-progress session visible alongside one that already reached 100%", async () => {
+  it("filters completed and promoted evidence out of the interrupted uploads panel", async () => {
+    const completed = resumableUnifiedSession({ id: "resume-session-completed", original_filename: "completed.mem", progress_percent: 100, status: "completed", resumable: false, cancellable: false });
+    const completedWithWarnings = resumableUnifiedSession({ id: "resume-session-warnings", original_filename: "warnings.mem", progress_percent: 100, status: "completed_with_warnings", resumable: false, cancellable: false });
+    const promoted = resumableUnifiedSession({ id: "resume-session-promoted", original_filename: "evidence.mem", progress_percent: 100, status: "promoted", resumable: false, cancellable: false, promoted_evidence_id: "evidence-1" });
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [completed, completedWithWarnings, promoted] });
+
+    renderWizard();
+    await passHealthCheck();
+
+    expect(screen.queryByTestId("resumable-uploads-panel")).not.toBeInTheDocument();
+    expect(screen.queryByText("completed.mem")).not.toBeInTheDocument();
+    expect(screen.queryByText("warnings.mem")).not.toBeInTheDocument();
+    expect(screen.queryByText("evidence.mem")).not.toBeInTheDocument();
+  });
+
+  it("keeps interrupted and paused uploads visible while excluding completed evidence", async () => {
     const inProgress = resumableUnifiedSession();
-    const finishedCandidate = resumableUnifiedSession({ id: "resume-session-done", original_filename: "done.mem", progress_percent: 100, status: "staged" });
-    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [inProgress, finishedCandidate] });
+    const paused = resumableUnifiedSession({ id: "resume-session-paused", original_filename: "paused.mem", progress_percent: 62, status: "paused" });
+    const promoted = resumableUnifiedSession({ id: "resume-session-done", original_filename: "done.mem", progress_percent: 100, status: "promoted", resumable: false, cancellable: false, promoted_evidence_id: "evidence-done" });
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [inProgress, paused, promoted] });
 
     renderWizard();
     await passHealthCheck();
 
     const panel = await screen.findByTestId("resumable-uploads-panel");
     expect(within(panel).getByText("capture.mem")).toBeInTheDocument();
+    expect(within(panel).getByText("paused.mem")).toBeInTheDocument();
     expect(within(panel).queryByText("done.mem")).not.toBeInTheDocument();
+    expect(within(panel).getAllByTestId("resume-upload-select")).toHaveLength(2);
+  });
+
+  it("shows a staged upload awaiting confirmation because it still needs investigator action", async () => {
+    const staged = resumableUnifiedSession({ original_filename: "awaiting-confirmation.mem", progress_percent: 100, status: "staged", resumable: false, cancellable: true });
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [staged] });
+
+    renderWizard();
+    await passHealthCheck();
+
+    const panel = await screen.findByTestId("resumable-uploads-panel");
+    expect(within(panel).getByText("awaiting-confirmation.mem")).toBeInTheDocument();
+    expect(within(panel).getByTestId("resume-upload-select")).toBeInTheDocument();
+  });
+
+  it("excludes uploads that do not belong to the current case", async () => {
+    const otherCasePaused = resumableUnifiedSession({ id: "resume-other-case", case_id: "case-2", original_filename: "other-case.mem", status: "paused", progress_percent: 62 });
+    const currentCaseInterrupted = resumableUnifiedSession({ id: "resume-current-case", original_filename: "current-case.mem", status: "interrupted", progress_percent: 31 });
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [otherCasePaused, currentCaseInterrupted] });
+
+    renderWizard();
+    await passHealthCheck();
+
+    const panel = await screen.findByTestId("resumable-uploads-panel");
+    expect(within(panel).getByText("current-case.mem")).toBeInTheDocument();
+    expect(within(panel).queryByText("other-case.mem")).not.toBeInTheDocument();
+  });
+
+  it("does not show cancelled or other-case completed uploads", async () => {
+    const cancelled = resumableUnifiedSession({ id: "resume-cancelled", original_filename: "cancelled.mem", status: "cancelled", progress_percent: 40, resumable: false, cancellable: false });
+    const otherCaseCompleted = resumableUnifiedSession({ id: "resume-other-complete", case_id: "case-2", original_filename: "other-completed.mem", status: "completed", progress_percent: 100, resumable: false, cancellable: false });
+    listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [cancelled, otherCaseCompleted] });
+
+    renderWizard();
+    await passHealthCheck();
+
+    expect(screen.queryByTestId("resumable-uploads-panel")).not.toBeInTheDocument();
+    expect(screen.queryByText("cancelled.mem")).not.toBeInTheDocument();
+    expect(screen.queryByText("other-completed.mem")).not.toBeInTheDocument();
   });
 });
 

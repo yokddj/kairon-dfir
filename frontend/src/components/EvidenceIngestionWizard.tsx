@@ -19,6 +19,8 @@ type BatchPreflightResponse = { batch: true; items: BatchPreflightItem[]; health
 
 const CREATE_HOST_CHOICE = "__create__";
 const UNASSIGNED_HOST_CHOICE = "__unassigned__";
+const TERMINAL_UPLOAD_STATUSES = new Set(["cancelled", "completed", "completed_with_errors", "completed_with_warnings", "expired", "finished", "indexed", "processing", "promoted"]);
+const ACTIONABLE_UPLOAD_STATUSES = new Set(["created", "interrupted", "paused", "preflight_running", "staged", "uploading"]);
 
 type Props = {
   open: boolean;
@@ -184,6 +186,16 @@ function routeForCategory(category: string): ForcedRoute | null {
   return null;
 }
 
+function isUnfinishedUploadForCurrentCase(candidate: ResumableUploadSessionRead, caseId: string): boolean {
+  if (candidate.case_id !== caseId) return false;
+  if (candidate.promoted_evidence_id) return false;
+  const status = candidate.status.toLowerCase();
+  if (status.startsWith("completed") || TERMINAL_UPLOAD_STATUSES.has(status)) return false;
+  if (status === "failed") return candidate.resumable;
+  if (ACTIONABLE_UPLOAD_STATUSES.has(status)) return true;
+  return candidate.resumable && candidate.progress_percent !== 100;
+}
+
 async function sha256Hex(blob: Blob): Promise<string | undefined> {
   // Pure JS (see lib/sha256.ts), not SubtleCrypto: crypto.subtle.digest is
   // restricted to secure contexts (HTTPS/localhost) and is silently
@@ -335,12 +347,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     refetchInterval: open ? 15_000 : false,
   });
   const resumableSessions = resumableSessionsQuery.data?.sessions ?? [];
-  // A session that reached 100% is neither interrupted nor still
-  // transferring -- it's done or finalizing. Only the discovery panel below
-  // is scoped to this; a resumeSessionId deep link (from a URL or Activity
-  // Center) must still resolve even for a session that happens to be at
-  // 100%, since that's an explicit targeted action, not this general list.
-  const interruptedOrActiveSessions = resumableSessions.filter((candidate) => candidate.progress_percent === null || candidate.progress_percent < 100);
+  // Only show uploads that still need investigator action. Explicit
+  // resumeSessionId deep links still resolve against the full server list below;
+  // this filter scopes only the general Add Evidence discovery panel.
+  const interruptedOrActiveSessions = resumableSessions.filter((candidate) => isUnfinishedUploadForCurrentCase(candidate, caseId));
 
   useEffect(() => {
     if (resumeCandidateProp) {
@@ -1143,7 +1153,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
           <section className="mt-5">
             {interruptedOrActiveSessions.length ? (
               <div className="mb-6 rounded-3xl border border-amber-400/30 bg-amber-400/5 p-4" data-testid="resumable-uploads-panel">
-                <p className="font-mono text-xs uppercase tracking-[0.16em] text-amber-300">Interrupted or active uploads</p>
+                <p className="font-mono text-xs uppercase tracking-[0.16em] text-amber-300">Interrupted uploads</p>
                 <div className="mt-3 space-y-2">
                   {interruptedOrActiveSessions.map((candidate) => (
                     <div key={candidate.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-abyss/60 p-3" data-testid="resumable-upload-row">
@@ -1155,9 +1165,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                         </p>
                       </div>
                       <div className="flex shrink-0 gap-2">
-                        {candidate.status === "promoted" && candidate.promoted_evidence_id ? (
-                          <button type="button" onClick={() => { handleClose(); navigate(candidate.category === "memory_dump" ? `/cases/${caseId}/memory/${candidate.promoted_evidence_id}` : `/evidences/${candidate.promoted_evidence_id}`); }} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss">Open evidence</button>
-                        ) : candidate.resumable || candidate.status === "staged" ? (
+                        {candidate.resumable || candidate.status === "staged" ? (
                           <button type="button" onClick={() => setResumeTarget(candidate)} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss" data-testid="resume-upload-select">Resume</button>
                         ) : null}
                         {candidate.cancellable ? (
