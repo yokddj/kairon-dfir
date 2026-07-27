@@ -17,7 +17,6 @@ type ForcedRoute = "disk_image" | "memory_dump" | "collection" | "archive" | "un
 type BatchPreflightItem = { file: File; session: EvidenceUploadSessionRead; preflight: PreflightReport };
 type BatchPreflightResponse = { batch: true; items: BatchPreflightItem[]; health: EvidenceUploadSessionCreateResponse["health"] };
 
-const TOTAL_STEPS = 4;
 const CREATE_HOST_CHOICE = "__create__";
 const UNASSIGNED_HOST_CHOICE = "__unassigned__";
 
@@ -160,21 +159,13 @@ function evidenceKindLabel(category: string | null | undefined): string {
   }
 }
 
-function confidencePercent(confidence: string | null | undefined): string {
-  switch (String(confidence || "").toLowerCase()) {
-    case "high":
-    case "filesystem":
-    case "ewf_signature":
-    case "signature":
-      return "99%";
-    case "medium":
-      return "70%";
-    case "low":
-    case "extension":
-      return "35%";
-    default:
-      return confidence || "unknown";
-  }
+function confidenceTierLabel(confidence: string | null | undefined, hasConflicts: boolean): { label: string; tone: "mint" | "amber" | "danger" } {
+  if (hasConflicts) return { label: "Ambiguous", tone: "amber" };
+  const normalized = String(confidence || "").toLowerCase();
+  if (["high", "filesystem", "ewf_signature", "signature"].includes(normalized)) return { label: "Confirmed", tone: "mint" };
+  if (["medium", "extension"].includes(normalized)) return { label: "Likely", tone: "amber" };
+  if (["low", "unknown", "ambiguous"].includes(normalized)) return { label: normalized === "unknown" ? "Unknown" : "Ambiguous", tone: "danger" };
+  return { label: confidence ? "Likely" : "Unknown", tone: confidence ? "amber" : "danger" };
 }
 
 function hasConflictingSignals(report: PreflightReport): boolean {
@@ -244,7 +235,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const queryClient = useQueryClient();
   const { notify } = useNotifications();
 
-  const [step, setStep] = useState<WizardStep>(0);
+  const [step, setStep] = useState<WizardStep>(4);
   const [intakeType, setIntakeType] = useState<IntakeType | null>("artifact_collection");
   const [platform, setPlatform] = useState<EvidencePlatform>("auto");
   const [hostChoice, setHostChoice] = useState<HostChoice>("auto");
@@ -294,6 +285,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   // mid-finalize (cancellation). Success/failure of the finalize call
   // itself already stops it via its own try/finally.
   const stopFinalizePollingRef = useRef<(() => void) | null>(null);
+  const explicitInspectRef = useRef(false);
   const [resumeTarget, setResumeTarget] = useState<ResumableUploadSessionRead | null>(null);
   const [resumeFile, setResumeFile] = useState<File | null>(null);
   const [resumeFileError, setResumeFileError] = useState<string | null>(null);
@@ -373,7 +365,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   }, []);
 
   function reset() {
-    setStep(0);
+    setStep(4);
     setIntakeType("artifact_collection");
     setPlatform("auto");
     setHostChoice("auto");
@@ -407,6 +399,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setNowMs(Date.now());
     promotedRef.current = false;
     promotedEvidenceRef.current = null;
+    explicitInspectRef.current = false;
     setResumeTarget(null);
     setResumeFile(null);
     setResumeFileError(null);
@@ -728,7 +721,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
         setUploadProgress(1);
         setInspectionState("complete");
         setInspectionError(null);
-        setStep(5);
+        setStep(explicitInspectRef.current ? 5 : 4);
+        explicitInspectRef.current = false;
         return;
       }
       if ("evidence" in response) {
@@ -773,7 +767,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       setUploadProgress(response.session.is_server_path ? null : 1);
       setInspectionState("complete");
       setInspectionError(null);
-      setStep(5);
+      setStep(explicitInspectRef.current ? 5 : 4);
+      explicitInspectRef.current = false;
     },
     onError: (error) => {
       const message = inspectionErrorMessage(error);
@@ -795,6 +790,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     if (inspectionState !== "uploading" || createSessionMutation.isPending) return;
     const timer = window.setTimeout(() => {
       setInspectionStartedAt(Date.now());
+      explicitInspectRef.current = false;
       createSessionMutation.mutate();
     }, 1000);
     return () => window.clearTimeout(timer);
@@ -1040,60 +1036,37 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     ? caseHosts.find((h) => h.id === hostChoice)?.display_name || "Selected host"
     : null;
 
-  const displayStep = step === 0 ? 1 : step === 5 ? 3 : step === 6 ? 4 : 2;
+  const healthStatus = healthQuery.isLoading
+    ? { label: "Checking systems", tone: "text-muted", dot: "bg-muted" }
+    : healthQuery.data?.critical_ready === false
+      ? { label: "Critical dependency down", tone: "text-danger", dot: "bg-danger" }
+      : healthQuery.data?.ready === false
+        ? { label: "Partial systems ready", tone: "text-amber", dot: "bg-amber" }
+        : { label: "All systems ready", tone: "text-mint", dot: "bg-mint" };
 
   if (!open) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Add Evidence">
       <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-[28px] border border-line bg-panel p-6 shadow-panel">
-        <div className="flex items-center justify-between">
-          <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Add Evidence &middot; Step {displayStep} of {TOTAL_STEPS}</p>
-          <button type="button" onClick={handleClose} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Cancel</button>
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">{step === 5 ? "Confirm evidence" : "Add Evidence"}</p>
+            <p className={`mt-1 inline-flex items-center gap-2 text-xs ${healthStatus.tone}`} data-testid="ingestion-health-chip"><span className={`h-2 w-2 rounded-full ${healthStatus.dot}`} />{healthStatus.label}</p>
+          </div>
+          <button type="button" onClick={handleClose} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Close</button>
         </div>
 
-        {step === 0 ? (
-          <section className="mt-5" data-testid="health-check">
-            <h2 className="text-xl font-semibold text-ink">Server Health Check</h2>
-            <p className="mt-1 text-sm text-muted">Kairon checks its core dependencies before you start adding evidence.</p>
-            {healthQuery.isLoading ? (
-              <p className="mt-4 text-sm text-muted">Checking system health...</p>
-            ) : healthQuery.data ? (
-              <>
-                <div className="mt-4 space-y-2">
-                  {healthQuery.data.checks.map((check) => (
-                    <p key={check.label} className={`text-sm ${check.ok ? "text-mint" : "text-danger"}`}>
-                      {check.ok ? "✔" : "⚠"} {check.label}: {check.detail}
-                    </p>
-                  ))}
-                </div>
-                <div className="mt-4 grid gap-2 text-sm text-muted sm:grid-cols-2">
-                  <p>Available disk space: <span className="text-ink">{bytes(healthQuery.data.available_disk_space_bytes)}</span></p>
-                  <p>Configured upload limit: <span className="text-ink">{bytes(healthQuery.data.configured_upload_limit_bytes)}</span></p>
-                  <p>Configured extraction limit: <span className="text-ink">{bytes(healthQuery.data.configured_extraction_limit_bytes)}</span></p>
-                </div>
-                {!healthQuery.data.critical_ready ? (
-                  <p className="mt-4 text-sm font-semibold text-danger">Processing cannot begin: Storage and Database must both be reachable.</p>
-                ) : !healthQuery.data.ready ? (
-                  <p className="mt-4 text-sm text-amber">Some non-critical dependencies (search or workers) are unavailable. You can continue, but processing may be delayed until they recover.</p>
-                ) : (
-                  <p className="mt-4 text-sm font-semibold text-mint">All systems ready</p>
-                )}
-              </>
-            ) : (
-              <p className="mt-4 text-sm text-danger">Kairon could not reach its own health check endpoint.</p>
-            )}
-            <div className="mt-5 flex justify-between">
-              <button type="button" onClick={() => healthQuery.refetch()} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Recheck</button>
-              <button
-                type="button"
-                disabled={!healthQuery.data?.critical_ready}
-                onClick={() => setStep(4)}
-                className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
-              >
-                Continue
-              </button>
+        {healthQuery.data?.critical_ready === false ? (
+          <section className="mt-5 rounded-2xl border border-danger/40 bg-danger/10 p-4" data-testid="health-check">
+            <h2 className="text-xl font-semibold text-danger">Critical dependency unavailable</h2>
+            <p className="mt-1 text-sm text-muted">Storage and database must be reachable before evidence intake can continue.</p>
+            <div className="mt-4 space-y-2">
+              {healthQuery.data.checks.map((check) => (
+                <p key={check.label} className={`text-sm ${check.ok ? "text-mint" : "text-danger"}`}>{check.ok ? "✔" : "⚠"} {check.label}: {check.detail}</p>
+              ))}
             </div>
+            <button type="button" onClick={() => healthQuery.refetch()} className="mt-4 rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Recheck</button>
           </section>
         ) : null}
 
@@ -1166,7 +1139,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
           </section>
         ) : null}
 
-        {step === 4 && !resumeTarget ? (
+        {step === 4 && !resumeTarget && healthQuery.data?.critical_ready !== false ? (
           <section className="mt-5">
             {interruptedOrActiveSessions.length ? (
               <div className="mb-6 rounded-3xl border border-amber-400/30 bg-amber-400/5 p-4" data-testid="resumable-uploads-panel">
@@ -1196,7 +1169,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 </div>
               </div>
             ) : null}
-            <h2 className="text-xl font-semibold text-ink">Select evidence</h2>
+            <h2 className="text-xl font-semibold text-ink">Add Evidence</h2>
             <p className="mt-1 text-sm text-muted">Select one or more files. Kairon will inspect each item and decide the evidence kind before processing.</p>
             <div
               className="mt-4 rounded-3xl border border-dashed border-line bg-abyss/60 p-8 text-center text-sm text-muted"
@@ -1374,15 +1347,43 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 )}
               </div>
             ) : null}
+            {activePreflightReports.length ? (
+              <div className="mt-5 space-y-3" data-testid="selected-evidence-list">
+                <p className="text-sm font-semibold text-ink">{activePreflightReports.length} {activePreflightReports.length === 1 ? "item" : "items"}</p>
+                {activePreflightReports.map((report) => {
+                  const tier = confidenceTierLabel(report.classification.confidence, hasConflictingSignals(report));
+                  const toneClass = tier.tone === "mint" ? "border-mint/30 bg-mint/10 text-mint" : tier.tone === "amber" ? "border-amber/30 bg-amber/10 text-amber" : "border-danger/30 bg-danger/10 text-danger";
+                  return (
+                    <div key={report.token} className="rounded-2xl border border-line bg-abyss/60 p-4" data-testid="selected-evidence-row">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div>
+                          <p className="font-semibold text-ink">{report.original_filename}</p>
+                          <p className="mt-1 text-xs text-muted">{bytes(report.resource_check.file_size_bytes)}</p>
+                        </div>
+                        <span className={`rounded-full border px-3 py-1 text-xs font-semibold ${toneClass}`}>{tier.label} — {evidenceKindLabel(report.classification.category)}</span>
+                      </div>
+                      <p className="mt-3 text-sm text-muted">{report.classification.reason || "Kairon inspected this item and produced a classification."}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : null}
             <div className="mt-5 flex justify-between">
-              <button type="button" onClick={() => setStep(0)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
+              <button type="button" onClick={handleClose} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Cancel</button>
               <button
                 type="button"
-                disabled={!canAdvanceStep4 || createSessionMutation.isPending || hashPending}
-                onClick={() => createSessionMutation.mutate()}
+                disabled={createSessionMutation.isPending || hashPending || (!activePreflightReports.length && !canAdvanceStep4)}
+                onClick={() => {
+                  if (activePreflightReports.length) {
+                    setStep(5);
+                  } else {
+                    explicitInspectRef.current = true;
+                    createSessionMutation.mutate();
+                  }
+                }}
                 className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
               >
-                {createSessionMutation.isPending ? inspectionLabel : hashPending ? "Calculating SHA-256..." : "Inspect evidence"}
+                {createSessionMutation.isPending ? inspectionLabel : hashPending ? "Calculating SHA-256..." : activePreflightReports.length ? "Continue →" : "Inspect evidence"}
               </button>
             </div>
           </section>
@@ -1390,8 +1391,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
         {step === 5 && preflight ? (
           <section className="mt-5" data-testid="preflight-report">
-            <h2 className="text-xl font-semibold text-ink">Detection Results</h2>
-            <p className="mt-1 text-sm text-muted">Kairon inspected the selected evidence before choosing a processing route.</p>
+            <h2 className="text-xl font-semibold text-ink">Confirm evidence</h2>
+            <p className="mt-1 text-sm text-muted">Review what Kairon found, confirm where it belongs, then start processing.</p>
 
             {session?.client_sha256_mismatch ? (
               <p className="mt-3 rounded-2xl border border-amber/40 bg-amber/10 p-3 text-xs text-amber" data-testid="hash-mismatch-warning">
@@ -1416,14 +1417,16 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                         <p className="font-semibold text-ink">{report.original_filename}</p>
                         <p className="mt-1 text-xs text-muted">{report.classification.container ?? report.classification.format_key ?? "Unknown container"}</p>
                       </div>
-                      <div className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent">
-                        {confidencePercent(report.classification.confidence)} confidence
-                      </div>
+                      {(() => {
+                        const tier = confidenceTierLabel(report.classification.confidence, hasConflictingSignals(report));
+                        const toneClass = tier.tone === "mint" ? "border-mint/30 bg-mint/10 text-mint" : tier.tone === "amber" ? "border-amber/30 bg-amber/10 text-amber" : "border-danger/30 bg-danger/10 text-danger";
+                        return <div className={`rounded-full border px-3 py-1 text-xs font-semibold ${toneClass}`}>{tier.label}</div>;
+                      })()}
                     </div>
                     <div className="mt-3 grid gap-2 text-sm text-muted sm:grid-cols-2">
                       <p>Detected kind: <span className="text-ink">{evidenceKindLabel(report.classification.category)}</span></p>
                       <p>Detected platform: <span className="text-ink">{report.classification.platform === "unknown" ? report.classification.contained_object ?? "Unknown" : report.classification.platform}</span></p>
-                      <p>Selected route: <span className="text-ink">{selectedRoute ? evidenceKindLabel(selectedRoute) : "No ingest route"}</span></p>
+                      <p>Assign to host: <span className="text-ink">{detectedHostname || selectedHostName || "Needs confirmation"}</span></p>
                       <p>Status: <span className={report.status === "ready" ? "text-mint" : report.status === "warning" ? "text-amber" : "text-danger"}>{report.status}</span></p>
                     </div>
                     {expectedMismatch ? (
@@ -1612,130 +1615,72 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               <p className="mt-4 text-sm font-semibold text-mint">Ready to process</p>
             )}
 
-            <details className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen((event.target as HTMLDetailsElement).open)}>
-              <summary className="cursor-pointer text-xs uppercase tracking-[0.16em] text-muted">Advanced options</summary>
-              <div className="mt-3 grid gap-3">
-                <label className="text-xs text-muted">Labels<input value={labels} onChange={(event) => setLabels(event.target.value)} placeholder="comma, separated, labels" className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
-                <label className="text-xs text-muted">Evidence notes<textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="mt-1 h-20 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
-              </div>
-            </details>
-
-            <div className="mt-5 flex justify-between">
-              <button type="button" onClick={() => setStep(4)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
-              <button
-                type="button"
-                disabled={blocked || overrideBlocking || wrongRouteBlocking}
-                onClick={() => setStep(6)}
-                className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
-              >
-                Continue
-              </button>
-            </div>
-          </section>
-        ) : null}
-
-        {step === 6 && preflight ? (
-          <section className="mt-5">
-            <h2 className="text-xl font-semibold text-ink">Confirmation</h2>
-            <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4 text-sm text-muted">
-              <p>Evidence: <span className="text-ink">{preflight.original_filename}</span></p>
-              <p className="mt-1">Platform: <span className="text-ink">{platform === "auto" ? `Auto Detect (${preflight.classification.platform})` : platform}</span></p>
-              <p className="mt-1">Pipeline: <span className="text-ink">{preflight.pipeline_preview.join(" → ")}</span></p>
-              <p className="mt-1">Estimated duration: <span className="text-ink">{durationBucketLabel(preflight.resource_check.estimated_duration_bucket) ?? "unknown"}</span></p>
-            </div>
-            <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4" data-testid="host-assignment-panel">
-              <h3 className="text-sm font-semibold text-ink">Host Assignment</h3>
-              {detectedHostname ? (
-                <div className="mt-3 rounded-2xl border border-mint/30 bg-mint/10 p-3 text-sm text-mint" data-testid="detected-hostname">
-                  <p className="font-semibold">&#10003; Detected hostname</p>
-                  <p className="mt-1 text-ink">{detectedHostname}</p>
-                </div>
-              ) : (
-                <p className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-sm text-amber" data-testid="missing-hostname">
-                  No reliable hostname was detected. Choose an existing host or create a new one before indexing.
-                </p>
-              )}
-              {detectedHostname && detectedHostMatches.length === 0 ? (
-                <p className="mt-3 text-sm text-muted">No existing host matches this hostname. Kairon can create it during evidence registration.</p>
-              ) : null}
-              {detectedHostname && detectedHostMatches.length > 1 ? (
-                <p className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-sm text-amber" data-testid="multiple-host-matches">
-                  Multiple hosts match this hostname. Select the correct host before indexing.
-                </p>
-              ) : null}
-              <div className="mt-4 grid gap-3">
-                {detectedHostname ? (
-                  <label className={`rounded-2xl border p-3 text-sm ${hostChoice === "auto" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
-                    <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === "auto"} onChange={() => setHostChoice("auto")} disabled={detectedHostMatches.length > 1} />
-                    {detectedHostMatches.length === 1 ? `Auto assign to ${detectedHostMatches[0].display_name}` : "Create host from detected hostname"}
-                  </label>
-                ) : null}
-                <label className={`rounded-2xl border p-3 text-sm ${hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
-                  <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(filteredCaseHosts[0]?.id ?? caseHosts[0]?.id ?? "auto")} disabled={!caseHosts.length} />
-                  Assign to existing host
-                  {hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? (
-                    <>
-                      <input value={hostSearch} onChange={(event) => setHostSearch(event.target.value)} placeholder="Search hosts" className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" />
-                      <select value={hostChoice} onChange={(event) => setHostChoice(event.target.value)} className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink">
-                        {filteredCaseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
-                      </select>
-                    </>
-                  ) : null}
-                </label>
-                <label className={`rounded-2xl border p-3 text-sm ${hostChoice === CREATE_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
-                  <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === CREATE_HOST_CHOICE} onChange={() => setHostChoice(CREATE_HOST_CHOICE)} />
-                  Create new host
-                  {hostChoice === CREATE_HOST_CHOICE ? (
-                    <input value={newHostName} onChange={(event) => setNewHostName(event.target.value)} placeholder={detectedHostname || "WS-01"} className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" />
-                  ) : null}
-                </label>
-                {processingMode === "skip" && !hasMemoryEvidence ? (
-                  <label className={`rounded-2xl border p-3 text-sm ${hostChoice === UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
-                    <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(UNASSIGNED_HOST_CHOICE)} />
-                    Keep unassigned
-                    <span className="mt-1 block text-xs text-muted">Host assignment can be completed later because indexing will not start now.</span>
-                  </label>
-                ) : null}
-              </div>
-              <p className="mt-3 text-sm text-muted">
-                Assignment: <span className="text-ink">{hostChoice === "auto" ? detectedHostMatches.length === 1 ? detectedHostMatches[0].display_name : detectedHostname ? detectedHostname : "Needs host" : hostChoice === CREATE_HOST_CHOICE ? newHostName || "New host" : hostChoice === UNASSIGNED_HOST_CHOICE ? "Keep unassigned" : selectedHostName}</span>
-              </p>
-              {hostAssignmentBlockingReason ? <p className="mt-3 text-sm text-amber" data-testid="host-assignment-guidance">{hostAssignmentBlockingReason}</p> : null}
-            </div>
-            {!hasMemoryEvidence ? (
-              <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4">
-                <h3 className="text-sm font-semibold text-ink">Processing</h3>
-                <div className="mt-3 grid gap-3 md:grid-cols-3">
-                  <label className={`rounded-2xl border p-3 text-sm ${processingMode === "recommended" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
-                    <input type="radio" name="processing-mode" className="mr-2" checked={processingMode === "recommended"} onChange={() => setProcessingMode("recommended")} />
-                    Recommended indexing
-                    <span className="mt-1 block text-xs text-muted">Queue the default parsers for this evidence type.</span>
-                  </label>
-                  <label className={`rounded-2xl border p-3 text-sm ${processingMode === "custom" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
-                    <input type="radio" name="processing-mode" className="mr-2" checked={processingMode === "custom"} onChange={() => setProcessingMode("custom")} />
-                    Custom indexing
-                    <span className="mt-1 block text-xs text-muted">Use the faster supported custom profile.</span>
-                  </label>
-                  <label className={`rounded-2xl border p-3 text-sm ${processingMode === "skip" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
-                    <input type="radio" name="processing-mode" className="mr-2" checked={processingMode === "skip"} onChange={() => setProcessingMode("skip")} />
-                    Save without indexing
-                    <span className="mt-1 block text-xs text-muted">Add evidence now and start indexing later.</span>
-                  </label>
-                </div>
-              </div>
-            ) : null}
             {hasMemoryEvidence ? (
               <label className="mt-4 flex items-start gap-2 rounded-2xl border border-amber/40 bg-amber/10 p-4 text-sm text-ink">
                 <input type="checkbox" className="mt-1" checked={memoryAuthorizationAcknowledged} onChange={(event) => setMemoryAuthorizationAcknowledged(event.target.checked)} />
                 I am authorized to handle this RAM evidence and understand it may contain highly sensitive data.
               </label>
             ) : null}
+
+            <details className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen((event.target as HTMLDetailsElement).open)}>
+              <summary className="cursor-pointer text-xs uppercase tracking-[0.16em] text-muted">Advanced — evidence options</summary>
+              <div className="mt-3 grid gap-3">
+                <div className="rounded-2xl border border-line bg-abyss/60 p-3" data-testid="host-assignment-panel">
+                  <p className="text-xs uppercase tracking-[0.16em] text-muted">Assign to host</p>
+                  <div className="mt-3 grid gap-3">
+                    {detectedHostname ? (
+                      <label className={`rounded-2xl border p-3 text-sm ${hostChoice === "auto" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+                        <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === "auto"} onChange={() => setHostChoice("auto")} disabled={detectedHostMatches.length > 1} />
+                        {detectedHostMatches.length === 1 ? `Auto assign to ${detectedHostMatches[0].display_name}` : `Create host from detected hostname (${detectedHostname})`}
+                      </label>
+                    ) : null}
+                    <label className={`rounded-2xl border p-3 text-sm ${hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+                      <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(filteredCaseHosts[0]?.id ?? caseHosts[0]?.id ?? "auto")} disabled={!caseHosts.length} />
+                      Existing host
+                      {hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? (
+                        <>
+                          <input value={hostSearch} onChange={(event) => setHostSearch(event.target.value)} placeholder="Search hosts" className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" />
+                          <select value={hostChoice} onChange={(event) => setHostChoice(event.target.value)} className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink">
+                            {filteredCaseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
+                          </select>
+                        </>
+                      ) : null}
+                    </label>
+                    <label className={`rounded-2xl border p-3 text-sm ${hostChoice === CREATE_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+                      <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === CREATE_HOST_CHOICE} onChange={() => setHostChoice(CREATE_HOST_CHOICE)} />
+                      New host
+                      {hostChoice === CREATE_HOST_CHOICE ? <input value={newHostName} onChange={(event) => setNewHostName(event.target.value)} placeholder={detectedHostname || "DESKTOP-7FQ2A1"} className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" /> : null}
+                    </label>
+                    {processingMode === "skip" && !hasMemoryEvidence ? (
+                      <label className={`rounded-2xl border p-3 text-sm ${hostChoice === UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+                        <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(UNASSIGNED_HOST_CHOICE)} />
+                        Keep unassigned
+                      </label>
+                    ) : null}
+                  </div>
+                  {hostAssignmentBlockingReason ? <p className="mt-3 text-sm text-amber" data-testid="host-assignment-guidance">{hostAssignmentBlockingReason}</p> : null}
+                </div>
+                {!hasMemoryEvidence ? (
+                  <div className="rounded-2xl border border-line bg-abyss/60 p-3">
+                    <p className="text-xs uppercase tracking-[0.16em] text-muted">Processing profile</p>
+                    <div className="mt-3 grid gap-2 md:grid-cols-3">
+                      <label className={`rounded-2xl border p-3 text-sm ${processingMode === "recommended" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}><input type="radio" name="processing-mode" className="mr-2" checked={processingMode === "recommended"} onChange={() => setProcessingMode("recommended")} />Standard</label>
+                      <label className={`rounded-2xl border p-3 text-sm ${processingMode === "custom" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}><input type="radio" name="processing-mode" className="mr-2" checked={processingMode === "custom"} onChange={() => setProcessingMode("custom")} />Custom</label>
+                      <label className={`rounded-2xl border p-3 text-sm ${processingMode === "skip" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}><input type="radio" name="processing-mode" className="mr-2" checked={processingMode === "skip"} onChange={() => setProcessingMode("skip")} />Save only</label>
+                    </div>
+                  </div>
+                ) : null}
+                <label className="text-xs text-muted">Labels<input value={labels} onChange={(event) => setLabels(event.target.value)} placeholder="comma, separated, labels" className="mt-1 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+                <label className="text-xs text-muted">Evidence notes<textarea value={notes} onChange={(event) => setNotes(event.target.value)} className="mt-1 h-20 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" /></label>
+              </div>
+            </details>
+
             {startMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{startMutation.error.message}</p> : null}
             <div className="mt-5 flex justify-between">
-              <button type="button" onClick={() => setStep(5)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
+              <button type="button" onClick={() => setStep(4)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
               <button
                 type="button"
-                disabled={!canStartProcessing}
+                disabled={blocked || !canStartProcessing}
                 onClick={() => startMutation.mutate()}
                 className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
               >
@@ -1744,6 +1689,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
             </div>
           </section>
         ) : null}
+
       </div>
     </div>
   );
