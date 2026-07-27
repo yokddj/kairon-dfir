@@ -22,6 +22,7 @@ from app.ingest.windows_ui.helpers import looks_like_windows_ui_artifact
 from app.ingest.wmi.helpers import looks_like_wmi_artifact
 from app.ingest.linux.helpers import looks_like_linux_artifact
 from app.disk_images.service import detect_disk_image_format
+from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classifier
 from app.models.evidence import EvidenceType
 
 
@@ -119,6 +120,16 @@ def detect_evidence_type(path: Path, extracted_files: list[str] | None = None) -
     lower_name = path.name.lower()
     extracted_files = extracted_files or []
     lower_files = [item.lower() for item in extracted_files]
+    if path.is_file():
+        classification = get_evidence_classifier().classify(path)
+        if classification.category == EvidenceCategory.DISK_IMAGE:
+            return EvidenceType.disk_image
+        if classification.category == EvidenceCategory.MEMORY_DUMP:
+            return EvidenceType.memory_dump
+        if classification.category == EvidenceCategory.AUXILIARY:
+            return EvidenceType.unknown
+        if classification.category == EvidenceCategory.UNKNOWN and suffix in {".raw", ".img", ".dd"}:
+            return EvidenceType.unknown
     if suffix == ".zip" and any(hint.lower() in file for hint in VELOCIRAPTOR_HINTS for file in lower_files):
         return EvidenceType.velociraptor_zip
     if suffix in {".7z", ".zip"} and any(token.lower() in lower_name for token in ["kape", "parseado", "ez", "zimmerman"]):

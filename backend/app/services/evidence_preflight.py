@@ -587,6 +587,14 @@ def run_preflight(
             "Memory Registration",
             "Memory Analysis (manual, after ingestion)",
         ]
+    elif classification_category == EvidenceCategory.AUXILIARY:
+        chain.append("Auxiliary")
+        platform = EvidencePlatform.unknown.value
+        classification_category_value = "auxiliary"
+        container_label = format_key.upper() if format_key else "Auxiliary file"
+        contained_object = "Volatility profile or support bundle"
+        warnings.append("Auxiliary files support analysis but are not standalone disk or memory evidence captures.")
+        pipeline_preview = ["Auxiliary", "Support File Registration", "No evidence ingest route"]
     else:
         classification_category_value = "unknown"
         pipeline_preview = ["Unknown", "Manual classification required"]
@@ -620,8 +628,15 @@ def run_preflight(
     )
 
     # --- Status checks ---
-    supported_ok = classification_category_value != "unknown"
+    supported_ok = classification_category_value not in {"unknown", "auxiliary"}
     status_checks.append(PreflightStatusCheck(label="Supported", ok=supported_ok, detail=classification_reason))
+    if classification_category_value == "auxiliary":
+        diagnostics.append(PreflightDiagnostic(
+            problem="Auxiliary file is not evidence",
+            reason="This file is a support artifact for memory analysis, not a disk or memory evidence capture, so Kairon will not send it to the disk or memory ingest pipelines.",
+            how_to_fix=["Import this file through the memory symbol/profile workflow when available."],
+            severity="recommendation",
+        ))
 
     upload_ok = file_size <= upload_limit
     status_checks.append(PreflightStatusCheck(

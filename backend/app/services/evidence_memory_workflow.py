@@ -24,16 +24,36 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classifier
 from app.models.evidence import Evidence
 from app.models.memory import MemoryUpload
 from app.services.host_resolution import assign_evidence_host
-from app.services.memory.upload_lifecycle import register_memory_evidence_from_upload
+from app.services.memory.upload_lifecycle import _canonical_path, _valid_regular_file, register_memory_evidence_from_upload
+from app.services.memory.upload_sessions import MemoryUploadSessionError
 from app.services.upload_shared.workflow import register_workflow_handler
 
 
 def register_evidence_memory_dump(upload_id: str, db: Session) -> Evidence:
-    evidence = register_memory_evidence_from_upload(upload_id, db=db)
     item = db.get(MemoryUpload, upload_id)
+    if item is None:
+        raise MemoryUploadSessionError("memory_upload_missing", f"Unified memory upload {upload_id} was not found.")
+    canonical = _canonical_path(item)
+    if not item.sha256 or not _valid_regular_file(canonical, int(item.expected_bytes)):
+        raise MemoryUploadSessionError("memory_file_missing", "Canonical memory image file is missing or has the wrong size.")
+    classification = get_evidence_classifier().classify(canonical)
+    if classification.category == EvidenceCategory.DISK_IMAGE:
+        raise MemoryUploadSessionError(
+            "classification_conflict_disk",
+            f"This upload was requested as memory evidence, but content detection classified it as a disk image: {classification.reason}",
+            detail={"detected_kind": classification.category.value, "confidence": classification.confidence, "reason": classification.reason, "metadata": classification.metadata},
+        )
+    if classification.category == EvidenceCategory.AUXILIARY:
+        raise MemoryUploadSessionError(
+            "classification_conflict_auxiliary",
+            f"This upload was requested as memory evidence, but content detection classified it as auxiliary: {classification.reason}",
+            detail={"detected_kind": classification.category.value, "confidence": classification.confidence, "reason": classification.reason, "metadata": classification.metadata},
+        )
+    evidence = register_memory_evidence_from_upload(upload_id, db=db)
     metadata = dict(item.metadata_json or {}) if item is not None else {}
 
     notes = metadata.get("wizard_notes")

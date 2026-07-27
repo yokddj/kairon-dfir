@@ -3677,7 +3677,7 @@ export type PreflightVolumeDiagnostic = {
 };
 
 export type PreflightClassification = {
-  category: "disk_image" | "memory_dump" | "archive" | "unknown";
+  category: "disk_image" | "memory_dump" | "auxiliary" | "collection" | "mixed" | "archive" | "unknown";
   format_key: string | null;
   confidence: string;
   reason: string;

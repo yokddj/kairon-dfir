@@ -47,6 +47,7 @@ from app.models.evidence import (
     resolve_evidence_platform,
 )
 from app.models.memory import MemoryUpload
+from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classifier
 from app.services.evidence_integrity import record_evidence_event
 from app.services.host_resolution import assign_evidence_host
 from app.services.memory.upload_lifecycle import _canonical_path, _valid_regular_file
@@ -95,9 +96,28 @@ def register_disk_image_evidence(upload_id: str, db: Session) -> Evidence:
     from app.disk_images.service import detect_disk_image_format
     from app.workers.tasks import enqueue_ingest
 
+    classification = get_evidence_classifier().classify(canonical)
+    if classification.category == EvidenceCategory.MEMORY_DUMP:
+        raise MemoryUploadSessionError(
+            "classification_conflict_memory",
+            f"This upload was requested as a disk image, but content detection classified it as memory evidence: {classification.reason}",
+            detail={"detected_kind": classification.category.value, "confidence": classification.confidence, "reason": classification.reason, "metadata": classification.metadata},
+        )
+    if classification.category == EvidenceCategory.AUXILIARY:
+        raise MemoryUploadSessionError(
+            "classification_conflict_auxiliary",
+            f"This upload was requested as a disk image, but content detection classified it as auxiliary: {classification.reason}",
+            detail={"detected_kind": classification.category.value, "confidence": classification.confidence, "reason": classification.reason, "metadata": classification.metadata},
+        )
     format_probe = detect_disk_image_format(canonical, [canonical])
     if not format_probe:
         raise MemoryUploadSessionError("unknown_format", "Kairon could not recognize this disk image format.")
+    if classification.category != EvidenceCategory.DISK_IMAGE and str(format_probe.get("confidence") or "") == "extension":
+        raise MemoryUploadSessionError(
+            "unknown_format",
+            "Kairon found only a raw disk-image extension, not a coherent disk structure.",
+            detail={"detected_kind": classification.category.value, "confidence": classification.confidence, "reason": classification.reason, "format_probe": format_probe, "metadata": classification.metadata},
+        )
     if not format_probe.get("supported"):
         raise MemoryUploadSessionError("unsupported_format", f"{format_probe.get('format')} is recognized but not supported in this release.")
 

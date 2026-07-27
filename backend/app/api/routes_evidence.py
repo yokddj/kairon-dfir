@@ -44,6 +44,7 @@ from app.core.storage import (
     sha256_file,
 )
 from app.ingest.detector import detect_evidence_type
+from app.ingest.evidence_classifier import EvidenceCategory, get_evidence_classifier
 from app.ingest.velociraptor import discover_velociraptor_evidences, open_evidence_container
 from app.ingest.velociraptor.zip_inventory import is_supported_archive_container
 from app.models.artifact import Artifact
@@ -2461,7 +2462,9 @@ def upload_disk_image(
         else:
             evidence_id, storage_root, size_bytes, combined_sha256, segment_entries, original_name = save_segmented_uploads(case_id, files)
             stored_path = storage_root / Path(original_name).name
-        format_probe = detect_disk_image_format(stored_path if stored_path.exists() else storage_root / Path(original_name).name, [storage_root / entry["path"] for entry in segment_entries if not entry.get("ignored")])
+        disk_candidate_path = stored_path if stored_path.exists() else storage_root / Path(original_name).name
+        format_probe = detect_disk_image_format(disk_candidate_path, [storage_root / entry["path"] for entry in segment_entries if not entry.get("ignored")])
+        classification = get_evidence_classifier().classify(disk_candidate_path) if len(files) == 1 else None
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     duplicate = find_duplicate_evidence(db, case_id=case_id, sha256=combined_sha256)
@@ -2469,6 +2472,13 @@ def upload_disk_image(
         raise HTTPException(status_code=409, detail=duplicate_evidence_error_detail(duplicate))
     if not format_probe:
         raise HTTPException(status_code=400, detail={"error_code": "unknown_format", "message": "Kairon could not recognize this disk image format."})
+    if classification is not None:
+        if classification.category == EvidenceCategory.MEMORY_DUMP:
+            raise HTTPException(status_code=400, detail={"error_code": "classification_conflict_memory", "message": f"This upload was requested as a disk image, but content detection classified it as memory evidence: {classification.reason}", "detected_kind": classification.category.value, "confidence": classification.confidence, "metadata": classification.metadata})
+        if classification.category == EvidenceCategory.AUXILIARY:
+            raise HTTPException(status_code=400, detail={"error_code": "classification_conflict_auxiliary", "message": f"This upload was requested as a disk image, but content detection classified it as auxiliary: {classification.reason}", "detected_kind": classification.category.value, "confidence": classification.confidence, "metadata": classification.metadata})
+        if classification.category != EvidenceCategory.DISK_IMAGE and str(format_probe.get("confidence") or "") == "extension":
+            raise HTTPException(status_code=400, detail={"error_code": "unknown_format", "message": "Kairon found only a raw disk-image extension, not a coherent disk structure.", "detected_kind": classification.category.value, "confidence": classification.confidence, "metadata": classification.metadata})
     if not format_probe.get("supported"):
         raise HTTPException(status_code=400, detail={"error_code": "unsupported_format", "message": f"{format_probe.get('format')} is recognized but not supported in this release."})
     resolved_provided_platform, resolved_detected_platform, resolved_effective_platform = _resolve_requested_platform(
