@@ -147,6 +147,10 @@ function CapabilityGroup({ title, capabilities, activeCaseId }: { title: string;
   );
 }
 
+function displayRegistryLabel(value: string) {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
 function WorkbenchSection({ workbench, capabilities, activeCaseId }: { workbench: CaseCapabilitiesResponse["workbenches"][number]; capabilities: CaseCapability[]; activeCaseId: string }) {
   const visibleCapabilities = capabilities.filter((capability) => capability.visible && workbench.capability_ids.includes(capability.id));
   if (!visibleCapabilities.length) return null;
@@ -159,7 +163,7 @@ function WorkbenchSection({ workbench, capabilities, activeCaseId }: { workbench
     <section className="space-y-2" data-testid={`workbench-${workbench.id}`}>
       <p className="px-4 font-mono text-[11px] uppercase tracking-[0.18em] text-muted">{workbench.label}</p>
       <div className="space-y-3">
-        {domains.map((domain) => <CapabilityGroup key={`${workbench.id}-${domain.id}`} title={domain.id.replace(/_/g, " ")} capabilities={domain.capabilities} activeCaseId={activeCaseId} />)}
+        {domains.map((domain) => <CapabilityGroup key={`${workbench.id}-${domain.id}`} title={displayRegistryLabel(domain.id)} capabilities={domain.capabilities} activeCaseId={activeCaseId} />)}
       </div>
     </section>
   );
