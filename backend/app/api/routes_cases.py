@@ -26,6 +26,7 @@ from app.services import case_deletion
 from app.services.debug_export import build_execution_story, build_process_tree_bundle, build_process_tree_expansion, build_process_tree_focused, generate_debug_pack
 from app.services.host_attribution import build_host_attribution
 from app.services.host_identity import build_case_host_candidates, get_case_hosts
+from app.services.case_capabilities import build_case_capabilities
 from app.services.case_state import build_case_next_actions, derive_case_investigation_state
 from app.services.indexing_profiles import evidence_has_active_indexing
 from app.services.stats_service import count_detections, count_events, count_findings
@@ -504,6 +505,14 @@ def get_case(case_id: str, db: Session = Depends(get_db)) -> Case:
 @router.get("/{case_id}/context")
 def get_case_context(case_id: str, db: Session = Depends(get_db)) -> dict:
     return _build_case_context(db, case_id)
+
+
+@router.get("/{case_id}/capabilities")
+def get_case_capabilities(case_id: str, db: Session = Depends(get_db)) -> dict:
+    payload = build_case_capabilities(db, case_id)
+    if payload is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    return payload
 
 
 @router.get("/{case_id}/validation-matrix")

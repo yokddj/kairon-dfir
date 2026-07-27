@@ -169,6 +169,22 @@ describe("apiFetch cache policy", () => {
     expect(init).toHaveProperty("cache", "no-store");
   });
 
+  it("fetches case-scoped capabilities from the registry endpoint", async () => {
+    (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
+      new Response(JSON.stringify({ registry_version: "test", generated_at: "", case: { id: "case-1", name: "Case", status: "active" }, platforms: [], evidence_domains: [], workbenches: [], capabilities: [], hosts: [], evidence: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const { api } = await import("./client");
+    await api.getCaseCapabilities("case-1");
+
+    const [url, init] = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.lastCall!;
+    expect(String(url)).toContain("/cases/case-1/capabilities");
+    expect(init).toHaveProperty("cache", "no-store");
+  });
+
   it("uses cache: no-store through api object endpoints (POST)", async () => {
     (globalThis.fetch as ReturnType<typeof vi.fn>).mockResolvedValue(
       new Response(JSON.stringify({ id: "c-1", name: "test", description: null, status: "open", mode: "investigation", timezone: null, created_at: "", updated_at: "" }), {
