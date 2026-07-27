@@ -6554,6 +6554,7 @@ export const api = {
       notes?: string | null;
       evidence_intent?: EvidenceIntent;
       ingest_mode?: IngestMode;
+      forced_evidence_kind?: "disk_image" | "memory_dump" | "collection" | "archive" | "unknown" | null;
     },
   ) => request<Evidence>(`/cases/${caseId}/evidence-uploads/${sessionId}/promote`, { method: "POST", body: JSON.stringify(payload) }),
   cancelEvidenceUploadSession: (caseId: string, sessionId: string) =>

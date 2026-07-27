@@ -570,6 +570,7 @@ def promote_evidence_upload(
             current_user=current_user,
             evidence_intent=payload.evidence_intent,
             ingest_mode=payload.ingest_mode,
+            forced_evidence_kind=payload.forced_evidence_kind,
         )
         operation = get_upload_operation(db, session)
         transition_operation(operation, "queued", stage="processing_queued", owner="worker", force=True)

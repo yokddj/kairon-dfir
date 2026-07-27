@@ -13,8 +13,11 @@ type WizardStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 type ProcessingMode = "recommended" | "custom" | "skip";
 type HostChoice = "auto" | "__create__" | "__unassigned__" | string;
 type InspectionState = "idle" | "uploading" | "finalizing_upload" | "preflight_running" | "complete" | "failed";
+type ForcedRoute = "disk_image" | "memory_dump" | "collection" | "archive" | "unknown";
+type BatchPreflightItem = { file: File; session: EvidenceUploadSessionRead; preflight: PreflightReport };
+type BatchPreflightResponse = { batch: true; items: BatchPreflightItem[]; health: EvidenceUploadSessionCreateResponse["health"] };
 
-const TOTAL_STEPS = 7;
+const TOTAL_STEPS = 4;
 const CREATE_HOST_CHOICE = "__create__";
 const UNASSIGNED_HOST_CHOICE = "__unassigned__";
 
@@ -32,6 +35,14 @@ const INTAKE_CARDS: { id: IntakeType; icon: string; title: string; examples: str
   { id: "artifact_collection", icon: "\u{1F4E6}", title: "Artifact Collection", examples: "KAPE, Velociraptor, manual ZIP" },
   { id: "folder", icon: "\u{1F4C1}", title: "Folder", examples: "Directory containing artifacts" },
   { id: "server_path", icon: "\u{2601}", title: "Existing Server Path", examples: "Already stored locally" },
+];
+
+const OVERRIDE_OPTIONS: Array<{ value: ForcedRoute; label: string }> = [
+  { value: "disk_image", label: "Disk" },
+  { value: "memory_dump", label: "Memory" },
+  { value: "collection", label: "Collection" },
+  { value: "archive", label: "Archive" },
+  { value: "unknown", label: "Unknown" },
 ];
 
 // Mirrors the server-side gate exactly (app.services.memory.upload_sessions
@@ -137,6 +148,58 @@ function inspectionErrorMessage(error: unknown): string {
   return "Kairon could not inspect this evidence.";
 }
 
+function evidenceKindLabel(category: string | null | undefined): string {
+  switch (category) {
+    case "disk_image":
+      return "Disk";
+    case "memory_dump":
+      return "Memory";
+    case "auxiliary":
+      return "Auxiliary";
+    case "collection":
+      return "Collection";
+    case "archive":
+      return "Archive";
+    case "mixed":
+      return "Mixed";
+    default:
+      return "Unknown";
+  }
+}
+
+function confidencePercent(confidence: string | null | undefined): string {
+  switch (String(confidence || "").toLowerCase()) {
+    case "high":
+    case "filesystem":
+    case "ewf_signature":
+    case "signature":
+      return "99%";
+    case "medium":
+      return "70%";
+    case "low":
+    case "extension":
+      return "35%";
+    default:
+      return confidence || "unknown";
+  }
+}
+
+function hasConflictingSignals(report: PreflightReport): boolean {
+  const text = [report.classification.reason, ...report.classification.warnings.map((warning) => warning.message), ...report.diagnostics.map((diagnostic) => `${diagnostic.problem} ${diagnostic.reason}`)].join(" ").toLowerCase();
+  return text.includes("conflict") || text.includes("ambiguous") || text.includes("only a raw") || text.includes("low confidence");
+}
+
+function needsManualOverride(report: PreflightReport): boolean {
+  const confidence = String(report.classification.confidence || "").toLowerCase();
+  return report.classification.category === "unknown" || confidence === "low" || confidence === "extension" || hasConflictingSignals(report);
+}
+
+function routeForCategory(category: string): ForcedRoute | null {
+  if (category === "disk_image" || category === "memory_dump" || category === "archive" || category === "unknown") return category;
+  if (category === "collection") return "collection";
+  return null;
+}
+
 async function sha256Hex(blob: Blob): Promise<string | undefined> {
   // Pure JS (see lib/sha256.ts), not SubtleCrypto: crypto.subtle.digest is
   // restricted to secure contexts (HTTPS/localhost) and is silently
@@ -189,7 +252,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const { notify } = useNotifications();
 
   const [step, setStep] = useState<WizardStep>(0);
-  const [intakeType, setIntakeType] = useState<IntakeType | null>(null);
+  const [intakeType, setIntakeType] = useState<IntakeType | null>("artifact_collection");
   const [platform, setPlatform] = useState<EvidencePlatform>("auto");
   const [hostChoice, setHostChoice] = useState<HostChoice>("auto");
   const [newHostName, setNewHostName] = useState("");
@@ -198,7 +261,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [serverPath, setServerPath] = useState("");
   const [session, setSession] = useState<EvidenceUploadSessionRead | null>(null);
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
+  const [batchItems, setBatchItems] = useState<BatchPreflightItem[]>([]);
   const [manualOverrideAccepted, setManualOverrideAccepted] = useState(false);
+  const [forcedRoutes, setForcedRoutes] = useState<Record<string, ForcedRoute>>({});
+  const [wrongRouteAccepted, setWrongRouteAccepted] = useState<Record<string, boolean>>({});
   const [memoryAuthorizationAcknowledged, setMemoryAuthorizationAcknowledged] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [processingMode, setProcessingMode] = useState<ProcessingMode>("recommended");
@@ -239,6 +305,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
   const requiresPathInput = intakeType === "server_path";
   const requiresFolderInput = intakeType === "folder";
+  const activePreflightReports = batchItems.length ? batchItems.map((item) => item.preflight) : preflight ? [preflight] : [];
 
   const caseHostsQuery = useQuery({ queryKey: ["case-hosts", caseId], queryFn: () => api.getCaseHosts(caseId), enabled: open && Boolean(caseId), staleTime: 15_000 });
   const caseHosts = caseHostsQuery.data?.hosts ?? [];
@@ -321,7 +388,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
   function reset() {
     setStep(0);
-    setIntakeType(null);
+    setIntakeType("artifact_collection");
     setPlatform("auto");
     setHostChoice("auto");
     setNewHostName("");
@@ -330,7 +397,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setServerPath("");
     setSession(null);
     setPreflight(null);
+    setBatchItems([]);
     setManualOverrideAccepted(false);
+    setForcedRoutes({});
+    setWrongRouteAccepted({});
     setMemoryAuthorizationAcknowledged(false);
     setAdvancedOpen(false);
     setProcessingMode("recommended");
@@ -622,6 +692,22 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       if ((useUnifiedMemoryDump || useUnifiedDiskImage || useUnifiedArchive) && !requiresFolderInput && files.length === 1) {
         return uploadUnifiedEvidence(files[0], onProgress);
       }
+      if (!requiresFolderInput && files.length > 1) {
+        const items: BatchPreflightItem[] = [];
+        for (let index = 0; index < files.length; index += 1) {
+          const file = files[index];
+          const response = await api.createEvidenceUploadSession(caseId, { file }, {
+            declaredPlatform: platform,
+            onProgress: (progress) => {
+              if (!progress.lengthComputable || progress.total <= 0) return;
+              const fileFraction = Math.min(1, progress.loaded / progress.total);
+              setUploadProgress(Math.min(1, (index + fileFraction) / files.length));
+            },
+          });
+          items.push({ file, session: response.session, preflight: normalizePreflightReport(response.preflight) });
+        }
+        return { batch: true, items, health: healthQuery.data ?? null } satisfies BatchPreflightResponse;
+      }
       if (!requiresFolderInput && files.length === 1) {
         return uploadSingleFileResumable(files[0], onProgress);
       }
@@ -631,6 +717,16 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       return api.createEvidenceUploadSession(caseId, { file: files[0] }, { declaredPlatform: platform, clientSha256: clientSha256 ?? undefined, onProgress });
     },
     onSuccess: async (response) => {
+      if ("batch" in response) {
+        setBatchItems(response.items);
+        setSession(response.items[0]?.session ?? null);
+        setPreflight(response.items[0]?.preflight ?? null);
+        setUploadProgress(1);
+        setInspectionState("complete");
+        setInspectionError(null);
+        setStep(5);
+        return;
+      }
       if ("evidence" in response) {
         const { evidence } = response;
         setUploadProgress(1);
@@ -667,6 +763,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
         return;
       }
       const preflightReport = normalizePreflightReport(response.preflight);
+      setBatchItems([]);
       setSession(response.session);
       setPreflight(preflightReport);
       setUploadProgress(response.session.is_server_path ? null : 1);
@@ -767,13 +864,15 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setHostChoice((current) => current === "auto" ? CREATE_HOST_CHOICE : current);
   }, [detectedHostname, intakeType, preflight]);
 
-  async function resolveHostAssignment(): Promise<{ host_id?: string; provided_host?: string }> {
+  async function resolveHostAssignment(report: PreflightReport | undefined = preflight ?? undefined): Promise<{ host_id?: string; provided_host?: string }> {
+    const reportHostname = report?.classification.hostname?.trim() || "";
+    const reportHostMatches = caseHosts.filter((host) => hostMatchesName(host, reportHostname));
     if (hostChoice === UNASSIGNED_HOST_CHOICE) return {};
     if (hostChoice === "auto") {
-      if (!detectedHostname) return {};
-      if (detectedHostMatches.length === 1) return { host_id: detectedHostMatches[0].id };
-      if (detectedHostMatches.length > 1) throw new Error("Multiple hosts match the detected hostname. Select the correct host before indexing.");
-      return { provided_host: detectedHostname };
+      if (!reportHostname) return {};
+      if (reportHostMatches.length === 1) return { host_id: reportHostMatches[0].id };
+      if (reportHostMatches.length > 1) throw new Error("Multiple hosts match the detected hostname. Select the correct host before indexing.");
+      return { provided_host: reportHostname };
     }
     if (hostChoice === CREATE_HOST_CHOICE) {
       const name = newHostName.trim();
@@ -803,18 +902,47 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
   const startMutation = useMutation({
     mutationFn: async (): Promise<{ evidence: Evidence; queuedJobs: number | null }> => {
+      if (batchItems.length) {
+        let lastEvidence: Evidence | null = null;
+        let queuedTotal = 0;
+        for (const item of batchItems) {
+          if (item.preflight.classification.category === "auxiliary") continue;
+          const hostAssignment = await resolveHostAssignment(item.preflight);
+          const declaredPlatform = platform === "auto" ? undefined : platform;
+          const evidence = await api.promoteEvidenceUploadSession(caseId, item.session.id, {
+            provided_platform: declaredPlatform,
+            host_id: hostAssignment.host_id,
+            provided_host: hostAssignment.provided_host,
+            memory_authorization_acknowledged: item.preflight.classification.category === "memory_dump" ? memoryAuthorizationAcknowledged : undefined,
+            labels: labels.split(",").map((label) => label.trim()).filter(Boolean),
+            notes: notes.trim() || undefined,
+            forced_evidence_kind: forcedRoutes[item.preflight.token] ?? undefined,
+            evidence_intent: evidenceIntent,
+            ingest_mode: ingestMode,
+            evtx_profile: evtxProfile,
+          });
+          lastEvidence = evidence;
+          if (evidence.evidence_type !== "memory_dump" && processingMode !== "skip") {
+            const result = await api.runEvidenceIndexingPlan(evidence.id, { profile: processingMode === "custom" ? "fast" : "recommended" });
+            queuedTotal += result.queued_jobs.length;
+          }
+        }
+        if (!lastEvidence) throw new Error("No ingestable evidence was selected. Auxiliary files are support files and are not processed as evidence.");
+        return { evidence: lastEvidence, queuedJobs: processingMode === "skip" ? null : queuedTotal };
+      }
       if (!session) throw new Error("No upload session is active");
       let evidence = promotedEvidenceRef.current;
       if (!evidence) {
-        const hostAssignment = await resolveHostAssignment();
+        const hostAssignment = await resolveHostAssignment(preflight ?? undefined);
         const declaredPlatform = platform === "auto" ? undefined : platform;
         evidence = await api.promoteEvidenceUploadSession(caseId, session.id, {
           provided_platform: declaredPlatform,
           host_id: hostAssignment.host_id,
           provided_host: hostAssignment.provided_host,
-          memory_authorization_acknowledged: intakeType === "memory_dump" ? memoryAuthorizationAcknowledged : undefined,
+          memory_authorization_acknowledged: preflight?.classification.category === "memory_dump" ? memoryAuthorizationAcknowledged : undefined,
           labels: labels.split(",").map((label) => label.trim()).filter(Boolean),
           notes: notes.trim() || undefined,
+          forced_evidence_kind: preflight ? forcedRoutes[preflight.token] ?? undefined : undefined,
           // Only meaningful for promote_upload_session's bare-else
           // (single-file legacy-compat) branch -- harmlessly ignored by
           // folder/server_path/disk_image/memory_dump. Defaults match
@@ -862,8 +990,9 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     },
   });
 
-  const blocked = preflight?.status === "blocked" && !manualOverrideAccepted;
-  const memoryRequiresExplicitHost = intakeType === "memory_dump";
+  const blocked = activePreflightReports.some((report) => report.status === "blocked" && !manualOverrideAccepted && !needsManualOverride(report));
+  const hasMemoryEvidence = activePreflightReports.some((report) => report.classification.category === "memory_dump") || intakeType === "memory_dump";
+  const memoryRequiresExplicitHost = hasMemoryEvidence;
   const hostStepBlockingReason = useMemo(() => {
     if (!memoryRequiresExplicitHost) return null;
     if (hostChoice === CREATE_HOST_CHOICE) {
@@ -887,7 +1016,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const inspectionElapsedSeconds = inspectionStartedAt ? Math.max(0, Math.floor((nowMs - inspectionStartedAt) / 1000)) : 0;
   const inspectionLabel = inspectionStateLabel(inspectionState, { isServerPath: requiresPathInput });
 
-  const hostAssignmentRequired = intakeType === "memory_dump" || processingMode !== "skip";
+  const hostAssignmentRequired = hasMemoryEvidence || processingMode !== "skip";
   const hostAssignmentBlockingReason = useMemo(() => {
     if (!hostAssignmentRequired) return null;
     if (hostChoice === UNASSIGNED_HOST_CHOICE) return "Choose an existing host or create a new host before indexing.";
@@ -899,10 +1028,18 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     }
     return hostChoice ? null : "Choose a host before indexing.";
   }, [detectedHostMatches.length, detectedHostname, hostAssignmentRequired, hostChoice, newHostName]);
-  const canStartProcessing = !startMutation.isPending && !(intakeType === "memory_dump" && !memoryAuthorizationAcknowledged) && hostAssignmentBlockingReason === null;
+  const overrideBlocking = activePreflightReports.some((report) => needsManualOverride(report) && !forcedRoutes[report.token]);
+  const wrongRouteBlocking = activePreflightReports.some((report) => {
+    const forced = forcedRoutes[report.token];
+    const detected = routeForCategory(report.classification.category);
+    return forced && detected && forced !== detected && [forced, detected].includes("disk_image") && [forced, detected].includes("memory_dump") && !wrongRouteAccepted[report.token];
+  });
+  const canStartProcessing = !startMutation.isPending && !(hasMemoryEvidence && !memoryAuthorizationAcknowledged) && hostAssignmentBlockingReason === null && !overrideBlocking && !wrongRouteBlocking;
   const selectedHostName = hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE
     ? caseHosts.find((h) => h.id === hostChoice)?.display_name || "Selected host"
     : null;
+
+  const displayStep = step === 0 ? 1 : step === 5 ? 3 : step === 6 ? 4 : 2;
 
   if (!open) return null;
 
@@ -910,7 +1047,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4" role="dialog" aria-modal="true" aria-label="Add Evidence">
       <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-[28px] border border-line bg-panel p-6 shadow-panel">
         <div className="flex items-center justify-between">
-          <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Add Evidence &middot; Step {step + 1} of {TOTAL_STEPS}</p>
+          <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Add Evidence &middot; Step {displayStep} of {TOTAL_STEPS}</p>
           <button type="button" onClick={handleClose} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Cancel</button>
         </div>
 
@@ -950,7 +1087,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               <button
                 type="button"
                 disabled={!healthQuery.data?.critical_ready}
-                onClick={() => setStep(1)}
+                onClick={() => setStep(4)}
                 className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
               >
                 Continue
@@ -1168,7 +1305,36 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
         {step === 4 && !resumeTarget ? (
           <section className="mt-5">
-            <h2 className="text-xl font-semibold text-ink">Choose evidence</h2>
+            {interruptedOrActiveSessions.length ? (
+              <div className="mb-6 rounded-3xl border border-amber-400/30 bg-amber-400/5 p-4" data-testid="resumable-uploads-panel">
+                <p className="font-mono text-xs uppercase tracking-[0.16em] text-amber-300">Interrupted or active uploads</p>
+                <div className="mt-3 space-y-2">
+                  {interruptedOrActiveSessions.map((candidate) => (
+                    <div key={candidate.id} className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-abyss/60 p-3" data-testid="resumable-upload-row">
+                      <div className="min-w-0">
+                        <p className="truncate text-sm font-semibold text-ink">{candidate.original_filename}</p>
+                        <p className="mt-0.5 text-xs text-muted">
+                          {candidate.category ?? "evidence"} &middot; {candidate.status}
+                          {candidate.progress_percent !== null ? ` · ${candidate.progress_percent.toFixed(0)}%` : ""}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 gap-2">
+                        {candidate.status === "promoted" && candidate.promoted_evidence_id ? (
+                          <button type="button" onClick={() => { handleClose(); navigate(candidate.category === "memory_dump" ? `/cases/${caseId}/memory/${candidate.promoted_evidence_id}` : `/evidences/${candidate.promoted_evidence_id}`); }} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss">Open evidence</button>
+                        ) : candidate.resumable || candidate.status === "staged" ? (
+                          <button type="button" onClick={() => setResumeTarget(candidate)} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss" data-testid="resume-upload-select">Resume</button>
+                        ) : null}
+                        {candidate.cancellable ? (
+                          <button type="button" disabled={cancelResumableMutation.isPending} onClick={() => cancelResumableMutation.mutate(candidate.id)} className="rounded-xl border border-line px-3 py-1.5 text-xs text-muted">Cancel</button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+            <h2 className="text-xl font-semibold text-ink">Select evidence</h2>
+            <p className="mt-1 text-sm text-muted">Select one or more files. Kairon will inspect each item and decide the evidence kind before processing.</p>
             {requiresPathInput ? (
               <label className="mt-4 block text-sm text-muted">
                 Server path
@@ -1179,11 +1345,11 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 <span>{requiresFolderInput ? "Select a folder" : "Select a file"}</span>
                 <input
                   type="file"
-                  multiple={requiresFolderInput || intakeType === "disk_image"}
+                  multiple
                   {...(requiresFolderInput ? { webkitdirectory: "true", directory: "true" } : {})}
                   onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
                 />
-                {files.length ? <span className="text-xs text-ink">{files.length === 1 ? files[0].name : `${files.length} files selected`}</span> : null}
+                {files.length ? <span className="text-xs text-ink">{files.length === 1 ? files[0].name : `${files.length} files selected for independent detection`}</span> : null}
                 {files.length === 1 && !requiresPathInput ? (
                   hashProgress === null ? null : hashProgress < 1 ? (
                     <span className="text-xs text-muted" data-testid="sha256-progress">Calculating SHA-256... {Math.round(hashProgress * 100)}%</span>
@@ -1288,7 +1454,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               </div>
             ) : null}
             <div className="mt-5 flex justify-between">
-              <button type="button" onClick={() => setStep(3)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
+              <button type="button" onClick={() => setStep(0)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
               <button
                 type="button"
                 disabled={!canAdvanceStep4 || createSessionMutation.isPending || hashPending}
@@ -1303,13 +1469,87 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
         {step === 5 && preflight ? (
           <section className="mt-5" data-testid="preflight-report">
-            <h2 className="text-xl font-semibold text-ink">Preflight Inspection</h2>
+            <h2 className="text-xl font-semibold text-ink">Detection Results</h2>
+            <p className="mt-1 text-sm text-muted">Kairon inspected the selected evidence before choosing a processing route.</p>
 
             {session?.client_sha256_mismatch ? (
               <p className="mt-3 rounded-2xl border border-amber/40 bg-amber/10 p-3 text-xs text-amber" data-testid="hash-mismatch-warning">
                 The SHA-256 computed in your browser does not match what Kairon staged on the server. The file may have changed during upload &mdash; consider re-selecting it before continuing.
               </p>
             ) : null}
+
+            <div className="mt-4 space-y-3" data-testid="detection-results-list">
+              {activePreflightReports.map((report) => {
+                const needsOverride = needsManualOverride(report);
+                const detectedRoute = routeForCategory(report.classification.category);
+                const forcedRoute = forcedRoutes[report.token];
+                const selectedRoute = forcedRoute ?? detectedRoute;
+                const wrongRoute = forcedRoute && detectedRoute && forcedRoute !== detectedRoute && [forcedRoute, detectedRoute].includes("disk_image") && [forcedRoute, detectedRoute].includes("memory_dump");
+                const decisiveSignals = [report.classification.reason, ...report.classification.warnings.map((warning) => warning.message)].filter(Boolean);
+                const conflictingSignals = hasConflictingSignals(report) ? report.diagnostics.map((diag) => diag.reason).filter(Boolean) : [];
+                return (
+                  <div key={report.token} className="rounded-2xl border border-line bg-abyss/60 p-4" data-testid="detection-result-row">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-semibold text-ink">{report.original_filename}</p>
+                        <p className="mt-1 text-xs text-muted">{report.classification.container ?? report.classification.format_key ?? "Unknown container"}</p>
+                      </div>
+                      <div className="rounded-full border border-accent/30 bg-accent/10 px-3 py-1 text-xs font-semibold text-accent">
+                        {confidencePercent(report.classification.confidence)} confidence
+                      </div>
+                    </div>
+                    <div className="mt-3 grid gap-2 text-sm text-muted sm:grid-cols-2">
+                      <p>Detected kind: <span className="text-ink">{evidenceKindLabel(report.classification.category)}</span></p>
+                      <p>Detected platform: <span className="text-ink">{report.classification.platform === "unknown" ? report.classification.contained_object ?? "Unknown" : report.classification.platform}</span></p>
+                      <p>Selected route: <span className="text-ink">{selectedRoute ? evidenceKindLabel(selectedRoute) : "No ingest route"}</span></p>
+                      <p>Status: <span className={report.status === "ready" ? "text-mint" : report.status === "warning" ? "text-amber" : "text-danger"}>{report.status}</span></p>
+                    </div>
+                    {decisiveSignals.length ? (
+                      <div className="mt-3">
+                        <p className="text-xs text-muted">Decisive signals</p>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {decisiveSignals.slice(0, 4).map((signal) => <span key={signal} className="rounded-full border border-mint/30 bg-mint/10 px-2 py-0.5 text-xs text-mint">{signal}</span>)}
+                        </div>
+                      </div>
+                    ) : null}
+                    {conflictingSignals.length ? (
+                      <div className="mt-3">
+                        <p className="text-xs text-muted">Conflicting signals</p>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {conflictingSignals.slice(0, 3).map((signal) => <span key={signal} className="rounded-full border border-amber/30 bg-amber/10 px-2 py-0.5 text-xs text-amber">{signal}</span>)}
+                        </div>
+                      </div>
+                    ) : null}
+                    {needsOverride ? (
+                      <div className="mt-3 rounded-xl border border-amber/30 bg-amber/10 p-3" data-testid="manual-override-panel">
+                        <label className="text-xs text-amber">
+                          Manual override
+                          <select
+                            value={forcedRoute ?? ""}
+                            onChange={(event) => setForcedRoutes((current) => ({ ...current, [report.token]: event.target.value as ForcedRoute }))}
+                            className="mt-1 w-full rounded-xl border border-line bg-abyss/90 px-3 py-2 text-sm text-ink"
+                          >
+                            <option value="">Choose forced route...</option>
+                            {OVERRIDE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                          </select>
+                        </label>
+                        {forcedRoute ? <p className="mt-2 text-xs text-amber">You are forcing the processing pipeline. Use this only when you have external evidence that Kairon's detection is incomplete.</p> : null}
+                        {wrongRoute ? (
+                          <div className="mt-3 rounded-xl border border-danger/30 bg-danger/10 p-3 text-xs text-danger" data-testid="wrong-route-warning">
+                            <p className="font-semibold">Forced route conflicts with strong structural detection.</p>
+                            <p className="mt-1">Kairon detected {evidenceKindLabel(report.classification.category)} but you selected {evidenceKindLabel(forcedRoute)}. Processing through the wrong pipeline may fail or produce misleading results.</p>
+                            <label className="mt-2 flex items-center gap-2 text-ink">
+                              <input type="checkbox" checked={Boolean(wrongRouteAccepted[report.token])} onChange={(event) => setWrongRouteAccepted((current) => ({ ...current, [report.token]: event.target.checked }))} />
+                              Process anyway
+                            </label>
+                          </div>
+                        ) : null}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
 
             <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4">
               <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">Evidence Classification</p>
@@ -1456,7 +1696,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               <button type="button" onClick={() => setStep(4)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
               <button
                 type="button"
-                disabled={blocked}
+                disabled={blocked || overrideBlocking || wrongRouteBlocking}
                 onClick={() => setStep(6)}
                 className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
               >
@@ -1521,7 +1761,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                     <input value={newHostName} onChange={(event) => setNewHostName(event.target.value)} placeholder={detectedHostname || "WS-01"} className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" />
                   ) : null}
                 </label>
-                {processingMode === "skip" && intakeType !== "memory_dump" ? (
+                {processingMode === "skip" && !hasMemoryEvidence ? (
                   <label className={`rounded-2xl border p-3 text-sm ${hostChoice === UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
                     <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(UNASSIGNED_HOST_CHOICE)} />
                     Keep unassigned
@@ -1534,7 +1774,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               </p>
               {hostAssignmentBlockingReason ? <p className="mt-3 text-sm text-amber" data-testid="host-assignment-guidance">{hostAssignmentBlockingReason}</p> : null}
             </div>
-            {intakeType !== "memory_dump" ? (
+            {!hasMemoryEvidence ? (
               <div className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4">
                 <h3 className="text-sm font-semibold text-ink">Processing</h3>
                 <div className="mt-3 grid gap-3 md:grid-cols-3">
@@ -1556,7 +1796,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 </div>
               </div>
             ) : null}
-            {intakeType === "memory_dump" ? (
+            {hasMemoryEvidence ? (
               <label className="mt-4 flex items-start gap-2 rounded-2xl border border-amber/40 bg-amber/10 p-4 text-sm text-ink">
                 <input type="checkbox" className="mt-1" checked={memoryAuthorizationAcknowledged} onChange={(event) => setMemoryAuthorizationAcknowledged(event.target.checked)} />
                 I am authorized to handle this RAM evidence and understand it may contain highly sensitive data.
@@ -1571,7 +1811,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 onClick={() => startMutation.mutate()}
                 className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
               >
-                {startMutation.isPending ? "Starting..." : processingMode === "skip" && intakeType !== "memory_dump" ? "Save Evidence" : "Start Processing"}
+                {startMutation.isPending ? "Starting..." : processingMode === "skip" && !hasMemoryEvidence ? "Save Evidence" : "Start Processing"}
               </button>
             </div>
           </section>

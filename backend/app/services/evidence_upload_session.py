@@ -1031,6 +1031,7 @@ def promote_upload_session(
     current_user: Any,
     evidence_intent: str | None = None,
     ingest_mode: str | None = None,
+    forced_evidence_kind: str | None = None,
 ) -> Evidence:
     """The shared bridge from a staged legacy session to a real Evidence
     row -- one function serving four architecturally distinct intake
@@ -1134,7 +1135,20 @@ def promote_upload_session(
                 for spec in extra_segment_specs
             ]
             try:
-                category = (session.metadata_json or {}).get("category")
+                metadata = dict(session.metadata_json or {})
+                detected_category = metadata.get("category")
+                normalized_forced_kind = str(forced_evidence_kind or "").strip().lower() or None
+                if normalized_forced_kind in {"disk", "disk_image"}:
+                    normalized_forced_kind = "disk_image"
+                elif normalized_forced_kind in {"memory", "memory_dump"}:
+                    normalized_forced_kind = "memory_dump"
+                elif normalized_forced_kind not in {"collection", "archive", "unknown", None}:
+                    normalized_forced_kind = None
+                category = normalized_forced_kind or detected_category
+                if normalized_forced_kind:
+                    session.metadata_json = {**metadata, "forced_evidence_kind": normalized_forced_kind, "detected_category_before_override": detected_category}
+                    db.add(session)
+                    db.flush()
                 if category == "disk_image":
                     evidence = upload_disk_image(
                         case_id,
@@ -1244,6 +1258,14 @@ def promote_upload_session(
                         db=db,
                         current_user=current_user,
                     )
+                if normalized_forced_kind:
+                    evidence.metadata_json = {
+                        **dict(evidence.metadata_json or {}),
+                        "forced_evidence_kind": normalized_forced_kind,
+                        "detected_category_before_override": detected_category,
+                    }
+                    db.add(evidence)
+                    db.flush()
             finally:
                 upload.file.close()
                 for extra in extra_uploads:
