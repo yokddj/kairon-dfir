@@ -10,6 +10,7 @@ import { hashBlob } from "../lib/sha256";
 type IntakeType = "disk_image" | "memory_dump" | "artifact_collection" | "folder" | "server_path";
 type WizardStep = 0 | 1 | 2 | 3 | 4 | 5 | 6;
 type ProcessingMode = "recommended" | "custom" | "skip";
+type AcquisitionSource = "files" | "server_path";
 type HostChoice = "auto" | "__create__" | "__unassigned__" | string;
 type InspectionState = "idle" | "uploading" | "finalizing_upload" | "preflight_running" | "complete" | "failed";
 type ForcedRoute = "disk_image" | "memory_dump" | "collection" | "archive" | "unknown";
@@ -92,11 +93,11 @@ function normalizeHostLabel(value: string | null | undefined): string {
 function inspectionStateLabel(state: InspectionState, options: { isServerPath: boolean }): string {
   switch (state) {
     case "uploading":
-      return "Uploading evidence to staging storage";
+      return "Analysing evidence...";
     case "finalizing_upload":
-      return "Finalizing staged upload";
+      return "Analysing evidence...";
     case "preflight_running":
-      return options.isServerPath ? "Inspecting server path" : "Inspecting staged evidence";
+      return options.isServerPath ? "Analysing server path..." : "Analysing evidence...";
     case "complete":
       return "Inspection complete";
     case "failed":
@@ -250,6 +251,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [newHostName, setNewHostName] = useState("");
   const [hostSearch, setHostSearch] = useState("");
   const [files, setFiles] = useState<File[]>([]);
+  const [folderUploadSelected, setFolderUploadSelected] = useState(false);
+  const [acquisitionSource, setAcquisitionSource] = useState<AcquisitionSource>("files");
   const [serverPath, setServerPath] = useState("");
   const [session, setSession] = useState<EvidenceUploadSessionRead | null>(null);
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
@@ -259,6 +262,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [wrongRouteAccepted, setWrongRouteAccepted] = useState<Record<string, boolean>>({});
   const [memoryAuthorizationAcknowledged, setMemoryAuthorizationAcknowledged] = useState(false);
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [selectionAdvancedOpen, setSelectionAdvancedOpen] = useState(false);
   const [processingMode, setProcessingMode] = useState<ProcessingMode>("recommended");
   const [labels, setLabels] = useState("");
   const [notes, setNotes] = useState("");
@@ -295,8 +299,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [resumeFileError, setResumeFileError] = useState<string | null>(null);
   const [resumeVerifying, setResumeVerifying] = useState(false);
 
-  const requiresPathInput = intakeType === "server_path";
-  const requiresFolderInput = intakeType === "folder";
+  const requiresPathInput = acquisitionSource === "server_path";
+  const requiresFolderInput = folderUploadSelected;
   const activePreflightReports = batchItems.length ? batchItems.map((item) => item.preflight) : preflight ? [preflight] : [];
 
   const caseHostsQuery = useQuery({ queryKey: ["case-hosts", caseId], queryFn: () => api.getCaseHosts(caseId), enabled: open && Boolean(caseId), staleTime: 15_000 });
@@ -317,24 +321,14 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   // already supports it (see files.length === 1 gate at the call site).
   const unifiedDiskImageEnabled = Boolean(healthQuery.data?.unified_upload_evidence_disk_image);
   const useUnifiedDiskImage = intakeType === "disk_image" && unifiedDiskImageEnabled;
-  // Single-file archives are the third migrated category, but unlike
-  // memory_dump/disk_image they have no dedicated intake card -- a ZIP/7z/
-  // tar/tar.gz/gz/xz file is selected under "Artifact Collection" today, the
-  // same card used for every other raw/parsed single-file or multi-file
-  // upload. Only when exactly one file is selected AND its extension is one
-  // of the migrated archive types does this route unified; anything else
-  // under this intake card (folders, multi-file, non-archive single files)
-  // is untouched and keeps taking the legacy staged/promote path.
+  // Single-file archives use the unified transport when selected directly;
+  // structural preflight remains the source of truth for evidence kind.
   const unifiedArchiveEnabled = Boolean(healthQuery.data?.unified_upload_evidence_archive);
   const useUnifiedArchive = intakeType === "artifact_collection" && unifiedArchiveEnabled && files.length === 1 && isSupportedArchiveFilename(files[0].name);
-  // Advanced Options (evidence_intent/ingest_mode/evtx_profile) surface
-  // only for "Artifact Collection" -- the one intake type where these
-  // concepts are meaningful (disk_image/memory_dump/folder/server_path
-  // have fixed or inapplicable classification). Captured before the
-  // upload/promote path diverges (unified archive vs. legacy) so the same
-  // state applies regardless of which one a given file ends up taking.
+  // Advanced Options (evidence_intent/ingest_mode/evtx_profile) are hidden
+  // unless the analyst explicitly expands Advanced import options.
   const wizardAdvancedOptionsEnabled = Boolean(healthQuery.data?.wizard_advanced_options_enabled);
-  const showAdvancedOptions = wizardAdvancedOptionsEnabled && intakeType === "artifact_collection";
+  const showAdvancedOptions = wizardAdvancedOptionsEnabled && selectionAdvancedOpen;
   const showEvtxProfileOption = showAdvancedOptions && files.length === 1 && (files[0].name.toLowerCase().endsWith(".evtx") || isSupportedArchiveFilename(files[0].name));
   // Discovery: lists sessions the analyst can still resume/cancel/open for
   // this case, reconciled server-side against their backing MemoryUpload.
@@ -386,6 +380,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setNewHostName("");
     setHostSearch("");
     setFiles([]);
+    setFolderUploadSelected(false);
+    setAcquisitionSource("files");
     setServerPath("");
     setSession(null);
     setPreflight(null);
@@ -395,6 +391,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setWrongRouteAccepted({});
     setMemoryAuthorizationAcknowledged(false);
     setAdvancedOpen(false);
+    setSelectionAdvancedOpen(false);
     setProcessingMode("recommended");
     setLabels("");
     setNotes("");
@@ -419,6 +416,21 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   function handleClose() {
     reset();
     onClose();
+  }
+
+  function selectEvidenceFiles(selectedFiles: File[], options: { folderUpload?: boolean } = {}) {
+    setAcquisitionSource("files");
+    setFolderUploadSelected(Boolean(options.folderUpload));
+    setFiles(selectedFiles);
+    setSession(null);
+    setPreflight(null);
+    setBatchItems([]);
+    setForcedRoutes({});
+    setWrongRouteAccepted({});
+    setManualOverrideAccepted(false);
+    setInspectionState(selectedFiles.length ? "uploading" : "idle");
+    setInspectionError(null);
+    setUploadProgress(selectedFiles.length ? 0 : null);
   }
 
   // Finalize (POST .../evidence-uploads/{id}/finalize) is a single
@@ -776,6 +788,17 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     const interval = window.setInterval(() => setNowMs(Date.now()), 1000);
     return () => window.clearInterval(interval);
   }, [createSessionMutation.isPending]);
+
+  useEffect(() => {
+    if (!open || step !== 4 || resumeTarget || requiresPathInput) return;
+    if (!files.length || session || preflight || batchItems.length) return;
+    if (inspectionState !== "uploading" || createSessionMutation.isPending) return;
+    const timer = window.setTimeout(() => {
+      setInspectionStartedAt(Date.now());
+      createSessionMutation.mutate();
+    }, 1000);
+    return () => window.clearTimeout(timer);
+  }, [batchItems.length, createSessionMutation, files.length, inspectionState, open, preflight, requiresPathInput, resumeTarget, session, step]);
 
   // Reacts to a resolved resume target (from the panel, Activity Center's
   // Resume action via resumeSessionId, or a resumeCandidate prop) -- the
@@ -1175,30 +1198,88 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
             ) : null}
             <h2 className="text-xl font-semibold text-ink">Select evidence</h2>
             <p className="mt-1 text-sm text-muted">Select one or more files. Kairon will inspect each item and decide the evidence kind before processing.</p>
-            {requiresPathInput ? (
-              <label className="mt-4 block text-sm text-muted">
-                Server path
-                <input value={serverPath} onChange={(event) => setServerPath(event.target.value)} placeholder="/mnt/evidence/case-001/disk.E01" className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" />
-              </label>
-            ) : (
-              <label className="mt-4 flex flex-col gap-2 rounded-2xl border border-dashed border-line bg-abyss/60 p-6 text-sm text-muted">
-                <span>{requiresFolderInput ? "Select a folder" : "Select a file"}</span>
-                <input
-                  type="file"
-                  multiple
-                  {...(requiresFolderInput ? { webkitdirectory: "true", directory: "true" } : {})}
-                  onChange={(event) => setFiles(Array.from(event.target.files ?? []))}
-                />
-                {files.length ? <span className="text-xs text-ink">{files.length === 1 ? files[0].name : `${files.length} files selected for independent detection`}</span> : null}
-                {files.length === 1 && !requiresPathInput ? (
-                  hashProgress === null ? null : hashProgress < 1 ? (
-                    <span className="text-xs text-muted" data-testid="sha256-progress">Calculating SHA-256... {Math.round(hashProgress * 100)}%</span>
-                  ) : (
-                    <span className="text-xs text-mint" data-testid="sha256-ready">SHA-256: {clientSha256}</span>
-                  )
+            <div
+              className="mt-4 rounded-3xl border border-dashed border-line bg-abyss/60 p-8 text-center text-sm text-muted"
+              onDragOver={(event) => event.preventDefault()}
+              onDrop={(event) => {
+                event.preventDefault();
+                selectEvidenceFiles(Array.from(event.dataTransfer.files ?? []));
+              }}
+              data-testid="evidence-dropzone"
+            >
+              <p className="text-base font-semibold text-ink">Drop evidence here</p>
+              <p className="mt-2">or choose an input method. Kairon will detect the evidence kind after selection.</p>
+              <div className="mt-5 flex flex-wrap justify-center gap-3">
+                <label className="cursor-pointer rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">
+                  Select Files
+                  <input
+                    type="file"
+                    multiple
+                    className="sr-only"
+                    onChange={(event) => {
+                      selectEvidenceFiles(Array.from(event.target.files ?? []));
+                    }}
+                  />
+                </label>
+                <label className="cursor-pointer rounded-2xl border border-line bg-panel/70 px-4 py-2 text-sm font-semibold text-ink">
+                  Select Folder
+                  <input
+                    type="file"
+                    multiple
+                    className="sr-only"
+                    {...({ webkitdirectory: "true", directory: "true" } as Record<string, string>)}
+                    onChange={(event) => {
+                      selectEvidenceFiles(Array.from(event.target.files ?? []), { folderUpload: true });
+                    }}
+                  />
+                </label>
+              </div>
+              {files.length ? <p className="mt-4 text-xs text-ink">{files.length === 1 ? files[0].name : `${files.length} files selected for detection`}</p> : null}
+              {files.length === 1 && !requiresPathInput ? (
+                hashProgress === null ? null : hashProgress < 1 ? (
+                  <p className="mt-2 text-xs text-muted" data-testid="sha256-progress">Calculating SHA-256... {Math.round(hashProgress * 100)}%</p>
+                ) : (
+                  <p className="mt-2 text-xs text-mint" data-testid="sha256-ready">SHA-256: {clientSha256}</p>
+                )
+              ) : null}
+            </div>
+            <details className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4" open={selectionAdvancedOpen} onToggle={(event) => setSelectionAdvancedOpen((event.target as HTMLDetailsElement).open)}>
+              <summary className="cursor-pointer text-xs uppercase tracking-[0.16em] text-muted">Advanced import options</summary>
+              <div className="mt-4 space-y-4">
+                <label className="flex items-start gap-2 rounded-2xl border border-line bg-abyss/60 p-3 text-sm text-muted">
+                  <input
+                    type="checkbox"
+                    className="mt-1"
+                    checked={requiresPathInput}
+                    onChange={(event) => {
+                      if (event.target.checked) {
+                        setAcquisitionSource("server_path");
+                        setFolderUploadSelected(false);
+                        setFiles([]);
+                        setSession(null);
+                        setPreflight(null);
+                        setBatchItems([]);
+                        setInspectionState("idle");
+                        setInspectionError(null);
+                        setUploadProgress(null);
+                      } else {
+                        setAcquisitionSource("files");
+                      }
+                    }}
+                  />
+                  <span>
+                    Import from existing server path
+                    <span className="mt-1 block text-xs text-muted">Use only when evidence is already mounted or staged on the server.</span>
+                  </span>
+                </label>
+                {requiresPathInput ? (
+                  <label className="block text-sm text-muted">
+                    Server path
+                    <input value={serverPath} onChange={(event) => setServerPath(event.target.value)} placeholder="/mnt/evidence/case-001/evidence.img" className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" />
+                  </label>
                 ) : null}
-              </label>
-            )}
+              </div>
+            </details>
             {showAdvancedOptions ? (
               <div className="mt-4 space-y-4 rounded-2xl border border-line bg-abyss/50 p-4" data-testid="wizard-advanced-options">
                 <p className="font-mono text-xs uppercase tracking-[0.16em] text-muted">Advanced options</p>
@@ -1348,7 +1429,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                     {expectedMismatch ? (
                       <div className="mt-3 rounded-xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber" data-testid="expected-kind-warning">
                         <p className="font-semibold">Expected {evidenceKindLabel(expectedKind)}, detected {evidenceKindLabel(detectedRoute)}.</p>
-                        <p className="mt-1">Kairon will use the detected route unless you choose a manual override below.</p>
+                        <p className="mt-1">Kairon will use the detected route unless you expand Advanced options and choose a manual override.</p>
                       </div>
                     ) : null}
                     {decisiveSignals.length ? (
@@ -1367,7 +1448,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                         </div>
                       </div>
                     ) : null}
-                    {needsOverride ? (
+                    {needsOverride || advancedOpen ? (
                       <div className="mt-3 rounded-xl border border-amber/30 bg-amber/10 p-3" data-testid="manual-override-panel">
                         <label className="text-xs text-amber">
                           Manual override

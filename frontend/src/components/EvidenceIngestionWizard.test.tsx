@@ -250,6 +250,18 @@ describe("EvidenceIngestionWizard", () => {
     expect(await screen.findByText(/Kairon will inspect each item and decide the evidence kind/i)).toBeInTheDocument();
   });
 
+  it("does not show evidence-type choices before preflight", async () => {
+    renderWizard();
+    await passHealthCheck();
+
+    expect(await screen.findByRole("heading", { name: "Select evidence" })).toBeInTheDocument();
+    expect(screen.queryByText(/What are you adding\?/i)).not.toBeInTheDocument();
+    expect(screen.queryByText("Disk Image")).not.toBeInTheDocument();
+    expect(screen.queryByText("Memory Dump")).not.toBeInTheDocument();
+    expect(screen.queryByText("Artifact Collection")).not.toBeInTheDocument();
+    expect(screen.queryByText("Existing Server Path")).not.toBeInTheDocument();
+  });
+
   it("starts upload without waiting for a client-side SHA-256 pass", async () => {
     renderWizard();
     await goToFileStep(/Artifact Collection/);
@@ -283,7 +295,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
 
     const panel = await screen.findByTestId("inspection-progress-panel");
-    expect(within(panel).getByText(/Uploading evidence to staging storage/i)).toBeInTheDocument();
+    expect(within(panel).getByText(/Analysing evidence/i)).toBeInTheDocument();
     expect(within(panel).getByText(/Uploading evidence 50%/i)).toBeInTheDocument();
     expect(within(panel).getByText(/Scanning contents, detecting platform, discovering hosts/i)).toBeInTheDocument();
 
@@ -1348,6 +1360,7 @@ describe("EvidenceIngestionWizard advanced options", () => {
     getIngestionReadinessMock.mockResolvedValue(readyHealth({ wizard_advanced_options_enabled: true }));
     renderWizard();
     await goToFileStep(/Artifact Collection/);
+    await userEvent.click(screen.getByText(/Advanced import options/i));
     const file = new File(["x"], "notes.csv");
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
 
@@ -1359,20 +1372,21 @@ describe("EvidenceIngestionWizard advanced options", () => {
     expect(within(panel).queryByTestId("evtx-profile-full")).not.toBeInTheDocument();
   });
 
-  it("shows generic advanced options on the auto-detect selection step when the flag is true", async () => {
+  it("keeps generic advanced options hidden until explicitly expanded", async () => {
     getIngestionReadinessMock.mockResolvedValue(readyHealth({ wizard_advanced_options_enabled: true }));
     renderWizard();
     await goToFileStep(/Disk Image/);
-    const file = new File(["x"], "disk.raw");
-    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
 
-    expect(screen.queryByTestId("wizard-advanced-options")).toBeInTheDocument();
+    expect(screen.queryByTestId("wizard-advanced-options")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByText(/Advanced import options/i));
+    expect(screen.getByTestId("wizard-advanced-options")).toBeInTheDocument();
   });
 
   it("shows the EVTX profile option for a .evtx file but not for a plain single file", async () => {
     getIngestionReadinessMock.mockResolvedValue(readyHealth({ wizard_advanced_options_enabled: true }));
     renderWizard();
     await goToFileStep(/Artifact Collection/);
+    await userEvent.click(screen.getByText(/Advanced import options/i));
     const file = new File(["x"], "Security.evtx");
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
 
@@ -1385,6 +1399,7 @@ describe("EvidenceIngestionWizard advanced options", () => {
     promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-adv-1", original_filename: "notes.csv" });
     renderWizard();
     await goToFileStep(/Artifact Collection/);
+    await userEvent.click(screen.getByText(/Advanced import options/i));
     const file = new File(["x"], "notes.csv");
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
     await screen.findByTestId("wizard-advanced-options");
@@ -1405,6 +1420,7 @@ describe("EvidenceIngestionWizard advanced options", () => {
     promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-adv-2", original_filename: "export.csv" });
     renderWizard();
     await goToFileStep(/Artifact Collection/);
+    await userEvent.click(screen.getByText(/Advanced import options/i));
     const file = new File(["x"], "export.csv");
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
     const panel = await screen.findByTestId("wizard-advanced-options");
@@ -1427,6 +1443,7 @@ describe("EvidenceIngestionWizard advanced options", () => {
     promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-adv-3", original_filename: "Security.evtx" });
     renderWizard();
     await goToFileStep(/Artifact Collection/);
+    await userEvent.click(screen.getByText(/Advanced import options/i));
     const file = new File(["x"], "Security.evtx");
     await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, file);
     const panel = await screen.findByTestId("wizard-advanced-options");
