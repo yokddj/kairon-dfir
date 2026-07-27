@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+from io import BytesIO
 
 import pytest
 from sqlalchemy import create_engine
@@ -23,6 +24,7 @@ from app.models.case import Case
 from app.models.case_host import CaseHost
 from app.models.evidence_upload_session import EvidenceUploadSession
 from app.models.memory import MemoryUpload
+from app.api.routes_evidence import upload_disk_image
 from app.services.evidence_disk_image_workflow import register_disk_image_evidence
 from app.services.evidence_unified_upload import (
     UNIFIED_UPLOAD_KINDS,
@@ -101,6 +103,15 @@ def _upload_all_chunks(db, memory_upload_id: str, payload: bytes, chunk_size: in
         )
 
 
+def _minimal_mbr_image() -> bytes:
+    payload = bytearray(4096)
+    payload[446 + 4] = 0x83
+    payload[446 + 8:446 + 12] = (1).to_bytes(4, "little")
+    payload[446 + 12:446 + 16] = (7).to_bytes(4, "little")
+    payload[510:512] = b"\x55\xaa"
+    return bytes(payload)
+
+
 def test_registered_workflows_include_disk_image():
     assert "disk_image" in registered_workflows()
     assert get_workflow_handler("disk_image") is register_disk_image_evidence
@@ -165,11 +176,7 @@ def test_disk_image_upload_registers_evidence_with_format_and_host(tmp_path, mon
     db.add(host)
     db.commit()
 
-    # RawImageAdapter falls back to matching the ".raw"/".img"/".dd"
-    # extension when no MBR/GPT/filesystem signature is present, so
-    # arbitrary bytes with a ".raw" name are enough to prove format
-    # detection ran, without needing a real disk image fixture.
-    payload = b"NOT-A-REAL-DISK-IMAGE-BUT-HAS-THE-RIGHT-EXTENSION"
+    payload = _minimal_mbr_image()
     known_hash = hashlib.sha256(payload).hexdigest()
     session, info = _create_disk_image_session(db, filename="evidence.raw", expected_size_bytes=len(payload), host_id=host.id, provided_host=None)
 
@@ -207,6 +214,26 @@ def test_disk_image_upload_rejects_unsupported_format(tmp_path, monkeypatch):
     with pytest.raises(MemoryUploadSessionError) as exc_info:
         finalize_memory_upload_session(db, case_id=CASE_ID, upload_id=info.memory_upload_id, expected_sha256=known_hash)
     assert exc_info.value.code == "unknown_format"
+
+
+def test_legacy_disk_upload_rejects_memory_img_before_enqueue(tmp_path, monkeypatch):
+    _configure(monkeypatch, tmp_path)
+    enqueued: list[str] = []
+    monkeypatch.setattr("app.workers.tasks.enqueue_ingest", lambda evidence_id: enqueued.append(evidence_id))
+    db = _db()
+    _case(db)
+
+    class Upload:
+        filename = "victoria-v8.kcore.img"
+        content_type = "application/octet-stream"
+        file = BytesIO(b"\x7fELF" + b"\x00" * 4096)
+
+    with pytest.raises(Exception) as exc_info:
+        upload_disk_image(CASE_ID, [Upload()], db=db)
+
+    assert getattr(exc_info.value, "status_code", None) == 400
+    assert exc_info.value.detail["error_code"] == "classification_conflict_memory"
+    assert enqueued == []
 
 
 def test_disk_image_and_memory_dump_ownership_never_cross(tmp_path, monkeypatch):

@@ -22,6 +22,7 @@ from app.services.memory.evidence_access import MemoryStorageAccessError, secure
 settings = get_settings()
 logger = logging.getLogger(__name__)
 _MEMORY_TEMP_NAME = re.compile(r"^[0-9a-f-]{36}-[0-9a-f-]{36}\.memory-upload\.part$")
+MEMORY_UPLOAD_CANDIDATE_EXTENSIONS = frozenset({".raw", ".mem", ".dmp", ".dump", ".bin", ".img", ".vmem", ".lime"})
 
 
 class MemoryUploadError(ValueError):
@@ -86,7 +87,7 @@ def safe_display_filename(filename: str | None) -> str:
 
 def is_memory_upload_filename(filename: str | None) -> bool:
     suffix = Path(filename or "").suffix.lower()
-    return bool(suffix and suffix in settings.memory_upload_extensions)
+    return bool(suffix and (suffix in settings.memory_upload_extensions or suffix in MEMORY_UPLOAD_CANDIDATE_EXTENSIONS))
 
 
 def save_memory_upload(
@@ -98,7 +99,7 @@ def save_memory_upload(
     state_callback: Callable[..., Any] | None = None,
 ) -> tuple[str, Path, int, str, str]:
     suffix = Path(upload.filename or "").suffix.lower()
-    if suffix not in settings.memory_upload_extensions:
+    if suffix not in settings.memory_upload_extensions and suffix not in MEMORY_UPLOAD_CANDIDATE_EXTENSIONS:
         raise MemoryUploadError("rejected_type", "This memory image extension is not enabled for browser upload.")
     chunk_size = max(65536, int(settings.memory_upload_chunk_size_bytes or 4194304))
     max_bytes = max(1, int(settings.memory_upload_max_bytes or settings.memory_max_upload_size or 1))

@@ -1203,6 +1203,11 @@ def promote_upload_session(
                             host_created=host_resolution.created,
                         )
                 else:
+                    if category == "auxiliary":
+                        raise UploadSessionError(
+                            "auxiliary_not_ingestable",
+                            "This file is an auxiliary support artifact, not standalone evidence. It was not sent to disk or memory processing.",
+                        )
                     # Documented single-file-coverage exemption: any single
                     # file that is neither disk_image nor memory_dump by
                     # preflight classification, AND was not eligible for

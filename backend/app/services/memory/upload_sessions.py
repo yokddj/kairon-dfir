@@ -35,6 +35,7 @@ from app.services.memory.upload_lifecycle import (
     _canonical_path,
     _find_duplicate_memory_evidence,
 )
+from app.services.memory.probe import CANDIDATE_MEMORY_EXTENSIONS
 from app.services.upload_locks import (
     UploadLockBusyError,
     UploadLockUnavailableError,
@@ -216,7 +217,7 @@ def _sanitize_sha256(value: str | None) -> str | None:
 
 def _allowed_memory_extension(filename: str) -> str:
     extension = Path(filename).suffix.lower()
-    if extension not in get_settings().memory_upload_extensions:
+    if extension not in get_settings().memory_upload_extensions and extension not in CANDIDATE_MEMORY_EXTENSIONS:
         raise MemoryUploadSessionError("MEMORY_UPLOAD_UNSUPPORTED_EXTENSION", "This file extension is not enabled for memory upload.")
     return extension
 

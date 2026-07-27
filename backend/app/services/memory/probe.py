@@ -296,11 +296,12 @@ def _has_valid_ext_superblock(header: bytes) -> bool:
         return False
     if header[_EXT_MAGIC_OFFSET:_EXT_MAGIC_OFFSET + 2] != _EXT_MAGIC:
         return False
-    s_inodes = int.from_bytes(header[_EXT_MAGIC_OFFSET + 4:_EXT_MAGIC_OFFSET + 8], "little")
-    s_blocks = int.from_bytes(header[_EXT_MAGIC_OFFSET + 24:_EXT_MAGIC_OFFSET + 28], "little")
+    superblock_offset = 1024
+    s_inodes = int.from_bytes(header[superblock_offset:superblock_offset + 4], "little")
+    s_blocks = int.from_bytes(header[superblock_offset + 4:superblock_offset + 8], "little")
     if s_inodes == 0 or s_blocks == 0:
         return False
-    s_log_block_size = int.from_bytes(header[_EXT_MAGIC_OFFSET + 24:_EXT_MAGIC_OFFSET + 28], "little")
+    s_log_block_size = int.from_bytes(header[superblock_offset + 24:superblock_offset + 28], "little")
     if s_log_block_size > 16:
         return False
     return True
