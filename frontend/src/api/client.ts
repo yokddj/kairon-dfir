@@ -3022,6 +3022,84 @@ export type MotwResponse = {
   warnings: string[];
 };
 
+export type LinuxAuthEvent = {
+  id?: string | null;
+  case_id?: string | null;
+  evidence_id?: string | null;
+  host_id?: string | null;
+  event_time?: string | null;
+  event_type?: string;
+  authentication_result?: string;
+  service?: string;
+  process?: string;
+  username?: string;
+  attempted_username?: string;
+  source_ip?: string;
+  source_port?: number | null;
+  destination_host?: string;
+  terminal?: string;
+  pid?: string | number | null;
+  uid?: string | number | null;
+  message?: string;
+  source_file?: string;
+  artifact_type?: string;
+  aggregate_failure_count?: number | null;
+  explicit_failure_count?: number;
+  effective_failure_count?: number;
+};
+
+export type LinuxAuthSession = {
+  id: string;
+  username: string;
+  source_ip?: string | null;
+  source_port?: number | null;
+  service?: string | null;
+  start?: string | null;
+  end?: string | null;
+  duration_seconds?: number | null;
+  status: string;
+  confidence?: string;
+  evidence_sources?: string[];
+};
+
+export type LinuxAuthBruteForceGroup = {
+  id: string;
+  target_account: string;
+  source_ip: string;
+  service: string;
+  first_seen?: string | null;
+  last_seen?: string | null;
+  explicit_failed_events: number;
+  pam_aggregate_failures: number;
+  effective_attempts: number;
+  distinct_usernames: string[];
+  distinct_source_ips: string[];
+  followed_by_success: boolean;
+  successful_username?: string | null;
+  time_to_success_seconds?: number | null;
+  status: string;
+};
+
+export type LinuxAuthenticationInvestigation = {
+  case_id: string;
+  overview: {
+    successful_logins: number;
+    failed_attempts: number;
+    effective_failed_attempts: number;
+    reconstructed_sessions: number;
+    suspected_brute_force_groups: number;
+    distinct_source_ips: number;
+    last_successful_login?: LinuxAuthEvent | null;
+    lastlog_source_ip_count: number;
+    lastlog_supported: boolean;
+  };
+  sessions: LinuxAuthSession[];
+  failed_authentication: LinuxAuthEvent[];
+  brute_force: LinuxAuthBruteForceGroup[];
+  last_login: LinuxAuthEvent[];
+  events: LinuxAuthEvent[];
+};
+
 export type EmailArtifactItem = {
   id: string;
   case_id: string;
@@ -6876,6 +6954,31 @@ export const api = {
       query.set(key, String(value));
     }
     return request<MotwResponse>(`/cases/${caseId}/motw${query.size ? `?${query.toString()}` : ""}`);
+  },
+  getLinuxAuthentication: (
+    caseId: string,
+    params?: {
+      username?: string;
+      attempted_username?: string;
+      source_ip?: string;
+      source_port?: number;
+      result?: string;
+      service?: string;
+      session_state?: string;
+      brute_force_only?: boolean;
+      followed_by_success?: boolean;
+      time_from?: string;
+      time_to?: string;
+      evidence_id?: string;
+      host_id?: string | null;
+    },
+  ) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params ?? {})) {
+      if (value === undefined || value === null || value === "") continue;
+      query.set(key, String(value));
+    }
+    return request<LinuxAuthenticationInvestigation>(`/cases/${caseId}/linux-authentication${query.size ? `?${query.toString()}` : ""}`);
   },
   getEmailArtifacts: (
     caseId: string,

@@ -3844,8 +3844,12 @@ def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path,
             module = importlib.import_module(f"app.ingest.linux.{parser_module}")
             parse_func = getattr(module, f"parse_{parser_module}", None)
             if parse_func:
-                text = path.read_text(encoding="utf-8", errors="replace")
-                rows = parse_func(text, source_path=str(artifact_meta.get("source_path") or path))
+                source_path_value = str(artifact_meta.get("source_path") or path)
+                if parser_module == "auth" and str(artifact_meta.get("artifact_type") or "").lower() in {"wtmp", "btmp", "lastlog"}:
+                    rows = parse_func(path.read_bytes(), source_path=source_path_value)
+                else:
+                    text = path.read_text(encoding="utf-8", errors="replace")
+                    rows = parse_func(text, source_path=source_path_value)
                 documents = [normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta) for row in rows]
                 artifact_meta["ingest_audit"] = {
                     "artifact": str(artifact_meta.get("name") or path.name),

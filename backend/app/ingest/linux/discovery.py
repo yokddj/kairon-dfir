@@ -12,6 +12,9 @@ from app.ingest.linux.os_detection import detect_linux_release
 SUPPORTED_ARTIFACTS: dict[str, dict[str, str]] = {
     "journal": {"label": "journal", "family": "linux_journal"},
     "auth_log": {"label": "auth.log", "family": "linux_auth"},
+    "wtmp": {"label": "wtmp", "family": "linux_auth"},
+    "btmp": {"label": "btmp", "family": "linux_auth"},
+    "lastlog": {"label": "lastlog", "family": "linux_auth"},
     "syslog": {"label": "syslog", "family": "linux_syslog"},
     "audit_log": {"label": "audit.log", "family": "linux_audit"},
     "shell_history": {"label": "shell history", "family": "linux_shell_history"},
@@ -67,6 +70,8 @@ def _artifact_key(family: str, artifact_type: str, path: str) -> str:
     if family == "linux_os_info":
         return "os_info"
     if family == "linux_auth":
+        if artifact_type in {"wtmp", "btmp", "lastlog"}:
+            return artifact_type
         return "auth_log"
     if family == "linux_syslog":
         return "syslog"

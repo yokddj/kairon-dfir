@@ -44,6 +44,8 @@ class LinuxTriageParser(ParserPlugin):
                 return []
             with open(artifact.get("full_path", source_path), "rb") as fh:
                 content = fh.read()
+                if family == "linux_auth" and artifact.get("artifact_type") in {"wtmp", "btmp", "lastlog"}:
+                    return parse_func(content, source_path=source_path)
                 try:
                     content = content.decode("utf-8")
                 except UnicodeDecodeError:

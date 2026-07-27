@@ -3649,6 +3649,16 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["event_action"] = row.get("event_action", "")
     linux_data["auth_method"] = row.get("auth_method", "")
     linux_data["source_ip"] = row.get("source_ip", "")
+    linux_data["source_port"] = row.get("source_port", None)
+    linux_data["service"] = row.get("service", "")
+    linux_data["terminal"] = row.get("terminal", "")
+    linux_data["uid"] = row.get("uid", None)
+    linux_data["attempted_username"] = row.get("attempted_username", "")
+    linux_data["authentication_result"] = row.get("authentication_result", "")
+    linux_data["auth_event_type"] = row.get("auth_event_type", "")
+    linux_data["effective_failure_count"] = row.get("effective_failure_count", None)
+    linux_data["record_type"] = row.get("record_type", "")
+    linux_data["record_offset"] = row.get("record_offset", None)
     linux_data["hostname"] = linux_data.get("hostname") or detected_host or ""
 
     if detected_host:
@@ -3671,6 +3681,22 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     doc["event"]["type"] = linux_data.get("artifact_type", "linux_record")
     doc["event"]["action"] = linux_data.get("event_action", "") or linux_data.get("artifact_type", "")
     doc["event"]["message"] = linux_data.get("message", "")
+    if family == "linux_auth":
+        auth_label = {
+            "login_success": "SSH login succeeded",
+            "login_failure": "SSH login failed",
+            "invalid_user": "SSH invalid user attempted",
+            "session_open": "PAM session opened",
+            "session_close": "PAM session closed",
+            "authentication_failure": "PAM authentication failed",
+            "logout": "Login session ended",
+            "privilege_authentication": "Privilege authentication event",
+        }.get(str(linux_data.get("auth_event_type") or ""))
+        if auth_label:
+            doc["event"]["type"] = linux_data.get("auth_event_type")
+            doc["event"]["action"] = linux_data.get("auth_event_type")
+            doc["event"]["message"] = auth_label
+            doc["title"] = auth_label
     event_severity = "medium" if linux_data.get("event_action") in {"login", "auth_failure", "session_open", "session_close", "sudo", "su"} else "info"
     doc["event"]["severity"] = event_severity
 

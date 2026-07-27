@@ -151,6 +151,7 @@ export default function Sidebar() {
       title: "Investigation",
       items: [
         { to: "/cases/:caseId/search", label: "Search", icon: Search, requiresCase: true, stage: "investigate" },
+        { to: "/cases/:caseId/linux-authentication", label: "Linux Auth", icon: KeyRound, requiresCase: true, stage: "investigate" },
         { to: "/cases/:caseId/command-history", label: "Command History", icon: Terminal, requiresCase: true, stage: "investigate" },
         { to: "/cases/:caseId/process-graph", label: "Execution Stories", icon: Waypoints, requiresCase: true, stage: "analyze" },
         { to: "/cases/:caseId/artifacts", label: "Artifact Views", icon: FolderSearch2, requiresCase: true, stage: "analyze" },
