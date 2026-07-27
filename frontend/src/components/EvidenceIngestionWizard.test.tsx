@@ -683,7 +683,7 @@ describe("EvidenceIngestionWizard", () => {
     promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-1", original_filename: "disk.E01" });
     createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
       session: { ...sessionResponse().session, id: "session-disk", original_filename: "disk.E01" },
-      preflight: readyReport({ original_filename: "disk.E01" }),
+      preflight: readyReport({ original_filename: "disk.E01", classification: { ...readyReport().classification, category: "disk_image", chain: ["Disk Image"], container: "EWF disk image" } }),
     }));
     renderWizard();
     await goToFileStep(/Disk Image/);
@@ -692,6 +692,8 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
     await screen.findByRole("heading", { name: "Confirm evidence" });
+    expect(screen.queryByTestId("memory-host-required-message")).not.toBeInTheDocument();
+    expect(screen.getByText("Ready to process")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-disk", expect.objectContaining({})));
@@ -947,6 +949,77 @@ describe("EvidenceIngestionWizard", () => {
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ provided_host: "web01", memory_authorization_acknowledged: true })));
     expect(runEvidenceIndexingPlanMock).not.toHaveBeenCalled();
     await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/memory/evidence-3"));
+  });
+
+  it("shows a visible host requirement for memory evidence with no detected host", async () => {
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+      preflight: readyReport({
+        original_filename: "capture.mem",
+        classification: { ...readyReport().classification, category: "memory_dump", hostname: null, chain: ["Memory Dump"], container: "Raw memory candidate" },
+        pipeline_preview: ["Memory Dump", "Evidence Classification", "Memory Registration", "Memory Analysis (manual, after ingestion)"],
+      }),
+    }));
+    renderWizard();
+    await goToFileStep(/Memory Dump/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "capture.mem"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+
+    expect(screen.getByTestId("memory-host-required-message")).toHaveTextContent(/Assign this memory evidence to a host before processing/i);
+    expect(screen.getByTestId("host-assignment-panel")).toBeInTheDocument();
+    expect(screen.getByText(/Status:/).parentElement).toHaveTextContent(/action required/i);
+    expect(screen.queryByText("Ready to process")).not.toBeInTheDocument();
+    const startButton = screen.getByRole("button", { name: "Start Processing" });
+    expect(startButton).toBeDisabled();
+    expect(screen.getByTestId("host-assignment-guidance")).toHaveTextContent(/Enter a hostname/i);
+  });
+
+  it("marks memory evidence ready after selecting an existing host", async () => {
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+      preflight: readyReport({ classification: { ...readyReport().classification, category: "memory_dump", hostname: null, chain: ["Memory Dump"], container: "Raw memory candidate" } }),
+    }));
+    renderWizard();
+    await goToFileStep(/Memory Dump/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "capture.mem"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+
+    const hostPanel = screen.getByTestId("host-assignment-panel");
+    await userEvent.click(within(hostPanel).getByRole("radio", { name: /Existing host/i }));
+    await userEvent.selectOptions(within(hostPanel).getByRole("combobox"), "host-1");
+
+    expect(screen.queryByTestId("memory-host-required-message")).not.toBeInTheDocument();
+    expect(screen.getByText(/Assign to host:/).parentElement).toHaveTextContent("WS-01");
+    expect(screen.getByText("Ready to process")).toBeInTheDocument();
+    const startButton = screen.getByRole("button", { name: "Start Processing" });
+    expect(startButton).toBeDisabled();
+    await userEvent.click(screen.getByRole("checkbox", { name: /authorized to handle this RAM evidence/i }));
+    expect(startButton).toBeEnabled();
+  });
+
+  it("marks memory evidence ready after entering a new host", async () => {
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-new-host", original_filename: "capture.mem", evidence_type: "memory_dump" });
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+      preflight: readyReport({ classification: { ...readyReport().classification, category: "memory_dump", hostname: null, chain: ["Memory Dump"], container: "Raw memory candidate" } }),
+    }));
+    renderWizard();
+    await goToFileStep(/Memory Dump/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "capture.mem"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+
+    const hostPanel = screen.getByTestId("host-assignment-panel");
+    await userEvent.click(within(hostPanel).getByRole("radio", { name: /New host/i }));
+    await userEvent.type(within(hostPanel).getByPlaceholderText("DESKTOP-7FQ2A1"), "MEMHOST-01");
+
+    expect(screen.queryByTestId("memory-host-required-message")).not.toBeInTheDocument();
+    expect(screen.getByText(/Assign to host:/).parentElement).toHaveTextContent("MEMHOST-01");
+    expect(screen.getByText("Ready to process")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("checkbox", { name: /authorized to handle this RAM evidence/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(createCaseHostMock).toHaveBeenCalledWith("case-1", { host_name: "MEMHOST-01", reason: "Created during evidence ingestion wizard" }));
+    await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ host_id: "host-created", memory_authorization_acknowledged: true })));
   });
 });
 

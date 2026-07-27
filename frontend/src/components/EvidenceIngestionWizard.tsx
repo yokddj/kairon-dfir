@@ -1045,6 +1045,51 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const selectedHostName = hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE
     ? caseHosts.find((h) => h.id === hostChoice)?.display_name || "Selected host"
     : null;
+  const assignedHostLabel = hostChoice === CREATE_HOST_CHOICE
+    ? newHostName.trim() || null
+    : hostChoice === "auto"
+      ? detectedHostMatches.length === 1 ? detectedHostMatches[0].display_name : detectedHostname
+      : selectedHostName;
+  const memoryHostBlocking = hasMemoryEvidence && hostAssignmentBlockingReason !== null;
+  const readyToProcess = !preflight?.diagnostics.length && !memoryHostBlocking;
+
+  const hostAssignmentPanel = (
+    <div className="rounded-2xl border border-line bg-abyss/60 p-3" data-testid="host-assignment-panel">
+      <p className="text-xs uppercase tracking-[0.16em] text-muted">Assign to host</p>
+      <div className="mt-3 grid gap-3">
+        {detectedHostname ? (
+          <label className={`rounded-2xl border p-3 text-sm ${hostChoice === "auto" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+            <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === "auto"} onChange={() => setHostChoice("auto")} disabled={detectedHostMatches.length > 1} />
+            {detectedHostMatches.length === 1 ? `Auto assign to ${detectedHostMatches[0].display_name}` : `Create host from detected hostname (${detectedHostname})`}
+          </label>
+        ) : null}
+        <label className={`rounded-2xl border p-3 text-sm ${hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+          <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(filteredCaseHosts[0]?.id ?? caseHosts[0]?.id ?? "auto")} disabled={!caseHosts.length} />
+          Existing host
+          {hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? (
+            <>
+              <input value={hostSearch} onChange={(event) => setHostSearch(event.target.value)} placeholder="Search hosts" className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" />
+              <select value={hostChoice} onChange={(event) => setHostChoice(event.target.value)} className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink">
+                {filteredCaseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
+              </select>
+            </>
+          ) : null}
+        </label>
+        <label className={`rounded-2xl border p-3 text-sm ${hostChoice === CREATE_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+          <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === CREATE_HOST_CHOICE} onChange={() => setHostChoice(CREATE_HOST_CHOICE)} />
+          New host
+          {hostChoice === CREATE_HOST_CHOICE ? <input value={newHostName} onChange={(event) => setNewHostName(event.target.value)} placeholder={detectedHostname || "DESKTOP-7FQ2A1"} className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" /> : null}
+        </label>
+        {processingMode === "skip" && !hasMemoryEvidence ? (
+          <label className={`rounded-2xl border p-3 text-sm ${hostChoice === UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
+            <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(UNASSIGNED_HOST_CHOICE)} />
+            Keep unassigned
+          </label>
+        ) : null}
+      </div>
+      {hostAssignmentBlockingReason ? <p className="mt-3 text-sm text-amber" data-testid="host-assignment-guidance">{hostAssignmentBlockingReason}</p> : null}
+    </div>
+  );
 
   const healthStatus = healthQuery.isLoading
     ? { label: "Checking systems", tone: "text-muted", dot: "bg-muted" }
@@ -1434,8 +1479,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                     <div className="mt-3 grid gap-2 text-sm text-muted sm:grid-cols-2">
                       <p>Detected kind: <span className="text-ink">{evidenceKindLabel(report.classification.category)}</span></p>
                       <p>Detected platform: <span className="text-ink">{report.classification.platform === "unknown" ? report.classification.contained_object ?? "Unknown" : report.classification.platform}</span></p>
-                      <p>Assign to host: <span className="text-ink">{detectedHostname || selectedHostName || "Needs confirmation"}</span></p>
-                      <p>Status: <span className={report.status === "ready" ? "text-mint" : report.status === "warning" ? "text-amber" : "text-danger"}>{report.status}</span></p>
+                      <p>Assign to host: <span className="text-ink">{assignedHostLabel || "Needs confirmation"}</span></p>
+                      <p>Status: <span className={memoryHostBlocking && report.classification.category === "memory_dump" ? "text-amber" : report.status === "ready" ? "text-mint" : report.status === "warning" ? "text-amber" : "text-danger"}>{memoryHostBlocking && report.classification.category === "memory_dump" ? "action required" : report.status}</span></p>
                     </div>
                     {expectedMismatch ? (
                       <div className="mt-3 rounded-xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber" data-testid="expected-kind-warning">
@@ -1589,6 +1634,16 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               ))}
             </div>
 
+            {memoryHostBlocking ? (
+              <div className="mt-4 rounded-2xl border border-amber/40 bg-amber/10 p-4" data-testid="memory-host-required-message">
+                <p className="font-semibold text-amber">Action required</p>
+                <p className="mt-1 text-sm text-ink">Assign this memory evidence to a host before processing.</p>
+                <p className="mt-1 text-sm text-muted">{hostAssignmentBlockingReason}</p>
+              </div>
+            ) : null}
+
+            {hasMemoryEvidence ? <div className="mt-4">{hostAssignmentPanel}</div> : null}
+
             {preflight.diagnostics.length ? (
               <div className="mt-4 space-y-3">
                 {preflight.diagnostics.map((diag) => (
@@ -1619,9 +1674,9 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                   </div>
                 ))}
               </div>
-            ) : (
+            ) : readyToProcess ? (
               <p className="mt-4 text-sm font-semibold text-mint">Ready to process</p>
-            )}
+            ) : null}
 
             {hasMemoryEvidence ? (
               <label className="mt-4 flex items-start gap-2 rounded-2xl border border-amber/40 bg-amber/10 p-4 text-sm text-ink">
@@ -1633,41 +1688,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
             <details className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen((event.target as HTMLDetailsElement).open)}>
               <summary className="cursor-pointer text-xs uppercase tracking-[0.16em] text-muted">Advanced — evidence options</summary>
               <div className="mt-3 grid gap-3">
-                <div className="rounded-2xl border border-line bg-abyss/60 p-3" data-testid="host-assignment-panel">
-                  <p className="text-xs uppercase tracking-[0.16em] text-muted">Assign to host</p>
-                  <div className="mt-3 grid gap-3">
-                    {detectedHostname ? (
-                      <label className={`rounded-2xl border p-3 text-sm ${hostChoice === "auto" ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
-                        <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === "auto"} onChange={() => setHostChoice("auto")} disabled={detectedHostMatches.length > 1} />
-                        {detectedHostMatches.length === 1 ? `Auto assign to ${detectedHostMatches[0].display_name}` : `Create host from detected hostname (${detectedHostname})`}
-                      </label>
-                    ) : null}
-                    <label className={`rounded-2xl border p-3 text-sm ${hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
-                      <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(filteredCaseHosts[0]?.id ?? caseHosts[0]?.id ?? "auto")} disabled={!caseHosts.length} />
-                      Existing host
-                      {hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? (
-                        <>
-                          <input value={hostSearch} onChange={(event) => setHostSearch(event.target.value)} placeholder="Search hosts" className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" />
-                          <select value={hostChoice} onChange={(event) => setHostChoice(event.target.value)} className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink">
-                            {filteredCaseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
-                          </select>
-                        </>
-                      ) : null}
-                    </label>
-                    <label className={`rounded-2xl border p-3 text-sm ${hostChoice === CREATE_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
-                      <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === CREATE_HOST_CHOICE} onChange={() => setHostChoice(CREATE_HOST_CHOICE)} />
-                      New host
-                      {hostChoice === CREATE_HOST_CHOICE ? <input value={newHostName} onChange={(event) => setNewHostName(event.target.value)} placeholder={detectedHostname || "DESKTOP-7FQ2A1"} className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" /> : null}
-                    </label>
-                    {processingMode === "skip" && !hasMemoryEvidence ? (
-                      <label className={`rounded-2xl border p-3 text-sm ${hostChoice === UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
-                        <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === UNASSIGNED_HOST_CHOICE} onChange={() => setHostChoice(UNASSIGNED_HOST_CHOICE)} />
-                        Keep unassigned
-                      </label>
-                    ) : null}
-                  </div>
-                  {hostAssignmentBlockingReason ? <p className="mt-3 text-sm text-amber" data-testid="host-assignment-guidance">{hostAssignmentBlockingReason}</p> : null}
-                </div>
+                {!hasMemoryEvidence ? hostAssignmentPanel : null}
                 {!hasMemoryEvidence ? (
                   <div className="rounded-2xl border border-line bg-abyss/60 p-3">
                     <p className="text-xs uppercase tracking-[0.16em] text-muted">Processing profile</p>
