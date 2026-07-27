@@ -40,7 +40,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "evidence_domain": "filesystem",
         "domain": "execution",
         "title": "Execution Stories",
-        "route": "/cases/:caseId/execution-stories",
+        "route": "/cases/:caseId/process-graph",
         "artifact_families": ["program_executions", "execution_candidates", "windows_event", "prefetch"],
         "nav": {"parent": "windows/execution", "order": 20},
         "search": {"filters": [], "presets": []},
