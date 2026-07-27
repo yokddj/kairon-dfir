@@ -90,6 +90,64 @@ export type IngestMode = "full_forensic" | "usable_search";
 export type EvtxProfile = "fast_high_value" | "full" | "custom";
 export type EvidencePlatform = "auto" | "windows" | "linux" | "macos" | "memory" | "mixed" | "unknown";
 
+export type CaseCapabilityPlatform = "windows" | "linux" | "macos" | "unknown" | string;
+export type CaseCapabilityEvidenceDomain = "filesystem" | "memory" | string;
+export type CaseCapabilityReadiness = "not_applicable" | "not_collected" | "empty" | "has_data" | "degraded" | string;
+
+export type CaseCapability = {
+  id: string;
+  platform: string;
+  evidence_domain: CaseCapabilityEvidenceDomain;
+  domain: string;
+  title: string;
+  route: string;
+  artifact_families: string[];
+  nav: { parent: string; order: number };
+  search: { filters: Array<Record<string, unknown>>; presets: Array<Record<string, unknown>> };
+  availability: string;
+  readiness_source: string;
+  artifact_count: number;
+  record_count: number;
+  status_counts: Record<string, unknown>;
+  readiness: CaseCapabilityReadiness;
+  visible: boolean;
+};
+
+export type CaseCapabilitiesResponse = {
+  registry_version: string;
+  generated_at: string;
+  case: { id: string; name: string; status: string };
+  platforms: Array<{ id: CaseCapabilityPlatform; label: string; evidence_count: number; shipped: boolean }>;
+  evidence_domains: Array<{ id: CaseCapabilityEvidenceDomain; label: string; evidence_count: number }>;
+  workbenches: Array<{
+    id: string;
+    label: string;
+    kind: "platform" | "evidence_domain" | string;
+    capability_ids: string[];
+    domains: Array<{ id: string; capability_ids: string[]; record_count: number }>;
+  }>;
+  capabilities: CaseCapability[];
+  hosts: Array<{
+    id: string;
+    canonical_name: string;
+    display_name: string;
+    platforms: CaseCapabilityPlatform[];
+    evidence_domains: CaseCapabilityEvidenceDomain[];
+    evidence_count: number;
+  }>;
+  evidence: Array<{
+    id: string;
+    name: string;
+    evidence_type: string;
+    evidence_domain: CaseCapabilityEvidenceDomain;
+    platform: CaseCapabilityPlatform;
+    legacy_effective_platform: string;
+    ingest_status: string;
+    host_id: string | null;
+    detected_host: string | null;
+  }>;
+};
+
 export type EvidencePlatformCategory = {
   id: string;
   label: string;
@@ -5500,6 +5558,7 @@ export const api = {
   createCase: (payload: Partial<DfirCase>) => request<DfirCase>("/cases", { method: "POST", body: JSON.stringify(payload) }),
   getCase: (caseId: string) => request<DfirCase>(`/cases/${caseId}`),
   getCaseContext: (caseId: string) => request<CaseContextResponse>(`/cases/${caseId}/context`),
+  getCaseCapabilities: (caseId: string) => request<CaseCapabilitiesResponse>(`/cases/${caseId}/capabilities`),
   getValidationMatrix: (
     caseId: string,
     params?: { host?: string; phase?: string; result?: string; source_part?: string; memory_required?: boolean | null },
