@@ -252,6 +252,82 @@ class TestShellHistoryParser:
         assert "sudo systemctl restart nginx" in commands
         assert "cat /etc/shadow" in commands
 
+    def test_shell_history_dispatch_normalizes_commands(self, tmp_path):
+        from app.ingest.normalizer import normalize_file
+
+        history = tmp_path / ".bash_history"
+        history.write_text("whoami\ncat /etc/passwd\n", encoding="utf-8")
+        artifact_meta = {
+            "artifact_family": "linux_shell_history",
+            "artifact_type": "bash_history",
+            "parser": "linux_shell_raw",
+            "name": ".bash_history",
+            "source_path": "/root/.bash_history",
+            "detected_host": "victoria",
+        }
+
+        docs = normalize_file("case-1", "ev-1", "art-1", history, artifact_meta)
+
+        assert [doc["linux"]["command"] for doc in docs] == ["whoami", "cat /etc/passwd"]
+        assert docs[0]["artifact"]["type"] == "linux_shell_history"
+        assert docs[0]["artifact"]["parser"] == "linux_shell_raw"
+        assert docs[0]["source_file"] == "/root/.bash_history"
+        assert docs[0]["evidence_id"] == "ev-1"
+        assert artifact_meta["ingest_audit"]["parser_status"] == "parsed"
+        assert artifact_meta["ingest_audit"]["records_indexed"] == 2
+
+    def test_linux_dispatch_failures_are_visible(self, tmp_path):
+        from app.ingest.linux.dispatch import LinuxParserDispatchError
+        from app.ingest.normalizer import normalize_file
+
+        history = tmp_path / ".bash_history"
+        history.write_text("whoami\n", encoding="utf-8")
+        artifact_meta = {
+            "artifact_family": "linux_shell_history",
+            "artifact_type": "bash_history",
+            "parser": "linux_missing_raw",
+            "name": ".bash_history",
+            "source_path": "/root/.bash_history",
+        }
+
+        with pytest.raises(LinuxParserDispatchError):
+            normalize_file("case-1", "ev-1", "art-1", history, artifact_meta)
+
+        assert artifact_meta["raw_parser_status"] == "failed_dispatch"
+        assert artifact_meta["ingest_audit"]["parser_status"] == "failed_dispatch"
+        assert "No Linux parser dispatch target" in artifact_meta["ingest_audit"]["parser_errors"][0]
+
+    def test_linux_dispatch_table_resolves_all_known_raw_parsers(self):
+        from app.ingest.linux.dispatch import LINUX_PARSER_TARGETS, resolve_linux_parser
+        from app.ingest.linux.helpers import _LINUX_ARTIFACT_MAP
+
+        expected_parsers = {parser for _, _, parser in _LINUX_ARTIFACT_MAP.values()}
+        assert expected_parsers <= set(LINUX_PARSER_TARGETS)
+
+        for parser in expected_parsers:
+            target, parse_func = resolve_linux_parser(parser)
+            assert target.parser == parser
+            assert callable(parse_func)
+
+    def test_linux_triage_dispatch_invokes_shell_history_parser(self, tmp_path):
+        from app.parsers.linux.triage import LinuxTriageParser
+
+        history = tmp_path / ".bash_history"
+        history.write_text("id\n", encoding="utf-8")
+
+        rows = LinuxTriageParser().parse(
+            {
+                "artifact_family": "linux_shell_history",
+                "artifact_type": "bash_history",
+                "parser": "linux_shell_raw",
+                "source_path": "/root/.bash_history",
+                "full_path": str(history),
+            }
+        )
+
+        assert rows[0]["artifact_family"] == "linux_shell_history"
+        assert rows[0]["command"] == "id"
+
     def test_bash_history_shell_type(self, bash_history_content):
         from app.ingest.linux.shell_history import parse_shell_history
         results = parse_shell_history(

@@ -50,6 +50,7 @@ from app.ingest.email import (
     normalize_email_row,
     parse_email_artifact_file,
 )
+from app.ingest.linux.dispatch import LinuxParserDispatchError, LinuxParserExecutionError, parse_linux_artifact_file
 from app.ingest.ntfs import (
     looks_like_ntfs_artifact,
     normalize_ntfs_row,
@@ -3838,43 +3839,46 @@ def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path,
     artifact_family = str(artifact_meta.get("artifact_family") or "").lower()
     if artifact_family.startswith("linux_"):
         parser = str(artifact_meta.get("parser") or "").lower()
-        parser_module = parser.replace("linux_", "").replace("_raw", "")
+        source_path_value = str(artifact_meta.get("source_path") or path)
         try:
-            import importlib
-            module = importlib.import_module(f"app.ingest.linux.{parser_module}")
-            parse_func = getattr(module, f"parse_{parser_module}", None)
-            if parse_func:
-                source_path_value = str(artifact_meta.get("source_path") or path)
-                if parser_module == "auth" and str(artifact_meta.get("artifact_type") or "").lower() in {"wtmp", "btmp", "lastlog"}:
-                    rows = parse_func(path.read_bytes(), source_path=source_path_value)
-                else:
-                    text = path.read_text(encoding="utf-8", errors="replace")
-                    rows = parse_func(text, source_path=source_path_value)
-                documents = [normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta) for row in rows]
-                artifact_meta["ingest_audit"] = {
-                    "artifact": str(artifact_meta.get("name") or path.name),
-                    "parser": parser,
-                    "records_read": len(rows),
-                    "records_parsed": len(documents),
-                    "events_indexed": len(documents),
-                    "parse_warnings": [],
-                    "bulk_index_errors": 0,
-                }
-                return documents
-        except Exception:
-            pass
-        rows = read_records(path)
-        if rows:
-            return [normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta) for row in rows]
+            rows = parse_linux_artifact_file(
+                path,
+                parser=parser,
+                artifact_type=str(artifact_meta.get("artifact_type") or ""),
+                source_path=source_path_value,
+            )
+        except (LinuxParserDispatchError, LinuxParserExecutionError) as exc:
+            artifact_meta["raw_parser_status"] = "failed_dispatch" if isinstance(exc, LinuxParserDispatchError) else "failed"
+            artifact_meta["raw_parser_errors"] = [str(exc)]
+            artifact_meta["ingest_audit"] = {
+                "artifact": str(artifact_meta.get("name") or path.name),
+                "parser": parser,
+                "records_read": 0,
+                "records_parsed": 0,
+                "events_indexed": 0,
+                "records_indexed": 0,
+                "parser_status": artifact_meta["raw_parser_status"],
+                "parse_warnings": [],
+                "parser_errors": [str(exc)],
+                "bulk_index_errors": 0,
+            }
+            raise
+        documents = [normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta) for row in rows]
+        parser_status = "parsed" if documents else "parsed_empty"
+        artifact_meta["raw_parser_status"] = parser_status
+        artifact_meta["raw_parser_errors"] = []
         artifact_meta["ingest_audit"] = {
             "artifact": str(artifact_meta.get("name") or path.name),
             "parser": parser,
-            "records_read": 0,
-            "records_parsed": 0,
-            "events_indexed": 0,
-            "parse_warnings": ["linux_parse_failed"],
+            "records_read": len(rows),
+            "records_parsed": len(documents),
+            "events_indexed": len(documents),
+            "records_indexed": len(documents),
+            "parser_status": parser_status,
+            "parse_warnings": [],
+            "parser_errors": [],
             "bulk_index_errors": 0,
         }
-        return []
+        return documents
     rows = read_records(path)
     return [normalize_row(case_id, evidence_id, artifact_id, row, artifact_meta) for row in rows]
