@@ -40,6 +40,16 @@ def _client(db):
     return TestClient(app)
 
 
+def _registered_routes() -> set[str]:
+    app_source = APP_TSX.read_text()
+    registered_paths = set()
+    for line in app_source.splitlines():
+        marker = '<Route path="'
+        if marker in line:
+            registered_paths.add(line.split(marker, 1)[1].split('"', 1)[0])
+    return registered_paths
+
+
 def _case(db):
     db.add(Case(id=CASE_ID, name="Capability Case", description=None))
     db.add(CaseHost(id=HOST_ID, case_id=CASE_ID, canonical_name="web-01", display_name="WEB-01", confidence="manual", source="manual"))
@@ -149,6 +159,40 @@ def test_case_capabilities_aggregates_workbench_warnings():
     assert any(warning["id"] == "linux.access.authentication.degraded" for warning in linux["overview"]["warnings"])
 
 
+def test_registry_static_architecture_consistency():
+    capability_ids = [item["id"] for item in CAPABILITY_REGISTRY]
+    assert len(capability_ids) == len(set(capability_ids))
+
+    canonical_routes = [_route_path(item["route"]) for item in CAPABILITY_REGISTRY]
+    assert len(canonical_routes) == len(set(canonical_routes))
+
+    for capability in CAPABILITY_REGISTRY:
+        assert capability["platform"]
+        assert capability["domain"]
+        assert capability["evidence_domain"] in {"filesystem", "memory"}
+        assert capability["availability"] == "shipped"
+        assert capability["readiness_source"] in {"artifact_counts", "memory_artifact_counts"}
+        assert capability["nav"]["parent"].startswith(f"{capability['platform']}/")
+        assert capability["nav"]["order"] > 0
+        overview = capability.get("overview")
+        assert overview, f"{capability['id']} has no overview metadata"
+        assert isinstance(overview.get("priority"), int)
+        assert isinstance(overview.get("featured"), bool)
+        if overview["featured"]:
+            assert overview.get("quick_action"), f"{capability['id']} featured without quick action"
+        if capability["evidence_domain"] == "memory":
+            assert capability["platform"] == "memory"
+            assert capability["route"].startswith("/cases/:caseId/m")
+        else:
+            assert capability["platform"] in {"windows", "linux"}
+
+
+def test_workbench_overview_routes_are_registered():
+    registered_paths = _registered_routes()
+    expected = {"/cases/:caseId/w", "/cases/:caseId/l", "/cases/:caseId/m"}
+    assert expected.issubset(registered_paths)
+
+
 def test_case_capabilities_returns_404_for_unknown_case():
     db = _db()
 
@@ -158,17 +202,40 @@ def test_case_capabilities_returns_404_for_unknown_case():
 
 
 def test_registry_canonical_routes_are_registered_in_app_router():
-    app_source = APP_TSX.read_text()
-    registered_paths = set()
-    for line in app_source.splitlines():
-        marker = '<Route path="'
-        if marker not in line:
-            continue
-        registered_paths.add(line.split(marker, 1)[1].split('"', 1)[0])
+    registered_paths = _registered_routes()
 
     for capability in CAPABILITY_REGISTRY:
         route = _route_path(capability["route"])
         assert route in registered_paths, f"{capability['id']} route {route} is not registered in App.tsx"
+
+
+def test_generated_workbench_summaries_have_no_orphan_routes_or_capabilities():
+    db = _db()
+    _case(db)
+    _evidence(db, "eeeeeeee-1111-4111-8111-eeeeeeeeeeee", "win.zip", EvidenceType.raw_collection, "windows")
+    _evidence(db, LINUX_EVIDENCE_ID, "triage.tgz", EvidenceType.linux_triage, "linux")
+    _evidence(db, MEMORY_EVIDENCE_ID, "mem.raw", EvidenceType.memory_dump, "memory", metadata={"probable_os": "windows"})
+
+    response = _client(db).get(f"/api/cases/{CASE_ID}/capabilities")
+
+    assert response.status_code == 200
+    body = response.json()
+    capability_ids = {capability["id"] for capability in body["capabilities"]}
+    for workbench in body["workbenches"]:
+        assert workbench["overview_route"].startswith(f"/cases/{CASE_ID}/")
+        assert ":" not in workbench["overview_route"]
+        domain_memberships: list[str] = []
+        for domain in workbench["domains"]:
+            assert domain["capability_ids"]
+            for capability_id in domain["capability_ids"]:
+                assert capability_id in capability_ids
+                domain_memberships.append(capability_id)
+        assert sorted(domain_memberships) == sorted(workbench["capability_ids"])
+        assert len(domain_memberships) == len(set(domain_memberships))
+        for action in workbench["overview"]["quick_actions"]:
+            assert action["id"] in capability_ids
+            assert action["route"].startswith(f"/cases/{CASE_ID}/")
+            assert ":" not in action["route"]
 
 
 def test_legacy_redirect_targets_are_single_hop_terminal_routes():

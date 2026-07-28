@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { api, type Evidence, type EvidenceIntent, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type EvtxProfile, type IngestMode, type MemoryUploadStatus, type PreflightReport, type ResumableUploadSessionRead } from "../api/client";
 import { useNotifications } from "../context/NotificationsContext";
 import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
+import { memoryEvidenceRoute } from "../lib/canonicalRoutes";
 import { hashBlob } from "../lib/sha256";
 
 type IntakeType = "disk_image" | "memory_dump" | "artifact_collection" | "folder" | "server_path";
@@ -746,7 +747,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
         if (evidence.evidence_type === "memory_dump") {
           notify({ title: "Memory evidence registered", description: `${evidence.original_filename} was uploaded and registered.`, tone: "success" });
           handleClose();
-          navigate(`/cases/${caseId}/m/${evidence.id}/overview`);
+          navigate(memoryEvidenceRoute(caseId, evidence.id));
           return;
         }
         // Non-memory unified categories (currently disk_image) still need
@@ -821,7 +822,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
     if (target.status === "promoted" && target.promoted_evidence_id) {
       handleClose();
-      navigate(target.category === "memory_dump" ? `/cases/${caseId}/m/${target.promoted_evidence_id}/overview` : `/evidences/${target.promoted_evidence_id}`);
+      navigate(target.category === "memory_dump" ? memoryEvidenceRoute(caseId, target.promoted_evidence_id) : `/evidences/${target.promoted_evidence_id}`);
       return;
     }
     if (target.status === "staged") {
@@ -1001,7 +1002,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       void queryClient.invalidateQueries({ queryKey: ["evidence-indexing-plan", evidence.id] });
       handleClose();
       if (evidence.evidence_type === "memory_dump") {
-        navigate(`/cases/${caseId}/m/${evidence.id}/overview`);
+        navigate(memoryEvidenceRoute(caseId, evidence.id));
         return;
       }
       navigate(`/cases/${caseId}?tab=processing&evidence_id=${evidence.id}`);

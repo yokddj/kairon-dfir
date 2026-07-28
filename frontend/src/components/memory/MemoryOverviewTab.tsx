@@ -14,6 +14,7 @@ import {
 } from "../../api/client";
 import { backendBadge } from "../MemoryWorkspace";
 import type { MemoryTab } from "../../lib/memoryWorkspaceState";
+import { linuxCommandHistoryRoute } from "../../lib/canonicalRoutes";
 import { InvestigationChecklist, type InvestigationChecklistItem } from "../common/InvestigationChecklist";
 
 type Props = {
@@ -335,7 +336,7 @@ export function MemoryOverviewTab({
           <div className="mt-4 flex flex-wrap gap-2" data-testid="memory-overview-context-actions">
             <Link to={`/cases/${caseId}/search?source_category=Memory&evidence_id=${evidenceId}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Search this Evidence</Link>
             <Link to={`/cases/${caseId}/timeline?source_category=Memory&evidence_id=${evidenceId}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Timeline</Link>
-            <Link to={`/cases/${caseId}/l/execution/command-history?source_category=Memory&evidence_id=${evidenceId}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Commands</Link>
+            <Link to={linuxCommandHistoryRoute(caseId, new URLSearchParams({ source_category: "Memory", evidence_id: evidenceId }))} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Commands</Link>
             <button type="button" onClick={() => onJumpToTab("processes")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">View Processes</button>
             <button type="button" onClick={() => onJumpToTab("graph")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">View Graph</button>
           </div>

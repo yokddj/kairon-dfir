@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import { CheckCircle2, LoaderCircle, UploadCloud } from "lucide-react";
 import { api, type Evidence, type EvidenceIntent, type EvidencePackaging, type EvidencePlatform, type EvtxProfile, type IngestMode, type VelociraptorDiscoverResponse } from "../api/client";
+import { memoryWorkbenchRoute } from "../lib/canonicalRoutes";
 import { platformUploadOptions } from "../lib/platformRegistry";
 
 type Props = {
@@ -1199,7 +1200,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
               <button type="button" onClick={() => navigate(`/evidences/${latestEvidenceId}`)} className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted">
                 View indexing progress
               </button>
-              <button type="button" onClick={() => navigate(`/cases/${caseId}/m`)} className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted">
+              <button type="button" onClick={() => navigate(memoryWorkbenchRoute(caseId))} className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted">
                 Open Memory Analysis
               </button>
               <button type="button" onClick={() => navigate(`/cases/${caseId}/rules?evidence_id=${latestEvidenceId}`)} className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted">

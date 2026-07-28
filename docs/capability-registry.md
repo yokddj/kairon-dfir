@@ -110,3 +110,10 @@ Workbench overviews reuse the capability registry query. Backend aggregation is 
 - Memory image overview data uses grouped memory summary and run-status queries.
 
 The frontend does not issue one query per capability.
+
+## Phase 2.6 Hardening Notes
+
+- Capability, visibility, workbench and overview policy remain backend-owned by `backend/app/services/case_capabilities.py`.
+- Frontend navigation renders registry workbenches and capabilities; canonical deep-link helpers live in `frontend/src/lib/canonicalRoutes.ts` to avoid repeated route spelling in pivot links.
+- The legacy memory landing implementation has been reduced to a compatibility wrapper around the generic Workbench Overview page.
+- Search behavior is unchanged and remains outside the capability registry until the Phase 3 Search redesign.

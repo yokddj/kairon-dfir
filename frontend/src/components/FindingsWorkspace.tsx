@@ -9,6 +9,7 @@ import { formatTimestamp } from "../lib/time";
 import EventTable from "./EventTable";
 import IndicatorResolutionPanel from "./IndicatorResolutionPanel";
 import PaginationControls from "./PaginationControls";
+import { linuxCommandHistoryRoute, memoryEvidenceRoute, memoryWorkbenchRoute, windowsExecutionStoriesRoute } from "../lib/canonicalRoutes";
 
 type Props = {
   caseId: string;
@@ -724,13 +725,13 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
   function openFindingCommandHistory() {
     const params = new URLSearchParams();
     appendFindingScope(params);
-    navigate(`/cases/${caseId}/l/execution/command-history?${params.toString()}`);
+    navigate(linuxCommandHistoryRoute(caseId, params));
   }
 
   function openFindingNetwork() {
     const params = new URLSearchParams({ tab: "network" });
     appendFindingScope(params);
-    navigate(selectedFinding?.evidence_id ? `/cases/${caseId}/m/${selectedFinding.evidence_id}/overview?${params.toString()}` : `/cases/${caseId}/m?${params.toString()}`);
+    navigate(selectedFinding?.evidence_id ? memoryEvidenceRoute(caseId, selectedFinding.evidence_id, "overview", params) : memoryWorkbenchRoute(caseId, params));
   }
 
   function openFindingProcessTree(item: Record<string, unknown>) {
@@ -750,7 +751,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
       if (process.pid !== undefined && process.pid !== null && String(process.pid).trim()) params.set("pid", String(process.pid));
       if (process.name !== undefined && process.name !== null && String(process.name).trim()) params.set("process_name", String(process.name));
     }
-    navigate(`/cases/${caseId}/w/execution/stories?${params.toString()}`);
+    navigate(windowsExecutionStoriesRoute(caseId, params));
   }
 
   function openProcessGraph() {
@@ -759,7 +760,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     if (selectedFinding.evidence_id) params.set("evidence_id", selectedFinding.evidence_id);
     params.set("finding_id", selectedFinding.id);
     for (const nodeId of selectedFinding.related_process_node_ids) params.append("node_id", nodeId);
-    navigate(`/cases/${caseId}/w/execution/stories?${params.toString()}`);
+    navigate(windowsExecutionStoriesRoute(caseId, params));
   }
 
   function openFindingTimeline() {
@@ -781,7 +782,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     if (selectedFinding.linked_host_id) params.set("host_id", selectedFinding.linked_host_id);
     if (selectedFinding.linked_artifact_type) params.set("artifact_type", selectedFinding.linked_artifact_type);
     if (selectedFinding.linked_event_id) params.set("selected", selectedFinding.linked_event_id);
-    if (selectedFinding.source_view === "memory") navigate(selectedFinding.linked_evidence_id ? `/cases/${caseId}/m/${selectedFinding.linked_evidence_id}/overview?${params.toString()}` : `/cases/${caseId}/m?${params.toString()}`);
+    if (selectedFinding.source_view === "memory") navigate(selectedFinding.linked_evidence_id ? memoryEvidenceRoute(caseId, selectedFinding.linked_evidence_id, "overview", params) : memoryWorkbenchRoute(caseId, params));
     else if (selectedFinding.source_view === "artifact_explorer") navigate(`/cases/${caseId}/artifacts?${params.toString()}`);
     else if (selectedFinding.linked_evidence_id || selectedFinding.evidence_id) navigate(`/evidences/${selectedFinding.linked_evidence_id || selectedFinding.evidence_id}`);
     else navigate(`/cases/${caseId}/search?${params.toString()}`);

@@ -24,6 +24,7 @@ import { useNavigate } from "react-router-dom";
 
 import { api, type Evidence, type ExecutionStory, type Finding, type ProcessTreeBundle, type ProcessTreeEdge, type ProcessTreeNode } from "../api/client";
 import ResponsiveDetailPanel, { useMinWidthQuery } from "./ResponsiveDetailPanel";
+import { linuxCommandHistoryRoute, windowsExecutionStoriesRoute } from "../lib/canonicalRoutes";
 import { copyToClipboard } from "../lib/time";
 
 type Props = {
@@ -1832,7 +1833,7 @@ export default function ProcessTreePanel({
     if (q) params.set("q", q);
     if (evidenceId) params.set("evidence_id", evidenceId);
     if (selectedHost || node.host) params.set("host", selectedHost || node.host || "");
-    navigate(`/cases/${caseId}/l/execution/command-history${params.toString() ? `?${params.toString()}` : ""}`);
+    navigate(linuxCommandHistoryRoute(caseId, params));
   }
 
   function clearExpansions() {
@@ -1945,7 +1946,7 @@ export default function ProcessTreePanel({
         urlParams.set("origin", "command_history");
         if (initialCommandHistoryRowId) urlParams.set("command_history_row_id", initialCommandHistoryRowId);
       }
-      navigate(`/cases/${caseId}/w/execution/stories?${urlParams.toString()}`, { replace: false });
+      navigate(windowsExecutionStoriesRoute(caseId, urlParams), { replace: false });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Execution story failed.";
       setStoryError(message);

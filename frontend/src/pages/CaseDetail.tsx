@@ -14,6 +14,7 @@ import Timeline from "../components/Timeline";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useHostContext } from "../hooks/useHostContext";
 import DeleteCaseDialog from "../components/DeleteCaseDialog";
+import { memoryEvidenceRoute } from "../lib/canonicalRoutes";
 
 const tabs = ["overview", "evidences", "processing", "artifacts", "artifact_explorer", "search", "process_tree", "investigation_timeline", "detections", "findings", "activity"] as const;
 type ExpectedEvidenceKind = "disk_image" | "memory_dump" | "collection" | "archive" | "unknown";
@@ -223,7 +224,7 @@ export default function CaseDetail() {
                   </p>
                 </div>
                 {candidate.status === "promoted" && candidate.promoted_evidence_id ? (
-                  <Link to={candidate.category === "memory_dump" ? `/cases/${caseId}/m/${candidate.promoted_evidence_id}/overview` : `/evidences/${candidate.promoted_evidence_id}`} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss">
+                  <Link to={candidate.category === "memory_dump" ? memoryEvidenceRoute(caseId, candidate.promoted_evidence_id) : `/evidences/${candidate.promoted_evidence_id}`} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss">
                     Open evidence
                   </Link>
                 ) : candidate.resumable || candidate.status === "staged" ? (

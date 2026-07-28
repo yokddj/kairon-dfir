@@ -1,6 +1,7 @@
 import { AlertTriangle, Cpu, Database, HardDrive, Network, ShieldCheck } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import type { CaseCapabilitiesResponse, CaseCapability } from "../../api/client";
+import { memoryWorkbenchRoute } from "../../lib/canonicalRoutes";
 
 type Workbench = CaseCapabilitiesResponse["workbenches"][number];
 
@@ -32,7 +33,7 @@ function resolveRoute(route: string, caseId: string, pathname: string): string {
   const base = route.replace(":caseId", caseId);
   if (!base.includes(":evidenceId")) return base;
   const match = pathname.match(/^\/cases\/([^/]+)\/m\/([^/]+)/);
-  return match?.[2] ? base.replace(":evidenceId", match[2]) : `/cases/${caseId}/m`;
+  return match?.[2] ? base.replace(":evidenceId", match[2]) : memoryWorkbenchRoute(caseId);
 }
 
 function readinessStyle(readiness: string) {

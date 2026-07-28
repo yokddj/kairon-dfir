@@ -11,6 +11,7 @@ import {
 } from "../../api/client";
 import { backendBadge } from "../MemoryWorkspace";
 import { MemoryRunAllModal } from "./MemoryRunAllModal";
+import { memoryEvidenceRoute } from "../../lib/canonicalRoutes";
 
 type Props = {
   caseId: string;
@@ -44,11 +45,11 @@ const PROFILE_SECTION: Record<string, Section> = {
 };
 
 function familyHref(caseId: string, evidenceId: string, item: MemoryAnalysisCatalogueItem): string {
-  if (item.family === "processes") return `/cases/${caseId}/m/${evidenceId}/processes`;
-  if (item.family === "system_info") return `/cases/${caseId}/m/${evidenceId}/system`;
-  if (item.family === "raw_observations") return `/cases/${caseId}/m/${evidenceId}/overview`;
+  if (item.family === "processes") return memoryEvidenceRoute(caseId, evidenceId, "processes");
+  if (item.family === "system_info") return memoryEvidenceRoute(caseId, evidenceId, "system");
+  if (item.family === "raw_observations") return memoryEvidenceRoute(caseId, evidenceId);
   const map: Record<string, string> = { network: "network", modules: "modules", handles: "handles", drivers: "modules", kernel_modules: "modules", suspicious_regions: "suspicious" };
-  return `/cases/${caseId}/m/${evidenceId}/${map[item.family] || "network"}`;
+  return memoryEvidenceRoute(caseId, evidenceId, map[item.family] || "network");
 }
 
 function StatusBadge({
@@ -218,7 +219,7 @@ function CatalogueCard({
               Run
             </button>
             <Link
-              to={`/cases/${caseId}/m/${evidenceId}/artifacts?artifact=${item.family}`}
+              to={memoryEvidenceRoute(caseId, evidenceId, "artifacts", new URLSearchParams({ artifact: item.family }))}
               className="rounded-md border border-line bg-abyss/70 px-2 py-1 text-[10px] text-muted"
               data-testid={`memory-catalogue-view-requirements-${item.profile}`}
             >
