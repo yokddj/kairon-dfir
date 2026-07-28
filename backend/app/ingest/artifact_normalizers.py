@@ -3660,6 +3660,16 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["record_type"] = row.get("record_type", "")
     linux_data["record_offset"] = row.get("record_offset", None)
     linux_data["hostname"] = linux_data.get("hostname") or detected_host or ""
+    linux_data["http_method"] = row.get("http_method", "")
+    linux_data["url_path"] = row.get("url_path", "")
+    linux_data["http_protocol"] = row.get("http_protocol", "")
+    linux_data["http_status"] = row.get("http_status", None)
+    linux_data["bytes_sent"] = row.get("bytes_sent", None)
+    linux_data["http_referrer"] = row.get("http_referrer", "")
+    linux_data["http_user_agent"] = row.get("http_user_agent", "")
+    linux_data["http_severity"] = row.get("http_severity", "")
+    linux_data["apache_module"] = row.get("apache_module", "")
+    linux_data["thread_id"] = row.get("thread_id", None)
 
     if detected_host:
         doc["host"]["hostname"] = detected_host
@@ -3697,7 +3707,27 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
             doc["event"]["action"] = linux_data.get("auth_event_type")
             doc["event"]["message"] = auth_label
             doc["title"] = auth_label
+    elif family == "linux_apache":
+        doc["event"]["type"] = linux_data.get("artifact_type") or "apache_log"
+        doc["event"]["action"] = linux_data.get("http_method") or linux_data.get("artifact_type") or "apache_log"
+        doc["network"]["source_ip"] = linux_data.get("source_ip") or None
+        doc["network"]["source_port"] = linux_data.get("source_port")
+        doc["url"]["path"] = linux_data.get("url_path") or None
+        doc["url"]["full"] = linux_data.get("url_path") or None
+        if linux_data.get("http_status") is not None:
+            doc["event"]["outcome"] = "failure" if int(linux_data["http_status"]) >= 400 else "success"
+        doc["title"] = linux_data.get("message") or "Apache log event"
     event_severity = "medium" if linux_data.get("event_action") in {"login", "auth_failure", "session_open", "session_close", "sudo", "su"} else "info"
+    if family == "linux_apache" and linux_data.get("artifact_type") == "apache_error":
+        apache_severity = str(linux_data.get("http_severity") or "").lower()
+        if apache_severity in {"emerg", "alert", "crit"}:
+            event_severity = "high"
+        elif apache_severity == "error":
+            event_severity = "medium"
+        elif apache_severity in {"warn", "warning"}:
+            event_severity = "low"
+        else:
+            event_severity = "info"
     doc["event"]["severity"] = event_severity
 
     doc["message"] = row.get("message", row.get("raw_excerpt", ""))

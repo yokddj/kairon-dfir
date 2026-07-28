@@ -82,6 +82,27 @@ def test_linux_inventory_and_generic_listing_include_journal_exports(tmp_path: P
     assert registry_entry["parser_name"] == "linux_journal_raw"
 
 
+def test_linux_inventory_and_generic_listing_include_apache_logs(tmp_path: Path) -> None:
+    (tmp_path / "var/log/apache2").mkdir(parents=True)
+    (tmp_path / "var/log/httpd").mkdir(parents=True)
+    (tmp_path / "var/log/apache2/access.log").write_text('192.0.2.10 - - [10/Oct/2024:13:55:36 +0000] "GET /index.html HTTP/1.1" 200 2326\n', encoding="utf-8")
+    (tmp_path / "var/log/apache2/error.log.1").write_text("[Thu Oct 10 13:55:37.123456 2024] [core:error] [pid 123] [client 192.0.2.10:5555] File does not exist\n", encoding="utf-8")
+    (tmp_path / "var/log/httpd/access_log-20241010").write_text('198.51.100.5 - alice [10/Oct/2024:13:56:36 +0000] "POST /login HTTP/1.1" 302 123 "-" "curl/8"\n', encoding="utf-8")
+
+    files = [str(path.relative_to(tmp_path)) for path in tmp_path.rglob("*") if path.is_file()]
+    inventory = build_linux_inventory(tmp_path, files)
+    artifacts = list_generic_artifacts(tmp_path)
+    registry_entry = get_parser_registry_entry(artifact_type="linux_apache")
+
+    assert inventory is not None
+    apache = next(item for item in inventory["detected_artifacts"] if item["key"] == "apache")
+    assert apache["family"] == "linux_apache"
+    assert apache["parser"] == "linux_apache_raw"
+    assert sorted(apache["paths"]) == sorted(files)
+    assert any(item["artifact_type"] == "linux_apache" and item["parser"] == "linux_apache_raw" for item in artifacts)
+    assert registry_entry["parser_name"] == "linux_apache_raw"
+
+
 def test_journal_parser_handles_json_and_export() -> None:
     json_rows = parse_journal('{"__REALTIME_TIMESTAMP":"1710000000000000","_HOSTNAME":"db01","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Accepted password for root"}\n', source_path="journal.json")
     export_rows = parse_journal("__REALTIME_TIMESTAMP=1710000000000000\n_HOSTNAME=db01\nSYSLOG_IDENTIFIER=sudo\nMESSAGE=session opened\n\n", source_path="journal.export")

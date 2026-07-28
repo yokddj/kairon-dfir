@@ -56,6 +56,11 @@ _LINUX_ARTIFACT_MAP: dict[str, tuple[str, str, str]] = {
     "interfaces": ("linux_network", "interfaces", "linux_network_raw"),
 }
 
+_APACHE_LOG_RE = re.compile(
+    r"(^|/)var/log/(apache2|httpd)/(?P<name>[^/]*(?:access|error)(?:[._-]log|\.log)[^/]*)$",
+    re.IGNORECASE,
+)
+
 _AUTH_PATTERNS = [
     re.compile(r"(accepted|Accepted)\s+(password|publickey)\s+for\s+(\S+)", re.IGNORECASE),
     re.compile(r"(Failed|failed)\s+password\s+for\s+(\S+)", re.IGNORECASE),
@@ -70,6 +75,11 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
     """Detect Linux artifact family, type, and parser from a path."""
     path_str = str(path).replace("\\", "/").lower()
     name = path_str.rsplit("/", 1)[-1]
+    apache_match = _APACHE_LOG_RE.search(path_str)
+    if apache_match:
+        apache_name = apache_match.group("name")
+        artifact_type = "apache_error" if "error" in apache_name else "apache_access"
+        return ("linux_apache", artifact_type, "linux_apache_raw")
     for marker, (family, artifact_type, parser) in _LINUX_ARTIFACT_MAP.items():
         if "/" in marker:
             # Directory-scoped marker: full relative-path context is required,

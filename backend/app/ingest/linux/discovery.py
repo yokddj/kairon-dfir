@@ -17,6 +17,7 @@ SUPPORTED_ARTIFACTS: dict[str, dict[str, str]] = {
     "lastlog": {"label": "lastlog", "family": "linux_auth"},
     "syslog": {"label": "syslog", "family": "linux_syslog"},
     "audit_log": {"label": "audit.log", "family": "linux_audit"},
+    "apache": {"label": "Apache logs", "family": "linux_apache"},
     "shell_history": {"label": "shell history", "family": "linux_shell_history"},
     "cron": {"label": "cron", "family": "linux_cron"},
     "systemd": {"label": "systemd", "family": "linux_systemd"},
@@ -77,6 +78,8 @@ def _artifact_key(family: str, artifact_type: str, path: str) -> str:
         return "syslog"
     if family == "linux_audit":
         return "audit_log"
+    if family == "linux_apache":
+        return "apache"
     if family == "linux_cron" or "/cron" in lower or "crontab" in lower:
         return "cron"
     if family == "linux_systemd":
