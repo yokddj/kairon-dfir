@@ -33,6 +33,7 @@ from app.models.event_marking import EventMarking
 from app.models.evidence import Evidence
 from app.models.finding import Finding
 from app.models.timeline_bookmark import TimelineBookmark
+from app.services.case_capabilities import capability_route
 from app.services.command_history import get_command_history
 from app.services.debug_export import build_execution_story
 from app.services.email_artifacts import build_email_artifacts_report_context, render_email_artifacts_markdown
@@ -2385,7 +2386,7 @@ def _execution_story_url_for_command(command: dict[str, Any]) -> str:
         params.append(("pid", str(process.get("pid"))))
     if command.get("timestamp"):
         params.append(("timestamp", str(command.get("timestamp"))))
-    return f"/cases/{case_id}/process-graph?" + "&".join(f"{key}={value}" for key, value in params)
+    return f"{capability_route('windows.execution.stories', case_id)}?" + "&".join(f"{key}={value}" for key, value in params)
 
 
 def _render_iocs(rows: list[dict[str, Any]]) -> str:

@@ -76,9 +76,9 @@ export default function Dashboard() {
           <div className="mt-4 flex flex-wrap gap-3">
             <Link to={`/cases/${activeCase.id}/overview`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open overview</Link>
             <Link to={`/cases/${activeCase.id}/search`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Search case</Link>
-            <Link to={`/cases/${activeCase.id}/artifact-search`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Artifact Search</Link>
+            <Link to={`/cases/${activeCase.id}/artifacts`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Artifact Search</Link>
             <Link to={`/cases/${activeCase.id}/timeline`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Search Timeline</Link>
-            <Link to={`/cases/${activeCase.id}/process-graph`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Process Graph</Link>
+            <Link to={`/cases/${activeCase.id}/w/execution/stories`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Process Graph</Link>
             <Link to={`/cases/${activeCase.id}/detections`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Detections</Link>
             <Link to={`/cases/${activeCase.id}/findings`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Findings</Link>
             <Link to={`/cases/${activeCase.id}/reports`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Reports</Link>

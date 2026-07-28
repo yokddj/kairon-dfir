@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
@@ -85,7 +85,6 @@ function assignmentStatus(item: MemoryEvidenceLandingItem, hosts: CaseContextHos
 
 export default function CaseMemoryLanding() {
   const { caseId = "" } = useParams();
-  const navigate = useNavigate();
   const { setActiveCaseId } = useActiveCase();
   const { activeHost, activeHostId, hasHostFilter, clearHostFilter, withHostScope } = useHostContext();
 
@@ -117,13 +116,6 @@ export default function CaseMemoryLanding() {
   const overview = overviewQuery.data;
   const landing = landingQuery.data;
 
-  useEffect(() => {
-    if (!overview) return;
-    if (overview.evidences.length === 1) {
-      navigate(withHostScope(`/cases/${caseId}/memory/${overview.evidences[0].id}/overview`), { replace: true });
-    }
-  }, [overview, navigate, caseId, withHostScope]);
-
   if (overviewQuery.isLoading) {
     return (
       <div className="rounded-[28px] border border-line bg-panel/70 p-8 text-sm text-muted shadow-panel" data-testid="memory-landing-loading">
@@ -151,7 +143,7 @@ export default function CaseMemoryLanding() {
           </p>
           <div className="mt-4 flex flex-wrap gap-2">
             {hasHostFilter ? <button type="button" onClick={clearHostFilter} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-accent">Clear host filter</button> : null}
-            <Link to={`/cases/${caseId}/memory/upload`} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">
+            <Link to={`/cases/${caseId}/evidence?add_evidence=1&expected_kind=memory_dump`} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">
               Add memory image
             </Link>
             <Link to={`/cases/${caseId}/evidence`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">
@@ -179,7 +171,7 @@ export default function CaseMemoryLanding() {
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Link to={`/cases/${caseId}/memory/upload`} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">
+            <Link to={`/cases/${caseId}/evidence?add_evidence=1&expected_kind=memory_dump`} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">
               Add memory image
             </Link>
             <Link to={`/cases/${caseId}/evidence`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">
@@ -262,13 +254,13 @@ export default function CaseMemoryLanding() {
                 })}
               </div>
               <div className="mt-4 flex flex-wrap gap-2">
-                <Link to={withHostScope(`/cases/${caseId}/memory/${item.evidence_id}/overview`)} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">
+                <Link to={withHostScope(`/cases/${caseId}/m/${item.evidence_id}/overview`)} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">
                   Open memory workspace
                 </Link>
                 <Link to={`/evidences/${item.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">
                   Open evidence details
                 </Link>
-                <Link to={withHostScope(`/cases/${caseId}/memory/${item.evidence_id}/overview`)} className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
+                <Link to={withHostScope(`/cases/${caseId}/m/${item.evidence_id}/overview`)} className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">
                   {item.host_id ? "Change host" : "Assign host"}
                 </Link>
               </div>

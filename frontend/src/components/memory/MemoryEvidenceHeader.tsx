@@ -157,7 +157,7 @@ export function MemoryEvidenceHeader({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <Link
-              to={`/cases/${caseId}/memory`}
+              to={`/cases/${caseId}/m`}
               className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted"
               data-testid="memory-evidence-back"
             >
@@ -240,7 +240,7 @@ export function MemoryEvidenceHeader({
               View analysis history
             </button>
             <Link
-              to={`/cases/${caseId}/memory/upload`}
+              to={`/cases/${caseId}/evidence?add_evidence=1&expected_kind=memory_dump`}
               className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted"
             >
               Add memory image

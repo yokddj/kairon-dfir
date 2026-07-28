@@ -728,7 +728,7 @@ export default function EvidenceDetail() {
   const detectionsHref = data?.case_id ? `/cases/${data.case_id}/detections?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
   const reportsHref = data?.case_id ? `/cases/${data.case_id}/reports?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
   const processingHref = data?.case_id ? `/cases/${data.case_id}?tab=processing` : "#";
-  const memoryHref = data?.case_id ? `/cases/${data.case_id}/memory/${evidenceId}/overview` : "#";
+  const memoryHref = data?.case_id ? `/cases/${data.case_id}/m/${evidenceId}/overview` : "#";
   const problematicHref = "#problematic-artifacts";
   const coreActions = [
     { id: "search", label: "Search this evidence", href: coreSearchHref, description: "Search all indexed data scoped to this evidence." },
@@ -1570,7 +1570,7 @@ function formatReportStatus(status: string | null | undefined) {
     if (remaining.length) groups.push({ id: "detected", label: "Detected", items: remaining });
     return groups;
   }, [platformProfile.groups, supportedCategoryOptions]);
-  const commandHistoryHref = data?.case_id ? `/cases/${data.case_id}/command-history?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
+  const commandHistoryHref = data?.case_id ? `/cases/${data.case_id}/l/execution/command-history?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
   const findingsHref = data?.case_id ? `/cases/${data.case_id}/findings?evidence_id=${encodeURIComponent(evidenceId)}` : "#";
   const addFindingHref = data?.case_id ? `/cases/${data.case_id}/findings?create=1&evidence_id=${encodeURIComponent(evidenceId)}&title=${encodeURIComponent("Evidence note")}&source_view=evidence${data.host_id ? `&host_id=${encodeURIComponent(data.host_id)}` : ""}` : "#";
   const deleteConfirmationValid = deleteConfirmText.trim() === "DELETE";

@@ -1048,7 +1048,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
                   <p className="mt-1 text-muted">It will be stored as memory_dump evidence, bypass normal disk ingest, and processing occurs later in Memory Analysis.</p>
                   {memoryUploadLimit > 0 ? <p className="mt-1 text-muted">Configured upload limit: {formatBytes(memoryUploadLimit)}</p> : null}
                   <p className="mt-2 text-muted">For the best experience, use the dedicated Memory Image upload.</p>
-                  <button type="button" onClick={() => navigate(`/cases/${caseId}/memory/upload`)} className="mt-2 rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Memory Upload</button>
+                  <button type="button" onClick={() => navigate(`/cases/${caseId}/evidence?add_evidence=1&expected_kind=memory_dump`)} className="mt-2 rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Memory Upload</button>
                   <label className="mt-3 flex gap-2 text-xs">
                     <input type="checkbox" checked={memoryAuthorizationAcknowledged} onChange={(event) => setMemoryAuthorizationAcknowledged(event.target.checked)} />
                     <span>I confirm that I own this memory image or am explicitly authorized to upload and analyze it.</span>
@@ -1199,7 +1199,7 @@ export default function EvidenceUpload({ caseId, onUploaded }: Props) {
               <button type="button" onClick={() => navigate(`/evidences/${latestEvidenceId}`)} className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted">
                 View indexing progress
               </button>
-              <button type="button" onClick={() => navigate(`/cases/${caseId}/memory`)} className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted">
+              <button type="button" onClick={() => navigate(`/cases/${caseId}/m`)} className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted">
                 Open Memory Analysis
               </button>
               <button type="button" onClick={() => navigate(`/cases/${caseId}/rules?evidence_id=${latestEvidenceId}`)} className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted">

@@ -10,6 +10,7 @@ from urllib.parse import quote_plus
 from sqlalchemy.orm import Session
 
 from app.core.opensearch import get_events_index, get_opensearch_client, index_exists
+from app.services.case_capabilities import capability_route
 from app.services.command_history import get_command_history
 from app.services.search_service import search_events_v2
 
@@ -355,7 +356,7 @@ def _pivots(case_id: str, indicator: dict[str, Any], context: dict[str, Any], fi
     elif type_ in {"url", "domain", "ip"}:
         pivots = [{"label": "Search network/DNS/browser", "url": search_url, "type": "network"}, {"label": "Add to finding", "url": search_url, "type": "finding"}]
     elif type_ == "command":
-        pivots = [{"label": "Open Command History", "url": f"/cases/{case_id}/command-history?{('&'.join(base_params))}", "type": "command"}, {"label": "Search exact command", "url": search_url, "type": "search"}]
+        pivots = [{"label": "Open Command History", "url": f"{capability_route('linux.execution.command_history', case_id)}?{('&'.join(base_params))}", "type": "command"}, {"label": "Search exact command", "url": search_url, "type": "search"}]
     elif type_ in {"registry", "service", "task", "user"}:
         pivots = [{"label": f"Search {type_} activity", "url": search_url, "type": type_}]
     if first_seen:

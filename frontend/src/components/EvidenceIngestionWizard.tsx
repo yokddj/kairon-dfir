@@ -746,7 +746,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
         if (evidence.evidence_type === "memory_dump") {
           notify({ title: "Memory evidence registered", description: `${evidence.original_filename} was uploaded and registered.`, tone: "success" });
           handleClose();
-          navigate(`/cases/${caseId}/memory/${evidence.id}`);
+          navigate(`/cases/${caseId}/m/${evidence.id}/overview`);
           return;
         }
         // Non-memory unified categories (currently disk_image) still need
@@ -821,7 +821,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
     if (target.status === "promoted" && target.promoted_evidence_id) {
       handleClose();
-      navigate(target.category === "memory_dump" ? `/cases/${caseId}/memory/${target.promoted_evidence_id}` : `/evidences/${target.promoted_evidence_id}`);
+      navigate(target.category === "memory_dump" ? `/cases/${caseId}/m/${target.promoted_evidence_id}/overview` : `/evidences/${target.promoted_evidence_id}`);
       return;
     }
     if (target.status === "staged") {
@@ -1001,7 +1001,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       void queryClient.invalidateQueries({ queryKey: ["evidence-indexing-plan", evidence.id] });
       handleClose();
       if (evidence.evidence_type === "memory_dump") {
-        navigate(`/cases/${caseId}/memory/${evidence.id}`);
+        navigate(`/cases/${caseId}/m/${evidence.id}/overview`);
         return;
       }
       navigate(`/cases/${caseId}?tab=processing&evidence_id=${evidence.id}`);

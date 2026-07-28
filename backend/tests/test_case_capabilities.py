@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -11,12 +13,18 @@ from app.models.case import Case
 from app.models.case_host import CaseHost
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
+from app.services.case_capabilities import CAPABILITY_REGISTRY
 
 
 CASE_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 HOST_ID = "bbbbbbbb-2222-4222-8222-bbbbbbbbbbbb"
 LINUX_EVIDENCE_ID = "cccccccc-3333-4333-8333-cccccccccccc"
 MEMORY_EVIDENCE_ID = "dddddddd-4444-4444-8444-dddddddddddd"
+APP_TSX = Path(__file__).resolve().parents[2] / "frontend" / "src" / "App.tsx"
+
+
+def _route_path(route: str) -> str:
+    return route.split("?", 1)[0]
 
 
 def _db():
@@ -84,7 +92,9 @@ def test_case_capabilities_exposes_linux_scope_and_counts():
     assert linux_auth["readiness"] == "has_data"
     assert linux_auth["visible"] is True
     assert linux_auth["record_count"] == 42
+    assert linux_auth["route"] == "/cases/:caseId/l/access/authentication"
     windows_command_history = next(item for item in body["capabilities"] if item["id"] == "windows.execution.command_history")
+    assert windows_command_history["route"] == "/cases/:caseId/w/execution/command-history"
     assert windows_command_history["visible"] is False
     assert windows_command_history["readiness"] == "not_applicable"
 
@@ -112,6 +122,7 @@ def test_case_capabilities_separates_memory_domain_from_os_platform():
     assert memory_processes["visible"] is True
     assert memory_processes["readiness"] == "has_data"
     assert memory_processes["record_count"] == 8
+    assert memory_processes["route"] == "/cases/:caseId/m/:evidenceId/processes"
 
 
 def test_case_capabilities_returns_404_for_unknown_case():
@@ -120,3 +131,48 @@ def test_case_capabilities_returns_404_for_unknown_case():
     response = _client(db).get("/api/cases/ffffffff-1111-4111-8111-ffffffffffff/capabilities")
 
     assert response.status_code == 404
+
+
+def test_registry_canonical_routes_are_registered_in_app_router():
+    app_source = APP_TSX.read_text()
+    registered_paths = set()
+    for line in app_source.splitlines():
+        marker = '<Route path="'
+        if marker not in line:
+            continue
+        registered_paths.add(line.split(marker, 1)[1].split('"', 1)[0])
+
+    for capability in CAPABILITY_REGISTRY:
+        route = _route_path(capability["route"])
+        assert route in registered_paths, f"{capability['id']} route {route} is not registered in App.tsx"
+
+
+def test_legacy_redirect_targets_are_single_hop_terminal_routes():
+    app_source = APP_TSX.read_text()
+    legacy_redirects = {
+        "/cases/:caseId/linux-authentication": "/cases/:caseId/l/access/authentication",
+        "/cases/:caseId/command-history": "/cases/:caseId/l/execution/command-history",
+        "/cases/:caseId/process-graph": "/cases/:caseId/w/execution/stories",
+        "/cases/:caseId/process-tree": "/cases/:caseId/w/execution/stories",
+        "/cases/:caseId/artifact-search": "/cases/:caseId/artifacts",
+        "/cases/:caseId/memory": "/cases/:caseId/m",
+        "/cases/:caseId/memory/landing": "/cases/:caseId/m",
+        "/cases/:caseId/memory/upload": "/cases/:caseId",
+        "/cases/:caseId/memory/:evidenceId/:memoryTab": "/cases/:caseId/m/:evidenceId/:memoryTab",
+        "/cases/:caseId/memory/:evidenceId": "/cases/:caseId/m/:evidenceId/overview",
+        "/process-tree": "/cases/:caseId/w/execution/stories",
+        "/command-history": "/cases/:caseId/l/execution/command-history",
+        "/dashboard": "/cases/:caseId/overview",
+        "/analysis/semi-auto": "/cases/:caseId/findings",
+        "/semi-auto": "/cases/:caseId/findings",
+    }
+    legacy_sources = set(legacy_redirects)
+
+    for source, target in legacy_redirects.items():
+        assert source in app_source, f"Legacy route {source} is not registered"
+        assert source != target, f"Legacy route {source} redirects to itself"
+        assert target not in legacy_sources, f"Legacy route {source} redirects to another legacy route {target}"
+
+    for capability in CAPABILITY_REGISTRY:
+        route = _route_path(capability["route"])
+        assert route not in legacy_sources, f"Registry route {route} uses a legacy alias"

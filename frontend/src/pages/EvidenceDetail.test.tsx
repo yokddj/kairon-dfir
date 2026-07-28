@@ -815,7 +815,7 @@ describe("EvidenceDetail minimal processing UX", () => {
     renderPage();
 
     expect(await screen.findByRole("link", { name: "Search" })).toHaveAttribute("href", "/cases/case-1/search?evidence_id=evidence-1&tab=results");
-    expect(screen.getByRole("link", { name: "Command History" })).toHaveAttribute("href", "/cases/case-1/command-history?evidence_id=evidence-1");
+    expect(screen.getByRole("link", { name: "Command History" })).toHaveAttribute("href", "/cases/case-1/l/execution/command-history?evidence_id=evidence-1");
     expect(screen.getByRole("link", { name: "Artifact Views" })).toHaveAttribute("href", "/cases/case-1/artifacts?evidence_id=evidence-1");
     expect(screen.getByRole("link", { name: "Timeline" })).toHaveAttribute("href", "/cases/case-1/search?evidence_id=evidence-1&view=timeline&sort=@timestamp&order=asc");
   });

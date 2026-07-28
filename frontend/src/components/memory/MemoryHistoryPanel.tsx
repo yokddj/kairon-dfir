@@ -105,7 +105,7 @@ export function MemoryHistoryPanel({
               </button>
             ) : null}
             <Link
-              to={`/cases/${caseId}/memory/${evidenceId}`}
+              to={`/cases/${caseId}/m/${evidenceId}/overview`}
               onClick={onClose}
               className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted"
               data-testid="memory-history-close"

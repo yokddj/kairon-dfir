@@ -109,7 +109,7 @@ export function MemoryAnalyzeAction({
             </span>
           ) : null}
           <Link
-            to={`/cases/${caseId}/memory/upload`}
+            to={`/cases/${caseId}/evidence?add_evidence=1&expected_kind=memory_dump`}
             className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-muted"
           >
             Add memory image

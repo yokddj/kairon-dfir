@@ -1,8 +1,8 @@
 # Capability Registry
 
-Phase 0 introduces a server-side, case-scoped capability registry at `GET /api/cases/{case_id}/capabilities`.
+Phase 0 introduced a server-side, case-scoped capability registry at `GET /api/cases/{case_id}/capabilities`.
 
-The endpoint is additive. Existing platform enums, routes, sidebar behavior, and Search filters are unchanged.
+The endpoint is additive to evidence and artifact APIs. The registry owns workbench metadata and canonical route metadata for capability navigation.
 
 ## Response Shape
 
@@ -39,7 +39,7 @@ Frontend responsibilities:
 - Render the fixed shell groups: `Investigation` and `Case Tools`.
 - Render registry-provided `workbenches`, `domains`, and visible `capabilities` generically.
 - Respect `nav.order` and backend-provided workbench/domain grouping.
-- Preserve existing routes by using each capability's declared `route` unchanged, with `:caseId` substitution only.
+- Preserve each capability's declared `route` unchanged, with `:caseId` substitution and `:evidenceId` substitution when the analyst is already in a memory evidence context.
 - Show loading, failure, and capability state indicators without deciding whether a platform or capability should exist.
 
 Backend responsibilities:
@@ -49,4 +49,30 @@ Backend responsibilities:
 - Keep memory modeled as `evidence_domain = "memory"` while projecting its OS platform separately.
 - Add future workbenches or capabilities by extending the registry, not Sidebar code.
 
-Phase 1 intentionally does not migrate URLs, redesign Search, or change route redirects. Canonical route migration is deferred to Phase 2.
+## Canonical Routes
+
+Phase 2 makes registry routes canonical for capability navigation. Current canonical capability paths use compact workbench prefixes:
+
+- Windows execution stories: `/cases/:caseId/w/execution/stories`.
+- Windows command history: `/cases/:caseId/w/execution/command-history`.
+- Linux authentication: `/cases/:caseId/l/access/authentication`.
+- Linux command history: `/cases/:caseId/l/execution/command-history`.
+- Memory landing: `/cases/:caseId/m`.
+- Memory evidence views: `/cases/:caseId/m/:evidenceId/{overview,processes,process-graph,network,modules,handles,vads,suspicious,system,raw,artifacts}`.
+- Memory runs: `/cases/:caseId/m/runs`.
+
+Memory routes are path-based. The public `process-graph` segment maps to the internal memory tab key `graph`.
+
+## Legacy Redirects
+
+Old bookmarks remain supported as single-hop redirects and should not be used for new UI links:
+
+- `/cases/:caseId/linux-authentication` redirects to `/cases/:caseId/l/access/authentication`.
+- `/cases/:caseId/command-history` redirects to `/cases/:caseId/l/execution/command-history`.
+- `/cases/:caseId/process-graph` and `/cases/:caseId/process-tree` redirect to `/cases/:caseId/w/execution/stories`.
+- `/cases/:caseId/artifact-search` redirects to `/cases/:caseId/artifacts`.
+- `/cases/:caseId/memory/:evidenceId/:tab` redirects to `/cases/:caseId/m/:evidenceId/:tab`, with legacy `graph` rewritten to `process-graph`.
+- `/cases/:caseId/memory?tab=runs` redirects to `/cases/:caseId/m/runs`.
+- `/cases/:caseId/memory?tab=...` redirects to the specific memory image only when exactly one memory image exists; otherwise it redirects to `/cases/:caseId/m` without guessing evidence identity.
+
+Search behavior and Search result semantics are intentionally unchanged by Phase 2; only navigation targets were moved to canonical routes.

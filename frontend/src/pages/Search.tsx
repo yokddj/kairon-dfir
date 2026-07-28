@@ -2024,7 +2024,7 @@ export default function Search() {
       actions.push({
         label: "Open execution story",
         ariaLabel: "Open execution story for this exact event",
-        onClick: () => navigate(`/cases/${resolvedCaseId}/process-graph?${storyParams.toString()}`),
+        onClick: () => navigate(`/cases/${resolvedCaseId}/w/execution/stories?${storyParams.toString()}`),
       });
       const commandHistoryParams = new URLSearchParams();
       if (evidenceId) commandHistoryParams.set("evidence_id", evidenceId);
@@ -2036,13 +2036,13 @@ export default function Search() {
       actions.push({
         label: "Open Command History",
         ariaLabel: "Open Command History for this process",
-        onClick: () => navigate(`/cases/${resolvedCaseId}/command-history?${commandHistoryParams.toString()}`),
+        onClick: () => navigate(`/cases/${resolvedCaseId}/l/execution/command-history?${commandHistoryParams.toString()}`),
       });
       const graphParams = buildProcessParams(result.kind === "finding" ? "finding_focus" : "process_focus");
       actions.push({
         label: "Open advanced process graph",
         ariaLabel: "Open advanced process graph",
-        onClick: () => navigate(`/cases/${resolvedCaseId}/process-graph?${graphParams.toString()}`),
+        onClick: () => navigate(`/cases/${resolvedCaseId}/w/execution/stories?${graphParams.toString()}`),
       });
     }
     return actions;

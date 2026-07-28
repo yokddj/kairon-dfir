@@ -356,7 +356,7 @@ def test_incident_story_target_classifies_exact_process():
         "source_type": "command_history",
         "artifact_type": "windows_event",
         "event_id": "evt-1",
-        "execution_story_url": "/cases/case-1/process-graph?story_event_id=evt-1",
+        "execution_story_url": "/cases/case-1/w/execution/stories?story_event_id=evt-1",
         "title": "PowerShell script.ps1 execution",
         "summary": "powershell.exe -ep bypass .\\f\\script.ps1",
     }

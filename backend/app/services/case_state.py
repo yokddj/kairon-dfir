@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from app.services.case_capabilities import capability_route
+
 
 CASE_STATES = {
     "empty_case",
@@ -99,7 +101,7 @@ def build_case_next_actions(
         unavailable.extend(
             [
                 _action("search_suspicious_commands", "Search suspicious commands", f"/cases/{case_id}/search?q=powershell%20-ep%20bypass", enabled=False, reason="Add and index evidence before searching."),
-                _action("review_command_history", "Review Command History", f"/cases/{case_id}/command-history", enabled=False, reason="Command History will appear after command-capable artifacts are indexed."),
+                _action("review_command_history", "Review Command History", capability_route("linux.execution.command_history", case_id), enabled=False, reason="Command History will appear after command-capable artifacts are indexed."),
                 _action("review_defender", "Review Defender detections", f"/cases/{case_id}/artifacts?artifact_type=defender", enabled=False, reason="No Defender artifacts indexed in this case."),
                 _action("generate_report", "Generate Report", f"/cases/{case_id}/reports", enabled=False, reason="Create findings or timeline items before generating a useful report."),
             ]
@@ -115,7 +117,7 @@ def build_case_next_actions(
         unavailable.extend(
             [
                 _action("search_suspicious_commands", "Search suspicious commands", f"/cases/{case_id}/search?q=powershell%20-ep%20bypass", enabled=False, reason="Index evidence before searching."),
-                _action("review_command_history", "Review Command History", f"/cases/{case_id}/command-history", enabled=False, reason="Command History will appear after command-capable artifacts are indexed."),
+                _action("review_command_history", "Review Command History", capability_route("linux.execution.command_history", case_id), enabled=False, reason="Command History will appear after command-capable artifacts are indexed."),
                 _action("generate_report", "Generate Report", f"/cases/{case_id}/reports", enabled=False, reason="Create findings or timeline items before generating a useful report."),
             ]
         )
@@ -170,7 +172,7 @@ def _ready_investigation_actions(
 ) -> list[dict[str, Any]]:
     actions = [
         _action("search_suspicious_commands", "Search suspicious commands", f"/cases/{case_id}/search?q=powershell%20-ep%20bypass", priority="primary"),
-        _action("review_command_history", "Review Command History", f"/cases/{case_id}/command-history", priority="primary"),
+        _action("review_command_history", "Review Command History", capability_route("linux.execution.command_history", case_id), priority="primary"),
         _action("review_artifacts", "Review Artifacts", f"/cases/{case_id}/artifacts", priority="primary"),
         _action("review_startup_persistence", "Review Startup & Persistence", f"/cases/{case_id}/artifacts?artifact_type=startup_persistence&suspicious_only=true", priority="primary"),
         _action("build_incident_timeline", "Build Incident Timeline", f"/cases/{case_id}/incident-timeline", priority="primary"),
