@@ -12,7 +12,8 @@ The endpoint is additive to evidence and artifact APIs. The registry owns workbe
 - `platforms`: OS platforms present in evidence (`windows`, `linux`, `macos`, `unknown`).
 - `evidence_domains`: acquisition domains present in evidence, currently `filesystem` and `memory`.
 - `workbenches`: visible workbench grouping derived from shipped capabilities and case scope.
-- `capabilities`: declared capability entries with evaluated `readiness`, `visible`, counts, route, nav, and Search metadata.
+- `capabilities`: declared capability entries with evaluated `readiness`, `visible`, counts, route, nav, and per-capability Search metadata.
+- `search`: registry-derived Search facets and presets generated from visible capabilities.
 - `hosts`: host-level evidence/platform/domain summary.
 - `evidence`: evidence-level platform/domain projection.
 
@@ -111,9 +112,32 @@ Workbench overviews reuse the capability registry query. Backend aggregation is 
 
 The frontend does not issue one query per capability.
 
+## Search Integration
+
+Phase 3 makes Investigation Search consume the same capability registry used by Sidebar and Workbench Overviews.
+
+Capability search metadata:
+
+- `search.priority`: ordering hint for Search-related capability presentation.
+- `search.group`: analyst-facing capability group label.
+- `search.tags` and `search.action_tags`: generic intent metadata for future pivots and actions.
+- `search.default_filters`: backend Search filter state for the capability, using existing Search params such as `platform`, `source_category`, and `artifact_type`.
+- `search.preferred_sort`: sort hint for capability presets.
+- `search.presets`: analyst-facing saved filters scoped to the capability.
+
+Top-level `search` metadata:
+
+- `search.facets.workbench`: visible workbenches available to Search.
+- `search.facets.domain`: visible domains scoped by workbench.
+- `search.facets.capability`: visible capabilities scoped by workbench and domain.
+- `search.facets.platform`, `search.facets.source_category`, and `search.facets.artifact_type`: backend-compatible filters derived from capability metadata.
+- `search.presets`: flattened capability presets with workbench/domain/capability context.
+
+Frontend Search uses `workbench`, `domain_scope`, and `capability` query params as registry context. Existing backend-compatible params remain valid and authoritative, so bookmarked searches using `platform`, `source_category`, `artifact_type`, `parser`, `event_type`, `evidence_id`, `host`, `host_id`, or `scope` continue to work.
+
 ## Phase 2.6 Hardening Notes
 
 - Capability, visibility, workbench and overview policy remain backend-owned by `backend/app/services/case_capabilities.py`.
 - Frontend navigation renders registry workbenches and capabilities; canonical deep-link helpers live in `frontend/src/lib/canonicalRoutes.ts` to avoid repeated route spelling in pivot links.
 - The legacy memory landing implementation has been reduced to a compatibility wrapper around the generic Workbench Overview page.
-- Search behavior is unchanged and remains outside the capability registry until the Phase 3 Search redesign.
+- Search behavior stayed unchanged during Phase 2.6; Phase 3 moved Search scope, facets and presets onto registry metadata without changing the backend Search API contract.

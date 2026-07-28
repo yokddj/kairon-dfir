@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { api, type EventContextResponse, type EventMarking, type EventMarkingStatus, type SearchQuickFilter, type SearchV2Response, type SearchV2Result } from "../api/client";
+import { api, type CaseCapabilitiesResponse, type CaseCapability, type EventContextResponse, type EventMarking, type EventMarkingStatus, type SearchQuickFilter, type SearchV2Response, type SearchV2Result } from "../api/client";
 import { useFindingIndicators } from "../lib/useFindingIndicators";
 import ResponsiveDetailPanel, { useMinWidthQuery } from "../components/ResponsiveDetailPanel";
 import SearchBar from "../components/SearchBar";
@@ -13,12 +13,11 @@ import { useHostContext } from "../hooks/useHostContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 import { artifactLabel } from "../lib/artifactRegistry";
-import { UI_PLATFORM_REGISTRY } from "../lib/platformRegistry";
 
 type Scope = "events" | "findings" | "all";
 type SortValue = "timestamp_desc" | "timestamp_asc" | "risk_desc" | "risk_asc" | "relevance";
-type SourceCategory = "" | "Memory" | "Disk" | "Event Log" | "Registry" | "Browser" | "Other";
-type SearchPlatform = "" | "windows" | "linux" | "memory" | "mixed" | "unknown";
+type SourceCategory = string;
+type SearchPlatform = string;
 type SearchTab = "results" | "timeline" | "findings" | "artifact_views";
 type ArtifactViewMode = "auto" | "process" | "dns" | "downloads" | "defender" | "persistence" | "files" | "cloud_usb" | "generic";
 type TableDensity = "compact" | "comfortable" | "expanded";
@@ -64,19 +63,6 @@ const findingStatusOptions = ["new", "reviewed", "confirmed", "dismissed"];
 const eventMarkingStatusOptions: EventMarkingStatus[] = ["suspicious", "important", "reviewed", "false_positive"];
 const SEARCH_UI_MAX_PAGE_SIZE = 500;
 const pageSizeOptions = [50, 100, 250, 500];
-const sourceCategoryOptions: Array<{ value: SourceCategory; label: string }> = [
-  { value: "", label: "All sources" },
-  { value: "Memory", label: "Memory" },
-  { value: "Disk", label: "Disk" },
-  { value: "Event Log", label: "Event Log" },
-  { value: "Registry", label: "Registry" },
-  { value: "Browser", label: "Browser" },
-  { value: "Other", label: "Other" },
-];
-const platformOptions: Array<{ value: SearchPlatform; label: string }> = [
-  { value: "", label: "All platforms" },
-  ...UI_PLATFORM_REGISTRY.filter((platform) => platform.id !== "auto" && platform.id !== "macos").map((platform) => ({ value: platform.id as SearchPlatform, label: platform.label })),
-];
 const riskPresets = [
   { label: "Low", min: "0", max: "29" },
   { label: "Medium", min: "30", max: "49" },
@@ -243,6 +229,9 @@ function buildState(searchParams: URLSearchParams) {
     marked_in_finding: searchParams.get("marked_in_finding") ?? "",
     include_filesystem_timeline: searchParams.get("include_filesystem_timeline") ?? "",
     evidence_id: searchParams.get("evidence_id") ?? "",
+    workbench: searchParams.get("workbench") ?? "",
+    domain_scope: searchParams.get("domain_scope") ?? "",
+    capability: searchParams.get("capability") ?? "",
     platform: (searchParams.get("platform") ?? "") as SearchPlatform,
     source_category: (searchParams.get("source_category") ?? searchParams.get("source") ?? "") as SourceCategory,
     time_from: searchParams.get("time_from") ?? "",
@@ -533,6 +522,60 @@ function humanizeToken(value: string | null | undefined) {
     .filter(Boolean)
     .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
     .join(" ");
+}
+
+function searchStateValues(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((item) => asString(item)).filter(Boolean);
+  const text = asString(value);
+  return text ? [text] : [];
+}
+
+function capabilityWorkbenchId(capability: CaseCapability) {
+  return capability.evidence_domain === "memory" ? "memory" : capability.platform;
+}
+
+function selectedRegistryCapabilities(registry: CaseCapabilitiesResponse | undefined, state: ReturnType<typeof buildState>) {
+  const visible = (registry?.capabilities ?? []).filter((capability) => capability.visible);
+  if (state.capability) return visible.filter((capability) => capability.id === state.capability);
+  if (!state.workbench && !state.domain_scope) return [];
+  return visible.filter((capability) => {
+    const workbench = capabilityWorkbenchId(capability);
+    return (!state.workbench || workbench === state.workbench) && (!state.domain_scope || capability.domain === state.domain_scope);
+  });
+}
+
+function mergeRegistryDefaultFilters(capabilities: CaseCapability[]) {
+  const platforms = new Set<string>();
+  const sources = new Set<string>();
+  const artifacts = new Set<string>();
+  for (const capability of capabilities) {
+    const filters = capability.search?.default_filters ?? {};
+    searchStateValues(filters.platform).forEach((value) => platforms.add(value));
+    searchStateValues(filters.source_category).forEach((value) => sources.add(value));
+    searchStateValues(filters.artifact_type).forEach((value) => artifacts.add(value));
+  }
+  return {
+    platform: platforms.size === 1 ? Array.from(platforms)[0] : "",
+    source_category: sources.size === 1 ? Array.from(sources)[0] : "",
+    artifact_type: Array.from(artifacts),
+  };
+}
+
+function registrySelectOptions(items: Array<{ id: string; label: string; count?: number }>, allLabel: string) {
+  return [{ value: "", label: allLabel }, ...items.map((item) => ({ value: item.id, label: typeof item.count === "number" ? `${item.label} (${item.count})` : item.label }))];
+}
+
+function withCurrentOption(options: Array<{ value: string; label: string }>, value: string) {
+  if (!value || options.some((option) => option.value === value)) return options;
+  return [...options, { value, label: value }];
+}
+
+function applyRegistrySearchState(state: Record<string, string | string[]>, pageSize: number) {
+  const updates: Record<string, string | null> = { tab: "results", page_size: String(pageSize) };
+  for (const [key, value] of Object.entries(state)) {
+    updates[key] = Array.isArray(value) ? joinParam(value) : value;
+  }
+  return updates;
 }
 
 function renderActions(actions: RowAction[]) {
@@ -1349,6 +1392,16 @@ export default function Search() {
   const debouncedQuery = useDebouncedValue(queryInput, 300);
   const isUltraWideLayout = useMinWidthQuery(1600);
   const resolvedCaseId = routeCaseId || activeCaseId;
+  const capabilitiesQuery = useQuery({
+    queryKey: ["case-capabilities", resolvedCaseId, "search"],
+    queryFn: () => api.getCaseCapabilities(resolvedCaseId || ""),
+    enabled: Boolean(resolvedCaseId),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const registry = capabilitiesQuery.data;
+  const registryCapabilities = useMemo(() => selectedRegistryCapabilities(registry, state), [registry, state]);
+  const registryDefaultFilters = useMemo(() => mergeRegistryDefaultFilters(registryCapabilities), [registryCapabilities]);
 
   useEffect(() => {
     if (routeCaseId) setActiveCaseId(routeCaseId);
@@ -1392,7 +1445,7 @@ export default function Search() {
       exclude_q: state.exclude_q,
       filters: state.filters,
       scope: state.scope,
-      artifact_type: state.artifact_type,
+      artifact_type: state.artifact_type.length ? state.artifact_type : registryDefaultFilters.artifact_type,
       parser: state.parser,
       backend_variant: state.backend_variant,
       parser_backend: state.parser_backend,
@@ -1425,8 +1478,8 @@ export default function Search() {
       marked_in_finding: state.marked_in_finding,
       include_filesystem_timeline: state.include_filesystem_timeline,
       evidence_id: state.evidence_id || selectedEvidenceId,
-      platform: state.platform,
-      source_category: state.source_category,
+      platform: state.platform || registryDefaultFilters.platform,
+      source_category: state.source_category || registryDefaultFilters.source_category,
       time_from: state.time_from,
       time_to: state.time_to,
       sort: state.sort,
@@ -1434,7 +1487,7 @@ export default function Search() {
       page_size: state.page_size,
       cursor: undefined,
     }),
-    [activeHost, activeHostId, selectedEvidenceId, selectedHost, state],
+    [activeHost, activeHostId, registryDefaultFilters, selectedEvidenceId, selectedHost, state],
   );
 
   const searchQuery = useQuery({
@@ -1530,6 +1583,19 @@ export default function Search() {
     return result;
   }, [globalFacets, response?.facets]);
   const parsedSearchError = useMemo(() => parseSearchError(searchQuery.error), [searchQuery.error]);
+  const registryFacetData = registry?.search?.facets ?? {};
+  const workbenchOptions = useMemo(() => registrySelectOptions(registryFacetData.workbench ?? [], "All workbenches"), [registryFacetData.workbench]);
+  const domainOptions = useMemo(() => {
+    const domains = (registryFacetData.domain ?? []).filter((item) => !state.workbench || item.workbench === state.workbench);
+    return registrySelectOptions(domains, "All domains");
+  }, [registryFacetData.domain, state.workbench]);
+  const capabilityOptions = useMemo(() => {
+    const capabilities = (registryFacetData.capability ?? []).filter((item) => (!state.workbench || item.workbench === state.workbench) && (!state.domain_scope || item.domain === state.domain_scope));
+    return registrySelectOptions(capabilities, "All capabilities");
+  }, [registryFacetData.capability, state.domain_scope, state.workbench]);
+  const platformOptions = useMemo(() => withCurrentOption(registrySelectOptions(registryFacetData.platform ?? [], "All platforms"), state.platform), [registryFacetData.platform, state.platform]);
+  const sourceCategoryOptions = useMemo(() => withCurrentOption(registrySelectOptions(registryFacetData.source_category ?? [], "All sources"), state.source_category), [registryFacetData.source_category, state.source_category]);
+  const registryPresets = useMemo(() => (registry?.search?.presets ?? []).filter((item) => (!state.workbench || item.workbench === state.workbench) && (!state.domain_scope || item.domain === state.domain_scope) && (!state.capability || item.capability_id === state.capability)), [registry?.search?.presets, state.capability, state.domain_scope, state.workbench]);
   const results = response?.results ?? [];
   const indicatorEntities = useMemo(() =>
     results.filter((r) => r.kind !== "finding").map((r) => {
@@ -1648,8 +1714,11 @@ export default function Search() {
     if (state.file_path) chips.push({ key: "file_path", label: `path: ${state.file_path}`, clear: { file_path: null } });
     if (state.file_name) chips.push({ key: "file_name", label: `file: ${state.file_name}`, clear: { file_name: null } });
     if (searchRequestState.evidence_id) chips.push({ key: "evidence_id", label: `evidence: ${searchRequestState.evidence_id.slice(0, 8)}`, clear: { evidence_id: null } });
-    if (searchRequestState.platform) chips.push({ key: "platform", label: `platform: ${searchRequestState.platform}`, clear: { platform: null } });
-    if (searchRequestState.source_category) chips.push({ key: "source_category", label: `source: ${searchRequestState.source_category}`, clear: { source_category: null, source: null } });
+    if (state.workbench) chips.push({ key: "workbench", label: `workbench: ${state.workbench}`, clear: { workbench: null, domain_scope: null, capability: null } });
+    if (state.domain_scope) chips.push({ key: "domain_scope", label: `domain: ${state.domain_scope}`, clear: { domain_scope: null, capability: null } });
+    if (state.capability) chips.push({ key: "capability", label: `capability: ${state.capability}`, clear: { capability: null } });
+    if (state.platform) chips.push({ key: "platform", label: `platform: ${state.platform}`, clear: { platform: null } });
+    if (state.source_category) chips.push({ key: "source_category", label: `source: ${state.source_category}`, clear: { source_category: null, source: null } });
     if (state.artifact_type.length) chips.push({ key: "artifact_type", label: `artifact: ${state.artifact_type.join(", ")}`, clear: { artifact_type: null } });
     if (state.exclude_artifact_type.length) chips.push({ key: "exclude_artifact_type", label: `NOT artifact: ${state.exclude_artifact_type.join(", ")}`, clear: { exclude_artifact_type: null } });
     if (state.event_type.length) chips.push({ key: "event_type", label: `type: ${state.event_type.join(", ")}`, clear: { event_type: null } });
@@ -1657,7 +1726,7 @@ export default function Search() {
     if (state.status.length) chips.push({ key: "status", label: `status: ${state.status.join(", ")}`, clear: { status: null } });
     if (state.time_from || state.time_to) chips.push({ key: "time", label: `time: ${state.time_from || "…"} → ${state.time_to || "…"}`, clear: { time_from: null, time_to: null } });
     return chips;
-  }, [searchRequestState.evidence_id, searchRequestState.host, searchRequestState.host_id, searchRequestState.platform, searchRequestState.source_category, state]);
+  }, [searchRequestState.evidence_id, searchRequestState.host, searchRequestState.host_id, state]);
   const querySyntaxChips = useMemo(
     () =>
       (response?.query_syntax?.applied_filters ?? []).map((item, index) => ({
@@ -1821,6 +1890,12 @@ export default function Search() {
     setContextResponse(null);
     setContextLabel("");
     updateParams(updates);
+  }
+
+  function applyRegistryPreset(item: NonNullable<CaseCapabilitiesResponse["search"]>["presets"][number]) {
+    setContextResponse(null);
+    setContextLabel("");
+    updateParams({ ...applyRegistrySearchState(item.state, state.page_size), workbench: item.workbench, domain_scope: item.domain, capability: item.capability_id });
   }
 
   function handleFacetClick(field: string, value: string, mode: "include" | "exclude" = "include") {
@@ -2187,10 +2262,34 @@ export default function Search() {
 
         <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
           <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Workbench</span>
+            <select aria-label="Workbench" value={state.workbench} onChange={(event) => updateParams({ workbench: event.target.value, domain_scope: null, capability: null, platform: null, source_category: null, artifact_type: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-workbench-filter">
+              {workbenchOptions.map((option) => (
+                <option key={option.value || "all-workbenches"} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Domain</span>
+            <select aria-label="Capability domain" value={state.domain_scope} onChange={(event) => updateParams({ domain_scope: event.target.value, capability: null, artifact_type: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-domain-filter">
+              {domainOptions.map((option) => (
+                <option key={option.value || "all-domains"} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Capability</span>
+            <select aria-label="Capability" value={state.capability} onChange={(event) => updateParams({ capability: event.target.value, artifact_type: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-capability-filter">
+              {capabilityOptions.map((option) => (
+                <option key={option.value || "all-capabilities"} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Platform</span>
             <select aria-label="Platform" value={state.platform} onChange={(event) => updateParams({ platform: event.target.value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-platform-filter">
               {platformOptions.map((option) => (
-                <option key={option.label} value={option.value}>{option.label}</option>
+                <option key={option.value || "all-platforms"} value={option.value}>{option.label}</option>
               ))}
             </select>
           </label>
@@ -2198,7 +2297,7 @@ export default function Search() {
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source</span>
             <select aria-label="Source category" value={state.source_category} onChange={(event) => updateParams({ source_category: event.target.value, source: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-source-category-filter">
               {sourceCategoryOptions.map((option) => (
-                <option key={option.label} value={option.value}>{option.label}</option>
+                <option key={option.value || "all-sources"} value={option.value}>{option.label}</option>
               ))}
             </select>
           </label>
@@ -2329,6 +2428,11 @@ export default function Search() {
           ) : null}
           {(quickFiltersQuery.data?.items ?? []).map((item) => (
             <button key={item.id} type="button" onClick={() => applyQuickFilter(item)} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">
+              {item.label}
+            </button>
+          ))}
+          {registryPresets.slice(0, 8).map((item) => (
+            <button key={item.id} type="button" onClick={() => applyRegistryPreset(item)} className="rounded-full border border-accent/30 bg-accent/8 px-3 py-1.5 text-xs text-slate-200">
               {item.label}
             </button>
           ))}
