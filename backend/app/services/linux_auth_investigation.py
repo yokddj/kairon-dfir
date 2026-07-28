@@ -162,7 +162,7 @@ def _fetch_auth_docs(case_id: str) -> list[dict]:
     client = get_opensearch_client()
     body = {
         "size": 10000,
-        "query": {"bool": {"filter": [{"term": {"case_id": case_id}}, {"term": {"artifact.type": "linux_auth"}}]}},
+        "query": {"bool": {"filter": [{"term": {"case_id": case_id}}, {"terms": {"artifact.type": ["linux_auth", "linux_lastlog"]}}]}},
         "sort": [{"@timestamp": {"order": "asc", "missing": "_last"}}, {"_id": "asc"}],
     }
     result = client.search(index=get_events_index(), body=body, params={"ignore_unavailable": "true"})

@@ -357,13 +357,81 @@ class TestAuthLogParser:
         assert rows[0]["auth_event_type"] == "login_failure"
 
     def test_lastlog_parsing(self):
-        from app.ingest.linux.auth import parse_auth
+        from app.ingest.linux.lastlog import parse_lastlog
         empty = b"\0" * 292
-        record = struct.pack("i32s256s", 1710000000, b"pts/1\0", b"10.0.0.10\0")
-        rows = parse_auth(empty + record, source_path="/var/log/lastlog")
+        record = struct.pack("<i32s256s", 1710000000, b"pts/1\0", b"10.0.0.10\0")
+        passwd = "root:x:0:0:root:/root:/bin/bash\nalice:x:1:1::/home/alice:/bin/bash\n"
+        rows = parse_lastlog(empty + record, source_path="/var/log/lastlog", passwd_content=passwd)
         assert rows[0]["artifact_type"] == "lastlog"
+        assert rows[0]["artifact_family"] == "linux_lastlog"
         assert rows[0]["uid"] == 1
+        assert rows[0]["username"] == "alice"
         assert rows[0]["source_ip"] == "10.0.0.10"
+        assert rows[0]["record_offset"] == 292
+        assert rows[0]["record_size"] == 292
+
+    def test_lastlog_hostname_does_not_populate_source_ip(self):
+        from app.ingest.linux.lastlog import parse_lastlog
+
+        record = struct.pack("<i32s256s", 1710000000, b"tty1\0", b"console.example.test\0")
+
+        rows = parse_lastlog(record, source_path="/var/log/lastlog")
+
+        assert rows[0]["source_ip"] == ""
+        assert rows[0]["remote_host"] == "console.example.test"
+        assert rows[0]["username"] == ""
+
+    def test_lastlog_normalizes_authentication_fields(self, tmp_path):
+        from app.ingest.normalizer import normalize_file
+
+        (tmp_path / "etc").mkdir()
+        (tmp_path / "var/log").mkdir(parents=True)
+        (tmp_path / "etc/passwd").write_text("alice:x:1000:1000::/home/alice:/bin/bash\n", encoding="utf-8")
+        lastlog_path = tmp_path / "var/log/lastlog"
+        lastlog_path.write_bytes((b"\0" * 292 * 1000) + struct.pack("<i32s256s", 1710000000, b"pts/2\0", b"host.example.test\0"))
+
+        docs = normalize_file("case-1", "ev-1", "art-1", lastlog_path, {
+            "artifact_family": "linux_lastlog",
+            "artifact_type": "lastlog",
+            "parser": "linux_lastlog_raw",
+            "name": "lastlog",
+            "source_path": "var/log/lastlog",
+        })
+
+        doc = docs[0]
+        assert doc["artifact"]["type"] == "linux_lastlog"
+        assert doc["artifact"]["parser"] == "linux_lastlog_raw"
+        assert doc["event"]["category"] == "authentication"
+        assert doc["event"]["type"] == "user_login"
+        assert doc["event"]["action"] == "last_login_record"
+        assert doc["event"]["outcome"] == "success"
+        assert doc["user"]["id"] == "1000"
+        assert doc["user"]["name"] == "alice"
+        assert doc["network"]["source_ip"] is None
+        assert doc["network"]["domain"] == "host.example.test"
+        assert doc["linux"]["record_offset"] == 292000
+        assert doc["linux"]["record_size"] == 292
+        assert "host.example.test" in doc["search_text"]
+
+    def test_lastlog_dispatch_resolves_passwd_from_extracted_volume_path(self, tmp_path):
+        from app.ingest.linux.dispatch import parse_linux_artifact_file
+
+        root = tmp_path / "extracted/volume-0/linux"
+        (root / "etc").mkdir(parents=True)
+        (root / "var/log").mkdir(parents=True)
+        (root / "etc/passwd").write_text("alice:x:1000:1000::/home/alice:/bin/bash\n", encoding="utf-8")
+        lastlog_path = root / "var/log/lastlog"
+        lastlog_path.write_bytes((b"\0" * 292 * 1000) + struct.pack("<i32s256s", 1710000000, b"pts/2\0", b"192.0.2.10\0"))
+
+        rows = parse_linux_artifact_file(
+            lastlog_path,
+            parser="linux_lastlog_raw",
+            artifact_type="lastlog",
+            source_path="volume-0/linux/var/log/lastlog",
+        )
+
+        assert rows[0]["uid"] == 1000
+        assert rows[0]["username"] == "alice"
 
     def test_unsupported_binary_layout_returns_empty(self):
         from app.ingest.linux.auth import parse_auth

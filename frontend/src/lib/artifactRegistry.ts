@@ -44,6 +44,7 @@ const ARTIFACT_REGISTRY: UiArtifactDefinition[] = [
   { id: "network", label: "Network", aliases: ["linux_network", "linux_ssh"], platforms: ["windows", "linux", "memory"], view: "network" },
   { id: "linux_journal", label: "Linux Journal", platforms: ["linux"], view: "evtx", platformShortcut: true },
   { id: "linux_auth", label: "Linux Auth", platforms: ["linux"], view: "network", platformShortcut: true },
+  { id: "linux_lastlog", label: "Lastlog", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_syslog", label: "Linux Syslog", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_audit", label: "Linux Audit", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_apache", label: "Apache Logs", platforms: ["linux"], view: "network", platformShortcut: true },

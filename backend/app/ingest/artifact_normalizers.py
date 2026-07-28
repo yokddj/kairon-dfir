@@ -3659,6 +3659,11 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["effective_failure_count"] = row.get("effective_failure_count", None)
     linux_data["record_type"] = row.get("record_type", "")
     linux_data["record_offset"] = row.get("record_offset", None)
+    linux_data["record_size"] = row.get("record_size", None)
+    linux_data["timestamp_status"] = row.get("timestamp_status", "")
+    linux_data["lastlog_host"] = row.get("lastlog_host", "")
+    linux_data["lastlog_tty"] = row.get("lastlog_tty", "")
+    linux_data["remote_host"] = row.get("remote_host", "")
     linux_data["line_number"] = row.get("line_number", None)
     linux_data["hostname"] = linux_data.get("hostname") or detected_host or ""
     linux_data["http_method"] = row.get("http_method", "")
@@ -3748,6 +3753,15 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         doc["email"]["to"] = [linux_data["recipient"]] if linux_data.get("recipient") else []
         doc["process"]["name"] = "exim"
         doc["title"] = linux_data.get("message") or "Exim log event"
+    elif family == "linux_lastlog":
+        doc["event"].update({"category": "authentication", "type": "user_login", "action": "last_login_record"})
+        doc["event"]["outcome"] = "success"
+        doc["user"]["id"] = str(linux_data.get("uid")) if linux_data.get("uid") is not None else None
+        doc["network"]["source_ip"] = linux_data.get("source_ip") or None
+        if linux_data.get("remote_host"):
+            doc["network"]["domain"] = linux_data.get("remote_host")
+        doc["process"]["name"] = "login"
+        doc["title"] = linux_data.get("message") or "Linux lastlog record"
     event_severity = "medium" if linux_data.get("event_action") in {"login", "auth_failure", "session_open", "session_close", "sudo", "su"} else "info"
     if family == "linux_apache" and linux_data.get("artifact_type") == "apache_error":
         apache_severity = str(linux_data.get("http_severity") or "").lower()
@@ -3761,6 +3775,8 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
             event_severity = "info"
     elif family == "linux_exim" and linux_data.get("event_severity"):
         event_severity = linux_data.get("event_severity")
+    elif family == "linux_lastlog":
+        event_severity = "info"
     doc["event"]["severity"] = event_severity
 
     doc["message"] = row.get("message", row.get("raw_excerpt", ""))

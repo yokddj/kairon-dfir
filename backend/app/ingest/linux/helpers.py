@@ -13,7 +13,6 @@ _LINUX_ARTIFACT_MAP: dict[str, tuple[str, str, str]] = {
     "secure": ("linux_auth", "auth_log", "linux_auth_raw"),
     "wtmp": ("linux_auth", "wtmp", "linux_auth_raw"),
     "btmp": ("linux_auth", "btmp", "linux_auth_raw"),
-    "lastlog": ("linux_auth", "lastlog", "linux_auth_raw"),
     "syslog": ("linux_syslog", "syslog", "linux_syslog_raw"),
     "messages": ("linux_syslog", "syslog", "linux_syslog_raw"),
     "kern.log": ("linux_syslog", "kern_log", "linux_syslog_raw"),
@@ -64,6 +63,7 @@ _EXIM_LOG_RE = re.compile(
     r"(^|/)var/log/exim4?/(?P<name>(?:mainlog|rejectlog|paniclog)(?:[._-].*)?)$",
     re.IGNORECASE,
 )
+_LASTLOG_RE = re.compile(r"(^|/)var/log/lastlog$", re.IGNORECASE)
 
 _AUTH_PATTERNS = [
     re.compile(r"(accepted|Accepted)\s+(password|publickey)\s+for\s+(\S+)", re.IGNORECASE),
@@ -94,6 +94,8 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
         else:
             artifact_type = "exim_main"
         return ("linux_exim", artifact_type, "linux_exim_raw")
+    if _LASTLOG_RE.search(path_str):
+        return ("linux_lastlog", "lastlog", "linux_lastlog_raw")
     for marker, (family, artifact_type, parser) in _LINUX_ARTIFACT_MAP.items():
         if "/" in marker:
             # Directory-scoped marker: full relative-path context is required,
