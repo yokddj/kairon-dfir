@@ -41,7 +41,7 @@ const DocsPage = lazy(() => import("./pages/DocsPage"));
 const ParserCoveragePage = lazy(() => import("./pages/ParserCoveragePage"));
 const DebugExportPage = lazy(() => import("./pages/DebugExportPage"));
 const MemoryEvidencePage = lazy(() => import("./pages/MemoryEvidencePage"));
-const CaseMemoryLanding = lazy(() => import("./pages/CaseMemoryLanding"));
+const WorkbenchOverviewPage = lazy(() => import("./pages/WorkbenchOverviewPage"));
 
 function WorkspaceLoadingFallback() {
   return (
@@ -172,7 +172,9 @@ export default function App() {
                         <Route path="/cases/:caseId/detections" element={<Detections />} />
                         <Route path="/cases/:caseId/reports" element={<CaseReportsPage />} />
                         <Route path="/cases/:caseId/debug-export" element={<DebugExportPage />} />
-                        <Route path="/cases/:caseId/m" element={<CaseMemoryLanding />} />
+                        <Route path="/cases/:caseId/w" element={<WorkbenchOverviewPage workbenchId="windows" />} />
+                        <Route path="/cases/:caseId/l" element={<WorkbenchOverviewPage workbenchId="linux" />} />
+                        <Route path="/cases/:caseId/m" element={<WorkbenchOverviewPage workbenchId="memory" />} />
                         <Route path="/cases/:caseId/m/runs" element={<MemoryRunsPage />} />
                         <Route path="/cases/:caseId/m/:evidenceId/processes" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/m/:evidenceId/process-graph" element={<MemoryEvidencePage />} />

@@ -93,6 +93,11 @@ def test_case_capabilities_exposes_linux_scope_and_counts():
     assert linux_auth["visible"] is True
     assert linux_auth["record_count"] == 42
     assert linux_auth["route"] == "/cases/:caseId/l/access/authentication"
+    assert linux_auth["overview"]["featured"] is True
+    linux = next(item for item in body["workbenches"] if item["id"] == "linux")
+    assert linux["overview_route"] == f"/cases/{CASE_ID}/l"
+    assert linux["overview"]["coverage"]["status_counts"]["has_data"] >= 1
+    assert linux["overview"]["quick_actions"][0]["route"] == f"/cases/{CASE_ID}/l/access/authentication"
     windows_command_history = next(item for item in body["capabilities"] if item["id"] == "windows.execution.command_history")
     assert windows_command_history["route"] == "/cases/:caseId/w/execution/command-history"
     assert windows_command_history["visible"] is False
@@ -123,6 +128,25 @@ def test_case_capabilities_separates_memory_domain_from_os_platform():
     assert memory_processes["readiness"] == "has_data"
     assert memory_processes["record_count"] == 8
     assert memory_processes["route"] == "/cases/:caseId/m/:evidenceId/processes"
+    memory = next(item for item in body["workbenches"] if item["id"] == "memory")
+    assert memory["overview_route"] == f"/cases/{CASE_ID}/m"
+    assert memory["overview"]["memory_images"][0]["route"] == f"/cases/{CASE_ID}/m/{MEMORY_EVIDENCE_ID}/overview"
+    assert memory["overview"]["quick_actions"][0]["route"] == f"/cases/{CASE_ID}/m"
+    assert any(action["route"] == f"/cases/{CASE_ID}/m/{MEMORY_EVIDENCE_ID}/processes" for action in memory["overview"]["quick_actions"])
+
+
+def test_case_capabilities_aggregates_workbench_warnings():
+    db = _db()
+    _case(db)
+    _evidence(db, LINUX_EVIDENCE_ID, "triage.tgz", EvidenceType.linux_triage, "linux")
+    db.add(Artifact(case_id=CASE_ID, evidence_id=LINUX_EVIDENCE_ID, name="auth.log", artifact_type="linux_auth", source_path="/var/log/auth.log", parser="linux_auth", record_count=1, status="completed_with_errors"))
+    db.commit()
+
+    response = _client(db).get(f"/api/cases/{CASE_ID}/capabilities")
+
+    assert response.status_code == 200
+    linux = next(item for item in response.json()["workbenches"] if item["id"] == "linux")
+    assert any(warning["id"] == "linux.access.authentication.degraded" for warning in linux["overview"]["warnings"])
 
 
 def test_case_capabilities_returns_404_for_unknown_case():

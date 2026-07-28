@@ -97,11 +97,15 @@ vi.mock("./pages/MemoryEvidencePage", async () => {
     },
   };
 });
-vi.mock("./pages/CaseMemoryLanding", async () => {
+vi.mock("./pages/WorkbenchOverviewPage", async () => {
   const { useLocation } = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
-  return { default: () => <div>Memory Landing Page<span data-testid="memory-landing-route">{useLocation().pathname + useLocation().search}</span></div> };
+  return { default: ({ workbenchId }: { workbenchId: string }) => <div>{displayWorkbench(workbenchId)} Workbench Page<span data-testid="workbench-route">{useLocation().pathname + useLocation().search}</span></div> };
 });
 vi.mock("./components/MemoryWorkspace", () => ({ MemoryWorkspace: () => <div>Memory Workspace Page</div> }));
+
+function displayWorkbench(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
 
 function renderApp(initialEntry: string | string[]) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -161,6 +165,11 @@ describe("legacy navigation redirects", () => {
     expect(await screen.findByText("Artifact Views Page")).toBeInTheDocument();
   });
 
+  it("renders canonical platform workbench overview routes", async () => {
+    renderApp("/cases/case-1/w");
+    expect(await screen.findByText("Windows Workbench Page")).toBeInTheDocument();
+  });
+
   it("keeps the legacy /cases/:caseId/artifact-search route working", async () => {
     renderApp("/cases/case-1/artifact-search");
     expect(await screen.findByText("Artifact Views Page")).toBeInTheDocument();
@@ -178,14 +187,14 @@ describe("memory routes are registered", () => {
 
   it("renders the canonical memory landing at /cases/:caseId/m", async () => {
     renderApp("/cases/case-1/m");
-    expect(await screen.findByText("Memory Landing Page")).toBeInTheDocument();
+    expect(await screen.findByText("Memory Workbench Page")).toBeInTheDocument();
   });
 
   it("redirects legacy /cases/:caseId/memory with multiple memory images to the canonical memory landing", async () => {
     getMemoryOverviewMock.mockResolvedValue({ evidences: [{ id: "ev-A" }, { id: "ev-B" }] });
     renderApp("/cases/case-1/memory?tab=processes&filter=suspicious");
-    expect(await screen.findByText("Memory Landing Page")).toBeInTheDocument();
-    expect(screen.getByTestId("memory-landing-route")).toHaveTextContent("/cases/case-1/m?filter=suspicious");
+    expect(await screen.findByText("Memory Workbench Page")).toBeInTheDocument();
+    expect(screen.getByTestId("workbench-route")).toHaveTextContent("/cases/case-1/m?filter=suspicious");
   });
 
   it("redirects legacy /cases/:caseId/memory with one memory image to the requested canonical tab", async () => {

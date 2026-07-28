@@ -11,7 +11,9 @@ from app.core.database import utc_now_naive
 from app.models.artifact import Artifact
 from app.models.case import Case
 from app.models.case_host import CaseHost
+from app.models.detection_result import DetectionResult
 from app.models.evidence import Evidence, EvidenceType
+from app.models.finding import Finding
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
 
 
@@ -30,6 +32,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "route": "/cases/:caseId/w/execution/command-history",
         "artifact_families": ["powershell_activity", "powershell_execution", "process_execution", "windows_event"],
         "nav": {"parent": "windows/execution", "order": 10},
+        "overview": {"priority": 20, "featured": True, "quick_action": "Open Command History"},
         "search": {"filters": [], "presets": []},
         "availability": "shipped",
         "readiness_source": "artifact_counts",
@@ -43,6 +46,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "route": "/cases/:caseId/w/execution/stories",
         "artifact_families": ["program_executions", "execution_candidates", "windows_event", "prefetch"],
         "nav": {"parent": "windows/execution", "order": 20},
+        "overview": {"priority": 10, "featured": True, "quick_action": "Open Execution Stories"},
         "search": {"filters": [], "presets": []},
         "availability": "shipped",
         "readiness_source": "artifact_counts",
@@ -56,6 +60,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "route": "/cases/:caseId/findings?preset=persistence",
         "artifact_families": ["scheduled_task", "service", "registry_run_key", "autoruns"],
         "nav": {"parent": "windows/persistence", "order": 10},
+        "overview": {"priority": 30, "featured": True, "quick_action": "Review Persistence"},
         "search": {"filters": [], "presets": []},
         "availability": "shipped",
         "readiness_source": "artifact_counts",
@@ -69,6 +74,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "route": "/cases/:caseId/l/access/authentication",
         "artifact_families": ["linux_auth"],
         "nav": {"parent": "linux/access", "order": 10},
+        "overview": {"priority": 10, "featured": True, "quick_action": "Open Authentication"},
         "search": {
             "filters": [
                 {"key": "auth.outcome", "type": "enum", "values": ["success", "failure"]},
@@ -88,6 +94,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "route": "/cases/:caseId/l/execution/command-history",
         "artifact_families": ["linux_shell_history"],
         "nav": {"parent": "linux/execution", "order": 10},
+        "overview": {"priority": 20, "featured": True, "quick_action": "Open Command History"},
         "search": {"filters": [], "presets": []},
         "availability": "shipped",
         "readiness_source": "artifact_counts",
@@ -101,6 +108,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "route": "/cases/:caseId/artifacts?artifact_type=linux_packages",
         "artifact_families": ["linux_packages"],
         "nav": {"parent": "linux/software", "order": 10},
+        "overview": {"priority": 50, "featured": False, "quick_action": "Review Packages"},
         "search": {"filters": [], "presets": []},
         "availability": "shipped",
         "readiness_source": "artifact_counts",
@@ -114,6 +122,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "route": "/cases/:caseId/m",
         "artifact_families": ["processes", "network", "modules", "handles", "vads"],
         "nav": {"parent": "memory/overview", "order": 5},
+        "overview": {"priority": 5, "featured": True, "quick_action": "Open Memory Images"},
         "search": {"filters": [], "presets": []},
         "availability": "shipped",
         "readiness_source": "memory_artifact_counts",
@@ -127,6 +136,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "route": "/cases/:caseId/m/:evidenceId/processes",
         "artifact_families": ["processes"],
         "nav": {"parent": "memory/execution", "order": 10},
+        "overview": {"priority": 10, "featured": True, "quick_action": "Open Processes"},
         "search": {"filters": [], "presets": []},
         "availability": "shipped",
         "readiness_source": "memory_artifact_counts",
@@ -140,6 +150,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "route": "/cases/:caseId/m/:evidenceId/network",
         "artifact_families": ["network"],
         "nav": {"parent": "memory/network", "order": 10},
+        "overview": {"priority": 30, "featured": True, "quick_action": "Open Network"},
         "search": {"filters": [], "presets": []},
         "availability": "shipped",
         "readiness_source": "memory_artifact_counts",
@@ -158,6 +169,33 @@ def capability_route(capability_id: str, case_id: str, *, evidence_id: str | Non
             raise ValueError(f"Capability route {capability_id} requires evidence_id")
         return route
     raise KeyError(f"Unknown capability route: {capability_id}")
+
+
+def _processing_state(status_counts: Counter[str]) -> str:
+    if any(status_counts.get(status, 0) for status in ("failed", "completed_with_errors")):
+        return "failed"
+    if any(status_counts.get(status, 0) for status in ("processing", "pending")):
+        return "processing"
+    if status_counts:
+        return "ready"
+    return "empty"
+
+
+def _overview_route(workbench_id: str, case_id: str) -> str:
+    return f"/cases/{case_id}/{'m' if workbench_id == 'memory' else workbench_id[0]}"
+
+
+def _route_for_capability(capability: dict[str, Any], case_id: str, evidence_id: str | None = None) -> str:
+    route = str(capability["route"]).replace(":caseId", case_id)
+    if evidence_id:
+        route = route.replace(":evidenceId", evidence_id)
+    if ":evidenceId" in route:
+        return f"/cases/{case_id}/m"
+    return route
+
+
+def _activity_row(kind: str, title: str, route: str, timestamp: Any = None) -> dict[str, Any]:
+    return {"kind": kind, "title": title, "route": route, "timestamp": _iso(timestamp)}
 
 
 def _value(value: Any) -> str:
@@ -238,6 +276,20 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
     )
     memory_run_rows = db.query(MemoryScanRun.status, func.count(MemoryScanRun.id)).filter(MemoryScanRun.case_id == case_id).group_by(MemoryScanRun.status).all()
     memory_plugin_rows = db.query(MemoryPluginRun.status, func.count(MemoryPluginRun.id)).filter(MemoryPluginRun.case_id == case_id).group_by(MemoryPluginRun.status).all()
+    recent_detections = (
+        db.query(DetectionResult)
+        .filter(DetectionResult.case_id == case_id, DetectionResult.deleted_at.is_(None), DetectionResult.archived_at.is_(None))
+        .order_by(DetectionResult.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    recent_findings = (
+        db.query(Finding)
+        .filter(Finding.case_id == case_id, Finding.archived_at.is_(None))
+        .order_by(Finding.updated_at.desc())
+        .limit(20)
+        .all()
+    )
 
     artifact_counts = {str(kind): {"artifacts": int(count or 0), "records": int(records or 0)} for kind, count, records in artifact_rows}
     artifact_statuses: dict[str, dict[str, int]] = defaultdict(dict)
@@ -249,8 +301,11 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
 
     evidence_payloads = []
     evidence_by_host: dict[str | None, list[dict[str, Any]]] = defaultdict(list)
+    evidence_lookup: dict[str, dict[str, Any]] = {}
+    evidence_models: dict[str, Evidence] = {}
     case_platforms: Counter[str] = Counter()
     case_domains: Counter[str] = Counter()
+    evidence_status_by_workbench: dict[str, Counter[str]] = defaultdict(Counter)
     for evidence in evidences:
         domain = _evidence_domain(evidence)
         platform = _os_platform(evidence)
@@ -268,7 +323,12 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
             "detected_host": evidence.detected_host,
         }
         evidence_payloads.append(payload)
+        evidence_lookup[evidence.id] = payload
+        evidence_models[evidence.id] = evidence
         evidence_by_host[evidence.host_id].append(payload)
+        workbench_keys = ["memory"] if domain == "memory" else [platform]
+        for workbench_key in workbench_keys:
+            evidence_status_by_workbench[workbench_key][_status(evidence.ingest_status)] += 1
 
     platform_payloads = []
     for platform in sorted(case_platforms):
@@ -317,16 +377,109 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
             workbench_key = "memory" if entry["evidence_domain"] == "memory" else entry["platform"]
             workbench = workbench_map.setdefault(
                 workbench_key,
-                {"id": workbench_key, "label": workbench_key.title(), "kind": "evidence_domain" if workbench_key == "memory" else "platform", "capability_ids": [], "domains": {}},
+                {
+                    "id": workbench_key,
+                    "label": workbench_key.title(),
+                    "kind": "evidence_domain" if workbench_key == "memory" else "platform",
+                    "capability_ids": [],
+                    "domains": {},
+                    "overview_route": _overview_route(workbench_key, case_id),
+                },
             )
             workbench["capability_ids"].append(entry["id"])
             domain = workbench["domains"].setdefault(entry["domain"], {"id": entry["domain"], "capability_ids": [], "record_count": 0})
             domain["capability_ids"].append(entry["id"])
             domain["record_count"] += record_count
 
+    capabilities_by_id = {item["id"]: item for item in capability_payloads}
     workbenches = []
     for workbench in workbench_map.values():
-        workbenches.append({**workbench, "domains": list(workbench["domains"].values())})
+        workbench_id = workbench["id"]
+        workbench_evidence = [item for item in evidence_payloads if (item["evidence_domain"] == "memory" if workbench_id == "memory" else item["platform"] == workbench_id and item["evidence_domain"] != "memory")]
+        workbench_evidence_ids = {item["id"] for item in workbench_evidence}
+        status_counts = evidence_status_by_workbench.get(workbench_id, Counter())
+        visible_capabilities = [capabilities_by_id[capability_id] for capability_id in workbench["capability_ids"] if capability_id in capabilities_by_id]
+        quick_actions = []
+        for capability in sorted(visible_capabilities, key=lambda item: (item.get("overview") or {}).get("priority", item.get("nav", {}).get("order", 999))):
+            overview = capability.get("overview") or {}
+            if not overview.get("featured"):
+                continue
+            first_memory_evidence = next((item["id"] for item in workbench_evidence if item["evidence_domain"] == "memory"), None)
+            quick_actions.append(
+                {
+                    "id": capability["id"],
+                    "label": overview.get("quick_action") or capability["title"],
+                    "route": _route_for_capability(capability, case_id, first_memory_evidence),
+                    "priority": overview.get("priority", capability.get("nav", {}).get("order", 999)),
+                }
+            )
+        warnings = []
+        for status in ("failed", "completed_with_errors"):
+            count = status_counts.get(status, 0)
+            if count:
+                warnings.append({"id": f"{workbench_id}.evidence.{status}", "severity": "critical" if status == "failed" else "warning", "title": "Evidence processing needs attention", "detail": f"{count} evidence item(s) are {status.replace('_', ' ')}."})
+        for capability in visible_capabilities:
+            if capability["readiness"] == "degraded":
+                warnings.append({"id": f"{capability['id']}.degraded", "severity": "warning", "title": f"{capability['title']} is degraded", "detail": "Some parser or plugin results are incomplete."})
+            if capability["readiness"] == "failed":
+                warnings.append({"id": f"{capability['id']}.failed", "severity": "critical", "title": f"{capability['title']} failed", "detail": "Processing failed for this capability."})
+        if workbench_id == "memory":
+            unassigned = sum(1 for item in workbench_evidence if not item.get("host_id"))
+            if unassigned:
+                warnings.append({"id": "memory.host_unresolved", "severity": "warning", "title": "Memory host association missing", "detail": f"{unassigned} memory image(s) are not assigned to a host."})
+            failed_plugins = memory_plugin_statuses.get("failed", 0) + memory_plugin_statuses.get("timed_out", 0)
+            if failed_plugins:
+                warnings.append({"id": "memory.plugin_failures", "severity": "warning", "title": "Memory plugin failures", "detail": f"{failed_plugins} plugin run(s) failed or timed out."})
+        recent_activity = []
+        for detection in recent_detections:
+            if detection.evidence_id and detection.evidence_id not in workbench_evidence_ids:
+                continue
+            recent_activity.append(_activity_row("detection", detection.rule_title or detection.rule_name, f"/cases/{case_id}/detections?detection_id={detection.id}", detection.created_at))
+        for finding in recent_findings:
+            related_ids = {value for value in [finding.evidence_id, finding.linked_evidence_id] if value}
+            if related_ids and not related_ids.intersection(workbench_evidence_ids):
+                continue
+            recent_activity.append(_activity_row("finding", finding.title, f"/cases/{case_id}/findings?finding_id={finding.id}", finding.updated_at))
+        recent_activity = sorted(recent_activity, key=lambda item: item.get("timestamp") or "", reverse=True)[:6]
+        memory_images = []
+        if workbench_id == "memory":
+            summaries_by_evidence: dict[str, int] = defaultdict(int)
+            for summary in db.query(MemoryArtifactSummary.evidence_id, func.coalesce(func.sum(MemoryArtifactSummary.count), 0)).filter(MemoryArtifactSummary.case_id == case_id).group_by(MemoryArtifactSummary.evidence_id).all():
+                summaries_by_evidence[str(summary[0])] = int(summary[1] or 0)
+            run_status_by_evidence: dict[str, Counter[str]] = defaultdict(Counter)
+            for evidence_id, status, count in db.query(MemoryScanRun.evidence_id, MemoryScanRun.status, func.count(MemoryScanRun.id)).filter(MemoryScanRun.case_id == case_id).group_by(MemoryScanRun.evidence_id, MemoryScanRun.status).all():
+                run_status_by_evidence[str(evidence_id)][_status(status)] = int(count or 0)
+            for item in workbench_evidence:
+                metadata = _json_dict(evidence_models[item["id"]].metadata_json if item["id"] in evidence_models else {})
+                memory_images.append({
+                    "id": item["id"],
+                    "name": item["name"],
+                    "host_id": item.get("host_id"),
+                    "detected_host": item.get("detected_host"),
+                    "detected_os": item.get("platform"),
+                    "preparation_state": item.get("ingest_status"),
+                    "symbol_state": metadata.get("symbol_state") or metadata.get("symbol_readiness") or "unknown",
+                    "plugin_record_count": summaries_by_evidence.get(item["id"], 0),
+                    "run_status_counts": dict(run_status_by_evidence.get(item["id"], Counter())),
+                    "route": f"/cases/{case_id}/m/{item['id']}/overview",
+                })
+        workbench_hosts = {item.get("host_id") or item.get("detected_host") for item in workbench_evidence if item.get("host_id") or item.get("detected_host")}
+        workbenches.append(
+            {
+                **workbench,
+                "domains": list(workbench["domains"].values()),
+                "overview": {
+                    "host_count": len(workbench_hosts),
+                    "evidence_count": len(workbench_evidence),
+                    "processing_state": _processing_state(status_counts),
+                    "coverage": {"capability_count": len(visible_capabilities), "status_counts": dict(Counter(capability["readiness"] for capability in visible_capabilities))},
+                    "quick_actions": quick_actions,
+                    "warnings": warnings,
+                    "recent_activity": recent_activity,
+                    "memory_images": memory_images,
+                },
+            }
+        )
     workbenches.sort(key=lambda item: {"windows": 10, "linux": 20, "macos": 30, "memory": 40}.get(item["id"], 99))
 
     host_payloads = []

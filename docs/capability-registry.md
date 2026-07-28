@@ -76,3 +76,37 @@ Old bookmarks remain supported as single-hop redirects and should not be used fo
 - `/cases/:caseId/memory?tab=...` redirects to the specific memory image only when exactly one memory image exists; otherwise it redirects to `/cases/:caseId/m` without guessing evidence identity.
 
 Search behavior and Search result semantics are intentionally unchanged by Phase 2; only navigation targets were moved to canonical routes.
+
+## Workbench Overviews
+
+Phase 2.5 turns each registry workbench into an investigation landing page. The same `GET /api/cases/{case_id}/capabilities` response provides the overview model; no separate frontend policy or capability list is maintained.
+
+Workbench overview fields:
+
+- `overview_route`: canonical workbench landing route, currently `/cases/:caseId/w`, `/cases/:caseId/l`, or `/cases/:caseId/m`.
+- `overview.host_count`: host count scoped to evidence in the workbench.
+- `overview.evidence_count`: evidence count scoped to the workbench.
+- `overview.processing_state`: aggregate evidence processing state: `empty`, `ready`, `processing`, or `failed`.
+- `overview.coverage`: capability count and readiness counts derived from registry capability states.
+- `overview.quick_actions`: featured capability actions generated from registry metadata.
+- `overview.warnings`: investigation blockers derived from evidence processing state, degraded/failed capabilities, memory plugin failures, and missing memory host assignment.
+- `overview.recent_activity`: recent detections and findings scoped to workbench evidence.
+- `overview.memory_images`: image-oriented memory summary for the Memory workbench.
+
+Capability overview metadata:
+
+- `overview.priority`: ordering for coverage and quick actions.
+- `overview.featured`: whether the capability should appear as a quick action.
+- `overview.quick_action`: analyst-facing action label.
+
+The frontend renders all domains, capabilities, coverage states, quick actions and warnings from this registry payload. Unknown future workbenches, domains and capabilities render generically.
+
+## Query Behavior
+
+Workbench overviews reuse the capability registry query. Backend aggregation is batched by case:
+
+- Evidence, hosts, artifact counts, artifact status counts, memory summary counts, memory run statuses and plugin statuses are loaded with grouped queries.
+- Recent detections and findings are loaded once per case and filtered in memory by workbench evidence scope.
+- Memory image overview data uses grouped memory summary and run-status queries.
+
+The frontend does not issue one query per capability.
