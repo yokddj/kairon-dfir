@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { type MemoryScanRun, api } from "../../api/client";
+import { memoryEvidenceRoute } from "../../lib/canonicalRoutes";
 
 type Props = {
   caseId: string;
@@ -105,7 +106,7 @@ export function MemoryHistoryPanel({
               </button>
             ) : null}
             <Link
-              to={`/cases/${caseId}/m/${evidenceId}/overview`}
+              to={memoryEvidenceRoute(caseId, evidenceId)}
               onClick={onClose}
               className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted"
               data-testid="memory-history-close"

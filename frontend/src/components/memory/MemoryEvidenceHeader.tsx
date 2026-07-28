@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import { type MemoryActiveResult, type MemoryAnalysisCatalogue, type MemoryEvidenceLandingItem, type MemorySymbolPreparation, type MemorySymbolReadiness } from "../../api/client";
+import { memoryWorkbenchRoute } from "../../lib/canonicalRoutes";
 
 type DetectionDisplay = {
   label: string;
@@ -157,7 +158,7 @@ export function MemoryEvidenceHeader({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <Link
-              to={`/cases/${caseId}/m`}
+              to={memoryWorkbenchRoute(caseId)}
               className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted"
               data-testid="memory-evidence-back"
             >

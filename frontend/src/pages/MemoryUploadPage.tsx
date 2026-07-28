@@ -10,6 +10,7 @@ import {
 } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
+import { memoryEvidenceRoute, memoryWorkbenchRoute } from "../lib/canonicalRoutes";
 import { hashBlob } from "../lib/sha256";
 
 const MEMORY_EXTENSIONS = [".raw", ".mem", ".dmp", ".dump", ".bin", ".img", ".vmem", ".lime", ".aff4"];
@@ -641,7 +642,7 @@ export default function MemoryUploadPage() {
       if (result.status === "completed" && result.evidence_id) {
         writeStoredUpload(caseId, null);
         setActiveUploadIdTracked(null);
-        navigate(`/cases/${caseId}/m/${result.evidence_id}/overview`);
+        navigate(memoryEvidenceRoute(caseId, result.evidence_id));
         return;
       }
       await statusQuery.refetch();
@@ -733,7 +734,7 @@ export default function MemoryUploadPage() {
             <h2 className="text-3xl font-semibold">Add memory image</h2>
             <p className="mt-2 max-w-3xl text-sm text-muted">Upload authorized RAM evidence into isolated memory storage. Supports Windows memory images (.raw, .mem, .dmp, .vmem) and Linux LiME captures (.lime).</p>
           </div>
-          <Link to={`/cases/${caseId}/m`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Back to Memory Analysis</Link>
+          <Link to={memoryWorkbenchRoute(caseId)} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Back to Memory Analysis</Link>
         </div>
       </section>
 
@@ -839,7 +840,7 @@ export default function MemoryUploadPage() {
                   Cancel and discard
                 </button>
               ) : null}
-              {serverActive.evidence_id ? <Link to={`/cases/${caseId}/m/${serverActive.evidence_id}/overview`} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">Open evidence</Link> : null}
+              {serverActive.evidence_id ? <Link to={memoryEvidenceRoute(caseId, serverActive.evidence_id)} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">Open evidence</Link> : null}
             </div>
           </div>
         </section>
@@ -981,8 +982,8 @@ export default function MemoryUploadPage() {
         {stage !== "idle" ? <div className="mt-4"><div className="flex justify-between text-xs text-muted"><span>{stage}</span><span>{formatBytes(progress.loaded)} / {formatBytes(progress.total)} · {percent}% transferred</span></div><div className="mt-2 h-3 overflow-hidden rounded-full bg-abyss"><div className={`h-full transition-all ${stage === "failed" ? "bg-rose-500" : stage === "completed" ? "bg-mint" : "bg-accent"}`} style={{ width: `${percent}%` }} /></div><p className={`mt-3 text-sm ${stage === "failed" ? "text-rose-200" : "text-muted"}`}>{status}</p>{stage === "uploading" ? <p className="mt-2 text-xs text-muted">Speed: {speedBytesPerSecond > 0 ? `${formatBytes(speedBytesPerSecond)}/s` : "Calculating"} · ETA: {formatSeconds(etaSeconds)}</p> : null}{stage === "verifying" || stage === "finalizing" ? <><p className="mt-2 text-xs text-muted" role="status">Server finalization is active · {elapsedSeconds}s elapsed.</p>{elapsedSeconds >= 30 ? <p className="mt-2 text-xs text-warning">The file has been transferred. Kairon is still finalizing the evidence.</p> : null}</> : null}</div> : null}
         {activeUploadId && stage !== "completed" ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" data-testid="memory-upload-check-status" onClick={async () => { setCheckingStatus(true); await statusQuery.refetch(); setCheckingStatus(false); }} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">{checkingStatus ? "Checking…" : "Check status"}</button>{statusQuery.data?.retryable ? <button type="button" onClick={() => void reconcileUpload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Retry finalization</button> : null}{statusQuery.data?.failure_code === "upload_bytes_lost" ? <button type="button" onClick={() => void prepareReupload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Prepare new upload</button> : null}{statusQuery.data?.status === "failed" && file && activeUploadId ? <button type="button" onClick={() => void upload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Resume missing chunks</button> : null}</div> : null}
         {stage === "failed" && !activeUploadId ? <div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => void retryUpload()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Retry upload</button><button type="button" onClick={() => inputRef.current?.click()} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Select another file</button></div> : null}
-        {duplicateUpload ? <div className="mt-4 rounded-2xl border border-warning/30 bg-warning/10 p-4 text-sm" data-testid="memory-upload-duplicate-warning"><p className="font-semibold text-ink">This memory image is already registered in this case.</p><p className="mt-1 text-muted">{duplicateUpload.message}</p>{duplicateUpload.existingFilename ? <p className="mt-1 text-muted">Existing evidence: {duplicateUpload.existingFilename}</p> : null}<div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => navigate(`/cases/${caseId}/m/${duplicateUpload.existingEvidenceId}/overview`)} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">Open existing evidence</button><button type="button" onClick={() => setDuplicateUpload(null)} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Cancel</button></div></div> : null}
-        {uploadedEvidence ? <div className="mt-4 rounded-2xl border border-mint/30 bg-mint/10 p-4 text-sm"><p className="font-semibold text-ink">Upload completed</p><p className="mt-1 text-muted">Evidence ID: {uploadedEvidence.id}</p><p className="mt-1 text-muted">Type: Memory image · Size: {formatBytes(uploadedEvidence.size_bytes ?? 0)}</p><div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => navigate(`/cases/${caseId}/m/${uploadedEvidence.id}/overview`)} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">Open Memory Analysis</button><button type="button" onClick={() => { setFile(null); setUploadedEvidence(null); setStage("idle"); setStatus(""); setProgress({ loaded: 0, total: 0 }); setSpeedBytesPerSecond(0); }} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Upload another memory image</button></div></div> : null}
+        {duplicateUpload ? <div className="mt-4 rounded-2xl border border-warning/30 bg-warning/10 p-4 text-sm" data-testid="memory-upload-duplicate-warning"><p className="font-semibold text-ink">This memory image is already registered in this case.</p><p className="mt-1 text-muted">{duplicateUpload.message}</p>{duplicateUpload.existingFilename ? <p className="mt-1 text-muted">Existing evidence: {duplicateUpload.existingFilename}</p> : null}<div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => navigate(memoryEvidenceRoute(caseId, duplicateUpload.existingEvidenceId))} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">Open existing evidence</button><button type="button" onClick={() => setDuplicateUpload(null)} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Cancel</button></div></div> : null}
+        {uploadedEvidence ? <div className="mt-4 rounded-2xl border border-mint/30 bg-mint/10 p-4 text-sm"><p className="font-semibold text-ink">Upload completed</p><p className="mt-1 text-muted">Evidence ID: {uploadedEvidence.id}</p><p className="mt-1 text-muted">Type: Memory image · Size: {formatBytes(uploadedEvidence.size_bytes ?? 0)}</p><div className="mt-4 flex flex-wrap gap-2"><button type="button" onClick={() => navigate(memoryEvidenceRoute(caseId, uploadedEvidence.id))} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">Open Memory Analysis</button><button type="button" onClick={() => { setFile(null); setUploadedEvidence(null); setStage("idle"); setStatus(""); setProgress({ loaded: 0, total: 0 }); setSpeedBytesPerSecond(0); }} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Upload another memory image</button></div></div> : null}
         {needsFileReselection ? (
           <div className="mt-4 rounded-2xl border border-warning/30 bg-warning/10 p-4 text-sm">
             <p className="font-semibold text-ink">Upload paused</p>

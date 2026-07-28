@@ -198,6 +198,92 @@ def _activity_row(kind: str, title: str, route: str, timestamp: Any = None) -> d
     return {"kind": kind, "title": title, "route": route, "timestamp": _iso(timestamp)}
 
 
+def _workbench_evidence(evidence_payloads: list[dict[str, Any]], workbench_id: str) -> list[dict[str, Any]]:
+    return [
+        item
+        for item in evidence_payloads
+        if (item["evidence_domain"] == "memory" if workbench_id == "memory" else item["platform"] == workbench_id and item["evidence_domain"] != "memory")
+    ]
+
+
+def _build_quick_actions(visible_capabilities: list[dict[str, Any]], case_id: str, workbench_evidence: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    actions = []
+    first_memory_evidence = next((item["id"] for item in workbench_evidence if item["evidence_domain"] == "memory"), None)
+    for capability in sorted(visible_capabilities, key=lambda item: (item.get("overview") or {}).get("priority", item.get("nav", {}).get("order", 999))):
+        overview = capability.get("overview") or {}
+        if not overview.get("featured"):
+            continue
+        actions.append(
+            {
+                "id": capability["id"],
+                "label": overview.get("quick_action") or capability["title"],
+                "route": _route_for_capability(capability, case_id, first_memory_evidence),
+                "priority": overview.get("priority", capability.get("nav", {}).get("order", 999)),
+            }
+        )
+    return actions
+
+
+def _build_warnings(workbench_id: str, status_counts: Counter[str], visible_capabilities: list[dict[str, Any]], workbench_evidence: list[dict[str, Any]], memory_plugin_statuses: dict[str, int]) -> list[dict[str, Any]]:
+    warnings = []
+    for status in ("failed", "completed_with_errors"):
+        count = status_counts.get(status, 0)
+        if count:
+            warnings.append({"id": f"{workbench_id}.evidence.{status}", "severity": "critical" if status == "failed" else "warning", "title": "Evidence processing needs attention", "detail": f"{count} evidence item(s) are {status.replace('_', ' ')}."})
+    for capability in visible_capabilities:
+        if capability["readiness"] == "degraded":
+            warnings.append({"id": f"{capability['id']}.degraded", "severity": "warning", "title": f"{capability['title']} is degraded", "detail": "Some parser or plugin results are incomplete."})
+        if capability["readiness"] == "failed":
+            warnings.append({"id": f"{capability['id']}.failed", "severity": "critical", "title": f"{capability['title']} failed", "detail": "Processing failed for this capability."})
+    if workbench_id == "memory":
+        unassigned = sum(1 for item in workbench_evidence if not item.get("host_id"))
+        if unassigned:
+            warnings.append({"id": "memory.host_unresolved", "severity": "warning", "title": "Memory host association missing", "detail": f"{unassigned} memory image(s) are not assigned to a host."})
+        failed_plugins = memory_plugin_statuses.get("failed", 0) + memory_plugin_statuses.get("timed_out", 0)
+        if failed_plugins:
+            warnings.append({"id": "memory.plugin_failures", "severity": "warning", "title": "Memory plugin failures", "detail": f"{failed_plugins} plugin run(s) failed or timed out."})
+    return warnings
+
+
+def _recent_activity_for_workbench(case_id: str, workbench_evidence_ids: set[str], recent_detections: list[DetectionResult], recent_findings: list[Finding]) -> list[dict[str, Any]]:
+    activity = []
+    for detection in recent_detections:
+        if detection.evidence_id and detection.evidence_id not in workbench_evidence_ids:
+            continue
+        activity.append(_activity_row("detection", detection.rule_title or detection.rule_name, f"/cases/{case_id}/detections?detection_id={detection.id}", detection.created_at))
+    for finding in recent_findings:
+        related_ids = {value for value in [finding.evidence_id, finding.linked_evidence_id] if value}
+        if related_ids and not related_ids.intersection(workbench_evidence_ids):
+            continue
+        activity.append(_activity_row("finding", finding.title, f"/cases/{case_id}/findings?finding_id={finding.id}", finding.updated_at))
+    return sorted(activity, key=lambda item: item.get("timestamp") or "", reverse=True)[:6]
+
+
+def _memory_images_for_workbench(db: Session, case_id: str, workbench_evidence: list[dict[str, Any]], evidence_models: dict[str, Evidence]) -> list[dict[str, Any]]:
+    summaries_by_evidence: dict[str, int] = defaultdict(int)
+    for summary in db.query(MemoryArtifactSummary.evidence_id, func.coalesce(func.sum(MemoryArtifactSummary.count), 0)).filter(MemoryArtifactSummary.case_id == case_id).group_by(MemoryArtifactSummary.evidence_id).all():
+        summaries_by_evidence[str(summary[0])] = int(summary[1] or 0)
+    run_status_by_evidence: dict[str, Counter[str]] = defaultdict(Counter)
+    for evidence_id, status, count in db.query(MemoryScanRun.evidence_id, MemoryScanRun.status, func.count(MemoryScanRun.id)).filter(MemoryScanRun.case_id == case_id).group_by(MemoryScanRun.evidence_id, MemoryScanRun.status).all():
+        run_status_by_evidence[str(evidence_id)][_status(status)] = int(count or 0)
+    images = []
+    for item in workbench_evidence:
+        metadata = _json_dict(evidence_models[item["id"]].metadata_json if item["id"] in evidence_models else {})
+        images.append({
+            "id": item["id"],
+            "name": item["name"],
+            "host_id": item.get("host_id"),
+            "detected_host": item.get("detected_host"),
+            "detected_os": item.get("platform"),
+            "preparation_state": item.get("ingest_status"),
+            "symbol_state": metadata.get("symbol_state") or metadata.get("symbol_readiness") or "unknown",
+            "plugin_record_count": summaries_by_evidence.get(item["id"], 0),
+            "run_status_counts": dict(run_status_by_evidence.get(item["id"], Counter())),
+            "route": f"/cases/{case_id}/m/{item['id']}/overview",
+        })
+    return images
+
+
 def _value(value: Any) -> str:
     return str(getattr(value, "value", value or ""))
 
@@ -395,74 +481,14 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
     workbenches = []
     for workbench in workbench_map.values():
         workbench_id = workbench["id"]
-        workbench_evidence = [item for item in evidence_payloads if (item["evidence_domain"] == "memory" if workbench_id == "memory" else item["platform"] == workbench_id and item["evidence_domain"] != "memory")]
+        workbench_evidence = _workbench_evidence(evidence_payloads, workbench_id)
         workbench_evidence_ids = {item["id"] for item in workbench_evidence}
         status_counts = evidence_status_by_workbench.get(workbench_id, Counter())
         visible_capabilities = [capabilities_by_id[capability_id] for capability_id in workbench["capability_ids"] if capability_id in capabilities_by_id]
-        quick_actions = []
-        for capability in sorted(visible_capabilities, key=lambda item: (item.get("overview") or {}).get("priority", item.get("nav", {}).get("order", 999))):
-            overview = capability.get("overview") or {}
-            if not overview.get("featured"):
-                continue
-            first_memory_evidence = next((item["id"] for item in workbench_evidence if item["evidence_domain"] == "memory"), None)
-            quick_actions.append(
-                {
-                    "id": capability["id"],
-                    "label": overview.get("quick_action") or capability["title"],
-                    "route": _route_for_capability(capability, case_id, first_memory_evidence),
-                    "priority": overview.get("priority", capability.get("nav", {}).get("order", 999)),
-                }
-            )
-        warnings = []
-        for status in ("failed", "completed_with_errors"):
-            count = status_counts.get(status, 0)
-            if count:
-                warnings.append({"id": f"{workbench_id}.evidence.{status}", "severity": "critical" if status == "failed" else "warning", "title": "Evidence processing needs attention", "detail": f"{count} evidence item(s) are {status.replace('_', ' ')}."})
-        for capability in visible_capabilities:
-            if capability["readiness"] == "degraded":
-                warnings.append({"id": f"{capability['id']}.degraded", "severity": "warning", "title": f"{capability['title']} is degraded", "detail": "Some parser or plugin results are incomplete."})
-            if capability["readiness"] == "failed":
-                warnings.append({"id": f"{capability['id']}.failed", "severity": "critical", "title": f"{capability['title']} failed", "detail": "Processing failed for this capability."})
-        if workbench_id == "memory":
-            unassigned = sum(1 for item in workbench_evidence if not item.get("host_id"))
-            if unassigned:
-                warnings.append({"id": "memory.host_unresolved", "severity": "warning", "title": "Memory host association missing", "detail": f"{unassigned} memory image(s) are not assigned to a host."})
-            failed_plugins = memory_plugin_statuses.get("failed", 0) + memory_plugin_statuses.get("timed_out", 0)
-            if failed_plugins:
-                warnings.append({"id": "memory.plugin_failures", "severity": "warning", "title": "Memory plugin failures", "detail": f"{failed_plugins} plugin run(s) failed or timed out."})
-        recent_activity = []
-        for detection in recent_detections:
-            if detection.evidence_id and detection.evidence_id not in workbench_evidence_ids:
-                continue
-            recent_activity.append(_activity_row("detection", detection.rule_title or detection.rule_name, f"/cases/{case_id}/detections?detection_id={detection.id}", detection.created_at))
-        for finding in recent_findings:
-            related_ids = {value for value in [finding.evidence_id, finding.linked_evidence_id] if value}
-            if related_ids and not related_ids.intersection(workbench_evidence_ids):
-                continue
-            recent_activity.append(_activity_row("finding", finding.title, f"/cases/{case_id}/findings?finding_id={finding.id}", finding.updated_at))
-        recent_activity = sorted(recent_activity, key=lambda item: item.get("timestamp") or "", reverse=True)[:6]
-        memory_images = []
-        if workbench_id == "memory":
-            summaries_by_evidence: dict[str, int] = defaultdict(int)
-            for summary in db.query(MemoryArtifactSummary.evidence_id, func.coalesce(func.sum(MemoryArtifactSummary.count), 0)).filter(MemoryArtifactSummary.case_id == case_id).group_by(MemoryArtifactSummary.evidence_id).all():
-                summaries_by_evidence[str(summary[0])] = int(summary[1] or 0)
-            run_status_by_evidence: dict[str, Counter[str]] = defaultdict(Counter)
-            for evidence_id, status, count in db.query(MemoryScanRun.evidence_id, MemoryScanRun.status, func.count(MemoryScanRun.id)).filter(MemoryScanRun.case_id == case_id).group_by(MemoryScanRun.evidence_id, MemoryScanRun.status).all():
-                run_status_by_evidence[str(evidence_id)][_status(status)] = int(count or 0)
-            for item in workbench_evidence:
-                metadata = _json_dict(evidence_models[item["id"]].metadata_json if item["id"] in evidence_models else {})
-                memory_images.append({
-                    "id": item["id"],
-                    "name": item["name"],
-                    "host_id": item.get("host_id"),
-                    "detected_host": item.get("detected_host"),
-                    "detected_os": item.get("platform"),
-                    "preparation_state": item.get("ingest_status"),
-                    "symbol_state": metadata.get("symbol_state") or metadata.get("symbol_readiness") or "unknown",
-                    "plugin_record_count": summaries_by_evidence.get(item["id"], 0),
-                    "run_status_counts": dict(run_status_by_evidence.get(item["id"], Counter())),
-                    "route": f"/cases/{case_id}/m/{item['id']}/overview",
-                })
+        quick_actions = _build_quick_actions(visible_capabilities, case_id, workbench_evidence)
+        warnings = _build_warnings(workbench_id, status_counts, visible_capabilities, workbench_evidence, memory_plugin_statuses)
+        recent_activity = _recent_activity_for_workbench(case_id, workbench_evidence_ids, recent_detections, recent_findings)
+        memory_images = _memory_images_for_workbench(db, case_id, workbench_evidence, evidence_models) if workbench_id == "memory" else []
         workbench_hosts = {item.get("host_id") or item.get("detected_host") for item in workbench_evidence if item.get("host_id") or item.get("detected_host")}
         workbenches.append(
             {
