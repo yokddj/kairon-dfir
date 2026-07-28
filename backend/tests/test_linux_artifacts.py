@@ -72,8 +72,12 @@ class TestApacheParser:
         assert doc["source_file"] == "/var/log/apache2/access.log.1.gz"
         assert doc["linux"]["http_status"] == 404
         assert doc["linux"]["url_path"] == "/index.html"
+        assert doc["linux"]["line_number"] == 1
         assert doc["network"]["source_ip"] == "192.0.2.10"
         assert doc["url"]["path"] == "/index.html"
+        assert doc["http"]["request"]["method"] == "GET"
+        assert doc["http"]["response"]["status_code"] == 404
+        assert doc["user_agent"]["original"] == "Mozilla/5"
         assert doc["@timestamp"] == "2024-10-10T13:55:36+00:00"
         assert "GET" in doc["search_text"]
         assert "/index.html" in doc["search_text"]
@@ -98,9 +102,30 @@ class TestApacheParser:
 
         assert docs[0]["event"]["severity"] == "medium"
         assert docs[0]["linux"]["http_severity"] == "error"
+        assert docs[0]["linux"]["line_number"] == 1
         assert docs[0]["network"]["source_ip"] == "203.0.113.9"
         assert docs[0]["network"]["source_port"] == 4444
         assert docs[0]["title"] == "File does not exist: /var/www/html/admin"
+
+    def test_raw_parser_name_maps_to_normalized_apache_family(self, tmp_path):
+        from app.ingest.normalizer import normalize_file
+
+        path = tmp_path / "access.log"
+        path.write_text('192.0.2.10 - - [10/Oct/2024:13:55:36 +0000] "GET /health HTTP/1.1" 200 10 "-" "curl/8"\n', encoding="utf-8")
+        artifact_meta = {
+            "artifact_family": "linux_apache",
+            "artifact_type": "apache_access",
+            "parser": "linux_apache_raw",
+            "name": "access.log",
+            "source_path": "/var/log/apache2/access.log",
+        }
+
+        doc = normalize_file("case-1", "ev-1", "art-1", path, artifact_meta)[0]
+
+        assert doc["artifact"]["type"] == "linux_apache"
+        assert doc["artifact"]["family"] == "linux_apache"
+        assert doc["artifact"]["parser"] == "linux_apache_raw"
+        assert doc["source_tool"] == "linux_apache_raw"
 
 
 class TestAuthLogParser:

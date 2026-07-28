@@ -681,7 +681,7 @@ def _materialize_volume_installation(
         try:
             file_obj = fs_info.open(full_path)
             size = int(getattr(meta, "size", 0) or 0)
-            data = file_obj.read_random(0, size)
+            data = b"" if size == 0 else file_obj.read_random(0, size)
         except Exception:
             warnings.append(f"unreadable_file:{full_path}")
             continue
