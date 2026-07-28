@@ -3659,6 +3659,7 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["effective_failure_count"] = row.get("effective_failure_count", None)
     linux_data["record_type"] = row.get("record_type", "")
     linux_data["record_offset"] = row.get("record_offset", None)
+    linux_data["line_number"] = row.get("line_number", None)
     linux_data["hostname"] = linux_data.get("hostname") or detected_host or ""
     linux_data["http_method"] = row.get("http_method", "")
     linux_data["url_path"] = row.get("url_path", "")
@@ -3714,6 +3715,9 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         doc["network"]["source_port"] = linux_data.get("source_port")
         doc["url"]["path"] = linux_data.get("url_path") or None
         doc["url"]["full"] = linux_data.get("url_path") or None
+        doc["http"]["request"]["method"] = linux_data.get("http_method") or None
+        doc["http"]["response"]["status_code"] = linux_data.get("http_status")
+        doc["user_agent"]["original"] = linux_data.get("http_user_agent") or None
         if linux_data.get("http_status") is not None:
             doc["event"]["outcome"] = "failure" if int(linux_data["http_status"]) >= 400 else "success"
         doc["title"] = linux_data.get("message") or "Apache log event"

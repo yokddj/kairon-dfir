@@ -512,20 +512,23 @@ function getColumns(view: EventView): Column[] {
         { key: "type", label: "Type", render: (item) => String(((item.event as Record<string, unknown>) ?? {}).type ?? ((item.network as Record<string, unknown>) ?? {}).artifact_type ?? "-") },
         {
           key: "interface_ssid",
-          label: "Interface / SSID",
+          label: "Method / Interface",
           render: (item) => {
+            const http = (item.http as Record<string, unknown>) ?? {};
+            const request = (http.request as Record<string, unknown>) ?? {};
             const network = (item.network as Record<string, unknown>) ?? {};
             const wlan = (item.wlan as Record<string, unknown>) ?? {};
-            return String(wlan.ssid ?? wlan.profile_name ?? network.interface_name ?? network.interface_description ?? "-");
+            return String(request.method ?? wlan.ssid ?? wlan.profile_name ?? network.interface_name ?? network.interface_description ?? "-");
           },
         },
         {
           key: "domain_ip",
-          label: "Domain / IP",
+          label: "URL / Domain / IP",
           render: (item) => {
+            const url = (item.url as Record<string, unknown>) ?? {};
             const network = (item.network as Record<string, unknown>) ?? {};
             const dns = (item.dns as Record<string, unknown>) ?? {};
-            return String(dns.name ?? dns.domain ?? dns.ip ?? network.domain ?? network.destination_ip ?? network.source_ip ?? "-");
+            return String(url.path ?? url.full ?? dns.name ?? dns.domain ?? dns.ip ?? network.domain ?? network.destination_ip ?? network.source_ip ?? "-");
           },
         },
         {
@@ -535,13 +538,16 @@ function getColumns(view: EventView): Column[] {
         },
         {
           key: "status",
-          label: "Status",
+          label: "Status / HTTP",
           render: (item) => {
+            const http = (item.http as Record<string, unknown>) ?? {};
+            const response = (http.response as Record<string, unknown>) ?? {};
             const network = (item.network as Record<string, unknown>) ?? {};
             const dns = (item.dns as Record<string, unknown>) ?? {};
-            return String(network.state ?? dns.status ?? "-");
+            return String(response.status_code ?? network.state ?? dns.status ?? "-");
           },
         },
+        { key: "user_agent", label: "User Agent", render: (item) => String(((item.user_agent as Record<string, unknown>) ?? {}).original ?? "-") },
         tags,
       ];
     case "srum":

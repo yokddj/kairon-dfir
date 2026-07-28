@@ -130,6 +130,10 @@ def test_materialize_raw_filesystem_image_linux_without_partition_table(sqlite_s
             "etc/passwd": "root:x:0:0:root:/root:/bin/bash\n",
             "etc/group": "root:x:0:\n",
             "var/log/auth.log": "Accepted password for root from 10.0.0.5\n",
+            "var/log/apache2/access.log": '192.0.2.10 - - [10/Oct/2024:13:55:36 +0000] "GET /index.html HTTP/1.1" 200 2326 "-" "curl/8"\n',
+            "var/log/apache2/error.log.1.gz": "compressed bytes are not required for materialization selection\n",
+            "var/log/apache2/other_vhosts_access.log": "",
+            "var/log/httpd/access_log-20241010": '198.51.100.5 - - [10/Oct/2024:13:56:36 +0000] "POST /login HTTP/1.1" 302 123\n',
             "logs/journal.export": "__REALTIME_TIMESTAMP=1710000000000000\n_HOSTNAME=ubuntu-lab\nMESSAGE=Started ssh.service\n\n",
             "home/ubuntu/.bash_history": "whoami\nid\n",
         },
@@ -146,8 +150,13 @@ def test_materialize_raw_filesystem_image_linux_without_partition_table(sqlite_s
     assert result.volumes[0].readable is True
     assert any(install.platform == "linux" for install in result.installations)
     assert any(item["artifact_type"] == "linux_auth" for item in artifacts)
+    assert any(item["artifact_type"] == "linux_apache" and item["parser"] == "linux_apache_raw" for item in artifacts)
     assert any(item["artifact_type"] == "linux_journal" for item in artifacts)
     assert any(item["artifact_type"] == "linux_shell_history" for item in artifacts)
+    assert (extract_dir / "volume-0/linux/var/log/apache2/access.log").exists()
+    assert (extract_dir / "volume-0/linux/var/log/apache2/error.log.1.gz").exists()
+    assert (extract_dir / "volume-0/linux/var/log/apache2/other_vhosts_access.log").exists()
+    assert (extract_dir / "volume-0/linux/var/log/httpd/access_log-20241010").exists()
     assert hashlib.sha256(image.read_bytes()).hexdigest() == original_hash
 
 

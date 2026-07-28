@@ -46,6 +46,7 @@ const ARTIFACT_REGISTRY: UiArtifactDefinition[] = [
   { id: "linux_auth", label: "Linux Auth", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_syslog", label: "Linux Syslog", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_audit", label: "Linux Audit", platforms: ["linux"], view: "network", platformShortcut: true },
+  { id: "linux_apache", label: "Apache Logs", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_shell_history", label: "Linux Shell History", platforms: ["linux"], view: "execution", platformShortcut: true },
   { id: "linux_cron", label: "Linux Cron", platforms: ["linux"], view: "persistence", platformShortcut: true },
   { id: "linux_systemd", label: "Linux Systemd", platforms: ["linux"], view: "persistence", platformShortcut: true },

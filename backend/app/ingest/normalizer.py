@@ -1125,7 +1125,9 @@ def base_document(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
             "parser_status": None,
             "timestamp_interpretation": None,
         },
+        "http": {"request": {"method": None}, "response": {"status_code": None}},
         "url": {"full": None, "domain": None, "scheme": None, "path": None, "query": None},
+        "user_agent": {"original": None},
         "download": {"url": None, "final_url": None, "referrer": None, "target_path": None, "file_name": None, "mime_type": None, "total_bytes": None, "received_bytes": None, "state": None},
         "task": {
             "name": None,
