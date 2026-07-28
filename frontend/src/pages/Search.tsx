@@ -1595,6 +1595,13 @@ export default function Search() {
   }, [registryFacetData.capability, state.domain_scope, state.workbench]);
   const platformOptions = useMemo(() => withCurrentOption(registrySelectOptions(registryFacetData.platform ?? [], "All platforms"), state.platform), [registryFacetData.platform, state.platform]);
   const sourceCategoryOptions = useMemo(() => withCurrentOption(registrySelectOptions(registryFacetData.source_category ?? [], "All sources"), state.source_category), [registryFacetData.source_category, state.source_category]);
+  const artifactTypeOptions = useMemo(() => {
+    const counts = globalFacets.artifact_type ?? response?.facets?.artifact_type ?? {};
+    return withCurrentOption(
+      [{ value: "", label: "Any" }, ...Object.keys(counts).map((option) => ({ value: option, label: formatFacetOption(option, globalFacets.artifact_type) }))],
+      state.artifact_type[0] ?? "",
+    );
+  }, [globalFacets.artifact_type, response?.facets?.artifact_type, state.artifact_type]);
   const registryPresets = useMemo(() => (registry?.search?.presets ?? []).filter((item) => (!state.workbench || item.workbench === state.workbench) && (!state.domain_scope || item.domain === state.domain_scope) && (!state.capability || item.capability_id === state.capability)), [registry?.search?.presets, state.capability, state.domain_scope, state.workbench]);
   const results = response?.results ?? [];
   const indicatorEntities = useMemo(() =>
@@ -2304,10 +2311,9 @@ export default function Search() {
           <label className="block">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact type</span>
             <select aria-label="Artifact type" value={state.artifact_type[0] ?? ""} onChange={(event) => updateParams({ artifact_type: event.target.value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50">
-              <option value="">Any</option>
-              {Object.keys(globalFacets.artifact_type ?? response?.facets?.artifact_type ?? {}).map((option) => (
-                <option key={option} value={option}>
-                  {formatFacetOption(option, globalFacets.artifact_type)}
+              {artifactTypeOptions.map((option) => (
+                <option key={option.value || "any-artifact"} value={option.value}>
+                  {option.label}
                 </option>
               ))}
             </select>
