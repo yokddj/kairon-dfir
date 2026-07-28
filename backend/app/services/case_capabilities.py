@@ -17,7 +17,7 @@ from app.models.finding import Finding
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
 
 
-REGISTRY_VERSION = "2026.07.phase0"
+REGISTRY_VERSION = "2026.07.phase3"
 OS_PLATFORMS = {"windows", "linux", "macos", "unknown"}
 SHIPPED_PLATFORMS = {"windows", "linux"}
 
@@ -33,7 +33,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "artifact_families": ["powershell_activity", "powershell_execution", "process_execution", "windows_event"],
         "nav": {"parent": "windows/execution", "order": 10},
         "overview": {"priority": 20, "featured": True, "quick_action": "Open Command History"},
-        "search": {"filters": [], "presets": []},
+        "search": {"priority": 20, "group": "Execution", "tags": ["commands", "process"], "action_tags": ["command_history"], "default_filters": {"platform": "windows", "artifact_type": ["powershell_activity", "powershell_execution", "process_execution", "windows_event"]}, "preferred_sort": "timestamp_desc", "filters": [], "presets": [{"title": "Windows command activity", "state": {"platform": "windows", "artifact_type": ["powershell_activity", "powershell_execution", "process_execution", "windows_event"]}}]},
         "availability": "shipped",
         "readiness_source": "artifact_counts",
     },
@@ -47,7 +47,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "artifact_families": ["program_executions", "execution_candidates", "windows_event", "prefetch"],
         "nav": {"parent": "windows/execution", "order": 20},
         "overview": {"priority": 10, "featured": True, "quick_action": "Open Execution Stories"},
-        "search": {"filters": [], "presets": []},
+        "search": {"priority": 10, "group": "Execution", "tags": ["process", "execution_story"], "action_tags": ["execution_story"], "default_filters": {"platform": "windows", "artifact_type": ["program_executions", "execution_candidates", "windows_event", "prefetch"]}, "preferred_sort": "timestamp_desc", "filters": [], "presets": [{"title": "Windows execution stories", "state": {"platform": "windows", "artifact_type": ["program_executions", "execution_candidates", "windows_event", "prefetch"]}}]},
         "availability": "shipped",
         "readiness_source": "artifact_counts",
     },
@@ -61,7 +61,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "artifact_families": ["scheduled_task", "service", "registry_run_key", "autoruns"],
         "nav": {"parent": "windows/persistence", "order": 10},
         "overview": {"priority": 30, "featured": True, "quick_action": "Review Persistence"},
-        "search": {"filters": [], "presets": []},
+        "search": {"priority": 30, "group": "Persistence", "tags": ["persistence", "registry"], "default_filters": {"platform": "windows", "artifact_type": ["scheduled_task", "service", "registry_run_key", "autoruns"]}, "preferred_sort": "risk_desc", "filters": [], "presets": [{"title": "Windows persistence", "state": {"platform": "windows", "artifact_type": ["scheduled_task", "service", "registry_run_key", "autoruns"]}}]},
         "availability": "shipped",
         "readiness_source": "artifact_counts",
     },
@@ -76,11 +76,16 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "nav": {"parent": "linux/access", "order": 10},
         "overview": {"priority": 10, "featured": True, "quick_action": "Open Authentication"},
         "search": {
+            "priority": 10,
+            "group": "Access",
+            "tags": ["authentication", "ssh", "login"],
+            "default_filters": {"platform": "linux", "artifact_type": ["linux_auth"]},
+            "preferred_sort": "timestamp_desc",
             "filters": [
                 {"key": "auth.outcome", "type": "enum", "values": ["success", "failure"]},
                 {"key": "auth.remote_ip", "type": "ip"},
             ],
-            "presets": [{"title": "Failed SSH logins", "state": {"artifact_family": "linux_auth", "q": "Failed password"}}],
+            "presets": [{"title": "Failed SSH logins", "state": {"platform": "linux", "artifact_type": ["linux_auth"], "q": "Failed password"}}],
         },
         "availability": "shipped",
         "readiness_source": "artifact_counts",
@@ -95,7 +100,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "artifact_families": ["linux_shell_history"],
         "nav": {"parent": "linux/execution", "order": 10},
         "overview": {"priority": 20, "featured": True, "quick_action": "Open Command History"},
-        "search": {"filters": [], "presets": []},
+        "search": {"priority": 20, "group": "Execution", "tags": ["commands", "shell"], "action_tags": ["command_history"], "default_filters": {"platform": "linux", "artifact_type": ["linux_shell_history"]}, "preferred_sort": "timestamp_desc", "filters": [], "presets": [{"title": "Linux shell commands", "state": {"platform": "linux", "artifact_type": ["linux_shell_history"]}}]},
         "availability": "shipped",
         "readiness_source": "artifact_counts",
     },
@@ -109,7 +114,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "artifact_families": ["linux_packages"],
         "nav": {"parent": "linux/software", "order": 10},
         "overview": {"priority": 50, "featured": False, "quick_action": "Review Packages"},
-        "search": {"filters": [], "presets": []},
+        "search": {"priority": 50, "group": "Software", "tags": ["packages", "software"], "default_filters": {"platform": "linux", "artifact_type": ["linux_packages"]}, "preferred_sort": "timestamp_desc", "filters": [], "presets": [{"title": "Linux packages", "state": {"platform": "linux", "artifact_type": ["linux_packages"]}}]},
         "availability": "shipped",
         "readiness_source": "artifact_counts",
     },
@@ -123,7 +128,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "artifact_families": ["processes", "network", "modules", "handles", "vads"],
         "nav": {"parent": "memory/overview", "order": 5},
         "overview": {"priority": 5, "featured": True, "quick_action": "Open Memory Images"},
-        "search": {"filters": [], "presets": []},
+        "search": {"priority": 5, "group": "Memory", "tags": ["memory", "overview"], "default_filters": {"source_category": "Memory", "artifact_type": ["processes", "network", "modules", "handles", "vads"]}, "preferred_sort": "timestamp_desc", "filters": [], "presets": [{"title": "Memory evidence", "state": {"source_category": "Memory", "artifact_type": ["processes", "network", "modules", "handles", "vads"]}}]},
         "availability": "shipped",
         "readiness_source": "memory_artifact_counts",
     },
@@ -137,7 +142,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "artifact_families": ["processes"],
         "nav": {"parent": "memory/execution", "order": 10},
         "overview": {"priority": 10, "featured": True, "quick_action": "Open Processes"},
-        "search": {"filters": [], "presets": []},
+        "search": {"priority": 10, "group": "Execution", "tags": ["memory", "process"], "default_filters": {"source_category": "Memory", "artifact_type": ["processes"]}, "preferred_sort": "timestamp_desc", "filters": [], "presets": [{"title": "Memory processes", "state": {"source_category": "Memory", "artifact_type": ["processes"]}}]},
         "availability": "shipped",
         "readiness_source": "memory_artifact_counts",
     },
@@ -151,7 +156,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "artifact_families": ["network"],
         "nav": {"parent": "memory/network", "order": 10},
         "overview": {"priority": 30, "featured": True, "quick_action": "Open Network"},
-        "search": {"filters": [], "presets": []},
+        "search": {"priority": 30, "group": "Network", "tags": ["memory", "network"], "default_filters": {"source_category": "Memory", "artifact_type": ["network"]}, "preferred_sort": "timestamp_desc", "filters": [], "presets": [{"title": "Memory network", "state": {"source_category": "Memory", "artifact_type": ["network"]}}]},
         "availability": "shipped",
         "readiness_source": "memory_artifact_counts",
     },
@@ -282,6 +287,56 @@ def _memory_images_for_workbench(db: Session, case_id: str, workbench_evidence: 
             "route": f"/cases/{case_id}/m/{item['id']}/overview",
         })
     return images
+
+
+def _search_state_items(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item)]
+    if value:
+        return [str(value)]
+    return []
+
+
+def _build_search_metadata(capabilities: list[dict[str, Any]], workbenches: list[dict[str, Any]]) -> dict[str, Any]:
+    visible_capabilities = [capability for capability in capabilities if capability.get("visible")]
+    capability_lookup = {capability["id"]: capability for capability in visible_capabilities}
+    facets = {
+        "workbench": [],
+        "domain": [],
+        "capability": [],
+        "platform": [],
+        "source_category": [],
+        "artifact_type": [],
+    }
+    platform_counts: Counter[str] = Counter()
+    source_counts: Counter[str] = Counter()
+    artifact_counts: Counter[str] = Counter()
+    domain_counts: Counter[tuple[str, str]] = Counter()
+    presets = []
+
+    for workbench in workbenches:
+        workbench_capabilities = [capability_lookup[capability_id] for capability_id in workbench["capability_ids"] if capability_id in capability_lookup]
+        facets["workbench"].append({"id": workbench["id"], "label": workbench["label"], "count": sum(capability.get("record_count", 0) for capability in workbench_capabilities)})
+        for domain in workbench["domains"]:
+            domain_capabilities = [capability_lookup[capability_id] for capability_id in domain["capability_ids"] if capability_id in capability_lookup]
+            domain_counts[(workbench["id"], domain["id"])] += sum(capability.get("record_count", 0) for capability in domain_capabilities)
+
+    for capability in visible_capabilities:
+        search = capability.get("search") or {}
+        default_filters = search.get("default_filters") or {}
+        platform_counts.update(_search_state_items(default_filters.get("platform")))
+        source_counts.update(_search_state_items(default_filters.get("source_category")))
+        artifact_counts.update(_search_state_items(default_filters.get("artifact_type")))
+        facets["capability"].append({"id": capability["id"], "label": capability["title"], "workbench": "memory" if capability["evidence_domain"] == "memory" else capability["platform"], "domain": capability["domain"], "count": capability.get("record_count", 0)})
+        for preset in search.get("presets") or []:
+            presets.append({"id": f"{capability['id']}:{preset.get('title', capability['title'])}", "label": preset.get("title") or capability["title"], "capability_id": capability["id"], "workbench": "memory" if capability["evidence_domain"] == "memory" else capability["platform"], "domain": capability["domain"], "state": preset.get("state") or {}})
+
+    facets["domain"] = [{"id": domain_id, "label": domain_id.replace("_", " ").title(), "workbench": workbench_id, "count": count} for (workbench_id, domain_id), count in sorted(domain_counts.items())]
+    facets["platform"] = [{"id": key, "label": key.title(), "count": count} for key, count in sorted(platform_counts.items())]
+    facets["source_category"] = [{"id": key, "label": key, "count": count} for key, count in sorted(source_counts.items())]
+    facets["artifact_type"] = [{"id": key, "label": key.replace("_", " ").title(), "count": count} for key, count in sorted(artifact_counts.items())]
+    presets.sort(key=lambda item: (item["workbench"], item["domain"], item["label"]))
+    return {"facets": facets, "presets": presets}
 
 
 def _value(value: Any) -> str:
@@ -522,6 +577,8 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
             }
         )
 
+    search_metadata = _build_search_metadata(capability_payloads, workbenches)
+
     return {
         "registry_version": REGISTRY_VERSION,
         "generated_at": _iso(utc_now_naive()),
@@ -530,6 +587,7 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
         "evidence_domains": domain_payloads,
         "workbenches": workbenches,
         "capabilities": capability_payloads,
+        "search": search_metadata,
         "hosts": host_payloads,
         "evidence": evidence_payloads,
     }

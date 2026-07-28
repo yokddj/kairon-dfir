@@ -104,7 +104,16 @@ export type CaseCapability = {
   artifact_families: string[];
   nav: { parent: string; order: number };
   overview?: { priority?: number; featured?: boolean; quick_action?: string };
-  search: { filters: Array<Record<string, unknown>>; presets: Array<Record<string, unknown>> };
+  search: {
+    priority?: number;
+    group?: string;
+    tags?: string[];
+    action_tags?: string[];
+    default_filters?: Record<string, string | string[]>;
+    preferred_sort?: string;
+    filters: Array<Record<string, unknown>>;
+    presets: Array<{ title?: string; state?: Record<string, string | string[]> }>;
+  };
   availability: string;
   readiness_source: string;
   artifact_count: number;
@@ -150,6 +159,10 @@ export type CaseCapabilitiesResponse = {
     };
   }>;
   capabilities: CaseCapability[];
+  search?: {
+    facets: Record<string, Array<{ id: string; label: string; count?: number; workbench?: string; domain?: string }>>;
+    presets: Array<{ id: string; label: string; capability_id: string; workbench: string; domain: string; state: Record<string, string | string[]> }>;
+  };
   hosts: Array<{
     id: string;
     canonical_name: string;

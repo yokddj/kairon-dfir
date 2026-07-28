@@ -180,6 +180,12 @@ def test_registry_static_architecture_consistency():
         assert isinstance(overview.get("featured"), bool)
         if overview["featured"]:
             assert overview.get("quick_action"), f"{capability['id']} featured without quick action"
+        search = capability.get("search")
+        assert search, f"{capability['id']} has no search metadata"
+        assert isinstance(search.get("priority"), int)
+        assert search.get("group")
+        assert isinstance(search.get("default_filters"), dict)
+        assert search.get("presets"), f"{capability['id']} has no registry search presets"
         if capability["evidence_domain"] == "memory":
             assert capability["platform"] == "memory"
             assert capability["route"].startswith("/cases/:caseId/m")
@@ -236,6 +242,26 @@ def test_generated_workbench_summaries_have_no_orphan_routes_or_capabilities():
             assert action["id"] in capability_ids
             assert action["route"].startswith(f"/cases/{CASE_ID}/")
             assert ":" not in action["route"]
+
+
+def test_case_capabilities_exposes_registry_driven_search_metadata():
+    db = _db()
+    _case(db)
+    _evidence(db, "eeeeeeee-1111-4111-8111-eeeeeeeeeeee", "win.zip", EvidenceType.raw_collection, "windows")
+    _evidence(db, LINUX_EVIDENCE_ID, "triage.tgz", EvidenceType.linux_triage, "linux")
+    _evidence(db, MEMORY_EVIDENCE_ID, "mem.raw", EvidenceType.memory_dump, "memory", metadata={"probable_os": "windows"})
+    db.add(Artifact(case_id=CASE_ID, evidence_id=LINUX_EVIDENCE_ID, name="auth.log", artifact_type="linux_auth", source_path="/var/log/auth.log", parser="linux_auth", record_count=42, status="parsed"))
+    db.add(MemoryArtifactSummary(case_id=CASE_ID, evidence_id=MEMORY_EVIDENCE_ID, memory_run_id="ffffffff-5555-4555-8555-ffffffffffff", memory_artifact_type="processes", count=8, metadata_json={}))
+    db.commit()
+
+    response = _client(db).get(f"/api/cases/{CASE_ID}/capabilities")
+
+    assert response.status_code == 200
+    search = response.json()["search"]
+    assert {item["id"] for item in search["facets"]["workbench"]} >= {"windows", "linux", "memory"}
+    assert any(item["workbench"] == "linux" and item["id"] == "access" for item in search["facets"]["domain"])
+    assert any(item["id"] == "linux.access.authentication" for item in search["facets"]["capability"])
+    assert any(preset["capability_id"] == "linux.access.authentication" and preset["state"]["platform"] == "linux" for preset in search["presets"])
 
 
 def test_legacy_redirect_targets_are_single_hop_terminal_routes():
