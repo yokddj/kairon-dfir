@@ -45,6 +45,7 @@ function renderPage(path = "/cases/case-1/command-history?evidence_id=ev-1&host=
         />
         <Route path="/cases/:caseId/search" element={<LocationProbe />} />
         <Route path="/cases/:caseId/process-graph" element={<LocationProbe />} />
+        <Route path="/cases/:caseId/w/execution/stories" element={<LocationProbe />} />
       </Routes>
     </MemoryRouter>,
   );
@@ -186,7 +187,7 @@ describe("CommandHistoryPage", () => {
     await screen.findByText(/powershell.exe -NoProfile/i);
     await user.click(screen.getByRole("link", { name: /Open process tree/i }));
 
-    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/cases/case-1/process-graph"));
+    await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("/cases/case-1/w/execution/stories"));
     expect(screen.getByTestId("location")).toHaveTextContent("mode=execution_story");
     expect(screen.getByTestId("location")).toHaveTextContent("pid=4444");
     expect(screen.getByTestId("location")).toHaveTextContent("process_guid=%7BGUID-1%7D");
@@ -210,5 +211,79 @@ describe("CommandHistoryPage", () => {
     await waitFor(() => expect(screen.getByTestId("location")).toHaveTextContent("sort=timestamp_asc"));
     expect(screen.getByTestId("location")).toHaveTextContent("sort_by=timestamp");
     expect(screen.getByTestId("location")).toHaveTextContent("sort_order=asc");
+  });
+
+  it("renders Linux shell history rows with artifact provenance in the existing table", async () => {
+    const linuxResponse = {
+      ...response,
+      total: 1,
+      items: [
+        {
+          id: "linux-cmd-1",
+          case_id: "case-1",
+          evidence_id: "ev-linux",
+          artifact_id: "art-linux",
+          host: "victoria",
+          timestamp: null,
+          timestamp_status: "missing",
+          command: "dd if=/dev/sda1 | nc 192.168.56.1 4444",
+          command_normalized: "dd if=/dev/sda1 | nc 192.168.56.1 4444",
+          shell: "bash",
+          shell_family: "linux_shell_history",
+          launcher: "bash",
+          launcher_path: "",
+          classification_confidence: "medium",
+          parent_shell: "",
+          parent_context: "",
+          source_type: "linux_shell_history",
+          source_category: "Disk",
+          source_plugin_or_parser: "linux_shell_raw",
+          parser: "linux_shell_raw",
+          artifact_type: "linux_shell_history",
+          source_event_id: "linux-doc-1",
+          windows_event_id: "",
+          source_file: "volume-0/linux/root/.bash_history",
+          user: "root",
+          process: { name: null, executable: null, pid: null, guid: null, command_line: "dd if=/dev/sda1 | nc 192.168.56.1 4444" },
+          parent_process: { name: null, executable: null, pid: null, guid: null, command_line: null },
+          working_directory: null,
+          risk_score: 0,
+          risk_reasons: [],
+          confidence: "low",
+          dedupe_key: "case-1|linux_shell_history|linux-doc-1",
+          raw_payload: "dd if=/dev/sda1 | nc 192.168.56.1 4444",
+          supporting_events: [{ event_id: "linux-doc-1", source_type: "linux_shell_history", windows_event_id: "", timestamp: null, source_file: "volume-0/linux/root/.bash_history", artifact_id: "art-linux", artifact_type: "linux_shell_history", parser: "linux_shell_raw" }],
+          linked_search_url: "/cases/case-1/search?event_id=linux-doc-1&evidence_id=ev-linux&tab=results",
+        },
+      ],
+      facets: {
+        shell: { linux_shell_history: 1 },
+        family: { linux_shell_history: 1 },
+        launcher: { bash: 1 },
+        confidence: { medium: 1 },
+        source_type: { linux_shell_history: 1 },
+        user: { root: 1 },
+        host: { victoria: 1 },
+        risk: { none: 1 },
+      },
+      summary: { commands_total: 1, suspicious_total: 0, high_confidence: 0, with_command_line: 1, with_supporting_events: 0 },
+    };
+    getCommandHistoryMock.mockResolvedValueOnce(linuxResponse);
+    const user = userEvent.setup();
+
+    renderPage("/cases/case-1/command-history?family=linux_shell_history");
+
+    expect(await screen.findByText("dd if=/dev/sda1 | nc 192.168.56.1 4444")).toBeInTheDocument();
+    expect(screen.getAllByText("linux_shell_history").length).toBeGreaterThan(0);
+    expect(screen.getByText("Disk: linux_shell_raw")).toBeInTheDocument();
+    expect(screen.getByText("No timestamp")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Details" }));
+
+    expect(screen.getByText("Artifact family:")).toBeInTheDocument();
+    expect(screen.getByText("Parser:")).toBeInTheDocument();
+    expect(screen.getByText("Artifact ID:")).toBeInTheDocument();
+    expect(screen.getByText("art-linux")).toBeInTheDocument();
+    expect(screen.getByText("volume-0/linux/root/.bash_history")).toBeInTheDocument();
   });
 });

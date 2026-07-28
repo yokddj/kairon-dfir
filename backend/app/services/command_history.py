@@ -24,6 +24,7 @@ SOURCE_PRIORITY = {
     "psreadline": 50,
     "scheduled_task": 60,
     "prefetch": 70,
+    "linux_shell_history": 80,
     "other": 90,
 }
 
@@ -164,10 +165,11 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> list[dict[s
         {"exists": {"field": "task.command"}},
         {"exists": {"field": "process.command_line"}},
         {"term": {"artifact.type": "prefetch"}},
+        {"term": {"artifact.type": "linux_shell_history"}},
     ]
     q = str(params.get("q") or "").strip()
     if q:
-        should.append({"simple_query_string": {"query": q, "fields": ["process.command_line", "powershell.command", "powershell.command_preview", "task.command", "search_text"], "default_operator": "and"}})
+        should.append({"simple_query_string": {"query": q, "fields": ["process.command_line", "powershell.command", "powershell.command_preview", "task.command", "linux.command", "search_text"], "default_operator": "and"}})
     body = {
         "size": COMMAND_FETCH_LIMIT,
         "query": {"bool": {"filter": filters, "should": should, "minimum_should_match": 1}},
@@ -188,6 +190,8 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
     artifact_type = str(_obj(event.get("artifact")).get("type") or "").lower()
     if artifact_type == "registry_event" or event_id in {12, 13, 14, 4657}:
         return []
+    if artifact_type == "linux_shell_history":
+        return _linux_shell_history_command(case_id, event)
     process = _obj(event.get("process"))
     parent = _obj(process.get("parent")) or _obj(_obj(event.get("parent")).get("process"))
     powershell = _obj(event.get("powershell"))
@@ -323,10 +327,15 @@ def _apply_filters(items: list[dict[str, Any]], params: dict[str, Any]) -> list[
     has_supporting = _truthy(params.get("has_supporting_sources"))
     output = []
     for item in items:
-        haystack = " ".join(str(item.get(key) or "") for key in ("command", "raw_payload", "user", "host", "source_file")).lower()
-        if q and q not in haystack:
+        haystack = " ".join(str(item.get(key) or "") for key in ("command", "raw_payload", "user", "host", "source_file", "artifact_type", "source_type")).lower()
+        if q and not _query_matches(haystack, q):
             continue
-        if shell and str(item.get("shell_family") or item.get("shell") or "").lower() != shell:
+        families = {
+            str(item.get("shell_family") or item.get("shell") or "").lower(),
+            str(item.get("artifact_type") or "").lower(),
+            str(item.get("source_type") or "").lower(),
+        }
+        if shell and shell not in families:
             continue
         if launcher and launcher not in str(item.get("launcher") or "").lower() and launcher not in str(item.get("launcher_path") or "").lower():
             continue
@@ -363,6 +372,59 @@ def _facets(items: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
     }
 
 
+def _linux_shell_history_command(case_id: str, event: dict[str, Any]) -> list[dict[str, Any]]:
+    linux = _obj(event.get("linux"))
+    artifact = _obj(event.get("artifact"))
+    command = _clean_command_value(_first(linux.get("command"), _obj(event.get("event")).get("message"), event.get("message")))
+    if not command:
+        return []
+    source_type = "linux_shell_history"
+    event_doc_id = str(event.get("id") or event.get("search_doc_id") or event.get("opensearch_id") or event.get("event_id") or "")
+    shell_artifact = str(linux.get("artifact_type") or artifact.get("name") or "").lower()
+    launcher = "zsh" if "zsh" in shell_artifact else "bash" if "bash" in shell_artifact else "shell"
+    timestamp = event.get("@timestamp")
+    risk_score, risk_reasons = _risk(command, {}, {})
+    item = {
+        "id": _command_id(case_id, event_doc_id, command),
+        "case_id": case_id,
+        "evidence_id": event.get("evidence_id"),
+        "artifact_id": event.get("artifact_id"),
+        "parser": artifact.get("parser"),
+        "host": _first(_obj(event.get("host")).get("name"), _obj(event.get("host")).get("hostname"), linux.get("hostname"), linux.get("detected_host")),
+        "timestamp": timestamp,
+        "timestamp_status": _timestamp_status(event),
+        "command": command,
+        "command_normalized": _normalize_command(command),
+        "shell": launcher,
+        "launcher": launcher,
+        "launcher_path": "",
+        "shell_family": "linux_shell_history",
+        "classification_confidence": "medium" if command else "low",
+        "parent_shell": "",
+        "parent_context": "",
+        "source_type": source_type,
+        "source_category": "Disk",
+        "source_plugin_or_parser": str(artifact.get("parser") or source_type),
+        "artifact_type": str(artifact.get("type") or "linux_shell_history"),
+        "source_event_id": event_doc_id,
+        "windows_event_id": "",
+        "source_file": _first(event.get("source_file"), linux.get("source_file")),
+        "user": _first(linux.get("username"), _obj(event.get("user")).get("name")),
+        "process": {"name": None, "executable": None, "pid": None, "guid": None, "command_line": command},
+        "parent_process": {"name": None, "executable": None, "pid": None, "guid": None, "command_line": None},
+        "working_directory": None,
+        "risk_score": risk_score,
+        "risk_reasons": risk_reasons,
+        "confidence": "medium" if timestamp else "low",
+        "dedupe_key": f"{case_id}|linux_shell_history|{event_doc_id}",
+        "raw_payload": _first(linux.get("message"), _obj(event.get("event")).get("message"), event.get("raw_summary"), command),
+        "registry_command": None,
+        "supporting_events": [_supporting_event(event, source_type)],
+        "linked_search_url": _search_url(case_id, event.get("evidence_id"), event_doc_id),
+    }
+    return [item]
+
+
 def _source_type(event: dict[str, Any], event_id: int | None) -> str:
     artifact_type = str(_obj(event.get("artifact")).get("type") or "").lower()
     channel = str(_obj(event.get("event")).get("channel") or _obj(event.get("windows")).get("channel") or "").lower()
@@ -382,6 +444,8 @@ def _source_type(event: dict[str, Any], event_id: int | None) -> str:
         return "scheduled_task"
     if artifact_type == "prefetch":
         return "prefetch"
+    if artifact_type == "linux_shell_history":
+        return "linux_shell_history"
     return "other"
 
 
@@ -660,6 +724,13 @@ def _clean_user_value(value: Any) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _query_matches(haystack: str, query: str) -> bool:
+    if query in haystack:
+        return True
+    tokens = [token for token in re.split(r"\s+", query.strip().lower()) if token]
+    return bool(tokens) and all(token in haystack for token in tokens)
+
+
 def _is_placeholder_command(value: Any) -> bool:
     text = _clean(value).lower()
     return text in {"", "-", "0x", "0x0", "0x00", "0x00000000"} or bool(re.fullmatch(r"0x[0-9a-f]{1,8}", text))
@@ -718,6 +789,7 @@ def _supporting_event(event: dict[str, Any], source_type: str) -> dict[str, Any]
         "windows_event_id": windows.get("event_id"),
         "timestamp": event.get("@timestamp"),
         "source_file": event.get("source_file"),
+        "artifact_id": event.get("artifact_id"),
         "artifact_type": artifact.get("type"),
         "parser": artifact.get("parser"),
     }

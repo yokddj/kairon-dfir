@@ -51,6 +51,7 @@ function commandRowSourceEventId(item: CommandHistoryItem): string {
 }
 
 function processGraphUrl(caseId: string, item: CommandHistoryItem): string {
+  if (item.source_type === "linux_shell_history") return item.linked_search_url;
   if (item.source_category === "Memory" || item.source_type === "memory") {
     const params = new URLSearchParams();
     params.set("tab", "graph");
@@ -462,6 +463,10 @@ export default function CommandHistoryPage() {
                             <div><span className="text-zinc-500">User:</span> {valueOrDash(item.user)}</div>
                             <div><span className="text-zinc-500">Host:</span> {valueOrDash(item.host)}</div>
                             <div><span className="text-zinc-500">Source:</span> <SourceBadge item={item} /> <span className="ml-1">{sourceLabel(item)} · {item.supporting_events.length} event(s)</span></div>
+                            <div><span className="text-zinc-500">Artifact family:</span> {valueOrDash(item.artifact_type)}</div>
+                            <div><span className="text-zinc-500">Parser:</span> {valueOrDash(item.parser || item.supporting_events[0]?.parser)}</div>
+                            <div><span className="text-zinc-500">Artifact ID:</span> {valueOrDash(item.artifact_id)}</div>
+                            <div><span className="text-zinc-500">Source file:</span> <span className="break-words font-mono text-xs">{valueOrDash(item.source_file)}</span></div>
                             <div><span className="text-zinc-500">Source event:</span> {valueOrDash(item.source_event_id)}</div>
                             <div><span className="text-zinc-500">Parent:</span> {valueOrDash(item.parent_process?.name || item.parent_process?.executable)}</div>
                             <div><span className="text-zinc-500">Parent command:</span> <span className="break-words font-mono text-xs">{valueOrDash(item.parent_process?.command_line)}</span></div>

@@ -4419,7 +4419,9 @@ export type CommandHistoryItem = {
   navigation_target?: Record<string, unknown> | null;
   raw_reference?: Record<string, unknown> | null;
   artifact_type?: string | null;
+  artifact_id?: string | null;
   source_event_id?: string | null;
+  parser?: string | null;
   windows_event_id?: string | number | null;
   source_file?: string | null;
   user?: string | null;

@@ -20,6 +20,33 @@ def _event(event_id: int, **overrides):
     return base
 
 
+def _linux_shell_hit(doc_id: str, *, command: str, user: str = "root", host: str = "victoria", evidence_id: str = "ev-linux", artifact_id: str = "art-linux", source_file: str = "volume-0/linux/root/.bash_history") -> dict:
+    return {
+        "_id": doc_id,
+        "_source": {
+            "case_id": "case-1",
+            "evidence_id": evidence_id,
+            "artifact_id": artifact_id,
+            "@timestamp": None,
+            "host": {"name": host, "hostname": host},
+            "user": {"name": user},
+            "artifact": {"type": "linux_shell_history", "parser": "linux_shell_raw", "name": ".bash_history"},
+            "source_file": source_file,
+            "event": {"type": "bash_history", "message": command},
+            "linux": {
+                "artifact_family": "linux_shell_history",
+                "artifact_type": "bash_history",
+                "source_file": source_file,
+                "username": user,
+                "hostname": host,
+                "command": command,
+                "message": command,
+            },
+            "search_text": f"{command} | {host} | {user} | linux_shell_history | {source_file}",
+        },
+    }
+
+
 def test_sysmon_event_id_1_extracts_command_execution() -> None:
     items = command_history._commands_from_event(
         "case-1",
@@ -269,6 +296,97 @@ def test_get_command_history_uses_search_documents(monkeypatch) -> None:
     assert response["facets"]["shell"]["powershell"] == 1
     assert response["facets"]["family"]["powershell"] == 1
     assert response["facets"]["launcher"]["powershell.exe"] == 1
+
+
+def test_candidate_query_includes_linux_shell_history(monkeypatch) -> None:
+    captured = {}
+    monkeypatch.setattr(command_history, "get_events_index", lambda case_id: f"events-{case_id}")
+
+    def fake_search(index, body):
+        captured["index"] = index
+        captured["body"] = body
+        return {"hits": {"hits": []}}
+
+    monkeypatch.setattr(command_history, "search_documents", fake_search)
+
+    command_history.get_command_history("case-1", {"q": "whoami", "source_category": "Disk", "page_size": 10})
+
+    should = captured["body"]["query"]["bool"]["should"]
+    assert {"term": {"artifact.type": "linux_shell_history"}} in should
+    q_clause = [clause for clause in should if "simple_query_string" in clause][0]
+    assert "linux.command" in q_clause["simple_query_string"]["fields"]
+
+
+def test_linux_shell_history_maps_to_command_history_response_model() -> None:
+    event = _linux_shell_hit("linux-doc-1", command="dd if=/dev/sda1 | nc 192.168.56.1 4444")["_source"]
+    event["id"] = "linux-doc-1"
+
+    items = command_history._commands_from_event("case-1", event)
+
+    assert len(items) == 1
+    item = items[0]
+    assert item["case_id"] == "case-1"
+    assert item["evidence_id"] == "ev-linux"
+    assert item["artifact_id"] == "art-linux"
+    assert item["parser"] == "linux_shell_raw"
+    assert item["artifact_type"] == "linux_shell_history"
+    assert item["source_type"] == "linux_shell_history"
+    assert item["source_category"] == "Disk"
+    assert item["source_plugin_or_parser"] == "linux_shell_raw"
+    assert item["source_event_id"] == "linux-doc-1"
+    assert item["source_file"] == "volume-0/linux/root/.bash_history"
+    assert item["timestamp"] is None
+    assert item["timestamp_status"] == "missing"
+    assert item["command"] == "dd if=/dev/sda1 | nc 192.168.56.1 4444"
+    assert item["host"] == "victoria"
+    assert item["user"] == "root"
+    assert item["supporting_events"][0]["artifact_id"] == "art-linux"
+    assert item["supporting_events"][0]["parser"] == "linux_shell_raw"
+
+
+def test_linux_shell_history_filtering_and_pagination(monkeypatch) -> None:
+    hits = [
+        _linux_shell_hit("linux-doc-1", command="whoami", user="root", host="victoria", artifact_id="art-1"),
+        _linux_shell_hit("linux-doc-2", command="vim /etc/passwd", user="root", host="VulnOSv2", artifact_id="art-2", source_file="volume-1/linux/root/.bash_history"),
+        _linux_shell_hit("linux-doc-3", command="cat .psql_history", user="postgres", host="VulnOSv2", artifact_id="art-3", source_file="volume-1/linux/home/postgres/.bash_history"),
+    ]
+    monkeypatch.setattr(command_history, "get_events_index", lambda case_id: f"events-{case_id}")
+    monkeypatch.setattr(command_history, "search_documents", lambda *_args, **_kwargs: {"hits": {"hits": hits}})
+
+    filtered = command_history.get_command_history("case-1", {"host": "vulnosv2", "user": "root", "q": "passwd", "family": "linux_shell_history", "source_category": "Disk", "page_size": 1})
+
+    assert filtered["total"] == 1
+    assert filtered["items"][0]["command"] == "vim /etc/passwd"
+    assert filtered["items"][0]["artifact_id"] == "art-2"
+    assert filtered["facets"]["family"]["linux_shell_history"] == 1
+    assert filtered["facets"]["source_type"]["linux_shell_history"] == 1
+
+    tokenized = command_history.get_command_history("case-1", {"q": "etc passwd", "family": "linux_shell_history", "source_category": "Disk", "page_size": 10})
+    assert tokenized["total"] == 1
+    assert tokenized["items"][0]["command"] == "vim /etc/passwd"
+
+    page_two = command_history.get_command_history("case-1", {"family": "linux_shell_history", "source_category": "Disk", "page": 2, "page_size": 2, "sort_by": "timestamp", "sort_order": "asc"})
+    assert page_two["total"] == 3
+    assert page_two["page"] == 2
+    assert [item["source_event_id"] for item in page_two["items"]] == ["linux-doc-1"]
+
+
+def test_mixed_windows_and_linux_command_history_preserves_windows_behavior(monkeypatch) -> None:
+    hits = [
+        _hit("event-win", ts="2024-03-22T12:30:00Z", command="powershell.exe -File C:\\new.ps1", pid=2000),
+        _linux_shell_hit("linux-doc-1", command="scp yom@192.168.56.1:/home/yom/temporary/exim4/* ."),
+    ]
+    monkeypatch.setattr(command_history, "get_events_index", lambda case_id: f"events-{case_id}")
+    monkeypatch.setattr(command_history, "search_documents", lambda *_args, **_kwargs: {"hits": {"hits": hits}})
+
+    result = command_history.get_command_history("case-1", {"source_category": "Disk", "page_size": 10})
+
+    assert result["total"] == 2
+    assert result["items"][0]["source_type"] == "sysmon_1"
+    assert result["items"][1]["source_type"] == "linux_shell_history"
+    assert result["items"][0]["windows_event_id"] == "1"
+    assert result["facets"]["source_type"]["sysmon_1"] == 1
+    assert result["facets"]["source_type"]["linux_shell_history"] == 1
 
 
 def test_lolbin_remote_exec_discovery_and_prefetch_classification() -> None:
