@@ -1245,6 +1245,7 @@ def _finalize_artifact_status(*, parser_name: str | None, record_count: int, raw
         "linux_syslog_raw",
         "linux_audit_raw",
         "linux_apache_raw",
+        "linux_exim_raw",
         "linux_shell_raw",
         "linux_cron_raw",
         "linux_systemd_raw",

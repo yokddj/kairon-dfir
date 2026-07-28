@@ -128,6 +128,115 @@ class TestApacheParser:
         assert doc["source_tool"] == "linux_apache_raw"
 
 
+class TestEximParser:
+    def test_mainlog_message_received(self):
+        from app.ingest.linux.exim import parse_exim
+
+        rows = parse_exim(
+            "2024-10-10 13:55:36 1abcDE-0001fG-2H <= sender@example.test H=mail.example.test [192.0.2.10]:587 I=[198.51.100.10]:25 P=esmtpsa A=dovecot_login:user S=1234 id=<msg-1@example.test>\n",
+            source_path="/var/log/exim4/mainlog",
+        )
+
+        row = rows[0]
+        assert row["artifact_family"] == "linux_exim"
+        assert row["artifact_type"] == "exim_main"
+        assert row["event_action"] == "message_received"
+        assert row["event_outcome"] == "success"
+        assert row["sender"] == "sender@example.test"
+        assert row["queue_id"] == "1abcDE-0001fG-2H"
+        assert row["message_id"] == "msg-1@example.test"
+        assert row["remote_ip"] == "192.0.2.10"
+        assert row["source_port"] == 587
+        assert row["local_ip"] == "198.51.100.10"
+        assert row["destination_port"] == 25
+        assert row["helo"] == "mail.example.test"
+        assert row["authentication"] == "dovecot_login:user"
+        assert row["timestamp"] == "2024-10-10T13:55:36+00:00"
+
+    def test_delivery_and_reject_lines(self):
+        from app.ingest.linux.exim import parse_exim
+
+        delivered = parse_exim("2024-10-10 13:56:36 1abcDE-0001fG-2H => recipient@example.test R=dnslookup T=remote_smtp H=mx.example.test [203.0.113.20] C=250 OK\n", source_path="/var/log/exim/mainlog.1")
+        rejected = parse_exim("2024-10-10 13:57:36 H=badhost [203.0.113.9] F=<spam@example.test> rejected RCPT recipient@example.test: relay not permitted\n", source_path="/var/log/exim4/rejectlog")
+
+        assert delivered[0]["event_action"] == "message_delivered"
+        assert delivered[0]["recipient"] == "recipient@example.test"
+        assert delivered[0]["smtp_status"] == 250
+        assert delivered[0]["event_outcome"] == "success"
+        assert rejected[0]["artifact_type"] == "exim_reject"
+        assert rejected[0]["event_action"] == "message_rejected"
+        assert rejected[0]["sender"] == "spam@example.test"
+        assert rejected[0]["recipient"] == "recipient@example.test"
+        assert rejected[0]["remote_ip"] == "203.0.113.9"
+        assert rejected[0]["event_outcome"] == "failure"
+
+    def test_reject_from_and_mail_sender_variants(self):
+        from app.ingest.linux.exim import parse_exim
+
+        from_sender = parse_exim("2024-10-10 13:57:36 1abcDE-0001fG-2H rejected from <root@local.test> H=(badhost) [203.0.113.9]: message too big\n", source_path="/var/log/exim4/mainlog")
+        mail_sender = parse_exim("2024-10-10 13:57:37 H=(badhost) [203.0.113.9] temporarily rejected MAIL <root@local.test>: failed ACL\n", source_path="/var/log/exim4/rejectlog")
+
+        assert from_sender[0]["queue_id"] == "1abcDE-0001fG-2H"
+        assert from_sender[0]["sender"] == "root@local.test"
+        assert mail_sender[0]["sender"] == "root@local.test"
+
+    def test_panic_and_malformed_lines_are_preserved(self):
+        from app.ingest.linux.exim import parse_exim
+
+        panic = parse_exim("2024-10-10 13:58:36 exim user lost privilege for using -C option\n", source_path="/var/log/exim4/paniclog")
+        malformed = parse_exim("not a timestamped exim line but still forensic content\n", source_path="/var/log/exim4/mainlog")
+
+        assert panic[0]["artifact_type"] == "exim_panic"
+        assert panic[0]["event_action"] == "panic"
+        assert panic[0]["event_severity"] == "high"
+        assert malformed[0]["timestamp"] is None
+        assert malformed[0]["message"] == "not a timestamped exim line but still forensic content"
+        assert malformed[0]["line_number"] == 1
+
+    def test_rotated_gzip_normalizes_with_search_fields_and_provenance(self, tmp_path):
+        from app.ingest.normalizer import normalize_file
+
+        path = tmp_path / "mainlog.1.gz"
+        with gzip.open(path, "wt", encoding="utf-8") as handle:
+            handle.write("2024-10-10 13:55:36 1abcDE-0001fG-2H <= sender@example.test H=mail.example.test [192.0.2.10]:587 I=[198.51.100.10]:25 A=plain:user id=<msg-1@example.test>\n")
+        artifact_meta = {
+            "artifact_family": "linux_exim",
+            "artifact_type": "exim_main",
+            "parser": "linux_exim_raw",
+            "name": "mainlog.1.gz",
+            "source_path": "/var/log/exim4/mainlog.1.gz",
+            "detected_host": "mail01",
+        }
+
+        docs = normalize_file("case-1", "ev-1", "art-1", path, artifact_meta)
+
+        assert len(docs) == 1
+        doc = docs[0]
+        assert doc["case_id"] == "case-1"
+        assert doc["evidence_id"] == "ev-1"
+        assert doc["artifact_id"] == "art-1"
+        assert doc["artifact"]["type"] == "linux_exim"
+        assert doc["artifact"]["family"] == "linux_exim"
+        assert doc["artifact"]["parser"] == "linux_exim_raw"
+        assert doc["source_tool"] == "linux_exim_raw"
+        assert doc["source_file"] == "/var/log/exim4/mainlog.1.gz"
+        assert doc["evidence_source"]["logical_source_path"] == "/var/log/exim4/mainlog.1.gz"
+        assert doc["event"]["type"] == "exim_main"
+        assert doc["event"]["action"] == "message_received"
+        assert doc["event"]["outcome"] == "success"
+        assert doc["event"]["severity"] == "info"
+        assert doc["network"]["source_ip"] == "192.0.2.10"
+        assert doc["destination"]["ip"] == "198.51.100.10"
+        assert doc["email"]["from"]["address"] == "sender@example.test"
+        assert doc["email"]["message_id"] == "msg-1@example.test"
+        assert doc["linux"]["queue_id"] == "1abcDE-0001fG-2H"
+        assert doc["linux"]["authentication"] == "plain:user"
+        assert doc["linux"]["line_number"] == 1
+        assert "sender@example.test" in doc["search_text"]
+        assert "1abcDE-0001fG-2H" in doc["search_text"]
+        assert artifact_meta["ingest_audit"]["parser_status"] == "parsed"
+
+
 class TestAuthLogParser:
     @pytest.fixture
     def auth_log_content(self):

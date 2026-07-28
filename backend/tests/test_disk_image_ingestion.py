@@ -134,6 +134,9 @@ def test_materialize_raw_filesystem_image_linux_without_partition_table(sqlite_s
             "var/log/apache2/error.log.1.gz": "compressed bytes are not required for materialization selection\n",
             "var/log/apache2/other_vhosts_access.log": "",
             "var/log/httpd/access_log-20241010": '198.51.100.5 - - [10/Oct/2024:13:56:36 +0000] "POST /login HTTP/1.1" 302 123\n',
+            "var/log/exim4/mainlog": "2024-10-10 13:55:36 1abcDE-0001fG-2H <= sender@example.test H=mail.example.test [192.0.2.10]\n",
+            "var/log/exim4/rejectlog.1.gz": "compressed bytes are not required for materialization selection\n",
+            "var/log/exim/paniclog-20241010": "2024-10-10 13:58:36 panic message\n",
             "logs/journal.export": "__REALTIME_TIMESTAMP=1710000000000000\n_HOSTNAME=ubuntu-lab\nMESSAGE=Started ssh.service\n\n",
             "home/ubuntu/.bash_history": "whoami\nid\n",
         },
@@ -151,12 +154,16 @@ def test_materialize_raw_filesystem_image_linux_without_partition_table(sqlite_s
     assert any(install.platform == "linux" for install in result.installations)
     assert any(item["artifact_type"] == "linux_auth" for item in artifacts)
     assert any(item["artifact_type"] == "linux_apache" and item["parser"] == "linux_apache_raw" for item in artifacts)
+    assert any(item["artifact_type"] == "linux_exim" and item["parser"] == "linux_exim_raw" for item in artifacts)
     assert any(item["artifact_type"] == "linux_journal" for item in artifacts)
     assert any(item["artifact_type"] == "linux_shell_history" for item in artifacts)
     assert (extract_dir / "volume-0/linux/var/log/apache2/access.log").exists()
     assert (extract_dir / "volume-0/linux/var/log/apache2/error.log.1.gz").exists()
     assert (extract_dir / "volume-0/linux/var/log/apache2/other_vhosts_access.log").exists()
     assert (extract_dir / "volume-0/linux/var/log/httpd/access_log-20241010").exists()
+    assert (extract_dir / "volume-0/linux/var/log/exim4/mainlog").exists()
+    assert (extract_dir / "volume-0/linux/var/log/exim4/rejectlog.1.gz").exists()
+    assert (extract_dir / "volume-0/linux/var/log/exim/paniclog-20241010").exists()
     assert hashlib.sha256(image.read_bytes()).hexdigest() == original_hash
 
 

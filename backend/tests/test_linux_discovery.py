@@ -103,6 +103,48 @@ def test_linux_inventory_and_generic_listing_include_apache_logs(tmp_path: Path)
     assert registry_entry["parser_name"] == "linux_apache_raw"
 
 
+def test_linux_inventory_and_generic_listing_include_exim_logs(tmp_path: Path) -> None:
+    (tmp_path / "var/log/exim4").mkdir(parents=True)
+    (tmp_path / "var/log/exim").mkdir(parents=True)
+    (tmp_path / "var/log/exim4/mainlog").write_text("2024-10-10 13:55:36 1abcDE-0001fG-2H <= sender@example.test H=mail.example.test [192.0.2.10]\n", encoding="utf-8")
+    (tmp_path / "var/log/exim4/rejectlog.1.gz").write_text("compressed bytes are not required for discovery\n", encoding="utf-8")
+    (tmp_path / "var/log/exim/paniclog-20241010").write_text("2024-10-10 13:58:36 panic message\n", encoding="utf-8")
+    (tmp_path / "var/log/exim/random.log").write_text("not an exim standard log\n", encoding="utf-8")
+
+    files = [str(path.relative_to(tmp_path)) for path in tmp_path.rglob("*") if path.is_file()]
+    inventory = build_linux_inventory(tmp_path, files)
+    artifacts = list_generic_artifacts(tmp_path)
+    registry_entry = get_parser_registry_entry(artifact_type="linux_exim")
+
+    assert inventory is not None
+    exim = next(item for item in inventory["detected_artifacts"] if item["key"] == "exim")
+    assert exim["family"] == "linux_exim"
+    assert exim["parser"] == "linux_exim_raw"
+    assert sorted(exim["paths"]) == sorted([
+        "var/log/exim4/mainlog",
+        "var/log/exim4/rejectlog.1.gz",
+        "var/log/exim/paniclog-20241010",
+    ])
+    exim_artifacts = [item for item in artifacts if item["artifact_type"] == "linux_exim"]
+    assert len(exim_artifacts) == 3
+    assert all(item["parser"] == "linux_exim_raw" for item in exim_artifacts)
+    assert registry_entry["parser_name"] == "linux_exim_raw"
+    assert registry_entry["searchable"] is True
+    assert "linux.queue_id" in registry_entry["searchable_fields"]
+
+
+def test_linux_inventory_absent_exim_logs_are_not_reported(tmp_path: Path) -> None:
+    (tmp_path / "var/log").mkdir(parents=True)
+    (tmp_path / "var/log/mail.log").write_text("mail noise\n", encoding="utf-8")
+
+    files = [str(path.relative_to(tmp_path)) for path in tmp_path.rglob("*") if path.is_file()]
+    inventory = build_linux_inventory(tmp_path, files)
+    artifacts = list_generic_artifacts(tmp_path)
+
+    assert inventory is None or all(item["key"] != "exim" for item in inventory["detected_artifacts"])
+    assert all(item["artifact_type"] != "linux_exim" for item in artifacts)
+
+
 def test_journal_parser_handles_json_and_export() -> None:
     json_rows = parse_journal('{"__REALTIME_TIMESTAMP":"1710000000000000","_HOSTNAME":"db01","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Accepted password for root"}\n', source_path="journal.json")
     export_rows = parse_journal("__REALTIME_TIMESTAMP=1710000000000000\n_HOSTNAME=db01\nSYSLOG_IDENTIFIER=sudo\nMESSAGE=session opened\n\n", source_path="journal.export")

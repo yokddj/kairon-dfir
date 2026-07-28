@@ -13,6 +13,7 @@ describe("artifactRegistry", () => {
     expect(artifactEventView("linux_systemd")).toBe("persistence");
     expect(artifactEventView("linux_network")).toBe("network");
     expect(artifactEventView("linux_apache")).toBe("network");
+    expect(artifactEventView("linux_exim")).toBe("network");
     expect(artifactEventView("mft")).toBe("filesystem");
   });
 
@@ -21,6 +22,7 @@ describe("artifactRegistry", () => {
 
     expect(linuxShortcuts).toContain("linux_journal");
     expect(linuxShortcuts).toContain("linux_apache");
+    expect(linuxShortcuts).toContain("linux_exim");
     expect(linuxShortcuts).toContain("linux_systemd");
     expect(linuxShortcuts).not.toContain("browser");
   });

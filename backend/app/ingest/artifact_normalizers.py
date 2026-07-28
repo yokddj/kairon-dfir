@@ -3671,6 +3671,19 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["http_severity"] = row.get("http_severity", "")
     linux_data["apache_module"] = row.get("apache_module", "")
     linux_data["thread_id"] = row.get("thread_id", None)
+    linux_data["event_outcome"] = row.get("event_outcome", "")
+    linux_data["event_severity"] = row.get("event_severity", "")
+    linux_data["destination_ip"] = row.get("destination_ip", "")
+    linux_data["destination_port"] = row.get("destination_port", None)
+    linux_data["sender"] = row.get("sender", "")
+    linux_data["recipient"] = row.get("recipient", "")
+    linux_data["queue_id"] = row.get("queue_id", "")
+    linux_data["message_id"] = row.get("message_id", "")
+    linux_data["smtp_status"] = row.get("smtp_status", None)
+    linux_data["remote_ip"] = row.get("remote_ip", "")
+    linux_data["local_ip"] = row.get("local_ip", "")
+    linux_data["helo"] = row.get("helo", "")
+    linux_data["authentication"] = row.get("authentication", "")
 
     if detected_host:
         doc["host"]["hostname"] = detected_host
@@ -3721,6 +3734,20 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         if linux_data.get("http_status") is not None:
             doc["event"]["outcome"] = "failure" if int(linux_data["http_status"]) >= 400 else "success"
         doc["title"] = linux_data.get("message") or "Apache log event"
+    elif family == "linux_exim":
+        doc["event"]["type"] = linux_data.get("artifact_type") or "exim_log"
+        doc["event"]["action"] = linux_data.get("event_action") or linux_data.get("artifact_type") or "exim_log"
+        if linux_data.get("event_outcome"):
+            doc["event"]["outcome"] = linux_data.get("event_outcome")
+        doc["network"]["source_ip"] = linux_data.get("remote_ip") or linux_data.get("source_ip") or None
+        doc["network"]["source_port"] = linux_data.get("source_port")
+        doc["destination"]["ip"] = linux_data.get("local_ip") or linux_data.get("destination_ip") or None
+        doc["destination"]["port"] = linux_data.get("destination_port")
+        doc["email"]["message_id"] = linux_data.get("message_id") or None
+        doc["email"]["from"]["address"] = linux_data.get("sender") or None
+        doc["email"]["to"] = [linux_data["recipient"]] if linux_data.get("recipient") else []
+        doc["process"]["name"] = "exim"
+        doc["title"] = linux_data.get("message") or "Exim log event"
     event_severity = "medium" if linux_data.get("event_action") in {"login", "auth_failure", "session_open", "session_close", "sudo", "su"} else "info"
     if family == "linux_apache" and linux_data.get("artifact_type") == "apache_error":
         apache_severity = str(linux_data.get("http_severity") or "").lower()
@@ -3732,6 +3759,8 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
             event_severity = "low"
         else:
             event_severity = "info"
+    elif family == "linux_exim" and linux_data.get("event_severity"):
+        event_severity = linux_data.get("event_severity")
     doc["event"]["severity"] = event_severity
 
     doc["message"] = row.get("message", row.get("raw_excerpt", ""))

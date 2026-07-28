@@ -60,6 +60,10 @@ _APACHE_LOG_RE = re.compile(
     r"(^|/)var/log/(apache2|httpd)/(?P<name>[^/]*(?:access|error)(?:[._-]log|\.log)[^/]*)$",
     re.IGNORECASE,
 )
+_EXIM_LOG_RE = re.compile(
+    r"(^|/)var/log/exim4?/(?P<name>(?:mainlog|rejectlog|paniclog)(?:[._-].*)?)$",
+    re.IGNORECASE,
+)
 
 _AUTH_PATTERNS = [
     re.compile(r"(accepted|Accepted)\s+(password|publickey)\s+for\s+(\S+)", re.IGNORECASE),
@@ -80,6 +84,16 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
         apache_name = apache_match.group("name")
         artifact_type = "apache_error" if "error" in apache_name else "apache_access"
         return ("linux_apache", artifact_type, "linux_apache_raw")
+    exim_match = _EXIM_LOG_RE.search(path_str)
+    if exim_match:
+        exim_name = exim_match.group("name")
+        if exim_name.startswith("rejectlog"):
+            artifact_type = "exim_reject"
+        elif exim_name.startswith("paniclog"):
+            artifact_type = "exim_panic"
+        else:
+            artifact_type = "exim_main"
+        return ("linux_exim", artifact_type, "linux_exim_raw")
     for marker, (family, artifact_type, parser) in _LINUX_ARTIFACT_MAP.items():
         if "/" in marker:
             # Directory-scoped marker: full relative-path context is required,
