@@ -153,7 +153,7 @@ describe("registry-driven sidebar", () => {
   it("generates platform workbenches from registry visibility", async () => {
     getCaseCapabilitiesMock.mockResolvedValue(registry({
       workbenches: [
-        { id: "linux", label: "Linux", kind: "platform", capability_ids: [linuxAuth.id], domains: [{ id: "access", capability_ids: [linuxAuth.id], record_count: 1 }] },
+        { id: "linux", label: "Linux", kind: "platform", overview_route: "/cases/case-1/l", capability_ids: [linuxAuth.id], domains: [{ id: "access", capability_ids: [linuxAuth.id], record_count: 1 }] },
       ],
       capabilities: [linuxAuth, hiddenWindows],
     }));
@@ -161,6 +161,7 @@ describe("registry-driven sidebar", () => {
     renderSidebar();
 
     const linux = await screen.findByTestId("workbench-linux");
+    expect(within(linux).getByRole("link", { name: "Linux" })).toHaveAttribute("href", "/cases/case-1/l");
     expect(within(linux).getByRole("link", { name: "Authentication" })).toHaveAttribute("href", "/cases/case-1/l/access/authentication");
     expect(screen.queryByTestId("workbench-windows")).not.toBeInTheDocument();
     expect(screen.queryByText("Hidden Windows")).not.toBeInTheDocument();

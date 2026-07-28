@@ -162,7 +162,11 @@ function WorkbenchSection({ workbench, capabilities, activeCaseId }: { workbench
 
   return (
     <section className="space-y-2" data-testid={`workbench-${workbench.id}`}>
-      <p className="px-4 font-mono text-[11px] uppercase tracking-[0.18em] text-muted">{workbench.label}</p>
+      {workbench.overview_route ? (
+        <NavLink to={workbench.overview_route} className={({ isActive }) => `block px-4 font-mono text-[11px] uppercase tracking-[0.18em] ${isActive ? "text-accent" : "text-muted hover:text-ink"}`}>{workbench.label}</NavLink>
+      ) : (
+        <p className="px-4 font-mono text-[11px] uppercase tracking-[0.18em] text-muted">{workbench.label}</p>
+      )}
       <div className="space-y-3">
         {domains.map((domain) => <CapabilityGroup key={`${workbench.id}-${domain.id}`} title={displayRegistryLabel(domain.id)} capabilities={domain.capabilities} activeCaseId={activeCaseId} />)}
       </div>

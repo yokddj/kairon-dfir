@@ -103,6 +103,7 @@ export type CaseCapability = {
   route: string;
   artifact_families: string[];
   nav: { parent: string; order: number };
+  overview?: { priority?: number; featured?: boolean; quick_action?: string };
   search: { filters: Array<Record<string, unknown>>; presets: Array<Record<string, unknown>> };
   availability: string;
   readiness_source: string;
@@ -125,6 +126,28 @@ export type CaseCapabilitiesResponse = {
     kind: "platform" | "evidence_domain" | string;
     capability_ids: string[];
     domains: Array<{ id: string; capability_ids: string[]; record_count: number }>;
+    overview_route?: string;
+    overview?: {
+      host_count: number;
+      evidence_count: number;
+      processing_state: string;
+      coverage: { capability_count: number; status_counts: Record<string, number> };
+      quick_actions: Array<{ id: string; label: string; route: string; priority: number }>;
+      warnings: Array<{ id: string; severity: string; title: string; detail: string }>;
+      recent_activity: Array<{ kind: string; title: string; route: string; timestamp: string | null }>;
+      memory_images: Array<{
+        id: string;
+        name: string;
+        host_id: string | null;
+        detected_host: string | null;
+        detected_os: string;
+        preparation_state: string;
+        symbol_state: string;
+        plugin_record_count: number;
+        run_status_counts: Record<string, number>;
+        route: string;
+      }>;
+    };
   }>;
   capabilities: CaseCapability[];
   hosts: Array<{
