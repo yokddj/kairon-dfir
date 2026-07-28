@@ -1239,12 +1239,32 @@ def _finalize_artifact_status(*, parser_name: str | None, record_count: int, raw
     parser_name = str(parser_name or "").lower()
     raw_parser_status = str(raw_parser_status or "").lower()
     native_raw_parsers = {"evtx_raw", "lnk_raw", "prefetch_raw", "amcache_raw", "shimcache_raw", "windows_service_registry"}
+    linux_raw_parsers = {
+        "linux_journal_raw",
+        "linux_auth_raw",
+        "linux_syslog_raw",
+        "linux_audit_raw",
+        "linux_shell_raw",
+        "linux_cron_raw",
+        "linux_systemd_raw",
+        "linux_ssh_raw",
+        "linux_identity_raw",
+        "linux_sudoers_raw",
+        "linux_packages_raw",
+        "linux_network_raw",
+        "linux_os_info_raw",
+    }
     if parser_name == "evtx_raw" and record_count == 0 and raw_parser_status == "parsed_empty":
         return "skipped_empty"
     if parser_name in native_raw_parsers and record_count == 0:
         if raw_parser_status in {"partial", "failed", "failed_unsupported"}:
             return raw_parser_status
         return "failed"
+    if parser_name in linux_raw_parsers and record_count == 0:
+        if raw_parser_status in {"failed", "failed_dispatch"}:
+            return "failed"
+        if raw_parser_status == "parsed_empty":
+            return "skipped_empty"
     if raw_parser_status == "partial":
         return "partial"
     return "completed"
