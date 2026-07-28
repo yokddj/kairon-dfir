@@ -27,7 +27,8 @@ class LinuxParserTarget:
 
 LINUX_PARSER_TARGETS: dict[str, LinuxParserTarget] = {
     "linux_journal_raw": LinuxParserTarget("linux_journal_raw", "journal", "parse_journal"),
-    "linux_auth_raw": LinuxParserTarget("linux_auth_raw", "auth", "parse_auth", frozenset({"wtmp", "btmp", "lastlog"})),
+    "linux_auth_raw": LinuxParserTarget("linux_auth_raw", "auth", "parse_auth", frozenset({"wtmp", "btmp"})),
+    "linux_lastlog_raw": LinuxParserTarget("linux_lastlog_raw", "lastlog", "parse_lastlog", frozenset({"lastlog"})),
     "linux_syslog_raw": LinuxParserTarget("linux_syslog_raw", "syslog", "parse_syslog"),
     "linux_audit_raw": LinuxParserTarget("linux_audit_raw", "audit", "parse_audit"),
     "linux_apache_raw": LinuxParserTarget("linux_apache_raw", "apache", "parse_apache"),
@@ -61,6 +62,9 @@ def resolve_linux_parser(parser: str | None) -> tuple[LinuxParserTarget, Callabl
 def parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type: str | None, source_path: str) -> list[dict[str, Any]]:
     target, parse_func = resolve_linux_parser(parser)
     try:
+        if target.parser == "linux_lastlog_raw":
+            passwd_content = _read_linux_passwd_for_artifact(path, source_path)
+            return parse_func(path.read_bytes(), source_path=source_path, passwd_content=passwd_content)
         if str(artifact_type or "").lower() in target.binary_artifact_types:
             return parse_func(path.read_bytes(), source_path=source_path)
         if path.suffix.lower() == ".gz":
@@ -71,3 +75,25 @@ def parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type: 
         raise
     except Exception as exc:  # noqa: BLE001
         raise LinuxParserExecutionError(f"Linux parser '{target.parser}' failed for '{source_path}': {exc}") from exc
+
+
+def _read_linux_passwd_for_artifact(path: Path, source_path: str) -> str | None:
+    try:
+        for root in (path.parent, *path.parents):
+            passwd = root / "etc" / "passwd"
+            if passwd.is_file():
+                return passwd.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    normalized_source = str(source_path or "").replace("\\", "/").lstrip("/")
+    suffix = Path(*normalized_source.split("/")) if normalized_source else Path(path.name)
+    try:
+        root = path
+        for _ in suffix.parts:
+            root = root.parent
+        passwd = root / "etc" / "passwd"
+        if passwd.is_file():
+            return passwd.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    return None

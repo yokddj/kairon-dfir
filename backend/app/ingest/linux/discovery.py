@@ -14,7 +14,7 @@ SUPPORTED_ARTIFACTS: dict[str, dict[str, str]] = {
     "auth_log": {"label": "auth.log", "family": "linux_auth"},
     "wtmp": {"label": "wtmp", "family": "linux_auth"},
     "btmp": {"label": "btmp", "family": "linux_auth"},
-    "lastlog": {"label": "lastlog", "family": "linux_auth"},
+    "lastlog": {"label": "lastlog", "family": "linux_lastlog"},
     "syslog": {"label": "syslog", "family": "linux_syslog"},
     "audit_log": {"label": "audit.log", "family": "linux_audit"},
     "apache": {"label": "Apache logs", "family": "linux_apache"},
@@ -72,9 +72,11 @@ def _artifact_key(family: str, artifact_type: str, path: str) -> str:
     if family == "linux_os_info":
         return "os_info"
     if family == "linux_auth":
-        if artifact_type in {"wtmp", "btmp", "lastlog"}:
+        if artifact_type in {"wtmp", "btmp"}:
             return artifact_type
         return "auth_log"
+    if family == "linux_lastlog":
+        return "lastlog"
     if family == "linux_syslog":
         return "syslog"
     if family == "linux_audit":

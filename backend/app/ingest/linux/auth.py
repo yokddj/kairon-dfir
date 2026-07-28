@@ -256,41 +256,9 @@ def parse_wtmp_btmp(content: bytes, *, source_path: str = "") -> list[dict]:
 
 
 def parse_lastlog(content: bytes, *, source_path: str = "") -> list[dict]:
-    if not content or len(content) % _LASTLOG_STRUCT_SIZE != 0:
-        return []
-    rows: list[dict] = []
-    for uid, offset in enumerate(range(0, len(content), _LASTLOG_STRUCT_SIZE)):
-        chunk = content[offset:offset + _LASTLOG_STRUCT_SIZE]
-        try:
-            seconds, terminal_raw, host_raw = _LASTLOG_STRUCT.unpack(chunk)
-        except struct.error:
-            return []
-        if seconds <= 0 or seconds > 4_102_444_800:
-            continue
-        terminal = _clean_bytes(terminal_raw)
-        host = _clean_bytes(host_raw)
-        timestamp = datetime.fromtimestamp(int(seconds), tz=timezone.utc).isoformat()
-        message = f"lastlog uid={uid} terminal={terminal or '-'} source={host or '-'}"
-        rows.append({
-            "artifact_family": "linux_auth",
-            "artifact_type": "lastlog",
-            "source_file": source_path,
-            "timestamp": timestamp,
-            "username": str(uid),
-            "uid": uid,
-            "process": "login",
-            "service": "login",
-            "source_ip": host,
-            "terminal": terminal,
-            "event_action": "last_login",
-            "auth_event_type": "login_success",
-            "authentication_result": "success",
-            "record_type": "lastlog",
-            "record_offset": offset,
-            "message": message,
-            "raw_excerpt": message,
-        })
-    return rows
+    from app.ingest.linux.lastlog import parse_lastlog as parse_linux_lastlog
+
+    return parse_linux_lastlog(content, source_path=source_path)
 
 
 def parse_auth(

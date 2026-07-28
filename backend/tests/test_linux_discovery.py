@@ -145,6 +145,30 @@ def test_linux_inventory_absent_exim_logs_are_not_reported(tmp_path: Path) -> No
     assert all(item["artifact_type"] != "linux_exim" for item in artifacts)
 
 
+def test_linux_inventory_and_listing_include_only_var_log_lastlog(tmp_path: Path) -> None:
+    (tmp_path / "var/log").mkdir(parents=True)
+    (tmp_path / "usr/bin").mkdir(parents=True)
+    (tmp_path / "usr/share/bash-completion/completions").mkdir(parents=True)
+    (tmp_path / "var/log/lastlog").write_bytes(b"\0" * 292)
+    (tmp_path / "usr/bin/lastlog").write_bytes(b"ELF")
+    (tmp_path / "usr/share/bash-completion/completions/lastlog").write_text("complete -F _lastlog lastlog\n", encoding="utf-8")
+
+    files = [str(path.relative_to(tmp_path)) for path in tmp_path.rglob("*") if path.is_file()]
+    inventory = build_linux_inventory(tmp_path, files)
+    artifacts = list_generic_artifacts(tmp_path)
+    registry_entry = get_parser_registry_entry(artifact_type="linux_lastlog")
+
+    assert inventory is not None
+    lastlog = next(item for item in inventory["detected_artifacts"] if item["key"] == "lastlog")
+    assert lastlog["family"] == "linux_lastlog"
+    assert lastlog["parser"] == "linux_lastlog_raw"
+    assert lastlog["paths"] == ["var/log/lastlog"]
+    lastlog_artifacts = [item for item in artifacts if item["artifact_type"] == "linux_lastlog"]
+    assert len(lastlog_artifacts) == 1
+    assert lastlog_artifacts[0]["source_path"] == "var/log/lastlog"
+    assert registry_entry["parser_name"] == "linux_lastlog_raw"
+
+
 def test_journal_parser_handles_json_and_export() -> None:
     json_rows = parse_journal('{"__REALTIME_TIMESTAMP":"1710000000000000","_HOSTNAME":"db01","SYSLOG_IDENTIFIER":"sshd","MESSAGE":"Accepted password for root"}\n', source_path="journal.json")
     export_rows = parse_journal("__REALTIME_TIMESTAMP=1710000000000000\n_HOSTNAME=db01\nSYSLOG_IDENTIFIER=sudo\nMESSAGE=session opened\n\n", source_path="journal.export")
