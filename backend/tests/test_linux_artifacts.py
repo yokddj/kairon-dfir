@@ -1,8 +1,106 @@
 import pytest
 from pathlib import Path
 import struct
+import gzip
 
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "linux"
+
+
+class TestApacheParser:
+    def test_common_log_format_access(self):
+        from app.ingest.linux.apache import parse_apache
+
+        rows = parse_apache('192.0.2.10 - frank [10/Oct/2024:13:55:36 +0000] "GET /apache_pb.gif HTTP/1.0" 200 2326\n', source_path="/var/log/apache2/access.log")
+
+        assert rows[0]["artifact_family"] == "linux_apache"
+        assert rows[0]["artifact_type"] == "apache_access"
+        assert rows[0]["source_ip"] == "192.0.2.10"
+        assert rows[0]["username"] == "frank"
+        assert rows[0]["http_method"] == "GET"
+        assert rows[0]["url_path"] == "/apache_pb.gif"
+        assert rows[0]["http_status"] == 200
+        assert rows[0]["bytes_sent"] == 2326
+        assert rows[0]["timestamp"] == "2024-10-10T13:55:36+00:00"
+
+    def test_combined_log_format_access(self):
+        from app.ingest.linux.apache import parse_apache
+
+        rows = parse_apache('198.51.100.5 - - [10/Oct/2024:13:56:36 +0000] "POST /login HTTP/1.1" 302 123 "https://example.test/" "curl/8.0"\n', source_path="/var/log/httpd/access_log")
+
+        assert rows[0]["http_method"] == "POST"
+        assert rows[0]["url_path"] == "/login"
+        assert rows[0]["http_referrer"] == "https://example.test/"
+        assert rows[0]["http_user_agent"] == "curl/8.0"
+
+    def test_error_log(self):
+        from app.ingest.linux.apache import parse_apache
+
+        rows = parse_apache("[Thu Oct 10 13:55:37.123456 2024] [core:error] [pid 123:tid 456] [client 203.0.113.9:4444] File does not exist: /var/www/html/admin\n", source_path="/var/log/apache2/error.log")
+
+        assert rows[0]["artifact_type"] == "apache_error"
+        assert rows[0]["apache_module"] == "core"
+        assert rows[0]["http_severity"] == "error"
+        assert rows[0]["pid"] == 123
+        assert rows[0]["thread_id"] == 456
+        assert rows[0]["source_ip"] == "203.0.113.9"
+        assert rows[0]["source_port"] == 4444
+
+    def test_rotated_gzip_access_normalizes_with_provenance(self, tmp_path):
+        from app.ingest.normalizer import normalize_file
+
+        path = tmp_path / "access.log.1.gz"
+        with gzip.open(path, "wt", encoding="utf-8") as handle:
+            handle.write('192.0.2.10 - - [10/Oct/2024:13:55:36 +0000] "GET /index.html HTTP/1.1" 404 2326 "-" "Mozilla/5"\n')
+        artifact_meta = {
+            "artifact_family": "linux_apache",
+            "artifact_type": "apache_access",
+            "parser": "linux_apache_raw",
+            "name": "access.log.1.gz",
+            "source_path": "/var/log/apache2/access.log.1.gz",
+            "detected_host": "web01",
+        }
+
+        docs = normalize_file("case-1", "ev-1", "art-1", path, artifact_meta)
+
+        assert len(docs) == 1
+        doc = docs[0]
+        assert doc["case_id"] == "case-1"
+        assert doc["evidence_id"] == "ev-1"
+        assert doc["artifact_id"] == "art-1"
+        assert doc["artifact"]["type"] == "linux_apache"
+        assert doc["artifact"]["parser"] == "linux_apache_raw"
+        assert doc["source_file"] == "/var/log/apache2/access.log.1.gz"
+        assert doc["linux"]["http_status"] == 404
+        assert doc["linux"]["url_path"] == "/index.html"
+        assert doc["network"]["source_ip"] == "192.0.2.10"
+        assert doc["url"]["path"] == "/index.html"
+        assert doc["@timestamp"] == "2024-10-10T13:55:36+00:00"
+        assert "GET" in doc["search_text"]
+        assert "/index.html" in doc["search_text"]
+        assert "Mozilla/5" in doc["search_text"]
+        assert artifact_meta["ingest_audit"]["parser_status"] == "parsed"
+
+    def test_error_log_normalizes_network_and_severity(self, tmp_path):
+        from app.ingest.normalizer import normalize_file
+
+        path = tmp_path / "error.log"
+        path.write_text("[Thu Oct 10 13:55:37.123456 2024] [core:error] [pid 123] [client 203.0.113.9:4444] File does not exist: /var/www/html/admin\n", encoding="utf-8")
+        artifact_meta = {
+            "artifact_family": "linux_apache",
+            "artifact_type": "apache_error",
+            "parser": "linux_apache_raw",
+            "name": "error.log",
+            "source_path": "/var/log/apache2/error.log",
+            "detected_host": "web01",
+        }
+
+        docs = normalize_file("case-1", "ev-1", "art-1", path, artifact_meta)
+
+        assert docs[0]["event"]["severity"] == "medium"
+        assert docs[0]["linux"]["http_severity"] == "error"
+        assert docs[0]["network"]["source_ip"] == "203.0.113.9"
+        assert docs[0]["network"]["source_port"] == 4444
+        assert docs[0]["title"] == "File does not exist: /var/www/html/admin"
 
 
 class TestAuthLogParser:

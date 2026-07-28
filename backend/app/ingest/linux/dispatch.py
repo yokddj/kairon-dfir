@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib
+import gzip
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -29,6 +30,7 @@ LINUX_PARSER_TARGETS: dict[str, LinuxParserTarget] = {
     "linux_auth_raw": LinuxParserTarget("linux_auth_raw", "auth", "parse_auth", frozenset({"wtmp", "btmp", "lastlog"})),
     "linux_syslog_raw": LinuxParserTarget("linux_syslog_raw", "syslog", "parse_syslog"),
     "linux_audit_raw": LinuxParserTarget("linux_audit_raw", "audit", "parse_audit"),
+    "linux_apache_raw": LinuxParserTarget("linux_apache_raw", "apache", "parse_apache"),
     "linux_shell_raw": LinuxParserTarget("linux_shell_raw", "shell_history", "parse_shell_history"),
     "linux_cron_raw": LinuxParserTarget("linux_cron_raw", "cron", "parse_cron"),
     "linux_systemd_raw": LinuxParserTarget("linux_systemd_raw", "systemd", "parse_systemd"),
@@ -60,6 +62,9 @@ def parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type: 
     try:
         if str(artifact_type or "").lower() in target.binary_artifact_types:
             return parse_func(path.read_bytes(), source_path=source_path)
+        if path.suffix.lower() == ".gz":
+            with gzip.open(path, "rt", encoding="utf-8", errors="replace") as handle:
+                return parse_func(handle.read(), source_path=source_path)
         return parse_func(path.read_text(encoding="utf-8", errors="replace"), source_path=source_path)
     except LinuxParserDispatchError:
         raise
