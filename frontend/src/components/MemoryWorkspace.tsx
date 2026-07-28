@@ -224,7 +224,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <Link to={`/cases/${caseId}/memory/upload`} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">
+            <Link to={`/cases/${caseId}/evidence?add_evidence=1&expected_kind=memory_dump`} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">
               Add memory image
             </Link>
             <Link to={`/cases/${caseId}/evidence`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">

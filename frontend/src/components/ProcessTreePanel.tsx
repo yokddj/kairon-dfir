@@ -1832,7 +1832,7 @@ export default function ProcessTreePanel({
     if (q) params.set("q", q);
     if (evidenceId) params.set("evidence_id", evidenceId);
     if (selectedHost || node.host) params.set("host", selectedHost || node.host || "");
-    navigate(`/cases/${caseId}/command-history${params.toString() ? `?${params.toString()}` : ""}`);
+    navigate(`/cases/${caseId}/l/execution/command-history${params.toString() ? `?${params.toString()}` : ""}`);
   }
 
   function clearExpansions() {
@@ -1945,7 +1945,7 @@ export default function ProcessTreePanel({
         urlParams.set("origin", "command_history");
         if (initialCommandHistoryRowId) urlParams.set("command_history_row_id", initialCommandHistoryRowId);
       }
-      navigate(`/cases/${caseId}/process-graph?${urlParams.toString()}`, { replace: false });
+      navigate(`/cases/${caseId}/w/execution/stories?${urlParams.toString()}`, { replace: false });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Execution story failed.";
       setStoryError(message);

@@ -56,7 +56,7 @@ function processGraphUrl(caseId: string, item: CommandHistoryItem): string {
     if (item.run_id) params.set("run_id", item.run_id);
     if (item.process_entity_id || item.process?.guid) params.set("process_entity_id", item.process_entity_id || item.process?.guid || "");
     if (item.process?.pid !== undefined && item.process?.pid !== null) params.set("pid", String(item.process.pid));
-    return item.evidence_id ? `/cases/${caseId}/memory/${item.evidence_id}?${params.toString()}` : `/cases/${caseId}/memory?${params.toString()}`;
+    return item.evidence_id ? `/cases/${caseId}/m/${item.evidence_id}/overview?${params.toString()}` : `/cases/${caseId}/m?${params.toString()}`;
   }
   const params = new URLSearchParams();
   const sourceEventId = commandRowSourceEventId(item);
@@ -73,7 +73,7 @@ function processGraphUrl(caseId: string, item: CommandHistoryItem): string {
     params.set("story_event_id", sourceEventId);
   }
   if (item.timestamp) params.set("timestamp", item.timestamp);
-  return `/cases/${caseId}/process-graph?${params.toString()}`;
+  return `/cases/${caseId}/w/execution/stories?${params.toString()}`;
 }
 
 function buildParams(searchParams: URLSearchParams) {

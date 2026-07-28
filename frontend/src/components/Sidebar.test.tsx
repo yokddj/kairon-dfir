@@ -58,7 +58,7 @@ function capability(patch: CapabilityPatch) {
     evidence_domain: "filesystem",
     domain: "access",
     title: "Authentication",
-    route: "/cases/:caseId/linux-authentication",
+    route: "/cases/:caseId/l/access/authentication",
     artifact_families: ["linux_auth"],
     nav: { parent: "linux/access", order: 10 },
     search: { filters: [], presets: [] },
@@ -93,7 +93,7 @@ const windowsCommandHistory = capability({
   platform: "windows",
   domain: "execution",
   title: "Command History",
-  route: "/cases/:caseId/command-history",
+  route: "/cases/:caseId/w/execution/command-history",
   artifact_families: ["windows_event"],
   nav: { parent: "windows/execution", order: 20 },
 });
@@ -102,7 +102,7 @@ const windowsExecutionStories = capability({
   platform: "windows",
   domain: "execution",
   title: "Execution Stories",
-  route: "/cases/:caseId/process-graph",
+  route: "/cases/:caseId/w/execution/stories",
   artifact_families: ["windows_event"],
   nav: { parent: "windows/execution", order: 10 },
 });
@@ -161,7 +161,7 @@ describe("registry-driven sidebar", () => {
     renderSidebar();
 
     const linux = await screen.findByTestId("workbench-linux");
-    expect(within(linux).getByRole("link", { name: "Authentication" })).toHaveAttribute("href", "/cases/case-1/linux-authentication");
+    expect(within(linux).getByRole("link", { name: "Authentication" })).toHaveAttribute("href", "/cases/case-1/l/access/authentication");
     expect(screen.queryByTestId("workbench-windows")).not.toBeInTheDocument();
     expect(screen.queryByText("Hidden Windows")).not.toBeInTheDocument();
   });
@@ -250,7 +250,7 @@ describe("registry-driven sidebar", () => {
       evidence_domain: "memory",
       domain: "network",
       title: "Network",
-      route: "/cases/:caseId/memory?tab=network",
+      route: "/cases/:caseId/m/:evidenceId/network",
       nav: { parent: "memory/network", order: 10 },
     });
     getCaseCapabilitiesMock.mockResolvedValue(registry({
@@ -260,10 +260,10 @@ describe("registry-driven sidebar", () => {
       capabilities: [memoryNetwork],
     }));
 
-    renderSidebar("/cases/case-1/memory/ev-A/processes");
+    renderSidebar("/cases/case-1/m/ev-A/processes");
 
     const memory = await screen.findByTestId("workbench-memory");
-    expect(within(memory).getByRole("link", { name: "Network" })).toHaveAttribute("href", "/cases/case-1/memory/ev-A/network");
+    expect(within(memory).getByRole("link", { name: "Network" })).toHaveAttribute("href", "/cases/case-1/m/ev-A/network");
   });
 
   it("does not call the registry endpoint when no case is active", () => {

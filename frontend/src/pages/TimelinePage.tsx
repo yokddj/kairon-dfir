@@ -231,7 +231,7 @@ function TimelinePage() {
           if (selectedItem.evidence_id) params.set("evidence_id", selectedItem.evidence_id);
           if (selectedItem.related_finding_ids?.[0]) params.set("finding_id", selectedItem.related_finding_ids[0]!);
           return (
-            <Link to={`/cases/${caseId}/process-graph?${params.toString()}`} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted">
+            <Link to={`/cases/${caseId}/w/execution/stories?${params.toString()}`} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted">
               <ExternalLink className="mr-2 inline h-3.5 w-3.5" />
               Open in Process Graph
             </Link>

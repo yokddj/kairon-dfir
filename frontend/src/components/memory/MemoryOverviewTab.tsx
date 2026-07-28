@@ -185,7 +185,7 @@ function buildInvestigationChecklist(
       id: "host_assigned",
       label: "Host assigned",
       done: Boolean(landing?.host_id),
-      action: landing?.host_id ? undefined : { label: "Assign host", href: `/cases/${landing?.case_id ?? ""}/memory` },
+      action: landing?.host_id ? undefined : { label: "Assign host", href: `/cases/${landing?.case_id ?? ""}/m` },
     },
     {
       id: "ready",
@@ -335,7 +335,7 @@ export function MemoryOverviewTab({
           <div className="mt-4 flex flex-wrap gap-2" data-testid="memory-overview-context-actions">
             <Link to={`/cases/${caseId}/search?source_category=Memory&evidence_id=${evidenceId}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Search this Evidence</Link>
             <Link to={`/cases/${caseId}/timeline?source_category=Memory&evidence_id=${evidenceId}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Timeline</Link>
-            <Link to={`/cases/${caseId}/command-history?source_category=Memory&evidence_id=${evidenceId}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Commands</Link>
+            <Link to={`/cases/${caseId}/l/execution/command-history?source_category=Memory&evidence_id=${evidenceId}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Commands</Link>
             <button type="button" onClick={() => onJumpToTab("processes")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">View Processes</button>
             <button type="button" onClick={() => onJumpToTab("graph")} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">View Graph</button>
           </div>

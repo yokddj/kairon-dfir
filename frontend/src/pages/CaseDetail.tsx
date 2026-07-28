@@ -223,7 +223,7 @@ export default function CaseDetail() {
                   </p>
                 </div>
                 {candidate.status === "promoted" && candidate.promoted_evidence_id ? (
-                  <Link to={candidate.category === "memory_dump" ? `/cases/${caseId}/memory/${candidate.promoted_evidence_id}` : `/evidences/${candidate.promoted_evidence_id}`} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss">
+                  <Link to={candidate.category === "memory_dump" ? `/cases/${caseId}/m/${candidate.promoted_evidence_id}/overview` : `/evidences/${candidate.promoted_evidence_id}`} className="rounded-xl bg-accent px-3 py-1.5 text-xs font-semibold text-abyss">
                     Open evidence
                   </Link>
                 ) : candidate.resumable || candidate.status === "staged" ? (
@@ -341,8 +341,8 @@ export default function CaseDetail() {
             </div>
             <div className="mt-5 flex flex-wrap gap-2">
               <Link to={`/cases/${caseId}/search`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Search</Link>
-              <Link to={`/cases/${caseId}/timeline`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Search Timeline</Link>
-              <Link to={`/cases/${caseId}/artifact-search`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Artifact Search</Link>
+              <Link to={`/cases/${caseId}/timeline`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Timeline</Link>
+              <Link to={`/cases/${caseId}/artifacts`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Artifact Search</Link>
               <Link to={`/cases/${caseId}/findings`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Run correlation in Findings</Link>
               <Link to={`/cases/${caseId}/debug-export`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Debug Export</Link>
               {siemLinksQuery.data?.discover_url ? (
@@ -756,7 +756,7 @@ export default function CaseDetail() {
         <section className="rounded-3xl border border-line bg-panel/40 p-5 text-sm text-muted">
           Use the dedicated artifact-focused workflow to pivot by artifact type, artifact name and evidence without starting from free-text search.
           <div className="mt-4">
-            <Link to={`/cases/${caseId}/artifact-search`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Artifact Search</Link>
+            <Link to={`/cases/${caseId}/artifacts`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Artifact Search</Link>
           </div>
         </section>
       ) : null}

@@ -724,13 +724,13 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
   function openFindingCommandHistory() {
     const params = new URLSearchParams();
     appendFindingScope(params);
-    navigate(`/cases/${caseId}/command-history?${params.toString()}`);
+    navigate(`/cases/${caseId}/l/execution/command-history?${params.toString()}`);
   }
 
   function openFindingNetwork() {
     const params = new URLSearchParams({ tab: "network" });
     appendFindingScope(params);
-    navigate(`/cases/${caseId}/memory${selectedFinding?.evidence_id ? `/${selectedFinding.evidence_id}` : ""}?${params.toString()}`);
+    navigate(selectedFinding?.evidence_id ? `/cases/${caseId}/m/${selectedFinding.evidence_id}/overview?${params.toString()}` : `/cases/${caseId}/m?${params.toString()}`);
   }
 
   function openFindingProcessTree(item: Record<string, unknown>) {
@@ -750,7 +750,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
       if (process.pid !== undefined && process.pid !== null && String(process.pid).trim()) params.set("pid", String(process.pid));
       if (process.name !== undefined && process.name !== null && String(process.name).trim()) params.set("process_name", String(process.name));
     }
-    navigate(`/cases/${caseId}/process-graph?${params.toString()}`);
+    navigate(`/cases/${caseId}/w/execution/stories?${params.toString()}`);
   }
 
   function openProcessGraph() {
@@ -759,7 +759,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     if (selectedFinding.evidence_id) params.set("evidence_id", selectedFinding.evidence_id);
     params.set("finding_id", selectedFinding.id);
     for (const nodeId of selectedFinding.related_process_node_ids) params.append("node_id", nodeId);
-    navigate(`/cases/${caseId}/process-graph?${params.toString()}`);
+    navigate(`/cases/${caseId}/w/execution/stories?${params.toString()}`);
   }
 
   function openFindingTimeline() {
@@ -781,7 +781,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
     if (selectedFinding.linked_host_id) params.set("host_id", selectedFinding.linked_host_id);
     if (selectedFinding.linked_artifact_type) params.set("artifact_type", selectedFinding.linked_artifact_type);
     if (selectedFinding.linked_event_id) params.set("selected", selectedFinding.linked_event_id);
-    if (selectedFinding.source_view === "memory") navigate(`/cases/${caseId}/memory${selectedFinding.linked_evidence_id ? `/${selectedFinding.linked_evidence_id}` : ""}?${params.toString()}`);
+    if (selectedFinding.source_view === "memory") navigate(selectedFinding.linked_evidence_id ? `/cases/${caseId}/m/${selectedFinding.linked_evidence_id}/overview?${params.toString()}` : `/cases/${caseId}/m?${params.toString()}`);
     else if (selectedFinding.source_view === "artifact_explorer") navigate(`/cases/${caseId}/artifacts?${params.toString()}`);
     else if (selectedFinding.linked_evidence_id || selectedFinding.evidence_id) navigate(`/evidences/${selectedFinding.linked_evidence_id || selectedFinding.evidence_id}`);
     else navigate(`/cases/${caseId}/search?${params.toString()}`);

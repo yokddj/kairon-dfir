@@ -8,6 +8,7 @@ from urllib.parse import quote_plus, urlparse
 
 from sqlalchemy.orm import Session
 
+from app.services.case_capabilities import capability_route
 from app.services.host_identity import normalize_host_alias
 from app.services.indicator_resolution import extract_indicators
 from app.services.search_service import search_events_v2
@@ -259,7 +260,7 @@ def _linked(case_id: str, host: str, base_path: str, host_url: str, timestamp: A
         "base_file_search": _search_url(case_id, host, base_path or basename),
         "browser_search": _search_url(case_id, host, host_url or basename),
         "user_activity_search": f"/cases/{case_id}/search?artifact_type=recentdocs&artifact_type=opensavemru&artifact_type=lnk&q={quote_plus(basename)}" + (f"&host={quote_plus(host)}" if host else ""),
-        "execution_search": f"/cases/{case_id}/command-history?q={quote_plus(basename)}" + (f"&host={quote_plus(host)}" if host else ""),
+        "execution_search": f"{capability_route('linux.execution.command_history', case_id)}?q={quote_plus(basename)}" + (f"&host={quote_plus(host)}" if host else ""),
         "timeline_around": _timeline_url(case_id, host, timestamp, base_path or basename),
     }
 

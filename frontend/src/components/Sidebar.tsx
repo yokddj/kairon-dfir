@@ -51,7 +51,7 @@ const READINESS_STYLES: Record<string, string> = {
 };
 
 function activeMemoryEvidenceId(pathname: string, activeCaseId: string): string | null {
-  const match = pathname.match(/^\/cases\/([^/]+)\/memory\/([^/]+)(?:\/[^/]+)?$/);
+  const match = pathname.match(/^\/cases\/([^/]+)\/(?:memory|m)\/([^/]+)(?:\/[^/]+)?$/);
   if (!match || match[1] !== activeCaseId) return null;
   const evidenceId = match[2];
   if (evidenceId === "landing" || evidenceId === "upload") return null;
@@ -61,9 +61,10 @@ function activeMemoryEvidenceId(pathname: string, activeCaseId: string): string 
 function resolveTarget(to: string, activeCaseId: string, pathname: string): string {
   const baseTarget = activeCaseId ? to.replace(":caseId", activeCaseId) : to;
   const currentMemoryEvidenceId = activeMemoryEvidenceId(pathname, activeCaseId);
-  if (!currentMemoryEvidenceId || !baseTarget.startsWith(`/cases/${activeCaseId}/memory?`)) return baseTarget;
-  const tab = new URLSearchParams(baseTarget.split("?")[1] || "").get("tab") || "overview";
-  return `/cases/${activeCaseId}/memory/${currentMemoryEvidenceId}/${tab}`;
+  if (baseTarget.includes(":evidenceId")) {
+    return currentMemoryEvidenceId ? baseTarget.replace(":evidenceId", currentMemoryEvidenceId) : `/cases/${activeCaseId}/m`;
+  }
+  return baseTarget;
 }
 
 function SidebarLink({ item, activeCaseId }: { item: NavItem; activeCaseId: string }) {

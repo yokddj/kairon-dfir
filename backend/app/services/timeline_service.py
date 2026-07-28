@@ -25,6 +25,7 @@ from app.models.event_marking import EventMarking
 from app.models.finding import Finding
 from app.models.incident_timeline_draft import IncidentTimelineDraft
 from app.models.timeline_bookmark import TimelineBookmark, TimelineBookmarkCategory, TimelineBookmarkImportance
+from app.services.case_capabilities import capability_route
 from app.services.command_history import get_command_history
 from app.services.host_identity import normalize_host_alias, resolve_canonical_host
 from app.services.investigation_memory import (
@@ -439,7 +440,7 @@ def _incident_execution_story_url(case_id: str, event_id: str | None, evidence_i
         params.append(f"evidence_id={quote_plus(str(evidence_id))}")
     if host:
         params.append(f"host={quote_plus(str(host))}")
-    return f"/cases/{case_id}/process-graph?{'&'.join(params)}"
+    return f"{capability_route('windows.execution.stories', case_id)}?{'&'.join(params)}"
 
 
 def _fallback_display_host(host: str | None) -> str | None:

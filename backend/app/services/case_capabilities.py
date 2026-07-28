@@ -27,7 +27,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "evidence_domain": "filesystem",
         "domain": "execution",
         "title": "Command History",
-        "route": "/cases/:caseId/command-history",
+        "route": "/cases/:caseId/w/execution/command-history",
         "artifact_families": ["powershell_activity", "powershell_execution", "process_execution", "windows_event"],
         "nav": {"parent": "windows/execution", "order": 10},
         "search": {"filters": [], "presets": []},
@@ -40,7 +40,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "evidence_domain": "filesystem",
         "domain": "execution",
         "title": "Execution Stories",
-        "route": "/cases/:caseId/process-graph",
+        "route": "/cases/:caseId/w/execution/stories",
         "artifact_families": ["program_executions", "execution_candidates", "windows_event", "prefetch"],
         "nav": {"parent": "windows/execution", "order": 20},
         "search": {"filters": [], "presets": []},
@@ -53,7 +53,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "evidence_domain": "filesystem",
         "domain": "persistence",
         "title": "Persistence",
-        "route": "/cases/:caseId/semi-auto?preset=persistence",
+        "route": "/cases/:caseId/findings?preset=persistence",
         "artifact_families": ["scheduled_task", "service", "registry_run_key", "autoruns"],
         "nav": {"parent": "windows/persistence", "order": 10},
         "search": {"filters": [], "presets": []},
@@ -66,7 +66,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "evidence_domain": "filesystem",
         "domain": "access",
         "title": "Authentication",
-        "route": "/cases/:caseId/linux-authentication",
+        "route": "/cases/:caseId/l/access/authentication",
         "artifact_families": ["linux_auth"],
         "nav": {"parent": "linux/access", "order": 10},
         "search": {
@@ -85,7 +85,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "evidence_domain": "filesystem",
         "domain": "execution",
         "title": "Command History",
-        "route": "/cases/:caseId/command-history",
+        "route": "/cases/:caseId/l/execution/command-history",
         "artifact_families": ["linux_shell_history"],
         "nav": {"parent": "linux/execution", "order": 10},
         "search": {"filters": [], "presets": []},
@@ -111,7 +111,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "evidence_domain": "memory",
         "domain": "execution",
         "title": "Overview",
-        "route": "/cases/:caseId/memory?tab=overview",
+        "route": "/cases/:caseId/m",
         "artifact_families": ["processes", "network", "modules", "handles", "vads"],
         "nav": {"parent": "memory/overview", "order": 5},
         "search": {"filters": [], "presets": []},
@@ -124,7 +124,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "evidence_domain": "memory",
         "domain": "execution",
         "title": "Processes",
-        "route": "/cases/:caseId/memory?tab=processes",
+        "route": "/cases/:caseId/m/:evidenceId/processes",
         "artifact_families": ["processes"],
         "nav": {"parent": "memory/execution", "order": 10},
         "search": {"filters": [], "presets": []},
@@ -137,7 +137,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "evidence_domain": "memory",
         "domain": "network",
         "title": "Network",
-        "route": "/cases/:caseId/memory?tab=network",
+        "route": "/cases/:caseId/m/:evidenceId/network",
         "artifact_families": ["network"],
         "nav": {"parent": "memory/network", "order": 10},
         "search": {"filters": [], "presets": []},
@@ -145,6 +145,19 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "readiness_source": "memory_artifact_counts",
     },
 ]
+
+
+def capability_route(capability_id: str, case_id: str, *, evidence_id: str | None = None) -> str:
+    for capability in CAPABILITY_REGISTRY:
+        if capability["id"] != capability_id:
+            continue
+        route = str(capability["route"]).replace(":caseId", case_id)
+        if evidence_id is not None:
+            route = route.replace(":evidenceId", evidence_id)
+        if ":evidenceId" in route:
+            raise ValueError(f"Capability route {capability_id} requires evidence_id")
+        return route
+    raise KeyError(f"Unknown capability route: {capability_id}")
 
 
 def _value(value: Any) -> str:

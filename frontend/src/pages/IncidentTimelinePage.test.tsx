@@ -94,7 +94,7 @@ describe("IncidentTimelinePage", () => {
           artifact_type: "command_history",
           risk_score: 90,
           search_url: "/cases/case-1/search?q=remote-admin.exe",
-          execution_story_url: "/cases/case-1/process-graph?story_event_id=evt-1",
+          execution_story_url: "/cases/case-1/w/execution/stories?story_event_id=evt-1",
           story_target_type: "lateral_movement",
           story_target_confidence: "high",
           story_target_reason: "multi-host movement or remote execution indicator",
@@ -199,7 +199,7 @@ describe("IncidentTimelinePage", () => {
           status: "accepted",
           confidence: "high",
           risk_score: 90,
-          execution_story_url: "/cases/case-1/process-graph?story_event_id=evt-powershell",
+          execution_story_url: "/cases/case-1/w/execution/stories?story_event_id=evt-powershell",
           story_target_type: "exact_process",
           story_target_reason: "source event has process identity",
           story_primary_action: "Open Execution Story",
@@ -209,7 +209,7 @@ describe("IncidentTimelinePage", () => {
     renderPage();
     expect(await screen.findByText("PowerShell script.ps1")).toBeInTheDocument();
     const storyLink = screen.getByRole("link", { name: /Open Execution Story/i });
-    expect(storyLink).toHaveAttribute("href", "/cases/case-1/process-graph?story_event_id=evt-powershell");
+    expect(storyLink).toHaveAttribute("href", "/cases/case-1/w/execution/stories?story_event_id=evt-powershell");
   });
 
   it("renders clean file story fields and clear pivots", async () => {

@@ -32,6 +32,15 @@ const ARTIFACT_FAMILY_FROM_TAB: Record<string, string> = {
   artifacts: "artifacts",
 };
 
+function tabFromRouteSegment(value: string | null): MemoryTab | null {
+  if (value === "process-graph") return "graph";
+  return isMemoryTab(value) ? value : null;
+}
+
+function routeSegmentFromTab(value: MemoryTab): string {
+  return value === "graph" ? "process-graph" : value;
+}
+
 function familyForTab(tab: MemoryTab, _artifact?: string | null): string {
   return ARTIFACT_FAMILY_FROM_TAB[tab] || "processes";
 }
@@ -90,11 +99,12 @@ export default function MemoryEvidencePage() {
     if (pid) params.set("pid", pid);
     if (legacyTab === "search") navigate(`/cases/${caseId}/search?${params.toString()}`, { replace: true });
     if (legacyTab === "timeline") navigate(`/cases/${caseId}/timeline?${params.toString()}`, { replace: true });
-    if (legacyTab === "history") navigate(`/cases/${caseId}/command-history?${params.toString()}`, { replace: true });
+    if (legacyTab === "history") navigate(`/cases/${caseId}/l/execution/command-history?${params.toString()}`, { replace: true });
   }, [activeHost, activeHostId, caseId, evidenceId, memoryTab, navigate, searchParams, setSearchParams]);
 
   const tab = useMemo<MemoryTab>(() => {
-    if (isMemoryTab(memoryTab)) return memoryTab;
+    const routeTab = tabFromRouteSegment(memoryTab);
+    if (routeTab) return routeTab;
     const raw = searchParams.get("tab");
     return isMemoryTab(raw) ? raw : "overview";
   }, [memoryTab, searchParams]);
@@ -109,7 +119,7 @@ export default function MemoryEvidencePage() {
     params.delete("tab");
     params.delete("run_id");
     const query = params.toString();
-    return `/cases/${caseId}/memory/${targetEvidenceId}/${targetTab}${query ? `?${query}` : ""}`;
+    return `/cases/${caseId}/m/${targetEvidenceId}/${routeSegmentFromTab(targetTab)}${query ? `?${query}` : ""}`;
   }, [caseId, searchParams, tab]);
 
   const overviewQuery = useQuery({
@@ -399,7 +409,7 @@ export default function MemoryEvidencePage() {
       <div className="space-y-4 rounded-[28px] border border-rose-400/30 bg-rose-500/10 p-8 text-sm text-rose-100 shadow-panel">
         <p>{hasHostFilter ? `This memory evidence is not associated with active host ${activeHost}.` : "Memory evidence was not found for this case."}</p>
         <div className="flex flex-wrap gap-2">
-          <Link to={withHostScope(`/cases/${caseId}/memory/landing`)} className="rounded-xl border border-rose-200/40 bg-rose-950/30 px-3 py-2 text-xs text-rose-100">Open filtered memory selector</Link>
+          <Link to={withHostScope(`/cases/${caseId}/m`)} className="rounded-xl border border-rose-200/40 bg-rose-950/30 px-3 py-2 text-xs text-rose-100">Open filtered memory selector</Link>
           {hasHostFilter ? <button type="button" onClick={clearHostFilter} className="rounded-xl border border-rose-200/40 bg-rose-950/30 px-3 py-2 text-xs text-rose-100">Clear host filter</button> : null}
         </div>
       </div>
@@ -415,7 +425,7 @@ export default function MemoryEvidencePage() {
         evidenceId={evidenceId}
         evidenceName={evidence.filename}
         current="Memory"
-        breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: "Case", to: `/cases/${caseId}` }, { label: "Memory", to: `/cases/${caseId}/memory?tab=overview` }, { label: evidence.filename || "Evidence" }]}
+        breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: "Case", to: `/cases/${caseId}` }, { label: "Memory", to: `/cases/${caseId}/m` }, { label: evidence.filename || "Evidence" }]}
         actions={[
           { label: "Evidence Detail", to: `/evidences/${evidenceId}`, description: "Open integrity and processing details" },
           { label: "Search", to: `/cases/${caseId}/search?source_category=Memory`, description: "Search memory-derived documents" },

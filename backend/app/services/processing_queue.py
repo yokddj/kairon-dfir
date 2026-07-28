@@ -331,7 +331,7 @@ def build_processing_item(evidence: Evidence, artifacts: list[Artifact], memory_
             "evidence": f"/evidences/{evidence.id}",
             "artifacts": f"/cases/{evidence.case_id}/artifacts?evidence_id={evidence.id}",
             "search": f"/cases/{evidence.case_id}/search?evidence_id={evidence.id}",
-            "memory": f"/cases/{evidence.case_id}/memory/{evidence.id}/overview" if _status_value(evidence.evidence_type) == "memory_dump" else None,
+            "memory": f"/cases/{evidence.case_id}/m/{evidence.id}/overview" if _status_value(evidence.evidence_type) == "memory_dump" else None,
         },
     }
 

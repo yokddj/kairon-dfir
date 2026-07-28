@@ -44,11 +44,11 @@ const PROFILE_SECTION: Record<string, Section> = {
 };
 
 function familyHref(caseId: string, evidenceId: string, item: MemoryAnalysisCatalogueItem): string {
-  if (item.family === "processes") return `/cases/${caseId}/memory/${evidenceId}?tab=processes`;
-  if (item.family === "system_info") return `/cases/${caseId}/memory/${evidenceId}?tab=system`;
-  if (item.family === "raw_observations") return `/cases/${caseId}/memory/${evidenceId}?tab=overview`;
+  if (item.family === "processes") return `/cases/${caseId}/m/${evidenceId}/processes`;
+  if (item.family === "system_info") return `/cases/${caseId}/m/${evidenceId}/system`;
+  if (item.family === "raw_observations") return `/cases/${caseId}/m/${evidenceId}/overview`;
   const map: Record<string, string> = { network: "network", modules: "modules", handles: "handles", drivers: "modules", kernel_modules: "modules", suspicious_regions: "suspicious" };
-  return `/cases/${caseId}/memory/${evidenceId}?tab=${map[item.family] || "network"}`;
+  return `/cases/${caseId}/m/${evidenceId}/${map[item.family] || "network"}`;
 }
 
 function StatusBadge({
@@ -218,7 +218,7 @@ function CatalogueCard({
               Run
             </button>
             <Link
-              to={`/cases/${caseId}/memory/${evidenceId}?tab=artifacts&artifact=${item.family}`}
+              to={`/cases/${caseId}/m/${evidenceId}/artifacts?artifact=${item.family}`}
               className="rounded-md border border-line bg-abyss/70 px-2 py-1 text-[10px] text-muted"
               data-testid={`memory-catalogue-view-requirements-${item.profile}`}
             >

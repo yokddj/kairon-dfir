@@ -1,15 +1,17 @@
 import type { ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import App from "./App";
 
 const listCasesMock = vi.fn();
+const getMemoryOverviewMock = vi.fn();
 const activeCaseState: any = {
   activeCaseId: "case-1",
   activeCase: { id: "case-1", name: "Case Alpha" },
+  setActiveCaseId: vi.fn(),
 };
 
 vi.mock("./components/Layout", () => ({
@@ -19,6 +21,7 @@ vi.mock("./components/Layout", () => ({
 vi.mock("./api/client", () => ({
   api: {
     listCases: (...args: unknown[]) => listCasesMock(...args),
+    getMemoryOverview: (...args: unknown[]) => getMemoryOverviewMock(...args),
   },
 }));
 
@@ -52,13 +55,19 @@ vi.mock("./context/NotificationsContext", () => ({
 
 vi.mock("./context/TimezoneContext", () => ({
   TimezoneProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  useTimezonePreference: () => ({ effectiveTimezone: "UTC" }),
 }));
 
 vi.mock("./pages/Dashboard", () => ({ default: () => <div>Dashboard Page</div> }));
 vi.mock("./pages/Cases", () => ({ default: () => <div>Cases Page</div> }));
 vi.mock("./pages/CaseDetail", () => ({ default: () => <div>Case Detail Page</div> }));
 vi.mock("./pages/CaseOverviewPage", () => ({ default: () => <div>Overview Page</div> }));
+vi.mock("./pages/CaseHostsPage", () => ({ default: () => <div>Hosts Page</div> }));
 vi.mock("./pages/CaseProcessGraphPage", () => ({ default: () => <div>Process Graph Page</div> }));
+vi.mock("./pages/CommandHistoryPage", () => ({ default: () => <div>Command History Page</div> }));
+vi.mock("./pages/LinuxAuthenticationPage", () => ({ default: () => <div>Linux Authentication Page</div> }));
+vi.mock("./pages/IncidentTimelinePage", () => ({ default: () => <div>Incident Timeline Page</div> }));
+vi.mock("./pages/TimelinePage", () => ({ default: () => <div>Timeline Page</div> }));
 vi.mock("./pages/CaseReportsPage", () => ({ default: () => <div>Reports Page</div> }));
 vi.mock("./pages/DebugExportPage", () => ({ default: () => <div>Debug Export Page</div> }));
 vi.mock("./pages/EvidenceDetail", () => ({ default: () => <div>Evidence Detail Page</div> }));
@@ -71,14 +80,35 @@ vi.mock("./pages/Rules", () => ({ default: () => <div>Rules Page</div> }));
 vi.mock("./pages/Detections", () => ({ default: () => <div>Detections Page</div> }));
 vi.mock("./pages/SystemPage", () => ({ default: () => <div>System Page</div> }));
 vi.mock("./pages/DocsPage", () => ({ default: () => <div>Docs Page</div> }));
-vi.mock("./pages/MemoryAnalysisPage", () => ({ default: () => <div>Memory Analysis Page</div> }));
-vi.mock("./pages/MemoryUploadPage", () => ({ default: () => <div>Memory Upload Page</div> }));
+vi.mock("./pages/ParserCoveragePage", () => ({ default: () => <div>Parser Coverage Page</div> }));
+vi.mock("./pages/MemoryEvidencePage", async () => {
+  const { useLocation, useNavigate } = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+  return {
+    default: () => {
+      const location = useLocation();
+      const navigate = useNavigate();
+      return (
+        <div>
+          Memory Evidence Page
+          <span data-testid="memory-evidence-route">{location.pathname + location.search}</span>
+          <button type="button" onClick={() => navigate(-1)}>Back</button>
+        </div>
+      );
+    },
+  };
+});
+vi.mock("./pages/CaseMemoryLanding", async () => {
+  const { useLocation } = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+  return { default: () => <div>Memory Landing Page<span data-testid="memory-landing-route">{useLocation().pathname + useLocation().search}</span></div> };
+});
+vi.mock("./components/MemoryWorkspace", () => ({ MemoryWorkspace: () => <div>Memory Workspace Page</div> }));
 
-function renderApp(initialEntry: string) {
+function renderApp(initialEntry: string | string[]) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const entries = Array.isArray(initialEntry) ? initialEntry : [initialEntry];
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter initialEntries={[initialEntry]}>
+      <MemoryRouter initialEntries={entries} initialIndex={entries.length - 1}>
         <App />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -89,7 +119,9 @@ describe("legacy navigation redirects", () => {
   beforeEach(() => {
     activeCaseState.activeCaseId = "case-1";
     activeCaseState.activeCase = { id: "case-1", name: "Case Alpha" };
+    activeCaseState.setActiveCaseId = vi.fn();
     listCasesMock.mockResolvedValue([{ id: "demo-case", name: "Demo - ACME Incident 001" }]);
+    getMemoryOverviewMock.mockResolvedValue({ evidences: [] });
   });
 
   it("redirects /process-tree to the active case process graph", async () => {
@@ -97,9 +129,9 @@ describe("legacy navigation redirects", () => {
     expect(await screen.findByText("Process Graph Page")).toBeInTheDocument();
   });
 
-  it("redirects /timeline to the active case Search timeline view", async () => {
+  it("redirects /timeline to the active case timeline", async () => {
     renderApp("/timeline");
-    expect(await screen.findByText("Search Page")).toBeInTheDocument();
+    expect(await screen.findByText("Timeline Page")).toBeInTheDocument();
   });
 
   it("redirects /dashboard to the active case overview", async () => {
@@ -139,12 +171,60 @@ describe("memory routes are registered", () => {
   beforeEach(() => {
     activeCaseState.activeCaseId = "case-1";
     activeCaseState.activeCase = { id: "case-1", name: "Case Alpha" };
+    activeCaseState.setActiveCaseId = vi.fn();
     listCasesMock.mockResolvedValue([]);
+    getMemoryOverviewMock.mockResolvedValue({ evidences: [] });
   });
 
-  it("renders Memory Analysis at /cases/:caseId/memory", async () => {
-    renderApp("/cases/case-1/memory");
-    expect(await screen.findByText("Memory Analysis Page")).toBeInTheDocument();
+  it("renders the canonical memory landing at /cases/:caseId/m", async () => {
+    renderApp("/cases/case-1/m");
+    expect(await screen.findByText("Memory Landing Page")).toBeInTheDocument();
+  });
+
+  it("redirects legacy /cases/:caseId/memory with multiple memory images to the canonical memory landing", async () => {
+    getMemoryOverviewMock.mockResolvedValue({ evidences: [{ id: "ev-A" }, { id: "ev-B" }] });
+    renderApp("/cases/case-1/memory?tab=processes&filter=suspicious");
+    expect(await screen.findByText("Memory Landing Page")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-landing-route")).toHaveTextContent("/cases/case-1/m?filter=suspicious");
+  });
+
+  it("redirects legacy /cases/:caseId/memory with one memory image to the requested canonical tab", async () => {
+    getMemoryOverviewMock.mockResolvedValue({ evidences: [{ id: "ev-A" }] });
+    renderApp("/cases/case-1/memory?tab=graph");
+    expect(await screen.findByText("Memory Evidence Page")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-evidence-route")).toHaveTextContent("/cases/case-1/m/ev-A/process-graph");
+  });
+
+  it("redirects legacy memory evidence bookmarks to canonical evidence routes", async () => {
+    renderApp("/cases/case-1/memory/ev-A/graph?foo=bar");
+    expect(await screen.findByText("Memory Evidence Page")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-evidence-route")).toHaveTextContent("/cases/case-1/m/ev-A/process-graph?foo=bar");
+  });
+
+  it("redirects legacy memory runs bookmarks to the canonical runs route", async () => {
+    getMemoryOverviewMock.mockResolvedValue({ evidences: [{ id: "ev-A" }, { id: "ev-B" }] });
+    renderApp("/cases/case-1/memory?tab=runs");
+    expect(await screen.findByText("Memory Workspace Page")).toBeInTheDocument();
+  });
+
+  it("renders invalid memory image ids on the canonical evidence route for page-level validation", async () => {
+    renderApp("/cases/case-1/m/not-a-real-image/processes");
+    expect(await screen.findByText("Memory Evidence Page")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-evidence-route")).toHaveTextContent("/cases/case-1/m/not-a-real-image/processes");
+  });
+
+  it("supports refresh-style direct canonical memory deep links without redirecting", async () => {
+    renderApp("/cases/case-1/m/ev-A/network?host=HOSTA");
+    expect(await screen.findByText("Memory Evidence Page")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-evidence-route")).toHaveTextContent("/cases/case-1/m/ev-A/network?host=HOSTA");
+  });
+
+  it("replaces legacy memory bookmarks so the back button does not re-enter the redirect", async () => {
+    renderApp(["/cases/case-1/overview", "/cases/case-1/memory/ev-A/graph"]);
+    expect(await screen.findByText("Memory Evidence Page")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-evidence-route")).toHaveTextContent("/cases/case-1/m/ev-A/process-graph");
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(await screen.findByText("Overview Page")).toBeInTheDocument();
   });
 
   it("redirects Memory Upload to the canonical Add Evidence wizard", async () => {
