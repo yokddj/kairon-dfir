@@ -1,9 +1,10 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import EventSummary from "./EventSummary";
 import TagPill from "./TagPill";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { compareValues, getNestedValue, nextSortDirection } from "../lib/sorting";
+import { presentationProfileForItems, renderPresentationValue, type PresentationProfile } from "../lib/eventPresentationProfiles";
 
 export type SortField =
   | "timestamp"
@@ -29,7 +30,20 @@ export type SortField =
   | "mft.entry_number"
   | "process.name"
   | "network.source_ip"
+  | "network.source_port"
   | "network.destination_ip"
+  | "network.destination_port"
+  | "destination.ip"
+  | "destination.port"
+  | "http.request.method"
+  | "http.response.status_code"
+  | "event.action"
+  | "event.outcome"
+  | "linux.sender"
+  | "linux.recipient"
+  | "linux.queue_id"
+  | "linux.smtp_status"
+  | "linux.line_number"
   | "risk_score";
 export type SortOrder = "asc" | "desc";
 export type EventView = "auto" | "generic" | "evtx" | "filesystem" | "execution" | "execution_artifacts" | "browser" | "network" | "srum" | "persistence" | "registry" | "defender" | "powershell" | "recycle_bin" | "shellbags" | "jumplist" | "usb" | "bits" | "wmi" | "autoruns" | "cloud_sync";
@@ -46,7 +60,7 @@ type Props = {
   onCreateFinding?: (item: Record<string, unknown>) => void;
 };
 
-type Column = { key: string; label: string; render: (item: Record<string, unknown>) => string };
+type Column = { key: string; label: string; render: (item: Record<string, unknown>) => string; defaultVisible?: boolean; sortField?: SortField };
 
 function sortFieldForColumn(key: string): SortField | null {
   if (key === "timestamp") return "@timestamp";
@@ -67,8 +81,39 @@ function sortFieldForColumn(key: string): SortField | null {
   if (key === "registry_type") return "event.type";
   if (key === "registry_hive") return "artifact.type";
   if (key === "source") return "network.source_ip";
+  if (key === "source_ip") return "network.source_ip";
+  if (key === "source_port") return "network.source_port";
   if (key === "destination") return "network.destination_ip";
+  if (key === "destination_ip") return "network.destination_ip";
+  if (key === "destination_port") return "network.destination_port";
+  if (key === "http_method") return "http.request.method";
+  if (key === "http_status") return "http.response.status_code";
+  if (key === "action") return "event.action";
+  if (key === "outcome" || key === "smtp_outcome") return "event.outcome";
+  if (key === "sender") return "linux.sender";
+  if (key === "recipient") return "linux.recipient";
+  if (key === "queue_id") return "linux.queue_id";
+  if (key === "line_number") return "linux.line_number";
   return null;
+}
+
+function columnsFromProfile(profile: PresentationProfile): Column[] {
+  return profile.columns.map((column) => ({
+    key: column.key,
+    label: column.label,
+    defaultVisible: column.defaultVisible,
+    sortField: sortFieldForColumn(column.key) ?? undefined,
+    render: (item) => renderPresentationValue(item, column),
+  }));
+}
+
+function semanticDetailSections(profile: PresentationProfile, item: Record<string, unknown>) {
+  return profile.details.map((section) => ({
+    ...section,
+    rows: section.fields
+      .map((field) => ({ label: field.label, value: renderPresentationValue(item, field) }))
+      .filter((row) => row.value !== "-"),
+  })).filter((section) => section.rows.length > 0);
 }
 
 function registryUserDisplay(item: Record<string, unknown>): string {
@@ -671,7 +716,12 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
   const [internalSortBy, setInternalSortBy] = useState<SortField | null>(sortBy ?? null);
   const [internalSortOrder, setInternalSortOrder] = useState<SortOrder>(sortOrder ?? "asc");
   const resolved = useMemo(() => resolveView(view, items), [items, view]);
-  const allColumns = useMemo(() => getColumns(resolved), [resolved]);
+  const presentationProfile = useMemo(() => (resolved === "network" ? presentationProfileForItems(items) : null), [items, resolved]);
+  const allColumns = useMemo(() => presentationProfile ? columnsFromProfile(presentationProfile) : getColumns(resolved), [presentationProfile, resolved]);
+  const profileKey = presentationProfile?.id ?? resolved;
+  useEffect(() => {
+    setHiddenColumns(allColumns.filter((column) => column.defaultVisible === false).map((column) => column.key));
+  }, [allColumns, profileKey]);
   const mostlyEmptyColumns = useMemo(() => {
     const output = new Set<string>();
     for (const column of allColumns) {
@@ -743,16 +793,16 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
               {onToggleSelect ? <th className="px-4 py-3 text-left">Select</th> : null}
               {columns.map((column) => (
                 <th key={column.key} className="px-4 py-3 text-left">
-                  {sortFieldForColumn(column.key) && onSortChange ? (
-                    <button type="button" onClick={() => handleHeaderSort(sortFieldForColumn(column.key) as SortField)} className="inline-flex items-center gap-2">
+                  {(column.sortField ?? sortFieldForColumn(column.key)) && onSortChange ? (
+                    <button type="button" onClick={() => handleHeaderSort((column.sortField ?? sortFieldForColumn(column.key)) as SortField)} className="inline-flex items-center gap-2">
                       <span>{column.label}</span>
-                      {effectiveSortBy === sortFieldForColumn(column.key) ? <span>{effectiveSortOrder === "asc" ? "↑" : "↓"}</span> : null}
+                      {effectiveSortBy === (column.sortField ?? sortFieldForColumn(column.key)) ? <span>{effectiveSortOrder === "asc" ? "↑" : "↓"}</span> : null}
                     </button>
                   ) : (
-                    sortFieldForColumn(column.key) ? (
-                      <button type="button" onClick={() => handleHeaderSort(sortFieldForColumn(column.key) as SortField)} className="inline-flex items-center gap-2">
+                    (column.sortField ?? sortFieldForColumn(column.key)) ? (
+                      <button type="button" onClick={() => handleHeaderSort((column.sortField ?? sortFieldForColumn(column.key)) as SortField)} className="inline-flex items-center gap-2">
                         <span>{column.label}</span>
-                        {effectiveSortBy === sortFieldForColumn(column.key) ? <span>{effectiveSortOrder === "asc" ? "↑" : "↓"}</span> : null}
+                        {effectiveSortBy === (column.sortField ?? sortFieldForColumn(column.key)) ? <span>{effectiveSortOrder === "asc" ? "↑" : "↓"}</span> : null}
                       </button>
                     ) : (
                       column.label
@@ -804,7 +854,25 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                             {onViewProcessTree && hasProcessTreeContext(item) ? <button type="button" onClick={() => onViewProcessTree(item)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">View process tree</button> : null}
                             <button type="button" onClick={() => void copyToClipboard(JSON.stringify(item, null, 2))} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy raw JSON</button>
                           </div>
-                          <EventSummary event={item} />
+                          {presentationProfile ? (
+                            <div className="grid gap-3 lg:grid-cols-2">
+                              {semanticDetailSections(presentationProfile, item).map((section) => (
+                                <section key={`${id}-${section.title}`} className="rounded-2xl border border-line bg-panel/40 p-3">
+                                  <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{section.title}</p>
+                                  <dl className="mt-3 space-y-2 text-sm">
+                                    {section.rows.map((row) => (
+                                      <div key={`${section.title}-${row.label}`} className="grid gap-1 sm:grid-cols-[10rem_1fr]">
+                                        <dt className="text-muted">{row.label}</dt>
+                                        <dd className="break-words text-ink">{row.value}</dd>
+                                      </div>
+                                    ))}
+                                  </dl>
+                                </section>
+                              ))}
+                            </div>
+                          ) : (
+                            <EventSummary event={item} />
+                          )}
                           <div className="flex flex-wrap gap-2">{((item.tags as string[]) ?? []).map((tag) => <TagPill key={`${id}-${tag}`} tag={tag} />)}</div>
                           <details className="rounded-2xl border border-line bg-panel/40 p-3">
                             <summary className="cursor-pointer font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Raw JSON</summary>
