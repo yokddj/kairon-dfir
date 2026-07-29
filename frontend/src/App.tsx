@@ -21,6 +21,7 @@ const Cases = lazy(() => import("./pages/Cases"));
 const CaseDetail = lazy(() => import("./pages/CaseDetail"));
 const CaseOverviewPage = lazy(() => import("./pages/CaseOverviewPage"));
 const CaseHostsPage = lazy(() => import("./pages/CaseHostsPage"));
+const HostInformationPage = lazy(() => import("./pages/HostInformationPage"));
 const CaseProcessGraphPage = lazy(() => import("./pages/CaseProcessGraphPage"));
 const CommandHistoryPage = lazy(() => import("./pages/CommandHistoryPage"));
 const LinuxAuthenticationPage = lazy(() => import("./pages/LinuxAuthenticationPage"));
@@ -157,6 +158,7 @@ export default function App() {
                         <Route path="/cases" element={<Cases />} />
                         <Route path="/cases/:caseId/overview" element={<CaseOverviewPage />} />
                         <Route path="/cases/:caseId/hosts" element={<CaseHostsPage />} />
+                        <Route path="/cases/:caseId/host-information" element={<HostInformationPage />} />
                         <Route path="/cases/:caseId/search" element={<Search />} />
                         <Route path="/cases/:caseId/findings" element={<Findings />} />
                         <Route path="/cases/:caseId/timeline" element={<TimelinePage />} />

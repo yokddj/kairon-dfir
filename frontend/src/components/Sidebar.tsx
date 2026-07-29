@@ -7,6 +7,7 @@ import {
   Clock3,
   Database,
   FileArchive,
+  Fingerprint,
   FolderSearch2,
   Gauge,
   Home,
@@ -48,6 +49,7 @@ type PersistedNavigationState = {
 const INVESTIGATION_ITEMS: NavItem[] = [
   { to: "/cases/:caseId/overview", label: "Overview", icon: Home, requiresCase: true },
   { to: "/cases/:caseId/evidence", label: "Evidence", icon: Database, requiresCase: true },
+  { to: "/cases/:caseId/host-information", label: "Host Information", icon: Fingerprint, requiresCase: true },
   { to: "/cases/:caseId/search", label: "Search", icon: Search, requiresCase: true },
   { to: "/cases/:caseId/timeline", label: "Timeline", icon: Waypoints, requiresCase: true },
   { to: "/cases/:caseId/incident-timeline", label: "Incident Timeline", icon: Waypoints, requiresCase: true },

@@ -2398,6 +2398,42 @@ export type CaseHostsResponse = {
   host_candidates: Array<Record<string, unknown>>;
 };
 
+export type HostFactObservation = {
+  id: string;
+  source_kind: string;
+  parser: string;
+  source_path: string | null;
+  raw_value: string | null;
+  normalized_value: string | null;
+  confidence: string;
+  status: string;
+  observed_at: string | null;
+  event_id: string | null;
+  evidence_id: string;
+  artifact_id: string | null;
+  host_id: string | null;
+  provenance: Record<string, unknown>;
+  created_at: string | null;
+};
+
+export type ResolvedHostFact = {
+  fact_type: string;
+  status: "confirmed" | "observed" | "conflicting" | "invalid" | "missing";
+  preferred_value: string | null;
+  supporting: HostFactObservation[];
+  conflicting: HostFactObservation[];
+  invalid: HostFactObservation[];
+  observations: HostFactObservation[];
+};
+
+export type CaseHostFactsResponse = {
+  case_id: string;
+  scope: "host" | "evidence";
+  host_id?: string;
+  evidence_id?: string;
+  facts: ResolvedHostFact[];
+};
+
 export type CaseHostAuditResponse = {
   case_id: string;
   items: CaseHostAuditEntry[];
@@ -5621,6 +5657,13 @@ export const api = {
     };
   },
   getCaseHosts: (caseId: string) => request<CaseHostsResponse>(`/cases/${caseId}/hosts`),
+  getCaseHostFacts: (caseId: string, params: { host_id?: string; evidence_id?: string; fact_type?: string }) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value) query.set(key, value);
+    }
+    return request<CaseHostFactsResponse>(`/cases/${caseId}/host-facts${query.size ? `?${query.toString()}` : ""}`);
+  },
   createCaseHost: (caseId: string, payload: { host_name: string; reason?: string | null; analyst?: string | null }) =>
     request<{ case_id: string; host: CaseContextHostSummary; created: boolean }>(`/cases/${caseId}/hosts`, { method: "POST", body: JSON.stringify(payload) }),
   mergeCaseHosts: (caseId: string, payload: { canonical_host_id: string; aliases: string[]; reason?: string | null; analyst?: string | null }) =>
