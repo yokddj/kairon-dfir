@@ -76,7 +76,15 @@ class ProbeConfidence(str, enum.Enum):
 
 
 class ReadinessState(str, enum.Enum):
-    """Terminal readiness states returned by an adapter."""
+    """Terminal readiness states returned by an adapter.
+
+    ``BLOCKED_SYMBOLS`` is this module's existing name for what the
+    capability-plan layer (app.services.memory.analysis_plan) calls
+    ``symbols_unavailable`` -- kept as-is rather than renamed, since it is
+    already used throughout the symbol-preparation pipeline; the plan
+    layer maps between the two vocabularies at its one boundary instead
+    of forcing a rename through every existing call site.
+    """
 
     READY = "ready"
     BLOCKED = "blocked"
@@ -89,6 +97,30 @@ class ReadinessState(str, enum.Enum):
     BLOCKED_SYMBOLS = "blocked_symbols"
     UNSUPPORTED = "unsupported"
     FAILED = "failed"
+    # Added for the memory platform-routing sprint: the probe could not
+    # determine an OS family at all (distinct from UNSUPPORTED, which
+    # means the family WAS determined and Kairon does not support it).
+    PLATFORM_UNKNOWN = "platform_unknown"
+    # The platform was determined and is not one Kairon's capability
+    # registry has any plugins for (e.g. a recognized-but-unimplemented
+    # family). Distinct from UNSUPPORTED's historical meaning (macOS
+    # today) only in that it is driven by the capability registry rather
+    # than a hardcoded adapter decision -- both map to the same terminal
+    # outcome for the analyst.
+    PLATFORM_UNSUPPORTED = "platform_unsupported"
+    # The framework plugin module exists and is importable, but no
+    # symbol/ISF table is available for this image's kernel/OS build and
+    # none can be resolved offline.
+    PROFILE_UNAVAILABLE = "profile_unavailable"
+    # The underlying analysis framework (e.g. Volatility 3) itself, or
+    # the specific plugin module, is not present/importable in this
+    # deployment -- a packaging/environment gap, not a per-image one.
+    FRAMEWORK_UNAVAILABLE = "framework_unavailable"
+    # The evidence file itself could not be read/opened at all.
+    INVALID_EVIDENCE = "invalid_evidence"
+    # Some capabilities for this evidence are eligible and ready; others
+    # are not. The plan's eligible/ineligible lists carry the detail.
+    PARTIALLY_READY = "partially_ready"
 
 
 @dataclass(frozen=True)
@@ -348,9 +380,14 @@ def _bounded_volatility_fallback(canonical_path: Path) -> MemoryProbeResult | No
         if win_result is not None:
             return win_result
 
-        # Fall back to Linux banner probe.
+        # Fall back to a Linux probe. There is no dedicated "banner only"
+        # plugin in the installed Volatility 3 (verified: the framework's
+        # linux plugin set has no banners module) -- linux.pslist is the
+        # cheapest real plugin that both confirms the Linux layer stacks
+        # AND incidentally proves symbols are usable, which is exactly
+        # what this bounded fallback needs to know.
         linux_result = _run_volatility_plugin_bounded(
-            "linux.banners", argv_prefix, canonical_path, work_dir
+            "linux.pslist", argv_prefix, canonical_path, work_dir
         )
         if linux_result is not None:
             return linux_result
@@ -414,7 +451,19 @@ def _run_volatility_plugin_bounded(
             reason=f"volatility_{plugin}_windows",
         )
 
-    if "linux_banner" in combined_lower or ("linux" in combined_lower and "banner" in combined_lower):
+    # A Linux plugin only produces well-formed JSON rows when Volatility
+    # actually stacked a Linux translation layer with usable symbols --
+    # "Unsatisfied requirement" / "unable to validate" is the framework's
+    # own failure text (verified against this exact plugin on real
+    # evidence during this sprint's diagnosis) and never appears in a
+    # successful run's output.
+    linux_plugin_succeeded = (
+        plugin.startswith("linux.")
+        and stdout.strip().startswith("[")
+        and "unsatisfied requirement" not in combined_lower
+        and "unable to validate" not in combined_lower
+    )
+    if linux_plugin_succeeded or "linux_banner" in combined_lower or ("linux" in combined_lower and "banner" in combined_lower):
         return MemoryProbeResult(
             platform=PlatformFamily.LINUX,
             format=f"volatility_{plugin}",
@@ -474,8 +523,10 @@ def probe_memory_platform(
 
     4. **Volatility fallback** (worker only) — when
        ``use_volatility_fallback=True`` and Volatility 3 is
-       importable, run a bounded ``windows.info`` / ``linux.banners``
-       probe to identify the OS family.  No MemoryScanRun is
+       importable, run a bounded ``windows.info`` / ``linux.pslist``
+       probe to identify the OS family. There is no dedicated banner-only
+       Linux plugin in the installed framework, so ``linux.pslist`` doubles
+       as the Linux identification probe. No MemoryScanRun is
        created; no symbols are downloaded; no network access.
 
     The probe is always read-only and bounded.

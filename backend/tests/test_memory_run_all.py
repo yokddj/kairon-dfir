@@ -141,6 +141,11 @@ def _make_case_and_evidence(db: Session, *, case_id: str | None = None, evidence
         sha256="0" * 64,
         size_bytes=4 * 1024 * 1024 * 1024,
         ingest_status=IngestStatus.completed,
+        # This suite exercises Windows-profile run-all orchestration; the
+        # bounded platform probe needs a real signal (magic bytes or
+        # detected_format) to route to Windows plugins, and the stub file
+        # content itself is all zero bytes.
+        detected_format="windows_crash_dump",
     )
     db.add(ev)
     db.flush()
@@ -712,6 +717,7 @@ def test_batch_scoped_by_evidence_id(db: Session) -> None:
         sha256="0" * 64,
         size_bytes=1 * 1024 * 1024 * 1024,
         ingest_status=IngestStatus.completed,
+        detected_format="windows_crash_dump",
     )
     db.add(ev2)
     db.flush()
@@ -977,6 +983,7 @@ def test_cross_evidence_isolation(db: Session) -> None:
         sha256="0" * 64,
         size_bytes=1 * 1024 * 1024 * 1024,
         ingest_status=IngestStatus.completed,
+        detected_format="windows_crash_dump",
     )
     db.add(ev_b)
     db.flush()

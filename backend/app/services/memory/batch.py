@@ -44,10 +44,14 @@ from app.services.memory.catalogue import (
 )
 from app.services.memory.execution import (
     MemoryExecutionValidationError,
+    PROFILE_CAPABILITY,
     PROFILE_PLUGINS,
     create_memory_metadata_run,
     mark_run_queued,
 )
+from app.services.memory.analysis_plan import build_memory_analysis_plan
+from app.services.memory.capability_registry import SkipReason
+from app.services.memory.platform import PlatformFamily, ReadinessState
 from app.services.memory.profile_planning import profile_has_enabled_plugins
 
 
@@ -146,14 +150,29 @@ def plan_run_all(
     case_id: str,
     evidence_id: str,
     mode: str,
+    evidence: Any | None = None,
 ) -> dict[str, Any]:
     """Resolve the ordered list of profiles to run and the skipped ones.
 
     The plan is computed server-side from an allowlist; the client
-    cannot inject arbitrary plugins.
+    cannot inject arbitrary plugins. When ``evidence`` is given, every
+    profile is additionally gated by the platform-aware analysis plan
+    (app.services.memory.analysis_plan) -- a run-all batch against Linux
+    evidence must skip every Windows-shaped profile with a typed
+    ``platform_mismatch`` reason rather than let each one fail at
+    execution time.
     """
     if mode not in MEMORY_BATCH_MODES:
         raise MemoryBatchError("MEMORY_BATCH_INVALID_MODE", f"Unknown run-all mode: {mode}", status_code=400)
+
+    analysis_plan = build_memory_analysis_plan(evidence) if evidence is not None else None
+    # A batch-planning-time storage-access failure (INVALID_EVIDENCE) is
+    # inconclusive, not a positive "not Windows" result -- the API process
+    # and the worker can legitimately see different evidence storage. Only
+    # gate on platform here when the probe actually reached a verdict; the
+    # authoritative gate still runs per-profile inside
+    # create_memory_metadata_run (via the worker-side validated path).
+    platform_known = analysis_plan is not None and analysis_plan.readiness != ReadinessState.INVALID_EVIDENCE
 
     selected: list[str] = []
     skipped: list[dict[str, str]] = []
@@ -166,6 +185,16 @@ def plan_run_all(
     else:
         allowed_profiles = RUN_ALL_PROFILES
     for profile in allowed_profiles:
+        if platform_known:
+            capability = PROFILE_CAPABILITY.get(profile)
+            if capability is None or capability not in analysis_plan.eligible_capabilities:
+                reason = (
+                    SkipReason.PLATFORM_MISMATCH.value
+                    if analysis_plan.detected_platform != PlatformFamily.WINDOWS
+                    else SkipReason.PLUGIN_UNSUPPORTED.value
+                )
+                skipped.append({"profile": profile, "reason": reason})
+                continue
         ok, reason = _profile_available(profile)
         if not ok:
             skipped.append({"profile": profile, "reason": reason or "unavailable"})
@@ -190,6 +219,7 @@ def plan_run_all(
         "selected_profiles": selected,
         "skipped_profiles": skipped,
         "excluded_profiles": excluded,
+        "detected_platform": analysis_plan.detected_platform.value if analysis_plan is not None else None,
     }
 
 
@@ -310,7 +340,7 @@ def create_run_all_batch(
             status_code=409,
         )
 
-    plan = plan_run_all(db, case_id=case_id, evidence_id=evidence_id, mode=mode)
+    plan = plan_run_all(db, case_id=case_id, evidence_id=evidence_id, mode=mode, evidence=evidence)
 
     batch = MemoryAnalysisBatch(
         case_id=case_id,

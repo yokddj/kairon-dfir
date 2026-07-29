@@ -75,6 +75,12 @@ class MemoryEvidenceReadinessRead(BaseModel):
     acquisition_available: bool = False
     acquisition_status: str | None = None
     can_analyze_offline: bool = False
+    detected_platform: str | None = None
+    platform_confidence: str | None = None
+    platform_readiness: str | None = None
+    platform_readiness_reason: str | None = None
+    eligible_capabilities: list[str] = []
+    ineligible_capabilities: dict[str, str] = {}
 
 
 class MemorySymbolAcquireRequest(BaseModel):
