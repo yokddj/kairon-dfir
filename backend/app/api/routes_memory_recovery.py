@@ -40,6 +40,7 @@ Endpoints (all gated on the feature flag):
 * ``DELETE /api/admin/memory/symbols/recovery-sources/{id}``
 * ``POST   /api/admin/memory/symbols/import-pdb``
 * ``POST   /api/admin/memory/symbols/import-isf``
+* ``POST   /api/admin/memory/symbols/linux/import-isf``
 * ``POST   /api/admin/memory/symbols/import-package``
 * ``POST   /api/admin/memory/symbols/recover/{requirement_id}``
 * ``GET    /api/admin/memory/symbols/attempts/{requirement_id}``
@@ -66,7 +67,10 @@ from app.models.memory import (
     MemorySymbolRecoverySource,
     MemorySymbolRequirement,
 )
+from app.models.user import User
+from app.services.auth_dependencies import require_admin
 from app.services.memory import symbol_recovery
+from app.services.memory.linux_symbols import LinuxSymbolError, import_linux_isf
 from app.services.memory.symbol_recovery import (
     RECOVERY_TERMINAL_IMPORT_REJECTED,
     recover_exact_symbol,
@@ -524,6 +528,46 @@ async def import_isf_endpoint(
         "import_id": attempt.id,
         "requirement_id": requirement.id,
         "queued_at": attempt.created_at.isoformat() if attempt.created_at else None,
+    }
+
+
+@router.post("/linux/import-isf", dependencies=[Depends(require_admin_recovery_enabled)])
+async def import_linux_isf_endpoint(
+    file: UploadFile = File(...),
+    admin_user: User = Depends(require_admin),
+) -> dict[str, Any]:
+    """Administrator Linux ISF import.
+
+    Linux evidence uses prebuilt Volatility ISF symbol tables. This promotes a
+    validated upload into the worker's offline ``symbols/linux`` cache without
+    touching the Windows PDB resolver or Windows symbol requirement tables.
+    """
+    settings = get_settings()
+    path, original = await _save_quarantined_upload(
+        file,
+        suffix=".isf",
+        max_bytes=int(settings.memory_linux_symbol_isf_upload_max_bytes),
+    )
+    try:
+        status = import_linux_isf(
+            path,
+            original_filename=original,
+            source=f"manual_upload:{admin_user.id}",
+            settings=settings,
+        )
+    except LinuxSymbolError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error_code": exc.code, "message": exc.message},
+        ) from exc
+    finally:
+        path.unlink(missing_ok=True)
+    return {
+        "status": "ready",
+        "symbol_source": status.source,
+        "symbol_identity": status.identity,
+        "symbol_sha256": status.sha256,
+        "path": status.path,
     }
 
 

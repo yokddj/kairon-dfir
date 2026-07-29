@@ -51,7 +51,12 @@ def _evidence(*, id_: str = "ev-1", detected_format: str | None = None, original
         display_name=None,
         filename=None,
         stored_path="/nonexistent-evidence-path",
+        metadata_json={},
     )
+
+
+def _linux_evidence_identity() -> dict:
+    return {"linux_symbol_identity": {"architecture": "x64", "kernel_release": "6.8.0-test", "build_id": "build-a"}}
 
 
 def _write(tmp_path: Path, name: str, content: bytes) -> Path:
@@ -86,6 +91,22 @@ def test_windows_evidence_never_selects_linux_plugins(tmp_path: Path) -> None:
     assert plan.detected_platform == PlatformFamily.WINDOWS
     assert plan.selected_plugins, "expected at least one selected Windows plugin"
     assert all(not plugin.startswith("linux.") for plugin in plan.selected_plugins)
+    assert all(plugin.startswith("windows.") for plugin in plan.selected_plugins)
+
+
+def test_windows_plan_never_calls_linux_symbol_resolver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.memory import analysis_plan as analysis_plan_module
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("Windows planning must not call Linux symbol resolution")
+
+    monkeypatch.setattr(analysis_plan_module, "resolve_linux_symbols", _fail)
+    path = _write(tmp_path, "windows.dmp", b"PAGEDU64" + b"\x00" * 4088)
+    evidence = _evidence(detected_format=None)
+
+    plan = build_memory_analysis_plan(evidence, canonical_path=path)
+
+    assert plan.detected_platform == PlatformFamily.WINDOWS
     assert all(plugin.startswith("windows.") for plugin in plan.selected_plugins)
 
 
@@ -172,7 +193,29 @@ def test_linux_process_capability_reports_blocked_symbols_when_no_isf_cached(tmp
     assert plan.detected_platform == PlatformFamily.LINUX
     assert MemoryCapability.PROCESSES in plan.eligible_capabilities
     assert plan.readiness == ReadinessState.BLOCKED_SYMBOLS
+    assert plan.symbol_status["reason_code"] == "kernel_identity_unknown"
     assert "linux.pslist" in plan.selected_plugins
+
+
+def test_linux_process_capability_reports_unavailable_when_identity_known_but_cache_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.memory import analysis_plan as analysis_plan_module
+
+    cache_root = tmp_path / "volatility-cache"
+    (cache_root / "symbols" / "linux").mkdir(parents=True)
+    monkeypatch.setattr(
+        analysis_plan_module,
+        "get_settings",
+        lambda: SimpleNamespace(memory_native_probe_cache_path=cache_root),
+    )
+
+    path = _write(tmp_path, "linux.img", b"\x7fELF" + b"\x00" * 4092)
+    evidence = _evidence(detected_format="elf_core")
+    evidence.metadata_json = _linux_evidence_identity()
+
+    plan = build_memory_analysis_plan(evidence, canonical_path=path, requested_capabilities=[MemoryCapability.PROCESSES])
+
+    assert plan.readiness == ReadinessState.BLOCKED_SYMBOLS
+    assert plan.symbol_status["reason_code"] == "symbols_unavailable"
 
 
 def test_linux_process_readiness_distinguishes_plugins_from_missing_symbols(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -189,6 +232,7 @@ def test_linux_process_readiness_distinguishes_plugins_from_missing_symbols(tmp_
 
     path = _write(tmp_path, "linux.img", b"\x7fELF" + b"\x00" * 4092)
     evidence = _evidence(detected_format="elf_core")
+    evidence.metadata_json = _linux_evidence_identity()
     plan = build_memory_analysis_plan(evidence, canonical_path=path, requested_capabilities=[MemoryCapability.PROCESSES])
 
     readiness = _memory_capability_readiness(
@@ -216,11 +260,22 @@ def test_linux_process_readiness_distinguishes_plugins_from_missing_symbols(tmp_
 
 def test_linux_process_capability_ready_when_isf_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.memory import analysis_plan as analysis_plan_module
+    from app.services.memory.linux_symbols import import_linux_isf
 
     cache_root = tmp_path / "volatility-cache"
     linux_symbols = cache_root / "symbols" / "linux"
     linux_symbols.mkdir(parents=True)
-    (linux_symbols / "some-kernel.json.xz").write_bytes(b"\x00")
+    source_isf = tmp_path / "some-kernel.json"
+    source_isf.write_text('{"metadata":{"linux":{"kernel_release":"6.8.0-test","architecture":"x64","build_id":"build-a"}},"symbols":{},"types":{}}')
+    import_linux_isf(
+        source_isf,
+        original_filename="some-kernel.json",
+        settings=SimpleNamespace(
+            memory_native_probe_cache_path=cache_root,
+            memory_linux_symbol_manual_import_enabled=True,
+            memory_linux_symbol_isf_upload_max_bytes=1024 * 1024,
+        ),
+    )
     monkeypatch.setattr(
         analysis_plan_module,
         "get_settings",
@@ -229,10 +284,49 @@ def test_linux_process_capability_ready_when_isf_cached(tmp_path: Path, monkeypa
 
     path = _write(tmp_path, "linux.img", b"\x7fELF" + b"\x00" * 4092)
     evidence = _evidence(detected_format="elf_core")
+    evidence.metadata_json = _linux_evidence_identity()
 
     plan = build_memory_analysis_plan(evidence, canonical_path=path, requested_capabilities=[MemoryCapability.PROCESSES])
 
     assert plan.readiness == ReadinessState.READY
+    assert "6.8.0-test" in plan.symbol_status["symbol_identity"]
+
+
+def test_linux_process_readiness_exposes_symbol_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api import routes_memory
+    from app.services.memory import analysis_plan as analysis_plan_module
+    from app.services.memory.linux_symbols import import_linux_isf
+
+    cache_root = tmp_path / "volatility-cache"
+    source_isf = tmp_path / "kernel.json"
+    source_isf.write_text('{"metadata":{"linux":{"kernel_release":"6.8.0-test","architecture":"x64","build_id":"build-a"}},"symbols":{},"types":{}}')
+    settings = SimpleNamespace(
+        memory_native_probe_cache_path=cache_root,
+        memory_linux_symbol_manual_import_enabled=True,
+        memory_linux_symbol_external_download_enabled=False,
+        memory_linux_symbol_isf_upload_max_bytes=1024 * 1024,
+    )
+    import_linux_isf(source_isf, original_filename="kernel.json", settings=settings)
+    monkeypatch.setattr(analysis_plan_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(routes_memory, "get_settings", lambda: settings)
+
+    path = _write(tmp_path, "linux.img", b"\x7fELF" + b"\x00" * 4092)
+    evidence = _evidence(detected_format="elf_core")
+    evidence.metadata_json = _linux_evidence_identity()
+    plan = build_memory_analysis_plan(evidence, canonical_path=path, requested_capabilities=[MemoryCapability.PROCESSES])
+    readiness = routes_memory._memory_capability_readiness(
+        plan,
+        {"supported_plugins": ["linux.pslist", "linux.pstree"]},
+        {"can_analyze": True},
+    )
+
+    processes = readiness["processes"]
+    assert processes["symbols_found"] is True
+    assert processes["symbol_source"] == "manual_upload"
+    assert "6.8.0-test" in processes["symbol_identity"]
+    assert processes["manual_upload_available"] is True
+    assert processes["external_download_enabled"] is False
+    assert processes["reason_code"] == "ready"
 
 
 # ---------------------------------------------------------------------------

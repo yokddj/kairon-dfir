@@ -31,8 +31,19 @@ def _legacy_doc(
     case_id: str = "case-x",
     evidence_id: str = "ev-1",
     run_id: str = "run-1",
+    os_family: str | None = None,
+    extra_process: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     doc_id = document_id or f"{run_id}:memory_process:{plugin}:{pid}:{name or 'n'}"
+    process = {
+        "pid": pid,
+        "ppid": ppid,
+        "name": name,
+        "command_line": command_line,
+        "create_time": create_time,
+        "exit_time": exit_time,
+    }
+    process.update(extra_process or {})
     return {
         "document_id": doc_id,
         "case_id": case_id,
@@ -41,14 +52,8 @@ def _legacy_doc(
         "memory_artifact_type": "memory_process",
         "backend": "volatility3",
         "plugins": [plugin],
-        "process": {
-            "pid": pid,
-            "ppid": ppid,
-            "name": name,
-            "command_line": command_line,
-            "create_time": create_time,
-            "exit_time": exit_time,
-        },
+        "os": {"family": os_family} if os_family else {},
+        "process": process,
         "memory": {},
         "visibility": {"pslist": plugin == "windows.pslist", "psscan": plugin == "windows.psscan", "pstree": plugin == "windows.pstree"},
         "state": {"active_candidate": exit_time is None, "terminated_candidate": exit_time is not None, "hidden_candidate": False},
@@ -118,6 +123,34 @@ def test_pstree_ppid_does_not_duplicate() -> None:
     entity = result["entities"][0]
     assert entity["process"]["ppid"] == 100
     assert set(entity["sources"]) == {"windows.pslist", "windows.pstree"}
+
+
+def test_linux_pslist_pstree_merge_and_preserve_field_sources() -> None:
+    docs = [
+        _legacy_doc(pid=200, plugin="linux.pslist", name="sshd", create_time="2024-03-22T11:00:00Z", os_family="linux", extra_process={"uid": 0, "user": "root", "status": "S"}),
+        _legacy_doc(pid=200, plugin="linux.pstree", name="sshd", ppid=1, create_time="2024-03-22T11:00:00Z", os_family="linux"),
+    ]
+
+    result = _renormalize(docs, run_id="run-linux")
+
+    assert result["summary"]["candidate_entities"] == 1
+    entity = result["entities"][0]
+    assert entity["process"]["pid"] == 200
+    assert entity["process"]["ppid"] == 1
+    assert entity["os"]["family"] == "linux"
+    assert entity["process"]["uid"] == 0
+    assert entity["process"]["user"] == "root"
+    assert entity["process"]["status"] == "S"
+    assert entity["visibility"]["listed"] is True
+    assert entity["observation_summary"]["has_pslist"] is True
+    assert entity["observation_summary"]["has_pstree"] is True
+    assert entity["field_sources"]["name"] == [
+        {"plugin": "linux.pslist", "run_id": "run-linux", "raw_record_id": "run-1:memory_process:linux.pslist:200:sshd"},
+        {"plugin": "linux.pstree", "run_id": "run-linux", "raw_record_id": "run-1:memory_process:linux.pstree:200:sshd"},
+    ]
+    assert entity["field_sources"]["ppid"] == [{"plugin": "linux.pstree", "run_id": "run-linux", "raw_record_id": "run-1:memory_process:linux.pstree:200:sshd"}]
+    assert entity["field_sources"]["uid"] == [{"plugin": "linux.pslist", "run_id": "run-linux", "raw_record_id": "run-1:memory_process:linux.pslist:200:sshd"}]
+    assert set(entity["sources"]) == {"linux.pslist", "linux.pstree"}
 
 
 # ---------------------------------------------------------------------------

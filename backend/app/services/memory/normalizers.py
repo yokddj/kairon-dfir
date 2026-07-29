@@ -107,19 +107,30 @@ def _process_from_row(row: dict[str, Any], plugin: str, *, command_limit: int = 
     command_line = _str_or_none(_lookup(row, "Args", "CommandLine", "Command Line", "CmdLine", "Command", "Path"), command_limit)
     identity = _identity(pid, offset, create_time)
     plugin_kind = plugin.rsplit(".", 1)[-1]
+    process_fields = {
+        "pid": pid,
+        "ppid": ppid,
+        "name": name,
+        "command_line": command_line,
+        "create_time": create_time,
+        "exit_time": exit_time,
+        "session_id": _int_or_none(_lookup(row, "SessionId", "Session ID")),
+        "wow64": _lookup(row, "Wow64", "IsWow64"),
+    }
+    if plugin.startswith("linux."):
+        uid = _int_or_none(_lookup(row, "UID", "Uid", "User ID"))
+        user = _str_or_none(_lookup(row, "User", "Username", "USER"), 512)
+        status = _str_or_none(_lookup(row, "State", "Status", "STAT"), 128)
+        if uid is not None:
+            process_fields["uid"] = uid
+        if user is not None:
+            process_fields["user"] = user
+        if status is not None:
+            process_fields["status"] = status
     return {
         "identity": identity,
         "plugins": [plugin],
-        "process": {
-            "pid": pid,
-            "ppid": ppid,
-            "name": name,
-            "command_line": command_line,
-            "create_time": create_time,
-            "exit_time": exit_time,
-            "session_id": _int_or_none(_lookup(row, "SessionId", "Session ID")),
-            "wow64": _lookup(row, "Wow64", "IsWow64"),
-        },
+        "process": process_fields,
         "memory": {"offset": offset, "virtual_offset": _str_or_none(_lookup(row, "Offset(V)", "Offset(Virtual)"), 128), "physical_offset": _str_or_none(_lookup(row, "Offset(P)", "Offset(Physical)"), 128)},
         "visibility": {"pslist": plugin_kind == "pslist", "psscan": plugin_kind == "psscan", "pstree": plugin_kind == "pstree"},
         "state": {"active_candidate": exit_time is None, "terminated_candidate": exit_time is not None, "hidden_candidate": False},

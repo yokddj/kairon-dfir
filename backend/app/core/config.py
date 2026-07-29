@@ -330,11 +330,23 @@ class Settings(BaseSettings):
     memory_native_probe_task_queue: str = "memory-native-probe"
     memory_native_probe_stale_seconds: int = 900
     memory_native_probe_worker_concurrency: int = 1
+    # Linux Volatility ISF cache.  This is intentionally separate from the
+    # Windows PDB resolver/acquisition settings above; Linux imports are
+    # prebuilt ISF tables promoted into the worker's offline symbols cache.
+    memory_linux_symbol_cache_root: str = ""
+    memory_linux_symbol_manual_import_enabled: bool = False
+    memory_linux_symbol_external_download_enabled: bool = False
+    memory_linux_symbol_isf_upload_max_bytes: int = 268435456
 
     @property
     def memory_native_probe_cache_path(self) -> Path:
         value = str(self.memory_native_probe_cache_root or "").strip()
         return Path(value) if value else Path("/volatility-cache/volatility3")
+
+    @property
+    def memory_linux_symbol_cache_path(self) -> Path:
+        value = str(self.memory_linux_symbol_cache_root or "").strip()
+        return Path(value) if value else self.memory_native_probe_cache_path / "symbols" / "linux"
 
     @property
     def memory_native_probe_queue_name(self) -> str:

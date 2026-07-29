@@ -75,16 +75,17 @@ logger = logging.getLogger(__name__)
 
 NORMALIZATION_VERSION = "memory_process_canonical_v1"
 
-# Plugin precedence (lower index = higher priority).
-NAME_PRECEDENCE = ("windows.pslist", "windows.psscan", "windows.pstree")
-PPID_PRECEDENCE = ("windows.pstree", "windows.pslist", "windows.psscan")
-CREATE_TIME_PRECEDENCE = ("windows.pslist", "windows.psscan", "windows.pstree")
-EXIT_TIME_PRECEDENCE = ("windows.psscan", "windows.pslist", "windows.pstree")
+# Plugin precedence (lower index = higher priority).  Linux names are additive;
+# the relative order of all Windows plugins is unchanged.
+NAME_PRECEDENCE = ("windows.pslist", "linux.pslist", "windows.psscan", "windows.pstree", "linux.pstree")
+PPID_PRECEDENCE = ("windows.pstree", "linux.pstree", "windows.pslist", "linux.pslist", "windows.psscan")
+CREATE_TIME_PRECEDENCE = ("windows.pslist", "linux.pslist", "windows.psscan", "windows.pstree", "linux.pstree")
+EXIT_TIME_PRECEDENCE = ("windows.psscan", "windows.pslist", "linux.pslist", "windows.pstree", "linux.pstree")
 
-CMDLINE_PLUGIN = "windows.cmdline"
-PSLIST_PLUGIN = "windows.pslist"
-PSSCAN_PLUGIN = "windows.psscan"
-PSTREE_PLUGIN = "windows.pstree"
+CMDLINE_PLUGINS = {"windows.cmdline"}
+PSLIST_PLUGINS = {"windows.pslist", "linux.pslist"}
+PSSCAN_PLUGINS = {"windows.psscan"}
+PSTREE_PLUGINS = {"windows.pstree", "linux.pstree"}
 
 
 # OpenSearch mapping additions for the canonical model.  The legacy
@@ -111,8 +112,12 @@ CANONICAL_MAPPING_ADDITIONS = {
                 "exit_time": {"type": "date", "ignore_malformed": True},
                 "session_id": {"type": "integer"},
                 "wow64": {"type": "boolean"},
+                "uid": {"type": "integer"},
+                "user": {"type": "keyword", "fields": {"text": {"type": "text"}}},
+                "status": {"type": "keyword"},
             }
         },
+        "os": {"properties": {"family": {"type": "keyword"}}},
         "visibility": {
             "properties": {
                 "listed": {"type": "boolean"},
@@ -124,6 +129,7 @@ CANONICAL_MAPPING_ADDITIONS = {
         },
         "sources": {"type": "keyword"},
         "source_plugins": {"type": "keyword"},
+        "field_sources": {"type": "object", "enabled": False},
         "observation_count": {"type": "integer"},
         "observation_summary": {
             "properties": {
@@ -274,6 +280,10 @@ def _extract_observation(
     create_time = _normalize_create_time(document.get("process", {}).get("create_time"))
     exit_time = _normalize_create_time(document.get("process", {}).get("exit_time"))
     command_line = _to_str(document.get("process", {}).get("command_line"), limit=16384)
+    uid = _to_int(document.get("process", {}).get("uid"))
+    user = _to_str(document.get("process", {}).get("user"))
+    status = _to_str(document.get("process", {}).get("status"), limit=128)
+    os_family = _to_str(document.get("os", {}).get("family"), limit=64) if isinstance(document.get("os"), dict) else None
     plugins = list(document.get("plugins") or [])
     plugin = plugins[0] if plugins else "unknown"
     raw_status = "ok"
@@ -296,7 +306,11 @@ def _extract_observation(
             "command_line": command_line,
             "create_time": create_time,
             "exit_time": exit_time,
+            "uid": uid,
+            "user": user,
+            "status": status,
         },
+        "os_family": os_family,
         "raw_status": raw_status,
         "source_fields": _bounded_raw(document.get("raw")),
     }
@@ -438,15 +452,41 @@ def _reconcile_entities(observations: list[dict[str, Any]], *, case_id: str, evi
 
 def _select_preferred(values: dict[str, Any], precedence: tuple[str, ...]) -> Any:
     """Pick the highest-precedence non-empty value from a per-plugin mapping."""
+    value, _ = _select_preferred_with_source(values, precedence)
+    return value
+
+
+def _select_preferred_with_source(values: dict[str, Any], precedence: tuple[str, ...]) -> tuple[Any, str | None]:
+    """Pick the highest-precedence non-empty value and its source plugin."""
     for plugin in precedence:
         v = values.get(plugin)
         if v not in (None, ""):
-            return v
+            return v, plugin
     # Fall back to any non-empty
-    for v in values.values():
+    for plugin, v in values.items():
         if v not in (None, ""):
-            return v
-    return None
+            return v, plugin
+    return None, None
+
+
+def _field_sources_for_value(observations: list[dict[str, Any]], field: str, value: Any) -> list[dict[str, Any]]:
+    if value in (None, ""):
+        return []
+    sources: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for obs in observations:
+        if obs["observed"].get(field) != value:
+            continue
+        item = {
+            "plugin": obs.get("plugin_name"),
+            "run_id": obs.get("scan_run_id"),
+            "raw_record_id": obs.get("source_record_id"),
+        }
+        key = (str(item["plugin"] or ""), str(item["run_id"] or ""), str(item["raw_record_id"] or ""))
+        if key not in seen:
+            seen.add(key)
+            sources.append(item)
+    return sources
 
 
 def _collect_by_plugin(observations: list[dict[str, Any]], field: str) -> dict[str, Any]:
@@ -467,21 +507,52 @@ def _merge_observations(observations: list[dict[str, Any]]) -> dict[str, Any]:
     ppid_by_plugin = _collect_by_plugin(observations, "ppid")
     create_time_by_plugin = _collect_by_plugin(observations, "create_time")
     exit_time_by_plugin = _collect_by_plugin(observations, "exit_time")
+    uid_by_plugin = _collect_by_plugin(observations, "uid")
+    user_by_plugin = _collect_by_plugin(observations, "user")
+    status_by_plugin = _collect_by_plugin(observations, "status")
+    name, name_source = _select_preferred_with_source(name_by_plugin, NAME_PRECEDENCE)
+    ppid, ppid_source = _select_preferred_with_source(ppid_by_plugin, PPID_PRECEDENCE)
+    create_time, create_time_source = _select_preferred_with_source(create_time_by_plugin, CREATE_TIME_PRECEDENCE)
+    exit_time, exit_time_source = _select_preferred_with_source(exit_time_by_plugin, EXIT_TIME_PRECEDENCE)
+    uid, _uid_source = _select_preferred_with_source(uid_by_plugin, NAME_PRECEDENCE)
+    user, _user_source = _select_preferred_with_source(user_by_plugin, NAME_PRECEDENCE)
+    status, _status_source = _select_preferred_with_source(status_by_plugin, NAME_PRECEDENCE)
     command_lines: list[str] = []
+    command_line_source = None
     for o in observations:
         cl = o["observed"].get("command_line")
         if cl and cl not in command_lines:
             command_lines.append(cl)
+            command_line_source = command_line_source or o["plugin_name"]
     return {
-        "name": _select_preferred(name_by_plugin, NAME_PRECEDENCE),
-        "ppid": _select_preferred(ppid_by_plugin, PPID_PRECEDENCE),
-        "create_time": _select_preferred(create_time_by_plugin, CREATE_TIME_PRECEDENCE),
-        "exit_time": _select_preferred(exit_time_by_plugin, EXIT_TIME_PRECEDENCE),
+        "name": name,
+        "ppid": ppid,
+        "create_time": create_time,
+        "exit_time": exit_time,
         "command_lines": command_lines,
         "command_line": command_lines[0] if command_lines else None,
         "executable_name": _executable_name(name_by_plugin, command_lines),
         "session_id": _select_session_id(observations),
+        "uid": uid,
+        "user": user,
+        "status": status,
+        "field_sources": {
+            "name": _field_sources_for_value(observations, "name", name),
+            "ppid": _field_sources_for_value(observations, "ppid", ppid),
+            "create_time": _field_sources_for_value(observations, "create_time", create_time),
+            "exit_time": _field_sources_for_value(observations, "exit_time", exit_time),
+            "command_line": _field_sources_for_value(observations, "command_line", command_lines[0] if command_lines else None),
+            "uid": _field_sources_for_value(observations, "uid", uid),
+            "user": _field_sources_for_value(observations, "user", user),
+            "status": _field_sources_for_value(observations, "status", status),
+        },
     }
+
+
+def _merged_os_family(observations: list[dict[str, Any]]) -> str | None:
+    families = [o.get("os_family") for o in observations if o.get("os_family")]
+    unique = sorted(set(families))
+    return unique[0] if len(unique) == 1 else None
 
 
 def _executable_name(name_by_plugin: dict[str, Any], command_lines: list[str]) -> str | None:
@@ -508,10 +579,10 @@ def _select_session_id(observations: list[dict[str, Any]]) -> int | None:
 
 def _classify_visibility(observations: list[dict[str, Any]], merged: dict[str, Any]) -> dict[str, bool]:
     sources = {o["plugin_name"] for o in observations}
-    has_pslist = PSLIST_PLUGIN in sources
-    has_psscan = PSSCAN_PLUGIN in sources
-    has_pstree = PSTREE_PLUGIN in sources
-    has_cmdline = CMDLINE_PLUGIN in sources
+    has_pslist = bool(PSLIST_PLUGINS & sources)
+    has_psscan = bool(PSSCAN_PLUGINS & sources)
+    has_pstree = bool(PSTREE_PLUGINS & sources)
+    has_cmdline = bool(CMDLINE_PLUGINS & sources)
     explicit_exit = any(o["observed"].get("exit_time") for o in observations)
     listed = has_pslist
     scan_only = has_psscan and not has_pslist
@@ -532,7 +603,7 @@ def _classify_visibility(observations: list[dict[str, Any]], merged: dict[str, A
 def _confidence(observations: list[dict[str, Any]], has_create_time: bool) -> str:
     sources = {o["plugin_name"] for o in observations}
     if has_create_time:
-        if {PSLIST_PLUGIN, CMDLINE_PLUGIN}.issubset(sources):
+        if (PSLIST_PLUGINS & sources) and (CMDLINE_PLUGINS & sources):
             return "high"
         if len(sources) >= 2:
             return "medium"
@@ -553,14 +624,14 @@ def _findings(merged: dict[str, Any], visibility: dict[str, bool], observations:
     if visibility["unknown"]:
         findings.append("identity_provisional")
     sources = {o["plugin_name"] for o in observations}
-    if merged.get("ppid") is None and {PSLIST_PLUGIN, PSTREE_PLUGIN} & sources:
+    if merged.get("ppid") is None and (PSLIST_PLUGINS | PSTREE_PLUGINS) & sources:
         # pslist/pstree did not report a PPID — cmdline alone cannot fill it
         findings.append("missing_parent_in_pslist_or_pstree")
     # Name conflict detection: pslist vs psscan/pstree disagree
     names = {o["observed"].get("name") for o in observations if o["observed"].get("name")}
     if len(names) > 1:
         findings.append("name_conflict")
-    if visibility["listed"] and CMDLINE_PLUGIN not in sources:
+    if visibility["listed"] and not (CMDLINE_PLUGINS & sources):
         findings.append("command_line_missing")
     return findings
 
@@ -582,6 +653,7 @@ def _build_canonical_entity(
         "evidence_id": entity["evidence_id"],
         "scan_run_id": run_id,
         "host_id": None,
+        "os": {"family": _merged_os_family(observations)},
         "process": {
             "pid": entity["pid"],
             "ppid": merged.get("ppid"),
@@ -592,16 +664,20 @@ def _build_canonical_entity(
             "exit_time": merged.get("exit_time"),
             "session_id": merged.get("session_id"),
             "wow64": None,
+            "uid": merged.get("uid"),
+            "user": merged.get("user"),
+            "status": merged.get("status"),
         },
         "visibility": visibility,
         "sources": sources,
         "source_plugins": sources,
+        "field_sources": merged.get("field_sources", {}),
         "observation_count": len(observations),
         "observation_summary": {
-            "has_pslist": PSLIST_PLUGIN in sources,
-            "has_psscan": PSSCAN_PLUGIN in sources,
-            "has_pstree": PSTREE_PLUGIN in sources,
-            "has_cmdline": CMDLINE_PLUGIN in sources,
+            "has_pslist": bool(PSLIST_PLUGINS & set(sources)),
+            "has_psscan": bool(PSSCAN_PLUGINS & set(sources)),
+            "has_pstree": bool(PSTREE_PLUGINS & set(sources)),
+            "has_cmdline": bool(CMDLINE_PLUGINS & set(sources)),
         },
         "confidence": confidence,
         "first_seen_run_id": run_id,
@@ -629,6 +705,14 @@ def _observation_document_id(observation_id: str) -> str:
 
 def _edge_document_id(parent_entity_id: str, child_entity_id: str, run_id: str) -> str:
     return f"{run_id}:memory_process_edge:{parent_entity_id}:{child_entity_id}"
+
+
+def _topology_plugin_source(sources: Iterable[str]) -> str:
+    source_set = set(sources)
+    for plugin in PPID_PRECEDENCE:
+        if plugin in source_set:
+            return plugin
+    return "unknown"
 
 
 def _utc_now() -> datetime:
@@ -862,8 +946,8 @@ def renormalize_documents(
                 "parent_entity_id": parent_id,
                 "child_entity_id": ent["process_entity_id"],
                 "edge_type": "parent_child",
-                "source_plugin": "windows.pstree" if PSTREE_PLUGIN in ent["sources"] else "windows.pslist",
-                "confidence": "high" if PSTREE_PLUGIN in ent["sources"] else "medium",
+                "source_plugin": _topology_plugin_source(ent["sources"]),
+                "confidence": "high" if PSTREE_PLUGINS & set(ent["sources"]) else "medium",
                 "parent_pid": ent["process"]["ppid"],
                 "child_pid": ent["process"]["pid"],
                 "indexed_at": _utc_now(),
@@ -1507,7 +1591,7 @@ def _lineage_edges(node: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> li
     parent_id = node["process_entity_id"]
     for child in node.get("children", []) or []:
         child_ent = by_id.get(child["process_entity_id"], {})
-        source = "windows.pstree" if PSTREE_PLUGIN in child_ent.get("sources", []) else "windows.pslist"
+        source = _topology_plugin_source(child_ent.get("sources", []))
         edges.append({
             "document_id": f"lineage:{parent_id}:{child['process_entity_id']}",
             "document_type": "memory_process_edge",
@@ -1518,7 +1602,7 @@ def _lineage_edges(node: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> li
             "child_entity_id": child["process_entity_id"],
             "edge_type": "parent_child",
             "source_plugin": source,
-            "confidence": "high" if source == "windows.pstree" else "medium",
+            "confidence": "high" if source in PSTREE_PLUGINS else "medium",
             "parent_pid": child.get("ppid"),
             "child_pid": child.get("pid"),
         })
@@ -1530,9 +1614,9 @@ def _topology_source_for_entities(entities: list[dict[str, Any] | None]) -> str:
     present = [e for e in entities if e]
     if not present:
         return "pstree"
-    if any(PSTREE_PLUGIN in e.get("sources", []) for e in present):
+    if any(PSTREE_PLUGINS & set(e.get("sources", [])) for e in present):
         return "pstree"
-    if any(PSLIST_PLUGIN in e.get("sources", []) for e in present):
+    if any(PSLIST_PLUGINS & set(e.get("sources", [])) for e in present):
         return "pslist_ppid"
     return "psscan_ppid_low_confidence"
 

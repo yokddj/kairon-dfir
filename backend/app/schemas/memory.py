@@ -433,6 +433,7 @@ class MemoryProcessEntityRead(BaseModel):
     visibility: dict
     sources: list[str] = []
     source_plugins: list[str] = []
+    field_sources: dict = {}
     observation_count: int = 0
     observation_summary: dict = {}
     confidence: str = "low"
