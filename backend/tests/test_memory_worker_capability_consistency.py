@@ -32,7 +32,7 @@ def _settings(*, enabled_plugins: str | None = None):
         base,
         "memory_allowed_plugins",
         enabled_plugins
-        or "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo",
+        or "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,linux.pslist,linux.pstree,linux.sockstat,linux.bash",
     )
     return base
 
@@ -251,3 +251,12 @@ def test_normal_volatility_command_has_no_offline_flag() -> None:
 
     command = build_plugin_argv(["vol"], Path("/tmp/memory.dmp"), "windows.netscan")
     assert "--offline" not in command
+
+
+def test_runner_guardrail_allows_configured_plugins() -> None:
+    from app.core.config import Settings
+    from app.services.memory.volatility_runner import ALLOWED_VOLATILITY_PLUGINS
+
+    settings = Settings()
+
+    assert set(settings.allowed_memory_plugins).issubset(ALLOWED_VOLATILITY_PLUGINS)

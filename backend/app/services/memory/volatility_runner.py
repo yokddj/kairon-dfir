@@ -124,6 +124,10 @@ ALLOWED_VOLATILITY_PLUGINS = {
     "windows.driverscan",
     "windows.malfind",
     "windows.vadinfo",
+    "linux.pslist",
+    "linux.pstree",
+    "linux.sockstat",
+    "linux.bash",
 }
 
 
