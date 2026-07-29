@@ -47,6 +47,7 @@ from app.services.memory.platform import (
     ReadinessState,
     probe_memory_platform,
 )
+from app.services.memory.linux_symbols import expected_linux_identity_from_evidence, resolve_linux_symbols
 
 # Platform families the capability registry has zero entries for today.
 # Kept separate from PlatformFamily.UNKNOWN (probe could not decide) --
@@ -69,6 +70,7 @@ class MemoryAnalysisPlan:
     ineligible_capabilities: tuple[tuple[MemoryCapability, SkipReason], ...] = field(default_factory=tuple)
     selected_plugins: tuple[str, ...] = field(default_factory=tuple)
     skipped_plugins: tuple[tuple[str, SkipReason], ...] = field(default_factory=tuple)
+    symbol_status: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -83,6 +85,7 @@ class MemoryAnalysisPlan:
             "ineligible_capabilities": {c.value: r.value for c, r in self.ineligible_capabilities},
             "selected_plugins": list(self.selected_plugins),
             "skipped_plugins": {plugin: r.value for plugin, r in self.skipped_plugins},
+            "symbol_status": dict(self.symbol_status),
         }
 
 
@@ -107,7 +110,7 @@ def _empty_plan(
     )
 
 
-def _linux_symbols_cached() -> bool:
+def _linux_symbol_status(evidence: Any) -> dict[str, Any]:
     """Real, direct check of the offline ISF symbol cache -- never assumed.
 
     The memory worker runs Volatility offline (no network access), so this
@@ -116,12 +119,20 @@ def _linux_symbols_cached() -> bool:
     against the real deployment: /volatility-cache/volatility3/symbols
     currently has a populated windows/ subdirectory and no linux/ one.
     """
-    settings = get_settings()
-    try:
-        linux_dir = settings.memory_native_probe_cache_path / "symbols" / "linux"
-        return linux_dir.is_dir() and any(linux_dir.iterdir())
-    except OSError:
-        return False
+    required_identity = expected_linux_identity_from_evidence(evidence)
+    status = resolve_linux_symbols(get_settings(), required_identity=required_identity)
+    return {
+        "symbols_found": status.found,
+        "symbols_valid": status.valid,
+        "symbols_compatible": status.compatible,
+        "volatility_selectable": status.volatility_selectable,
+        "symbol_source": status.source,
+        "symbol_identity": status.identity,
+        "symbol_identity_details": status.identity_details,
+        "symbol_path": status.path,
+        "symbol_sha256": status.sha256,
+        "reason_code": status.reason_code,
+    }
 
 
 def build_memory_analysis_plan(
@@ -231,7 +242,13 @@ def build_memory_analysis_plan(
             readiness_reason=f"No capability requested for platform '{platform.value}'.",
         )
 
-    linux_symbols_present = platform == PlatformFamily.LINUX and _linux_symbols_cached()
+    linux_symbol_status = _linux_symbol_status(evidence) if platform == PlatformFamily.LINUX else {}
+    linux_symbols_present = bool(
+        linux_symbol_status.get("symbols_found")
+        and linux_symbol_status.get("symbols_valid")
+        and linux_symbol_status.get("symbols_compatible")
+        and linux_symbol_status.get("volatility_selectable")
+    )
 
     eligible: list[MemoryCapability] = []
     ineligible: list[tuple[MemoryCapability, SkipReason]] = []
@@ -262,10 +279,10 @@ def build_memory_analysis_plan(
         readiness_reason = f"No requested capability has a registry entry for platform '{platform.value}'."
     elif platform == PlatformFamily.LINUX and not linux_symbols_present:
         readiness = ReadinessState.PARTIALLY_READY if ineligible else ReadinessState.BLOCKED_SYMBOLS
+        linux_reason = str(linux_symbol_status.get("reason_code") or "symbols_unavailable")
         readiness_reason = (
-            "No Linux ISF symbol table is cached for this kernel/build and the memory worker runs "
-            "offline, so symbol-dependent plugins are expected to fail at execution with a real "
-            "'symbols unavailable' error rather than being hidden or predicted successful here."
+            f"Linux symbols are not ready ({linux_reason}). Kairon requires a resolved evidence "
+            "kernel identity plus a validated, compatible, Volatility-selectable Linux ISF in the offline cache."
         )
     elif ineligible:
         readiness = ReadinessState.PARTIALLY_READY
@@ -286,4 +303,5 @@ def build_memory_analysis_plan(
         ineligible_capabilities=tuple(ineligible),
         selected_plugins=tuple(selected_plugins),
         skipped_plugins=(),
+        symbol_status=linux_symbol_status,
     )

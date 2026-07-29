@@ -429,6 +429,7 @@ def get_memory_evidence_readiness(case_id: str, evidence_id: str, db: Session = 
 
 
 def _memory_capability_readiness(analysis_plan, backend: dict, storage_readiness: dict) -> dict[str, dict]:
+    settings = get_settings()
     plugin_states = backend.get("plugins") if isinstance(backend.get("plugins"), dict) else {}
     supported_plugins = set(str(item) for item in backend.get("supported_plugins") or [])
     capabilities: list[MemoryCapability] = []
@@ -451,8 +452,25 @@ def _memory_capability_readiness(analysis_plan, backend: dict, storage_readiness
         )
         symbols_required = any(spec.requires_symbols for spec in specs)
         symbols_found = True
-        if symbols_required and analysis_plan.detected_platform == PlatformFamily.LINUX and analysis_plan.readiness.value == "blocked_symbols":
-            symbols_found = False
+        symbol_source = None
+        symbol_identity = None
+        manual_upload_available = False
+        external_download_enabled = False
+        external_download_attempted = False
+        linux_symbol_reason = None
+        if symbols_required and analysis_plan.detected_platform == PlatformFamily.LINUX:
+            symbol_status = getattr(analysis_plan, "symbol_status", {}) or {}
+            symbols_found = bool(
+                symbol_status.get("symbols_found")
+                and symbol_status.get("symbols_valid")
+                and symbol_status.get("symbols_compatible")
+                and symbol_status.get("volatility_selectable")
+            )
+            symbol_source = symbol_status.get("symbol_source")
+            symbol_identity = symbol_status.get("symbol_identity")
+            linux_symbol_reason = symbol_status.get("reason_code")
+            manual_upload_available = bool(getattr(settings, "memory_linux_symbol_manual_import_enabled", False))
+            external_download_enabled = bool(getattr(settings, "memory_linux_symbol_external_download_enabled", False))
         elif symbols_required and analysis_plan.detected_platform == PlatformFamily.WINDOWS:
             symbols_found = bool(storage_readiness.get("symbol_identifier_present") or storage_readiness.get("can_analyze_offline"))
         platform_supported = analysis_plan.detected_platform in {PlatformFamily.WINDOWS, PlatformFamily.LINUX}
@@ -474,7 +492,7 @@ def _memory_capability_readiness(analysis_plan, backend: dict, storage_readiness
         elif not plugin_available:
             reason = "framework_plugin_unavailable"
         elif symbols_required and not symbols_found:
-            reason = "symbols_unavailable"
+            reason = str(linux_symbol_reason or "symbols_unavailable")
         elif not storage_readiness.get("can_analyze"):
             reason = storage_readiness.get("error_code") or "evidence_not_ready"
         else:
@@ -486,8 +504,14 @@ def _memory_capability_readiness(analysis_plan, backend: dict, storage_readiness
             "evidence_supported": evidence_supported,
             "symbols_required": symbols_required,
             "symbols_found": symbols_found,
+            "symbol_source": symbol_source,
+            "symbol_identity": symbol_identity,
+            "manual_upload_available": manual_upload_available,
+            "external_download_enabled": external_download_enabled,
+            "external_download_attempted": external_download_attempted,
             "ready": ready,
             "reason": reason,
+            "reason_code": reason,
             "plugins": plugins,
         }
     return result
