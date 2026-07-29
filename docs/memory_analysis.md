@@ -144,7 +144,7 @@ Configuration:
 - `MEMORY_PLUGIN_TIMEOUT_SECONDS=600`
 - `MEMORY_PLUGIN_OUTPUT_MAX_BYTES=10485760`
 - `MEMORY_WORKER_CONCURRENCY=1`
-- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo`
+- `MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,linux.pslist,linux.pstree,linux.sockstat,linux.bash`
 - `MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory`
 - `MEMORY_DEFAULT_PROFILE=metadata_only`
 - `MEMORY_PROCESS_PROFILE_ENABLED=false`
