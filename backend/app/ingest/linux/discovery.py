@@ -28,6 +28,7 @@ SUPPORTED_ARTIFACTS: dict[str, dict[str, str]] = {
     "packages": {"label": "packages", "family": "linux_packages"},
     "network": {"label": "network", "family": "linux_network"},
     "os_info": {"label": "os-release", "family": "linux_os_info"},
+    "timezone": {"label": "timezone", "family": "linux_timezone"},
 }
 
 OPTIONAL_NOT_FOUND = {
@@ -77,6 +78,8 @@ def _artifact_key(family: str, artifact_type: str, path: str) -> str:
         return "auth_log"
     if family == "linux_lastlog":
         return "lastlog"
+    if family == "linux_timezone":
+        return "timezone"
     if family == "linux_syslog":
         return "syslog"
     if family == "linux_audit":
