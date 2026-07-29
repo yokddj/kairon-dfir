@@ -18,6 +18,7 @@ from app.models.evidence_upload_session import EvidenceUploadSession
 from app.models.event_marking import EventMarking
 from app.models.finding import Finding
 from app.models.host_fact import HostFact
+from app.models.host_user_fact import HostUserFact
 from app.models.incident_timeline_draft import IncidentTimelineDraft
 from app.models.memory import (
     MemoryArtifactSummary,

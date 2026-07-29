@@ -5,14 +5,16 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import HostInformationPage from "./HostInformationPage";
-import type { CaseHostFactsResponse } from "../api/client";
+import type { CaseHostFactsResponse, CaseHostUsersResponse, HostUserFieldResolution } from "../api/client";
 
 const getCaseHostFactsMock = vi.fn();
+const getCaseHostUsersMock = vi.fn();
 const useActiveCaseMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
     getCaseHostFacts: (...args: unknown[]) => getCaseHostFactsMock(...args),
+    getCaseHostUsers: (...args: unknown[]) => getCaseHostUsersMock(...args),
   },
 }));
 
@@ -59,6 +61,50 @@ function factsResponse(facts: CaseHostFactsResponse["facts"]): CaseHostFactsResp
   return { case_id: "case-1", scope: "host", host_id: "host-1", facts };
 }
 
+function fieldResolution(field: string, overrides: Partial<HostUserFieldResolution> = {}): HostUserFieldResolution {
+  return { field, status: "observed", preferred_value: null, supporting: [], conflicting: [], observations: [], ...overrides };
+}
+
+function userObservation(overrides: Partial<CaseHostUsersResponse["users"][number]["identity"]["uid"]["observations"][number]> = {}) {
+  return {
+    id: "uobs-1",
+    source_kind: "passwd",
+    parser: "linux_identity_raw",
+    source_path: "/etc/passwd",
+    observed_at: "2026-01-01T00:00:00Z",
+    event_id: null,
+    evidence_id: "ev-1",
+    artifact_id: "art-1",
+    host_id: "host-1",
+    created_at: "2026-01-01T00:00:00Z",
+    ...overrides,
+  };
+}
+
+function userEntry(overrides: Partial<CaseHostUsersResponse["users"][number]> = {}): CaseHostUsersResponse["users"][number] {
+  return {
+    username: "alice",
+    is_synthetic_username: false,
+    identity: {
+      uid: fieldResolution("uid", { status: "observed", preferred_value: "1000", observations: [userObservation()] }),
+      primary_gid: fieldResolution("primary_gid", { status: "observed", preferred_value: "1000" }),
+      gecos: fieldResolution("gecos", { status: "missing" }),
+      home: fieldResolution("home", { status: "observed", preferred_value: "/home/alice" }),
+      shell: fieldResolution("shell", { status: "observed", preferred_value: "/bin/bash" }),
+    },
+    primary_group_name: null,
+    secondary_groups: [],
+    password_status: fieldResolution("password_status", { status: "missing", preferred_value: "unavailable" }),
+    account_status: "unknown",
+    last_login: null,
+    ...overrides,
+  };
+}
+
+function usersResponse(users: CaseHostUsersResponse["users"]): CaseHostUsersResponse {
+  return { case_id: "case-1", scope: "host", host_id: "host-1", users };
+}
+
 function renderPage(path = "/cases/case-1/host-information") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -75,6 +121,7 @@ function renderPage(path = "/cases/case-1/host-information") {
 describe("HostInformationPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getCaseHostUsersMock.mockResolvedValue(usersResponse([]));
   });
 
   it("shows an empty state when the case has no identified hosts", async () => {
@@ -231,5 +278,136 @@ describe("HostInformationPage", () => {
     await userEvent.selectOptions(screen.getByTestId("host-selector"), "host-1");
     await waitFor(() => expect(screen.getByRole("heading", { name: "webserver-01" })).toBeInTheDocument());
     expect(getCaseHostFactsMock).toHaveBeenCalledTimes(2);
+  });
+
+  describe("User Inventory", () => {
+    beforeEach(() => {
+      useActiveCaseMock.mockReturnValue(activeCaseValue([host()]));
+      getCaseHostFactsMock.mockResolvedValue(factsResponse([]));
+    });
+
+    it("shows an empty state when no local accounts were identified", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([]));
+      renderPage();
+      expect(await screen.findByTestId("user-inventory-empty")).toBeInTheDocument();
+    });
+
+    it("renders one row per user with identity fields, never duplicating an account", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([
+        userEntry({ username: "alice" }),
+        userEntry({ username: "bob", identity: { ...userEntry().identity, uid: fieldResolution("uid", { preferred_value: "1001" }) } }),
+      ]));
+      renderPage();
+      const rows = await screen.findAllByTestId("user-row");
+      expect(rows).toHaveLength(2);
+      expect(rows.map((row) => row.dataset.username)).toEqual(["alice", "bob"]);
+    });
+
+    it("shows an unresolved lastlog uid as a synthetic, non-fabricated entry", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([userEntry({ username: "uid:1234", is_synthetic_username: true })]));
+      renderPage();
+      const row = await screen.findByTestId("user-row");
+      expect(row).toHaveTextContent("uid:1234");
+      expect(screen.queryByTestId("user-username-link")).not.toBeInTheDocument();
+    });
+
+    it("renders Not observed for last login when no lastlog record exists, never fabricating one", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([userEntry({ last_login: null })]));
+      renderPage();
+      const lastLoginCell = await screen.findByTestId("user-last-login");
+      expect(lastLoginCell).toHaveTextContent("Not observed");
+    });
+
+    it("renders a locked account with the Locked status pill", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([
+        userEntry({
+          username: "backdoor",
+          account_status: "locked",
+          password_status: fieldResolution("password_status", { status: "observed", preferred_value: "locked" }),
+        }),
+      ]));
+      renderPage();
+      const statusPill = await screen.findByTestId("user-account-status");
+      expect(statusPill).toHaveTextContent("Locked");
+    });
+
+    it("expands to show secondary groups and per-field provenance, with conflicts surfaced not hidden", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([
+        userEntry({
+          username: "alice",
+          secondary_groups: [{ group_name: "sudo", gid: "27", observations: [userObservation()] }],
+          identity: {
+            ...userEntry().identity,
+            uid: fieldResolution("uid", {
+              status: "conflicting",
+              preferred_value: "1000",
+              observations: [userObservation({ id: "o1", source_path: "/etc/passwd" }), userObservation({ id: "o2", source_path: "/etc/passwd.bak" })],
+            }),
+          },
+        }),
+      ]));
+      renderPage();
+      await screen.findByTestId("user-row");
+      expect(screen.getByText("Conflicting sources")).toBeInTheDocument();
+
+      await userEvent.click(screen.getByTestId("user-expand-toggle"));
+      expect(await screen.findByTestId("user-secondary-groups")).toHaveTextContent("sudo");
+      const fieldDetails = screen.getAllByTestId("user-field-detail");
+      const uidDetail = fieldDetails.find((el) => el.dataset.field === "uid");
+      expect(uidDetail).toHaveAttribute("data-status", "conflicting");
+      const observations = within(uidDetail!).getAllByTestId("user-observation");
+      expect(observations).toHaveLength(2);
+    });
+
+    it("pivots the username into Search reusing existing Search infrastructure", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([userEntry({ username: "alice" })]));
+      renderPage();
+      const link = await screen.findByTestId("user-username-link");
+      expect(link).toHaveAttribute("href", "/cases/case-1/search?host_id=host-1&q=alice");
+    });
+
+    it("sorts by UID when the UID header is clicked", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([
+        userEntry({ username: "bob", identity: { ...userEntry().identity, uid: fieldResolution("uid", { preferred_value: "1001" }) } }),
+        userEntry({ username: "alice", identity: { ...userEntry().identity, uid: fieldResolution("uid", { preferred_value: "1000" }) } }),
+      ]));
+      renderPage();
+      await screen.findAllByTestId("user-row");
+      // Default sort is by username: alice before bob.
+      let rows = screen.getAllByTestId("user-row");
+      expect(rows.map((row) => row.dataset.username)).toEqual(["alice", "bob"]);
+
+      await userEvent.click(screen.getByTestId("user-sort-uid"));
+      rows = screen.getAllByTestId("user-row");
+      expect(rows.map((row) => row.dataset.username)).toEqual(["alice", "bob"]);
+
+      await userEvent.click(screen.getByTestId("user-sort-uid"));
+      rows = screen.getAllByTestId("user-row");
+      expect(rows.map((row) => row.dataset.username)).toEqual(["bob", "alice"]);
+    });
+
+    it("filters users by the lightweight text filter without an extra API call", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([userEntry({ username: "alice" }), userEntry({ username: "bob" })]));
+      renderPage();
+      await screen.findAllByTestId("user-row");
+      await userEvent.type(screen.getByTestId("user-filter-input"), "ali");
+      const rows = screen.getAllByTestId("user-row");
+      expect(rows).toHaveLength(1);
+      expect(rows[0].dataset.username).toBe("alice");
+      expect(getCaseHostUsersMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("refreshes the inventory when the host changes and never merges users across hosts", async () => {
+      useActiveCaseMock.mockReturnValue(activeCaseValue([host({ id: "host-1", display_name: "webserver-01" }), host({ id: "host-2", display_name: "db-02" })]));
+      getCaseHostUsersMock.mockImplementation((_caseId: string, params: { host_id?: string }) =>
+        Promise.resolve(usersResponse([userEntry({ username: params.host_id === "host-1" ? "alice" : "carol" })])),
+      );
+      renderPage("/cases/case-1/host-information?host_id=host-1");
+      expect(await screen.findByTestId("user-row")).toHaveTextContent("alice");
+
+      await userEvent.selectOptions(screen.getByTestId("host-selector"), "host-2");
+      await waitFor(() => expect(screen.getByTestId("user-row")).toHaveTextContent("carol"));
+      expect(screen.queryByText("alice")).not.toBeInTheDocument();
+    });
   });
 });

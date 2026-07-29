@@ -2434,6 +2434,66 @@ export type CaseHostFactsResponse = {
   facts: ResolvedHostFact[];
 };
 
+export type HostUserObservation = {
+  id: string;
+  source_kind: string;
+  parser: string;
+  source_path: string | null;
+  observed_at: string | null;
+  event_id: string | null;
+  evidence_id: string;
+  artifact_id: string | null;
+  host_id: string | null;
+  created_at: string | null;
+};
+
+export type HostUserFieldResolution = {
+  field: string;
+  status: "confirmed" | "observed" | "conflicting" | "missing";
+  preferred_value: string | null;
+  supporting: HostUserObservation[];
+  conflicting: HostUserObservation[];
+  observations: HostUserObservation[];
+};
+
+export type HostUserSecondaryGroup = {
+  group_name: string;
+  gid: string | null;
+  observations: HostUserObservation[];
+};
+
+export type HostUserLastLogin = {
+  timestamp: string | null;
+  source_ip: string | null;
+  terminal: string | null;
+  observations: HostUserObservation[];
+};
+
+export type HostUserEntry = {
+  username: string;
+  is_synthetic_username: boolean;
+  identity: {
+    uid: HostUserFieldResolution;
+    primary_gid: HostUserFieldResolution;
+    gecos: HostUserFieldResolution;
+    home: HostUserFieldResolution;
+    shell: HostUserFieldResolution;
+  };
+  primary_group_name: string | null;
+  secondary_groups: HostUserSecondaryGroup[];
+  password_status: HostUserFieldResolution;
+  account_status: "locked" | "active" | "unknown";
+  last_login: HostUserLastLogin | null;
+};
+
+export type CaseHostUsersResponse = {
+  case_id: string;
+  scope: "host" | "evidence";
+  host_id?: string;
+  evidence_id?: string;
+  users: HostUserEntry[];
+};
+
 export type CaseHostAuditResponse = {
   case_id: string;
   items: CaseHostAuditEntry[];
@@ -5663,6 +5723,13 @@ export const api = {
       if (value) query.set(key, value);
     }
     return request<CaseHostFactsResponse>(`/cases/${caseId}/host-facts${query.size ? `?${query.toString()}` : ""}`);
+  },
+  getCaseHostUsers: (caseId: string, params: { host_id?: string; evidence_id?: string }) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value) query.set(key, value);
+    }
+    return request<CaseHostUsersResponse>(`/cases/${caseId}/host-users${query.size ? `?${query.toString()}` : ""}`);
   },
   createCaseHost: (caseId: string, payload: { host_name: string; reason?: string | null; analyst?: string | null }) =>
     request<{ case_id: string; host: CaseContextHostSummary; created: boolean }>(`/cases/${caseId}/hosts`, { method: "POST", body: JSON.stringify(payload) }),

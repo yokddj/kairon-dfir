@@ -7,7 +7,7 @@ from starlette._utils import AwaitableOrContextManagerWrapper
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.responses import Response
 
-from app.api import routes_activity, routes_admin, routes_auth, routes_cases, routes_command_history, routes_email_artifacts, routes_evidence, routes_evidence_preflight, routes_events, routes_findings, routes_host_facts, routes_hosts, routes_hunting, routes_indicators, routes_linux_auth, routes_motw, routes_persistence, routes_reports, routes_rules, routes_search, routes_system, routes_tags, routes_timeline, routes_velociraptor
+from app.api import routes_activity, routes_admin, routes_auth, routes_cases, routes_command_history, routes_email_artifacts, routes_evidence, routes_evidence_preflight, routes_events, routes_findings, routes_host_facts, routes_host_users, routes_hosts, routes_hunting, routes_indicators, routes_linux_auth, routes_motw, routes_persistence, routes_reports, routes_rules, routes_search, routes_system, routes_tags, routes_timeline, routes_velociraptor
 from app.core.config import get_settings
 from app.core.database import init_db
 from app.core.opensearch import ensure_events_indices_safe_settings
@@ -147,6 +147,7 @@ app.include_router(routes_events.router)
 app.include_router(routes_hunting.router)
 app.include_router(routes_findings.router)
 app.include_router(routes_host_facts.router)
+app.include_router(routes_host_users.router)
 app.include_router(routes_hosts.router)
 app.include_router(routes_indicators.router)
 app.include_router(routes_linux_auth.router)

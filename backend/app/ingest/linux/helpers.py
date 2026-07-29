@@ -163,15 +163,36 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
             # so a plain substring match is safe (low collision risk).
             if marker in path_str:
                 return (family, artifact_type, parser)
-        else:
+        elif not _BIN_OR_SHARE_DIR_RE.search(path_str):
             # Filename-scoped marker: match the basename only (optionally with a
-            # log-rotation suffix like ".1" or "-20230101"), never a raw
-            # substring of the full path — otherwise unrelated files that merely
-            # contain the marker word (e.g. "more_messages_pb2.py" containing
-            # "messages", or "group_utils.py" containing "group") get
-            # misclassified as forensic log artifacts.
-            if name == marker or name.startswith(marker + ".") or name.startswith(marker + "-"):
+            # log-rotation suffix like ".1" or "-20230101", or the bare trailing
+            # dash of the standard vipw/pwck backup convention: passwd-,
+            # group-, shadow-), never a raw substring of the full path —
+            # otherwise unrelated files that merely contain the marker word
+            # (e.g. "more_messages_pb2.py" containing "messages", or
+            # "group_utils.py" containing "group") get misclassified as
+            # forensic log artifacts. A rotation/date suffix always starts
+            # with a digit; requiring that (rather than accepting any
+            # suffix) is what excludes a genuinely different file that just
+            # happens to share the marker as a prefix -- confirmed against
+            # real evidence: /usr/share/base-passwd/passwd.master is a
+            # Debian package *template* listing default system accounts,
+            # not a rotated copy of the host's actual /etc/passwd, and was
+            # silently inflating the Host User Inventory with accounts that
+            # never existed on the host. The digit check alone still isn't
+            # enough though -- man page section files (passwd.5.gz, a real
+            # man(7) naming convention, section "5") also start with a
+            # digit after the dot; excluding usr/share (and usr/bin,
+            # /sbin) the same way the hostnamectl/uname/timedatectl
+            # false-positive fix already does is what actually rules those
+            # out, since no real /etc/passwd, /etc/group or /etc/shadow
+            # ever lives under a share/bin directory.
+            if name == marker or name == f"{marker}-":
                 return (family, artifact_type, parser)
+            for separator in (".", "-"):
+                prefix = f"{marker}{separator}"
+                if name.startswith(prefix) and name[len(prefix):][:1].isdigit():
+                    return (family, artifact_type, parser)
     return None
 
 

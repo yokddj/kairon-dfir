@@ -2636,3 +2636,70 @@ def _v34_host_facts(connection: Connection) -> None:
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_event_id ON host_facts (event_id)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_fingerprint ON host_facts (fingerprint)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_case_host_type ON host_facts (case_id, host_id, fact_type)"))
+
+
+# ---------------------------------------------------------------------------
+# v35: host_user_facts -- Host User Inventory, sibling to host_facts
+# ---------------------------------------------------------------------------
+
+
+@register(35, "host_user_facts")
+def _v35_host_user_facts(connection: Connection) -> None:
+    """Introduce Host User Inventory: one row per per-account observation
+    (passwd/shadow/lastlog/group), correlated into one inventory entry per
+    username at read time (see app.services.host_users.resolve_host_users).
+    A sibling to host_facts rather than a reuse of it -- these rows bundle
+    several fields produced together by one artifact line (a passwd line
+    already carries uid/gid/home/shell/gecos together) instead of a single
+    normalized_value, and are scoped by username (nullable, for
+    group_definition rows) rather than fact_type alone. Never stores
+    password hashes or raw shadow content -- password_status is a
+    locked/set/empty classification computed once at parse time.
+    """
+    inspector = _inspector_for(connection)
+    if "host_user_facts" in inspector.get_table_names():
+        return
+    dialect = connection.dialect.name
+    json_type = "JSONB" if dialect == "postgresql" else "JSON"
+    json_default = "'{}'::jsonb" if dialect == "postgresql" else "'{}'"
+    timestamp_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "TIMESTAMP"
+    id_type = "UUID" if dialect == "postgresql" else "VARCHAR(36)"
+    connection.execute(text(f"""
+        CREATE TABLE host_user_facts (
+            id {id_type} PRIMARY KEY,
+            case_id {id_type} NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+            evidence_id {id_type} NOT NULL REFERENCES evidences(id) ON DELETE CASCADE,
+            artifact_id {id_type} REFERENCES artifacts(id) ON DELETE SET NULL,
+            host_id {id_type} REFERENCES case_hosts(id) ON DELETE SET NULL,
+            username VARCHAR(255),
+            source_kind VARCHAR(32) NOT NULL,
+            parser VARCHAR(128) NOT NULL,
+            source_path VARCHAR(2048),
+            uid VARCHAR(32),
+            primary_gid VARCHAR(32),
+            gecos VARCHAR(255),
+            home VARCHAR(1024),
+            shell VARCHAR(255),
+            password_status VARCHAR(16),
+            last_login_at {timestamp_type},
+            last_login_source_ip VARCHAR(64),
+            last_login_terminal VARCHAR(64),
+            group_name VARCHAR(255),
+            group_gid VARCHAR(32),
+            observed_at {timestamp_type},
+            event_id VARCHAR(64),
+            fingerprint VARCHAR(64) NOT NULL,
+            provenance {json_type} NOT NULL DEFAULT {json_default},
+            created_at {timestamp_type} NOT NULL,
+            updated_at {timestamp_type} NOT NULL
+        )
+    """))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_user_facts_case_id ON host_user_facts (case_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_user_facts_evidence_id ON host_user_facts (evidence_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_user_facts_artifact_id ON host_user_facts (artifact_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_user_facts_host_id ON host_user_facts (host_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_user_facts_username ON host_user_facts (username)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_user_facts_source_kind ON host_user_facts (source_kind)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_user_facts_event_id ON host_user_facts (event_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_user_facts_fingerprint ON host_user_facts (fingerprint)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_user_facts_case_host_user ON host_user_facts (case_id, host_id, username)"))
