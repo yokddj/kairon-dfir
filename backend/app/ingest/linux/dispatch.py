@@ -29,6 +29,7 @@ LINUX_PARSER_TARGETS: dict[str, LinuxParserTarget] = {
     "linux_journal_raw": LinuxParserTarget("linux_journal_raw", "journal", "parse_journal"),
     "linux_auth_raw": LinuxParserTarget("linux_auth_raw", "auth", "parse_auth", frozenset({"wtmp", "btmp"})),
     "linux_lastlog_raw": LinuxParserTarget("linux_lastlog_raw", "lastlog", "parse_lastlog", frozenset({"lastlog"})),
+    "linux_timezone_raw": LinuxParserTarget("linux_timezone_raw", "timezone", "parse_timezone", frozenset({"etc_localtime"})),
     "linux_syslog_raw": LinuxParserTarget("linux_syslog_raw", "syslog", "parse_syslog"),
     "linux_audit_raw": LinuxParserTarget("linux_audit_raw", "audit", "parse_audit"),
     "linux_apache_raw": LinuxParserTarget("linux_apache_raw", "apache", "parse_apache"),
@@ -65,6 +66,17 @@ def parse_linux_artifact_file(path: Path, *, parser: str | None, artifact_type: 
         if target.parser == "linux_lastlog_raw":
             passwd_content = _read_linux_passwd_for_artifact(path, source_path)
             return parse_func(path.read_bytes(), source_path=source_path, passwd_content=passwd_content)
+        if target.parser == "linux_timezone_raw":
+            # classify_artifact() reports the coarse family ("linux_timezone")
+            # as artifact_type for disk-image-sourced candidates, reserving
+            # the real sub-type for its separate linux_artifact_type field --
+            # so the generic binary_artifact_types check below never fires
+            # for /etc/localtime from that path (confirmed against real
+            # evidence: it silently fell back to text-decoding a TZif
+            # binary). Matching on the source filename directly is
+            # unambiguous and correct for every calling convention.
+            if Path(str(source_path or path.name)).name.lower() == "localtime":
+                return parse_func(path.read_bytes(), source_path=source_path)
         if str(artifact_type or "").lower() in target.binary_artifact_types:
             return parse_func(path.read_bytes(), source_path=source_path)
         if path.suffix.lower() == ".gz":

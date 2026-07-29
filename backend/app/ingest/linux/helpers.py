@@ -64,6 +64,21 @@ _EXIM_LOG_RE = re.compile(
     re.IGNORECASE,
 )
 _LASTLOG_RE = re.compile(r"(^|/)var/log/lastlog$", re.IGNORECASE)
+_ETC_TIMEZONE_RE = re.compile(r"(^|/)etc/timezone$", re.IGNORECASE)
+_ETC_LOCALTIME_RE = re.compile(r"(^|/)etc/localtime$", re.IGNORECASE)
+_SYSCONFIG_CLOCK_RE = re.compile(r"(^|/)etc/sysconfig/clock$", re.IGNORECASE)
+_CONF_D_CLOCK_RE = re.compile(r"(^|/)etc/conf\.d/clock$", re.IGNORECASE)
+_TIMEDATECTL_RE = re.compile(r"(^|/)timedatectl(?:[._-][a-z0-9_-]*)?$", re.IGNORECASE)
+_HOSTNAMECTL_RE = re.compile(r"(^|/)hostnamectl(?:[._-][a-z0-9_-]*)?$", re.IGNORECASE)
+# timedatectl/hostnamectl are also real systemd binary names (under bin/
+# sbin/) and, confirmed against real disk-image evidence, real systemd
+# packages ship a file named exactly "timedatectl"/"hostnamectl" under
+# usr/share/bash-completion/completions/ (a shell-completion *script*, sourced
+# from a live shell -- never captured command output). Only the captured
+# text output of actually running the command is a timezone source; the
+# executable and any package-shipped file living under a system share/bin
+# directory is excluded rather than misread as that output.
+_BIN_OR_SHARE_DIR_RE = re.compile(r"(^|/)(s?bin|share)/", re.IGNORECASE)
 
 _AUTH_PATTERNS = [
     re.compile(r"(accepted|Accepted)\s+(password|publickey)\s+for\s+(\S+)", re.IGNORECASE),
@@ -96,6 +111,18 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
         return ("linux_exim", artifact_type, "linux_exim_raw")
     if _LASTLOG_RE.search(path_str):
         return ("linux_lastlog", "lastlog", "linux_lastlog_raw")
+    if _ETC_TIMEZONE_RE.search(path_str):
+        return ("linux_timezone", "etc_timezone", "linux_timezone_raw")
+    if _ETC_LOCALTIME_RE.search(path_str):
+        return ("linux_timezone", "etc_localtime", "linux_timezone_raw")
+    if _SYSCONFIG_CLOCK_RE.search(path_str):
+        return ("linux_timezone", "sysconfig_clock", "linux_timezone_raw")
+    if _CONF_D_CLOCK_RE.search(path_str):
+        return ("linux_timezone", "conf_d_clock", "linux_timezone_raw")
+    if _TIMEDATECTL_RE.search(path_str) and not _BIN_OR_SHARE_DIR_RE.search(path_str):
+        return ("linux_timezone", "timedatectl", "linux_timezone_raw")
+    if _HOSTNAMECTL_RE.search(path_str) and not _BIN_OR_SHARE_DIR_RE.search(path_str):
+        return ("linux_timezone", "hostnamectl", "linux_timezone_raw")
     for marker, (family, artifact_type, parser) in _LINUX_ARTIFACT_MAP.items():
         if "/" in marker:
             # Directory-scoped marker: full relative-path context is required,

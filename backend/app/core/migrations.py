@@ -2577,3 +2577,62 @@ def _v33_assignment_history_evidence_cascade_delete(connection: Connection) -> N
             "FOREIGN KEY (evidence_id) REFERENCES evidences(id) ON DELETE CASCADE"
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# v34: host_facts -- generic Host Facts foundation, first consumer: timezone
+# ---------------------------------------------------------------------------
+
+
+@register(34, "host_facts")
+def _v34_host_facts(connection: Connection) -> None:
+    """Introduce the Host Facts abstraction: a small, connected table of
+    per-source observations (fact type, value, normalized value, source
+    artifact, parser, confidence, status, provenance) that future facts
+    (hostname, boot time, network interfaces, locale, ...) reuse alongside
+    the first consumer, host.timezone. It does not duplicate evidence --
+    each row references its case/evidence/artifact rather than copying
+    file content, and the full observation stays searchable as a normal
+    indexed event via the artifact's own family (e.g. linux_timezone).
+    """
+    inspector = _inspector_for(connection)
+    if "host_facts" in inspector.get_table_names():
+        return
+    dialect = connection.dialect.name
+    json_type = "JSONB" if dialect == "postgresql" else "JSON"
+    json_default = "'{}'::jsonb" if dialect == "postgresql" else "'{}'"
+    timestamp_type = "TIMESTAMP WITH TIME ZONE" if dialect == "postgresql" else "TIMESTAMP"
+    id_type = "UUID" if dialect == "postgresql" else "VARCHAR(36)"
+    connection.execute(text(f"""
+        CREATE TABLE host_facts (
+            id {id_type} PRIMARY KEY,
+            case_id {id_type} NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+            evidence_id {id_type} NOT NULL REFERENCES evidences(id) ON DELETE CASCADE,
+            artifact_id {id_type} REFERENCES artifacts(id) ON DELETE SET NULL,
+            host_id {id_type} REFERENCES case_hosts(id) ON DELETE SET NULL,
+            fact_type VARCHAR(64) NOT NULL,
+            source_kind VARCHAR(64) NOT NULL,
+            parser VARCHAR(128) NOT NULL,
+            source_path VARCHAR(2048),
+            raw_value TEXT,
+            normalized_value VARCHAR(255),
+            confidence VARCHAR(16) NOT NULL DEFAULT 'medium',
+            status VARCHAR(32) NOT NULL DEFAULT 'observed',
+            observed_at {timestamp_type},
+            event_id VARCHAR(64),
+            fingerprint VARCHAR(64) NOT NULL,
+            provenance {json_type} NOT NULL DEFAULT {json_default},
+            created_at {timestamp_type} NOT NULL,
+            updated_at {timestamp_type} NOT NULL
+        )
+    """))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_case_id ON host_facts (case_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_evidence_id ON host_facts (evidence_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_artifact_id ON host_facts (artifact_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_host_id ON host_facts (host_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_fact_type ON host_facts (fact_type)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_normalized_value ON host_facts (normalized_value)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_status ON host_facts (status)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_event_id ON host_facts (event_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_fingerprint ON host_facts (fingerprint)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_facts_case_host_type ON host_facts (case_id, host_id, fact_type)"))
