@@ -175,6 +175,45 @@ def test_linux_process_capability_reports_blocked_symbols_when_no_isf_cached(tmp
     assert "linux.pslist" in plan.selected_plugins
 
 
+def test_linux_process_readiness_distinguishes_plugins_from_missing_symbols(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.api.routes_memory import _memory_capability_readiness
+    from app.services.memory import analysis_plan as analysis_plan_module
+
+    cache_root = tmp_path / "volatility-cache"
+    (cache_root / "symbols" / "windows").mkdir(parents=True)
+    monkeypatch.setattr(
+        analysis_plan_module,
+        "get_settings",
+        lambda: SimpleNamespace(memory_native_probe_cache_path=cache_root),
+    )
+
+    path = _write(tmp_path, "linux.img", b"\x7fELF" + b"\x00" * 4092)
+    evidence = _evidence(detected_format="elf_core")
+    plan = build_memory_analysis_plan(evidence, canonical_path=path, requested_capabilities=[MemoryCapability.PROCESSES])
+
+    readiness = _memory_capability_readiness(
+        plan,
+        {
+            "supported_plugins": ["linux.pslist", "linux.pstree"],
+            "plugins": {
+                "linux.pslist": {"state": "available"},
+                "linux.pstree": {"state": "available"},
+            },
+        },
+        {"can_analyze": True},
+    )
+
+    processes = readiness["processes"]
+    assert processes["registered"] is True
+    assert processes["framework_plugin_available"] is True
+    assert processes["platform_supported"] is True
+    assert processes["evidence_supported"] is True
+    assert processes["symbols_required"] is True
+    assert processes["symbols_found"] is False
+    assert processes["ready"] is False
+    assert processes["reason"] == "symbols_unavailable"
+
+
 def test_linux_process_capability_ready_when_isf_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.memory import analysis_plan as analysis_plan_module
 
@@ -225,7 +264,7 @@ def test_resolved_plugins_for_capability_reproduces_legacy_profile_plugins_exact
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_profile_plugins_rejects_windows_profile_for_linux_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_profile_plugins_maps_process_profile_to_linux_process_capability(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.core.config import Settings
     from app.services.memory import backend_readiness
 
@@ -237,10 +276,10 @@ def test_resolve_profile_plugins_rejects_windows_profile_for_linux_plan(tmp_path
     evidence = _evidence(detected_format="elf_core")
     plan = build_memory_analysis_plan(evidence, canonical_path=path)
 
-    with pytest.raises(MemoryExecutionValidationError) as exc_info:
-        resolve_profile_plugins("processes_basic", plan=plan)
+    plugins = resolve_profile_plugins("processes_basic", plan=plan)
 
-    assert exc_info.value.code == "PLATFORM_INCOMPATIBLE_PROFILE"
+    assert plugins == ["linux.pslist", "linux.pstree"]
+    assert all(not plugin.startswith("windows.") for plugin in plugins)
 
 
 def test_resolve_profile_plugins_rejects_windows_profile_for_unknown_plan(tmp_path: Path) -> None:
@@ -251,7 +290,7 @@ def test_resolve_profile_plugins_rejects_windows_profile_for_unknown_plan(tmp_pa
     with pytest.raises(MemoryExecutionValidationError) as exc_info:
         resolve_profile_plugins("metadata_only", plan=plan)
 
-    assert exc_info.value.code == "PLATFORM_INCOMPATIBLE_PROFILE"
+    assert exc_info.value.code == "PROFILE_CAPABILITY_UNAVAILABLE"
     # The unknown platform must never be silently substituted for Windows.
     assert plan.detected_platform != PlatformFamily.WINDOWS
 

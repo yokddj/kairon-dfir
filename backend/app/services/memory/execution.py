@@ -36,7 +36,7 @@ from app.services.memory.artifact_normalizers import (
     normalize_windows_vadinfo,
 )
 from app.services.memory.indexing import index_memory_documents, index_memory_system_info
-from app.services.memory.normalizers import merge_memory_process_results, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
+from app.services.memory.normalizers import merge_memory_process_results, normalize_linux_pslist, normalize_linux_pstree, normalize_windows_cmdline, normalize_windows_info, normalize_windows_pslist, normalize_windows_psscan, normalize_windows_pstree
 from app.services.memory.pids import normalize_pid
 from app.services.memory.process_entities import renormalize_documents
 from app.services.memory.storage import memory_run_dir, relative_to_data_dir, write_atomic_bytes, write_atomic_json
@@ -63,7 +63,7 @@ PROFILE_PLUGINS = {
     "kernel_basic": ["windows.modules", "windows.driverscan", "windows.info"],
     "suspicious_memory": ["windows.malfind", "windows.vadinfo"],
 }
-PROCESS_PLUGINS = {"windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"}
+PROCESS_PLUGINS = {"windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline", "linux.pslist", "linux.pstree"}
 PROCESS_OBSERVATION_PLUGINS = {"windows.envars", "windows.getsids", "windows.privileges"}
 OPTIONAL_RUNTIME_PROBED_PLUGINS = PROCESS_OBSERVATION_PLUGINS | {"windows.netscan", "windows.netstat", "windows.vadinfo"}
 ARTIFACT_PROFILES = {
@@ -243,12 +243,6 @@ def resolve_profile_plugins(profile: str, *, plan: MemoryAnalysisPlan | None = N
     if plan is None:
         return PROFILE_PLUGINS[profile]
 
-    if plan.detected_platform != PlatformFamily.WINDOWS:
-        raise MemoryExecutionValidationError(
-            "PLATFORM_INCOMPATIBLE_PROFILE",
-            f"Profile '{profile}' selects Windows-only plugins; detected platform is "
-            f"'{plan.detected_platform.value}' ({plan.readiness_reason}).",
-        )
     capability = PROFILE_CAPABILITY.get(profile)
     if capability is None or capability not in plan.eligible_capabilities:
         raise MemoryExecutionValidationError(
@@ -998,6 +992,10 @@ def _normalize_process_payload(plugin: str, payload: Any) -> dict[str, Any]:
         return normalize_windows_psscan(payload, **kwargs)
     if plugin == "windows.cmdline":
         return normalize_windows_cmdline(payload, **kwargs)
+    if plugin == "linux.pslist":
+        return normalize_linux_pslist(payload, **kwargs)
+    if plugin == "linux.pstree":
+        return normalize_linux_pstree(payload, **kwargs)
     return {"plugin": plugin, "processes": [], "edges": [], "warnings": ["unsupported_process_plugin"], "row_count": 0}
 
 

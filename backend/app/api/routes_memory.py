@@ -66,6 +66,7 @@ from app.services.memory.artifact_indexing import (
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, derive_memory_timeout_plan, mark_run_queued, resolve_profile_plugins
 from app.services.memory.analysis_plan import build_memory_analysis_plan
+from app.services.memory.capability_registry import MemoryCapability, capabilities_for_platform, plugins_for_capability
 from app.services.memory.platform import PlatformFamily
 from app.services.memory.evidence_access import evidence_readiness
 from app.services.memory.indexing import ensure_memory_index, get_memory_document, get_opensearch_client, search_memory_edges, search_memory_processes
@@ -423,6 +424,72 @@ def get_memory_evidence_readiness(case_id: str, evidence_id: str, db: Session = 
     result["platform_readiness_reason"] = analysis_plan.readiness_reason
     result["eligible_capabilities"] = [c.value for c in analysis_plan.eligible_capabilities]
     result["ineligible_capabilities"] = {c.value: r.value for c, r in analysis_plan.ineligible_capabilities}
+    result["capability_readiness"] = _memory_capability_readiness(analysis_plan, backend, result)
+    return result
+
+
+def _memory_capability_readiness(analysis_plan, backend: dict, storage_readiness: dict) -> dict[str, dict]:
+    plugin_states = backend.get("plugins") if isinstance(backend.get("plugins"), dict) else {}
+    supported_plugins = set(str(item) for item in backend.get("supported_plugins") or [])
+    capabilities: list[MemoryCapability] = []
+    if analysis_plan.detected_platform in {PlatformFamily.WINDOWS, PlatformFamily.LINUX}:
+        capabilities.extend(capabilities_for_platform(analysis_plan.detected_platform))
+    for capability in MemoryCapability:
+        if capability in analysis_plan.eligible_capabilities or any(item[0] == capability for item in analysis_plan.ineligible_capabilities):
+            if capability not in capabilities:
+                capabilities.append(capability)
+
+    ineligible = {capability: reason for capability, reason in analysis_plan.ineligible_capabilities}
+    result: dict[str, dict] = {}
+    for capability in capabilities:
+        specs = plugins_for_capability(analysis_plan.detected_platform, capability)
+        plugins = [spec.plugin for spec in specs]
+        registered = bool(specs)
+        plugin_available = bool(plugins) and all(
+            (plugin_states.get(plugin) or {}).get("state") == "available" if plugin in plugin_states else plugin in supported_plugins
+            for plugin in plugins
+        )
+        symbols_required = any(spec.requires_symbols for spec in specs)
+        symbols_found = True
+        if symbols_required and analysis_plan.detected_platform == PlatformFamily.LINUX and analysis_plan.readiness.value == "blocked_symbols":
+            symbols_found = False
+        elif symbols_required and analysis_plan.detected_platform == PlatformFamily.WINDOWS:
+            symbols_found = bool(storage_readiness.get("symbol_identifier_present") or storage_readiness.get("can_analyze_offline"))
+        platform_supported = analysis_plan.detected_platform in {PlatformFamily.WINDOWS, PlatformFamily.LINUX}
+        evidence_supported = capability in analysis_plan.eligible_capabilities
+        ready = bool(
+            registered
+            and plugin_available
+            and platform_supported
+            and evidence_supported
+            and (not symbols_required or symbols_found)
+            and storage_readiness.get("can_analyze")
+        )
+        if not registered:
+            reason = "capability_not_registered_for_platform"
+        elif not platform_supported:
+            reason = "platform_unsupported"
+        elif capability in ineligible:
+            reason = ineligible[capability].value
+        elif not plugin_available:
+            reason = "framework_plugin_unavailable"
+        elif symbols_required and not symbols_found:
+            reason = "symbols_unavailable"
+        elif not storage_readiness.get("can_analyze"):
+            reason = storage_readiness.get("error_code") or "evidence_not_ready"
+        else:
+            reason = "ready"
+        result[capability.value] = {
+            "registered": registered,
+            "framework_plugin_available": plugin_available,
+            "platform_supported": platform_supported,
+            "evidence_supported": evidence_supported,
+            "symbols_required": symbols_required,
+            "symbols_found": symbols_found,
+            "ready": ready,
+            "reason": reason,
+            "plugins": plugins,
+        }
     return result
 
 

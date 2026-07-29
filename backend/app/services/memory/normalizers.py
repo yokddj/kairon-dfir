@@ -100,12 +100,13 @@ def _process_from_row(row: dict[str, Any], plugin: str, *, command_limit: int = 
         return None, warnings
     raw_ppid = _lookup(row, "PPID", "PPid", "ParentPID", "Parent Pid", "InheritedFromUniqueProcessId")
     ppid = _int_or_none(raw_ppid)
-    name = _str_or_none(_lookup(row, "ImageFileName", "Name", "Process", "Image"), 512)
+    name = _str_or_none(_lookup(row, "ImageFileName", "Name", "Process", "Image", "Comm", "Command"), 512)
     create_time = _str_or_none(_lookup(row, "CreateTime", "Create Time", "Created"), 128)
     exit_time = _str_or_none(_lookup(row, "ExitTime", "Exit Time", "Exited"), 128)
     offset = _str_or_none(_lookup(row, "Offset", "Offset(V)", "Offset(P)", "Offset(Virtual)", "Offset(Physical)"), 128)
-    command_line = _str_or_none(_lookup(row, "Args", "CommandLine", "Command Line", "CmdLine"), command_limit)
+    command_line = _str_or_none(_lookup(row, "Args", "CommandLine", "Command Line", "CmdLine", "Command", "Path"), command_limit)
     identity = _identity(pid, offset, create_time)
+    plugin_kind = plugin.rsplit(".", 1)[-1]
     return {
         "identity": identity,
         "plugins": [plugin],
@@ -120,7 +121,7 @@ def _process_from_row(row: dict[str, Any], plugin: str, *, command_limit: int = 
             "wow64": _lookup(row, "Wow64", "IsWow64"),
         },
         "memory": {"offset": offset, "virtual_offset": _str_or_none(_lookup(row, "Offset(V)", "Offset(Virtual)"), 128), "physical_offset": _str_or_none(_lookup(row, "Offset(P)", "Offset(Physical)"), 128)},
-        "visibility": {"pslist": plugin == "windows.pslist", "psscan": plugin == "windows.psscan", "pstree": plugin == "windows.pstree"},
+        "visibility": {"pslist": plugin_kind == "pslist", "psscan": plugin_kind == "psscan", "pstree": plugin_kind == "pstree"},
         "state": {"active_candidate": exit_time is None, "terminated_candidate": exit_time is not None, "hidden_candidate": False},
         "warnings": warnings,
         "raw": {"fields": _raw_subset_limited(row, raw_limit), "process_pid": _bounded(raw_pid), "process_ppid": _bounded(raw_ppid)},
@@ -161,6 +162,22 @@ def normalize_windows_psscan(payload: Any, **kwargs: Any) -> dict[str, Any]:
 
 def normalize_windows_cmdline(payload: Any, **kwargs: Any) -> dict[str, Any]:
     return _normalize_process_plugin(payload, "windows.cmdline", **kwargs)
+
+
+def normalize_linux_pslist(payload: Any, **kwargs: Any) -> dict[str, Any]:
+    return _normalize_process_plugin(payload, "linux.pslist", **kwargs)
+
+
+def normalize_linux_pstree(payload: Any, **kwargs: Any) -> dict[str, Any]:
+    normalized = _normalize_process_plugin(payload, "linux.pstree", **kwargs)
+    edges = []
+    for item in normalized["processes"]:
+        ppid = item["process"].get("ppid")
+        pid = item["process"].get("pid")
+        if ppid is not None and pid is not None:
+            edges.append({"parent_pid": ppid, "child_pid": pid, "edge_type": "parent_child", "source_plugin": "linux.pstree", "confidence": "reported_by_plugin", "warnings": []})
+    normalized["edges"] = edges
+    return normalized
 
 
 def _normalize_process_plugin(payload: Any, plugin: str, *, command_limit: int = 16384, raw_limit: int = 65536) -> dict[str, Any]:
@@ -209,6 +226,12 @@ def merge_memory_process_results(results: list[dict[str, Any]], *, case_id: str,
         if visibility.get("psscan") and not visibility.get("pslist"):
             item.setdefault("warnings", []).append("not_present_in_pslist_result")
         item["state"]["hidden_candidate"] = False
+        plugin_prefixes = {str(plugin).split(".", 1)[0] for plugin in item.get("plugins") or [] if "." in str(plugin)}
+        os_family = None
+        if len(plugin_prefixes) == 1:
+            only_prefix = next(iter(plugin_prefixes))
+            if only_prefix in {"windows", "linux"}:
+                os_family = only_prefix
         docs.append({
             "document_id": f"{memory_run_id}:memory_process:{identity}",
             "case_id": case_id,
@@ -218,6 +241,7 @@ def merge_memory_process_results(results: list[dict[str, Any]], *, case_id: str,
             "memory_artifact_type": "memory_process",
             "backend": "volatility3",
             "plugins": sorted(item.get("plugins") or []),
+            "os": {"family": os_family},
             "process": item["process"],
             "memory": item["memory"],
             "visibility": visibility,
