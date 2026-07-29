@@ -274,11 +274,23 @@ function UserRow({ caseId, hostId, entry, expanded, onToggle }: { caseId: string
         </td>
         <td className="px-4 py-3 text-xs text-muted">{primaryGroupDisplay || <span className="italic text-muted/70">unknown</span>}</td>
         <td className="px-4 py-3 font-mono text-xs text-muted">{identity.home.preferred_value || <span className="italic text-muted/70">unknown</span>}</td>
-        <td className="px-4 py-3 font-mono text-xs text-muted">{identity.shell.preferred_value || <span className="italic text-muted/70">unknown</span>}</td>
+        <td className="px-4 py-3 font-mono text-xs text-muted" data-testid="user-shell">
+          {identity.shell.preferred_value || <span className="italic text-muted/70">unknown</span>}
+          {identity.shell.preferred_value && entry.shell_classification === "non_login" ? (
+            <span className="ml-1.5 rounded-full border border-line px-1.5 py-0.5 text-[9px] uppercase tracking-[0.1em] text-muted/70">non-login</span>
+          ) : null}
+        </td>
         <td className="px-4 py-3">
-          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${ACCOUNT_STATUS_STYLES[entry.account_status]}`} data-testid="user-account-status">
-            {ACCOUNT_STATUS_LABEL[entry.account_status]}
-          </span>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${ACCOUNT_STATUS_STYLES[entry.account_status]}`} data-testid="user-account-status">
+              {ACCOUNT_STATUS_LABEL[entry.account_status]}
+            </span>
+            {entry.effective_sudo.has_sudo ? (
+              <span className="rounded-full border border-amber/40 bg-amber/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-amber" data-testid="user-sudo-badge">
+                sudo
+              </span>
+            ) : null}
+          </div>
         </td>
         <td className="px-4 py-3 text-xs text-muted" data-testid="user-last-login">
           {entry.last_login ? (
@@ -309,7 +321,25 @@ function UserRow({ caseId, hostId, entry, expanded, onToggle }: { caseId: string
                 <span className="text-xs uppercase tracking-[0.12em] text-muted">Password status</span>
                 <p className="mt-1 text-sm text-ink">{PASSWORD_STATUS_LABEL[entry.password_status.preferred_value || "unavailable"]}</p>
               </div>
+              <div className="rounded-xl border border-line/70 bg-abyss/50 px-3 py-2" data-testid="user-effective-sudo">
+                <span className="text-xs uppercase tracking-[0.12em] text-muted">Effective sudo</span>
+                <p className="mt-1 text-sm text-ink">
+                  {entry.effective_sudo.has_sudo
+                    ? entry.effective_sudo.via === "direct"
+                      ? "Yes -- direct sudoers rule"
+                      : `Yes -- via group${entry.effective_sudo.granting_groups.length > 1 ? "s" : ""} ${entry.effective_sudo.granting_groups.join(", ")}`
+                    : "No sudo rule observed"}
+                </p>
+              </div>
             </div>
+            {entry.effective_sudo.has_sudo ? (
+              <div className="mt-3 space-y-1.5" data-testid="user-sudo-provenance">
+                <span className="text-xs uppercase tracking-[0.12em] text-muted">Sudo rule sources</span>
+                {entry.effective_sudo.observations.map((observation) => (
+                  <UserObservationRow key={observation.id} caseId={caseId} hostId={hostId} observation={observation} />
+                ))}
+              </div>
+            ) : null}
             <div className="mt-3">
               <span className="text-xs uppercase tracking-[0.12em] text-muted">Secondary groups</span>
               {entry.secondary_groups.length > 0 ? (

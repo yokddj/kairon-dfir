@@ -5938,7 +5938,7 @@ def ingest_evidence(evidence_id: str) -> None:
                         )
                         if host_facts_warning:
                             detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_facts: {host_facts_warning}"})
-                    if documents and any((document.get("linux") or {}).get("artifact_family") in ("linux_identity", "linux_lastlog") for document in documents):
+                    if documents and any((document.get("linux") or {}).get("artifact_family") in ("linux_identity", "linux_lastlog", "linux_sudoers") for document in documents):
                         host_user_facts_warning = _safe_create_host_user_facts_isolated(
                             case_id=evidence.case_id,
                             evidence_id=evidence.id,

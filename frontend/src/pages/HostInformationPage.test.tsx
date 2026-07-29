@@ -97,6 +97,8 @@ function userEntry(overrides: Partial<CaseHostUsersResponse["users"][number]> = 
     password_status: fieldResolution("password_status", { status: "missing", preferred_value: "unavailable" }),
     account_status: "unknown",
     last_login: null,
+    shell_classification: "login",
+    effective_sudo: { has_sudo: false, via: null, granting_groups: [], observations: [] },
     ...overrides,
   };
 }

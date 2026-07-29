@@ -89,6 +89,18 @@ def _identity_docs(content: str, *, artifact_type: str, source_path: str, artifa
     ]
 
 
+def _sudoers_docs(content: str, *, source_path: str = "etc/sudoers", artifact_id=ART1_ID) -> list[dict]:
+    from app.ingest.linux.sudoers import parse_sudoers
+    rows = parse_sudoers(content, source_path=source_path)
+    return [
+        normalize_row(CASE_ID, EVIDENCE_ID, artifact_id, row, {
+            "artifact_family": "linux_sudoers", "artifact_type": "sudoers", "parser": "linux_sudoers_raw",
+            "name": source_path.rsplit("/", 1)[-1], "source_path": source_path,
+        })
+        for row in rows
+    ]
+
+
 def _lastlog_binary(records: dict[int, tuple[int, str, str]]) -> bytes:
     """records: uid -> (unix_seconds, terminal, host)."""
     layout = struct.Struct("<i32s256s")
@@ -226,6 +238,65 @@ class TestGroups:
         create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART2_ID, host_id=None, observed_at=None, documents=group_docs)
         entries = {e["username"]: e for e in resolve_host_users(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID)}
         assert entries["alice"]["primary_group_name"] == "developers"
+
+
+class TestShellClassification:
+    def test_login_and_non_login_shells(self):
+        db = _db()
+        _case(db)
+        _evidence(db)
+        docs = _identity_docs(PASSWD_ALICE_BOB, artifact_type="passwd", source_path="etc/passwd")
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None, documents=docs)
+        entries = {e["username"]: e for e in resolve_host_users(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID)}
+        assert entries["alice"]["shell_classification"] == "login"  # /bin/bash
+        assert entries["bob"]["shell_classification"] == "login"  # /bin/sh
+
+
+class TestEffectiveSudo:
+    def test_direct_sudoers_rule_grants_effective_sudo(self):
+        db = _db()
+        _case(db)
+        _evidence(db)
+        passwd_docs = _identity_docs(PASSWD_ALICE_BOB, artifact_type="passwd", source_path="etc/passwd")
+        sudoers_docs = _sudoers_docs("bob ALL=(ALL) ALL\n")
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None, documents=passwd_docs)
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART2_ID, host_id=None, observed_at=None, documents=sudoers_docs)
+        entries = {e["username"]: e for e in resolve_host_users(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID)}
+        assert entries["bob"]["effective_sudo"]["has_sudo"] is True
+        assert entries["bob"]["effective_sudo"]["via"] == "direct"
+        assert entries["alice"]["effective_sudo"]["has_sudo"] is False
+
+    def test_group_based_sudoers_rule_resolves_through_secondary_group_membership(self):
+        # alice is a member of "sudo" (GROUP_SUDO_DEVS); a %sudo rule must
+        # grant her effective sudo without alice ever appearing by name in
+        # /etc/sudoers.
+        db = _db()
+        _case(db)
+        _evidence(db)
+        passwd_docs = _identity_docs(PASSWD_ALICE_BOB, artifact_type="passwd", source_path="etc/passwd")
+        group_docs = _identity_docs(GROUP_SUDO_DEVS, artifact_type="group", source_path="etc/group")
+        sudoers_docs = _sudoers_docs("%sudo ALL=(ALL:ALL) ALL\n")
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None, documents=passwd_docs)
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART2_ID, host_id=None, observed_at=None, documents=group_docs)
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id="3333333a-1111-4111-8111-333333333a3f", host_id=None, observed_at=None, documents=sudoers_docs)
+        entries = {e["username"]: e for e in resolve_host_users(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID)}
+        assert entries["alice"]["effective_sudo"]["has_sudo"] is True
+        assert entries["alice"]["effective_sudo"]["via"] == "group"
+        assert entries["alice"]["effective_sudo"]["granting_groups"] == ["sudo"]
+        assert entries["bob"]["effective_sudo"]["has_sudo"] is False
+
+    def test_defaults_lines_never_grant_sudo(self):
+        db = _db()
+        _case(db)
+        _evidence(db)
+        passwd_docs = _identity_docs(PASSWD_ALICE_BOB, artifact_type="passwd", source_path="etc/passwd")
+        sudoers_docs = _sudoers_docs("Defaults env_reset\nDefaults secure_path=\"/usr/bin\"\n")
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None, documents=passwd_docs)
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART2_ID, host_id=None, observed_at=None, documents=sudoers_docs)
+        entries = {e["username"]: e for e in resolve_host_users(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID)}
+        assert entries["alice"]["effective_sudo"]["has_sudo"] is False
+        assert entries["bob"]["effective_sudo"]["has_sudo"] is False
+        assert db.query(HostUserFact).filter(HostUserFact.source_kind == "sudoers_rule").count() == 0
 
 
 class TestLastLogin:

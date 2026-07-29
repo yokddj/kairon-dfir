@@ -35,6 +35,7 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.ingest.linux.shells import classify_shell
 from app.models.host_user_fact import HostUserFact
 
 _IDENTITY_FIELDS = ("uid", "primary_gid", "gecos", "home", "shell")
@@ -103,6 +104,19 @@ def _group_rows_from_doc(linux: dict) -> list[dict]:
     return rows
 
 
+def _sudoers_rows_from_doc(linux: dict) -> list[dict]:
+    # Defaults lines carry no principal and are not an account-level grant;
+    # only real "who may run what" rules resolve into effective sudo access.
+    if linux.get("is_defaults"):
+        return []
+    principal = str(linux.get("principal") or "").strip()
+    if not principal:
+        return []
+    if principal.startswith("%"):
+        return [{"source_kind": "sudoers_rule", "username": None, "group_name": principal[1:], "group_gid": None}]
+    return [{"source_kind": "sudoers_rule", "username": principal, "group_name": None, "group_gid": None}]
+
+
 def _lastlog_rows_from_doc(linux: dict, doc: dict) -> list[dict]:
     timestamp = doc.get("@timestamp")
     observed: datetime | None = None
@@ -152,6 +166,8 @@ def create_host_user_fact_observations(
             field_rows = _group_rows_from_doc(linux)
         elif family == "linux_lastlog":
             field_rows = _lastlog_rows_from_doc(linux, doc)
+        elif family == "linux_sudoers":
+            field_rows = _sudoers_rows_from_doc(linux)
         else:
             continue
         parser = str((doc.get("artifact") or {}).get("parser") or "")
@@ -311,18 +327,45 @@ def _resolve_last_login(rows: list[HostUserFact]) -> dict | None:
     }
 
 
-def _resolve_user_entry(username: str, *, is_synthetic: bool, passwd_rows, shadow_rows, membership_rows, lastlog_rows, gid_group_name_map) -> dict:
+def _effective_sudo(username: str, *, group_names: set[str], sudoers_rows: list[HostUserFact]) -> dict:
+    direct = [row for row in sudoers_rows if row.username == username]
+    via_group = [row for row in sudoers_rows if row.group_name and row.group_name in group_names]
+    observations = direct + via_group
+    via = "direct" if direct else "group" if via_group else None
+    return {
+        "has_sudo": bool(observations),
+        "via": via,
+        "granting_groups": sorted({row.group_name for row in via_group if row.group_name}),
+        "observations": [_serialize(row) for row in observations],
+    }
+
+
+def _resolve_user_entry(username: str, *, is_synthetic: bool, passwd_rows, shadow_rows, membership_rows, lastlog_rows, sudoers_rows, gid_group_name_map) -> dict:
     identity = {field: _resolve_field(field, passwd_rows) for field in _IDENTITY_FIELDS}
     primary_gid_value = identity["primary_gid"]["preferred_value"]
+    primary_group_name = gid_group_name_map.get(primary_gid_value) if primary_gid_value else None
+    secondary_groups = _secondary_groups(membership_rows)
+    group_names = {group["group_name"] for group in secondary_groups if group.get("group_name")}
+    if primary_group_name:
+        group_names.add(primary_group_name)
     return {
         "username": username,
         "is_synthetic_username": is_synthetic,
         "identity": identity,
-        "primary_group_name": gid_group_name_map.get(primary_gid_value) if primary_gid_value else None,
-        "secondary_groups": _secondary_groups(membership_rows),
+        "primary_group_name": primary_group_name,
+        "secondary_groups": secondary_groups,
         "password_status": _resolve_password_status(shadow_rows),
         "account_status": _account_status_from_password_status(_resolve_password_status(shadow_rows)["preferred_value"]),
         "last_login": _resolve_last_login(lastlog_rows),
+        # Reusable classification (app.ingest.linux.shells) of the resolved
+        # shell value -- "login" / "non_login" / "unknown" -- never a bare
+        # "is it /bin/bash" check, so it generalizes to any distro's shell set.
+        "shell_classification": classify_shell(identity["shell"]["preferred_value"]),
+        # Effective sudo considers both a direct sudoers rule for this
+        # username and any %group rule matching a group (primary or
+        # secondary) this user actually belongs to -- not group membership
+        # alone, since a group with no sudoers rule grants nothing.
+        "effective_sudo": _effective_sudo(username, group_names=group_names, sudoers_rows=sudoers_rows),
     }
 
 
@@ -351,12 +394,13 @@ def resolve_host_users(
     membership_rows = [r for r in rows if r.source_kind == "group_membership"]
     group_definition_rows = [r for r in rows if r.source_kind == "group_definition"]
     lastlog_rows = [r for r in rows if r.source_kind == "lastlog"]
+    sudoers_rows = [r for r in rows if r.source_kind == "sudoers_rule"]
 
     uid_username_map = _build_uid_username_map(passwd_rows)
     gid_group_name_map = _build_gid_group_name_map(group_definition_rows)
 
     usernames: set[str] = set()
-    for row in passwd_rows + shadow_rows + membership_rows:
+    for row in passwd_rows + shadow_rows + membership_rows + sudoers_rows:
         if row.username:
             usernames.add(row.username)
 
@@ -382,6 +426,7 @@ def resolve_host_users(
             shadow_rows=[r for r in shadow_rows if r.username == username],
             membership_rows=[r for r in membership_rows if r.username == username],
             lastlog_rows=lastlog_by_username.get(username, []),
+            sudoers_rows=sudoers_rows,
             gid_group_name_map=gid_group_name_map,
         ))
     for uid, uid_rows in lastlog_orphans_by_uid.items():
@@ -392,6 +437,7 @@ def resolve_host_users(
             shadow_rows=[],
             membership_rows=[],
             lastlog_rows=uid_rows,
+            sudoers_rows=sudoers_rows,
             gid_group_name_map=gid_group_name_map,
         ))
 
