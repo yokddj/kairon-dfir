@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel
 
@@ -81,6 +82,7 @@ class MemoryEvidenceReadinessRead(BaseModel):
     platform_readiness_reason: str | None = None
     eligible_capabilities: list[str] = []
     ineligible_capabilities: dict[str, str] = {}
+    capability_readiness: dict[str, dict[str, Any]] = {}
 
 
 class MemorySymbolAcquireRequest(BaseModel):

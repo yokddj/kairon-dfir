@@ -2652,6 +2652,27 @@ def test_process_normalizer_invalid_pid_warns() -> None:
     assert "missing_or_invalid_pid" in normalized["warnings"]
 
 
+def test_linux_process_normalizers_merge_into_canonical_process_documents() -> None:
+    pslist = memory_normalizers.normalize_linux_pslist([
+        {"PID": 1, "PPID": 0, "COMM": "systemd", "Offset(V)": "0xffff888000001000"},
+        {"PID": 4242, "PPID": 1, "COMM": "sshd", "Offset(V)": "0xffff888000002000"},
+    ])
+    pstree = memory_normalizers.normalize_linux_pstree([
+        {"PID": 4242, "PPID": 1, "COMM": "sshd", "Offset(V)": "0xffff888000002000"},
+    ])
+
+    merged = memory_normalizers.merge_memory_process_results([pslist, pstree], case_id=CASE_ID, evidence_id=MEMORY_EVIDENCE_ID, memory_run_id="run-linux")
+
+    assert len(merged["processes"]) == 2
+    sshd = next(item for item in merged["processes"] if item["process"]["pid"] == 4242)
+    assert sshd["memory_artifact_type"] == "memory_process"
+    assert sshd["os"]["family"] == "linux"
+    assert sshd["plugins"] == ["linux.pslist", "linux.pstree"]
+    assert sshd["visibility"]["pslist"] is True
+    assert sshd["visibility"]["pstree"] is True
+    assert len(merged["edges"]) == 1
+
+
 @pytest.mark.parametrize(
     ("value", "expected"),
     [

@@ -118,7 +118,8 @@ class Settings(BaseSettings):
         "windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,"
         "windows.envars,windows.getsids,windows.privileges,"
         "windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,"
-        "windows.modules,windows.driverscan,windows.malfind,windows.vadinfo"
+        "windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,"
+        "linux.pslist,linux.pstree,linux.sockstat,linux.bash"
     )
     memory_allowed_profiles: str = (
         "metadata_only,processes_basic,processes_extended,"
@@ -481,6 +482,10 @@ class Settings(BaseSettings):
             "windows.driverscan",
             "windows.malfind",
             "windows.vadinfo",
+            "linux.pslist",
+            "linux.pstree",
+            "linux.sockstat",
+            "linux.bash",
         }
         values = self.memory_allowed_plugins
         if isinstance(values, str):
