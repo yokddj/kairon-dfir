@@ -89,25 +89,48 @@ def _parse_group(
     return results
 
 
+def _classify_shadow_password(password_field: str) -> str:
+    """Classify a shadow password field without ever retaining the hash.
+
+    "locked" -- a leading ``!`` or ``*`` marks the account as unable to log
+    in via password (whether or not a stale hash follows the marker).
+    "empty" -- no password required at all.
+    "set" -- a real hash is present and the account is not locked.
+    """
+    field = (password_field or "").strip()
+    if not field:
+        return "empty"
+    if field.startswith("!") or field.startswith("*"):
+        return "locked"
+    return "set"
+
+
 def _parse_shadow(
     content: str,
     *,
     source_path: str = "",
     username: str | None = None,
 ) -> list[dict]:
-    entries: list[str] = []
-    for line in content.splitlines():
+    results: list[dict] = []
+    for line_number, line in enumerate(content.splitlines(), start=1):
         stripped = line.strip()
-        if stripped and not _COMMENT_RE.match(stripped):
-            name = stripped.split(":", 1)[0] if ":" in stripped else stripped
-            entries.append(name)
-    raw_excerpt = content.strip()[:2000]
-    return [{
-        "artifact_family": "linux_identity",
-        "artifact_type": "shadow",
-        "source_file": source_path,
-        "line_number": 1,
-        "username": ", ".join(entries) if entries else None,
-        "message": f"Shadow file present with {len(entries)} user entries (hashes not stored)",
-        "raw_excerpt": raw_excerpt,
-    }]
+        if not stripped or _COMMENT_RE.match(stripped):
+            continue
+        fields = stripped.split(":")
+        uname = fields[0].strip() if fields else ""
+        if not uname:
+            continue
+        password_field = fields[1] if len(fields) > 1 else ""
+        status = _classify_shadow_password(password_field)
+        status_label = {"locked": "locked", "empty": "no password required", "set": "password set"}[status]
+        results.append({
+            "artifact_family": "linux_identity",
+            "artifact_type": "shadow",
+            "source_file": source_path,
+            "line_number": line_number,
+            "username": uname,
+            "password_status": status,
+            "message": f"Shadow entry for {uname} ({status_label}, hash not stored)",
+            "raw_excerpt": f"Shadow entry present for {uname} (hash not stored)",
+        })
+    return results

@@ -95,6 +95,7 @@ from app.rules_engine.sigma import (
 from app.rules_engine.yara_engine import run_yara_rule_on_evidence, run_yara_rule_set_on_evidence, yara_available
 from app.services.host_attribution import choose_primary_host, classify_host_candidate
 from app.services.host_facts import create_host_fact_observations, delete_host_facts_for_evidence
+from app.services.host_users import create_host_user_fact_observations, delete_host_user_facts_for_evidence
 from app.services.host_identity import apply_case_host_identity
 from app.services.parser_backend_evaluation import _tool_dll_path
 from app.services.evidence_runs import get_evidence_run, merge_evidence_metadata, start_ingest_run, sync_ingest_run_from_metadata, upsert_ingest_run
@@ -1472,6 +1473,7 @@ def _run_pending_reprocess_cleanup(db: Session, evidence: Evidence, metadata: di
         # otherwise stale observations from the previous run would sit
         # next to fresh ones and corrupt conflict resolution.
         delete_host_facts_for_evidence(db, evidence.id)
+        delete_host_user_facts_for_evidence(db, evidence.id)
     if cleanup.get("reset_extracted_dir"):
         reset_extracted_dir(evidence.case_id, evidence.id)
     if cleanup.get("reset_staging_dir"):
@@ -4102,6 +4104,43 @@ def _safe_create_host_facts_isolated(
         isolated_db.close()
 
 
+def _safe_create_host_user_facts_isolated(
+    *,
+    case_id: str,
+    evidence_id: str,
+    artifact_id: str,
+    host_id: str | None,
+    observed_at,
+    artifact_name: str,
+    documents: list[dict],
+) -> str | None:
+    """Best-effort Host User Inventory aggregation for one artifact's documents.
+
+    Mirrors _safe_create_host_facts_isolated: failures never interrupt
+    ingest, since Host User Facts are a derived convenience layer, not part
+    of the forensic record itself (the raw passwd/shadow/lastlog artifacts
+    remain fully indexed and viewable regardless).
+    """
+    isolated_db: Session = SessionLocal()
+    try:
+        create_host_user_fact_observations(
+            isolated_db,
+            case_id=case_id,
+            evidence_id=evidence_id,
+            artifact_id=artifact_id,
+            host_id=host_id,
+            observed_at=observed_at,
+            documents=documents,
+        )
+        return None
+    except Exception as exc:  # noqa: BLE001
+        isolated_db.rollback()
+        logger.warning("Host User Facts aggregation failed for artifact %s: %s", artifact_name, exc)
+        return str(exc)
+    finally:
+        isolated_db.close()
+
+
 def _estimate_remaining_seconds(*, elapsed_seconds: float, progress_pct: int) -> float | None:
     if progress_pct <= 0:
         return None
@@ -5899,6 +5938,18 @@ def ingest_evidence(evidence_id: str) -> None:
                         )
                         if host_facts_warning:
                             detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_facts: {host_facts_warning}"})
+                    if documents and any((document.get("linux") or {}).get("artifact_family") in ("linux_identity", "linux_lastlog") for document in documents):
+                        host_user_facts_warning = _safe_create_host_user_facts_isolated(
+                            case_id=evidence.case_id,
+                            evidence_id=evidence.id,
+                            artifact_id=artifact_id,
+                            host_id=evidence.host_id,
+                            observed_at=utc_now(),
+                            artifact_name=artifact_info["name"],
+                            documents=documents,
+                        )
+                        if host_user_facts_warning:
+                            detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_user_facts: {host_user_facts_warning}"})
             except Exception as exc:  # noqa: BLE001
                 db.rollback()
                 is_fast_evtx_timeout = (

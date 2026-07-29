@@ -1,9 +1,9 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { Fingerprint } from "lucide-react";
+import { Fingerprint, Users as UsersIcon } from "lucide-react";
 
-import { api, type HostFactObservation, type ResolvedHostFact } from "../api/client";
+import { api, type HostFactObservation, type HostUserEntry, type HostUserFieldResolution, type HostUserObservation, type ResolvedHostFact } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
 type FactSlot = { factType: string; label: string };
@@ -190,6 +190,262 @@ function FactGroupCard({ caseId, hostId, group, factsByType }: { caseId: string;
   );
 }
 
+const ACCOUNT_STATUS_LABEL: Record<string, string> = { locked: "Locked", active: "Active", unknown: "Unknown" };
+const ACCOUNT_STATUS_STYLES: Record<string, string> = {
+  locked: "border-danger/40 bg-danger/10 text-danger",
+  active: "border-mint/40 bg-mint/10 text-mint",
+  unknown: "border-line bg-abyss/40 text-muted",
+};
+const PASSWORD_STATUS_LABEL: Record<string, string> = { locked: "Locked", set: "Password set", empty: "No password required", unavailable: "Unavailable" };
+
+type UserSortKey = "username" | "uid" | "last_login" | "status";
+type UserSortDirection = "asc" | "desc";
+
+function UserObservationRow({ caseId, hostId, observation }: { caseId: string; hostId: string; observation: HostUserObservation }) {
+  return (
+    <div className="rounded-xl border border-line/70 bg-abyss/40 px-3 py-2 text-xs text-muted" data-testid="user-observation">
+      <p>
+        <span className="text-ink">{observation.source_kind}</span> &middot; parser <span className="text-ink">{observation.parser}</span>
+        {observation.source_path ? (
+          <>
+            {" "}
+            &middot; <span className="text-ink">{observation.source_path}</span>
+          </>
+        ) : null}
+      </p>
+      <p className="mt-1">observed {fmtTime(observation.observed_at)}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <Link to={searchHref(caseId, observation.host_id || hostId)} className="rounded-lg border border-line px-2 py-1 text-[11px] text-accent hover:bg-white/5" data-testid="pivot-search">
+          View in Search
+        </Link>
+        {observation.source_path ? (
+          <Link to={artifactHref(caseId, observation.source_path)} className="rounded-lg border border-line px-2 py-1 text-[11px] text-accent hover:bg-white/5" data-testid="pivot-artifact">
+            View artifact
+          </Link>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function UserFieldDetail({ caseId, hostId, label, resolution }: { caseId: string; hostId: string; label: string; resolution: HostUserFieldResolution }) {
+  if (resolution.status === "missing") return null;
+  return (
+    <div className="rounded-xl border border-line/70 bg-abyss/50 px-3 py-2" data-testid="user-field-detail" data-field={resolution.field} data-status={resolution.status}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-xs uppercase tracking-[0.12em] text-muted">{label}</span>
+        {resolution.status === "conflicting" ? <span className="rounded-full border border-amber/40 px-2 py-0.5 text-[10px] uppercase tracking-[0.12em] text-amber">Conflicting</span> : null}
+      </div>
+      <p className="mt-1 font-mono text-sm text-ink">{resolution.preferred_value}</p>
+      {resolution.status === "conflicting" ? (
+        <div className="mt-2 space-y-1.5">
+          {resolution.observations.map((observation) => (
+            <UserObservationRow key={observation.id} caseId={caseId} hostId={hostId} observation={observation} />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function UserRow({ caseId, hostId, entry, expanded, onToggle }: { caseId: string; hostId: string; entry: HostUserEntry; expanded: boolean; onToggle: () => void }) {
+  const { identity } = entry;
+  const primaryGroupDisplay = entry.primary_group_name || identity.primary_gid.preferred_value;
+  const hasConflict = [...Object.values(identity), entry.password_status].some((field) => field.status === "conflicting");
+
+  return (
+    <>
+      <tr className="align-top" data-testid="user-row" data-username={entry.username} data-account-status={entry.account_status}>
+        <td className="px-4 py-3">
+          {entry.is_synthetic_username ? (
+            <span className="font-mono text-sm italic text-muted" title="No passwd entry matched this uid">
+              {entry.username}
+            </span>
+          ) : (
+            <Link to={searchHref(caseId, hostId, entry.username)} className="font-semibold text-ink hover:text-accent" data-testid="user-username-link">
+              {entry.username}
+            </Link>
+          )}
+          {identity.gecos.preferred_value ? <p className="mt-0.5 text-xs text-muted">{identity.gecos.preferred_value}</p> : null}
+          {hasConflict ? <p className="mt-0.5 text-[11px] text-amber">Conflicting sources</p> : null}
+        </td>
+        <td className="px-4 py-3 font-mono text-xs text-muted" data-testid="user-uid">
+          {identity.uid.preferred_value || <span className="italic text-muted/70">unknown</span>}
+        </td>
+        <td className="px-4 py-3 text-xs text-muted">{primaryGroupDisplay || <span className="italic text-muted/70">unknown</span>}</td>
+        <td className="px-4 py-3 font-mono text-xs text-muted">{identity.home.preferred_value || <span className="italic text-muted/70">unknown</span>}</td>
+        <td className="px-4 py-3 font-mono text-xs text-muted">{identity.shell.preferred_value || <span className="italic text-muted/70">unknown</span>}</td>
+        <td className="px-4 py-3">
+          <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${ACCOUNT_STATUS_STYLES[entry.account_status]}`} data-testid="user-account-status">
+            {ACCOUNT_STATUS_LABEL[entry.account_status]}
+          </span>
+        </td>
+        <td className="px-4 py-3 text-xs text-muted" data-testid="user-last-login">
+          {entry.last_login ? (
+            <>
+              <p className="text-ink">{fmtTime(entry.last_login.timestamp)}</p>
+              {entry.last_login.source_ip ? <p>{entry.last_login.source_ip}</p> : null}
+            </>
+          ) : (
+            <span className="italic text-muted/70">Not observed</span>
+          )}
+        </td>
+        <td className="px-4 py-3 text-right">
+          <button type="button" onClick={onToggle} className="text-xs text-accent hover:underline" data-testid="user-expand-toggle">
+            {expanded ? "Hide details" : "Details"}
+          </button>
+        </td>
+      </tr>
+      {expanded ? (
+        <tr>
+          <td colSpan={8} className="border-t border-line/70 bg-abyss/30 px-4 py-4" data-testid="user-detail-panel">
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+              <UserFieldDetail caseId={caseId} hostId={hostId} label="UID" resolution={identity.uid} />
+              <UserFieldDetail caseId={caseId} hostId={hostId} label="Primary GID" resolution={identity.primary_gid} />
+              <UserFieldDetail caseId={caseId} hostId={hostId} label="Home directory" resolution={identity.home} />
+              <UserFieldDetail caseId={caseId} hostId={hostId} label="Login shell" resolution={identity.shell} />
+              <UserFieldDetail caseId={caseId} hostId={hostId} label="Full name" resolution={identity.gecos} />
+              <div className="rounded-xl border border-line/70 bg-abyss/50 px-3 py-2" data-testid="user-password-status">
+                <span className="text-xs uppercase tracking-[0.12em] text-muted">Password status</span>
+                <p className="mt-1 text-sm text-ink">{PASSWORD_STATUS_LABEL[entry.password_status.preferred_value || "unavailable"]}</p>
+              </div>
+            </div>
+            <div className="mt-3">
+              <span className="text-xs uppercase tracking-[0.12em] text-muted">Secondary groups</span>
+              {entry.secondary_groups.length > 0 ? (
+                <div className="mt-1.5 flex flex-wrap gap-1.5" data-testid="user-secondary-groups">
+                  {entry.secondary_groups.map((group) => (
+                    <span key={group.group_name} className="rounded-full border border-line px-2.5 py-1 text-[11px] text-muted">
+                      {group.group_name}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1 text-xs italic text-muted/70" data-testid="user-secondary-groups-empty">
+                  None observed
+                </p>
+              )}
+            </div>
+            {entry.last_login ? (
+              <div className="mt-3 space-y-1.5" data-testid="user-last-login-provenance">
+                <span className="text-xs uppercase tracking-[0.12em] text-muted">Last login sources</span>
+                {entry.last_login.observations.map((observation) => (
+                  <UserObservationRow key={observation.id} caseId={caseId} hostId={hostId} observation={observation} />
+                ))}
+              </div>
+            ) : null}
+          </td>
+        </tr>
+      ) : null}
+    </>
+  );
+}
+
+function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostId: string; users: HostUserEntry[] }) {
+  const [filterText, setFilterText] = useState("");
+  const [sortKey, setSortKey] = useState<UserSortKey>("username");
+  const [sortDirection, setSortDirection] = useState<UserSortDirection>("asc");
+  const [expandedUsernames, setExpandedUsernames] = useState<Set<string>>(new Set());
+
+  const toggleExpanded = (username: string) => {
+    setExpandedUsernames((prev) => {
+      const next = new Set(prev);
+      if (next.has(username)) next.delete(username);
+      else next.add(username);
+      return next;
+    });
+  };
+
+  const toggleSort = (key: UserSortKey) => {
+    if (sortKey === key) {
+      setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(key);
+      setSortDirection("asc");
+    }
+  };
+
+  const filtered = useMemo(() => {
+    const needle = filterText.trim().toLowerCase();
+    const matches = needle
+      ? users.filter((entry) => {
+          const haystack = [entry.username, entry.identity.gecos.preferred_value, entry.identity.shell.preferred_value, entry.primary_group_name]
+            .filter(Boolean)
+            .join(" ")
+            .toLowerCase();
+          return haystack.includes(needle);
+        })
+      : users;
+    const sorted = [...matches].sort((a, b) => {
+      let comparison = 0;
+      if (sortKey === "username") comparison = a.username.localeCompare(b.username);
+      else if (sortKey === "uid") comparison = Number(a.identity.uid.preferred_value ?? Number.MAX_SAFE_INTEGER) - Number(b.identity.uid.preferred_value ?? Number.MAX_SAFE_INTEGER);
+      else if (sortKey === "last_login") comparison = (a.last_login?.timestamp ?? "").localeCompare(b.last_login?.timestamp ?? "");
+      else if (sortKey === "status") comparison = a.account_status.localeCompare(b.account_status);
+      return sortDirection === "asc" ? comparison : -comparison;
+    });
+    return sorted;
+  }, [users, filterText, sortKey, sortDirection]);
+
+  const sortButton = (key: UserSortKey, label: string) => (
+    <button type="button" onClick={() => toggleSort(key)} className="flex items-center gap-1 hover:text-ink" data-testid={`user-sort-${key}`}>
+      {label}
+      {sortKey === key ? <span>{sortDirection === "asc" ? "↑" : "↓"}</span> : null}
+    </button>
+  );
+
+  return (
+    <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel" data-testid="user-inventory-section">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <UsersIcon size={18} className="text-accent/60" aria-hidden="true" />
+          <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Users ({users.length})</p>
+        </div>
+        <input
+          type="text"
+          value={filterText}
+          onChange={(event) => setFilterText(event.target.value)}
+          placeholder="Filter users&hellip;"
+          className="w-56 rounded-xl border border-line bg-abyss/80 px-3 py-1.5 text-xs text-ink placeholder:text-muted/60"
+          data-testid="user-filter-input"
+        />
+      </div>
+      {users.length === 0 ? (
+        <p className="mt-4 text-sm text-muted" data-testid="user-inventory-empty">
+          No local accounts have been identified for this host yet.
+        </p>
+      ) : (
+        <div className="mt-4 overflow-x-auto">
+          <table className="min-w-full text-left text-sm">
+            <thead className="border-b border-line bg-abyss/70 font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+              <tr>
+                <th className="px-4 py-3">{sortButton("username", "Username")}</th>
+                <th className="px-4 py-3">{sortButton("uid", "UID")}</th>
+                <th className="px-4 py-3">Primary group</th>
+                <th className="px-4 py-3">Home</th>
+                <th className="px-4 py-3">Shell</th>
+                <th className="px-4 py-3">{sortButton("status", "Status")}</th>
+                <th className="px-4 py-3">{sortButton("last_login", "Last login")}</th>
+                <th className="px-4 py-3" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-line/70">
+              {filtered.map((entry) => (
+                <UserRow key={entry.username} caseId={caseId} hostId={hostId} entry={entry} expanded={expandedUsernames.has(entry.username)} onToggle={() => toggleExpanded(entry.username)} />
+              ))}
+            </tbody>
+          </table>
+          {filtered.length === 0 ? (
+            <p className="px-4 py-6 text-sm text-muted" data-testid="user-filter-empty">
+              No users match &ldquo;{filterText}&rdquo;.
+            </p>
+          ) : null}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function HostInformationPage() {
   const { caseId = "" } = useParams();
   const { setActiveCaseId, caseContext, isCaseContextLoading } = useActiveCase();
@@ -230,6 +486,14 @@ export default function HostInformationPage() {
     for (const fact of factsQuery.data?.facts ?? []) map.set(fact.fact_type, fact);
     return map;
   }, [factsQuery.data]);
+
+  const usersQuery = useQuery({
+    queryKey: ["case-host-users", caseId, selectedHostId],
+    queryFn: () => api.getCaseHostUsers(caseId, { host_id: selectedHostId }),
+    enabled: Boolean(caseId && selectedHostId),
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
 
   const selectedHost = hosts.find((host) => host.id === selectedHostId) ?? null;
 
@@ -306,6 +570,10 @@ export default function HostInformationPage() {
               ))}
             </div>
           ) : null}
+
+          {usersQuery.isLoading ? <p className="text-sm text-muted">Loading users&hellip;</p> : null}
+          {usersQuery.isError ? <p className="text-sm text-danger">{String((usersQuery.error as Error)?.message || "Could not load Host User Inventory for this host.")}</p> : null}
+          {usersQuery.data ? <UserInventorySection caseId={caseId} hostId={selectedHostId} users={usersQuery.data.users} /> : null}
         </>
       ) : null}
     </div>

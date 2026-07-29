@@ -3664,6 +3664,18 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["lastlog_host"] = row.get("lastlog_host", "")
     linux_data["lastlog_tty"] = row.get("lastlog_tty", "")
     linux_data["remote_host"] = row.get("remote_host", "")
+    # Identity fields (linux_identity: passwd/group/shadow) -- consumed by
+    # app.services.host_users, which correlates these already-normalized
+    # observations into one inventory entry per account, exactly the way
+    # app.services.host_facts already reads linux.fact_type/timezone_* here
+    # without this normalizer needing to know about that consumer.
+    linux_data["gid"] = row.get("gid", "")
+    linux_data["home"] = row.get("home", "")
+    linux_data["shell"] = row.get("shell", "")
+    linux_data["gecos"] = row.get("gecos", "")
+    linux_data["password_status"] = row.get("password_status", "")
+    linux_data["group_name"] = row.get("group_name", "")
+    linux_data["members"] = row.get("members") or []
     linux_data["fact_type"] = row.get("fact_type", "")
     linux_data["timezone_name"] = row.get("normalized_value") or ""
     linux_data["timezone_raw_value"] = row.get("raw_value", "")

@@ -958,11 +958,29 @@ class TestIdentityParser:
     def test_shadow_no_hashes_stored(self, shadow_content):
         from app.ingest.linux.identity import parse_identity
         results = parse_identity(shadow_content, source_path="/etc/shadow")
-        assert len(results) == 1
-        entry = results[0]
-        message = entry.get("message", "")
-        assert "hashes not stored" in message
-        assert "root" in entry.get("username", "")
+        # One row per user (needed for per-account password/lock status), not
+        # a single file-level summary -- but still never carrying the hash.
+        assert len(results) == 3
+        usernames = {r["username"] for r in results}
+        assert usernames == {"root", "analyst", "dbadmin"}
+        for entry in results:
+            message = entry.get("message", "")
+            assert "hash not stored" in message
+            assert entry["password_status"] == "set"
+
+    def test_shadow_locked_and_empty_password_status(self):
+        from app.ingest.linux.identity import parse_identity
+        content = "\n".join([
+            "root:$6$randomsalt$hashedpasswordvaluehere12345abcde:19000:0:99999:7:::",
+            "daemon:!:19000:0:99999:7:::",
+            "sync:*:19000:0:99999:7:::",
+            "guest::19000:0:99999:7:::",
+        ])
+        results = parse_identity(content, source_path="/etc/shadow")
+        status_by_user = {r["username"]: r["password_status"] for r in results}
+        assert status_by_user == {"root": "set", "daemon": "locked", "sync": "locked", "guest": "empty"}
+        for entry in results:
+            assert "$" not in entry["message"]
 
 
 class TestSudoersParser:
@@ -1190,13 +1208,14 @@ class TestSecretsAreNeverStored:
     def test_shadow_no_hashes_in_message(self, shadow_content):
         from app.ingest.linux.identity import parse_identity
         results = parse_identity(shadow_content, source_path="/etc/shadow")
-        entry = results[0]
-        assert entry["artifact_type"] == "shadow"
-        message = entry.get("message", "")
-        assert "6$" not in message
-        assert "hashes not stored" in entry.get("message", "")
-        username_field = entry.get("username", "")
-        assert "$" not in username_field
+        assert results
+        for entry in results:
+            assert entry["artifact_type"] == "shadow"
+            message = entry.get("message", "")
+            assert "6$" not in message
+            assert "hash not stored" in message
+            username_field = entry.get("username", "")
+            assert "$" not in username_field
 
 
 class TestArtifactMarkerMatching:
@@ -1226,6 +1245,34 @@ class TestArtifactMarkerMatching:
         assert looks_like_linux_artifact("var/log/messages.1") is not None
         assert looks_like_linux_artifact("var/log/messages-20230101") is not None
         assert looks_like_linux_artifact("var/log/auth.log.1") is not None
+
+    def test_vipw_backup_suffix_still_matches(self):
+        from app.ingest.linux.helpers import looks_like_linux_artifact
+        assert looks_like_linux_artifact("etc/passwd-") == ("linux_identity", "passwd", "linux_identity_raw")
+        assert looks_like_linux_artifact("etc/shadow-") == ("linux_identity", "shadow", "linux_identity_raw")
+
+    def test_package_template_file_is_not_misclassified_as_rotated_passwd(self):
+        # Confirmed against real evidence: /usr/share/base-passwd/passwd.master
+        # is a Debian package *template* listing default system accounts, not
+        # a rotated copy of the host's actual /etc/passwd -- it was silently
+        # inflating the Host User Inventory with accounts that never existed
+        # on the host. A real rotation/date suffix always starts with a
+        # digit; "master" does not.
+        from app.ingest.linux.helpers import looks_like_linux_artifact
+        assert looks_like_linux_artifact("usr/share/base-passwd/passwd.master") is None
+        assert looks_like_linux_artifact("etc/passwd.bak") is None
+        assert looks_like_linux_artifact("etc/passwd.orig") is None
+
+    def test_man_page_section_file_is_not_misclassified_as_rotated_passwd(self):
+        # passwd(5)'s own man page is literally named passwd.5.gz -- the
+        # section number "5" satisfies a naive "starts with a digit" rotation
+        # check the same way messages.1 legitimately does, so excluding
+        # usr/share (like the existing hostnamectl/uname/timedatectl fix
+        # already does) is what actually rules this out: no real /etc/passwd,
+        # /etc/group or /etc/shadow ever lives under a share/bin directory.
+        from app.ingest.linux.helpers import looks_like_linux_artifact
+        assert looks_like_linux_artifact("usr/share/man/man5/passwd.5.gz") is None
+        assert looks_like_linux_artifact("usr/share/man/zh_TW/man5/passwd.5.gz") is None
 
     def test_directory_scoped_marker_still_matches(self):
         from app.ingest.linux.helpers import looks_like_linux_artifact
