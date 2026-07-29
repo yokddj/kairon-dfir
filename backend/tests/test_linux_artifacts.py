@@ -1060,12 +1060,17 @@ class TestOSInfoParser:
         return (FIXTURES_DIR / "hostname").read_text()
 
     def test_os_release_name_and_version(self, os_release_content):
+        # Since the Host Facts: Identity & Operating System sprint,
+        # os-release with both a distribution and a version present
+        # produces two independently-conflictable facts (host.distribution,
+        # host.distribution_version) rather than one collapsed row.
         from app.ingest.linux.os_info import parse_os_info
         results = parse_os_info(os_release_content, source_path="/etc/os-release")
-        assert len(results) == 1
-        entry = results[0]
-        assert entry["os_name"] == "Ubuntu"
-        assert "22.04" in entry.get("os_version", "")
+        assert len(results) == 2
+        by_type = {entry["fact_type"]: entry for entry in results}
+        assert by_type["host.distribution"]["os_name"] == "Ubuntu 22.04.4 LTS"
+        assert by_type["host.distribution"]["normalized_value"] == "ubuntu"
+        assert "22.04" in by_type["host.distribution_version"].get("os_version", "")
 
     def test_os_release_type(self, os_release_content):
         from app.ingest.linux.os_info import parse_os_info

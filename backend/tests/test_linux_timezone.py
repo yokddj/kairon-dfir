@@ -104,16 +104,15 @@ class TestTimedatectlAndHostnamectl:
         assert rows[0]["parse_status"] == "invalid"
         assert rows[0]["reason"] == "no_time_zone_line_found"
 
-    def test_hostnamectl_with_timezone_present(self):
+    def test_hostnamectl_is_not_handled_here(self):
+        # hostnamectl output is host-identity command output first --
+        # dispatch and parsing moved to app.ingest.linux.os_info in the
+        # Host Facts: Identity & Operating System sprint (see
+        # test_linux_host_identity.py), which reuses this module's own
+        # validate_iana_zone/TIME_ZONE_LINE_RE for the timezone line it
+        # also carries rather than this function handling it directly.
         content = "Static hostname: db01\nTime zone: America/New_York (EDT, -0400)\n"
-        rows = parse_timezone(content, source_path="hostnamectl.txt")
-        assert rows[0]["artifact_type"] == "hostnamectl"
-        assert rows[0]["normalized_value"] == "America/New_York"
-
-    def test_hostnamectl_without_timezone_yields_no_fact(self):
-        content = "Static hostname: db01\nOperating System: Debian GNU/Linux 11\nKernel: Linux 5.10.0\n"
-        rows = parse_timezone(content, source_path="hostnamectl.txt")
-        assert rows == []
+        assert parse_timezone(content, source_path="hostnamectl.txt") == []
 
     def test_timedatectl_binary_under_bin_is_not_dispatched(self):
         from app.ingest.linux.helpers import looks_like_linux_artifact

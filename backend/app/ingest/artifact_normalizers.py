@@ -3671,8 +3671,22 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["timezone_parse_status"] = row.get("parse_status", "")
     linux_data["timezone_parse_reason"] = row.get("reason", "")
     linux_data["timezone_tzif_meta"] = row.get("tzif_meta") or {}
+    # Generic fact fields -- populated for every Host-Facts-producing row
+    # regardless of fact_type (host.hostname, host.fqdn, host.distribution,
+    # host.distribution_version, host.kernel, host.architecture,
+    # host.timezone, ...). The timezone_* fields above stay populated too,
+    # for backward compatibility with the first Host Facts sprint.
+    linux_data["fact_normalized_value"] = row.get("normalized_value") or ""
+    linux_data["fact_raw_value"] = row.get("raw_value", "")
+    linux_data["fact_confidence"] = row.get("confidence", "")
+    linux_data["fact_parse_status"] = row.get("parse_status", "")
+    linux_data["fact_reason"] = row.get("reason", "")
     linux_data["line_number"] = row.get("line_number", None)
-    linux_data["hostname"] = linux_data.get("hostname") or detected_host or ""
+    linux_data["os_name"] = row.get("os_name") or linux_data.get("os_name") or ""
+    linux_data["os_version"] = row.get("os_version") or linux_data.get("os_version") or ""
+    linux_data["kernel_version"] = row.get("kernel_version") or linux_data.get("kernel_version") or ""
+    linux_data["architecture"] = row.get("architecture") or linux_data.get("architecture") or ""
+    linux_data["hostname"] = row.get("hostname") or linux_data.get("hostname") or detected_host or ""
     linux_data["http_method"] = row.get("http_method", "")
     linux_data["url_path"] = row.get("url_path", "")
     linux_data["http_protocol"] = row.get("http_protocol", "")
@@ -3779,6 +3793,15 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
         doc["event"].update({"category": "config", "type": "timezone", "action": "timezone_detected"})
         doc["event"]["outcome"] = "success" if linux_data.get("timezone_parse_status") == "valid" else "failure"
         doc["title"] = linux_data.get("message") or "Linux timezone observation"
+    elif family == "linux_os_info":
+        # Host identity is configuration, same as timezone -- see
+        # app.services.host_facts. A single hostnamectl capture can yield
+        # several rows (hostname, distribution, kernel, architecture,
+        # timezone), each already carrying its own fact_type/artifact_type;
+        # event.type reflects that specific fact, not the whole family.
+        doc["event"].update({"category": "config", "type": linux_data.get("fact_type") or linux_data.get("artifact_type") or "os_info", "action": "host_identity_detected"})
+        doc["event"]["outcome"] = "success" if linux_data.get("fact_parse_status") == "valid" else "failure"
+        doc["title"] = linux_data.get("message") or "Linux host identity observation"
     event_severity = "medium" if linux_data.get("event_action") in {"login", "auth_failure", "session_open", "session_close", "sudo", "su"} else "info"
     if family == "linux_apache" and linux_data.get("artifact_type") == "apache_error":
         apache_severity = str(linux_data.get("http_severity") or "").lower()
@@ -3795,6 +3818,8 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     elif family == "linux_lastlog":
         event_severity = "info"
     elif family == "linux_timezone":
+        event_severity = "info"
+    elif family == "linux_os_info":
         event_severity = "info"
     doc["event"]["severity"] = event_severity
 
