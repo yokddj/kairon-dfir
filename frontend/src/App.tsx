@@ -66,12 +66,6 @@ function appendSearch(path: string, search: string): string {
   return `${path}${separator}${search.replace(/^\?/, "")}`;
 }
 
-function NavigateToCaseTab({ tab }: { tab: string }) {
-  const { caseId = "" } = useParams();
-  if (!caseId) return <Navigate to="/cases" replace />;
-  return <Navigate to={`/cases/${caseId}?tab=${tab}`} replace />;
-}
-
 function LegacyCaseParamRedirect({ suffix, fallback = "/cases", preserveQuery = true }: { suffix: string; fallback?: string; preserveQuery?: boolean }) {
   const { caseId = "" } = useParams();
   const location = useLocation();
@@ -169,8 +163,8 @@ export default function App() {
                         <Route path="/cases/:caseId/artifacts" element={<ArtifactExplorer />} />
                         <Route path="/cases/:caseId/incident-timeline" element={<IncidentTimelinePage />} />
                         <Route path="/cases/:caseId/validation-matrix" element={<ValidationMatrixPage />} />
-                        <Route path="/cases/:caseId/evidence" element={<NavigateToCaseTab tab="evidences" />} />
-                        <Route path="/cases/:caseId/ingest" element={<NavigateToCaseTab tab="processing" />} />
+                        <Route path="/cases/:caseId/evidence" element={<CaseDetail />} />
+                        <Route path="/cases/:caseId/ingest" element={<LegacyCaseParamRedirect suffix="/evidence?tab=processing" preserveQuery={false} />} />
                         <Route path="/cases/:caseId/detections" element={<Detections />} />
                         <Route path="/cases/:caseId/reports" element={<CaseReportsPage />} />
                         <Route path="/cases/:caseId/debug-export" element={<DebugExportPage />} />
@@ -200,7 +194,7 @@ export default function App() {
                         <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<LegacyMemoryEvidenceRedirect />} />
                         <Route path="/cases/:caseId/memory/:evidenceId" element={<LegacyMemoryEvidenceRedirect />} />
                         <Route path="/cases/:caseId/dashboard" element={<LegacyCaseParamRedirect suffix="/overview" />} />
-                        <Route path="/cases/:caseId" element={<CaseDetail />} />
+                        <Route path="/cases/:caseId" element={<LegacyCaseParamRedirect suffix="/evidence" />} />
                         <Route path="/evidences/:evidenceId" element={<EvidenceDetail />} />
                         <Route path="/search" element={<LegacyCaseRoute suffix="/search" />} />
                         <Route path="/artifacts/explorer" element={<LegacyCaseRoute suffix="/artifacts" />} />

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { api, type DfirCase, type ResumableUploadSessionRead } from "../api/client";
 import ArtifactBadge from "../components/ArtifactBadge";
 import CreateFindingDialog from "../components/CreateFindingDialog";
@@ -17,7 +17,40 @@ import DeleteCaseDialog from "../components/DeleteCaseDialog";
 import { memoryEvidenceRoute } from "../lib/canonicalRoutes";
 
 const tabs = ["overview", "evidences", "processing", "artifacts", "artifact_explorer", "search", "process_tree", "investigation_timeline", "detections", "findings", "activity"] as const;
+// This page's remaining, non-duplicated responsibility -- everything else in
+// `tabs` above now has its own dedicated Investigation page (see
+// redirectTargetForTab) and only stays in `tabs`/`tabLabels` so that legacy
+// ?tab= links still resolve to a value before being redirected away.
+const PRIMARY_TABS = ["evidences", "processing"] as const;
 type ExpectedEvidenceKind = "disk_image" | "memory_dump" | "collection" | "archive" | "unknown";
+
+// Most of this page's original tabs have since grown into dedicated
+// Investigation pages (Overview, Search, Timeline, Detections, Findings,
+// Artifact Views) -- redirecting here keeps old bookmarks/links working
+// without this page rendering a second, stale copy of that UI.
+function redirectTargetForTab(tab: string, caseId: string): string | null {
+  switch (tab) {
+    case "overview":
+      return `/cases/${caseId}/overview`;
+    case "artifacts":
+    case "artifact_explorer":
+      return `/cases/${caseId}/artifacts`;
+    case "search":
+      return `/cases/${caseId}/search`;
+    case "process_tree":
+      return `/cases/${caseId}/w/execution/stories`;
+    case "investigation_timeline":
+      return `/cases/${caseId}/incident-timeline`;
+    case "detections":
+      return `/cases/${caseId}/detections`;
+    case "findings":
+      return `/cases/${caseId}/findings`;
+    case "activity":
+      return "/activity";
+    default:
+      return null;
+  }
+}
 
 function expectedEvidenceKind(value: string | null): ExpectedEvidenceKind | null {
   if (value === "disk_image" || value === "memory_dump" || value === "collection" || value === "archive" || value === "unknown") return value;
@@ -47,7 +80,12 @@ export default function CaseDetail() {
   const { activeHost, activeHostId, hasHostFilter, clearHostFilter } = useHostContext();
   const initialTab = searchParams.get("tab");
   const expectedKind = expectedEvidenceKind(searchParams.get("expected_kind"));
-  const [tab, setTab] = useState<(typeof tabs)[number]>(tabs.includes(initialTab as (typeof tabs)[number]) ? (initialTab as (typeof tabs)[number]) : "overview");
+  // "evidences" (Evidence & Ingest) is this page's own remaining
+  // responsibility and the correct default when no ?tab= is present --
+  // "overview" duplicates the dedicated /overview page and only exists here
+  // so an explicit ?tab=overview link still resolves to something before
+  // redirectTargetForTab redirects it away.
+  const [tab, setTab] = useState<(typeof tabs)[number]>(tabs.includes(initialTab as (typeof tabs)[number]) ? (initialTab as (typeof tabs)[number]) : "evidences");
   const [caseTimezone, setCaseTimezone] = useState("");
   const [query, setQuery] = useState(searchParams.get("query") ?? "");
   const [searchEventId, setSearchEventId] = useState(searchParams.get("event_id") ?? "");
@@ -254,6 +292,14 @@ export default function CaseDetail() {
     </div>
   );
 
+  const redirectTarget = redirectTargetForTab(initialTab || "", caseId);
+  if (redirectTarget) {
+    const preservedParams = new URLSearchParams(searchParams);
+    preservedParams.delete("tab");
+    const query = preservedParams.toString();
+    return <Navigate to={query ? `${redirectTarget}?${query}` : redirectTarget} replace />;
+  }
+
   return (
     <div className="space-y-8">
       {caseQuery.error instanceof Error ? <div className="rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger">{caseQuery.error.message}</div> : null}
@@ -299,7 +345,7 @@ export default function CaseDetail() {
           <div className="md:col-span-4"><p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Notes</p><p className="mt-1 whitespace-pre-wrap text-sm text-muted">{caseQuery.data?.case_notes || "No case notes yet."}</p></div>
         </div>
         <div className="mt-6 flex flex-wrap gap-2">
-          {tabs.map((item) => (
+          {PRIMARY_TABS.map((item) => (
             <button
               key={item}
               onClick={() => {

@@ -103,7 +103,7 @@ describe("ActivityPage", () => {
     expect(cancelButton).toBeEnabled();
 
     await userEvent.click(continueButton);
-    expect(navigateMock).toHaveBeenCalledWith("/cases/case-1?tab=evidences&resume_session=upload-session-1");
+    expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/evidence?tab=evidences&resume_session=upload-session-1");
 
     await userEvent.click(cancelButton);
     await waitFor(() => expect(cancelEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "upload-session-1"));
