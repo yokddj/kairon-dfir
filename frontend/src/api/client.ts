@@ -2484,6 +2484,13 @@ export type HostUserEntry = {
   password_status: HostUserFieldResolution;
   account_status: "locked" | "active" | "unknown";
   last_login: HostUserLastLogin | null;
+  shell_classification: "login" | "non_login" | "unknown";
+  effective_sudo: {
+    has_sudo: boolean;
+    via: "direct" | "group" | null;
+    granting_groups: string[];
+    observations: HostUserObservation[];
+  };
 };
 
 export type CaseHostUsersResponse = {

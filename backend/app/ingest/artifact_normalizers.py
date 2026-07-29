@@ -3676,6 +3676,15 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["password_status"] = row.get("password_status", "")
     linux_data["group_name"] = row.get("group_name", "")
     linux_data["members"] = row.get("members") or []
+    # Sudoers fields -- consumed by app.services.host_users to resolve
+    # effective sudo access (direct user rules and %group rules), the same
+    # way group membership is already resolved there.
+    linux_data["principal"] = row.get("principal", "")
+    linux_data["host_spec"] = row.get("host_spec", "")
+    linux_data["run_as"] = row.get("run_as", "")
+    linux_data["command_spec"] = row.get("command_spec", "")
+    linux_data["sudo_options"] = row.get("options") or []
+    linux_data["is_defaults"] = bool(row.get("is_defaults"))
     linux_data["fact_type"] = row.get("fact_type", "")
     linux_data["timezone_name"] = row.get("normalized_value") or ""
     linux_data["timezone_raw_value"] = row.get("raw_value", "")
@@ -3701,6 +3710,12 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     linux_data["hostname"] = row.get("hostname") or linux_data.get("hostname") or detected_host or ""
     linux_data["http_method"] = row.get("http_method", "")
     linux_data["url_path"] = row.get("url_path", "")
+    # Passive, never-executed decoding of the request path -- see
+    # app.ingest.linux.apache. Both the original and decoded forms stay
+    # searchable so an analyst can pivot on either.
+    linux_data["url_path_decoded"] = row.get("url_path_decoded", "")
+    linux_data["url_base64_decoded"] = row.get("url_base64_decoded") or []
+    linux_data["suspicious_url_indicators"] = row.get("suspicious_url_indicators") or []
     linux_data["http_protocol"] = row.get("http_protocol", "")
     linux_data["http_status"] = row.get("http_status", None)
     linux_data["bytes_sent"] = row.get("bytes_sent", None)
@@ -3825,6 +3840,11 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
             event_severity = "low"
         else:
             event_severity = "info"
+    elif family == "linux_apache" and linux_data.get("suspicious_url_indicators"):
+        # A request whose decoded/base64-revealed content matched generic
+        # web-shell/reverse-shell indicators -- a flag for analyst review,
+        # never a confirmed detection on its own.
+        event_severity = "medium"
     elif family == "linux_exim" and linux_data.get("event_severity"):
         event_severity = linux_data.get("event_severity")
     elif family == "linux_lastlog":

