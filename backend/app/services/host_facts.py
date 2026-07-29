@@ -19,10 +19,12 @@ always returns every supporting and conflicting observation alongside the
 preferred value, so an analyst sees a disagreement rather than a single
 number that hides it.
 
-Timezone (``host.timezone``) is the first, and currently only, fact_type
-this module knows about; every function here is generic over fact_type so
-a future fact (hostname, boot time, network interfaces, locale, ...) only
-needs to add rows with a new fact_type, not a new table or a new service.
+Timezone (``host.timezone``) was the first fact_type this module supported;
+host.hostname, host.fqdn, host.distribution, host.distribution_version,
+host.kernel and host.architecture followed in the Host Facts: Identity &
+Operating System sprint without any change to this module at all -- every
+function here was already generic over fact_type, which is exactly what
+that sprint set out to validate.
 """
 from __future__ import annotations
 
@@ -32,23 +34,70 @@ from datetime import datetime
 
 from sqlalchemy.orm import Session
 
+from app.ingest.linux.os_info import (
+    FACT_ARCHITECTURE,
+    FACT_DISTRIBUTION,
+    FACT_DISTRIBUTION_VERSION,
+    FACT_FQDN,
+    FACT_HOSTNAME,
+    FACT_KERNEL,
+)
+from app.ingest.linux.timezone import FACT_TYPE_TIMEZONE
 from app.models.host_fact import HostFact
 
 # Deterministic tie-break order used only when independent sources for the
 # same host and fact_type disagree and a single "preferred value" must still
 # be surfaced (the resolution response always also carries every
 # conflicting observation, so this ranking never hides the disagreement --
-# see resolve_host_facts). Highest first: the two sources that reflect the
-# system's *current, live* configuration on the two major distro families
-# rank above copies/derivations of it.
-_SOURCE_PRIORITY: dict[str, int] = {
-    "etc_timezone": 100,
-    "timedatectl": 90,
-    "etc_localtime_symlink": 80,
-    "sysconfig_clock": 70,
-    "conf_d_clock": 65,
-    "etc_localtime_tzif": 60,
-    "hostnamectl": 50,
+# see resolve_host_facts). Keyed by (fact_type, source_kind) because the
+# same source_kind can rank differently depending on what it is being
+# asked about -- hostnamectl is a strong source for the host's live
+# hostname, but only a secondary one for distribution (no machine-readable
+# ID field) and for kernel/architecture (it just echoes uname/proc). A
+# (fact_type, source_kind) pair with no entry defaults to 0.
+_SOURCE_PRIORITY: dict[tuple[str, str], int] = {
+    # host.timezone -- the two sources that reflect the system's current,
+    # live configuration on the two major distro families rank above
+    # copies/derivations of it.
+    (FACT_TYPE_TIMEZONE, "etc_timezone"): 100,
+    (FACT_TYPE_TIMEZONE, "timedatectl"): 90,
+    (FACT_TYPE_TIMEZONE, "etc_localtime_symlink"): 80,
+    (FACT_TYPE_TIMEZONE, "sysconfig_clock"): 70,
+    (FACT_TYPE_TIMEZONE, "conf_d_clock"): 65,
+    (FACT_TYPE_TIMEZONE, "etc_localtime_tzif"): 60,
+    (FACT_TYPE_TIMEZONE, "hostnamectl"): 50,
+    # host.hostname / host.fqdn -- the persisted config file and the live
+    # systemd-managed value should normally agree; when they don't,
+    # /etc/hostname is what the machine will present on its next boot.
+    (FACT_HOSTNAME, "hostname"): 100,
+    (FACT_HOSTNAME, "hostnamectl"): 90,
+    (FACT_FQDN, "hostname"): 100,
+    (FACT_FQDN, "hostnamectl"): 90,
+    # host.distribution / host.distribution_version -- os-release is the
+    # current standard, machine-readable spec; lsb-release is its legacy
+    # predecessor (still shipped alongside it on Debian/Ubuntu, usually
+    # redundant); hostnamectl only carries a human-readable pretty name,
+    # no machine-readable ID; debian_version is the weakest signal (its
+    # presence alone implies "debian", but it carries no distribution name
+    # of its own -- see the reason on that row).
+    (FACT_DISTRIBUTION, "os_release"): 100,
+    (FACT_DISTRIBUTION, "lsb_release"): 80,
+    (FACT_DISTRIBUTION, "hostnamectl"): 60,
+    (FACT_DISTRIBUTION, "debian_version"): 40,
+    (FACT_DISTRIBUTION_VERSION, "os_release"): 100,
+    (FACT_DISTRIBUTION_VERSION, "lsb_release"): 80,
+    (FACT_DISTRIBUTION_VERSION, "debian_version"): 70,
+    (FACT_DISTRIBUTION_VERSION, "hostnamectl"): 60,
+    # host.kernel / host.architecture -- uname is the direct command output
+    # this information exists to describe; /proc/version is equally
+    # authoritative but a little harder to parse cleanly; hostnamectl
+    # again only echoes what uname already reports.
+    (FACT_KERNEL, "uname"): 100,
+    (FACT_KERNEL, "kernel_version"): 90,
+    (FACT_KERNEL, "hostnamectl"): 70,
+    (FACT_ARCHITECTURE, "uname"): 100,
+    (FACT_ARCHITECTURE, "kernel_version"): 90,
+    (FACT_ARCHITECTURE, "hostnamectl"): 70,
 }
 
 
@@ -209,7 +258,7 @@ def _resolve_group(fact_type: str, rows: list[HostFact]) -> dict:
         preferred = distinct_values[0]
         status = "confirmed" if len(valid_rows) > 1 else "observed"
     else:
-        preferred = max(valid_rows, key=lambda row: _SOURCE_PRIORITY.get(row.source_kind, 0)).normalized_value
+        preferred = max(valid_rows, key=lambda row: _SOURCE_PRIORITY.get((fact_type, row.source_kind), 0)).normalized_value
         status = "conflicting"
     return {
         "fact_type": fact_type,

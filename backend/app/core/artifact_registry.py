@@ -620,7 +620,7 @@ ARTIFACT_REGISTRY: dict[str, dict[str, Any]] = {
         "timeline_capable": False,
         "severity_support": False,
         "usable_tier": "tier2",
-        "filter_fields": ["linux.hostname", "host.name"],
+        "filter_fields": ["linux.hostname", "linux.fact_type", "linux.fact_normalized_value", "linux.os_name", "linux.os_version", "linux.kernel_version", "linux.architecture", "host.name"],
         "quick_selects": [],
         "capabilities": ["supportsSearch", "supportsUsers"],
     },

@@ -41,7 +41,10 @@ _TZIF_HEADER_STRUCT = struct.Struct(">4sc15xllllll")  # magic, version, 15 reser
 # Systemd's real output is "Time zone: Europe/Madrid (CET, +0100)". Only the
 # token immediately after the colon is ever used -- the parenthetical
 # abbreviation/offset is provenance only and is never used to name the zone.
-_TIME_ZONE_LINE_RE = re.compile(r"^\s*Time zone:\s*(\S+)", re.IGNORECASE | re.MULTILINE)
+# Public: app.ingest.linux.os_info's hostnamectl handling reuses this same
+# pattern instead of matching "Time zone:" a second, independent way.
+TIME_ZONE_LINE_RE = re.compile(r"^\s*Time zone:\s*(\S+)", re.IGNORECASE | re.MULTILINE)
+_TIME_ZONE_LINE_RE = TIME_ZONE_LINE_RE
 
 # ZONE=... / TIMEZONE=... shell-assignment style, tolerant of quoting and
 # surrounding whitespace. Matched with a regex, never evaluated as shell.
@@ -180,11 +183,14 @@ def _clean_zone_candidate(value: str) -> str:
     return value.strip().strip("\"'").strip()
 
 
-def _validated_zone(candidate: str) -> tuple[str | None, str]:
+def validate_iana_zone(candidate: str) -> tuple[str | None, str]:
     """Return (normalized_value, confidence_penalty_reason).
 
     Only ever resolves a name that exists in the system's own IANA zone
     database -- never a name synthesized from an offset or abbreviation.
+    Public: reused by app.ingest.linux.os_info's hostnamectl handling so
+    the "Time zone:" line is validated identically wherever it is found,
+    without duplicating this logic a second time.
     """
     cleaned = _clean_zone_candidate(candidate)
     if not cleaned:
@@ -201,6 +207,9 @@ def _validated_zone(candidate: str) -> tuple[str | None, str]:
             return cleaned, "unverified_no_zone_database"
         return None, "not_iana_shaped"
     return cleaned, ""
+
+
+_validated_zone = validate_iana_zone  # internal alias, kept for brevity below
 
 
 def _row(
@@ -323,6 +332,13 @@ def parse_timezone(content: bytes | str, *, source_path: str = "", username: str
     artifact type in ``app.ingest.linux.dispatch``); every other source_kind
     arrives as decoded text, matching the convention already used by
     ``app.ingest.linux.os_info``.
+
+    Note: ``hostnamectl`` output is *not* handled here even though it can
+    carry a "Time zone:" line -- it is host-identity command output first
+    and foremost (hostname, distribution, kernel, architecture), so its
+    dispatch and parsing live in ``app.ingest.linux.os_info`` alongside
+    those other facts, reusing ``validate_iana_zone``/``TIME_ZONE_LINE_RE``
+    from this module for the timezone portion rather than duplicating it.
     """
     path_lower = str(source_path).replace("\\", "/").lower()
     name = path_lower.rsplit("/", 1)[-1]
@@ -338,8 +354,6 @@ def parse_timezone(content: bytes | str, *, source_path: str = "", username: str
         return _parse_shell_clock_file(content, source_path, source_kind="conf_d_clock")
     if "timedatectl" in name:
         return _parse_time_zone_line(content, source_path, source_kind="timedatectl", required=True)
-    if "hostnamectl" in name:
-        return _parse_time_zone_line(content, source_path, source_kind="hostnamectl", required=False)
     if name == "localtime" or name.startswith("localtime."):
         return _parse_etc_localtime_text(content, source_path)
     return []

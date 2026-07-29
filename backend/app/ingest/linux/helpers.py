@@ -44,11 +44,6 @@ _LINUX_ARTIFACT_MAP: dict[str, tuple[str, str, str]] = {
     "apt/history.log": ("linux_packages", "apt_history", "linux_packages_raw"),
     "apt/term.log": ("linux_packages", "apt_term", "linux_packages_raw"),
     "var/lib/dpkg/status": ("linux_packages", "dpkg_status", "linux_packages_raw"),
-    "os-release": ("linux_os_info", "os_release", "linux_os_info_raw"),
-    "lsb-release": ("linux_os_info", "lsb_release", "linux_os_info_raw"),
-    "debian_version": ("linux_os_info", "debian_version", "linux_os_info_raw"),
-    "issue": ("linux_os_info", "issue", "linux_os_info_raw"),
-    "hostname": ("linux_os_info", "hostname", "linux_os_info_raw"),
     "hosts": ("linux_network", "etc_hosts", "linux_network_raw"),
     "resolv.conf": ("linux_network", "resolv_conf", "linux_network_raw"),
     "/netplan/": ("linux_network", "netplan", "linux_network_raw"),
@@ -70,14 +65,39 @@ _SYSCONFIG_CLOCK_RE = re.compile(r"(^|/)etc/sysconfig/clock$", re.IGNORECASE)
 _CONF_D_CLOCK_RE = re.compile(r"(^|/)etc/conf\.d/clock$", re.IGNORECASE)
 _TIMEDATECTL_RE = re.compile(r"(^|/)timedatectl(?:[._-][a-z0-9_-]*)?$", re.IGNORECASE)
 _HOSTNAMECTL_RE = re.compile(r"(^|/)hostnamectl(?:[._-][a-z0-9_-]*)?$", re.IGNORECASE)
-# timedatectl/hostnamectl are also real systemd binary names (under bin/
-# sbin/) and, confirmed against real disk-image evidence, real systemd
-# packages ship a file named exactly "timedatectl"/"hostnamectl" under
-# usr/share/bash-completion/completions/ (a shell-completion *script*, sourced
-# from a live shell -- never captured command output). Only the captured
-# text output of actually running the command is a timezone source; the
-# executable and any package-shipped file living under a system share/bin
-# directory is excluded rather than misread as that output.
+# /etc/hostname is dedicated (not a bare "hostname" marker) because real
+# disk-image evidence ships unrelated files with that exact basename
+# outside /etc -- e.g. usr/lib/byobu/hostname (a shell script) and
+# usr/lib/perl*/auto/Sys/Hostname.
+_ETC_HOSTNAME_RE = re.compile(r"(^|/)etc/hostname$", re.IGNORECASE)
+# os-release is checked by exact basename anywhere (both /etc/os-release
+# and /usr/lib/os-release are legitimate per the spec, and this basename
+# has not shown false positives against real evidence).
+_OS_RELEASE_RE = re.compile(r"(^|/)os-release$", re.IGNORECASE)
+# lsb-release is restricted to /etc/lsb-release and the installer-time
+# snapshot at /var/log/installer/lsb-release (both confirmed present on
+# real evidence). A bare "lsb-release" marker also matched dpkg's own
+# package-metadata files for the lsb-release package itself --
+# var/lib/dpkg/info/lsb-release.list/.md5sums/.postinst/.postrm/.prerm --
+# which are not the file's content, just bookkeeping that shares its name.
+_LSB_RELEASE_RE = re.compile(r"(^|/)(etc|var/log/installer)/lsb-release$", re.IGNORECASE)
+# /etc/debian_version only -- dedicated for the same reason as the others,
+# and so the internal "version" substring can never collide with kernel
+# routing (see app.ingest.linux.os_info).
+_DEBIAN_VERSION_RE = re.compile(r"(^|/)etc/debian_version$", re.IGNORECASE)
+# uname output capture (e.g. "uname.txt", "uname_a.log"); excluded from
+# bin/sbin like timedatectl/hostnamectl since /usr/bin/uname is a real
+# binary, not captured command output.
+_UNAME_RE = re.compile(r"(^|/)uname(?:[._-][a-z0-9_-]*)?$", re.IGNORECASE)
+# timedatectl/hostnamectl/uname are also real systemd/coreutils binary
+# names (under bin/sbin/) and, confirmed against real disk-image evidence,
+# real systemd packages ship a file named exactly "timedatectl"/
+# "hostnamectl" under usr/share/bash-completion/completions/ (a
+# shell-completion *script*, sourced from a live shell -- never captured
+# command output). Only the captured text output of actually running the
+# command is a fact source; the executable and any package-shipped file
+# living under a system share/bin directory is excluded rather than
+# misread as that output.
 _BIN_OR_SHARE_DIR_RE = re.compile(r"(^|/)(s?bin|share)/", re.IGNORECASE)
 
 _AUTH_PATTERNS = [
@@ -111,6 +131,12 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
         return ("linux_exim", artifact_type, "linux_exim_raw")
     if _LASTLOG_RE.search(path_str):
         return ("linux_lastlog", "lastlog", "linux_lastlog_raw")
+    if _OS_RELEASE_RE.search(path_str):
+        return ("linux_os_info", "os_release", "linux_os_info_raw")
+    if _LSB_RELEASE_RE.search(path_str):
+        return ("linux_os_info", "lsb_release", "linux_os_info_raw")
+    if _DEBIAN_VERSION_RE.search(path_str):
+        return ("linux_os_info", "debian_version", "linux_os_info_raw")
     if _ETC_TIMEZONE_RE.search(path_str):
         return ("linux_timezone", "etc_timezone", "linux_timezone_raw")
     if _ETC_LOCALTIME_RE.search(path_str):
@@ -121,8 +147,16 @@ def looks_like_linux_artifact(path: str | Path) -> tuple[str, str, str] | None:
         return ("linux_timezone", "conf_d_clock", "linux_timezone_raw")
     if _TIMEDATECTL_RE.search(path_str) and not _BIN_OR_SHARE_DIR_RE.search(path_str):
         return ("linux_timezone", "timedatectl", "linux_timezone_raw")
+    if _ETC_HOSTNAME_RE.search(path_str):
+        return ("linux_os_info", "hostname", "linux_os_info_raw")
     if _HOSTNAMECTL_RE.search(path_str) and not _BIN_OR_SHARE_DIR_RE.search(path_str):
-        return ("linux_timezone", "hostnamectl", "linux_timezone_raw")
+        # Host-identity command output (hostname, distribution, kernel,
+        # architecture) first and foremost; app.ingest.linux.os_info also
+        # extracts the "Time zone:" line it carries, reusing
+        # app.ingest.linux.timezone's own validation for that one field.
+        return ("linux_os_info", "hostnamectl", "linux_os_info_raw")
+    if _UNAME_RE.search(path_str) and not _BIN_OR_SHARE_DIR_RE.search(path_str):
+        return ("linux_os_info", "uname", "linux_os_info_raw")
     for marker, (family, artifact_type, parser) in _LINUX_ARTIFACT_MAP.items():
         if "/" in marker:
             # Directory-scoped marker: full relative-path context is required,
