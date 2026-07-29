@@ -138,7 +138,7 @@ describe("registry-driven sidebar", () => {
     localStorage.clear();
   });
 
-  it("renders fixed Investigation and Case Tools groups", async () => {
+  it("renders fixed Investigation and Technical Tools groups", async () => {
     getCaseCapabilitiesMock.mockResolvedValue(registry());
     renderSidebar();
 
@@ -146,7 +146,7 @@ describe("registry-driven sidebar", () => {
     for (const label of ["Overview", "Evidence", "Search", "Timeline", "Incident Timeline", "Detections", "Findings", "Reports"]) {
       expect(within(investigation).getByRole("link", { name: label })).toBeInTheDocument();
     }
-    const tools = screen.getByText("Case Tools").closest("section")!;
+    const tools = screen.getByText("Technical Tools").closest("section")!;
     expect(within(tools).getByRole("link", { name: "Artifact Views" })).toHaveAttribute("href", "/cases/case-1/artifacts");
     expect(within(tools).getByRole("link", { name: "Validation Matrix" })).toHaveAttribute("href", "/cases/case-1/validation-matrix");
     expect(within(tools).getByRole("link", { name: "Debug Export" })).toHaveAttribute("href", "/cases/case-1/debug-export");
@@ -231,7 +231,7 @@ describe("registry-driven sidebar", () => {
   it("renders an empty registry with only fixed sections", async () => {
     getCaseCapabilitiesMock.mockResolvedValue(registry());
     renderSidebar();
-    await screen.findByText("Case Tools");
+    await screen.findByText("Technical Tools");
     expect(screen.queryByTestId(/workbench-/)).not.toBeInTheDocument();
   });
 
@@ -360,7 +360,7 @@ describe("registry-driven sidebar", () => {
     }));
 
     renderSidebar();
-    await userEvent.type(await screen.findByLabelText("Search navigation"), "auth");
+    await userEvent.type(await screen.findByLabelText("Filter capabilities"), "auth");
 
     expect(await screen.findByRole("treeitem", { name: "Authentication" })).toBeInTheDocument();
     expect(screen.queryByRole("treeitem", { name: "Execution Stories" })).not.toBeInTheDocument();
@@ -385,7 +385,7 @@ describe("registry-driven sidebar", () => {
     await userEvent.keyboard("{Enter}");
     expect(screen.getByRole("treeitem", { name: /access/i })).toHaveAttribute("aria-expanded", "true");
     await userEvent.keyboard("{Escape}");
-    expect(screen.getByLabelText("Search navigation")).toHaveFocus();
+    expect(screen.getByLabelText("Filter capabilities")).toHaveFocus();
   });
 
   it("keeps large synthetic registries searchable without hardcoded workbench logic", async () => {
@@ -414,7 +414,7 @@ describe("registry-driven sidebar", () => {
     getCaseCapabilitiesMock.mockResolvedValue(registry({ workbenches: syntheticWorkbenches, capabilities: syntheticCapabilities }));
 
     renderSidebar();
-    await userEvent.type(await screen.findByLabelText("Search navigation"), "needle process");
+    await userEvent.type(await screen.findByLabelText("Filter capabilities"), "needle process");
 
     const match = await screen.findByRole("treeitem", { name: "Needle Process Capability" });
     expect(match).toHaveAttribute("href", "/cases/case-1/future-6/domain-27/capability-137");

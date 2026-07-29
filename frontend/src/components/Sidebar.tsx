@@ -9,6 +9,7 @@ import {
   FileArchive,
   Fingerprint,
   FolderSearch2,
+  GitCommitHorizontal,
   Gauge,
   Home,
   KeyRound,
@@ -29,6 +30,7 @@ type NavItem = {
   label: string;
   icon: typeof Home;
   requiresCase?: boolean;
+  description?: string;
 };
 
 type DomainNode = CaseCapabilitiesResponse["workbenches"][number]["domains"][number] & {
@@ -51,14 +53,29 @@ const INVESTIGATION_ITEMS: NavItem[] = [
   { to: "/cases/:caseId/evidence", label: "Evidence", icon: Database, requiresCase: true },
   { to: "/cases/:caseId/host-information", label: "Host Information", icon: Fingerprint, requiresCase: true },
   { to: "/cases/:caseId/search", label: "Search", icon: Search, requiresCase: true },
-  { to: "/cases/:caseId/timeline", label: "Timeline", icon: Waypoints, requiresCase: true },
-  { to: "/cases/:caseId/incident-timeline", label: "Incident Timeline", icon: Waypoints, requiresCase: true },
+  {
+    to: "/cases/:caseId/timeline",
+    label: "Timeline",
+    icon: Waypoints,
+    requiresCase: true,
+    description: "Raw, broad event timeline across every indexed artifact -- use this for open-ended exploration.",
+  },
+  {
+    to: "/cases/:caseId/incident-timeline",
+    label: "Incident Timeline",
+    icon: GitCommitHorizontal,
+    requiresCase: true,
+    description: "Curated chronology for reporting: high-signal findings, marked events, command history and detections -- noisy raw artifacts excluded.",
+  },
   { to: "/cases/:caseId/detections", label: "Detections", icon: ShieldAlert, requiresCase: true },
   { to: "/cases/:caseId/findings", label: "Findings", icon: ShieldAlert, requiresCase: true },
   { to: "/cases/:caseId/reports", label: "Reports", icon: FileArchive, requiresCase: true },
 ];
 
-const CASE_TOOL_ITEMS: NavItem[] = [
+// Internal utilities that support an investigation but aren't investigative
+// findings themselves -- kept deliberately small so they never compete with
+// the Investigation section above for attention.
+const TECHNICAL_TOOL_ITEMS: NavItem[] = [
   { to: "/cases/:caseId/artifacts", label: "Artifact Views", icon: FolderSearch2, requiresCase: true },
   { to: "/cases/:caseId/validation-matrix", label: "Validation Matrix", icon: ListChecks, requiresCase: true },
   { to: "/cases/:caseId/debug-export", label: "Debug Export", icon: FileArchive, requiresCase: true },
@@ -121,6 +138,7 @@ function SidebarLink({ item, activeCaseId }: { item: NavItem; activeCaseId: stri
   return (
     <NavLink
       to={target}
+      title={item.description}
       className={({ isActive }) =>
         `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
           isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
@@ -426,16 +444,17 @@ export default function Sidebar() {
         {activeCaseId && capabilitiesQuery.isLoading ? <p className="px-4 text-xs text-muted" role="status">Loading workbenches...</p> : null}
         {activeCaseId && capabilitiesQuery.isError ? <p className="px-4 text-xs text-danger" role="alert">Capability registry unavailable.</p> : null}
         {activeCaseId && workbenches.length ? (
-          <section className="space-y-3" aria-label="Capability workspaces">
+          <section className="space-y-3" aria-label="Investigation Surfaces">
+            <p className="px-4 font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Investigation Surfaces</p>
             <label className="block px-1">
-              <span className="sr-only">Search navigation</span>
+              <span className="sr-only">Filter capabilities</span>
               <input
                 ref={searchRef}
                 type="search"
                 value={navigationSearch}
                 onChange={(event) => setNavigationSearch(event.target.value)}
-                placeholder="Search navigation"
-                aria-label="Search navigation"
+                placeholder="Filter capabilities"
+                aria-label="Filter capabilities"
                 className="w-full rounded-2xl border border-line bg-abyss/70 px-4 py-2.5 text-sm text-ink outline-none transition placeholder:text-muted focus:border-accent/50"
               />
             </label>
@@ -458,7 +477,7 @@ export default function Sidebar() {
           </section>
         ) : null}
 
-        <NavigationSection title="Case Tools" items={CASE_TOOL_ITEMS} activeCaseId={activeCaseId} />
+        <NavigationSection title="Technical Tools" items={TECHNICAL_TOOL_ITEMS} activeCaseId={activeCaseId} />
       </nav>
 
       <div className="mt-auto border-t border-line/80 pt-5">
