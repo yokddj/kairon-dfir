@@ -1707,6 +1707,7 @@ def test_memory_scan_external_execution_disabled_rejects_without_run(db_session,
 def test_memory_scan_queues_metadata_only_when_enabled(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     evidence = _evidence(db_session)
+    evidence.detected_format = "windows_crash_dump"
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
     monkeypatch.setattr(memory_execution.backend_readiness, "get_settings", lambda: _backend_settings(memory_process_profile_enabled=True))
     monkeypatch.setattr(routes_memory, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True}]})
@@ -1731,6 +1732,7 @@ def test_memory_scan_queues_metadata_only_when_enabled(db_session, monkeypatch: 
 def test_memory_scan_allows_direct_volatility_when_preparation_not_ready(db_session, monkeypatch: pytest.MonkeyPatch, prep_state: str) -> None:
     _case(db_session)
     evidence = _evidence(db_session)
+    evidence.detected_format = "windows_crash_dump"
     db_session.add(MemorySymbolPreparation(
         case_id=evidence.case_id,
         evidence_id=evidence.id,
@@ -1740,7 +1742,7 @@ def test_memory_scan_allows_direct_volatility_when_preparation_not_ready(db_sess
     ))
     db_session.commit()
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
-    monkeypatch.setattr(routes_memory, "resolve_profile_plugins", lambda profile: ["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"])
+    monkeypatch.setattr(routes_memory, "resolve_profile_plugins", lambda profile, plan=None: ["windows.info", "windows.pslist", "windows.pstree", "windows.cmdline"])
     monkeypatch.setattr(memory_execution.backend_readiness, "get_settings", lambda: _backend_settings(memory_process_profile_enabled=True))
     monkeypatch.setattr(routes_memory, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True}]})
     monkeypatch.setattr(routes_memory, "validate_memory_execution_request", lambda _db, _evidence_id: object())
@@ -1808,7 +1810,12 @@ def test_catalogue_does_not_block_on_platform_or_symbol_preparation(db_session, 
 def test_run_all_unknown_preparation_creates_one_existing_evidence_run(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     case = _case(db_session)
     evidence_file = tmp_path / "memory.mem"
-    evidence_file.write_bytes(b"synthetic")
+    # "PAGE" is a real Windows crash-dump magic prefix (see
+    # app.services.memory.platform._classify_from_head) -- this run-all
+    # batch expects all 8 Windows profiles to be selected, which now
+    # requires a genuine Windows platform signal rather than arbitrary
+    # bytes.
+    evidence_file.write_bytes(b"PAGEDU64" + b"\x00" * 100)
     ev = _evidence(db_session, case_id=case.id, stored_path=str(evidence_file))
     db_session.add(MemorySymbolPreparation(
         case_id=case.id,
@@ -2334,11 +2341,19 @@ def test_memory_upload_readiness_blocks_insufficient_storage(tmp_path: Path, mon
 def test_memory_scan_prevents_duplicate_active_run(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     evidence = _evidence(db_session)
+    # Route to Windows so the request reaches the duplicate-active-run
+    # check this test exercises, instead of failing earlier on platform
+    # detection (this helper's stub evidence has no real magic bytes).
+    evidence.detected_format = "windows_crash_dump"
     db_session.add(MemoryScanRun(case_id=CASE_ID, evidence_id=evidence.id, profile="metadata_only", status="running"))
     db_session.commit()
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
     monkeypatch.setattr(routes_memory, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True}]})
-    monkeypatch.setattr(routes_memory, "validate_memory_execution_request", lambda _db, _evidence_id: object())
+    monkeypatch.setattr(
+        routes_memory,
+        "validate_memory_execution_request",
+        lambda _db, _evidence_id: SimpleNamespace(evidence=evidence, path=Path("/tmp/evidence"), size_bytes=1024),
+    )
 
     with pytest.raises(Exception) as exc_info:
         routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), case_id=evidence.case_id, db=db_session)

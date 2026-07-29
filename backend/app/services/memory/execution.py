@@ -44,6 +44,9 @@ from app.services.memory.validation import MemoryExecutionValidationError, valid
 from app.services.memory.volatility_runner import VolatilityRunnerError, probe_windows_symbol_identity, run_plugin
 from app.services.memory import volatility_runner
 from app.services.memory.symbol_control import record_symbol_requirement
+from app.services.memory.analysis_plan import MemoryAnalysisPlan, build_memory_analysis_plan
+from app.services.memory.capability_registry import MemoryCapability, resolved_plugins_for_capability
+from app.services.memory.platform import PlatformFamily
 
 
 logger = logging.getLogger(__name__)
@@ -99,6 +102,23 @@ ARTIFACT_PLUGIN_LIMITS = {
     "windows.driverscan": {"timeout_seconds": 300, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "windows.malfind": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 50000, "max_preview_bytes": 256},
     "windows.vadinfo": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 50000, "max_preview_bytes": 256},
+}
+
+# Each existing profile name already encodes one capability's intent.
+# This is the one place that maps the historical, Windows-shaped profile
+# vocabulary onto the platform-independent capability registry -- see
+# app.services.memory.capability_registry and .analysis_plan, which are
+# what actually decide whether a capability is eligible for a given
+# evidence item's detected platform.
+PROFILE_CAPABILITY = {
+    "metadata_only": MemoryCapability.IDENTIFICATION,
+    "processes_basic": MemoryCapability.PROCESSES,
+    "processes_extended": MemoryCapability.PROCESSES_EXTENDED,
+    "network_basic": MemoryCapability.NETWORK,
+    "modules_basic": MemoryCapability.MODULES,
+    "handles_basic": MemoryCapability.HANDLES,
+    "kernel_basic": MemoryCapability.KERNEL_MODULES,
+    "suspicious_memory": MemoryCapability.SUSPICIOUS_REGIONS,
 }
 
 TIMEOUT_POLICY_VERSION = "memory_timeout_hierarchy_v1"
@@ -201,20 +221,58 @@ def active_run_for_evidence(db: Session, evidence_id: str, profile: str = "metad
     )
 
 
-def resolve_profile_plugins(profile: str) -> list[str]:
+def resolve_profile_plugins(profile: str, *, plan: MemoryAnalysisPlan | None = None) -> list[str]:
+    """Resolve a profile name to its concrete plugin list.
+
+    When ``plan`` is given (the normal path, from
+    ``create_memory_metadata_run``), the result is gated by the evidence's
+    actual detected platform: a Windows-shaped profile never returns
+    plugins for evidence that was not detected as Windows, and no plugin
+    is returned unless the capability plan marked it eligible (real
+    platform match, real plugin import). ``plan=None`` is a
+    backward-compatible fallback for callers that have not been migrated
+    to pass one yet and must not be relied on for platform routing.
+    """
     settings = backend_readiness.get_settings()
     profile = str(profile or settings.default_memory_profile).strip()
     if profile not in settings.allowed_memory_profiles or profile not in PROFILE_PLUGINS:
         raise MemoryExecutionValidationError("UNKNOWN_PROFILE", "Unknown memory analysis profile.")
     if profile != "metadata_only" and not settings.memory_process_profile_enabled:
         raise MemoryExecutionValidationError("PROCESS_PROFILE_DISABLED", "Memory process profiles are disabled by server configuration.")
-    plugins = PROFILE_PLUGINS[profile]
-    return plugins
+
+    if plan is None:
+        return PROFILE_PLUGINS[profile]
+
+    if plan.detected_platform != PlatformFamily.WINDOWS:
+        raise MemoryExecutionValidationError(
+            "PLATFORM_INCOMPATIBLE_PROFILE",
+            f"Profile '{profile}' selects Windows-only plugins; detected platform is "
+            f"'{plan.detected_platform.value}' ({plan.readiness_reason}).",
+        )
+    capability = PROFILE_CAPABILITY.get(profile)
+    if capability is None or capability not in plan.eligible_capabilities:
+        raise MemoryExecutionValidationError(
+            "PROFILE_CAPABILITY_UNAVAILABLE",
+            f"Profile '{profile}' has no plugin eligible for this evidence ({plan.readiness_reason}).",
+        )
+    resolved = resolved_plugins_for_capability(plan.detected_platform, capability)
+    # Never return a plugin the plan did not actually select (e.g. one
+    # that failed the real import probe) even if it is nominally part of
+    # this capability's registry entry.
+    selected = set(plan.selected_plugins)
+    return [plugin for plugin in resolved if plugin in selected]
 
 
-def create_memory_metadata_run(db: Session, evidence_id: str, profile: str = "metadata_only") -> MemoryScanRun:
+def create_memory_metadata_run(db: Session, evidence_id: str, profile: str = "metadata_only", *, plan: MemoryAnalysisPlan | None = None) -> MemoryScanRun:
     validated = validate_memory_execution_request(db, evidence_id)
-    plugins = resolve_profile_plugins(profile)
+    if plan is None:
+        plan = build_memory_analysis_plan(validated.evidence, canonical_path=getattr(validated, "path", None))
+    plugins = resolve_profile_plugins(profile, plan=plan)
+    if not plugins:
+        raise MemoryExecutionValidationError(
+            "PROFILE_CAPABILITY_UNAVAILABLE",
+            f"Profile '{profile}' has no plugin eligible for this evidence ({plan.readiness_reason}).",
+        )
     timeout_plan = derive_memory_timeout_plan(profile, plugins)
     run = MemoryScanRun(
         case_id=validated.evidence.case_id,
@@ -231,6 +289,7 @@ def create_memory_metadata_run(db: Session, evidence_id: str, profile: str = "me
             "source_layer": "memory",
             "profile": profile,
             "timeout_policy": timeout_plan,
+            "analysis_plan": plan.to_dict(),
         },
         error_log={},
     )

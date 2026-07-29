@@ -1,0 +1,266 @@
+"""Regression coverage for platform-aware memory plugin routing.
+
+Covers the sprint that fixed Linux memory evidence running Windows
+Volatility plugins. app.services.memory.analysis_plan.build_memory_analysis_plan
+is the single choke point between platform detection
+(app.services.memory.platform) and plugin selection
+(app.services.memory.capability_registry); these tests pin down its
+mandatory guarantees:
+
+* Linux evidence never selects a windows.* plugin.
+* Windows evidence never selects a linux.* plugin.
+* Unknown-platform evidence selects nothing and is never silently
+  treated as Windows.
+* A platform mismatch is recorded with a typed reason distinct from a
+  genuine missing-symbols outcome.
+* app.services.memory.execution.resolve_profile_plugins enforces the
+  same gate for the existing (Windows-shaped) profile API.
+
+Evidence fixtures here are synthetic, generic byte patterns (real
+Volatility magic-byte signatures or plain zero bytes) -- never a CTF
+image, filename, hostname, or IP.
+"""
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from app.services.memory.analysis_plan import build_memory_analysis_plan
+from app.services.memory.capability_registry import (
+    MEMORY_CAPABILITY_REGISTRY,
+    MemoryCapability,
+    SkipReason,
+    resolved_plugins_for_capability,
+)
+from app.services.memory.execution import (
+    PROFILE_CAPABILITY,
+    PROFILE_PLUGINS,
+    MemoryExecutionValidationError,
+    resolve_profile_plugins,
+)
+from app.services.memory.platform import PlatformFamily, ProbeConfidence, ReadinessState
+
+
+def _evidence(*, id_: str = "ev-1", detected_format: str | None = None, original_filename: str = "sample.img") -> SimpleNamespace:
+    return SimpleNamespace(
+        id=id_,
+        detected_format=detected_format,
+        original_filename=original_filename,
+        display_name=None,
+        filename=None,
+        stored_path="/nonexistent-evidence-path",
+    )
+
+
+def _write(tmp_path: Path, name: str, content: bytes) -> Path:
+    path = tmp_path / name
+    path.write_bytes(content)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# build_memory_analysis_plan: the mandatory routing guarantees
+# ---------------------------------------------------------------------------
+
+
+def test_linux_evidence_never_selects_windows_plugins(tmp_path: Path) -> None:
+    path = _write(tmp_path, "linux.img", b"\x7fELF" + b"\x00" * 4092)
+    evidence = _evidence(detected_format="elf_core")
+
+    plan = build_memory_analysis_plan(evidence, canonical_path=path)
+
+    assert plan.detected_platform == PlatformFamily.LINUX
+    assert plan.selected_plugins, "expected at least one selected Linux plugin"
+    assert all(not plugin.startswith("windows.") for plugin in plan.selected_plugins)
+    assert all(plugin.startswith("linux.") for plugin in plan.selected_plugins)
+
+
+def test_windows_evidence_never_selects_linux_plugins(tmp_path: Path) -> None:
+    path = _write(tmp_path, "windows.dmp", b"PAGEDU64" + b"\x00" * 4088)
+    evidence = _evidence(detected_format=None)
+
+    plan = build_memory_analysis_plan(evidence, canonical_path=path)
+
+    assert plan.detected_platform == PlatformFamily.WINDOWS
+    assert plan.selected_plugins, "expected at least one selected Windows plugin"
+    assert all(not plugin.startswith("linux.") for plugin in plan.selected_plugins)
+    assert all(plugin.startswith("windows.") for plugin in plan.selected_plugins)
+
+
+def test_unknown_platform_selects_no_plugins_and_never_defaults_to_windows(tmp_path: Path) -> None:
+    path = _write(tmp_path, "ambiguous.raw", b"\x00" * 4096)
+    evidence = _evidence(detected_format=None)
+
+    plan = build_memory_analysis_plan(evidence, canonical_path=path)
+
+    assert plan.detected_platform == PlatformFamily.UNKNOWN
+    assert plan.readiness == ReadinessState.PLATFORM_UNKNOWN
+    assert plan.selected_plugins == ()
+    assert plan.eligible_capabilities == ()
+
+
+def test_invalid_evidence_path_selects_no_plugins(tmp_path: Path) -> None:
+    """A storage-access failure must degrade to "no plugins", not a guess."""
+    evidence = SimpleNamespace(
+        id="ev-invalid",
+        detected_format=None,
+        original_filename="unreadable.dmp",
+        display_name=None,
+        filename=None,
+        stored_path=str(tmp_path / "does-not-exist.dmp"),
+        storage_mode=None,
+    )
+
+    plan = build_memory_analysis_plan(evidence)
+
+    assert plan.detected_platform in (PlatformFamily.UNKNOWN,)
+    assert plan.readiness in (ReadinessState.INVALID_EVIDENCE, ReadinessState.PLATFORM_UNKNOWN)
+    assert plan.selected_plugins == ()
+
+
+def test_macos_evidence_selects_no_plugins_but_is_distinguished_from_unknown(tmp_path: Path) -> None:
+    path = _write(tmp_path, "macos.img", b"Mach-O" + b"\x00" * 4090)
+    evidence = _evidence(detected_format=None)
+
+    plan = build_memory_analysis_plan(evidence, canonical_path=path)
+
+    assert plan.detected_platform == PlatformFamily.MACOS
+    assert plan.readiness == ReadinessState.PLATFORM_UNSUPPORTED
+    assert plan.selected_plugins == ()
+
+
+def test_requesting_a_capability_absent_for_the_platform_is_platform_mismatch_not_symbols(tmp_path: Path) -> None:
+    """Phase 4 requirement: an incompatible plugin must be recorded as a
+    platform mismatch, never confused with a genuine symbols-unavailable
+    outcome."""
+    path = _write(tmp_path, "linux.img", b"\x7fELF" + b"\x00" * 4092)
+    evidence = _evidence(detected_format="elf_core")
+
+    plan = build_memory_analysis_plan(
+        evidence,
+        canonical_path=path,
+        requested_capabilities=[MemoryCapability.HANDLES],  # Windows-only capability
+    )
+
+    assert plan.detected_platform == PlatformFamily.LINUX
+    assert plan.eligible_capabilities == ()
+    assert plan.ineligible_capabilities == ((MemoryCapability.HANDLES, SkipReason.PLATFORM_MISMATCH),)
+    assert plan.readiness != ReadinessState.BLOCKED_SYMBOLS
+
+
+def test_linux_process_capability_reports_blocked_symbols_when_no_isf_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Real, verified readiness: with no Linux ISF cache on disk, a
+    genuinely-eligible Linux capability must be reported as
+    symbol-blocked rather than silently claimed ready."""
+    from app.services.memory import analysis_plan as analysis_plan_module
+
+    cache_root = tmp_path / "volatility-cache"
+    (cache_root / "symbols" / "windows").mkdir(parents=True)  # Windows populated, Linux absent
+    monkeypatch.setattr(
+        analysis_plan_module,
+        "get_settings",
+        lambda: SimpleNamespace(memory_native_probe_cache_path=cache_root),
+    )
+
+    path = _write(tmp_path, "linux.img", b"\x7fELF" + b"\x00" * 4092)
+    evidence = _evidence(detected_format="elf_core")
+
+    plan = build_memory_analysis_plan(evidence, canonical_path=path, requested_capabilities=[MemoryCapability.PROCESSES])
+
+    assert plan.detected_platform == PlatformFamily.LINUX
+    assert MemoryCapability.PROCESSES in plan.eligible_capabilities
+    assert plan.readiness == ReadinessState.BLOCKED_SYMBOLS
+    assert "linux.pslist" in plan.selected_plugins
+
+
+def test_linux_process_capability_ready_when_isf_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.services.memory import analysis_plan as analysis_plan_module
+
+    cache_root = tmp_path / "volatility-cache"
+    linux_symbols = cache_root / "symbols" / "linux"
+    linux_symbols.mkdir(parents=True)
+    (linux_symbols / "some-kernel.json.xz").write_bytes(b"\x00")
+    monkeypatch.setattr(
+        analysis_plan_module,
+        "get_settings",
+        lambda: SimpleNamespace(memory_native_probe_cache_path=cache_root),
+    )
+
+    path = _write(tmp_path, "linux.img", b"\x7fELF" + b"\x00" * 4092)
+    evidence = _evidence(detected_format="elf_core")
+
+    plan = build_memory_analysis_plan(evidence, canonical_path=path, requested_capabilities=[MemoryCapability.PROCESSES])
+
+    assert plan.readiness == ReadinessState.READY
+
+
+# ---------------------------------------------------------------------------
+# Capability registry: no plugin is declared under the wrong platform
+# ---------------------------------------------------------------------------
+
+
+def test_registry_never_binds_a_windows_plugin_name_to_linux_or_vice_versa() -> None:
+    for spec in MEMORY_CAPABILITY_REGISTRY:
+        if spec.platform == PlatformFamily.WINDOWS:
+            assert spec.plugin.startswith("windows."), spec.plugin
+        elif spec.platform == PlatformFamily.LINUX:
+            assert not spec.plugin.startswith("windows."), spec.plugin
+
+
+def test_resolved_plugins_for_capability_reproduces_legacy_profile_plugins_exactly() -> None:
+    """resolved_plugins_for_capability(WINDOWS, ...) must exactly
+    reconstruct every existing profile's plugin list and order -- the
+    registry replaces execution.PROFILE_PLUGINS as the source of truth,
+    it must not silently change behavior for the platform that already
+    worked."""
+    for profile, capability in PROFILE_CAPABILITY.items():
+        resolved = resolved_plugins_for_capability(PlatformFamily.WINDOWS, capability)
+        assert resolved == PROFILE_PLUGINS[profile], profile
+
+
+# ---------------------------------------------------------------------------
+# execution.resolve_profile_plugins: the existing profile-based API
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_profile_plugins_rejects_windows_profile_for_linux_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.core.config import Settings
+    from app.services.memory import backend_readiness
+
+    enabled_settings = Settings()
+    object.__setattr__(enabled_settings, "memory_process_profile_enabled", True)
+    monkeypatch.setattr(backend_readiness, "get_settings", lambda: enabled_settings)
+
+    path = _write(tmp_path, "linux.img", b"\x7fELF" + b"\x00" * 4092)
+    evidence = _evidence(detected_format="elf_core")
+    plan = build_memory_analysis_plan(evidence, canonical_path=path)
+
+    with pytest.raises(MemoryExecutionValidationError) as exc_info:
+        resolve_profile_plugins("processes_basic", plan=plan)
+
+    assert exc_info.value.code == "PLATFORM_INCOMPATIBLE_PROFILE"
+
+
+def test_resolve_profile_plugins_rejects_windows_profile_for_unknown_plan(tmp_path: Path) -> None:
+    path = _write(tmp_path, "ambiguous.raw", b"\x00" * 4096)
+    evidence = _evidence(detected_format=None)
+    plan = build_memory_analysis_plan(evidence, canonical_path=path)
+
+    with pytest.raises(MemoryExecutionValidationError) as exc_info:
+        resolve_profile_plugins("metadata_only", plan=plan)
+
+    assert exc_info.value.code == "PLATFORM_INCOMPATIBLE_PROFILE"
+    # The unknown platform must never be silently substituted for Windows.
+    assert plan.detected_platform != PlatformFamily.WINDOWS
+
+
+def test_resolve_profile_plugins_accepts_windows_profile_for_windows_plan(tmp_path: Path) -> None:
+    path = _write(tmp_path, "windows.dmp", b"PAGEDU64" + b"\x00" * 4088)
+    evidence = _evidence(detected_format=None)
+    plan = build_memory_analysis_plan(evidence, canonical_path=path)
+
+    plugins = resolve_profile_plugins("metadata_only", plan=plan)
+
+    assert plugins == ["windows.info"]

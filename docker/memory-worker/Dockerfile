@@ -20,6 +20,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# build-essential is required to build libewf-python (a main backend
+# dependency with no prebuilt wheel) from source -- this image installs
+# the same backend package ("pip install .[dev]") as backend/Dockerfile,
+# which already carries this toolchain; memory-worker never needed it
+# until libewf-python was added as a dependency for disk-image EWF
+# streaming, unrelated to memory analysis itself.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN addgroup --system --gid 10001 kairon \
     && adduser --system --uid 10001 --ingroup kairon --home /home/kairon kairon \
     && mkdir -p /app/data /app/data/tmp /licenses/volatility3 /licenses/kairon /volatility-cache \

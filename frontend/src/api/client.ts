@@ -929,6 +929,12 @@ export type MemoryEvidenceReadiness = {
   acquisition_status: string | null;
   can_analyze_offline: boolean;
   pending_request_id: string | null;
+  detected_platform: string | null;
+  platform_confidence: string | null;
+  platform_readiness: string | null;
+  platform_readiness_reason: string | null;
+  eligible_capabilities: string[];
+  ineligible_capabilities: Record<string, string>;
 };
 
 export type MemoryActiveRun = {

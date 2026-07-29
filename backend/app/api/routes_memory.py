@@ -65,6 +65,8 @@ from app.services.memory.artifact_indexing import (
 )
 from app.services.memory.backend_readiness import check_volatility3_backend, get_memory_backend_overview
 from app.services.memory.execution import active_run_for_evidence, create_memory_metadata_run, derive_memory_timeout_plan, mark_run_queued, resolve_profile_plugins
+from app.services.memory.analysis_plan import build_memory_analysis_plan
+from app.services.memory.platform import PlatformFamily
 from app.services.memory.evidence_access import evidence_readiness
 from app.services.memory.indexing import ensure_memory_index, get_memory_document, get_opensearch_client, search_memory_edges, search_memory_processes
 from app.services.memory.normalizers import normalize_windows_info
@@ -344,12 +346,14 @@ def direct_metadata_probe(
 ) -> dict:
     """Sprint 6: minimal reliable fallback for the analyst.
 
-    Runs a single ``metadata_only`` scan that executes the
-    matching platform information plugin (``windows.info``,
-    ``linux.banners``, ``mac.banners``) with raw output
-    preservation.  It does NOT depend on the preparation
-    pipeline, does NOT open OpenSearch indices and does NOT
-    enqueue symbol acquisition.
+    Runs a single ``metadata_only`` scan against whichever
+    identification capability actually matches the evidence's
+    detected platform (``windows.info`` for Windows; Kairon's
+    bounded platform probe itself for Linux, since no dedicated
+    Linux banner-only plugin exists in the installed Volatility 3
+    framework -- see app.services.memory.capability_registry). It
+    does NOT depend on the preparation pipeline, does NOT open
+    OpenSearch indices and does NOT enqueue symbol acquisition.
     """
     _require_case(db, case_id)
     evidence = db.get(Evidence, evidence_id)
@@ -376,7 +380,10 @@ def direct_metadata_probe(
         create_memory_metadata_run,
         mark_run_queued,
     )
-    run = create_memory_metadata_run(db, evidence_id, "metadata_only")
+    try:
+        run = create_memory_metadata_run(db, evidence_id, "metadata_only")
+    except MemoryExecutionValidationError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
     db.flush()
     job_id = enqueue_memory_metadata_scan(run.id)
     run = mark_run_queued(db, run.id, job_id) or run
@@ -409,6 +416,13 @@ def get_memory_evidence_readiness(case_id: str, evidence_id: str, db: Session = 
         result["error_code"] = "MEMORY_BACKEND_UNAVAILABLE"
         result["sanitized_message"] = "The memory analysis backend is not ready."
     result.update(evidence_symbol_readiness(db, case_id, evidence_id))
+    analysis_plan = build_memory_analysis_plan(evidence)
+    result["detected_platform"] = analysis_plan.detected_platform.value
+    result["platform_confidence"] = analysis_plan.platform_confidence.value
+    result["platform_readiness"] = analysis_plan.readiness.value
+    result["platform_readiness_reason"] = analysis_plan.readiness_reason
+    result["eligible_capabilities"] = [c.value for c in analysis_plan.eligible_capabilities]
+    result["ineligible_capabilities"] = {c.value: r.value for c, r in analysis_plan.ineligible_capabilities}
     return result
 
 
@@ -1879,7 +1893,10 @@ def get_memory_runs(
 def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None = None, case_id: str = Query(...), db: Session = Depends(get_db)) -> MemoryStartScanResponse:
     profile = (payload.profile if payload else "metadata_only") or "metadata_only"
     try:
-        resolved_plugins = resolve_profile_plugins(profile)
+        # Syntactic check only (known/enabled profile name) -- this does
+        # not yet know the evidence's platform, so its result must never
+        # be used to decide which plugins actually run.
+        resolve_profile_plugins(profile)
     except MemoryExecutionValidationError as exc:
         raise HTTPException(status_code=400, detail=exc.message) from exc
     evidence = db.get(Evidence, evidence_id)
@@ -1930,19 +1947,36 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
                 ),
             },
         )
-    # Preparation and symbol discovery are advisory diagnostics.  The
-    # analysis run itself owns Volatility execution and lets Volatility
-    # identify layers and resolve/download symbols as needed.
+    # Symbol/profile preparation is advisory diagnostics for readiness
+    # *messaging*; it is no longer what decides which plugins run.
+    # app.services.memory.analysis_plan.build_memory_analysis_plan is the
+    # single choke point for that -- it consults the platform probe and
+    # verifies real plugin importability before anything is selected, so
+    # a Linux evidence item can never end up with Windows plugins queued.
     backend_overview = get_memory_backend_overview()
     volatility_status = next((item for item in backend_overview.get("backends", []) if item.get("backend") == "volatility3"), None)
     if not volatility_status or not volatility_status.get("ready"):
         raise HTTPException(status_code=503, detail=(volatility_status or {}).get("message") or "Volatility 3 backend is not ready.")
     try:
-        validate_memory_execution_request(db, evidence.id)
+        validated_evidence = validate_memory_execution_request(db, evidence.id)
     except MemoryExecutionValidationError as exc:
         raise HTTPException(status_code=400, detail=exc.message) from exc
-    profile_plan = plan_profile_capability(profile)
-    if resolved_plugins and not profile_plan["has_enabled_plugins"]:
+    analysis_plan = build_memory_analysis_plan(evidence, canonical_path=getattr(validated_evidence, "path", None))
+    try:
+        resolved_plugins = resolve_profile_plugins(profile, plan=analysis_plan)
+    except MemoryExecutionValidationError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error_code": exc.code,
+                "message": exc.message,
+                "detected_platform": analysis_plan.detected_platform.value,
+                "readiness": analysis_plan.readiness.value,
+                "readiness_reason": analysis_plan.readiness_reason,
+            },
+        ) from exc
+    profile_plan = plan_profile_capability(profile) if analysis_plan.detected_platform == PlatformFamily.WINDOWS else None
+    if profile_plan is not None and resolved_plugins and not profile_plan["has_enabled_plugins"]:
         raise HTTPException(
             status_code=400,
             detail={
@@ -1955,8 +1989,12 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
     if existing:
         raise HTTPException(status_code=409, detail=f"An active metadata analysis run already exists for this memory evidence: {existing.id}")
 
-    run = create_memory_metadata_run(db, evidence.id, profile)
-    plugin_states = {item["plugin"]: item["state"] for item in profile_plan.get("plugins", []) if isinstance(item, dict) and item.get("plugin")}
+    run = create_memory_metadata_run(db, evidence.id, profile, plan=analysis_plan)
+    plugin_states = (
+        {item["plugin"]: item["state"] for item in profile_plan.get("plugins", []) if isinstance(item, dict) and item.get("plugin")}
+        if profile_plan is not None
+        else {}
+    )
     timeout_plan = derive_memory_timeout_plan(profile, resolved_plugins, plugin_states=plugin_states)
     run.metadata_json = {
         **(run.metadata_json or {}),

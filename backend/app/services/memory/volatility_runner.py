@@ -252,7 +252,7 @@ def run_plugin(
     if len(stderr or b"") > 65536:
         stderr = (stderr or b"")[:65536]
     if process.returncode != 0:
-        message = _classify_failure(stderr or b"")
+        message = _classify_failure(stderr or b"", plugin)
         raise VolatilityRunnerError(message[0], message[1], stdout=(stdout or b"")[:max_bytes], stderr=stderr or b"", return_code=process.returncode, stdout_length=stdout_length, stderr_length=stderr_length)
     display_argv = [display]
     if offline:
@@ -346,20 +346,29 @@ def _strip_progress_lines(stderr_text: str) -> str:
     return "\n".join(keep)
 
 
-def _classify_failure(stderr: bytes) -> tuple[str, str]:
+def _classify_failure(stderr: bytes, plugin: str = "") -> tuple[str, str]:
+    """Classify a failed Volatility run from its real stderr text.
+
+    Used by every plugin invocation (Windows and Linux alike) via
+    run_plugin -- the returned code (e.g. SYMBOLS_UNAVAILABLE) must stay
+    platform-generic, since app.services.memory.analysis_plan relies on
+    it being an honest reflection of what Volatility actually reported,
+    not a guess made ahead of execution.
+    """
     raw = stderr.decode("utf-8", errors="replace")
     cleaned = _strip_progress_lines(raw)
     lower = cleaned.lower()
+    plugin_label = plugin or "the plugin"
     if "read-only file system" in lower and ("symbol" in lower or "pdb" in lower):
         return "MEMORY_SYMBOL_CACHE_NOT_WRITABLE", "Volatility could not use its controlled symbol cache under the read-only worker filesystem."
     if "symbol_table_name" in lower or ("unable to validate" in lower and "symbol" in lower):
-        return "SYMBOLS_UNAVAILABLE", "Volatility could not download required symbols."
+        return "SYMBOLS_UNAVAILABLE", f"Volatility could not resolve the symbol/ISF table required by {plugin_label}."
     if "unable to validate" in lower and "layer" in lower:
-        return "INVALID_MEMORY_LAYER", "Volatility could not construct a valid Windows memory layer for this image."
+        return "INVALID_MEMORY_LAYER", f"Volatility could not construct a valid memory layer for this image ({plugin_label})."
     if "no suitable" in lower and "layer" in lower:
-        return "UNSUPPORTED_MEMORY_IMAGE", "Volatility could not construct a supported Windows memory layer for this image."
+        return "UNSUPPORTED_MEMORY_IMAGE", f"Volatility could not construct a supported memory layer for this image ({plugin_label})."
     if "unable to validate" in lower or "requirement" in lower:
-        return "PLUGIN_REQUIREMENTS_UNSATISFIED", "Volatility could not satisfy the windows.info plugin requirements."
+        return "PLUGIN_REQUIREMENTS_UNSATISFIED", f"Volatility could not satisfy the {plugin_label} plugin requirements."
     # If everything was progress noise, return a structured error
     # so the UI does not display raw progress text as an error.
     if not cleaned.strip():
@@ -368,7 +377,7 @@ def _classify_failure(stderr: bytes) -> tuple[str, str]:
             "or unsupported by the installed runtime."
         )
     text = sanitize_backend_error(cleaned)
-    return "PLUGIN_FAILED", text or "Volatility windows.info failed."
+    return "PLUGIN_FAILED", text or f"Volatility {plugin_label} failed."
 
 
 # Plugins that make up the network_basic profile. Kept in one place for
@@ -395,6 +404,17 @@ VOLATILITY_PLUGIN_CLASSES = {
     "windows.netstat": ("volatility3.plugins.windows.netstat", "NetStat"),
     "windows.malfind": ("volatility3.plugins.windows.malfind", "Malfind"),
     "windows.vadinfo": ("volatility3.plugins.windows.vadinfo", "VadInfo"),
+    # Linux plugins -- verified present in the installed Volatility 3
+    # framework (volatility3.framework.plugins.linux, merged into the
+    # volatility3.plugins.linux namespace package at import time) as of
+    # this sprint's diagnosis. Listing a name here is a structural claim
+    # ("the module imports"), never a compatibility claim -- symbol/ISF
+    # and per-image compatibility are evaluated separately, see
+    # app.services.memory.capability_registry and analysis_plan.
+    "linux.pslist": ("volatility3.plugins.linux.pslist", "PsList"),
+    "linux.pstree": ("volatility3.plugins.linux.pstree", "PsTree"),
+    "linux.sockstat": ("volatility3.plugins.linux.sockstat", "Sockstat"),
+    "linux.bash": ("volatility3.plugins.linux.bash", "Bash"),
 }
 
 

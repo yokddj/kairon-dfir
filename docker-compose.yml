@@ -153,6 +153,11 @@ services:
       MEMORY_OUTPUT_DIR: /app/memory-output
       VOLATILITY3_COMMAND: vol
       XDG_CACHE_HOME: /volatility-cache
+      # env_file (config/defaults.env) sets KAIRON_COMMIT=unknown; without
+      # this, that default masks the image's real build-time value at
+      # container runtime -- backend/worker already re-assert it here for
+      # the same reason.
+      KAIRON_COMMIT: ${KAIRON_COMMIT:-unknown}
     depends_on:
       postgres:
         condition: service_healthy
