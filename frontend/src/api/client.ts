@@ -133,6 +133,7 @@ export type CaseCapabilitiesResponse = {
     id: string;
     label: string;
     kind: "platform" | "evidence_domain" | string;
+    icon: string | null;
     capability_ids: string[];
     domains: Array<{ id: string; capability_ids: string[]; record_count: number }>;
     overview_route?: string;
