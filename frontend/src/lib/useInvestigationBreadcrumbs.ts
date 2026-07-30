@@ -24,6 +24,14 @@ export type UseInvestigationBreadcrumbsOptions = {
   // otherwise be derived (e.g. an evidence name from :evidenceId) -- never
   // combined with it. Never derived automatically from ?view=/?tab=.
   context?: string;
+  // Narrow escape hatch for the one route that is a real entity page but is
+  // NOT itself a capability's route (so matchCapabilityRoute can never find
+  // it): looks the capability up by id directly to resolve the same Case /
+  // Surface / Domain / Capability prefix a capability-route match would
+  // produce, then appends entityLabel as the final, unlinked crumb once
+  // it's known. Not a general entity-breadcrumb registry -- callers name a
+  // real, already-registered capability id, nothing hypothetical.
+  entityTrail?: { capabilityId: string; entityLabel?: string };
 };
 
 function caseOverviewRoute(caseId: string) {
@@ -47,7 +55,7 @@ export function useInvestigationBreadcrumbs(options: UseInvestigationBreadcrumbs
     refetchOnWindowFocus: false,
   });
 
-  const { currentLabel, lensLabel, context } = options;
+  const { currentLabel, lensLabel, context, entityTrail } = options;
   const registry = capabilitiesQuery.data;
 
   return useMemo(() => {
@@ -55,6 +63,21 @@ export function useInvestigationBreadcrumbs(options: UseInvestigationBreadcrumbs
     // (`caseName || "Case"`, `"No case"` when there's no active case) --
     // not a new placeholder string.
     const caseCrumb: BreadcrumbItem = activeCaseId ? { label: activeCase?.name || "Case", to: caseOverviewRoute(activeCaseId) } : { label: "No case" };
+
+    if (entityTrail) {
+      if (!registry) return [caseCrumb];
+      const capability = registry.capabilities.find((item) => item.id === entityTrail.capabilityId);
+      if (!capability) return [caseCrumb];
+      const workbench = registry.workbenches.find((item) => item.capability_ids.includes(capability.id));
+      const items: BreadcrumbItem[] = [caseCrumb];
+      if (workbench) items.push({ label: workbench.label, to: workbench.overview_route });
+      items.push({ label: displayLabel(capability.domain) });
+      items.push({ label: capability.title });
+      // While the entity itself hasn't loaded yet, truncate at Capability --
+      // never invent the process name.
+      if (entityTrail.entityLabel) items.push({ label: entityTrail.entityLabel });
+      return items;
+    }
 
     if (currentLabel) {
       const items: BreadcrumbItem[] = [caseCrumb, { label: currentLabel }];
@@ -101,5 +124,16 @@ export function useInvestigationBreadcrumbs(options: UseInvestigationBreadcrumbs
     }
 
     return [caseCrumb];
-  }, [activeCaseId, activeCase?.name, registry, location.pathname, location.search, currentLabel, lensLabel, context]);
+  }, [
+    activeCaseId,
+    activeCase?.name,
+    registry,
+    location.pathname,
+    location.search,
+    currentLabel,
+    lensLabel,
+    context,
+    entityTrail?.capabilityId,
+    entityTrail?.entityLabel,
+  ]);
 }

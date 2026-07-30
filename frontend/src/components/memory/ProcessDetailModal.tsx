@@ -1,11 +1,19 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import {
   api,
   type MemoryArtifactList,
   type MemoryProcessEntity,
   type MemoryProcessEntityDetail,
 } from "../../api/client";
+import { memoryProcessEntityRoute } from "../../lib/entityRoutes";
+import {
+  describeProcessVisibility,
+  processVisibilityToneClass,
+  reportedValue as reported,
+  sourcePluginBadge as sourceBadge,
+} from "../../lib/memoryProcessEntityPresentation";
 import {
   AlertCircle,
   ChevronRight,
@@ -62,32 +70,8 @@ const TABS: { key: TabKey; label: string; icon?: React.ReactNode }[] = [
   { key: "raw", label: "Raw references" },
 ];
 
-function reported(value: unknown): string {
-  if (value === null || value === undefined || value === "") return "—";
-  return String(value);
-}
-
-function sourceBadge(plugin: string): string {
-  return plugin.replace("windows.", "");
-}
-
-function describeVisibility(entity: MemoryProcessEntity | null | undefined): string {
-  if (!entity) return "—";
-  if (entity.visibility?.terminated) return "Terminated";
-  if (entity.visibility?.hidden_candidate) return "Hidden candidate";
-  if (entity.visibility?.scan_only) return "Scan only";
-  if (entity.visibility?.unknown) return "Unknown";
-  return "Listed";
-}
-
-function visibilityToneClass(entity: MemoryProcessEntity | null | undefined): string {
-  if (!entity) return "border-line bg-abyss/70 text-muted";
-  if (entity.visibility?.scan_only || entity.visibility?.hidden_candidate)
-    return "border-rose-400/30 bg-rose-500/10 text-rose-100";
-  if (entity.visibility?.terminated) return "border-line bg-abyss/70 text-muted";
-  if (entity.visibility?.unknown) return "border-amber-400/30 bg-amber-500/10 text-amber-100";
-  return "border-sky-400/30 bg-sky-500/10 text-sky-100";
-}
+const describeVisibility = describeProcessVisibility;
+const visibilityToneClass = processVisibilityToneClass;
 
 function nodeIcon(entity: MemoryProcessEntity | null | undefined) {
   if (!entity) return <Network className="h-3.5 w-3.5 text-muted" />;
@@ -139,7 +123,7 @@ function copyText(value: string) {
   }
 }
 
-function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+export function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="rounded-xl border border-line bg-abyss/40 p-3" data-testid={`modal-field-${label.toLowerCase().replace(/\s+/g, "-")}`}>
       <p className="text-[10px] uppercase tracking-[0.16em] text-muted">{label}</p>
@@ -148,7 +132,7 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   );
 }
 
-function BreadcrumbPath({ treePath }: { treePath: string[] }) {
+export function BreadcrumbPath({ treePath }: { treePath: string[] }) {
   if (!treePath.length) {
     return <span className="text-xs text-muted">Root (no ancestors in canonical set)</span>;
   }
@@ -367,19 +351,19 @@ function ArtifactLazySection({ tab, title, testId, caseId, evidenceId, runId, pi
   </SectionPanel>;
 }
 
-function NetworkSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
+export function NetworkSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
   return <ArtifactLazySection tab="network" title="Network connections" testId="process-detail-modal-tabpanel-network" caseId={caseId} evidenceId={evidenceId} runId={runId} pid={pid} queryKey="modal-network" fetcher={api.getMemoryNetworkConnections as (cid: string, p: Record<string, unknown>) => Promise<MemoryArtifactList>}
     columns={[{ label: "Protocol", key: "protocol" }, { label: "Local", key: "local_address", render: (r: Record<string, unknown>) => <span>{String(r.local_address ?? "—")}:{String(r.local_port ?? "")}</span> }, { label: "Remote", key: "remote_address", render: (r: Record<string, unknown>) => <span>{String(r.remote_address ?? "—")}:{String(r.remote_port ?? "")}</span> }, { label: "State", key: "state" }, { label: "Source", key: "source_plugin", render: (r: Record<string, unknown>) => String(r.source_plugin ?? "").replace("windows.", "") }]}
     emptyMsg="No network connections found for this process." />;
 }
 
-function ModulesSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
+export function ModulesSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
   return <ArtifactLazySection tab="modules" title="Modules and DLLs" testId="process-detail-modal-tabpanel-modules" caseId={caseId} evidenceId={evidenceId} runId={runId} pid={pid} queryKey="modal-modules" fetcher={api.getMemoryProcessModules as (cid: string, p: Record<string, unknown>) => Promise<MemoryArtifactList>}
     columns={[{ label: "Module", key: "module_name" }, { label: "Path", key: "path", render: (r: Record<string, unknown>) => <span className="max-w-[200px] truncate inline-block" title={String(r.path ?? "")}>{String(r.path ?? "—")}</span> }, { label: "Base", key: "base_address" }, { label: "Size", key: "size" }, { label: "Load", key: "load_state" }, { label: "Source", key: "source_plugin", render: (r: Record<string, unknown>) => String(r.source_plugin ?? "").replace("windows.", "") }]}
     emptyMsg="No modules found for this process." />;
 }
 
-function HandlesSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
+export function HandlesSection({ caseId, evidenceId, runId, pid }: { caseId: string; evidenceId: string; runId: string | null; pid: number | null }) {
   return <ArtifactLazySection tab="handles" title="Handles" testId="process-detail-modal-tabpanel-handles" caseId={caseId} evidenceId={evidenceId} runId={runId} pid={pid} queryKey="modal-handles" fetcher={api.getMemoryHandles as (cid: string, p: Record<string, unknown>) => Promise<MemoryArtifactList>}
     columns={[{ label: "Handle", key: "handle_value" }, { label: "Type", key: "object_type" }, { label: "Name", key: "object_name", render: (r: Record<string, unknown>) => <span className="max-w-[250px] truncate inline-block" title={String(r.object_name ?? "")}>{String(r.object_name ?? "—")}</span> }, { label: "Access", key: "granted_access" }]}
     emptyMsg="No handles found for this process." />;
@@ -559,6 +543,16 @@ export function ProcessDetailModal({
               <Copy className="mr-1 inline h-3.5 w-3.5" />
               Copy PID
             </button>
+            {entity ? (
+              <Link
+                to={memoryProcessEntityRoute(caseId, entity.process_entity_id) ?? "#"}
+                className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted"
+                data-testid="modal-open-process-entity"
+              >
+                <ExternalLink className="mr-1 inline h-3.5 w-3.5" />
+                Open process entity
+              </Link>
+            ) : null}
             <button
               type="button"
               onClick={onClose}

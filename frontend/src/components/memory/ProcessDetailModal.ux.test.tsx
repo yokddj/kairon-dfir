@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryArtifactList, MemoryProcessEntityDetail } from "../../api/client";
 import { ProcessDetailModal } from "./ProcessDetailModal";
@@ -97,16 +98,18 @@ function renderModal(
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={queryClient}>
-      <ProcessDetailModal
-        open={overrides.open ?? true}
-        detail={overrides.detail ?? detailFixture()}
-        isLoading={overrides.isLoading ?? false}
-        error={overrides.error ?? null}
-        caseId={overrides.caseId ?? "case-1"}
-        evidenceId={overrides.evidenceId ?? "ev-memory"}
-        runId={overrides.runId ?? "run-basic"}
-        onClose={vi.fn()}
-      />
+      <MemoryRouter>
+        <ProcessDetailModal
+          open={overrides.open ?? true}
+          detail={"detail" in overrides ? overrides.detail! : detailFixture()}
+          isLoading={overrides.isLoading ?? false}
+          error={overrides.error ?? null}
+          caseId={overrides.caseId ?? "case-1"}
+          evidenceId={overrides.evidenceId ?? "ev-memory"}
+          runId={overrides.runId ?? "run-basic"}
+          onClose={vi.fn()}
+        />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -130,6 +133,22 @@ describe("ProcessDetailModal", () => {
       expect(screen.getByTestId("modal-visibility")).toHaveTextContent("Listed");
     });
 
+    it("links to the entity page via the shared route builder when an entity is loaded", async () => {
+      const detail = detailFixture();
+      renderModal({ detail, caseId: "case-7" });
+      await screen.findByTestId("process-detail-modal");
+      expect(screen.getByTestId("modal-open-process-entity")).toHaveAttribute(
+        "href",
+        "/cases/case-7/entities/memory-process/ent-system",
+      );
+    });
+
+    it("does not render the entity link when no entity is loaded", async () => {
+      renderModal({ detail: null });
+      await screen.findByTestId("process-detail-modal");
+      expect(screen.queryByTestId("modal-open-process-entity")).toBeNull();
+    });
+
     it("does not render HTML injection in process name", async () => {
       const detail = detailFixture({
         entity: {
@@ -147,10 +166,12 @@ describe("ProcessDetailModal", () => {
       const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
       render(
         <QueryClientProvider client={queryClient}>
-          <ProcessDetailModal
-            open={true} detail={detailFixture()} isLoading={false} error={null}
-            caseId="case-1" evidenceId="ev-memory" runId="run-basic" onClose={onClose}
-          />
+          <MemoryRouter>
+            <ProcessDetailModal
+              open={true} detail={detailFixture()} isLoading={false} error={null}
+              caseId="case-1" evidenceId="ev-memory" runId="run-basic" onClose={onClose}
+            />
+          </MemoryRouter>
         </QueryClientProvider>,
       );
       await screen.findByTestId("process-detail-modal");
