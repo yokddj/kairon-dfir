@@ -1,19 +1,15 @@
 import {
-  Cpu,
   Database,
   FileArchive,
   Fingerprint,
   FolderSearch2,
   GitCommitHorizontal,
-  HardDrive,
   Home,
   KeyRound,
-  Layers,
   ListChecks,
   LogOut,
   Search,
   ShieldAlert,
-  ShieldCheck,
   UserCog,
   Waypoints,
 } from "lucide-react";
@@ -21,6 +17,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { api, type CaseCapabilitiesResponse } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useAuth } from "../context/AuthContext";
+import { resolveSurfaceIcon } from "../lib/surfaceIcons";
 import { useQuery } from "@tanstack/react-query";
 
 type NavItem = {
@@ -63,22 +60,6 @@ const TECHNICAL_TOOL_ITEMS: NavItem[] = [
   { to: "/cases/:caseId/validation-matrix", label: "Validation Matrix", icon: ListChecks, requiresCase: true },
   { to: "/cases/:caseId/debug-export", label: "Debug Export", icon: FileArchive, requiresCase: true },
 ];
-
-// Single resolution point for the semantic icon identifier the Capability
-// Registry's Surface Registry declares on each workbench (backend
-// SURFACE_REGISTRY.icon, PR1). Adding a new surface icon means adding one
-// entry here -- no screen is ever allowed to derive an icon from a
-// workbench/surface id itself.
-const SURFACE_ICONS: Record<string, typeof Home> = {
-  "hard-drive": HardDrive,
-  "shield-check": ShieldCheck,
-  cpu: Cpu,
-};
-
-function resolveSurfaceIcon(icon: string | null): typeof Home {
-  if (icon && Object.prototype.hasOwnProperty.call(SURFACE_ICONS, icon)) return SURFACE_ICONS[icon];
-  return Layers;
-}
 
 function activeMemoryEvidenceId(pathname: string, activeCaseId: string): string | null {
   const match = pathname.match(/^\/cases\/([^/]+)\/(?:memory|m)\/([^/]+)(?:\/[^/]+)?$/);

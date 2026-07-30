@@ -4,7 +4,13 @@ import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import Sidebar from "./Sidebar";
+import { resolveSurfaceIcon } from "../lib/surfaceIcons";
 import type { CaseCapabilitiesResponse } from "../api/client";
+
+vi.mock("../lib/surfaceIcons", async () => {
+  const actual = await vi.importActual<typeof import("../lib/surfaceIcons")>("../lib/surfaceIcons");
+  return { ...actual, resolveSurfaceIcon: vi.fn(actual.resolveSurfaceIcon) };
+});
 
 const getCaseCapabilitiesMock = vi.fn();
 const logoutMock = vi.fn();
@@ -124,6 +130,16 @@ describe("registry-driven sidebar", () => {
     expect(row).toHaveTextContent("Windows");
     expect(row).toHaveAttribute("href", "/cases/case-1/w");
     expect(svgClass(row)).toContain("lucide-hard-drive");
+  });
+
+  it("delegates icon resolution to the shared surfaceIcons module (not a local copy)", async () => {
+    vi.mocked(resolveSurfaceIcon).mockClear();
+    getCaseCapabilitiesMock.mockResolvedValue(registry([workbench({ id: "windows", icon: "hard-drive" })]));
+
+    renderSidebar();
+    await screen.findByTestId("surface-windows");
+
+    expect(resolveSurfaceIcon).toHaveBeenCalledWith("hard-drive");
   });
 
   it("marks the surface row active when the URL is exactly its Surface Home", async () => {

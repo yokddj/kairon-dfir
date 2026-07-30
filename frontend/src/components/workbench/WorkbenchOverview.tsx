@@ -1,7 +1,8 @@
-import { AlertTriangle, Cpu, Database, HardDrive, Network, ShieldCheck } from "lucide-react";
+import { AlertTriangle, Database, Network } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import type { CaseCapabilitiesResponse, CaseCapability } from "../../api/client";
 import { memoryWorkbenchRoute } from "../../lib/canonicalRoutes";
+import { resolveSurfaceIcon } from "../../lib/surfaceIcons";
 
 type Workbench = CaseCapabilitiesResponse["workbenches"][number];
 
@@ -45,13 +46,13 @@ function pluralCapability(count: number) {
 }
 
 function PlatformHeader({ workbench }: { workbench: Workbench }) {
-  const Icon = workbench.id === "memory" ? Cpu : workbench.id === "linux" ? ShieldCheck : HardDrive;
+  const Icon = resolveSurfaceIcon(workbench.icon);
   const overview = workbench.overview;
   return (
     <section className="rounded-[28px] border border-line bg-panel/75 p-6 shadow-panel">
       <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
         <div className="flex items-start gap-4">
-          <div className="rounded-2xl border border-accent/30 bg-accent/10 p-3 text-accent"><Icon size={24} /></div>
+          <div className="rounded-2xl border border-accent/30 bg-accent/10 p-3 text-accent" data-testid="surface-icon"><Icon size={24} /></div>
           <div>
             <p className="font-mono text-xs uppercase tracking-[0.22em] text-accent">Workbench</p>
             <h1 className="mt-2 text-3xl font-semibold text-ink">{workbench.label}</h1>

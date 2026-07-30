@@ -1,8 +1,14 @@
 import { render, screen, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { WorkbenchOverview } from "./WorkbenchOverview";
+import { resolveSurfaceIcon } from "../../lib/surfaceIcons";
 import type { CaseCapabilitiesResponse, CaseCapability } from "../../api/client";
+
+vi.mock("../../lib/surfaceIcons", async () => {
+  const actual = await vi.importActual<typeof import("../../lib/surfaceIcons")>("../../lib/surfaceIcons");
+  return { ...actual, resolveSurfaceIcon: vi.fn(actual.resolveSurfaceIcon) };
+});
 
 function capability(patch: Partial<CaseCapability>): CaseCapability {
   return {
@@ -126,5 +132,42 @@ describe("WorkbenchOverview", () => {
     expect(screen.getByText("Memory host association missing")).toBeInTheDocument();
     const execution = screen.getByTestId("coverage-execution");
     expect(within(execution).getByText("Processes")).toBeInTheDocument();
+  });
+});
+
+function headerIconClass() {
+  return screen.getByTestId("surface-icon").querySelector("svg")?.getAttribute("class") ?? "";
+}
+
+describe("WorkbenchOverview surface icon", () => {
+  it("renders the icon resolved from workbench.icon through the shared resolver", () => {
+    vi.mocked(resolveSurfaceIcon).mockClear();
+    const base = registry().workbenches[0];
+    renderOverview(registry({ workbenches: [{ ...base, icon: "hard-drive" }] }));
+
+    expect(headerIconClass()).toContain("lucide-hard-drive");
+    expect(resolveSurfaceIcon).toHaveBeenCalledWith("hard-drive");
+  });
+
+  it("does not change the icon when workbench.id changes but workbench.icon stays the same", () => {
+    const base = registry().workbenches[0];
+    renderOverview(registry({ workbenches: [{ ...base, id: "some-future-surface", icon: "shield-check", overview_route: "/cases/case-1/xyz" }] }), "some-future-surface");
+
+    expect(headerIconClass()).toContain("lucide-shield-check");
+  });
+
+  it("falls back to the safe generic icon for an unrecognized icon identifier", () => {
+    const base = registry().workbenches[0];
+    renderOverview(registry({ workbenches: [{ ...base, icon: "not-a-real-icon" }] }));
+
+    expect(headerIconClass()).toContain("lucide-layers");
+    expect(headerIconClass()).not.toContain("lucide-shield-check");
+  });
+
+  it("falls back to the safe generic icon when workbench.icon is null", () => {
+    const base = registry().workbenches[0];
+    renderOverview(registry({ workbenches: [{ ...base, icon: null }] }));
+
+    expect(headerIconClass()).toContain("lucide-layers");
   });
 });
