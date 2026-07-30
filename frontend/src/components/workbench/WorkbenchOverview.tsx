@@ -1,5 +1,6 @@
+import { useRef, type KeyboardEvent } from "react";
 import { AlertTriangle, Database, Network } from "lucide-react";
-import { Link, useLocation } from "react-router-dom";
+import { Link, useLocation, useSearchParams } from "react-router-dom";
 import type { CaseCapabilitiesResponse, CaseCapability } from "../../api/client";
 import { memoryWorkbenchRoute } from "../../lib/canonicalRoutes";
 import { resolveSurfaceIcon } from "../../lib/surfaceIcons";
@@ -45,6 +46,36 @@ function pluralCapability(count: number) {
   return count === 1 ? "capability" : "capabilities";
 }
 
+// A domain requested via ?domain= that isn't in this workbench's own domain
+// list (missing, unknown, empty, or left over from a different surface)
+// falls back to the first domain of the already-sorted list -- the same
+// domain a fresh visit with no ?domain= at all would land on. A workbench
+// with no domains yields null; callers must not assume a domain exists.
+function resolveActiveDomainId(domains: Array<{ id: string }>, requested: string | null): string | null {
+  if (!domains.length) return null;
+  if (requested && domains.some((domain) => domain.id === requested)) return requested;
+  return domains[0].id;
+}
+
+// Severity order for the compact per-tab badge: the worst status present
+// wins, so a tab with one failed capability among ten healthy ones still
+// reads as "needs attention" at a glance.
+const READINESS_SEVERITY = ["failed", "degraded", "processing", "not_collected", "empty", "has_data", "not_applicable"];
+
+function domainReadinessCounts(capabilities: CaseCapability[]): Record<string, number> {
+  return capabilities.reduce<Record<string, number>>((acc, capability) => {
+    acc[capability.readiness] = (acc[capability.readiness] || 0) + 1;
+    return acc;
+  }, {});
+}
+
+function dominantReadiness(counts: Record<string, number>): string | null {
+  for (const status of READINESS_SEVERITY) {
+    if (counts[status]) return status;
+  }
+  return Object.keys(counts)[0] ?? null;
+}
+
 function PlatformHeader({ workbench }: { workbench: Workbench }) {
   const Icon = resolveSurfaceIcon(workbench.icon);
   const overview = workbench.overview;
@@ -64,6 +95,25 @@ function PlatformHeader({ workbench }: { workbench: Workbench }) {
           <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">Evidence</p><p className="mt-1 text-xl text-ink">{overview?.evidence_count ?? 0}</p></div>
           <div className="rounded-2xl border border-line bg-abyss/70 px-4 py-3"><p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">State</p><p className="mt-1 text-sm text-ink">{displayLabel(overview?.processing_state || "empty")}</p></div>
         </div>
+      </div>
+    </section>
+  );
+}
+
+// Surface-wide Readiness/Coverage summary. Renders overview.coverage
+// exactly as the registry computed it -- capability_count and
+// status_counts are consumed literally, never recomputed here, so this
+// stays identical no matter which domain tab is active.
+function SurfaceCoverageSummary({ coverage }: { coverage: NonNullable<Workbench["overview"]>["coverage"] }) {
+  const entries = Object.entries(coverage.status_counts);
+  return (
+    <section className="rounded-3xl border border-line bg-panel/55 p-5" data-testid="surface-coverage-summary">
+      <div className="flex items-center justify-between gap-3">
+        <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Coverage</p>
+        <span className="text-xs text-muted">{coverage.capability_count} {pluralCapability(coverage.capability_count)}</span>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        {entries.length ? entries.map(([status, count]) => <span key={status} className={`rounded-full border px-2.5 py-1 text-[11px] ${readinessStyle(status)}`}>{count} {STATUS_LABELS[status] || displayLabel(status)}</span>) : <p className="text-sm text-muted">No capability data yet for this workbench.</p>}
       </div>
     </section>
   );
@@ -92,6 +142,67 @@ function CoverageCard({ domain, capabilities, caseId, pathname }: { domain: Work
         {ordered.slice(0, 3).map((capability) => <p key={capability.id} className="flex justify-between gap-2"><span>{capability.title}</span><span className="text-ink">{STATUS_LABELS[capability.readiness] || capability.readiness}</span></p>)}
       </div>
     </Link>
+  );
+}
+
+type DomainTab = { id: string; capabilities: CaseCapability[] };
+
+// WAI-ARIA Tabs pattern with manual activation: arrow/Home/End only move DOM
+// focus between tabs (roving tabindex). Enter/Space are deliberately NOT
+// handled here -- each tab is a real <button>, so the browser (and
+// userEvent in tests) already fires a click from Enter/Space on a focused
+// button. Handling them again here would double-activate the same
+// selection and push two history entries for one user action.
+function DomainTabBar({ domains, activeDomainId, onSelect }: { domains: DomainTab[]; activeDomainId: string; onSelect: (domainId: string) => void }) {
+  const tabRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+
+  function focusDomain(domainId: string) {
+    tabRefs.current[domainId]?.focus();
+  }
+
+  function handleKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number) {
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      focusDomain(domains[(index + 1) % domains.length].id);
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      focusDomain(domains[(index - 1 + domains.length) % domains.length].id);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      focusDomain(domains[0].id);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      focusDomain(domains[domains.length - 1].id);
+    }
+  }
+
+  return (
+    <div role="tablist" aria-label="Domains" className="flex flex-wrap gap-2">
+      {domains.map((domain, index) => {
+        const selected = domain.id === activeDomainId;
+        const counts = domainReadinessCounts(domain.capabilities);
+        const dominant = dominantReadiness(counts);
+        const total = domain.capabilities.length;
+        return (
+          <button
+            key={domain.id}
+            ref={(element) => { tabRefs.current[domain.id] = element; }}
+            type="button"
+            role="tab"
+            id={`domain-tab-${domain.id}`}
+            aria-selected={selected}
+            aria-controls={`domain-panel-${domain.id}`}
+            tabIndex={selected ? 0 : -1}
+            onClick={() => onSelect(domain.id)}
+            onKeyDown={(event) => handleKeyDown(event, index)}
+            className={`flex items-center gap-2 rounded-2xl border px-4 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 ${selected ? "border-accent/50 bg-accent/10 text-accent" : "border-line bg-panel/55 text-muted hover:border-accent/30 hover:text-ink"}`}
+          >
+            <span>{displayLabel(domain.id)}</span>
+            {dominant ? <span className={`rounded-full border px-2 py-0.5 text-[10px] ${readinessStyle(dominant)}`}>{total}</span> : null}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -142,6 +253,7 @@ function MemoryImagesPanel({ images }: { images: NonNullable<Workbench["overview
 
 export function WorkbenchOverview({ registry, workbenchId, caseId }: { registry: CaseCapabilitiesResponse; workbenchId: string; caseId: string }) {
   const location = useLocation();
+  const [searchParams, setSearchParams] = useSearchParams();
   const workbench = registry.workbenches.find((item) => item.id === workbenchId);
   if (!workbench) {
     return <section className="rounded-3xl border border-line bg-panel/55 p-6"><p className="text-lg font-semibold text-ink">Workbench unavailable</p><p className="mt-2 text-sm text-muted">The registry has no visible capabilities for this workbench in this case.</p></section>;
@@ -149,15 +261,38 @@ export function WorkbenchOverview({ registry, workbenchId, caseId }: { registry:
   const capabilities = registry.capabilities.filter((capability) => capability.visible && workbench.capability_ids.includes(capability.id));
   const domains = [...workbench.domains].sort((a, b) => Math.min(...a.capability_ids.map((id) => capabilities.find((capability) => capability.id === id)?.overview?.priority ?? 999)) - Math.min(...b.capability_ids.map((id) => capabilities.find((capability) => capability.id === id)?.overview?.priority ?? 999)) || a.id.localeCompare(b.id));
   const overview = workbench.overview;
+
+  const domainTabs: DomainTab[] = domains.map((domain) => ({ id: domain.id, capabilities: capabilities.filter((capability) => domain.capability_ids.includes(capability.id)) }));
+  const activeDomainId = resolveActiveDomainId(domains, searchParams.get("domain"));
+  const activeDomain = activeDomainId ? domains.find((domain) => domain.id === activeDomainId) : undefined;
+
+  function selectDomain(domainId: string) {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      next.set("domain", domainId);
+      return next;
+    });
+  }
+
   return (
     <div className="space-y-5" data-testid={`workbench-overview-${workbench.id}`}>
       <PlatformHeader workbench={workbench} />
+      <SurfaceCoverageSummary coverage={overview?.coverage ?? { capability_count: 0, status_counts: {} }} />
       <QuickActionsPanel actions={overview?.quick_actions ?? []} />
       <section>
         <p className="mb-3 font-mono text-xs uppercase tracking-[0.18em] text-accent">Coverage</p>
-      <div className="grid gap-4 lg:grid-cols-3">
-        {domains.map((domain) => <CoverageCard key={domain.id} domain={domain} capabilities={capabilities.filter((capability) => domain.capability_ids.includes(capability.id))} caseId={caseId} pathname={location.pathname} />)}
-      </div>
+        {activeDomainId ? (
+          <>
+            <DomainTabBar domains={domainTabs} activeDomainId={activeDomainId} onSelect={selectDomain} />
+            {activeDomain ? (
+              <div role="tabpanel" id={`domain-panel-${activeDomain.id}`} aria-labelledby={`domain-tab-${activeDomain.id}`} className="mt-4">
+                <CoverageCard domain={activeDomain} capabilities={capabilities.filter((capability) => activeDomain.capability_ids.includes(capability.id))} caseId={caseId} pathname={location.pathname} />
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <p className="text-sm text-muted">No domains are visible for this workbench yet.</p>
+        )}
       </section>
       <MemoryImagesPanel images={overview?.memory_images ?? []} />
       <div className="grid gap-4 lg:grid-cols-2">

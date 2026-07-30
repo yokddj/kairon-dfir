@@ -1,5 +1,6 @@
 import { render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { WorkbenchOverview } from "./WorkbenchOverview";
 import { resolveSurfaceIcon } from "../../lib/surfaceIcons";
@@ -74,25 +75,78 @@ function registry(overrides: Partial<CaseCapabilitiesResponse> = {}): CaseCapabi
   };
 }
 
-function renderOverview(data: CaseCapabilitiesResponse = registry(), workbenchId = "linux") {
+// Three domains whose priority order deliberately does NOT match alphabetical
+// order, so tab-order assertions can't pass by accident of id sorting.
+function multiDomainRegistry(): CaseCapabilitiesResponse {
+  const caps = [
+    capability({ id: "surface.zzz_first.a", domain: "zzz_first", title: "Zzz First Cap", route: "/cases/:caseId/artifacts?artifact_type=zzz", nav: { parent: "linux/zzz_first", order: 5 }, overview: { priority: 5, featured: true, quick_action: "Open Zzz" }, readiness: "has_data" }),
+    capability({ id: "surface.mmm_third.a", domain: "mmm_third", title: "Mmm Third Cap", route: "/cases/:caseId/artifacts?artifact_type=mmm", nav: { parent: "linux/mmm_third", order: 20 }, overview: { priority: 20, featured: true, quick_action: "Open Mmm" }, readiness: "degraded" }),
+    capability({ id: "surface.aaa_second.a", domain: "aaa_second", title: "Aaa Second Cap", route: "/cases/:caseId/artifacts?artifact_type=aaa", nav: { parent: "linux/aaa_second", order: 50 }, overview: { priority: 50, featured: true, quick_action: "Open Aaa" }, readiness: "has_data" }),
+  ];
+  return registry({
+    workbenches: [
+      {
+        id: "linux",
+        label: "Linux",
+        kind: "platform",
+        icon: "shield-check",
+        overview_route: "/cases/case-1/l",
+        capability_ids: caps.map((item) => item.id),
+        domains: [
+          { id: "zzz_first", capability_ids: [caps[0].id], record_count: 1 },
+          { id: "mmm_third", capability_ids: [caps[1].id], record_count: 1 },
+          { id: "aaa_second", capability_ids: [caps[2].id], record_count: 1 },
+        ],
+        overview: {
+          host_count: 1,
+          evidence_count: 1,
+          processing_state: "ready",
+          coverage: { capability_count: 3, status_counts: { has_data: 2, degraded: 1 } },
+          quick_actions: [],
+          warnings: [],
+          recent_activity: [],
+          memory_images: [],
+        },
+      },
+    ],
+    capabilities: caps,
+  });
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <span data-testid="location-probe">{location.pathname + location.search}</span>;
+}
+
+function renderOverview(data: CaseCapabilitiesResponse = registry(), workbenchId = "linux", initialEntry?: string) {
+  const entry = initialEntry ?? `/cases/case-1/${workbenchId === "memory" ? "m" : workbenchId[0]}`;
   return render(
-    <MemoryRouter initialEntries={[`/cases/case-1/${workbenchId === "memory" ? "m" : workbenchId[0]}`]}>
+    <MemoryRouter initialEntries={[entry]}>
       <WorkbenchOverview registry={data} workbenchId={workbenchId} caseId="case-1" />
+      <LocationProbe />
     </MemoryRouter>,
   );
 }
 
 describe("WorkbenchOverview", () => {
-  it("renders registry-driven header, coverage, warnings, activity and quick actions", () => {
+  it("renders registry-driven header, warnings, activity and quick actions, with only the default domain's panel mounted", async () => {
     renderOverview();
 
     expect(screen.getByTestId("workbench-overview-linux")).toBeInTheDocument();
     expect(screen.getByText("Linux")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open Authentication" })).toHaveAttribute("href", "/cases/case-1/l/access/authentication");
-    expect(screen.getByTestId("coverage-access")).toHaveTextContent("Authentication");
-    expect(screen.getByTestId("coverage-cloud_sync")).toHaveTextContent("Cloud Sync");
     expect(screen.getByText("Cloud Sync failed")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Suspicious SSH/i })).toHaveAttribute("href", "/cases/case-1/detections?detection_id=det-1");
+
+    // Default domain (lowest capability priority) is "access" -- its panel
+    // is mounted, "cloud_sync" is only a tab until selected.
+    expect(screen.getByTestId("coverage-access")).toHaveTextContent("Authentication");
+    expect(screen.queryByTestId("coverage-cloud_sync")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("tab", { name: /Cloud Sync/i }));
+
+    expect(screen.getByTestId("coverage-cloud_sync")).toHaveTextContent("Cloud Sync");
+    expect(screen.queryByTestId("coverage-access")).not.toBeInTheDocument();
   });
 
   it("renders an empty workbench without inventing capabilities", () => {
@@ -169,5 +223,213 @@ describe("WorkbenchOverview surface icon", () => {
     renderOverview(registry({ workbenches: [{ ...base, icon: null }] }));
 
     expect(headerIconClass()).toContain("lucide-layers");
+  });
+});
+
+describe("WorkbenchOverview surface coverage summary", () => {
+  it("renders the exact values from overview.coverage, without recomputing them", () => {
+    renderOverview(multiDomainRegistry());
+    const summary = screen.getByTestId("surface-coverage-summary");
+
+    expect(summary).toHaveTextContent("3 capabilities");
+    expect(summary).toHaveTextContent("2 has data");
+    expect(summary).toHaveTextContent("1 degraded");
+  });
+
+  it("stays identical when switching domains", async () => {
+    renderOverview(multiDomainRegistry());
+    const before = screen.getByTestId("surface-coverage-summary").textContent;
+
+    await userEvent.click(screen.getByRole("tab", { name: /Aaa Second/i }));
+
+    expect(screen.getByTestId("surface-coverage-summary").textContent).toBe(before);
+  });
+});
+
+describe("WorkbenchOverview domain tabs", () => {
+  it("renders one tab per domain, in priority order rather than alphabetical", () => {
+    renderOverview(multiDomainRegistry());
+    const tabs = screen.getAllByRole("tab");
+
+    expect(tabs.map((tab) => tab.textContent)).toEqual([
+      expect.stringContaining("Zzz First"),
+      expect.stringContaining("Mmm Third"),
+      expect.stringContaining("Aaa Second"),
+    ]);
+  });
+
+  it("selects the first domain by priority order as the default when the URL has no ?domain=", () => {
+    renderOverview(multiDomainRegistry());
+
+    expect(screen.getByRole("tab", { name: /Zzz First/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("coverage-zzz_first")).toBeInTheDocument();
+  });
+
+  it("mounts only the active domain's panel, never the others", () => {
+    renderOverview(multiDomainRegistry());
+
+    expect(screen.getByTestId("coverage-zzz_first")).toBeInTheDocument();
+    expect(screen.queryByTestId("coverage-mmm_third")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("coverage-aaa_second")).not.toBeInTheDocument();
+  });
+
+  it("clicking another tab switches the active domain, updates ?domain=, and preserves other query params", async () => {
+    renderOverview(multiDomainRegistry(), "linux", "/cases/case-1/l?tab=overview");
+
+    await userEvent.click(screen.getByRole("tab", { name: /Mmm Third/i }));
+
+    expect(screen.getByRole("tab", { name: /Mmm Third/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("coverage-mmm_third")).toBeInTheDocument();
+    expect(screen.queryByTestId("coverage-zzz_first")).not.toBeInTheDocument();
+
+    const location = screen.getByTestId("location-probe").textContent || "";
+    expect(location).toContain("domain=mmm_third");
+    expect(location).toContain("tab=overview");
+  });
+
+  it("selects the domain from a valid ?domain= deep link on load", () => {
+    renderOverview(multiDomainRegistry(), "linux", "/cases/case-1/l?domain=aaa_second");
+
+    expect(screen.getByRole("tab", { name: /Aaa Second/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("coverage-aaa_second")).toBeInTheDocument();
+  });
+
+  it("falls back to the first domain when ?domain= is unknown", () => {
+    renderOverview(multiDomainRegistry(), "linux", "/cases/case-1/l?domain=not-a-real-domain");
+    expect(screen.getByRole("tab", { name: /Zzz First/i })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("falls back to the first domain when ?domain= is empty", () => {
+    renderOverview(multiDomainRegistry(), "linux", "/cases/case-1/l?domain=");
+    expect(screen.getByRole("tab", { name: /Zzz First/i })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("falls back to the first domain when ?domain= belongs to a different surface", () => {
+    // "network" is a real domain id on the Memory surface, not on this Linux one.
+    renderOverview(multiDomainRegistry(), "linux", "/cases/case-1/l?domain=network");
+    expect(screen.getByRole("tab", { name: /Zzz First/i })).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("renders a single tab for a surface with exactly one domain", () => {
+    const data = registry({
+      workbenches: [
+        {
+          id: "linux",
+          label: "Linux",
+          kind: "platform",
+          icon: "shield-check",
+          overview_route: "/cases/case-1/l",
+          capability_ids: ["linux.access.authentication"],
+          domains: [{ id: "access", capability_ids: ["linux.access.authentication"], record_count: 20 }],
+          overview: {
+            host_count: 1,
+            evidence_count: 1,
+            processing_state: "ready",
+            coverage: { capability_count: 1, status_counts: { has_data: 1 } },
+            quick_actions: [],
+            warnings: [],
+            recent_activity: [],
+            memory_images: [],
+          },
+        },
+      ],
+      capabilities: [capability({})],
+    });
+
+    renderOverview(data);
+
+    const tabs = screen.getAllByRole("tab");
+    expect(tabs).toHaveLength(1);
+    expect(tabs[0]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("renders no tabs for a workbench with no domains, without throwing", () => {
+    const data = registry({
+      workbenches: [
+        {
+          id: "linux",
+          label: "Linux",
+          kind: "platform",
+          icon: "shield-check",
+          overview_route: "/cases/case-1/l",
+          capability_ids: [],
+          domains: [],
+          overview: {
+            host_count: 0,
+            evidence_count: 0,
+            processing_state: "empty",
+            coverage: { capability_count: 0, status_counts: {} },
+            quick_actions: [],
+            warnings: [],
+            recent_activity: [],
+            memory_images: [],
+          },
+        },
+      ],
+      capabilities: [],
+    });
+
+    expect(() => renderOverview(data)).not.toThrow();
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tabpanel")).not.toBeInTheDocument();
+    expect(screen.getByText("No domains are visible for this workbench yet.")).toBeInTheDocument();
+  });
+
+  it("exposes the tabs/tabpanel ARIA contract with a stable id relationship", () => {
+    renderOverview(multiDomainRegistry());
+
+    const tablist = screen.getByRole("tablist");
+    expect(tablist).toBeInTheDocument();
+
+    const activeTab = screen.getByRole("tab", { name: /Zzz First/i });
+    const panel = screen.getByRole("tabpanel");
+    expect(activeTab).toHaveAttribute("aria-selected", "true");
+    expect(activeTab.id).toBe("domain-tab-zzz_first");
+    expect(activeTab).toHaveAttribute("aria-controls", panel.id);
+    expect(panel).toHaveAttribute("aria-labelledby", activeTab.id);
+
+    const inactiveTab = screen.getByRole("tab", { name: /Mmm Third/i });
+    expect(inactiveTab).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("supports ArrowRight/ArrowLeft/Home/End to move focus between tabs (roving tabindex), without activating them", async () => {
+    renderOverview(multiDomainRegistry());
+    const [first, second, third] = screen.getAllByRole("tab");
+
+    first.focus();
+    expect(first).toHaveAttribute("tabIndex", "0");
+    expect(second).toHaveAttribute("tabIndex", "-1");
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(second).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(third).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowRight}");
+    expect(first).toHaveFocus();
+
+    await userEvent.keyboard("{ArrowLeft}");
+    expect(third).toHaveFocus();
+
+    await userEvent.keyboard("{Home}");
+    expect(first).toHaveFocus();
+
+    await userEvent.keyboard("{End}");
+    expect(third).toHaveFocus();
+
+    // Moving focus never activates a tab by itself (manual activation).
+    expect(third).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("activates the focused tab on Enter (native button activation, no double-handling)", async () => {
+    renderOverview(multiDomainRegistry());
+    const third = screen.getAllByRole("tab")[2];
+
+    third.focus();
+    await userEvent.keyboard("{Enter}");
+
+    expect(third).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("coverage-aaa_second")).toBeInTheDocument();
   });
 });
