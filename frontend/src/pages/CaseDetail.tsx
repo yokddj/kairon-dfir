@@ -15,6 +15,7 @@ import { useActiveCase } from "../context/ActiveCaseContext";
 import { useHostContext } from "../hooks/useHostContext";
 import DeleteCaseDialog from "../components/DeleteCaseDialog";
 import { memoryEvidenceRoute } from "../lib/canonicalRoutes";
+import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 
 const tabs = ["overview", "evidences", "processing", "artifacts", "artifact_explorer", "search", "process_tree", "investigation_timeline", "detections", "findings", "activity"] as const;
 // This page's remaining, non-duplicated responsibility -- everything else in
@@ -86,6 +87,10 @@ export default function CaseDetail() {
   // so an explicit ?tab=overview link still resolves to something before
   // redirectTargetForTab redirects it away.
   const [tab, setTab] = useState<(typeof tabs)[number]>(tabs.includes(initialTab as (typeof tabs)[number]) ? (initialTab as (typeof tabs)[number]) : "evidences");
+  // CaseDetail's tabs (Evidence & Ingest, Processing, etc.) aren't
+  // capabilities or a Surface -- currentLabel skips registry/Surface Home
+  // matching entirely and produces Case / {tab label}.
+  const breadcrumbs = useInvestigationBreadcrumbs({ currentLabel: tabLabels[tab] });
   const [caseTimezone, setCaseTimezone] = useState("");
   const [query, setQuery] = useState(searchParams.get("query") ?? "");
   const [searchEventId, setSearchEventId] = useState(searchParams.get("event_id") ?? "");
@@ -309,7 +314,7 @@ export default function CaseDetail() {
         hostId={activeHostId}
         host={activeHost}
         current={tabLabels[tab]}
-        breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: caseQuery.data?.name || "Case", to: `/cases/${caseId}` }, { label: tabLabels[tab] }]}
+        breadcrumbs={breadcrumbs}
       />
       {normalizedCaseStatus === "archived" ? (
         <div className="rounded-2xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">This case is archived. It is hidden from the default case list but evidence is preserved.</div>

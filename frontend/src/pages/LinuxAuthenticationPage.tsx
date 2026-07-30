@@ -5,6 +5,8 @@ import { Link, useParams } from "react-router-dom";
 import { ShieldCheck } from "lucide-react";
 
 import { api, type LinuxAuthBruteForceGroup, type LinuxAuthEvent, type LinuxAuthSession } from "../api/client";
+import { InvestigationBreadcrumbs } from "../components/InvestigationContext";
+import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 
 function fmtTime(value?: string | null): string {
   if (!value) return "-";
@@ -50,11 +52,13 @@ export default function LinuxAuthenticationPage() {
 
   const query = useQuery({ queryKey: ["linux-authentication", caseId, params], queryFn: () => api.getLinuxAuthentication(caseId, params), enabled: Boolean(caseId) });
   const data = query.data;
+  const breadcrumbs = useInvestigationBreadcrumbs();
 
   if (!caseId) return <div className="rounded-2xl border border-line bg-panel p-6 text-sm text-muted">Select a case first.</div>;
 
   return (
     <main className="space-y-6">
+      <InvestigationBreadcrumbs items={breadcrumbs} />
       <section className="rounded-[28px] border border-line bg-panel p-6 shadow-panel">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>

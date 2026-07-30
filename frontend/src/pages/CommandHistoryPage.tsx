@@ -2,7 +2,9 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type CommandHistoryItem } from "../api/client";
 import { HostFilter } from "../components/HostFilter";
+import { InvestigationBreadcrumbs } from "../components/InvestigationContext";
 import { memoryEvidenceRoute, memoryWorkbenchRoute, windowsExecutionStoriesRoute } from "../lib/canonicalRoutes";
+import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 
 const PAGE_SIZE = 100;
 const SOURCE_OPTIONS = ["", "Memory", "Disk", "Event Log", "Registry", "Browser", "Other"];
@@ -132,6 +134,7 @@ async function copyText(text: string) {
 
 export default function CommandHistoryPage() {
   const { caseId = "" } = useParams();
+  const breadcrumbs = useInvestigationBreadcrumbs();
   const [searchParams, setSearchParams] = useSearchParams();
   const params = useMemo(() => buildParams(searchParams), [searchParams]);
   const [qDraft, setQDraft] = useState(params.q ?? "");
@@ -227,6 +230,7 @@ export default function CommandHistoryPage() {
 
   return (
     <div className="space-y-5">
+      <InvestigationBreadcrumbs items={breadcrumbs} />
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
           <p className="text-xs uppercase tracking-wide text-zinc-500">Case workspace</p>

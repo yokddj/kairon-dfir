@@ -6,6 +6,7 @@ import { useActiveCase } from "../context/ActiveCaseContext";
 import { MemoryWorkspace } from "../components/MemoryWorkspace";
 import InvestigationContext from "../components/InvestigationContext";
 import { useHostContext } from "../hooks/useHostContext";
+import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 import { MemoryEvidenceHeader } from "../components/memory/MemoryEvidenceHeader";
 import { MemoryEvidenceSelector } from "../components/memory/MemoryEvidenceSelector";
 import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysisCatalogueModal";
@@ -18,7 +19,7 @@ import { assignedHostMatchesDetected, normalizeEvidenceHostName } from "../lib/e
 import { capabilityEnabled } from "../lib/platformRegistry";
 import { MEMORY_TABS, isMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 import { memoryQueryKeys } from "../lib/memoryQueryKeys";
-import { caseRoute, linuxCommandHistoryRoute, memoryEvidenceRoute, memoryWorkbenchRoute } from "../lib/canonicalRoutes";
+import { linuxCommandHistoryRoute, memoryEvidenceRoute, memoryWorkbenchRoute } from "../lib/canonicalRoutes";
 import type { CaseContextHostSummary, MemoryEvidenceLanding, MemoryEvidenceLandingItem, MemoryScanRun } from "../api/client";
 
 const ARTIFACT_FAMILY_FROM_TAB: Record<string, string> = {
@@ -185,6 +186,14 @@ export default function MemoryEvidencePage() {
 
   const overview = overviewQuery.data;
   const evidence = landingQuery.data?.items?.find((item) => item.evidence_id === evidenceId) || null;
+  // Tabs that are registered capabilities (processes, network) resolve to
+  // the full Case/Surface/Domain/Capability trail on their own, with the
+  // evidence name auto-derived from the registry; "Memory" is the fallback
+  // for the other tabs (overview, modules, handles, ...), which aren't
+  // registered capabilities. The evidence filename is passed explicitly
+  // either way since this page already has it directly, rather than
+  // depending on whether capability matching happened to fire.
+  const breadcrumbs = useInvestigationBreadcrumbs({ lensLabel: "Memory", context: evidence?.filename || undefined });
   const evidencePlatformProfile = evidence?.platform_capabilities ? { capabilities: evidence.platform_capabilities as EvidencePlatformCapabilities } : null;
   const linuxMemoryHint = capabilityEnabled(evidencePlatformProfile, "supportsJournal") || capabilityEnabled(evidencePlatformProfile, "supportsPackages") || capabilityEnabled(evidencePlatformProfile, "supportsUsers");
   const caseHosts = caseHostsQuery.data?.hosts ?? [];
@@ -426,7 +435,7 @@ export default function MemoryEvidencePage() {
         evidenceId={evidenceId}
         evidenceName={evidence.filename}
         current="Memory"
-        breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: "Case", to: caseRoute(caseId) }, { label: "Memory", to: memoryWorkbenchRoute(caseId) }, { label: evidence.filename || "Evidence" }]}
+        breadcrumbs={breadcrumbs}
         actions={[
           { label: "Evidence Detail", to: `/evidences/${evidenceId}`, description: "Open integrity and processing details" },
           { label: "Search", to: `/cases/${caseId}/search?source_category=Memory`, description: "Search memory-derived documents" },

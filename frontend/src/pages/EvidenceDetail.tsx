@@ -4,12 +4,14 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type CaseReport, type EvidenceBenchmark, type EvidenceIndexingPlan, type EvidenceIndexingStep, type EvidencePlatformProfile, type EvidenceRun, type EvtxHealthCheckResult, type EvtxProfile, type IngestPlanCandidate, type OnDemandModule, type ProblematicArtifact, type RuleRun, type VelociraptorCandidate } from "../api/client";
 import DebugExportDialog from "../components/DebugExportDialog";
 import HostAssignmentPanel from "../components/HostAssignmentPanel";
-import InvestigationContext from "../components/InvestigationContext";
+import { InvestigationBreadcrumbs } from "../components/InvestigationContext";
 import { Disclosure } from "../components/common/Disclosure";
+import { useActiveCase } from "../context/ActiveCaseContext";
 import { useNotifications } from "../context/NotificationsContext";
 import { useHostAssignment } from "../hooks/useHostAssignment";
 import { useHostContext } from "../hooks/useHostContext";
 import { linuxCommandHistoryRoute, memoryEvidenceRoute } from "../lib/canonicalRoutes";
+import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 import {
   asLinuxInventory,
   buildRunTimeoutSummary,
@@ -80,6 +82,16 @@ export default function EvidenceDetail() {
     },
     refetchIntervalInBackground: true,
   });
+  const { setActiveCaseId } = useActiveCase();
+  // This page is reached via /evidences/:evidenceId (no :caseId in the URL)
+  // and previously never synced the active case at all, unlike every other
+  // capability/Surface page -- needed so the breadcrumb's Case level (and
+  // ActiveCaseContext generally) reflects this evidence's actual case
+  // rather than whatever case happened to be active before navigating here.
+  useEffect(() => {
+    if (evidenceQuery.data?.case_id) setActiveCaseId(evidenceQuery.data.case_id);
+  }, [evidenceQuery.data?.case_id, setActiveCaseId]);
+  const breadcrumbs = useInvestigationBreadcrumbs({ currentLabel: evidenceQuery.data?.original_filename || "Evidence" });
   const manifestQuery = useQuery({
     queryKey: ["evidence-manifest", evidenceId],
     queryFn: () => api.getEvidenceManifest(evidenceId),
@@ -1577,6 +1589,7 @@ function formatReportStatus(status: string | null | undefined) {
   const deleteConfirmationValid = deleteConfirmText.trim() === "DELETE";
   return (
     <div className="min-w-0 space-y-5">
+      <InvestigationBreadcrumbs items={breadcrumbs} />
       <section className="rounded-[28px] border border-line bg-panel/75 p-6 shadow-panel">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-start xl:justify-between">
           <div className="min-w-0">
