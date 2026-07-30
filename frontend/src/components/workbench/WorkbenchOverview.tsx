@@ -1,8 +1,8 @@
 import { useRef, type KeyboardEvent } from "react";
-import { AlertTriangle, Database, Network } from "lucide-react";
+import { AlertTriangle, Network } from "lucide-react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import type { CaseCapabilitiesResponse, CaseCapability } from "../../api/client";
-import { memoryWorkbenchRoute } from "../../lib/canonicalRoutes";
+import { useActiveCase } from "../../context/ActiveCaseContext";
 import { resolveSurfaceIcon } from "../../lib/surfaceIcons";
 
 type Workbench = CaseCapabilitiesResponse["workbenches"][number];
@@ -31,11 +31,26 @@ function displayLabel(value: string) {
   return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
-function resolveRoute(route: string, caseId: string, pathname: string): string {
+// Evidence priority for routes that carry :evidenceId: (1) an evidence id
+// already present in the current pathname -- the analyst is already inside
+// that evidence's context, so it wins; (2) selectedEvidenceId from
+// ActiveCaseContext -- the analyst's last-picked evidence elsewhere in the
+// app; (3) none. No selector, no modal -- this is purely a priority lookup
+// over data that already exists.
+function resolveEvidenceId(pathname: string, selectedEvidenceId: string): string | null {
+  const match = pathname.match(/^\/cases\/([^/]+)\/m\/([^/]+)/);
+  if (match?.[2]) return match[2];
+  return selectedEvidenceId || null;
+}
+
+// Routes without :evidenceId resolve unconditionally. Routes with
+// :evidenceId return null when no evidence is available from either
+// priority source -- callers must render an explicit "needs evidence"
+// state instead of silently landing on the workbench root.
+function resolveRoute(route: string, caseId: string, evidenceId: string | null): string | null {
   const base = route.replace(":caseId", caseId);
   if (!base.includes(":evidenceId")) return base;
-  const match = pathname.match(/^\/cases\/([^/]+)\/m\/([^/]+)/);
-  return match?.[2] ? base.replace(":evidenceId", match[2]) : memoryWorkbenchRoute(caseId);
+  return evidenceId ? base.replace(":evidenceId", evidenceId) : null;
 }
 
 function readinessStyle(readiness: string) {
@@ -62,7 +77,7 @@ function resolveActiveDomainId(domains: Array<{ id: string }>, requested: string
 // reads as "needs attention" at a glance.
 const READINESS_SEVERITY = ["failed", "degraded", "processing", "not_collected", "empty", "has_data", "not_applicable"];
 
-function domainReadinessCounts(capabilities: CaseCapability[]): Record<string, number> {
+function readinessCounts(capabilities: CaseCapability[]): Record<string, number> {
   return capabilities.reduce<Record<string, number>>((acc, capability) => {
     acc[capability.readiness] = (acc[capability.readiness] || 0) + 1;
     return acc;
@@ -119,29 +134,43 @@ function SurfaceCoverageSummary({ coverage }: { coverage: NonNullable<Workbench[
   );
 }
 
-function CoverageCard({ domain, capabilities, caseId, pathname }: { domain: Workbench["domains"][number]; capabilities: CaseCapability[]; caseId: string; pathname: string }) {
-  const ordered = [...capabilities].sort((a, b) => (a.overview?.priority ?? a.nav?.order ?? 999) - (b.overview?.priority ?? b.nav?.order ?? 999));
-  const counts = ordered.reduce<Record<string, number>>((acc, capability) => {
-    acc[capability.readiness] = (acc[capability.readiness] || 0) + 1;
-    return acc;
-  }, {});
-  const target = ordered[0] ? resolveRoute(ordered[0].route, caseId, pathname) : `/cases/${caseId}/artifacts`;
+// One card per visible capability. The card itself is never a link -- only
+// its action is -- so a missing-evidence state can be represented as a
+// genuinely disabled control instead of a link with a fake or misleading
+// destination. Readiness is purely informative here; it never drives
+// whether the action is enabled (only missing evidence does).
+function CapabilityCard({ capability, caseId, evidenceId, warnings }: { capability: CaseCapability; caseId: string; evidenceId: string | null; warnings: NonNullable<Workbench["overview"]>["warnings"] }) {
+  const route = resolveRoute(capability.route, caseId, evidenceId);
+  const warning = warnings.find((item) => item.id.startsWith(`${capability.id}.`));
+  const actionLabel = capability.overview?.quick_action || "Open";
   return (
-    <Link to={target} className="block rounded-3xl border border-line bg-panel/55 p-5 transition hover:border-accent/50 hover:bg-panel/80" data-testid={`coverage-${domain.id}`}>
+    <div className="rounded-3xl border border-line bg-panel/55 p-5" data-testid={`capability-${capability.id}`}>
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-lg font-semibold text-ink">{displayLabel(domain.id)}</p>
-          <p className="mt-1 text-xs text-muted">{ordered.length} {pluralCapability(ordered.length)} · {domain.record_count} records</p>
+        <p className="text-lg font-semibold text-ink">{capability.title}</p>
+        <span className={`rounded-full border px-2.5 py-1 text-[11px] ${readinessStyle(capability.readiness)}`}>{STATUS_LABELS[capability.readiness] || displayLabel(capability.readiness)}</span>
+      </div>
+      <p className="mt-1 text-xs text-muted">{capability.record_count} records · {capability.artifact_count} artifacts</p>
+      {warning ? (
+        <div className="mt-3 rounded-2xl border border-warning/40 bg-warning/10 p-3 text-sm">
+          <p className="flex items-center gap-2 font-semibold text-warning"><AlertTriangle size={15} />{warning.title}</p>
+          <p className="mt-1 text-muted">{warning.detail}</p>
         </div>
-        <Database size={18} className="text-muted" />
+      ) : null}
+      <div className="mt-4">
+        {route ? (
+          <Link to={route} className="inline-block rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent transition hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60">
+            {actionLabel}
+          </Link>
+        ) : (
+          <div>
+            <button type="button" disabled aria-label={`${actionLabel} unavailable -- evidence required`} className="cursor-not-allowed rounded-2xl border border-line bg-abyss/40 px-4 py-2 text-sm font-semibold text-muted/60">
+              {actionLabel}
+            </button>
+            <p className="mt-2 text-xs text-muted">Select memory evidence</p>
+          </div>
+        )}
       </div>
-      <div className="mt-4 flex flex-wrap gap-2">
-        {Object.entries(counts).map(([status, count]) => <span key={status} className={`rounded-full border px-2.5 py-1 text-[11px] ${readinessStyle(status)}`}>{count} {STATUS_LABELS[status] || displayLabel(status)}</span>)}
-      </div>
-      <div className="mt-4 space-y-1 text-xs text-muted">
-        {ordered.slice(0, 3).map((capability) => <p key={capability.id} className="flex justify-between gap-2"><span>{capability.title}</span><span className="text-ink">{STATUS_LABELS[capability.readiness] || capability.readiness}</span></p>)}
-      </div>
-    </Link>
+    </div>
   );
 }
 
@@ -180,7 +209,7 @@ function DomainTabBar({ domains, activeDomainId, onSelect }: { domains: DomainTa
     <div role="tablist" aria-label="Domains" className="flex flex-wrap gap-2">
       {domains.map((domain, index) => {
         const selected = domain.id === activeDomainId;
-        const counts = domainReadinessCounts(domain.capabilities);
+        const counts = readinessCounts(domain.capabilities);
         const dominant = dominantReadiness(counts);
         const total = domain.capabilities.length;
         return (
@@ -253,6 +282,7 @@ function MemoryImagesPanel({ images }: { images: NonNullable<Workbench["overview
 
 export function WorkbenchOverview({ registry, workbenchId, caseId }: { registry: CaseCapabilitiesResponse; workbenchId: string; caseId: string }) {
   const location = useLocation();
+  const { selectedEvidenceId } = useActiveCase();
   const [searchParams, setSearchParams] = useSearchParams();
   const workbench = registry.workbenches.find((item) => item.id === workbenchId);
   if (!workbench) {
@@ -265,6 +295,10 @@ export function WorkbenchOverview({ registry, workbenchId, caseId }: { registry:
   const domainTabs: DomainTab[] = domains.map((domain) => ({ id: domain.id, capabilities: capabilities.filter((capability) => domain.capability_ids.includes(capability.id)) }));
   const activeDomainId = resolveActiveDomainId(domains, searchParams.get("domain"));
   const activeDomain = activeDomainId ? domains.find((domain) => domain.id === activeDomainId) : undefined;
+  const activeDomainCapabilities = activeDomain
+    ? [...capabilities.filter((capability) => activeDomain.capability_ids.includes(capability.id))].sort((a, b) => (a.overview?.priority ?? a.nav?.order ?? 999) - (b.overview?.priority ?? b.nav?.order ?? 999))
+    : [];
+  const evidenceId = resolveEvidenceId(location.pathname, selectedEvidenceId);
 
   function selectDomain(domainId: string) {
     setSearchParams((current) => {
@@ -285,8 +319,8 @@ export function WorkbenchOverview({ registry, workbenchId, caseId }: { registry:
           <>
             <DomainTabBar domains={domainTabs} activeDomainId={activeDomainId} onSelect={selectDomain} />
             {activeDomain ? (
-              <div role="tabpanel" id={`domain-panel-${activeDomain.id}`} aria-labelledby={`domain-tab-${activeDomain.id}`} className="mt-4">
-                <CoverageCard domain={activeDomain} capabilities={capabilities.filter((capability) => activeDomain.capability_ids.includes(capability.id))} caseId={caseId} pathname={location.pathname} />
+              <div role="tabpanel" id={`domain-panel-${activeDomain.id}`} aria-labelledby={`domain-tab-${activeDomain.id}`} className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {activeDomainCapabilities.map((capability) => <CapabilityCard key={capability.id} capability={capability} caseId={caseId} evidenceId={evidenceId} warnings={overview?.warnings ?? []} />)}
               </div>
             ) : null}
           </>
