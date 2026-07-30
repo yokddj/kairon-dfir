@@ -258,6 +258,31 @@ def test_linux_process_readiness_distinguishes_plugins_from_missing_symbols(tmp_
     assert processes["reason"] == "symbols_unavailable"
 
 
+def test_windows_process_readiness_uses_supported_plugins_when_worker_state_is_inconsistent(tmp_path: Path) -> None:
+    from app.api.routes_memory import _memory_capability_readiness
+
+    path = _write(tmp_path, "windows.dmp", b"PAGEDU64" + b"\x00" * 4088)
+    evidence = _evidence(detected_format=None)
+    plan = build_memory_analysis_plan(evidence, canonical_path=path, requested_capabilities=[MemoryCapability.PROCESSES])
+
+    readiness = _memory_capability_readiness(
+        plan,
+        {
+            "ready": True,
+            "supported_plugins": ["windows.pslist", "windows.pstree", "windows.cmdline"],
+            "plugins": {
+                "windows.pslist": {"state": "unavailable"},
+                "windows.pstree": {"state": "unavailable"},
+                "windows.cmdline": {"state": "available"},
+            },
+        },
+        {"can_analyze": True, "symbol_identifier_present": True},
+    )
+
+    assert readiness["processes"]["framework_plugin_available"] is True
+    assert readiness["processes"]["ready"] is True
+
+
 def test_linux_process_capability_ready_when_isf_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from app.services.memory import analysis_plan as analysis_plan_module
     from app.services.memory.linux_symbols import import_linux_isf
@@ -327,6 +352,16 @@ def test_linux_process_readiness_exposes_symbol_provenance(tmp_path: Path, monke
     assert processes["manual_upload_available"] is True
     assert processes["external_download_enabled"] is False
     assert processes["reason_code"] == "ready"
+
+
+def test_process_source_plugin_filters_include_linux_process_producers() -> None:
+    from app.api.routes_memory import PROCESS_SOURCE_PLUGIN_FILTERS, PROCESS_SOURCE_PLUGIN_FILTER_PATTERN
+
+    assert "linux.pslist" in PROCESS_SOURCE_PLUGIN_FILTERS
+    assert "linux.pstree" in PROCESS_SOURCE_PLUGIN_FILTERS
+    assert "linux.sockstat" not in PROCESS_SOURCE_PLUGIN_FILTERS
+    assert "linux\\.pslist" in PROCESS_SOURCE_PLUGIN_FILTER_PATTERN
+    assert "linux\\.pstree" in PROCESS_SOURCE_PLUGIN_FILTER_PATTERN
 
 
 # ---------------------------------------------------------------------------

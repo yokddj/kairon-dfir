@@ -19,6 +19,16 @@ from sqlalchemy.orm import Session
 # references this so operators know which migration to apply.
 EXPECTED_BATCH_SCHEMA_MIGRATION_VERSION = 11
 
+PROCESS_SOURCE_PLUGIN_FILTERS = {
+    "windows.pslist",
+    "windows.pstree",
+    "windows.psscan",
+    "windows.cmdline",
+    "linux.pslist",
+    "linux.pstree",
+}
+PROCESS_SOURCE_PLUGIN_FILTER_PATTERN = "^(windows\\.pslist|windows\\.psscan|windows\\.pstree|windows\\.cmdline|linux\\.pslist|linux\\.pstree)$"
+
 
 def _structured_db_error(
     exc: Exception,
@@ -446,9 +456,19 @@ def _memory_capability_readiness(analysis_plan, backend: dict, storage_readiness
         specs = plugins_for_capability(analysis_plan.detected_platform, capability)
         plugins = [spec.plugin for spec in specs]
         registered = bool(specs)
+
+        def _plugin_available(plugin: str) -> bool:
+            state = plugin_states.get(plugin)
+            if isinstance(state, dict) and state.get("state") == "available":
+                return True
+            if analysis_plan.detected_platform == PlatformFamily.WINDOWS:
+                return bool(backend.get("ready") and plugin in supported_plugins)
+            if isinstance(state, dict):
+                return False
+            return plugin in supported_plugins
+
         plugin_available = bool(plugins) and all(
-            (plugin_states.get(plugin) or {}).get("state") == "available" if plugin in plugin_states else plugin in supported_plugins
-            for plugin in plugins
+            _plugin_available(plugin) for plugin in plugins
         )
         symbols_required = any(spec.requires_symbols for spec in specs)
         symbols_found = True
@@ -2256,7 +2276,7 @@ def get_memory_run_processes(
     db: Session = Depends(get_db),
 ) -> dict:
     run = _require_memory_run(db, run_id)
-    if source_plugin and source_plugin not in {"windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"}:
+    if source_plugin and source_plugin not in PROCESS_SOURCE_PLUGIN_FILTERS:
         raise HTTPException(status_code=400, detail="Unsupported memory process source plugin filter.")
     return search_memory_processes(run.case_id, run_id=run.id, pid=pid, ppid=ppid, process_name=process_name, source_plugin=source_plugin, present_in_pslist=present_in_pslist, present_in_psscan=present_in_psscan, has_command_line=has_command_line, active=active, page=page, page_size=page_size)
 
@@ -2279,7 +2299,7 @@ def get_case_memory_processes(
     db: Session = Depends(get_db),
 ) -> dict:
     _require_case(db, case_id)
-    if source_plugin and source_plugin not in {"windows.pslist", "windows.pstree", "windows.psscan", "windows.cmdline"}:
+    if source_plugin and source_plugin not in PROCESS_SOURCE_PLUGIN_FILTERS:
         raise HTTPException(status_code=400, detail="Unsupported memory process source plugin filter.")
     if run_id:
         _require_memory_run(db, run_id, case_id=case_id)
@@ -2490,7 +2510,7 @@ def get_canonical_process_entities(
     profile: str | None = Query(default=None, pattern="^(processes_basic|processes_extended)$"),
     evidence_id: str | None = Query(default=None),
     visibility: str | None = Query(default=None, pattern="^(listed|scan_only|terminated|unknown|hidden_candidate)$"),
-    source_plugin: str | None = Query(default=None, pattern="^(windows\\.pslist|windows\\.psscan|windows\\.pstree|windows\\.cmdline)$"),
+    source_plugin: str | None = Query(default=None, pattern=PROCESS_SOURCE_PLUGIN_FILTER_PATTERN),
     process_name: str | None = Query(default=None),
     pid: int | None = Query(default=None, ge=0),
     ppid: int | None = Query(default=None, ge=0),
