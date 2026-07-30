@@ -197,6 +197,73 @@ describe("useInvestigationBreadcrumbs", () => {
     expect(await screen.findByText("Case Alpha")).toBeInTheDocument();
   });
 
+  it("resolves entityTrail to Case / Surface / Domain / Capability / entityLabel via capability id, not route matching", async () => {
+    vi.mocked(api.getCaseCapabilities).mockResolvedValue(registry());
+    renderProbe(
+      { entityTrail: { capabilityId: "memory.processes", entityLabel: "powershell.exe (PID 1840)" } },
+      "/cases/case-1/entities/memory-process/entity-abc",
+    );
+
+    await screen.findByText("powershell.exe (PID 1840)");
+    expect(crumbLabels()).toEqual(["Case Alpha", "Memory", "Execution", "Processes", "powershell.exe (PID 1840)"]);
+  });
+
+  it("truncates entityTrail at Capability while the entity label hasn't loaded yet", async () => {
+    vi.mocked(api.getCaseCapabilities).mockResolvedValue(registry());
+    renderProbe(
+      { entityTrail: { capabilityId: "memory.processes" } },
+      "/cases/case-1/entities/memory-process/entity-abc",
+    );
+
+    await screen.findByText("Processes");
+    expect(crumbLabels()).toEqual(["Case Alpha", "Memory", "Execution", "Processes"]);
+  });
+
+  it("shows only the case for entityTrail while the capabilities payload is still loading", async () => {
+    vi.mocked(api.getCaseCapabilities).mockReturnValue(new Promise(() => {}));
+    renderProbe(
+      { entityTrail: { capabilityId: "memory.processes", entityLabel: "powershell.exe (PID 1840)" } },
+      "/cases/case-1/entities/memory-process/entity-abc",
+    );
+
+    await screen.findByText("Case Alpha");
+    expect(crumbLabels()).toEqual(["Case Alpha"]);
+  });
+
+  it("truncates entityTrail to the case when the capability id does not exist in the registry", async () => {
+    vi.mocked(api.getCaseCapabilities).mockResolvedValue(registry());
+    renderProbe(
+      { entityTrail: { capabilityId: "does.not.exist", entityLabel: "powershell.exe (PID 1840)" } },
+      "/cases/case-1/entities/memory-process/entity-abc",
+    );
+
+    await screen.findByText("Case Alpha");
+    expect(crumbLabels()).toEqual(["Case Alpha"]);
+  });
+
+  it("never shows the raw synthetic entityId as a breadcrumb label", async () => {
+    vi.mocked(api.getCaseCapabilities).mockResolvedValue(registry());
+    renderProbe(
+      { entityTrail: { capabilityId: "memory.processes", entityLabel: "powershell.exe (PID 1840)" } },
+      "/cases/case-1/entities/memory-process/entity-abc",
+    );
+
+    await screen.findByText("powershell.exe (PID 1840)");
+    expect(crumbLabels().join(" / ")).not.toContain("entity-abc");
+  });
+
+  it("does not link the entityTrail's Domain, Capability or entity crumbs -- only Case and Surface", async () => {
+    vi.mocked(api.getCaseCapabilities).mockResolvedValue(registry());
+    renderProbe(
+      { entityTrail: { capabilityId: "memory.processes", entityLabel: "powershell.exe (PID 1840)" } },
+      "/cases/case-1/entities/memory-process/entity-abc",
+    );
+
+    await screen.findByText("powershell.exe (PID 1840)");
+    const crumbs = screen.getAllByTestId("crumb");
+    expect(crumbs.map((node) => node.getAttribute("data-linked"))).toEqual(["true", "true", "false", "false", "false"]);
+  });
+
   it("links only the Case and Surface levels; Domain, Capability and Context are informative", async () => {
     vi.mocked(api.getCaseCapabilities).mockResolvedValue(registry());
     renderProbe(undefined, "/cases/case-1/m/ev-1/processes");

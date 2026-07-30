@@ -43,6 +43,7 @@ const ParserCoveragePage = lazy(() => import("./pages/ParserCoveragePage"));
 const DebugExportPage = lazy(() => import("./pages/DebugExportPage"));
 const MemoryEvidencePage = lazy(() => import("./pages/MemoryEvidencePage"));
 const WorkbenchOverviewPage = lazy(() => import("./pages/WorkbenchOverviewPage"));
+const MemoryProcessEntityPage = lazy(() => import("./pages/MemoryProcessEntityPage"));
 
 function WorkspaceLoadingFallback() {
   return (
@@ -183,6 +184,7 @@ export default function App() {
                         <Route path="/cases/:caseId/m/:evidenceId/overview" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/m/:evidenceId/raw" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/m/:evidenceId/artifacts" element={<MemoryEvidencePage />} />
+                        <Route path="/cases/:caseId/entities/memory-process/:entityId" element={<MemoryProcessEntityPage />} />
                         <Route path="/cases/:caseId/linux-authentication" element={<LegacyCaseParamRedirect suffix="/l/access/authentication" />} />
                         <Route path="/cases/:caseId/command-history" element={<LegacyCaseParamRedirect suffix="/l/execution/command-history" />} />
                         <Route path="/cases/:caseId/process-graph" element={<LegacyCaseParamRedirect suffix="/w/execution/stories" />} />
