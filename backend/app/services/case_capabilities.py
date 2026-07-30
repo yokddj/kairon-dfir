@@ -163,6 +163,55 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
 ]
 
 
+# Surface Registry: declares identity/presentation metadata for each workbench
+# ("surface") that CAPABILITY_REGISTRY entries can resolve to via `platform`/
+# `evidence_domain`. This is the single source of truth for workbench label,
+# kind, icon and sidebar/overview ordering -- replaces the hardcoded label
+# generation, kind ternary and order dict that previously lived inline in
+# build_case_capabilities(). A capability entry never needs a matching
+# SURFACE_REGISTRY entry to work (readiness/coverage still compute), but a
+# surface without an entry falls back to derived defaults so nothing breaks
+# if a new platform value ships in CAPABILITY_REGISTRY before this registry
+# is updated for it.
+SURFACE_REGISTRY: list[dict[str, Any]] = [
+    {
+        "id": "windows",
+        "label": "Windows",
+        "kind": "platform",
+        "icon": "hard-drive",
+        "route_prefix": "w",
+        "nav": {"order": 10},
+    },
+    {
+        "id": "linux",
+        "label": "Linux",
+        "kind": "platform",
+        "icon": "shield-check",
+        "route_prefix": "l",
+        "nav": {"order": 20},
+    },
+    {
+        "id": "memory",
+        "label": "Memory",
+        "kind": "evidence_domain",
+        "icon": "cpu",
+        "route_prefix": "m",
+        "nav": {"order": 40},
+    },
+]
+
+
+def _surface_entry(surface_id: str) -> dict[str, Any] | None:
+    return next((entry for entry in SURFACE_REGISTRY if entry["id"] == surface_id), None)
+
+
+def surface_route_prefix(surface_id: str) -> str:
+    entry = _surface_entry(surface_id)
+    if entry:
+        return str(entry["route_prefix"])
+    return surface_id[0]
+
+
 def capability_route(capability_id: str, case_id: str, *, evidence_id: str | None = None) -> str:
     for capability in CAPABILITY_REGISTRY:
         if capability["id"] != capability_id:
@@ -187,7 +236,7 @@ def _processing_state(status_counts: Counter[str]) -> str:
 
 
 def _overview_route(workbench_id: str, case_id: str) -> str:
-    return f"/cases/{case_id}/{'m' if workbench_id == 'memory' else workbench_id[0]}"
+    return f"/cases/{case_id}/{surface_route_prefix(workbench_id)}"
 
 
 def _route_for_capability(capability: dict[str, Any], case_id: str, evidence_id: str | None = None) -> str:
@@ -516,12 +565,14 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
         capability_payloads.append(capability)
         if visible:
             workbench_key = "memory" if entry["evidence_domain"] == "memory" else entry["platform"]
+            surface = _surface_entry(workbench_key)
             workbench = workbench_map.setdefault(
                 workbench_key,
                 {
                     "id": workbench_key,
-                    "label": workbench_key.title(),
-                    "kind": "evidence_domain" if workbench_key == "memory" else "platform",
+                    "label": surface["label"] if surface else workbench_key.title(),
+                    "kind": surface["kind"] if surface else ("evidence_domain" if workbench_key == "memory" else "platform"),
+                    "icon": surface["icon"] if surface else None,
                     "capability_ids": [],
                     "domains": {},
                     "overview_route": _overview_route(workbench_key, case_id),
@@ -561,7 +612,8 @@ def build_case_capabilities(db: Session, case_id: str) -> dict[str, Any] | None:
                 },
             }
         )
-    workbenches.sort(key=lambda item: {"windows": 10, "linux": 20, "macos": 30, "memory": 40}.get(item["id"], 99))
+    surface_order = {entry["id"]: entry["nav"]["order"] for entry in SURFACE_REGISTRY}
+    workbenches.sort(key=lambda item: surface_order.get(item["id"], 99))
 
     host_payloads = []
     for host in hosts:

@@ -13,7 +13,7 @@ from app.models.case import Case
 from app.models.case_host import CaseHost
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
-from app.services.case_capabilities import CAPABILITY_REGISTRY
+from app.services.case_capabilities import CAPABILITY_REGISTRY, SURFACE_REGISTRY, surface_route_prefix
 
 
 CASE_ID = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
@@ -191,6 +191,70 @@ def test_registry_static_architecture_consistency():
             assert capability["route"].startswith("/cases/:caseId/m")
         else:
             assert capability["platform"] in {"windows", "linux"}
+
+
+def test_surface_registry_consistency():
+    surface_ids = [entry["id"] for entry in SURFACE_REGISTRY]
+    assert len(surface_ids) == len(set(surface_ids))
+
+    route_prefixes = [entry["route_prefix"] for entry in SURFACE_REGISTRY]
+    assert len(route_prefixes) == len(set(route_prefixes))
+
+    for entry in SURFACE_REGISTRY:
+        assert entry["label"]
+        assert entry["kind"] in {"platform", "evidence_domain"}
+        assert entry["icon"]
+        assert entry["nav"]["order"] > 0
+
+    # Every workbench a capability can resolve to (platform, or "memory" for
+    # evidence_domain == "memory") must have a registered surface, so the
+    # sidebar/overview never falls back to derived label/kind/icon defaults
+    # for a surface that is actually shipped today.
+    reachable_surface_ids = {
+        "memory" if capability["evidence_domain"] == "memory" else capability["platform"]
+        for capability in CAPABILITY_REGISTRY
+    }
+    assert reachable_surface_ids.issubset(set(surface_ids))
+
+
+def test_surface_route_prefix_matches_registry():
+    assert surface_route_prefix("windows") == "w"
+    assert surface_route_prefix("linux") == "l"
+    assert surface_route_prefix("memory") == "m"
+    # Unregistered surface falls back to its first letter rather than raising,
+    # so a new platform value in CAPABILITY_REGISTRY never breaks capability
+    # navigation while SURFACE_REGISTRY catches up.
+    assert surface_route_prefix("cloud") == "c"
+
+
+def test_workbench_payload_contract_is_unchanged_except_for_icon():
+    """Pins the exact pre-SURFACE_REGISTRY workbench payload shape and values.
+
+    SURFACE_REGISTRY must only add the new `icon` field to each workbench --
+    every other key and value already covered by existing tests must be
+    byte-for-byte identical to what build_case_capabilities() produced before
+    this registry existed.
+    """
+    db = _db()
+    _case(db)
+    _evidence(db, LINUX_EVIDENCE_ID, "triage.tgz", EvidenceType.linux_triage, "linux")
+    db.add(Artifact(case_id=CASE_ID, evidence_id=LINUX_EVIDENCE_ID, name="auth.log", artifact_type="linux_auth", source_path="/var/log/auth.log", parser="linux_auth", record_count=42, status="parsed"))
+    db.commit()
+
+    response = _client(db).get(f"/api/cases/{CASE_ID}/capabilities")
+
+    assert response.status_code == 200
+    linux = next(item for item in response.json()["workbenches"] if item["id"] == "linux")
+
+    pre_registry_keys = {"id", "label", "kind", "capability_ids", "domains", "overview_route", "overview"}
+    assert set(linux.keys()) == pre_registry_keys | {"icon"}
+
+    assert linux["id"] == "linux"
+    assert linux["label"] == "Linux"
+    assert linux["kind"] == "platform"
+    assert linux["capability_ids"] == ["linux.access.authentication", "linux.execution.command_history", "linux.software.packages"]
+    assert linux["overview_route"] == f"/cases/{CASE_ID}/l"
+    assert linux["icon"] == "shield-check"
 
 
 def test_workbench_overview_routes_are_registered():
