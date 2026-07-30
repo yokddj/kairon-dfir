@@ -9,6 +9,7 @@ import { useActiveCase } from "../context/ActiveCaseContext";
 import { HostFilter } from "../components/HostFilter";
 import InvestigationContext from "../components/InvestigationContext";
 import CreateFindingDialog from "../components/CreateFindingDialog";
+import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 import { useHostContext } from "../hooks/useHostContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
@@ -1392,6 +1393,11 @@ export default function Search() {
   const debouncedQuery = useDebouncedValue(queryInput, 300);
   const isUltraWideLayout = useMinWidthQuery(1600);
   const resolvedCaseId = routeCaseId || activeCaseId;
+  // Search is a Tier 1 lens with no query-declared capability route of its
+  // own, so lensLabel is effectively always the result here today -- kept
+  // as lensLabel (not currentLabel) for consistency with the other lenses
+  // and in case a future capability route ever lands on /search.
+  const breadcrumbs = useInvestigationBreadcrumbs({ lensLabel: state.tab === "timeline" ? "Timeline" : "Search" });
   const capabilitiesQuery = useQuery({
     queryKey: ["case-capabilities", resolvedCaseId, "search"],
     queryFn: () => api.getCaseCapabilities(resolvedCaseId || ""),
@@ -2204,7 +2210,7 @@ export default function Search() {
         hostId={searchRequestState.host_id}
         evidenceId={searchRequestState.evidence_id}
         current={state.tab === "timeline" ? "Timeline" : "Search"}
-        breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: "Case", to: resolvedCaseId ? `/cases/${resolvedCaseId}` : undefined }, { label: state.tab === "timeline" ? "Timeline" : "Search" }]}
+        breadcrumbs={breadcrumbs}
         actions={resolvedCaseId ? [
           { label: "Artifact Views", to: `/cases/${resolvedCaseId}/artifacts`, description: "Focused artifact-family views" },
           { label: "Processing", to: `/cases/${resolvedCaseId}?tab=processing`, description: "Review queue and evidence runs" },

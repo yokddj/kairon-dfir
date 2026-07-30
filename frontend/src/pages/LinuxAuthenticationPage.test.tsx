@@ -14,6 +14,10 @@ vi.mock("../api/client", () => ({
   },
 }));
 
+vi.mock("../context/ActiveCaseContext", () => ({
+  useActiveCase: () => ({ activeCaseId: "", activeCase: null }),
+}));
+
 function renderPage() {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(

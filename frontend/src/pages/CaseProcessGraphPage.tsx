@@ -5,9 +5,12 @@ import { api } from "../api/client";
 import ProcessTreePanel from "../components/ProcessTreePanel";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { HostFilter } from "../components/HostFilter";
+import { InvestigationBreadcrumbs } from "../components/InvestigationContext";
+import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 
 export default function CaseProcessGraphPage() {
   const { caseId = "" } = useParams();
+  const breadcrumbs = useInvestigationBreadcrumbs();
   const [searchParams, setSearchParams] = useSearchParams();
   const { setActiveCaseId, selectedEvidenceId, selectedHost, caseContext } = useActiveCase();
   const hostId = searchParams.get("host_id") ?? "";
@@ -52,6 +55,7 @@ export default function CaseProcessGraphPage() {
 
   return (
     <div className="space-y-6">
+      <InvestigationBreadcrumbs items={breadcrumbs} />
       <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Process Graph</p>
         <h2 className="mt-2 text-2xl font-semibold">Execution graph for the active case</h2>

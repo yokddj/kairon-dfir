@@ -13,6 +13,7 @@ import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { useHostContext } from "../hooks/useHostContext";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
+import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 import { artifactEventView, artifactLabel as artifactViewLabel, artifactOptions, artifactOptionsForPlatforms, canonicalArtifactView } from "../lib/artifactRegistry";
 
 const USER_ACTIVITY_TABS = [
@@ -566,6 +567,11 @@ export default function ArtifactExplorer() {
   const { effectiveTimezone } = useTimezonePreference();
   const queryClient = useQueryClient();
   const [caseId, setCaseId] = useState(routeCaseId || activeCaseId);
+  // Artifact Views is a Tier 1 lens, but some capability routes land here
+  // too (e.g. linux.software.packages via ?artifact_type=linux_packages) --
+  // lensLabel is only the fallback when no capability route matches; a
+  // matching one produces the full Surface/Domain/Capability trail instead.
+  const breadcrumbs = useInvestigationBreadcrumbs({ lensLabel: "Artifact Views" });
   const [artifactType, setArtifactType] = useState(canonicalArtifactView(searchParams.get("artifact_type")));
   const [artifactName, setArtifactName] = useState("");
   const [query, setQuery] = useState(searchParams.get("q") ?? "");
@@ -859,7 +865,7 @@ export default function ArtifactExplorer() {
         hostId={hostIdFilter}
         evidenceId={evidenceIdFilter}
         current="Artifact Views"
-        breadcrumbs={[{ label: "Cases", to: "/cases" }, { label: caseId ? "Case" : "All cases", to: caseId ? `/cases/${caseId}` : undefined }, { label: "Artifact Views" }]}
+        breadcrumbs={breadcrumbs}
         actions={caseId ? [
           { label: "Search", to: `/cases/${caseId}/search${artifactType ? `?artifact_type=${encodeURIComponent(artifactType)}` : ""}`, description: "Open matching documents in Search" },
           { label: "Timeline", to: `/cases/${caseId}/search?view=timeline&sort=@timestamp&order=asc`, description: "Timeline with this context" },

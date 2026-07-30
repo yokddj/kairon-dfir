@@ -3,6 +3,7 @@ import { AlertTriangle, Network } from "lucide-react";
 import { Link, useLocation, useSearchParams } from "react-router-dom";
 import type { CaseCapabilitiesResponse, CaseCapability } from "../../api/client";
 import { useActiveCase } from "../../context/ActiveCaseContext";
+import { displayLabel } from "../../lib/displayLabel";
 import { resolveSurfaceIcon } from "../../lib/surfaceIcons";
 
 type Workbench = CaseCapabilitiesResponse["workbenches"][number];
@@ -26,10 +27,6 @@ const STATUS_STYLES: Record<string, string> = {
   empty: "border-line bg-abyss/70 text-muted",
   not_applicable: "border-line bg-abyss/40 text-muted/70",
 };
-
-function displayLabel(value: string) {
-  return value.replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-}
 
 // Evidence priority for routes that carry :evidenceId: (1) an evidence id
 // already present in the current pathname -- the analyst is already inside

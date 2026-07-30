@@ -95,9 +95,12 @@ vi.mock("../context/NotificationsContext", () => ({
 
 vi.mock("../context/ActiveCaseContext", () => ({
   useActiveCase: () => ({
+    activeCaseId: "",
+    activeCase: null,
     selectedHostId: "",
     selectedHost: "",
     caseContext: { hosts: [] },
+    setActiveCaseId: vi.fn(),
     setSelectedHostId: vi.fn(),
     setSelectedHost: vi.fn(),
     clearSelectedHost: vi.fn(),
@@ -539,7 +542,7 @@ describe("EvidenceDetail minimal processing UX", () => {
   it("renders the minimal analyst layout", async () => {
     renderPage();
 
-    expect(await screen.findByText("collection.zip")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "collection.zip" })).toBeInTheDocument();
     expect(screen.getByText("Choose what to parse")).toBeInTheDocument();
     expect(screen.getAllByText("Processing result").length).toBeGreaterThan(0);
     expect(screen.getByText("Real failures / retry")).toBeInTheDocument();
@@ -551,7 +554,7 @@ describe("EvidenceDetail minimal processing UX", () => {
     const user = userEvent.setup();
     renderPage();
 
-    expect(await screen.findByText("collection.zip")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "collection.zip" })).toBeInTheDocument();
     expect(await screen.findByTestId("evidence-integrity-panel")).toBeInTheDocument();
     expect(screen.getByText("Integrity not checked yet.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Export manifest/i })).toBeInTheDocument();
@@ -824,7 +827,7 @@ describe("EvidenceDetail minimal processing UX", () => {
     setupMinimalEvidenceDetail({ evidence: { evidence_type: "memory_dump", original_filename: "ram.raw", host_id: null, detected_host: "WIN-RAM01", provided_host: null } });
     renderPage();
 
-    expect(await screen.findByText("ram.raw")).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "ram.raw" })).toBeInTheDocument();
     const panel = await screen.findByTestId("evidence-host-assignment-panel");
     expect(panel).toHaveTextContent("Host assignment");
     expect(panel).toHaveTextContent("Detected/provided host");
@@ -852,7 +855,7 @@ describe("EvidenceDetail minimal processing UX", () => {
 
     renderPage();
 
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     const primaryProgress = screen.getByTestId("evidence-progress-primary");
     expect(within(primaryProgress).getByText("Active")).toBeInTheDocument();
@@ -1116,7 +1119,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
   it("opens the modal and shows the previous-selection option", async () => {
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     await userEvent.click(screen.getByRole("button", { name: /Re-index evidence/i }));
     expect((await screen.findAllByText(/^Re-index evidence$/i)).length).toBeGreaterThan(0);
     await userEvent.click(screen.getByText(/Advanced re-index options/i));
@@ -1132,7 +1135,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
   it("shows a simplified evidence summary with primary actions and collapsed advanced details", async () => {
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     expect(await screen.findByText(/Evidence summary/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Core indexing/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Indexed documents/i).length).toBeGreaterThan(0);
@@ -1178,7 +1181,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     });
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect(await screen.findByText(/MFT detected · available on demand/i)).toBeInTheDocument();
     expect(screen.getByText(/\$MFT detected/i)).toBeInTheDocument();
@@ -1199,7 +1202,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     });
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect((await screen.findAllByText(/Requires Windows parser worker/i)).length).toBeGreaterThan(0);
     expect(screen.getByText(/requires a Windows-capable worker/i)).toBeInTheDocument();
@@ -1232,7 +1235,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     getEvidenceRunsMock.mockResolvedValueOnce([]);
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect(screen.getByRole("heading", { name: /Index evidence for investigation/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Index evidence for investigation/i })).toBeEnabled();
@@ -1287,7 +1290,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     });
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect(screen.getByRole("heading", { name: /Ready to index/i })).toBeInTheDocument();
     expect(screen.getByText(/Indexing plan prepared · 866 supported artifacts detected/i)).toBeInTheDocument();
@@ -1305,7 +1308,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
   it("renders selected artifact types outside advanced and hides benchmark tools by default", async () => {
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     const selectedSection = screen.getByTestId("selected-artifact-types-section");
     expect(within(selectedSection).getByRole("heading", { name: /Index selected artifact types/i })).toBeInTheDocument();
@@ -1432,7 +1435,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     });
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     const selectedSection = screen.getByTestId("selected-artifact-types-section");
     expect(within(selectedSection).getByText("Linux Logs")).toBeInTheDocument();
@@ -1498,7 +1501,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
   it("selects shimcache without opening debug and queues shimcache-only parsing", async () => {
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     const selectedSection = screen.getByTestId("selected-artifact-types-section");
     await userEvent.click(within(selectedSection).getByLabelText(/shimcache/i));
@@ -1546,7 +1549,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     ]);
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect(screen.getAllByRole("heading", { name: /Recommended indexing is running/i }).length).toBeGreaterThan(0);
     expect(screen.getByText(/Categories in this run:/i)).toHaveTextContent("evtx, scheduled_task, service, shimcache");
@@ -1608,7 +1611,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
     renderPage();
 
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     expect(screen.getByText("Indexed this run")).toBeInTheDocument();
     expect(screen.getAllByText("1,924").length).toBeGreaterThan(0);
     expect(screen.getAllByText("200 / 866").length).toBeGreaterThan(0);
@@ -1663,7 +1666,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
     renderPage();
 
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     expect(screen.getAllByText("Indexed documents").length).toBeGreaterThan(0);
     expect(screen.getAllByText("3,848").length).toBeGreaterThan(0);
     expect(screen.getByText("Artifact types")).toBeInTheDocument();
@@ -1750,7 +1753,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     retryProblematicArtifactsMock.mockResolvedValueOnce({ accepted: true, run_id: "retry-1", artifact_ids: ["ps-op", "store-op"], mode: "higher_timeout" });
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect(screen.getByText("Retryable parser failures")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "2 retryable failures" })).toBeInTheDocument();
@@ -1783,7 +1786,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     });
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect(screen.queryByText("Retryable parser failures")).not.toBeInTheDocument();
   });
@@ -1827,7 +1830,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     });
     getEvidenceRunsMock.mockResolvedValue([]);
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     expect(screen.getAllByText(/Investigation indexing/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Action required: select what to index/i).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /Continue with recommended indexing/i })).toBeEnabled();
@@ -1854,7 +1857,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     });
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect(screen.getAllByText(/Evidence ready with warnings/i).length).toBeGreaterThan(0);
     expect(screen.getAllByRole("link", { name: /Search this evidence/i })[0]).toBeInTheDocument();
@@ -1902,7 +1905,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     });
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect(screen.getByText(/Some Windows event log files do not contain parseable records/i)).toBeInTheDocument();
     expect(screen.getByText(/Empty\/no records/i)).toBeInTheDocument();
@@ -1927,7 +1930,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
       },
     });
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     expect(screen.getAllByText(/149 deferred · 1 partial/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/Fast profile: partial EVTX coverage/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Continue EVTX indexing · Advanced\/Beta/i })).toBeDisabled();
@@ -1948,7 +1951,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
       },
     });
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     expect(screen.getAllByText(/Full EVTX coverage/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/EvtxECmd CSV 2026\.5\.0/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/partial EVTX coverage/i)).not.toBeInTheDocument();
@@ -1961,7 +1964,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
   it("launches an on-demand rules run from the rules module", async () => {
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     await userEvent.click(screen.getByRole("button", { name: /Run now/i }));
 
@@ -1979,7 +1982,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
   it("shows generate report in on-demand modules and launches it manually", async () => {
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     await userEvent.click(screen.getByRole("button", { name: /Generate summary/i }));
 
@@ -2019,7 +2022,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     });
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect(screen.getByText(/No indexed documents are available for this evidence yet/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Run now/i })).toBeDisabled();
@@ -2047,7 +2050,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     });
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect(screen.getByText(/No indexed documents are available for this evidence yet/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Generate summary/i })).toBeDisabled();
@@ -2096,7 +2099,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     ]);
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect(screen.getByText(/Latest rules run/i)).toBeInTheDocument();
     expect(screen.getByText(/Detections created:/i)).toBeInTheDocument();
@@ -2137,7 +2140,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
     ]);
 
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
 
     expect(screen.getByText(/Latest report/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Download$/i })).toBeInTheDocument();
@@ -2146,7 +2149,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
   it("shows indexed document summary and artifact-type search links", async () => {
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     expect(screen.getAllByText("273").length).toBeGreaterThan(0);
     const browserLink = screen.getAllByRole("link", { name: /browser · 53/i })[0];
     expect(browserLink).toHaveAttribute("href", expect.stringContaining("artifact_type=browser"));
@@ -2155,7 +2158,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
   it("locks body scroll while the reprocess modal is open and restores it on close", async () => {
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     expect(document.body.style.overflow).toBe("");
     expect(document.body.style.overscrollBehavior).toBe("");
 
@@ -2178,7 +2181,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
   it("defaults to previous selection and starts that mode without full rediscovery", async () => {
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     await userEvent.click(screen.getByRole("button", { name: /Re-index evidence/i }));
     await userEvent.click(screen.getByRole("button", { name: /Start re-indexing/i }));
 
@@ -2196,7 +2199,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
   it("lets the user choose artifacts again and submit the edited selection", async () => {
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     await userEvent.click(screen.getByRole("button", { name: /Re-index evidence/i }));
     await userEvent.click(screen.getByText(/Advanced re-index options/i));
     await userEvent.click(screen.getByRole("button", { name: /Choose artifacts again/i }));
@@ -2219,7 +2222,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
 
   it("requires REDISCOVER before starting a full rediscovery", async () => {
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     await userEvent.click(screen.getByRole("button", { name: /Re-index evidence/i }));
     await userEvent.click(screen.getByText(/Advanced re-index options/i));
     await userEvent.click(screen.getByRole("button", { name: /Start from scratch \/ Full rediscovery/i }));
@@ -2253,7 +2256,7 @@ describe.skip("EvidenceDetail reprocess UX", () => {
       warnings: ["No previous ingest plan is stored for this evidence."],
     });
     renderPage();
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     await userEvent.click(screen.getByRole("button", { name: /Re-index evidence/i }));
     expect((await screen.findAllByText(/No previous ingest plan is stored for this evidence/i)).length).toBeGreaterThan(0);
   });
@@ -2660,7 +2663,7 @@ describe.skip("EvidenceDetail ingest progress diagnostics", () => {
   it("hides benchmark actions by default", async () => {
     renderPage();
 
-    await screen.findByText("collection.zip");
+    await screen.findByRole("heading", { name: "collection.zip" });
     expect(screen.queryByText(/Benchmark & Tuning/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Run safe baseline/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Run performance benchmark/i })).not.toBeInTheDocument();

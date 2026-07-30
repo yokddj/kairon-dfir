@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -18,8 +19,11 @@ vi.mock("../api/client", () => ({
 
 vi.mock("../context/ActiveCaseContext", () => ({
   useActiveCase: () => ({
+    activeCaseId: "",
+    activeCase: null,
     selectedHost: "HOSTA",
     selectedEvidenceId: "ev-1",
+    setActiveCaseId: vi.fn(),
     setSelectedHost: vi.fn(),
     setSelectedEvidenceId: vi.fn(),
   }),
@@ -31,7 +35,9 @@ function LocationProbe() {
 }
 
 function renderPage(path = "/cases/case-1/command-history?evidence_id=ev-1&host=HOSTA") {
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
+    <QueryClientProvider client={queryClient}>
     <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route
@@ -47,7 +53,8 @@ function renderPage(path = "/cases/case-1/command-history?evidence_id=ev-1&host=
         <Route path="/cases/:caseId/process-graph" element={<LocationProbe />} />
         <Route path="/cases/:caseId/w/execution/stories" element={<LocationProbe />} />
       </Routes>
-    </MemoryRouter>,
+    </MemoryRouter>
+    </QueryClientProvider>,
   );
 }
 
