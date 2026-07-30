@@ -39,6 +39,7 @@ function registry(overrides: Partial<CaseCapabilitiesResponse> = {}): CaseCapabi
         id: "linux",
         label: "Linux",
         kind: "platform",
+        icon: "shield-check",
         overview_route: "/cases/case-1/l",
         capability_ids: ["linux.access.authentication", "future.cloud.sync"],
         domains: [
@@ -100,6 +101,7 @@ describe("WorkbenchOverview", () => {
           id: "memory",
           label: "Memory",
           kind: "evidence_domain",
+          icon: "cpu",
           overview_route: "/cases/case-1/m",
           capability_ids: ["memory.processes"],
           domains: [{ id: "execution", capability_ids: ["memory.processes"], record_count: 8 }],
