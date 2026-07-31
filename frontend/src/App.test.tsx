@@ -228,6 +228,36 @@ describe("memory routes are registered", () => {
     expect(screen.getByTestId("memory-evidence-route")).toHaveTextContent("/cases/case-1/m/ev-A/network?host=HOSTA");
   });
 
+  // Regression: /cases/:caseId/m/:evidenceId/runs was the only Memory tab
+  // route missing from this route table. Since it matched no <Route>, the
+  // app fell through every specific match and hit the final catch-all
+  // (`<Route path="*" element={<Navigate to="/" replace />} />`), which
+  // sent the analyst to the global Dashboard -- silently dropping caseId
+  // and evidenceId. This reproduces "click Runs -> global cases summary"
+  // exactly, via the real route table (not a test-local one), and
+  // confirms it no longer happens.
+  it("opens the canonical evidence-scoped Runs route inside the Memory workspace, not the global dashboard (regression)", async () => {
+    renderApp("/cases/case-1/m/ev-A/runs");
+    expect(await screen.findByText("Memory Evidence Page")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-evidence-route")).toHaveTextContent("/cases/case-1/m/ev-A/runs");
+    expect(screen.queryByText("Dashboard Page")).not.toBeInTheDocument();
+    expect(screen.queryByText("Cases Page")).not.toBeInTheDocument();
+  });
+
+  it("supports refresh-style direct canonical Runs deep links without redirecting", async () => {
+    renderApp("/cases/case-1/m/ev-A/runs?host=HOSTA");
+    expect(await screen.findByText("Memory Evidence Page")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-evidence-route")).toHaveTextContent("/cases/case-1/m/ev-A/runs?host=HOSTA");
+  });
+
+  it("supports browser Back from the canonical Runs route back to the previous screen", async () => {
+    renderApp(["/cases/case-1/overview", "/cases/case-1/m/ev-A/runs"]);
+    expect(await screen.findByText("Memory Evidence Page")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-evidence-route")).toHaveTextContent("/cases/case-1/m/ev-A/runs");
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(await screen.findByText("Overview Page")).toBeInTheDocument();
+  });
+
   it("replaces legacy memory bookmarks so the back button does not re-enter the redirect", async () => {
     renderApp(["/cases/case-1/overview", "/cases/case-1/memory/ev-A/graph"]);
     expect(await screen.findByText("Memory Evidence Page")).toBeInTheDocument();

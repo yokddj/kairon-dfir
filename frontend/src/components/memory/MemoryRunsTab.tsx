@@ -177,6 +177,7 @@ export function MemoryRunsTab({ evidenceId, runs, landingItems }: Props) {
                 <th className="px-3 py-2">Plugins</th>
                 <th className="px-3 py-2">Progress</th>
                 <th className="px-3 py-2">Failed</th>
+                <th className="px-3 py-2">Skipped</th>
                 <th className="px-3 py-2">Error</th>
               </tr>
             </thead>
@@ -192,7 +193,8 @@ export function MemoryRunsTab({ evidenceId, runs, landingItems }: Props) {
                   <td className="px-3 py-2 text-muted">{run.backend || "—"}</td>
                   <td className="px-3 py-2 text-muted">{run.plugins_completed}/{run.plugin_count}</td>
                   <td className="px-3 py-2 text-muted">{memoryRunProgress(run)}</td>
-                  <td className="px-3 py-2 text-muted">{run.plugins_failed}</td>
+                  <td className="px-3 py-2 text-muted" data-testid={`run-row-${run.id}-failed`}>{run.plugins_failed}</td>
+                  <td className="px-3 py-2 text-muted" data-testid={`run-row-${run.id}-skipped`}>{run.plugins_skipped}</td>
                   <td className="px-3 py-2 text-muted">{memoryRunError(run)}</td>
                 </tr>
               ))}

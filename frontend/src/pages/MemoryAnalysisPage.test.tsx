@@ -483,6 +483,62 @@ describe("MemoryAnalysisPage workspace", () => {
     });
   });
 
+  it("marks Runs (and only Runs) as the active tab on a direct URL load, which also covers reload", async () => {
+    renderPage("/cases/case-1/memory/ev-memory/runs");
+    await screen.findByTestId("memory-runs-tab");
+    // A direct load at the Runs URL is exactly what a hard reload replays
+    // (SPA state is rebuilt from the URL, not from in-memory React state) --
+    // this doubles as the "reload keeps Runs active" check from the spec.
+    expect(screen.getByTestId("memory-tab-runs")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("memory-tab-overview")).toHaveAttribute("aria-selected", "false");
+    expect(screen.getByTestId("memory-tab-processes")).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("never widens the Runs query to case-wide when loaded for a specific evidence", async () => {
+    renderPage("/cases/case-1/memory/ev-memory/runs");
+    await screen.findByTestId("run-row-run-basic");
+    // caseId + evidenceId together, every time -- never a case-wide
+    // (evidenceId-less) fetch for an evidence-scoped Runs URL.
+    for (const call of listMemoryRunsMock.mock.calls) {
+      expect(call).toEqual(["case-1", "ev-memory"]);
+    }
+    expect(listMemoryRunsMock).toHaveBeenCalledWith("case-1", "ev-memory");
+  });
+
+  it("shows failed and skipped plugin counts as distinct, uncollapsed values", async () => {
+    // MemoryEvidencePage's own evidenceRunsQuery and MemoryWorkspace's
+    // runsQuery both call api.listMemoryRuns(caseId, evidenceId) -- a
+    // "once" override would only satisfy whichever of the two fires
+    // first, so the persistent form is required to cover both callers.
+    listMemoryRunsMock.mockResolvedValue([
+      {
+        id: "run-mixed", case_id: "case-1", evidence_id: "ev-memory", backend: "volatility3", profile: "processes_extended",
+        status: "completed_with_errors", requested_plugin_count: 6, plugin_count: 6, plugins_completed: 3, plugins_failed: 2,
+        plugins_skipped: 1, started_at: "2026-06-16T00:00:00Z", completed_at: "2026-06-16T00:01:00Z", duration_ms: 60000,
+        output_dir: null, metadata_json: {}, error_log: {}, backend_version: "2.28.0", worker_task_id: null,
+        cancellation_requested: false, created_at: "2026-06-16T00:00:00Z",
+      },
+    ]);
+    renderPage("/cases/case-1/memory/ev-memory/runs");
+    await screen.findByTestId("run-row-run-mixed");
+    expect(screen.getByTestId("run-row-run-mixed-failed")).toHaveTextContent("2");
+    expect(screen.getByTestId("run-row-run-mixed-skipped")).toHaveTextContent("1");
+  });
+
+  it("shows an empty state when the evidence has no runs", async () => {
+    listMemoryRunsMock.mockResolvedValue([]);
+    renderPage("/cases/case-1/memory/ev-memory/runs");
+    await screen.findByTestId("memory-runs-tab");
+    expect(await screen.findByText("No runs match the current filters.")).toBeInTheDocument();
+  });
+
+  it("shows an error state when the runs query fails, instead of a silent empty table", async () => {
+    listMemoryRunsMock.mockRejectedValue(new Error("Failed to load memory runs"));
+    renderPage("/cases/case-1/memory/ev-memory/runs");
+    expect(await screen.findByTestId("memory-runs-tab-error")).toHaveTextContent("Failed to load memory runs");
+    expect(screen.queryByTestId("memory-runs-tab")).not.toBeInTheDocument();
+  });
+
   // 6. Raw tab contains legacy views
   it("renders the Raw tab with legacy plugin observations", async () => {
     renderPage();
