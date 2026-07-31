@@ -825,6 +825,123 @@ def maybe_reconcile_stale_ingest(db: Session, item: Evidence) -> bool:
     return True
 
 
+def _rq_job_terminal_status(job_id: str) -> str | None:
+    """Resolve a queued_jobs entry's real outcome from RQ.
+
+    Returns None while the job is genuinely still active (queued/started/
+    deferred/scheduled) -- the caller should leave it alone. Returns
+    "completed"/"failed" once RQ says it's done. A job_id that no longer
+    resolves to anything in Redis (expired result, or the id was never
+    valid) is treated as "failed" rather than silently "completed" -- we
+    have no positive evidence it succeeded.
+    """
+    if not job_id:
+        return None
+    job = ingest_queue.fetch_job(job_id)
+    if job is None:
+        return "failed"
+    status = job.get_status(refresh=False)
+    if status in {"queued", "started", "deferred", "scheduled"}:
+        return None
+    return "completed" if status == "finished" else "failed"
+
+
+def _reconcile_indexing_plan_run(item: Evidence) -> bool:
+    """Close out an on-demand indexing-plan run (Full MFT, MFT summary, User
+    Activity, Defender) whose queued_jobs entry claims to still be
+    queued/running but whose RQ job has actually finished or died.
+
+    Deliberately NOT gated on Evidence.ingest_status: these on-demand steps
+    can still be genuinely running (or stuck) after the core ingest already
+    reached a terminal status, which is exactly the state
+    evidence_has_active_indexing() reads first (before it ever looks at
+    ingest_status) to decide whether Evidence Detail shows "Processing".
+    Each queued job's run_id is a real RQ job id (set by
+    _enqueue_indexing_plan_steps), so it can be checked directly instead of
+    relying on a heartbeat, unlike the core-ingest watchdog above.
+
+    This is also what heals evidence already left inconsistent by the
+    now-fixed gap where a finished on-demand job never closed its own
+    queued_jobs entry (see close_indexing_plan_job in indexing_profiles.py)
+    -- no separate backfill/migration needed, this sweep converges any
+    existing bad row the next time it's read or the server restarts.
+    """
+    metadata = dict(item.metadata_json or {})
+    plan_run = dict(metadata.get("indexing_plan_run") or {})
+    if str(plan_run.get("status") or "").strip().lower() not in ACTIVE_RUN_STATUSES:
+        return False
+    queued_jobs = [dict(job) for job in (plan_run.get("queued_jobs") or []) if isinstance(job, dict)]
+    changed = False
+    for job in queued_jobs:
+        if str(job.get("status") or "").strip().lower() not in ACTIVE_RUN_STATUSES:
+            continue
+        terminal = _rq_job_terminal_status(str(job.get("run_id") or ""))
+        if terminal is None:
+            continue
+        job["status"] = terminal
+        changed = True
+    if not changed:
+        return False
+    plan_run["queued_jobs"] = queued_jobs
+    still_active = any(str(job.get("status") or "").strip().lower() in ACTIVE_RUN_STATUSES for job in queued_jobs)
+    if still_active:
+        plan_run["status"] = "queued"
+    else:
+        any_failed = any(str(job.get("status") or "").strip().lower() in {"failed", "timed_out", "timeout"} for job in queued_jobs)
+        plan_run["status"] = "completed_with_errors" if any_failed else "completed"
+    plan_run["updated_at"] = _utcnow_iso()
+    metadata["indexing_plan_run"] = plan_run
+    item.metadata_json = merge_evidence_metadata(item.metadata_json or {}, metadata)
+    flag_modified(item, "metadata_json")
+    return True
+
+
+def maybe_reconcile_stale_indexing_plan(db: Session, item: Evidence) -> bool:
+    """Single-evidence version of _reconcile_indexing_plan_run, called from
+    the evidence detail GET route the same way maybe_reconcile_stale_ingest
+    is -- heals the lock the moment an analyst opens or refreshes the page.
+    """
+    if not _reconcile_indexing_plan_run(item):
+        return False
+    db.add(item)
+    db.commit()
+    db.refresh(item)
+    return True
+
+
+def reconcile_stale_indexing_plans(db: Session, *, max_evidences: int = 200) -> dict[str, int]:
+    """Bulk sweep for evidences whose on-demand indexing-plan run is still
+    marked active, mirroring reconcile_stale_ingests below but for
+    indexing_plan_run instead of the core ingest lock -- runs at startup so
+    a plan left stuck by a dead work-horse is released even if no analyst
+    opens that evidence's page before the next restart.
+    """
+    # A two-level JSON path (["indexing_plan_run"]["status"]) doesn't have a
+    # portable .astext/.as_string() the way a single-level path does (see
+    # the precedent in routes_rules.py / symbol_recovery.py) -- narrow to
+    # "has an indexing_plan_run at all" in SQL, then check its status in
+    # Python, same division of labor reconcile_stale_ingests already uses
+    # (coarse SQL filter, precise Python check).
+    candidates = (
+        db.query(Evidence)
+        .filter(Evidence.metadata_json["indexing_plan_run"].isnot(None))
+        .limit(max_evidences)
+        .all()
+    )
+    inspected = 0
+    reconciled = 0
+    for item in candidates:
+        plan_status = str(dict(item.metadata_json or {}).get("indexing_plan_run", {}).get("status") or "").strip().lower()
+        if plan_status not in ACTIVE_RUN_STATUSES:
+            continue
+        inspected += 1
+        if _reconcile_indexing_plan_run(item):
+            db.add(item)
+            db.commit()
+            reconciled += 1
+    return {"inspected": inspected, "reconciled": reconciled}
+
+
 def reconcile_stale_ingests(db: Session, *, max_evidences: int = 200) -> dict[str, int]:
     """Bulk sweep for evidences nobody is actively looking at.
 

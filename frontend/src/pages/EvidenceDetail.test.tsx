@@ -14,6 +14,7 @@ const getEvidenceMftDiagnosticMock = vi.fn();
 const getEvidenceIndexingPlanMock = vi.fn();
 const runEvidenceIndexingPlanMock = vi.fn();
 const cancelEvidenceIndexingMock = vi.fn();
+const pauseEvidenceIndexingMock = vi.fn();
 const getLongTailArtifactsMock = vi.fn();
 const previewReprocessEvidenceMock = vi.fn();
 const reprocessEvidenceMock = vi.fn();
@@ -59,6 +60,7 @@ vi.mock("../api/client", () => ({
     getEvidenceIndexingPlan: (...args: unknown[]) => getEvidenceIndexingPlanMock(...args),
     runEvidenceIndexingPlan: (...args: unknown[]) => runEvidenceIndexingPlanMock(...args),
     cancelEvidenceIndexing: (...args: unknown[]) => cancelEvidenceIndexingMock(...args),
+    pauseEvidenceIndexing: (...args: unknown[]) => pauseEvidenceIndexingMock(...args),
     indexEvidenceMftSummary: (...args: unknown[]) => indexEvidenceMftSummaryMock(...args),
     indexEvidenceMftFull: (...args: unknown[]) => indexEvidenceMftFullMock(...args),
     getLongTailArtifacts: (...args: unknown[]) => getLongTailArtifactsMock(...args),
@@ -500,6 +502,7 @@ function setupMinimalEvidenceDetail(overrides?: {
   });
   runEvidenceIndexingPlanMock.mockResolvedValue({ accepted: true, evidence_id: "evidence-1", run_id: "plan-1", status: "queued" });
   cancelEvidenceIndexingMock.mockResolvedValue({ accepted: true });
+  pauseEvidenceIndexingMock.mockResolvedValue({ accepted: true });
   getLongTailArtifactsMock.mockResolvedValue({ evidence_id: "evidence-1", summary: {}, items: [] });
   previewReprocessEvidenceMock.mockResolvedValue({ evidence_id: "evidence-1", previous_plan_available: true, selected_candidates: [], missing_candidates: [], new_candidates: [], changed_candidates: [], warnings: [], summary: {} });
   reprocessEvidenceMock.mockResolvedValue({ accepted: true, evidence_id: "evidence-1", run_id: "run-1", status: "queued", mode: "previous_selection" });
@@ -2714,5 +2717,186 @@ describe.skip("EvidenceDetail ingest progress diagnostics", () => {
         }),
       ),
     );
+  });
+
+});
+
+describe("Processing badge / Pause indexing coherence (stuck-Processing regression)", () => {
+  // A "clean" problematic-artifacts response -- zero real failures,
+  // warnings or skipped-empty items -- so the badge in these tests is
+  // driven purely by activeIndexingJob, not by unrelated parser-warning
+  // logic that also feeds minimalStatusLabel.
+  const cleanProblematicArtifacts = {
+    evidence_id: "evidence-1",
+    summary: { problematic_count: 0, skipped_empty: 0, failed: 0, retryable: 0, indexed_with_warning: 0, recovered_count: 0, unresolved_count: 0, data_loss_expected_count: 0 },
+    items: [],
+  };
+
+  it("shows Pause indexing while the core ingest is genuinely still processing", async () => {
+    setupMinimalEvidenceDetail({
+      evidence: { ingest_status: "processing", processed_at: null },
+      indexingPlan: { active: true, active_job: { step: "core_ingest", run_id: "run-1", status: "processing" } },
+      problematicArtifacts: cleanProblematicArtifacts,
+    });
+    renderPage();
+
+    await screen.findByRole("heading", { name: "collection.zip" });
+    // "Processing" also appears as the progress-card eyebrow label while a
+    // job is active, so scope to the status badge (a <span>) specifically.
+    expect(await screen.findByText("Processing", { selector: "span" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Pause indexing/i })).toBeInTheDocument();
+  });
+
+  it("does not show Pause indexing once completed at 100%, even though the progress bar still reads 100", async () => {
+    setupMinimalEvidenceDetail({
+      evidence: { ingest_status: "completed", processed_at: "2026-05-21T10:05:00Z" },
+      indexingPlan: { active: false, active_job: null },
+      problematicArtifacts: cleanProblematicArtifacts,
+    });
+    renderPage();
+
+    await screen.findByRole("heading", { name: "collection.zip" });
+    expect(await screen.findByText("Ready")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Pause indexing/i })).not.toBeInTheDocument();
+    // The completed_at tile is unconditional by design (spec: "la fecha
+    // de completado permanece visible") -- still shown, just no longer
+    // alongside a live Pause action.
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+  });
+
+  it("enables Re-index evidence once genuinely done", async () => {
+    setupMinimalEvidenceDetail({
+      evidence: { ingest_status: "completed", processed_at: "2026-05-21T10:05:00Z" },
+      indexingPlan: { active: false, active_job: null },
+      problematicArtifacts: cleanProblematicArtifacts,
+    });
+    renderPage();
+
+    await screen.findByRole("heading", { name: "collection.zip" });
+    const reindexButton = await screen.findByRole("button", { name: /Re-index evidence/i });
+    expect(reindexButton).toBeEnabled();
+  });
+
+  it("does not show Pause indexing when indexing failed", async () => {
+    setupMinimalEvidenceDetail({
+      evidence: { ingest_status: "failed", processed_at: "2026-05-21T10:05:00Z" },
+      indexingPlan: { active: false, active_job: null },
+      problematicArtifacts: realFailureArtifactsPayload,
+    });
+    renderPage();
+
+    await screen.findByRole("heading", { name: "collection.zip" });
+    expect(screen.queryByRole("button", { name: /Pause indexing/i })).not.toBeInTheDocument();
+  });
+
+  it("regression: reproduces 100% + completed_at + Processing badge with no core job active, driven only by a stuck indexing-plan job", async () => {
+    // Exact reported shape: core ingest is done (ingest_status completed,
+    // processed_at set, so progressPct's ingest_status===completed
+    // shortcut reads 100%) but the backend's indexing-plan endpoint still
+    // reports an on-demand job active -- the one path that can make this
+    // happen (see backend fix: indexing_plan_run not yet closed by a
+    // finished on-demand step, or not yet reconciled). The frontend's job
+    // here is only to stay coherent with whatever the backend reports,
+    // never inventing "completed" from progress===100 alone.
+    setupMinimalEvidenceDetail({
+      evidence: { ingest_status: "completed", processed_at: "2026-05-21T10:05:00Z" },
+      indexingPlan: { active: true, active_job: { step: "indexing_plan", run_id: "plan-1", status: "queued" } },
+      problematicArtifacts: cleanProblematicArtifacts,
+    });
+    renderPage();
+
+    await screen.findByRole("heading", { name: "collection.zip" });
+    // Badge and Pause button must agree with each other -- both driven by
+    // the same activeIndexingJob -- never "Processing" badge with no
+    // Pause, or vice versa.
+    expect(await screen.findByText("Processing", { selector: "span" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Pause indexing/i })).toBeInTheDocument();
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
+    // completed_at stays visible even mid-way through a real remaining
+    // phase, per spec -- it is not itself evidence of "done".
+    expect(screen.getByText("Completed")).toBeInTheDocument();
+  });
+
+  it("picks up the transition from Processing to Completed via polling, without a manual reload", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      setupMinimalEvidenceDetail({
+        evidence: { ingest_status: "completed", processed_at: "2026-05-21T10:05:00Z" },
+        problematicArtifacts: cleanProblematicArtifacts,
+      });
+      getEvidenceIndexingPlanMock.mockReset();
+      getEvidenceIndexingPlanMock
+        .mockResolvedValueOnce({ profile: "recommended", label: "Recommended indexing", primary_cta: "Index evidence for investigation", runnable_steps: [], active: true, active_job: { step: "indexing_plan", run_id: "plan-1", status: "queued" }, requires_user_action: false, supported_candidate_count: 2, can_run: true })
+        .mockResolvedValue({ profile: "recommended", label: "Recommended indexing", primary_cta: "Index evidence for investigation", runnable_steps: [], active: false, active_job: null, requires_user_action: false, supported_candidate_count: 2, can_run: true });
+
+      renderPage();
+      await screen.findByRole("heading", { name: "collection.zip" });
+      expect(await screen.findByText("Processing", { selector: "span" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Pause indexing/i })).toBeInTheDocument();
+
+      await vi.advanceTimersByTimeAsync(3000);
+
+      await vi.waitFor(() => expect(screen.getByText("Ready")).toBeInTheDocument());
+      expect(screen.queryByRole("button", { name: /Pause indexing/i })).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /Re-index evidence/i })).toBeEnabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops polling the indexing plan once nothing is active anymore", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      setupMinimalEvidenceDetail({
+        evidence: { ingest_status: "completed", processed_at: "2026-05-21T10:05:00Z" },
+        problematicArtifacts: cleanProblematicArtifacts,
+      });
+      getEvidenceIndexingPlanMock.mockReset();
+      getEvidenceIndexingPlanMock
+        .mockResolvedValueOnce({ profile: "recommended", label: "Recommended indexing", primary_cta: "Index evidence for investigation", runnable_steps: [], active: true, active_job: { step: "indexing_plan", run_id: "plan-1", status: "queued" }, requires_user_action: false, supported_candidate_count: 2, can_run: true })
+        .mockResolvedValue({ profile: "recommended", label: "Recommended indexing", primary_cta: "Index evidence for investigation", runnable_steps: [], active: false, active_job: null, requires_user_action: false, supported_candidate_count: 2, can_run: true });
+
+      renderPage();
+      await screen.findByRole("heading", { name: "collection.zip" });
+      await screen.findByText("Processing", { selector: "span" });
+
+      await vi.advanceTimersByTimeAsync(3000);
+      await vi.waitFor(() => expect(screen.getByText("Ready")).toBeInTheDocument());
+      const callsOnceSettled = getEvidenceIndexingPlanMock.mock.calls.length;
+
+      // Now that the plan reports inactive, further polling ticks must
+      // not keep refetching it.
+      await vi.advanceTimersByTimeAsync(9000);
+      expect(getEvidenceIndexingPlanMock.mock.calls.length).toBe(callsOnceSettled);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not leave the old Pause button visible from a stale response once a fresher one resolves", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      setupMinimalEvidenceDetail({
+        evidence: { ingest_status: "completed", processed_at: "2026-05-21T10:05:00Z" },
+        problematicArtifacts: cleanProblematicArtifacts,
+      });
+      getEvidenceIndexingPlanMock.mockReset();
+      getEvidenceIndexingPlanMock
+        .mockResolvedValueOnce({ profile: "recommended", label: "Recommended indexing", primary_cta: "Index evidence for investigation", runnable_steps: [], active: true, active_job: { step: "indexing_plan", run_id: "plan-1", status: "queued" }, requires_user_action: false, supported_candidate_count: 2, can_run: true })
+        .mockResolvedValueOnce({ profile: "recommended", label: "Recommended indexing", primary_cta: "Index evidence for investigation", runnable_steps: [], active: true, active_job: { step: "indexing_plan", run_id: "plan-1", status: "queued" }, requires_user_action: false, supported_candidate_count: 2, can_run: true })
+        .mockResolvedValue({ profile: "recommended", label: "Recommended indexing", primary_cta: "Index evidence for investigation", runnable_steps: [], active: false, active_job: null, requires_user_action: false, supported_candidate_count: 2, can_run: true });
+
+      renderPage();
+      await screen.findByRole("heading", { name: "collection.zip" });
+      await screen.findByText("Processing", { selector: "span" });
+
+      await vi.advanceTimersByTimeAsync(3000);
+      await vi.advanceTimersByTimeAsync(3000);
+
+      await vi.waitFor(() => expect(screen.getByText("Ready")).toBeInTheDocument());
+      expect(screen.queryByRole("button", { name: /Pause indexing/i })).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

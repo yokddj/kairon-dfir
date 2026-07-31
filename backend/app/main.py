@@ -382,6 +382,21 @@ def on_startup() -> None:
     finally:
         db.close()
 
+    # Same idea, for on-demand indexing-plan jobs (Full MFT, User Activity,
+    # Defender) left "queued"/"running" by a dead work-horse -- these can
+    # outlive the core ingest, which reconcile_stale_ingests above does not
+    # cover (it's gated on Evidence.ingest_status still being pending/processing).
+    from app.services.job_watchdog import reconcile_stale_indexing_plans
+    db = SessionLocal()
+    try:
+        plan_stats = reconcile_stale_indexing_plans(db)
+        if plan_stats.get("reconciled", 0) > 0:
+            logger.info("stale indexing-plan reconciliation: %s", plan_stats)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stale indexing-plan reconciliation skipped: %s", exc)
+    finally:
+        db.close()
+
     if settings.memory_enabled:
         _cleanup_memory_upload_sessions_startup(logger)
 

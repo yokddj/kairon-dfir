@@ -91,7 +91,7 @@ from app.services.ingest_plan import (
     rebuild_ingest_plan_from_last_run,
 )
 from app.services.indexing_profiles import build_indexing_plan, create_indexing_plan_run, evidence_has_active_indexing, normalize_indexing_profile
-from app.services.job_watchdog import _find_ingest_job, maybe_reconcile_stale_ingest, redis_conn, release_stale_ingest_lock, run_benchmark_watchdog
+from app.services.job_watchdog import _find_ingest_job, maybe_reconcile_stale_ingest, maybe_reconcile_stale_indexing_plan, redis_conn, release_stale_ingest_lock, run_benchmark_watchdog
 from app.services.on_demand_modules import build_on_demand_module_registry
 from app.services.parser_registry import (
     build_indexed_field_coverage_by_artifact_type,
@@ -2892,6 +2892,10 @@ def get_evidence(evidence_id: str, db: Session = Depends(get_db)) -> Evidence:
     if not item:
         raise HTTPException(status_code=404, detail="Evidence not found")
     maybe_reconcile_stale_ingest(db, item)
+    # Not gated on ingest_status: an on-demand indexing-plan step (Full MFT,
+    # User Activity, Defender) can still be genuinely active -- or stuck --
+    # after the core ingest already reached a terminal status.
+    maybe_reconcile_stale_indexing_plan(db, item)
     return _ensure_rebuilt_ingest_plan(db, item)
 
 
