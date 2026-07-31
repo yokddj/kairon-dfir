@@ -17,7 +17,7 @@ import { MemoryExperimentalResultsPanel } from "../components/memory/MemoryExper
 import { MemoryPreparationCard } from "../components/memory/MemoryPreparationCard";
 import { assignedHostMatchesDetected, normalizeEvidenceHostName } from "../lib/evidenceDetailFormatting";
 import { capabilityEnabled } from "../lib/platformRegistry";
-import { MEMORY_TABS, isMemoryTab, type MemoryTab } from "../lib/memoryWorkspaceState";
+import { MEMORY_TABS, isMemoryTab, tabFromRouteSegment, routeSegmentFromTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 import { memoryQueryKeys } from "../lib/memoryQueryKeys";
 import { linuxCommandHistoryRoute, memoryEvidenceRoute, memoryWorkbenchRoute } from "../lib/canonicalRoutes";
 import type { CaseContextHostSummary, MemoryEvidenceLanding, MemoryEvidenceLandingItem, MemoryScanRun } from "../api/client";
@@ -33,15 +33,6 @@ const ARTIFACT_FAMILY_FROM_TAB: Record<string, string> = {
   raw: "raw_observations",
   artifacts: "artifacts",
 };
-
-function tabFromRouteSegment(value: string | null): MemoryTab | null {
-  if (value === "process-graph") return "graph";
-  return isMemoryTab(value) ? value : null;
-}
-
-function routeSegmentFromTab(value: MemoryTab): string {
-  return value === "graph" ? "process-graph" : value;
-}
 
 function familyForTab(tab: MemoryTab, _artifact?: string | null): string {
   return ARTIFACT_FAMILY_FROM_TAB[tab] || "processes";
@@ -322,7 +313,12 @@ export default function MemoryEvidencePage() {
   }, [overview]);
 
   useEffect(() => {
-    if (!evidenceId || isMemoryTab(memoryTab)) return;
+    // memoryTab here is a route SEGMENT (e.g. "process-graph"), not a tab
+    // key -- isMemoryTab() checks tab keys ("graph"), so it always missed
+    // every route whose segment differs from its key, firing this legacy
+    // ?tab= fallback (and a stray replace-navigation) on every load of
+    // those tabs even though the route already resolved a valid tab.
+    if (!evidenceId || tabFromRouteSegment(memoryTab) !== null) return;
     setSearchParams((current) => {
       const params = new URLSearchParams(current);
       if (!params.get("tab")) params.set("tab", "overview");

@@ -173,18 +173,17 @@ export default function App() {
                         <Route path="/cases/:caseId/l" element={<WorkbenchOverviewPage workbenchId="linux" />} />
                         <Route path="/cases/:caseId/m" element={<WorkbenchOverviewPage workbenchId="memory" />} />
                         <Route path="/cases/:caseId/m/runs" element={<MemoryRunsPage />} />
-                        <Route path="/cases/:caseId/m/:evidenceId/processes" element={<MemoryEvidencePage />} />
-                        <Route path="/cases/:caseId/m/:evidenceId/process-graph" element={<MemoryEvidencePage />} />
-                        <Route path="/cases/:caseId/m/:evidenceId/network" element={<MemoryEvidencePage />} />
-                        <Route path="/cases/:caseId/m/:evidenceId/modules" element={<MemoryEvidencePage />} />
-                        <Route path="/cases/:caseId/m/:evidenceId/handles" element={<MemoryEvidencePage />} />
-                        <Route path="/cases/:caseId/m/:evidenceId/vads" element={<MemoryEvidencePage />} />
-                        <Route path="/cases/:caseId/m/:evidenceId/suspicious" element={<MemoryEvidencePage />} />
-                        <Route path="/cases/:caseId/m/:evidenceId/system" element={<MemoryEvidencePage />} />
-                        <Route path="/cases/:caseId/m/:evidenceId/overview" element={<MemoryEvidencePage />} />
-                        <Route path="/cases/:caseId/m/:evidenceId/runs" element={<MemoryEvidencePage />} />
-                        <Route path="/cases/:caseId/m/:evidenceId/raw" element={<MemoryEvidencePage />} />
-                        <Route path="/cases/:caseId/m/:evidenceId/artifacts" element={<MemoryEvidencePage />} />
+                        {/* A single parameterized route -- not one literal <Route> per
+                            tab -- so :memoryTab actually lands in useParams(). The 11
+                            literal routes this replaced (path="/m/:evidenceId/processes",
+                            path="/m/:evidenceId/network", ...) never declared :memoryTab
+                            at all, so MemoryEvidencePage's route-based tab resolution
+                            (tabFromRouteSegment(memoryTab)) always received memoryTab="",
+                            always fell through to the stale/absent ?tab= query param, and
+                            a legacy fallback effect kept re-forcing ?tab=overview after
+                            every tab click -- every tab silently rendered Overview
+                            regardless of which path segment was in the URL. */}
+                        <Route path="/cases/:caseId/m/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/entities/memory-process/:entityId" element={<MemoryProcessEntityPage />} />
                         <Route path="/cases/:caseId/linux-authentication" element={<LegacyCaseParamRedirect suffix="/l/access/authentication" />} />
                         <Route path="/cases/:caseId/command-history" element={<LegacyCaseParamRedirect suffix="/l/execution/command-history" />} />
