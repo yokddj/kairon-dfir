@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { api, type CaseNextAction } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
@@ -136,12 +136,21 @@ function remainingWorkCopy(stageId: StageId, state: { evidence_count: number; in
 export default function CaseOverviewPage() {
   const { caseId = "" } = useParams();
   const { setActiveCaseId, setSelectedHost, setSelectedEvidenceId } = useActiveCase();
+  const queryClient = useQueryClient();
   const caseContextQuery = useQuery({
     queryKey: ["case-context", caseId],
     queryFn: () => api.getCaseContext(caseId),
     enabled: Boolean(caseId),
     staleTime: 15_000,
     refetchOnWindowFocus: false,
+  });
+  // INVESTIGATE and REPORT are manual stages: the analyst advances them
+  // explicitly ("Start investigation" / "Generate report") instead of
+  // Kairon inferring the decision from findings/timeline counts. Reuses the
+  // existing case PATCH endpoint -- no new endpoint.
+  const advancePhaseMutation = useMutation({
+    mutationFn: (phase: "investigating" | "report") => api.updateCase(caseId, { investigation_phase_override: phase }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["case-context", caseId] }),
   });
   const contextPreview = caseContextQuery.data ?? null;
   const investigationStatePreview = contextPreview?.summary?.investigation_state;
@@ -229,6 +238,37 @@ export default function CaseOverviewPage() {
         <div className="mt-3">
           <StageProgress stages={stages} testId="investigation-stage-progress" />
         </div>
+        {currentState === "investigation_ready" ? (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => advancePhaseMutation.mutate("investigating")}
+              disabled={advancePhaseMutation.isPending}
+              className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss shadow-panel disabled:opacity-60"
+              data-testid="start-investigation-action"
+            >
+              {advancePhaseMutation.isPending ? "Starting investigation…" : "Start investigation"}
+            </button>
+            <p className="max-w-md text-xs text-muted">Marks the case as actively under investigation. Confirmed once -- Kairon will not do this automatically.</p>
+          </div>
+        ) : null}
+        {currentState === "investigation_in_progress" ? (
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={() => advancePhaseMutation.mutate("report")}
+              disabled={advancePhaseMutation.isPending}
+              className="rounded-2xl bg-accent px-5 py-3 text-sm font-semibold text-abyss shadow-panel disabled:opacity-60"
+              data-testid="generate-report-action"
+            >
+              {advancePhaseMutation.isPending ? "Moving to report…" : "Generate report"}
+            </button>
+            <p className="max-w-md text-xs text-muted">Marks the case as ready for reporting. This is a decision you make, not an automatic transition.</p>
+          </div>
+        ) : null}
+        {advancePhaseMutation.error instanceof Error ? (
+          <p className="mt-2 text-xs text-danger">{advancePhaseMutation.error.message}</p>
+        ) : null}
         <h2 className="mt-4 text-3xl font-semibold">{copy.title}</h2>
         <p className="mt-1 text-lg text-ink">{context.case.name}</p>
         <p className="mt-2 max-w-3xl text-sm text-muted">{copy.subtitle}</p>

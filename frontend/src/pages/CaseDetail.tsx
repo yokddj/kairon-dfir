@@ -625,14 +625,15 @@ export default function CaseDetail() {
                         <th className="px-4 py-3">Failed</th>
                         <th className="px-4 py-3">Artifacts</th>
                         <th className="px-4 py-3">Last error</th>
-                        <th className="px-4 py-3">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-line/70">
                       {(processingQuery.data?.items ?? []).map((item) => (
-                        <tr key={item.evidence_id} className={selectedProcessing?.evidence_id === item.evidence_id ? "bg-accent/10" : "bg-panel/40"}>
+                        <tr key={item.evidence_id} className={selectedProcessing?.evidence_id === item.evidence_id ? "bg-accent/10" : "bg-panel/40 hover:bg-abyss/40"}>
                           <td className="px-4 py-3"><span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.12em] ${processingStatusClass(item.processing_status)}`}>{item.processing_status.replaceAll("_", " ")}</span></td>
-                          <td className="max-w-[240px] truncate px-4 py-3 font-semibold text-ink" title={item.filename}>{item.filename}</td>
+                          <td className="max-w-[240px] truncate px-4 py-3 font-semibold" title={item.filename}>
+                            <button type="button" onClick={() => setSelectedProcessingId(item.evidence_id)} className="text-ink hover:text-accent hover:underline" data-testid={`select-processing-${item.evidence_id}`}>{item.filename}</button>
+                          </td>
                           <td className="max-w-[160px] truncate px-4 py-3 text-muted" title={item.host || "-"}>{item.host || "-"}</td>
                           <td className="px-4 py-3 font-mono text-xs text-muted">{item.evidence_type}</td>
                           <td className="px-4 py-3 text-muted">{formatDateTime(item.last_run_finished_at || item.last_run_started_at)}</td>
@@ -641,13 +642,6 @@ export default function CaseDetail() {
                           <td className="px-4 py-3 text-danger">{item.failed_parser_count}</td>
                           <td className="px-4 py-3 text-muted">{item.artifact_count}</td>
                           <td className="max-w-[260px] truncate px-4 py-3 text-muted" title={item.last_error || ""}>{item.last_error || "-"}</td>
-                          <td className="px-4 py-3">
-                            <div className="flex flex-wrap gap-2">
-                              <button type="button" onClick={() => setSelectedProcessingId(item.evidence_id)} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted">View details</button>
-                              <Link to={`/evidences/${item.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted">Open evidence</Link>
-                              <Link to={`/cases/${caseId}/artifacts?evidence_id=${item.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted">Open artifacts</Link>
-                            </div>
-                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -671,10 +665,21 @@ export default function CaseDetail() {
                     <div className="rounded-2xl border border-line bg-abyss/60 p-3"><p className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted">Parsers failed</p><p className="mt-1 text-sm text-danger">{selectedProcessing.failed_parser_count}</p></div>
                   </div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <Link to={`/evidences/${selectedProcessing.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Evidence detail</Link>
-                    <Link to={`/cases/${caseId}/search?evidence_id=${selectedProcessing.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Search results</Link>
-                    <Link to={`/cases/${caseId}/artifacts?evidence_id=${selectedProcessing.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Artifact Explorer</Link>
-                    {selectedProcessing.links.memory ? <Link to={selectedProcessing.links.memory} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Memory views</Link> : null}
+                    <Link to={`/evidences/${selectedProcessing.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted" data-testid="processing-detail-open-evidence">Open evidence</Link>
+                    {selectedProcessing.artifact_count > 0 ? (
+                      <Link to={`/cases/${caseId}/artifacts?evidence_id=${selectedProcessing.evidence_id}`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted" data-testid="processing-detail-open-artifacts">Open artifacts</Link>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled
+                        aria-disabled="true"
+                        title="No artifacts have been generated for this evidence yet."
+                        className="cursor-not-allowed rounded-xl border border-line bg-abyss/40 px-3 py-2 text-xs text-muted/50"
+                        data-testid="processing-detail-open-artifacts"
+                      >
+                        Open artifacts
+                      </button>
+                    )}
                   </div>
                   <div className="mt-5">
                     <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">Timeline of processing runs</p>

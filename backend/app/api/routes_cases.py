@@ -373,6 +373,7 @@ def _build_case_context(db: Session, case_id: str) -> dict:
         marked_events_count=marked_events_count,
         parser_errors=sum(parser_errors_by_evidence.values()),
         warnings=warnings,
+        manual_phase=item.investigation_phase_override,
     )
     first_evidence_id = evidences[0].id if evidences else None
     next_actions = build_case_next_actions(

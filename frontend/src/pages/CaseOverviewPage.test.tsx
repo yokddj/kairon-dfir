@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -8,12 +9,14 @@ import CaseOverviewPage from "./CaseOverviewPage";
 const getCaseContextMock = vi.fn();
 const listFindingsMock = vi.fn();
 const getIncidentTimelineDraftMock = vi.fn();
+const updateCaseMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
     getCaseContext: (...args: unknown[]) => getCaseContextMock(...args),
     listFindings: (...args: unknown[]) => listFindingsMock(...args),
     getIncidentTimelineDraft: (...args: unknown[]) => getIncidentTimelineDraftMock(...args),
+    updateCase: (...args: unknown[]) => updateCaseMock(...args),
   },
 }));
 
@@ -85,6 +88,7 @@ function makeContext(overrides: Record<string, unknown> = {}) {
 
 describe("CaseOverviewPage", () => {
   beforeEach(() => {
+    vi.resetAllMocks();
     getCaseContextMock.mockResolvedValue(makeContext());
     listFindingsMock.mockResolvedValue([
       { id: "finding-1", title: "PowerShell execution", severity: "high", summary: "Suspicious PowerShell", description: null, risk_score: 88 },
@@ -186,5 +190,104 @@ describe("CaseOverviewPage", () => {
     expect(screen.getByRole("link", { name: /Search suspicious commands/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Add more evidence/i })).toBeInTheDocument();
     expect(screen.getByText(/Create findings or timeline items/i)).toBeInTheDocument();
+  });
+
+  describe("manual INVESTIGATE / REPORT workflow actions", () => {
+    function investigationReadyContext() {
+      return makeContext({
+        summary: {
+          investigation_state: { state: "investigation_ready", evidence_count: 1, investigation_ready_evidence_count: 1, indexed_docs: 12, active_jobs: [], active_job_count: 0, findings_count: 0, official_timeline_count: 0, candidate_timeline_count: 0, marked_events_count: 0, parser_errors: 0, warnings: [] },
+        },
+      });
+    }
+
+    function investigationInProgressContext() {
+      return makeContext({
+        summary: {
+          investigation_state: { state: "investigation_in_progress", evidence_count: 1, investigation_ready_evidence_count: 1, indexed_docs: 12, active_jobs: [], active_job_count: 0, findings_count: 0, official_timeline_count: 0, candidate_timeline_count: 2, marked_events_count: 1, parser_errors: 0, warnings: [] },
+        },
+      });
+    }
+
+    it("shows Start investigation only when the case is investigation-ready", async () => {
+      getCaseContextMock.mockResolvedValueOnce(investigationReadyContext());
+      renderPage();
+
+      expect(await screen.findByTestId("start-investigation-action")).toBeInTheDocument();
+      expect(screen.queryByTestId("generate-report-action")).not.toBeInTheDocument();
+    });
+
+    it("transitions Analyze to Investigate: persists the override, refetches, updates the stage rail and hides the action", async () => {
+      // Both queued upfront -- call 1 is the initial mount, call 2 is the
+      // refetch triggered by the mutation's invalidateQueries. Queuing
+      // call 2 only after the click risks losing the race against the
+      // (near-synchronous) invalidation-triggered refetch.
+      getCaseContextMock.mockResolvedValueOnce(investigationReadyContext());
+      getCaseContextMock.mockResolvedValueOnce(investigationInProgressContext());
+      updateCaseMock.mockResolvedValueOnce({});
+      renderPage();
+
+      await userEvent.click(await screen.findByTestId("start-investigation-action"));
+      expect(updateCaseMock).toHaveBeenCalledWith("case-1", { investigation_phase_override: "investigating" });
+
+      await waitFor(() => expect(getCaseContextMock).toHaveBeenCalledTimes(2));
+
+      expect(await screen.findByTestId("generate-report-action")).toBeInTheDocument();
+      expect(screen.queryByTestId("start-investigation-action")).not.toBeInTheDocument();
+      const stageRail = screen.getByTestId("investigation-stage-progress");
+      expect(stageRail).toHaveTextContent("Investigate");
+    });
+
+    it("shows Generate report only when the case is in Investigate", async () => {
+      getCaseContextMock.mockResolvedValueOnce(investigationInProgressContext());
+      renderPage();
+
+      expect(await screen.findByTestId("generate-report-action")).toBeInTheDocument();
+      expect(screen.queryByTestId("start-investigation-action")).not.toBeInTheDocument();
+    });
+
+    it("transitions Investigate to Report: persists the override, refetches and updates the stage rail", async () => {
+      getCaseContextMock.mockResolvedValueOnce(investigationInProgressContext());
+      getCaseContextMock.mockResolvedValueOnce(makeContext());
+      updateCaseMock.mockResolvedValueOnce({});
+      renderPage();
+
+      await userEvent.click(await screen.findByTestId("generate-report-action"));
+      expect(updateCaseMock).toHaveBeenCalledWith("case-1", { investigation_phase_override: "report" });
+
+      await waitFor(() => expect(getCaseContextMock).toHaveBeenCalledTimes(2));
+
+      await screen.findByText(/Report-ready investigation/i);
+      expect(screen.queryByTestId("generate-report-action")).not.toBeInTheDocument();
+      const stageRail = screen.getByTestId("investigation-stage-progress");
+      expect(stageRail).toHaveTextContent("Report");
+    });
+
+    it("does not auto-advance to Report just because REPORT-ready counts exist without the manual override", async () => {
+      // findings/official timeline counts alone are informational only now
+      // -- the backend no longer promotes state from them.
+      getCaseContextMock.mockResolvedValueOnce(
+        makeContext({
+          summary: {
+            investigation_state: { state: "investigation_ready", evidence_count: 1, investigation_ready_evidence_count: 1, indexed_docs: 12, active_jobs: [], active_job_count: 0, findings_count: 3, official_timeline_count: 2, candidate_timeline_count: 0, marked_events_count: 0, parser_errors: 0, warnings: [] },
+          },
+        }),
+      );
+      renderPage();
+
+      expect(await screen.findByTestId("start-investigation-action")).toBeInTheDocument();
+      expect(screen.queryByTestId("generate-report-action")).not.toBeInTheDocument();
+    });
+
+    it("persists the manual phase across a reload (a fresh mount refetches the same override from the backend)", async () => {
+      getCaseContextMock.mockResolvedValueOnce(investigationInProgressContext());
+      const { unmount } = renderPage();
+      await screen.findByTestId("generate-report-action");
+      unmount();
+
+      getCaseContextMock.mockResolvedValueOnce(investigationInProgressContext());
+      renderPage();
+      expect(await screen.findByTestId("generate-report-action")).toBeInTheDocument();
+    });
   });
 });

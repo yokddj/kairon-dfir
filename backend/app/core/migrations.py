@@ -2703,3 +2703,33 @@ def _v35_host_user_facts(connection: Connection) -> None:
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_user_facts_event_id ON host_user_facts (event_id)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_user_facts_fingerprint ON host_user_facts (fingerprint)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_host_user_facts_case_host_user ON host_user_facts (case_id, host_id, username)"))
+
+
+@register(36, "case_investigation_phase_override")
+def _v36_case_investigation_phase_override(connection: Connection) -> None:
+    """Add ``cases.investigation_phase_override`` for the manual
+    INVESTIGATE/REPORT workflow actions ("Start investigation" / "Generate
+    report").
+
+    UPLOAD/PREPARE/ANALYZE stay fully automatic (derived from evidence and
+    indexing counts, see ``app.services.case_state.derive_case_investigation_state``).
+    INVESTIGATE and REPORT no longer auto-activate from candidate timeline
+    items, marked events, findings or official timeline entries -- they now
+    require this explicit, persisted analyst decision. NULL means no
+    override (the case stays at investigation_ready once automatically
+    ready); ``'investigating'`` and ``'report'`` are the only other values,
+    set via the existing ``PATCH /cases/{case_id}`` endpoint.
+
+    Existing cases that previously auto-computed into
+    investigation_in_progress or report_ready are intentionally NOT
+    backfilled: they reset to investigation_ready and the analyst
+    re-confirms with a single click. This is a one-time, non-destructive
+    display reset -- no findings, timeline items or other data are
+    affected.
+    """
+    inspector = _inspector_for(connection)
+    if "cases" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("cases")}
+    if "investigation_phase_override" not in existing:
+        connection.execute(text("ALTER TABLE cases ADD COLUMN investigation_phase_override VARCHAR(32)"))

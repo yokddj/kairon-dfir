@@ -35,22 +35,60 @@ def test_derive_investigation_ready() -> None:
     assert state["state"] == "investigation_ready"
 
 
-def test_derive_investigation_in_progress_from_candidates() -> None:
+def test_candidate_timeline_alone_no_longer_auto_advances_to_investigate() -> None:
+    # INVESTIGATE is a manual, analyst-driven stage ("Start investigation").
+    # Candidate timeline items alone must never auto-promote the case past
+    # investigation_ready.
     state = derive_case_investigation_state(
         evidence_count=1,
         indexed_docs=25,
         candidate_timeline_count=3,
     )
 
-    assert state["state"] == "investigation_in_progress"
+    assert state["state"] == "investigation_ready"
 
 
-def test_derive_report_ready_from_findings_or_official_timeline() -> None:
+def test_findings_or_official_timeline_alone_no_longer_auto_advance_to_report() -> None:
+    # REPORT is a manual, analyst-driven stage ("Generate report"). Findings
+    # or official timeline items alone must never auto-promote the case.
     finding_state = derive_case_investigation_state(evidence_count=1, indexed_docs=25, findings_count=1)
     timeline_state = derive_case_investigation_state(evidence_count=1, indexed_docs=25, official_timeline_count=1)
 
-    assert finding_state["state"] == "report_ready"
-    assert timeline_state["state"] == "report_ready"
+    assert finding_state["state"] == "investigation_ready"
+    assert timeline_state["state"] == "investigation_ready"
+
+
+def test_manual_phase_investigating_advances_state() -> None:
+    state = derive_case_investigation_state(
+        evidence_count=1,
+        indexed_docs=25,
+        manual_phase="investigating",
+    )
+
+    assert state["state"] == "investigation_in_progress"
+
+
+def test_manual_phase_report_advances_state() -> None:
+    state = derive_case_investigation_state(
+        evidence_count=1,
+        indexed_docs=25,
+        manual_phase="report",
+    )
+
+    assert state["state"] == "report_ready"
+
+
+def test_manual_phase_is_ignored_before_the_case_is_ready() -> None:
+    # A case still indexing (or with no evidence) must not jump straight to
+    # INVESTIGATE/REPORT just because a stale override value is present.
+    state = derive_case_investigation_state(
+        evidence_count=1,
+        indexed_docs=0,
+        active_jobs=[{"step": "indexing_plan", "status": "queued"}],
+        manual_phase="report",
+    )
+
+    assert state["state"] == "indexing_in_progress"
 
 
 def test_next_actions_empty_case_prioritizes_add_evidence() -> None:
@@ -84,7 +122,7 @@ def test_next_actions_ready_include_add_more_evidence_and_investigation() -> Non
 
 
 def test_next_actions_report_ready_include_generate_report() -> None:
-    state = derive_case_investigation_state(evidence_count=1, indexed_docs=20, findings_count=1)
+    state = derive_case_investigation_state(evidence_count=1, indexed_docs=20, findings_count=1, manual_phase="report")
     actions = build_case_next_actions("case-1", state)
 
     assert any(item["id"] == "generate_report" and item["enabled"] is True for item in actions["primary"])
