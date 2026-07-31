@@ -425,7 +425,13 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
           />
         ) : null}
 
-        {tab === "runs" ? (
+        {tab === "runs" && runsQuery.error instanceof Error ? (
+          <section className="rounded-2xl border border-rose-400/30 bg-rose-500/10 p-5 text-sm text-rose-100" data-testid="memory-runs-tab-error">
+            {runsQuery.error.message}
+          </section>
+        ) : null}
+
+        {tab === "runs" && !runsQuery.error ? (
           <MemoryRunsTab
             key={evidenceIdProp ?? "case-wide"}
             caseId={caseId}

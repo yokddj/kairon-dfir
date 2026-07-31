@@ -182,6 +182,7 @@ export default function App() {
                         <Route path="/cases/:caseId/m/:evidenceId/suspicious" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/m/:evidenceId/system" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/m/:evidenceId/overview" element={<MemoryEvidencePage />} />
+                        <Route path="/cases/:caseId/m/:evidenceId/runs" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/m/:evidenceId/raw" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/m/:evidenceId/artifacts" element={<MemoryEvidencePage />} />
                         <Route path="/cases/:caseId/entities/memory-process/:entityId" element={<MemoryProcessEntityPage />} />
