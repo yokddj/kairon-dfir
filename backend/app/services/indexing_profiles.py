@@ -221,6 +221,45 @@ def build_indexing_plan(
     }
 
 
+def close_indexing_plan_job(metadata: dict[str, Any], *, step_id: str, status: str) -> dict[str, Any]:
+    """Mark a queued on-demand indexing-plan step (mft_full, mft_summary,
+    user_activity, defender) terminal inside metadata["indexing_plan_run"],
+    and close the whole plan run once every step it queued is terminal.
+
+    evidence_has_active_indexing() checks indexing_plan_run.status/queued_jobs
+    BEFORE it falls back to the individual per-step status fields (mft_full_status,
+    etc.) -- so without this, a plan run that queued an on-demand step stays
+    "queued" forever once that step finishes, and the evidence looks stuck
+    "Processing" no matter what Evidence.ingest_status says. Each on-demand
+    task's own metadata-update helper calls this alongside its own status
+    write so both close together, in the same merge/commit.
+
+    step_id/run_id in queued_jobs come from the RQ enqueue call
+    (_enqueue_indexing_plan_steps), not from the run_id the task itself
+    generates internally -- those are different id namespaces, so this
+    matches on step_id only.
+    """
+    plan_run = dict(metadata.get("indexing_plan_run") or {})
+    if not plan_run:
+        return metadata
+    queued_jobs = [dict(item) for item in (plan_run.get("queued_jobs") or []) if isinstance(item, dict)]
+    matched = False
+    for job in queued_jobs:
+        if str(job.get("step_id") or "") == step_id:
+            job["status"] = status
+            matched = True
+    if not matched:
+        return metadata
+    plan_run["queued_jobs"] = queued_jobs
+    still_active = any(str(job.get("status") or "").strip().lower() in ACTIVE_STATUSES for job in queued_jobs)
+    if not still_active:
+        any_failed = any(str(job.get("status") or "").strip().lower() in {"failed", "timed_out", "timeout"} for job in queued_jobs)
+        plan_run["status"] = "completed_with_errors" if any_failed else "completed"
+        plan_run["updated_at"] = datetime.now(UTC).isoformat()
+    metadata["indexing_plan_run"] = plan_run
+    return metadata
+
+
 def create_indexing_plan_run(plan: dict[str, Any], queued_jobs: list[dict[str, Any]]) -> dict[str, Any]:
     now = datetime.now(UTC).isoformat()
     run_id = str(uuid4())

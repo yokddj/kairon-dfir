@@ -12,6 +12,7 @@ _service_spec.loader.exec_module(indexing_profiles)
 build_indexing_plan = indexing_profiles.build_indexing_plan
 create_indexing_plan_run = indexing_profiles.create_indexing_plan_run
 evidence_has_active_indexing = indexing_profiles.evidence_has_active_indexing
+close_indexing_plan_job = indexing_profiles.close_indexing_plan_job
 
 
 def _metadata(**overrides):
@@ -149,3 +150,101 @@ def test_create_indexing_plan_run_persists_step_statuses():
     assert run["status"] == "queued"
     assert steps["mft_full"]["status"] == "queued"
     assert steps["mft_full"]["run_id"] == "job-1"
+
+
+def test_close_indexing_plan_job_closes_the_run_once_the_only_queued_job_succeeds():
+    metadata = _metadata(
+        indexing_plan_run={
+            "run_id": "plan-1",
+            "status": "queued",
+            "queued_jobs": [{"step_id": "mft_full", "run_id": "job-1", "status": "queued"}],
+        }
+    )
+
+    metadata = close_indexing_plan_job(metadata, step_id="mft_full", status="completed")
+
+    plan_run = metadata["indexing_plan_run"]
+    assert plan_run["status"] == "completed"
+    assert plan_run["queued_jobs"][0]["status"] == "completed"
+
+
+def test_close_indexing_plan_job_reproduces_and_fixes_the_stuck_processing_bug():
+    # Exact repro: an on-demand step finished successfully, but nothing ever
+    # told indexing_plan_run -- this is the state that made
+    # evidence_has_active_indexing() (and therefore EvidenceDetail's
+    # "Processing" badge / Pause button) claim an active job forever, even
+    # with Evidence.ingest_status already "completed".
+    metadata = _metadata(
+        indexing_plan_run={
+            "run_id": "plan-1",
+            "status": "queued",
+            "queued_jobs": [{"step_id": "mft_full", "run_id": "job-1", "status": "queued"}],
+        }
+    )
+    active_before, _job = evidence_has_active_indexing(metadata, "completed")
+    assert active_before is True  # the bug, reproduced
+
+    metadata = close_indexing_plan_job(metadata, step_id="mft_full", status="completed")
+    active_after, job_after = evidence_has_active_indexing(metadata, "completed")
+
+    assert active_after is False
+    assert job_after is None
+
+
+def test_close_indexing_plan_job_marks_completed_with_errors_on_failure():
+    metadata = _metadata(
+        indexing_plan_run={
+            "run_id": "plan-1",
+            "status": "queued",
+            "queued_jobs": [{"step_id": "defender", "run_id": "job-2", "status": "queued"}],
+        }
+    )
+
+    metadata = close_indexing_plan_job(metadata, step_id="defender", status="failed")
+
+    plan_run = metadata["indexing_plan_run"]
+    assert plan_run["status"] == "completed_with_errors"
+    assert plan_run["queued_jobs"][0]["status"] == "failed"
+    # A failed on-demand step must not look active either.
+    active, _job = evidence_has_active_indexing(metadata, "completed")
+    assert active is False
+
+
+def test_close_indexing_plan_job_keeps_the_run_active_while_a_sibling_job_is_still_queued():
+    metadata = _metadata(
+        indexing_plan_run={
+            "run_id": "plan-1",
+            "status": "queued",
+            "queued_jobs": [
+                {"step_id": "mft_full", "run_id": "job-1", "status": "queued"},
+                {"step_id": "user_activity", "run_id": "job-2", "status": "queued"},
+            ],
+        }
+    )
+
+    metadata = close_indexing_plan_job(metadata, step_id="mft_full", status="completed")
+
+    plan_run = metadata["indexing_plan_run"]
+    assert plan_run["status"] == "queued"
+    assert plan_run["queued_jobs"][0]["status"] == "completed"
+    assert plan_run["queued_jobs"][1]["status"] == "queued"
+    active, job = evidence_has_active_indexing(metadata, "completed")
+    assert active is True
+    assert job["step"] == "indexing_plan"
+
+
+def test_close_indexing_plan_job_is_a_no_op_when_step_never_queued():
+    metadata = _metadata(indexing_plan_run={"run_id": "plan-1", "status": "queued", "queued_jobs": [{"step_id": "mft_full", "run_id": "job-1", "status": "queued"}]})
+
+    result = close_indexing_plan_job(metadata, step_id="srum", status="completed")
+
+    # No queued_jobs entry has step_id "srum" -- nothing should change.
+    assert result["indexing_plan_run"]["status"] == "queued"
+
+
+def test_close_indexing_plan_job_is_a_no_op_without_a_plan_run():
+    metadata = _metadata()
+
+    result = close_indexing_plan_job(metadata, step_id="mft_full", status="completed")
+
+    assert "indexing_plan_run" not in result

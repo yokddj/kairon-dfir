@@ -135,7 +135,19 @@ export default function EvidenceDetail() {
     queryKey: ["evidence-indexing-plan", evidenceId, indexingProfile],
     queryFn: () => api.getEvidenceIndexingPlan(evidenceId, indexingProfile),
     enabled: Boolean(evidenceId),
-    refetchInterval: () => (evidenceQuery.data?.ingest_status === "pending" || evidenceQuery.data?.ingest_status === "processing" ? 3000 : false),
+    // Keep polling while the core ingest is active OR the indexing plan
+    // itself still reports an active on-demand job (Full MFT, User Activity,
+    // Defender) -- those can still be running after ingest_status has
+    // already reached a terminal value. Polling only on ingest_status meant
+    // this query stopped refreshing the moment core ingest finished, even
+    // while an on-demand job it queued was genuinely still in flight, so
+    // the badge/Pause button never got the update that told them it was
+    // done.
+    refetchInterval: (query) => {
+      const ingestStatus = evidenceQuery.data?.ingest_status;
+      if (ingestStatus === "pending" || ingestStatus === "processing") return 3000;
+      return query.state.data?.active ? 3000 : false;
+    },
   });
   const runIndexingPlanMutation = useMutation({
     mutationFn: () => api.runEvidenceIndexingPlan(evidenceId, { profile: indexingProfile }),

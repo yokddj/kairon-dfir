@@ -99,6 +99,7 @@ from app.services.host_users import create_host_user_fact_observations, delete_h
 from app.services.host_identity import apply_case_host_identity
 from app.services.parser_backend_evaluation import _tool_dll_path
 from app.services.evidence_runs import get_evidence_run, merge_evidence_metadata, start_ingest_run, sync_ingest_run_from_metadata, upsert_ingest_run
+from app.services.indexing_profiles import close_indexing_plan_job
 from app.services.evidence_integrity import record_evidence_event
 from app.services.evtx_profile import EVTX_PROFILE_FAST_HIGH_VALUE, normalize_evtx_fast_limits
 from app.services.ingest_benchmarks import (
@@ -7345,6 +7346,8 @@ def _update_recmd_user_activity_metadata(evidence_id: str, run: dict) -> None:
         metadata["registry_user_activity_hives_processed"] = int(run.get("hives_processed") or metadata.get("registry_user_activity_hives_processed") or 0)
         metadata["registry_user_activity_hives_failed"] = int(run.get("hives_failed") or metadata.get("registry_user_activity_hives_failed") or 0)
         metadata["investigation_ready"] = True
+        if run.get("status") in {"completed", "failed"}:
+            metadata = close_indexing_plan_job(metadata, step_id="user_activity", status=str(run.get("status")))
         evidence.metadata_json = merge_evidence_metadata(evidence.metadata_json or {}, metadata)
         isolated_db.commit()
     finally:
@@ -8111,6 +8114,8 @@ def _update_defender_evtx_metadata(evidence_id: str, run: dict) -> None:
         metadata["defender_evtx_by_event_id"] = dict(run.get("by_event_id") or metadata.get("defender_evtx_by_event_id") or {})
         metadata["defender_evtx_by_threat"] = dict(run.get("by_threat") or metadata.get("defender_evtx_by_threat") or {})
         metadata["investigation_ready"] = True
+        if run.get("status") in {"completed", "failed"}:
+            metadata = close_indexing_plan_job(metadata, step_id="defender", status=str(run.get("status")))
         evidence.metadata_json = merge_evidence_metadata(evidence.metadata_json or {}, metadata)
         isolated_db.commit()
     finally:
@@ -8595,6 +8600,8 @@ def _update_mft_summary_metadata(evidence_id: str, run: dict) -> None:
                 metadata["warnings"] = warnings
                 metadata["warning_count"] = max(int(metadata.get("warning_count") or 0), len(warnings))
                 metadata["display_status"] = "completed_with_warnings"
+        if run.get("status") in {"completed", "failed"}:
+            metadata = close_indexing_plan_job(metadata, step_id="mft_summary", status=str(run.get("status")))
         evidence.metadata_json = merge_evidence_metadata(evidence.metadata_json or {}, metadata)
         isolated_db.commit()
     finally:
@@ -8638,6 +8645,8 @@ def _update_mft_full_metadata(evidence_id: str, run: dict) -> None:
             if warnings:
                 metadata["warnings"] = warnings
                 metadata["warning_count"] = max(int(metadata.get("warning_count") or 0), len(warnings))
+        if run.get("status") in {"completed", "failed"}:
+            metadata = close_indexing_plan_job(metadata, step_id="mft_full", status=str(run.get("status")))
         evidence.metadata_json = merge_evidence_metadata(evidence.metadata_json or {}, metadata)
         isolated_db.commit()
     finally:
