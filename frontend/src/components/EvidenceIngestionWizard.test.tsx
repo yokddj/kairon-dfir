@@ -692,7 +692,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
     await screen.findByRole("heading", { name: "Confirm evidence" });
-    expect(screen.queryByTestId("memory-host-required-message")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("host-required-message")).not.toBeInTheDocument();
     expect(screen.getByText("Ready to process")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
 
@@ -965,7 +965,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
     await screen.findByTestId("preflight-report");
 
-    expect(screen.getByTestId("memory-host-required-message")).toHaveTextContent(/Assign this memory evidence to a host before processing/i);
+    expect(screen.getByTestId("host-required-message")).toHaveTextContent(/This evidence must be associated with a host before processing/i);
     expect(screen.getByTestId("host-assignment-panel")).toBeInTheDocument();
     expect(screen.getByText(/Status:/).parentElement).toHaveTextContent(/action required/i);
     expect(screen.queryByText("Ready to process")).not.toBeInTheDocument();
@@ -988,7 +988,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(within(hostPanel).getByRole("radio", { name: /Existing host/i }));
     await userEvent.selectOptions(within(hostPanel).getByRole("combobox"), "host-1");
 
-    expect(screen.queryByTestId("memory-host-required-message")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("host-required-message")).not.toBeInTheDocument();
     expect(screen.getByText(/Assign to host:/).parentElement).toHaveTextContent("WS-01");
     expect(screen.getByText("Ready to process")).toBeInTheDocument();
     const startButton = screen.getByRole("button", { name: "Start Processing" });
@@ -1012,7 +1012,7 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(within(hostPanel).getByRole("radio", { name: /New host/i }));
     await userEvent.type(within(hostPanel).getByPlaceholderText("DESKTOP-7FQ2A1"), "MEMHOST-01");
 
-    expect(screen.queryByTestId("memory-host-required-message")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("host-required-message")).not.toBeInTheDocument();
     expect(screen.getByText(/Assign to host:/).parentElement).toHaveTextContent("MEMHOST-01");
     expect(screen.getByText("Ready to process")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("checkbox", { name: /authorized to handle this RAM evidence/i }));
@@ -1020,6 +1020,133 @@ describe("EvidenceIngestionWizard", () => {
 
     await waitFor(() => expect(createCaseHostMock).toHaveBeenCalledWith("case-1", { host_name: "MEMHOST-01", reason: "Created during evidence ingestion wizard" }));
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ host_id: "host-created", memory_authorization_acknowledged: true })));
+  });
+
+  describe("generalized host requirement (any evidence type, not just memory)", () => {
+    it("shows a visible host requirement for a non-memory archive with no detected host, without opening Advanced", async () => {
+      createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+        preflight: readyReport({
+          original_filename: "windows-artifacts.zip",
+          classification: { ...readyReport().classification, category: "archive", platform: "windows", hostname: null, chain: ["Archive"], container: "ZIP archive" },
+        }),
+      }));
+      renderWizard();
+      await goToFileStep(/Artifact Collection/);
+      await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "windows-artifacts.zip"));
+      await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+      await screen.findByTestId("preflight-report");
+
+      // Visible without ever opening "Advanced -- evidence options".
+      expect(screen.getByTestId("host-required-message")).toHaveTextContent(/This evidence must be associated with a host before processing/i);
+      expect(screen.getByTestId("host-assignment-panel")).toBeInTheDocument();
+      expect(screen.queryByText("Ready to process")).not.toBeInTheDocument();
+      const startButton = screen.getByRole("button", { name: "Start Processing" });
+      expect(startButton).toBeDisabled();
+      expect(screen.getByTestId("start-processing-host-reason")).toHaveTextContent(/Select a host before starting processing/i);
+    });
+
+    it("enables Start Processing and sends the selected host once a host is chosen for a non-memory archive", async () => {
+      promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-win-archive", original_filename: "windows-artifacts.zip" });
+      createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+        preflight: readyReport({
+          original_filename: "windows-artifacts.zip",
+          classification: { ...readyReport().classification, category: "archive", platform: "windows", hostname: null, chain: ["Archive"], container: "ZIP archive" },
+        }),
+      }));
+      renderWizard();
+      await goToFileStep(/Artifact Collection/);
+      await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "windows-artifacts.zip"));
+      await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+      await screen.findByTestId("preflight-report");
+
+      const hostPanel = screen.getByTestId("host-assignment-panel");
+      await userEvent.click(within(hostPanel).getByRole("radio", { name: /Existing host/i }));
+      await userEvent.selectOptions(within(hostPanel).getByRole("combobox", { name: "Existing host" }), "host-1");
+
+      expect(screen.queryByTestId("host-required-message")).not.toBeInTheDocument();
+      expect(screen.getByText("Ready to process")).toBeInTheDocument();
+      const startButton = screen.getByRole("button", { name: "Start Processing" });
+      expect(startButton).toBeEnabled();
+
+      await userEvent.click(startButton);
+      await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ host_id: "host-1" })));
+    });
+
+    it("does not require or show a mandatory host selector when the evidence already has a detected host", async () => {
+      // Default readyReport() already carries a detected hostname ("web01").
+      renderWizard();
+      await goToFileStep(/Artifact Collection/);
+      await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+      await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+      await screen.findByTestId("preflight-report");
+
+      expect(screen.queryByTestId("host-required-message")).not.toBeInTheDocument();
+      expect(screen.getByText("Ready to process")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Start Processing" })).toBeEnabled();
+      // The panel is still reachable (optional), just not forced open.
+      expect(await openEvidenceAdvancedOptions()).toBeInTheDocument();
+    });
+
+    it("does not render a duplicate host selector when Advanced is opened while the host requirement is already visible", async () => {
+      createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+        preflight: readyReport({
+          classification: { ...readyReport().classification, category: "archive", platform: "windows", hostname: null },
+        }),
+      }));
+      renderWizard();
+      await goToFileStep(/Artifact Collection/);
+      await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+      await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+      await screen.findByTestId("preflight-report");
+      expect(screen.getByTestId("host-assignment-panel")).toBeInTheDocument();
+
+      await userEvent.click(screen.getByText(/Advanced — evidence options/i));
+
+      expect(screen.getAllByTestId("host-assignment-panel")).toHaveLength(1);
+    });
+
+    it("does not render a duplicate host selector for memory evidence either", async () => {
+      createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+        preflight: readyReport({
+          original_filename: "capture.mem",
+          classification: { ...readyReport().classification, category: "memory_dump", hostname: null, chain: ["Memory Dump"], container: "Raw memory candidate" },
+        }),
+      }));
+      renderWizard();
+      await goToFileStep(/Memory Dump/);
+      await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "capture.mem"));
+      await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+      await screen.findByTestId("preflight-report");
+      expect(screen.getByTestId("host-assignment-panel")).toBeInTheDocument();
+
+      await userEvent.click(screen.getByText(/Advanced — evidence options/i));
+
+      expect(screen.getAllByTestId("host-assignment-panel")).toHaveLength(1);
+    });
+
+    it("does not show 'Ready to process' while a non-memory host requirement is unmet, and shows it once resolved", async () => {
+      createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+        preflight: readyReport({
+          classification: { ...readyReport().classification, category: "collection", platform: "windows", hostname: null },
+        }),
+      }));
+      renderWizard();
+      await goToFileStep(/Artifact Collection/);
+      await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "collection.zip"));
+      await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+      await screen.findByTestId("preflight-report");
+
+      expect(screen.queryByText("Ready to process")).not.toBeInTheDocument();
+      const statusLine = screen.getByText(/Status:/).parentElement!;
+      expect(statusLine).toHaveTextContent(/action required/i);
+
+      const hostPanel = screen.getByTestId("host-assignment-panel");
+      await userEvent.click(within(hostPanel).getByRole("radio", { name: /Existing host/i }));
+      await userEvent.selectOptions(within(hostPanel).getByRole("combobox", { name: "Existing host" }), "host-1");
+
+      expect(screen.getByText("Ready to process")).toBeInTheDocument();
+      expect(screen.getByText(/Status:/).parentElement).toHaveTextContent(/ready/i);
+    });
   });
 });
 
