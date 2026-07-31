@@ -82,15 +82,21 @@ vi.mock("./pages/SystemPage", () => ({ default: () => <div>System Page</div> }))
 vi.mock("./pages/DocsPage", () => ({ default: () => <div>Docs Page</div> }));
 vi.mock("./pages/ParserCoveragePage", () => ({ default: () => <div>Parser Coverage Page</div> }));
 vi.mock("./pages/MemoryEvidencePage", async () => {
-  const { useLocation, useNavigate } = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
+  const { useLocation, useNavigate, useParams } = await vi.importActual<typeof import("react-router-dom")>("react-router-dom");
   return {
     default: () => {
       const location = useLocation();
       const navigate = useNavigate();
+      // Exposes the raw :memoryTab route param App.tsx's route actually
+      // captures -- the missing-Runs bug and the later ?tab= priority bug
+      // both trace back to this being empty when the route only matched a
+      // literal per-tab segment instead of a real :memoryTab parameter.
+      const { memoryTab } = useParams();
       return (
         <div>
           Memory Evidence Page
           <span data-testid="memory-evidence-route">{location.pathname + location.search}</span>
+          <span data-testid="memory-evidence-tab-param">{memoryTab ?? ""}</span>
           <button type="button" onClick={() => navigate(-1)}>Back</button>
         </div>
       );
@@ -248,6 +254,24 @@ describe("memory routes are registered", () => {
     renderApp("/cases/case-1/m/ev-A/runs?host=HOSTA");
     expect(await screen.findByText("Memory Evidence Page")).toBeInTheDocument();
     expect(screen.getByTestId("memory-evidence-route")).toHaveTextContent("/cases/case-1/m/ev-A/runs?host=HOSTA");
+  });
+
+  // Regression: App.tsx used to register one LITERAL <Route> per Memory tab
+  // segment (path="/cases/:caseId/m/:evidenceId/processes", etc.), none of
+  // which declared :memoryTab as an actual route parameter. That made
+  // useParams().memoryTab empty for every single Memory tab in production,
+  // which in turn made MemoryEvidencePage's tab resolution always fall
+  // through to the ?tab= query param -- so every tab silently rendered
+  // Overview regardless of the URL path. This asserts the real App.tsx
+  // route captures the segment as :memoryTab for every tab, using the
+  // actual route table (not a test-only one).
+  it.each([
+    "overview", "processes", "process-graph", "network", "modules",
+    "handles", "suspicious", "vads", "system", "runs", "raw",
+  ])("captures \"%s\" as the :memoryTab route param, not just a literal path match", async (segment) => {
+    renderApp(`/cases/case-1/m/ev-A/${segment}`);
+    expect(await screen.findByText("Memory Evidence Page")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-evidence-tab-param")).toHaveTextContent(segment);
   });
 
   it("supports browser Back from the canonical Runs route back to the previous screen", async () => {

@@ -1,9 +1,18 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import MemoryAnalysisPage from "./MemoryAnalysisPage";
 import MemoryEvidencePage from "./MemoryEvidencePage";
+
+// Exposes the router's current pathname+search as a testid so tests can
+// assert on location.pathname the same way a real click-through in the
+// browser would be verified, instead of only inferring it indirectly from
+// which subview happened to render.
+function LocationProbe() {
+  const location = useLocation();
+  return <span data-testid="current-location">{location.pathname + location.search}</span>;
+}
 
 const getMemoryOverviewMock = vi.fn();
 const getMemoryBackendOverviewMock = vi.fn();
@@ -60,10 +69,19 @@ function renderPage(initialPath = "/cases/case-1/memory/ev-memory") {
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <QueryClientProvider client={queryClient}>
+        <LocationProbe />
         <Routes>
           <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
           <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
           <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
+          {/* Real tab clicks navigate to the canonical /m/ route
+              (memoryEvidenceRoute / memoryViewPath), not this file's legacy
+              /memory/ initialPath strings -- both have to be registered here
+              so clicking a tab (which pushes a canonical URL) actually
+              resolves inside this test's own router, the same way it does
+              in the real App.tsx route table. */}
+          <Route path="/cases/:caseId/m/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
+          <Route path="/cases/:caseId/m/:evidenceId" element={<MemoryEvidencePage />} />
         </Routes>
       </QueryClientProvider>
     </MemoryRouter>,
@@ -665,5 +683,207 @@ describe("MemoryAnalysisPage workspace", () => {
     await waitFor(() => {
       expect(getCanonicalProcessEntitiesMock).toHaveBeenCalled();
     });
+  });
+
+  // 21. Full-coverage navigation matrix -- every Memory tab, exercised the
+  // same way an analyst does (click the tab button), against the real
+  // MemoryEvidencePage/MemoryWorkspace tree. This is what would have caught
+  // the missing Runs route (and would catch a future one) if it had covered
+  // every tab instead of a handful.
+  const ALL_TABS: Array<{ key: string; segment: string; tabTestId: string; panelTestId: string }> = [
+    { key: "overview", segment: "overview", tabTestId: "memory-tab-overview", panelTestId: "memory-tabpanel-overview" },
+    { key: "processes", segment: "processes", tabTestId: "memory-tab-processes", panelTestId: "memory-tabpanel-processes" },
+    { key: "graph", segment: "process-graph", tabTestId: "memory-tab-graph", panelTestId: "memory-tabpanel-graph" },
+    { key: "network", segment: "network", tabTestId: "memory-tab-network", panelTestId: "memory-tabpanel-network" },
+    { key: "modules", segment: "modules", tabTestId: "memory-tab-modules", panelTestId: "memory-tabpanel-modules" },
+    { key: "handles", segment: "handles", tabTestId: "memory-tab-handles", panelTestId: "memory-tabpanel-handles" },
+    { key: "suspicious", segment: "suspicious", tabTestId: "memory-tab-suspicious", panelTestId: "memory-tabpanel-suspicious" },
+    { key: "vads", segment: "vads", tabTestId: "memory-tab-vads", panelTestId: "memory-tabpanel-vads" },
+    { key: "system", segment: "system", tabTestId: "memory-tab-system", panelTestId: "memory-tabpanel-system" },
+    { key: "runs", segment: "runs", tabTestId: "memory-tab-runs", panelTestId: "memory-tabpanel-runs" },
+    { key: "raw", segment: "raw", tabTestId: "memory-tab-raw", panelTestId: "memory-tabpanel-raw" },
+  ];
+
+  it.each(ALL_TABS)("clicking $key navigates to the evidence-scoped URL, activates the tab, and renders its subview", async ({ segment, tabTestId, panelTestId }) => {
+    renderPage();
+    await screen.findByTestId("memory-overview");
+    fireEvent.click(screen.getByTestId(tabTestId));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("current-location")).toHaveTextContent(`/cases/case-1/m/ev-memory/${segment}`);
+    });
+    expect(screen.getByTestId(tabTestId)).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByTestId(panelTestId)).toBeInTheDocument();
+    // Never falls back to the case-wide/global memory landing.
+    expect(screen.queryByTestId("memory-landing")).not.toBeInTheDocument();
+  });
+
+  it.each(ALL_TABS)("a direct URL load of $key (reload-equivalent) keeps that tab active and renders its subview", async ({ segment, tabTestId, panelTestId }) => {
+    // The canonical /m/ URL, not the legacy /memory/ form -- a real reload
+    // re-requests whatever URL is already in the address bar (which is
+    // always canonical once the analyst has navigated there), it never
+    // reintroduces the legacy prefix.
+    renderPage(`/cases/case-1/m/ev-memory/${segment}`);
+    expect(await screen.findByTestId(panelTestId)).toBeInTheDocument();
+    expect(screen.getByTestId(tabTestId)).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("current-location")).toHaveTextContent(`/cases/case-1/m/ev-memory/${segment}`);
+  });
+
+  // 21b. Regression: reproduces the exact reported runtime bug --
+  // /cases/:caseId/m/:evidenceId/processes?tab=overview rendered Overview,
+  // not Processes, because App.tsx's per-tab routes never captured
+  // :memoryTab at all, so the tab computation always fell through to the
+  // stale ?tab= query param. The path segment must be authoritative for
+  // every tab, with an inherited/stale ?tab= present.
+  it("the exact reported URL /processes?tab=overview renders Processes, not Overview (path wins over stale ?tab=)", async () => {
+    renderPage("/cases/case-1/m/ev-memory/processes?tab=overview");
+    expect(await screen.findByTestId("memory-tabpanel-processes")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-tab-processes")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("memory-tab-overview")).toHaveAttribute("aria-selected", "false");
+    expect(screen.queryByTestId("memory-tabpanel-overview")).not.toBeInTheDocument();
+  });
+
+  it.each(ALL_TABS)("$key wins over an inherited/stale ?tab=overview query param on the same URL", async ({ segment, tabTestId, panelTestId }) => {
+    renderPage(`/cases/case-1/m/ev-memory/${segment}?tab=overview`);
+    expect(await screen.findByTestId(panelTestId)).toBeInTheDocument();
+    expect(screen.getByTestId(tabTestId)).toHaveAttribute("aria-selected", "true");
+    if (segment !== "overview") {
+      expect(screen.getByTestId("memory-tab-overview")).toHaveAttribute("aria-selected", "false");
+    }
+  });
+
+  it("switching from a stale ?tab=overview URL to Graph, Network, or Runs via click still works", async () => {
+    renderPage("/cases/case-1/m/ev-memory/processes?tab=overview");
+    await screen.findByTestId("memory-tabpanel-processes");
+
+    fireEvent.click(screen.getByTestId("memory-tab-graph"));
+    expect(await screen.findByTestId("memory-tabpanel-graph")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("memory-tab-network"));
+    expect(await screen.findByTestId("memory-tabpanel-network")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("memory-tab-runs"));
+    expect(await screen.findByTestId("memory-tabpanel-runs")).toBeInTheDocument();
+  });
+
+  it("an unrelated query param alongside a stale ?tab= is preserved while the path still wins", async () => {
+    renderPage("/cases/case-1/m/ev-memory/processes?tab=overview&process_entity_id=ent-42");
+    expect(await screen.findByTestId("memory-tabpanel-processes")).toBeInTheDocument();
+    expect(screen.getByTestId("memory-tab-processes")).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("current-location")).toHaveTextContent("process_entity_id=ent-42");
+  });
+
+  // 22. Two memory evidences in the same case must never mix data --
+  // switching between them by URL must only ever query the evidenceId in
+  // the path, not a "last selected" or case-wide default.
+  it("scopes each tab to the evidence in the path when a case has two RAM evidences with different data", async () => {
+    getMemoryEvidenceLandingMock.mockResolvedValue({
+      case_id: "case-1",
+      items: [
+        {
+          evidence_id: "ev-memory", case_id: "case-1", filename: "memory-a.mem", detected_host: "WS01", size_bytes: 2048,
+          created_at: "2026-06-16T00:00:00Z", processed_at: "2026-06-16T00:01:00Z", ingest_status: "completed", metadata: {},
+          families: [{ family: "processes", title: "Processes", state: "completed", active_run: { id: "run-a" }, latest_attempt: { id: "run-a" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null }],
+          run_count: 1, latest_run_id: "run-a", latest_run_status: "completed",
+        },
+        {
+          evidence_id: "ev-memory-2", case_id: "case-1", filename: "memory-b.mem", detected_host: "WS02", size_bytes: 4096,
+          created_at: "2026-06-17T00:00:00Z", processed_at: "2026-06-17T00:01:00Z", ingest_status: "completed", metadata: {},
+          families: [{ family: "processes", title: "Processes", state: "not_analyzed", active_run: null, latest_attempt: null, selection_reason: "not_analyzed", using_fallback: false, historical_override: false, availability_reason: null }],
+          run_count: 0, latest_run_id: null, latest_run_status: null,
+        },
+      ],
+    });
+    listMemoryRunsMock.mockImplementation((_caseId: string, evidenceId?: string) =>
+      Promise.resolve(evidenceId === "ev-memory"
+        ? [{ id: "run-a", case_id: "case-1", evidence_id: "ev-memory", backend: "volatility3", profile: "processes_basic", status: "completed", requested_plugin_count: 4, plugin_count: 4, plugins_completed: 4, plugins_failed: 0, plugins_skipped: 0, started_at: "2026-06-16T00:00:00Z", completed_at: "2026-06-16T00:00:30Z", duration_ms: 30000, output_dir: null, metadata_json: {}, error_log: {}, backend_version: "2.28.0", worker_task_id: null, cancellation_requested: false, created_at: "2026-06-16T00:00:00Z" }]
+        : []),
+    );
+
+    const first = renderPage("/cases/case-1/memory/ev-memory/runs");
+    await screen.findByTestId("run-row-run-a");
+    expect(listMemoryRunsMock).toHaveBeenCalledWith("case-1", "ev-memory");
+    expect(listMemoryRunsMock).not.toHaveBeenCalledWith("case-1", "ev-memory-2");
+    // Unmount before switching evidence -- render() doesn't auto-unmount a
+    // previous tree within the same test, and leaving evidence A's DOM
+    // mounted would make the isolation assertions below meaningless (they'd
+    // find A's row because it's still there, not because B leaked into it).
+    first.unmount();
+
+    listMemoryRunsMock.mockClear();
+    renderPage("/cases/case-1/memory/ev-memory-2/runs");
+    await screen.findByTestId("memory-runs-tab");
+    expect(screen.queryByTestId("run-row-run-a")).not.toBeInTheDocument();
+    expect(listMemoryRunsMock).toHaveBeenCalledWith("case-1", "ev-memory-2");
+    expect(listMemoryRunsMock).not.toHaveBeenCalledWith("case-1", "ev-memory");
+  });
+
+  // 23. The exact reported inconsistency: "Analysis status" (the family
+  // table) reports processes as analyzed_with_results, but the Processes
+  // summary card below it independently re-derived "is this family
+  // analyzed" with a narrower condition that didn't recognize that state,
+  // so it showed "Processes have not been analyzed" underneath a table row
+  // that said otherwise. Both now go through the same isFamilyAnalyzed()
+  // predicate the investigation checklist already used correctly.
+  it("does not show 'Processes have not been analyzed' when the family state is analyzed_with_results", async () => {
+    getMemoryEvidenceLandingMock.mockResolvedValue({
+      case_id: "case-1",
+      items: [
+        {
+          evidence_id: "ev-memory", case_id: "case-1", filename: "memory.mem", detected_host: "WS01", size_bytes: 2048,
+          created_at: "2026-06-16T00:00:00Z", processed_at: "2026-06-16T00:01:00Z", ingest_status: "completed", metadata: {},
+          families: [
+            { family: "processes", title: "Processes", state: "analyzed_with_results", count: 42, active_run: { id: "run-basic", profile: "processes_basic", completed_at: "2026-06-16T00:01:00Z" }, latest_attempt: { id: "run-basic" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
+          ],
+          run_count: 1, latest_run_id: "run-basic", latest_run_status: "completed",
+        },
+      ],
+    });
+    renderPage();
+    await screen.findByTestId("memory-overview");
+    expect(await screen.findByTestId("memory-family-state-processes")).toHaveTextContent("Completed");
+    expect(screen.queryByTestId("overview-processes-empty")).not.toBeInTheDocument();
+    expect(screen.getByTestId("overview-processes-processes")).toHaveTextContent("42");
+  });
+
+  it("shows a real 'not analyzed' state (not a false empty result) when the family genuinely has no run", async () => {
+    getMemoryEvidenceLandingMock.mockResolvedValue({
+      case_id: "case-1",
+      items: [
+        {
+          evidence_id: "ev-memory", case_id: "case-1", filename: "memory.mem", detected_host: "WS01", size_bytes: 2048,
+          created_at: "2026-06-16T00:00:00Z", processed_at: "2026-06-16T00:01:00Z", ingest_status: "completed", metadata: {},
+          families: [
+            { family: "processes", title: "Processes", state: "not_analyzed", active_run: null, latest_attempt: null, selection_reason: "not_analyzed", using_fallback: false, historical_override: false, availability_reason: null },
+          ],
+          run_count: 0, latest_run_id: null, latest_run_status: null,
+        },
+      ],
+    });
+    renderPage();
+    await screen.findByTestId("memory-overview");
+    expect(await screen.findByTestId("overview-processes-empty")).toHaveTextContent("Processes have not been analyzed for this evidence.");
+  });
+
+  it("shows a genuine zero-results state (analyzed_empty) distinctly from not_analyzed", async () => {
+    getMemoryEvidenceLandingMock.mockResolvedValue({
+      case_id: "case-1",
+      items: [
+        {
+          evidence_id: "ev-memory", case_id: "case-1", filename: "memory.mem", detected_host: "WS01", size_bytes: 2048,
+          created_at: "2026-06-16T00:00:00Z", processed_at: "2026-06-16T00:01:00Z", ingest_status: "completed", metadata: {},
+          families: [
+            { family: "processes", title: "Processes", state: "analyzed_empty", count: 0, active_run: { id: "run-basic", profile: "processes_basic", completed_at: "2026-06-16T00:01:00Z" }, latest_attempt: { id: "run-basic" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
+          ],
+          run_count: 1, latest_run_id: "run-basic", latest_run_status: "completed",
+        },
+      ],
+    });
+    renderPage();
+    await screen.findByTestId("memory-overview");
+    // Genuinely analyzed with zero results -- not the "not analyzed yet" copy.
+    expect(screen.queryByTestId("overview-processes-empty")).not.toBeInTheDocument();
+    expect(screen.getByTestId("overview-processes-processes")).toHaveTextContent("0");
+    expect(await screen.findByTestId("memory-family-zero-processes")).toBeInTheDocument();
   });
 });

@@ -53,22 +53,48 @@ function stateLabel(state: MemoryFamilyState | string | undefined): { label: str
   switch (state) {
     case "completed":
     case "ready":
+    case "analyzed_with_results":
       return { label: "Completed", tone: "ok" };
+    case "analyzed_empty":
+      return { label: "Completed (no results)", tone: "ok" };
     case "running":
     case "pending":
     case "queued":
       return { label: "Running", tone: "info" };
+    case "partial":
+      return { label: "Partially analyzed", tone: "warn" };
     case "latest_attempt_failed":
       return { label: "Latest attempt failed", tone: "warn" };
+    case "failed":
+      return { label: "Failed", tone: "danger" };
     case "unavailable":
       return { label: "Unavailable", tone: "muted" };
     case "not_analyzed":
       return { label: "Not analyzed", tone: "muted" };
     case "evidence_scope_required":
       return { label: "Evidence scope required", tone: "danger" };
+    case "historical_override":
+      return { label: "Showing historical run", tone: "info" };
+    case "historical_override_invalid":
+      return { label: "Historical run unavailable", tone: "warn" };
+    case "unknown_family":
+      return { label: "Unknown family", tone: "muted" };
     default:
       return { label: state ? String(state) : "Not analyzed", tone: "muted" };
   }
+}
+
+// Whether a family's row should show its count/last-attempt cell as
+// "has real content", i.e. isFamilyAnalyzed() (the same predicate the
+// investigation checklist already uses) plus latest_attempt_failed, which
+// still has a prior successful count to show alongside the failure.
+function hasAnalyzedContent(state: MemoryFamilyState | undefined): boolean {
+  return isFamilyAnalyzed(state) || state === "latest_attempt_failed";
+}
+
+function countCellLabel(state: MemoryFamilyState | undefined): string {
+  if (state === "latest_attempt_failed") return "Latest attempt failed";
+  return "Completed";
 }
 
 function formatCount(n: number): string {
@@ -430,9 +456,9 @@ export function MemoryOverviewTab({
                     <td className="px-3 py-2 text-ink">
                       {row.state === "unavailable" ? (
                         <span className="text-[10px] text-muted">—</span>
-                      ) : row.state === "completed" || row.state === "ready" || row.state === "latest_attempt_failed" ? (
+                      ) : hasAnalyzedContent(row.state) ? (
                         <span data-testid={`memory-family-count-${row.family}`}>
-                          {row.state === "completed" || row.state === "ready" ? "Completed" : "Latest attempt failed"} · {formatCount(row.lastCount)}
+                          {countCellLabel(row.state)} · {formatCount(row.lastCount)}
                           {row.lastCount === 0 ? (
                             <span className="ml-1 text-[10px] text-muted" data-testid={`memory-family-zero-${row.family}`}>
                               0 results
@@ -462,7 +488,7 @@ export function MemoryOverviewTab({
         data-testid="memory-overview-processes"
       >
         <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Processes</h3>
-        {processesFamily && (processesFamily.state === "completed" || processesFamily.state === "ready" || processesFamily.state === "latest_attempt_failed") ? (
+        {processesFamily && hasAnalyzedContent(processesFamily.state) ? (
           <div className="mt-3 grid gap-3 md:grid-cols-4">
             <SummaryCard label="Processes" value={processesFamily.lastCount} testId="overview-processes-processes" />
             <SummaryCard label="Last profile" value={processesFamily.activeRun?.profile ?? "—"} testId="overview-processes-profile" />
@@ -505,7 +531,7 @@ export function MemoryOverviewTab({
           {artifactCards.map((row) => {
             const meta = stateLabel(row.state);
             const isUnavailable = row.state === "unavailable";
-            const isAnalyzed = row.state === "completed" || row.state === "ready" || row.state === "latest_attempt_failed";
+            const isAnalyzed = hasAnalyzedContent(row.state);
             return (
               <div
                 key={row.family}
