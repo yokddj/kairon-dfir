@@ -39,6 +39,11 @@ class Case(UUIDMixin, TimestampMixin, Base):
     management_tags: Mapped[list] = mapped_column(JSONVariant, default=list, nullable=False)
     mode: Mapped[CaseMode] = mapped_column(Enum(CaseMode), default=CaseMode.investigation, nullable=False)
     timezone: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # Analyst-set override for the manual INVESTIGATE/REPORT workflow stages
+    # ("Start investigation" / "Generate report"). NULL = no override (stays
+    # at investigation_ready once automatically ready). See
+    # app.services.case_state.derive_case_investigation_state.
+    investigation_phase_override: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     evidences = relationship("Evidence", back_populates="case", cascade="all, delete-orphan")
     artifacts = relationship("Artifact", back_populates="case", cascade="all, delete-orphan")

@@ -27,6 +27,7 @@ def derive_case_investigation_state(
     marked_events_count: int = 0,
     parser_errors: int = 0,
     warnings: list[str] | None = None,
+    manual_phase: str | None = None,
 ) -> dict[str, Any]:
     active_job_rows = [dict(item) for item in (active_jobs or []) if isinstance(item, dict)]
     ready = investigation_ready_evidence_count > 0 or indexed_docs > 0
@@ -36,9 +37,14 @@ def derive_case_investigation_state(
         state = "indexing_in_progress"
     elif indexed_docs <= 0 and not ready:
         state = "evidence_uploaded_not_indexed"
-    elif findings_count > 0 or official_timeline_count > 0:
+    # INVESTIGATE and REPORT are manual, analyst-driven stages (Case.
+    # investigation_phase_override, set via "Start investigation" / "Generate
+    # report") -- they never auto-activate from findings, timeline items or
+    # marked events alone, so a case never appears to skip ahead of a
+    # decision the analyst hasn't made yet.
+    elif manual_phase == "report":
         state = "report_ready"
-    elif ready and (candidate_timeline_count > 0 or marked_events_count > 0):
+    elif manual_phase == "investigating":
         state = "investigation_in_progress"
     else:
         state = "investigation_ready"

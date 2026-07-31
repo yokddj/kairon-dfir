@@ -745,6 +745,10 @@ export type DfirCase = {
   case_notes: string | null;
   mode: "investigation" | "demo" | "training" | "validation";
   timezone: string | null;
+  // Manual INVESTIGATE/REPORT workflow override, set via "Start
+  // investigation" / "Generate report" (PATCH /cases/:caseId). UPLOAD/
+  // PREPARE/ANALYZE stay automatic and never set this field.
+  investigation_phase_override?: "investigating" | "report" | null;
   evidence_count: number;
   host_count: number;
   processing_summary: Record<string, number>;

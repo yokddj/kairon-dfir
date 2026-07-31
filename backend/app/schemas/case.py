@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 import re
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -67,6 +68,10 @@ class CaseUpdate(BaseModel):
     case_notes: str | None = Field(default=None, max_length=12000)
     mode: CaseMode | None = None
     timezone: str | None = None
+    # Manual INVESTIGATE/REPORT workflow override -- see
+    # app.services.case_state.derive_case_investigation_state. UPLOAD/
+    # PREPARE/ANALYZE are never set through this field; they stay automatic.
+    investigation_phase_override: Literal["investigating", "report"] | None = None
 
     @field_validator("status", mode="before")
     @classmethod

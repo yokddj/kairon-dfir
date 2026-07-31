@@ -206,13 +206,56 @@ describe("CaseDetail Processing Queue", () => {
     renderPage();
     await screen.findByText("failed.zip");
 
-    const failedRow = screen.getByText("failed.zip").closest("tr")!;
-    await userEvent.click(within(failedRow).getByRole("button", { name: /View details/i }));
+    await userEvent.click(screen.getByTestId("select-processing-ev-failed"));
 
-    expect(await screen.findByTestId("processing-detail-panel")).toHaveTextContent("failed.zip");
+    const panel = await screen.findByTestId("processing-detail-panel");
+    expect(panel).toHaveTextContent("failed.zip");
     expect(screen.getAllByText("Parser crashed").length).toBeGreaterThan(0);
     expect(screen.getAllByText("evtx").length).toBeGreaterThan(0);
-    expect(within(failedRow).getByRole("link", { name: /Open evidence/i })).toHaveAttribute("href", "/evidences/ev-failed");
+    expect(within(panel).getByTestId("processing-detail-open-evidence")).toHaveAttribute("href", "/evidences/ev-failed");
+  });
+
+  it("no longer renders a View details button -- selecting a row is done by clicking its filename", async () => {
+    renderPage();
+    await screen.findByText("failed.zip");
+
+    expect(screen.queryByRole("button", { name: /View details/i })).not.toBeInTheDocument();
+  });
+
+  it("removes the Actions column and moves Open evidence / Open artifacts to the detail panel only", async () => {
+    renderPage();
+    await screen.findByText("failed.zip");
+
+    expect(screen.queryByText("Actions")).not.toBeInTheDocument();
+    const failedRow = screen.getByText("failed.zip").closest("tr")!;
+    expect(within(failedRow).queryByRole("link", { name: /Open evidence/i })).not.toBeInTheDocument();
+    expect(within(failedRow).queryByRole("link", { name: /Open artifacts/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("select-processing-ev-failed"));
+    const panel = await screen.findByTestId("processing-detail-panel");
+    expect(within(panel).getByTestId("processing-detail-open-evidence")).toBeInTheDocument();
+  });
+
+  it("keeps Open artifacts visible but disabled when the selected evidence has no artifacts yet", async () => {
+    renderPage();
+    await screen.findByText("pending.zip");
+
+    await userEvent.click(screen.getByTestId("select-processing-ev-pending"));
+    const panel = await screen.findByTestId("processing-detail-panel");
+    const artifactsControl = within(panel).getByTestId("processing-detail-open-artifacts");
+    expect(artifactsControl.tagName).toBe("BUTTON");
+    expect(artifactsControl).toBeDisabled();
+  });
+
+  it("enables Open artifacts in the detail panel once artifacts exist", async () => {
+    renderPage();
+    await screen.findAllByText("complete.zip");
+
+    await userEvent.click(await screen.findByTestId("select-processing-ev-complete"));
+    const panel = await screen.findByTestId("processing-detail-panel");
+    const artifactsControl = within(panel).getByTestId("processing-detail-open-artifacts");
+    expect(artifactsControl.tagName).toBe("A");
+    expect(artifactsControl).toHaveAttribute("href", "/cases/case-1/artifacts?evidence_id=ev-complete");
   });
 
   it("shows Linux source counts separately from parsed event counts", async () => {
@@ -228,8 +271,8 @@ describe("CaseDetail Processing Queue", () => {
       })],
     }));
     renderPage();
-    const row = (await screen.findAllByText("ubuntu-disk.zip"))[0].closest("tr")!;
-    await userEvent.click(within(row).getByRole("button", { name: /View details/i }));
+    await screen.findAllByText("ubuntu-disk.zip");
+    await userEvent.click(screen.getByTestId("select-processing-ev-linux"));
 
     const linuxTable = await screen.findByTestId("linux-processing-artifacts");
     expect(within(linuxTable).getByText("Sources found")).toBeInTheDocument();
