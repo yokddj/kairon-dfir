@@ -1025,6 +1025,17 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const inspectionLabel = inspectionStateLabel(inspectionState, { isServerPath: requiresPathInput });
 
   const hostAssignmentRequired = hasMemoryEvidence || processingMode !== "skip";
+  // Whether hostAssignmentPanel renders visibly (outside Advanced) or stays
+  // tucked away, for any evidence type. Deliberately independent of
+  // hostChoice/processingMode -- both are controls the analyst can change
+  // *while the panel itself is open*, and if either flipped this value, the
+  // panel would move between two different parents mid-interaction. React
+  // would then unmount/remount it, discarding focus and any in-progress
+  // selection. Based only on facts already known from classification/case
+  // data before the analyst touches anything: memory always shows it;
+  // anything else shows it only when detection didn't already resolve a
+  // single, unambiguous host.
+  const hostRequirementVisible = hasMemoryEvidence || !detectedHostname || detectedHostMatches.length > 1;
   const hostAssignmentBlockingReason = useMemo(() => {
     if (!hostAssignmentRequired) return null;
     if (hostChoice === UNASSIGNED_HOST_CHOICE) return "Choose an existing host or create a new host before indexing.";
@@ -1051,8 +1062,17 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     : hostChoice === "auto"
       ? detectedHostMatches.length === 1 ? detectedHostMatches[0].display_name : detectedHostname
       : selectedHostName;
-  const memoryHostBlocking = hasMemoryEvidence && hostAssignmentBlockingReason !== null;
-  const readyToProcess = !preflight?.diagnostics.length && !memoryHostBlocking;
+  // Single source of truth for "does this evidence need a host, right now,
+  // that it doesn't have" -- drives the "Host required" banner, the status
+  // pill, the Ready-to-process gate and the disabled-button explanation,
+  // for every evidence type (not just memory). Resolves live as soon as a
+  // valid host is chosen. hostAssignmentPanel's own placement (visible vs.
+  // tucked in Advanced) intentionally uses the more stable
+  // hostAssignmentRequired instead -- it must not flip mid-interaction
+  // (e.g. the instant a host is picked), or React unmounts/remounts the
+  // panel out from under the very selection the analyst is making.
+  const hostRequirementBlocking = hostAssignmentBlockingReason !== null;
+  const readyToProcess = !preflight?.diagnostics.length && !hostRequirementBlocking;
 
   const hostAssignmentPanel = (
     <div className="rounded-2xl border border-line bg-abyss/60 p-3" data-testid="host-assignment-panel">
@@ -1070,7 +1090,12 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
           {hostChoice !== "auto" && hostChoice !== CREATE_HOST_CHOICE && hostChoice !== UNASSIGNED_HOST_CHOICE ? (
             <>
               <input value={hostSearch} onChange={(event) => setHostSearch(event.target.value)} placeholder="Search hosts" className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-ink" />
-              <select value={hostChoice} onChange={(event) => setHostChoice(event.target.value)} className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink">
+              <select
+                aria-label="Existing host"
+                value={hostChoice}
+                onChange={(event) => setHostChoice(event.target.value)}
+                className="mt-2 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink"
+              >
                 {filteredCaseHosts.map((host) => <option key={host.id} value={host.id}>{host.display_name}</option>)}
               </select>
             </>
@@ -1079,7 +1104,15 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
         <label className={`rounded-2xl border p-3 text-sm ${hostChoice === CREATE_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
           <input type="radio" name="final-host-choice" className="mr-2" checked={hostChoice === CREATE_HOST_CHOICE} onChange={() => setHostChoice(CREATE_HOST_CHOICE)} />
           New host
-          {hostChoice === CREATE_HOST_CHOICE ? <input value={newHostName} onChange={(event) => setNewHostName(event.target.value)} placeholder={detectedHostname || "DESKTOP-7FQ2A1"} className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink" /> : null}
+          {hostChoice === CREATE_HOST_CHOICE ? (
+            <input
+              aria-label="New host name"
+              value={newHostName}
+              onChange={(event) => setNewHostName(event.target.value)}
+              placeholder={detectedHostname || "DESKTOP-7FQ2A1"}
+              className="mt-3 w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-ink"
+            />
+          ) : null}
         </label>
         {processingMode === "skip" && !hasMemoryEvidence ? (
           <label className={`rounded-2xl border p-3 text-sm ${hostChoice === UNASSIGNED_HOST_CHOICE ? "border-accent bg-accent/10 text-ink" : "border-line bg-abyss/70 text-muted"}`}>
@@ -1481,7 +1514,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                       <p>Detected kind: <span className="text-ink">{evidenceKindLabel(report.classification.category)}</span></p>
                       <p>Detected platform: <span className="text-ink">{report.classification.platform === "unknown" ? report.classification.contained_object ?? "Unknown" : report.classification.platform}</span></p>
                       <p>Assign to host: <span className="text-ink">{assignedHostLabel || "Needs confirmation"}</span></p>
-                      <p>Status: <span className={memoryHostBlocking && report.classification.category === "memory_dump" ? "text-amber" : report.status === "ready" ? "text-mint" : report.status === "warning" ? "text-amber" : "text-danger"}>{memoryHostBlocking && report.classification.category === "memory_dump" ? "action required" : report.status}</span></p>
+                      <p>Status: <span className={hostRequirementBlocking ? "text-amber" : report.status === "ready" ? "text-mint" : report.status === "warning" ? "text-amber" : "text-danger"}>{hostRequirementBlocking ? "action required" : report.status}</span></p>
                     </div>
                     {expectedMismatch ? (
                       <div className="mt-3 rounded-xl border border-amber/30 bg-amber/10 p-3 text-xs text-amber" data-testid="expected-kind-warning">
@@ -1635,15 +1668,15 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               ))}
             </div>
 
-            {memoryHostBlocking ? (
-              <div className="mt-4 rounded-2xl border border-amber/40 bg-amber/10 p-4" data-testid="memory-host-required-message">
-                <p className="font-semibold text-amber">Action required</p>
-                <p className="mt-1 text-sm text-ink">Assign this memory evidence to a host before processing.</p>
+            {hostRequirementBlocking ? (
+              <div className="mt-4 rounded-2xl border border-amber/40 bg-amber/10 p-4" data-testid="host-required-message">
+                <p className="font-semibold text-amber">Host required</p>
+                <p className="mt-1 text-sm text-ink">This evidence must be associated with a host before processing.</p>
                 <p className="mt-1 text-sm text-muted">{hostAssignmentBlockingReason}</p>
               </div>
             ) : null}
 
-            {hasMemoryEvidence ? <div className="mt-4">{hostAssignmentPanel}</div> : null}
+            {hostRequirementVisible ? <div className="mt-4">{hostAssignmentPanel}</div> : null}
 
             {preflight.diagnostics.length ? (
               <div className="mt-4 space-y-3">
@@ -1689,7 +1722,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
             <details className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4" open={advancedOpen} onToggle={(event) => setAdvancedOpen((event.target as HTMLDetailsElement).open)}>
               <summary className="cursor-pointer text-xs uppercase tracking-[0.16em] text-muted">Advanced — evidence options</summary>
               <div className="mt-3 grid gap-3">
-                {!hasMemoryEvidence ? hostAssignmentPanel : null}
+                {!hostRequirementVisible ? hostAssignmentPanel : null}
                 {!hasMemoryEvidence ? (
                   <div className="rounded-2xl border border-line bg-abyss/60 p-3">
                     <p className="text-xs uppercase tracking-[0.16em] text-muted">Processing profile</p>
@@ -1706,6 +1739,11 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
             </details>
 
             {startMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{startMutation.error.message}</p> : null}
+            {hostRequirementBlocking ? (
+              <p className="mt-3 text-sm text-amber" data-testid="start-processing-host-reason">
+                Select a host before starting processing.
+              </p>
+            ) : null}
             <div className="mt-5 flex justify-between">
               <button type="button" onClick={() => setStep(4)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Back</button>
               <button
