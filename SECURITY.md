@@ -4,7 +4,7 @@ Kairon DFIR handles forensic evidence, extracted artifacts, indexed events, repo
 
 ## Self-Hosted Deployment Boundary
 
-Kairon DFIR is self-hosted software, not a managed service. It does not provide a complete public-facing security boundary by itself — do not expose a deployment directly to the public Internet.
+Kairon DFIR is self-hosted software, not a managed service. It does not provide a complete public-facing security boundary by itself. Do not expose a deployment directly to the public Internet.
 
 Recommended access controls:
 
