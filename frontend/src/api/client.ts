@@ -2485,15 +2485,26 @@ export type HostUserEntry = {
   is_synthetic_username: boolean;
   identity: {
     uid: HostUserFieldResolution;
+    // "uid" (Linux) | "rid" (Windows) | null -- which local-identifier
+    // concept actually produced identity.uid, so the UI can label it
+    // correctly without knowing which platform produced this entry.
+    id_kind: HostUserFieldResolution;
     primary_gid: HostUserFieldResolution;
     gecos: HostUserFieldResolution;
     home: HostUserFieldResolution;
     shell: HostUserFieldResolution;
   };
+  // Producer-specific extras with no cross-platform column (Windows RID/
+  // SID/account flags/logon counters, ...). Keys present are exactly
+  // whatever the producer(s) that observed this account contributed --
+  // empty for a purely Linux entry.
+  attributes: Record<string, HostUserFieldResolution>;
   primary_group_name: string | null;
   secondary_groups: HostUserSecondaryGroup[];
   password_status: HostUserFieldResolution;
-  account_status: "locked" | "active" | "unknown";
+  // A resolution object like every other field -- carries its own
+  // source/provenance/confidence, not a bare string.
+  account_status: HostUserFieldResolution;
   last_login: HostUserLastLogin | null;
   shell_classification: "login" | "non_login" | "unknown";
   effective_sudo: {

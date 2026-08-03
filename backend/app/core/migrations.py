@@ -2733,3 +2733,60 @@ def _v36_case_investigation_phase_override(connection: Connection) -> None:
     existing = {c["name"] for c in inspector.get_columns("cases")}
     if "investigation_phase_override" not in existing:
         connection.execute(text("ALTER TABLE cases ADD COLUMN investigation_phase_override VARCHAR(32)"))
+
+
+@register(37, "host_user_facts_windows_identity_columns")
+def _v37_host_user_facts_windows_identity_columns(connection: Connection) -> None:
+    """Add the three columns Windows local-account producers (SAM,
+    ProfileList -- see app.ingest.raw_parsers.sam_identity_parser /
+    profile_list_parser) need on ``host_user_facts``, alongside the
+    Linux-only columns v35 already created:
+
+    * ``id_kind`` (VARCHAR(16), nullable) -- "uid" | "rid" | NULL. Records
+      which local-identifier concept produced ``uid`` on this row, so the
+      API/UI can label it correctly without any platform check of their
+      own. NULL on every pre-existing Linux row (passwd never set it) --
+      resolve_host_users() treats a NULL id_kind exactly like any other
+      "missing" field, never inferring it after the fact.
+    * ``account_status`` (VARCHAR(16), nullable) -- a normalized
+      classification ("active" | "disabled" | "locked" | NULL) computed
+      once at parse time by each producer from its OWN reliable signal
+      (Linux: shadow password_status; Windows: SAM's real F-value control-
+      flag bits). NULL on every pre-existing row of either platform --
+      account_status used to be derived ad hoc at read time from
+      password_status alone (pre-refactor); existing rows simply have no
+      value here until the evidence that produced them is reprocessed.
+      This is intentional, not a data-loss bug: the raw password_status
+      column (and every other pre-existing column) is completely
+      unaffected and keeps resolving exactly as before.
+    * ``attributes`` (JSON/JSONB, NOT NULL, default ``{}``) -- producer-
+      specific extras with no cross-platform column (Windows RID/SID,
+      non-secret SAM control-flag labels, logon_count, bad_password_count,
+      last_password_set, ProfileList profile_state). Mirrors how
+      host_facts.provenance holds producer-specific extras without
+      widening that table's own schema. Never holds password hashes,
+      bootkey material, or any other secret -- see
+      app.ingest.windows.sam_identity's module docstring and
+      tests/test_sam_identity_security.py for the enforced contract.
+
+    Idempotent (skips columns that already exist, same pattern as v1/v34)
+    and purely additive: no existing host_user_facts row is read, altered
+    or deleted. A database that already has these columns (e.g. a fresh
+    install where Base.metadata.create_all() created the table with the
+    current model) is a no-op here.
+    """
+    inspector = _inspector_for(connection)
+    if "host_user_facts" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("host_user_facts")}
+    dialect = connection.dialect.name
+    json_type = "JSONB" if dialect == "postgresql" else "JSON"
+    json_default = "'{}'::jsonb" if dialect == "postgresql" else "'{}'"
+    if "id_kind" not in existing:
+        connection.execute(text("ALTER TABLE host_user_facts ADD COLUMN id_kind VARCHAR(16)"))
+    if "account_status" not in existing:
+        connection.execute(text("ALTER TABLE host_user_facts ADD COLUMN account_status VARCHAR(16)"))
+    if "attributes" not in existing:
+        connection.execute(
+            text(f"ALTER TABLE host_user_facts ADD COLUMN attributes {json_type} NOT NULL DEFAULT {json_default}")
+        )

@@ -2062,7 +2062,7 @@ def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path,
             "bulk_index_errors": 0,
         }
         return []
-    if parser_name in {"evtx_raw", "lnk_raw", "prefetch_raw", "amcache_raw", "shimcache_raw", "windows_service_registry"}:
+    if parser_name in {"evtx_raw", "lnk_raw", "prefetch_raw", "amcache_raw", "shimcache_raw", "windows_service_registry", "windows_sam_identity", "windows_profile_list"}:
         raw_parser = route_raw_parser(path, parser_name_hint=parser_name)
         if parser_name == "evtx_raw":
             result = raw_parser.parse(

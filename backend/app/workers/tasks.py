@@ -56,6 +56,7 @@ from app.ingest.archive import ArchiveExtractionError, copy_folder, extract_arch
 from app.ingest.csv_json import list_generic_artifacts
 from app.ingest.detector import detect_evidence_type
 from app.ingest.host_detection import detect_host_from_artifacts, detect_host_from_velociraptor_collection, normalize_hostname
+from app.ingest.host_user_extraction import extract_host_user_documents
 from app.ingest.linux.discovery import build_linux_inventory
 from app.ingest.normalizer import base_document, build_raw_summary
 from app.ingest.raw_parsers.evtxecmd_backend import EVTXECMD_BACKEND_CSV, EVTX_RAW_PYTHON_BACKEND, EvtxECmdCsvBackend, select_evtx_parser_backend
@@ -1263,6 +1264,13 @@ def _finalize_artifact_status(*, parser_name: str | None, record_count: int, raw
     }
     if parser_name == "evtx_raw" and record_count == 0 and raw_parser_status == "parsed_empty":
         return "skipped_empty"
+    if parser_name in ("windows_sam_identity", "windows_profile_list") and record_count == 0:
+        # Unlike evtx_raw/shimcache_raw/service (bulk record extraction,
+        # where zero records is unusual), a SAM hive with zero decodable
+        # accounts (e.g. Names subkey missing/empty) or a SOFTWARE hive
+        # with no ProfileList entries is a real, honest "nothing here",
+        # not a parser failure.
+        return "skipped_empty" if raw_parser_status == "parsed_empty" else "failed"
     if parser_name in native_raw_parsers and record_count == 0:
         if raw_parser_status in {"partial", "failed", "failed_unsupported"}:
             return raw_parser_status
@@ -5939,18 +5947,27 @@ def ingest_evidence(evidence_id: str) -> None:
                         )
                         if host_facts_warning:
                             detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_facts: {host_facts_warning}"})
-                    if documents and any((document.get("linux") or {}).get("artifact_family") in ("linux_identity", "linux_lastlog", "linux_sudoers") for document in documents):
-                        host_user_facts_warning = _safe_create_host_user_facts_isolated(
-                            case_id=evidence.case_id,
-                            evidence_id=evidence.id,
-                            artifact_id=artifact_id,
-                            host_id=evidence.host_id,
-                            observed_at=utc_now(),
-                            artifact_name=artifact_info["name"],
-                            documents=documents,
-                        )
-                        if host_user_facts_warning:
-                            detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_user_facts: {host_user_facts_warning}"})
+                    if documents:
+                        # Platform-agnostic: extract_host_user_documents()
+                        # dispatches to every registered platform extractor
+                        # (Linux, Windows SAM/ProfileList, ...) internally --
+                        # this call site never needs a platform branch of its
+                        # own, now or when a future platform/source gains
+                        # Host User Facts support. See
+                        # app.ingest.host_user_extraction.
+                        host_user_documents = extract_host_user_documents(documents)
+                        if host_user_documents:
+                            host_user_facts_warning = _safe_create_host_user_facts_isolated(
+                                case_id=evidence.case_id,
+                                evidence_id=evidence.id,
+                                artifact_id=artifact_id,
+                                host_id=evidence.host_id,
+                                observed_at=utc_now(),
+                                artifact_name=artifact_info["name"],
+                                documents=host_user_documents,
+                            )
+                            if host_user_facts_warning:
+                                detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_user_facts: {host_user_facts_warning}"})
             except Exception as exc:  # noqa: BLE001
                 db.rollback()
                 is_fast_evtx_timeout = (

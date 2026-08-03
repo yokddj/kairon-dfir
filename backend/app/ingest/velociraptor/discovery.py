@@ -1580,6 +1580,60 @@ def _detect_priority_registry_raw_candidate(
         if shimcache_candidate:
             candidates.append(shimcache_candidate)
         return candidates
+    if lower_name == "sam" and normalized_lower.endswith("windows\\system32\\config\\sam"):
+        sam_native = describe_raw_candidate(entry.path, "windows_sam_identity")
+        if sam_native:
+            candidates.append(
+                VelociraptorEvidenceCandidate(
+                    id=_candidate_id("windows_sam_identity", entry.path),
+                    category="windows_sam_identity",
+                    artifact_type="windows_sam_identity",
+                    parser_status=str(sam_native["parser_status"]),
+                    display_name=f"Windows Local Accounts raw - {Path(entry.path).name}",
+                    original_path=entry.path,
+                    local_path=entry.local_path or "",
+                    normalized_windows_path=normalize_velociraptor_path(entry.path),
+                    filename=Path(entry.path).name,
+                    parser=str(sam_native["parser"]),
+                    size=entry.size,
+                    mtime=entry.mtime,
+                    confidence="medium",
+                    supported=bool(sam_native["supported"]),
+                    reason=str(sam_native["reason"]),
+                    warnings=[],
+                    companion_files=_find_system_companion_files(entry, entry_map),
+                    container_type=container_type,
+                    container_path=container_path,
+                )
+            )
+        return candidates
+    if lower_name == "software" and normalized_lower.endswith("windows\\system32\\config\\software"):
+        profile_list_native = describe_raw_candidate(entry.path, "windows_profile_list")
+        if profile_list_native:
+            candidates.append(
+                VelociraptorEvidenceCandidate(
+                    id=_candidate_id("windows_profile_list", entry.path),
+                    category="windows_profile_list",
+                    artifact_type="windows_profile_list",
+                    parser_status=str(profile_list_native["parser_status"]),
+                    display_name=f"Windows ProfileList raw - {Path(entry.path).name}",
+                    original_path=entry.path,
+                    local_path=entry.local_path or "",
+                    normalized_windows_path=normalize_velociraptor_path(entry.path),
+                    filename=Path(entry.path).name,
+                    parser=str(profile_list_native["parser"]),
+                    size=entry.size,
+                    mtime=entry.mtime,
+                    confidence="medium",
+                    supported=bool(profile_list_native["supported"]),
+                    reason=str(profile_list_native["reason"]),
+                    warnings=[],
+                    companion_files=_find_system_companion_files(entry, entry_map),
+                    container_type=container_type,
+                    container_path=container_path,
+                )
+            )
+        return candidates
     return candidates
 
 
@@ -2269,6 +2323,28 @@ def list_velociraptor_artifacts(root: Path, selected_candidates: list[dict] | No
                         "source_tool": "native_windows_service",
                         "source_format": "registry_hive",
                         "service_artifact_type": candidate.get("artifact_type") or "service",
+                    }
+                )
+            elif candidate.get("category") == "windows_sam_identity":
+                artifacts.append(
+                    {
+                        **common,
+                        "artifact_type": "windows_sam_identity",
+                        "parser": "windows_sam_identity",
+                        "profile": "host_identity",
+                        "source_tool": "native_registry",
+                        "source_format": "registry_hive",
+                    }
+                )
+            elif candidate.get("category") == "windows_profile_list":
+                artifacts.append(
+                    {
+                        **common,
+                        "artifact_type": "windows_profile_list",
+                        "parser": "windows_profile_list",
+                        "profile": "host_identity",
+                        "source_tool": "native_registry",
+                        "source_format": "registry_hive",
                     }
                 )
             elif candidate.get("category") == "wmi":

@@ -18,6 +18,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.api import routes_host_users
 from app.core.database import Base, get_db
+from app.ingest.host_user_extraction import extract_host_user_documents
 from app.ingest.linux.identity import parse_identity
 from app.ingest.linux.lastlog import parse_lastlog
 from app.ingest.normalizer import normalize_row
@@ -79,26 +80,31 @@ def _evidence(db, evidence_id=EVIDENCE_ID, *, host_id=None, case_id=CASE_ID, fil
 
 
 def _identity_docs(content: str, *, artifact_type: str, source_path: str, artifact_id=ART1_ID) -> list[dict]:
+    # Routes through the real dispatcher (app.ingest.host_user_extraction),
+    # exactly like the ingest pipeline does -- these tests exercise the
+    # Linux derived extractor, not a bespoke test-only shortcut.
     rows = parse_identity(content, source_path=source_path)
-    return [
+    docs = [
         normalize_row(CASE_ID, EVIDENCE_ID, artifact_id, row, {
             "artifact_family": "linux_identity", "artifact_type": artifact_type, "parser": "linux_identity_raw",
             "name": source_path.rsplit("/", 1)[-1], "source_path": source_path,
         })
         for row in rows
     ]
+    return extract_host_user_documents(docs)
 
 
 def _sudoers_docs(content: str, *, source_path: str = "etc/sudoers", artifact_id=ART1_ID) -> list[dict]:
     from app.ingest.linux.sudoers import parse_sudoers
     rows = parse_sudoers(content, source_path=source_path)
-    return [
+    docs = [
         normalize_row(CASE_ID, EVIDENCE_ID, artifact_id, row, {
             "artifact_family": "linux_sudoers", "artifact_type": "sudoers", "parser": "linux_sudoers_raw",
             "name": source_path.rsplit("/", 1)[-1], "source_path": source_path,
         })
         for row in rows
     ]
+    return extract_host_user_documents(docs)
 
 
 def _lastlog_binary(records: dict[int, tuple[int, str, str]]) -> bytes:
@@ -115,13 +121,14 @@ def _lastlog_binary(records: dict[int, tuple[int, str, str]]) -> bytes:
 def _lastlog_docs(records: dict[int, tuple[int, str, str]], *, passwd_content: str | None = None, artifact_id=ART1_ID) -> list[dict]:
     content = _lastlog_binary(records)
     rows = parse_lastlog(content, source_path="var/log/lastlog", passwd_content=passwd_content)
-    return [
+    docs = [
         normalize_row(CASE_ID, EVIDENCE_ID, artifact_id, row, {
             "artifact_family": "linux_lastlog", "artifact_type": "lastlog", "parser": "linux_lastlog_raw",
             "name": "lastlog", "source_path": "var/log/lastlog",
         })
         for row in rows
     ]
+    return extract_host_user_documents(docs)
 
 
 PASSWD_ALICE_BOB = "alice:x:1000:1000:Alice Analyst:/home/alice:/bin/bash\nbob:x:1001:1001:Bob:/home/bob:/bin/sh\n"
@@ -186,9 +193,11 @@ class TestPasswordAndAccountStatus:
         create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART2_ID, host_id=None, observed_at=None, documents=shadow_docs)
         entries = {e["username"]: e for e in resolve_host_users(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID)}
         assert entries["alice"]["password_status"]["preferred_value"] == "set"
-        assert entries["alice"]["account_status"] == "active"
+        # account_status is a resolution object -- same source/provenance
+        # transparency as every other field -- not a bare string.
+        assert entries["alice"]["account_status"]["preferred_value"] == "active"
         assert entries["bob"]["password_status"]["preferred_value"] == "locked"
-        assert entries["bob"]["account_status"] == "locked"
+        assert entries["bob"]["account_status"]["preferred_value"] == "locked"
 
     def test_no_shadow_observation_is_unavailable_not_fabricated(self):
         db = _db()
@@ -198,7 +207,8 @@ class TestPasswordAndAccountStatus:
         create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None, documents=passwd_docs)
         entries = {e["username"]: e for e in resolve_host_users(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID)}
         assert entries["alice"]["password_status"]["preferred_value"] == "unavailable"
-        assert entries["alice"]["account_status"] == "unknown"
+        assert entries["alice"]["account_status"]["status"] == "missing"
+        assert entries["alice"]["account_status"]["preferred_value"] is None
 
     def test_password_hash_never_appears_anywhere_in_resolved_entry(self):
         db = _db()
