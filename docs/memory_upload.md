@@ -53,7 +53,7 @@ GET /api/cases/{case_id}/memory/uploads/{upload_id}
 
 The status record contains only sanitized state, byte counts, terminal failure category, and the evidence ID after completion. It allows completion to be recovered after a browser disconnect, backend response loss, or a successful file move followed by a database error. Safe reconciliation is idempotent and never overwrites when both staging and canonical files exist.
 
-The standard remote validation target is `MEMORY_UPLOAD_MAX_BYTES=5368709120`, displayed as `5 GiB`. Capacity is grouped by filesystem device:
+The default is `MEMORY_UPLOAD_MAX_BYTES=34359738368`, displayed as `32 GiB`. The startup configuration validator rejects any value below `10 GiB` (`10 * 1024^3` bytes), so operators lowering the limit have a hard floor. Capacity is grouped by filesystem device:
 
 - same-filesystem finalization requires one input image, output allowance, and one safety margin before upload
 - after that input is staged, atomic finalization requires only the remaining output allowance and safety margin

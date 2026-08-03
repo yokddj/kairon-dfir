@@ -8,6 +8,7 @@ Esta documentación describe el estado real de la plataforma. Las capacidades pa
 - [artifacts_matrix.md](artifacts_matrix.md): matriz de artefactos detectados/parseados/indexados.
 - [parser-coverage.md](parser-coverage.md): matriz estructurada de familias de parsers, formatos, campos, vistas y limitaciones.
 - [platform-architecture.md](platform-architecture.md): arquitectura multiplataforma, capabilities, registry de artefactos y flujo de UI.
+- [host-information.md](host-information.md): Host Facts y Local Accounts — cobertura por plataforma, resolución de conflictos y qué se decodifica (y qué no) de SAM/ProfileList en Windows.
 - [disk-image-ingestion.md](disk-image-ingestion.md): ingestión read-only de imágenes RAW/EWF, volúmenes, OS detection y trazabilidad.
 - [unified-evidence-ingestion.md](unified-evidence-ingestion.md): wizard guiado de 7 pasos (incluye Server Health Check) para añadir evidencia (disco, memoria, colección, carpeta o ruta existente) con una sola subida de red por evidencia.
 - [preflight-inspection.md](preflight-inspection.md): inspección de solo lectura antes de procesar — clasificación, pipeline preview, chequeo de recursos y diagnósticos accionables.
@@ -61,7 +62,6 @@ Esta documentación describe el estado real de la plataforma. Las capacidades pa
 - [artifacts.md](artifacts.md)
 - [debug_export_pack.md](debug_export_pack.md)
 - [maintenance/documentation-maintenance.md](maintenance/documentation-maintenance.md)
-- [maintenance/documentation-inventory.md](maintenance/documentation-inventory.md)
 
 ## Arquitectura y decisiones
 
@@ -71,3 +71,10 @@ Esta documentación describe el estado real de la plataforma. Las capacidades pa
 ## Roadmap
 
 - [roadmap.md](roadmap.md)
+
+## Comunidad
+
+- [../CONTRIBUTING.md](../CONTRIBUTING.md): cómo compilar, testear y proponer cambios.
+- [../CODE_OF_CONDUCT.md](../CODE_OF_CONDUCT.md): normas de la comunidad.
+- [../SECURITY.md](../SECURITY.md): política de seguridad, límite de despliegue autoalojado y reporte de vulnerabilidades.
+- [../LICENSE](../LICENSE) / [../NOTICE](../NOTICE): licencia AGPL-3.0 y avisos de terceros.

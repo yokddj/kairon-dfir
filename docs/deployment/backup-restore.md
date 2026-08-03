@@ -1,6 +1,6 @@
 # Backup and Restore
 
-Backups must be taken before beta updates, before migrations, and before deleting large evidence.
+Backups must be taken before updates, before migrations, and before deleting large evidence.
 
 ## What To Back Up
 
@@ -62,14 +62,14 @@ Files:
 
 ## OpenSearch Snapshot Strategy
 
-For private beta, the minimum supported strategy is:
+The minimum supported strategy is:
 
 1. Back up PostgreSQL.
 2. Back up `./data`.
 3. Record OpenSearch index inventory.
 4. Keep original evidence so indexed events can be regenerated if OpenSearch data is lost.
 
-For larger beta deployments, configure an OpenSearch snapshot repository and snapshot all `dfir-events-*` indices before updates.
+For larger deployments, configure an OpenSearch snapshot repository and snapshot all `dfir-events-*` indices before updates.
 
 ## Restore Order
 

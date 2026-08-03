@@ -1,6 +1,6 @@
 # Memory Analysis
 
-Memory Analysis is the planned Kairon workspace for authorized RAM and memory evidence triage.
+Memory Analysis is a Preview Kairon capability for authorized RAM and memory evidence triage. See [roadmap.md](roadmap.md) for its Preview classification and [architecture/optional-capability-boundary.md](architecture/optional-capability-boundary.md) for what "optional" means technically for this capability.
 
 The primary upload workflow is now:
 
@@ -29,10 +29,12 @@ This version includes isolated Volatility 3 profiles:
 
 It does not run YARA, dump memory regions, dump processes, dump DLLs, extract credentials, run registry plugins, perform timeline integration, or create malware findings from memory plugins. MemProcFS remains readiness-only.
 
-Memory Analysis is disabled by default:
+The Memory capability itself is mounted by default (`memory_enabled=true`), but plugin execution against a memory image is disabled by default, behind two independent gates:
 
-- `MEMORY_ANALYSIS_ENABLED=false`
-- `MEMORY_ALLOW_EXTERNAL_TOOL_EXECUTION=false`
+- `MEMORY_ANALYSIS_ENABLED=false` (default) — actual Volatility 3 / MemProcFS plugin execution stays off until explicitly enabled.
+- `MEMORY_ALLOW_EXTERNAL_TOOL_EXECUTION=false` (default) — a second, independent gate on invoking the external tool binary itself.
+
+Setting `memory_enabled=false` removes Memory's routers and startup reconciliation hooks from the running backend entirely — see the "Added"/"Changed" entries under `CHANGELOG.md`'s Unreleased section for when this activation boundary shipped.
 
 External tools such as Volatility 3 or MemProcFS are optional, external to Kairon, not bundled, and subject to their own licenses. Kairon does not auto-install them during the default Docker build, app startup, tests, or frontend build.
 
@@ -131,8 +133,8 @@ Configuration:
 - `MEMORY_ANALYSIS_ENABLED=false`
 - `MEMORY_ALLOW_EXTERNAL_TOOL_EXECUTION=false`
 - `MEMORY_UPLOAD_ENABLED=false`
-- `MEMORY_UPLOAD_MAX_BYTES=2147483648`
-- `MEMORY_UPLOAD_CHUNK_SIZE_BYTES=4194304`
+- `MEMORY_UPLOAD_MAX_BYTES=34359738368` (32 GiB default; the startup validator rejects any value below 10 GiB)
+- `MEMORY_UPLOAD_CHUNK_SIZE_BYTES=67108864` (64 MiB default)
 - `MEMORY_UPLOAD_STAGING_ROOT=`
 - `MEMORY_UPLOAD_ALLOWED_EXTENSIONS=.raw,.mem,.vmem,.dmp,.lime`
 - `VOLATILITY3_COMMAND=vol`

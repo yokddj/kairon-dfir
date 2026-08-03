@@ -14,7 +14,7 @@ This page records which parser backends are active in the current platform state
 | AmcacheParser | advanced | yes | advanced rebuild only | Produces richer fields; advanced docs are separate from default Search unless selected. |
 | AppCompatCacheParser | advanced | yes | advanced rebuild only | Produces richer Shimcache/AppCompatCache fields; interpretation remains cautious. |
 | SrumECmd | tooling_missing | no | not available | Installed tool requires Windows ESE libraries. SRUM is detected but needs a Windows parser worker. |
-| SBECmd / ShellBagsExplorer | planned | not active | none | Shellbags are pending a dedicated backend decision. |
+| SBECmd / ShellBagsExplorer | stable partial | yes | scoped user activity extraction | SBECmd CSV output is parsed and indexed. Raw `NTUSER.DAT`/`UsrClass.dat` hive parsing is not implemented — detected raw hives are surfaced as discovery-only. |
 | UsnJrnl2Csv | tooling_missing | no active backend | none | USN Journal support should not be claimed as stable unless a parsed compatible source exists. |
 
 ## Backend status meanings

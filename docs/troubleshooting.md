@@ -36,10 +36,10 @@ Comportamiento esperado de la app:
 Diagnóstico:
 
 ```bash
-curl -u admin:admin 'http://localhost:9200/_cluster/settings?include_defaults=true&pretty'
-curl -u admin:admin 'http://localhost:9200/_cluster/health?pretty'
-curl -u admin:admin 'http://localhost:9200/_cat/allocation?v'
-curl -u admin:admin 'http://localhost:9200/_cat/indices?v'
+curl -u admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD 'http://localhost:9200/_cluster/settings?include_defaults=true&pretty'
+curl -u admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD 'http://localhost:9200/_cluster/health?pretty'
+curl -u admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD 'http://localhost:9200/_cat/allocation?v'
+curl -u admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD 'http://localhost:9200/_cat/indices?v'
 ```
 
 Qué buscar:
@@ -62,7 +62,7 @@ Remediación segura:
 Ejemplos:
 
 ```bash
-curl -u admin:admin -XPUT 'http://localhost:9200/_cluster/settings' -H 'Content-Type: application/json' -d '{
+curl -u admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD -XPUT 'http://localhost:9200/_cluster/settings' -H 'Content-Type: application/json' -d '{
   "persistent": {
     "cluster.blocks.create_index": null,
     "cluster.blocks.write": null
@@ -73,7 +73,7 @@ curl -u admin:admin -XPUT 'http://localhost:9200/_cluster/settings' -H 'Content-
   }
 }'
 
-curl -u admin:admin -XPUT 'http://localhost:9200/_all/_settings' -H 'Content-Type: application/json' -d '{
+curl -u admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD -XPUT 'http://localhost:9200/_all/_settings' -H 'Content-Type: application/json' -d '{
   "index.blocks.read_only_allow_delete": null
 }'
 ```

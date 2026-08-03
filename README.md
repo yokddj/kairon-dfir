@@ -14,6 +14,7 @@
 
 <p align="center">
   <img alt="Beta" src="https://img.shields.io/badge/status-beta-7dd3fc" />
+  <img alt="License: AGPL v3" src="https://img.shields.io/badge/license-AGPL--3.0-blue" />
   <img alt="Local-first" src="https://img.shields.io/badge/deployment-local--first-8fd694" />
   <img alt="Docker" src="https://img.shields.io/badge/runtime-docker-2496ed" />
   <img alt="Python and TypeScript" src="https://img.shields.io/badge/stack-python%20%2B%20typescript-111827" />
@@ -22,7 +23,7 @@
 
 Kairon DFIR supports the analyst; it does not replace them. It provides a clear lens over forensic evidence so critical moments can be interpreted faster and with more context.
 
-The project is intended for trusted labs and controlled private-beta deployments. Evidence can contain highly sensitive data. Do not expose Kairon DFIR directly to the internet without authentication, VPN, or a protected reverse proxy.
+Kairon DFIR is intended for trusted labs and controlled, self-hosted deployments. Evidence can contain highly sensitive data. Do not expose Kairon DFIR directly to the internet without authentication, VPN, or a protected reverse proxy.
 
 ## What It Does
 
@@ -33,8 +34,9 @@ The project is intended for trusted labs and controlled private-beta deployments
 - Provides analyst workflows for Search, Artifact Views, Command History, Execution Stories, Incident Timeline, Findings, and Reports.
 - Records evidence SHA-256, size, upload metadata, integrity checks, custody events, and exportable JSON manifests. See [docs/evidence-integrity.md](docs/evidence-integrity.md).
 - Resolves evidence hosts through a canonical Host Resolution policy: memory evidence requires an explicit source host, while non-memory evidence follows its configured policy for explicit host, detected hostname, Auto Assign, or unassigned handling.
+- Surfaces per-host Host Facts (Linux identity/OS attributes today) and a cross-platform Local Accounts inventory (Linux passwd/shadow/group; Windows local accounts from the SAM hive, corroborated by ProfileList) on a dedicated Host Information page. See [docs/host-information.md](docs/host-information.md).
 - Shows a per-case Evidence Processing Queue with parser status, errors, partial results, and navigation to evidence, artifacts, Search, and memory views. See [docs/processing-queue.md](docs/processing-queue.md).
-- Includes an experimental Memory Analysis workflow for authorized RAM evidence, disabled by default and isolated from current global Search, Timeline, Detections, Findings, Reports, and SIEM.
+- Includes a Preview Memory Analysis capability for authorized RAM evidence, isolated from global Search, Timeline, Detections, Findings, Reports, and SIEM; actual Volatility/MemProcFS analysis execution is opt-in per deployment. See [docs/roadmap.md](docs/roadmap.md) for its Preview classification.
 - Keeps validation features optional and disabled by default for normal investigations.
 
 ## Quick Start
@@ -176,27 +178,27 @@ docker compose up -d --force-recreate
 
 3. Index evidence for investigation
    - Click Index evidence for investigation.
+   - Use recommended indexing for the normal path.
+   - Use Index selected artifact types only when you want a focused parse.
 
 4. Capture findings and notes
    - Open the case Findings tab.
    - Create draft notes or confirmed findings with severity, status, tags, and evidence/host links.
    - Use Add finding from Evidence Detail or Memory to prefill context.
-   - Use recommended indexing for the normal path.
-   - Use Index selected artifact types only when you want a focused parse.
 
-4. Start triage
+5. Start triage
    - Use Investigation Home.
    - Review Search.
    - Review Command History.
    - Review Artifact Views.
    - Check Startup & Persistence, MOTW/Downloaded Files, and Email Artifacts if present.
 
-5. Build findings
+6. Build findings
    - Promote relevant evidence into Findings.
    - Use correlation carefully with visible scope.
    - Add important events to Incident Timeline.
 
-6. Generate a report
+7. Generate a report
    - Use Reports after evidence and findings exist.
    - Export Markdown for review.
 
@@ -204,19 +206,20 @@ Kairon DFIR assists the analyst; final interpretation remains the analyst's resp
 
 ## Supported Evidence And Artifact Overview
 
-Coverage depends on the artifacts present in the uploaded evidence and on parser availability in the deployment.
+Coverage depends on the artifacts present in the uploaded evidence and on parser availability in the deployment. This table is a quick overview; see [docs/parser-coverage.md](docs/parser-coverage.md) for the detailed, per-parser status matrix.
 
 | Area | Examples |
 | --- | --- |
 | Event logs | EVTX, Sysmon, Security, PowerShell |
 | Filesystem | MFT, MOTW/Zone.Identifier |
 | Execution | Prefetch, Shimcache, Amcache, LNK, Jump Lists |
-| User activity | RecentDocs, UserAssist, OpenSaveMRU |
+| User activity | RecentDocs, UserAssist, OpenSaveMRU, Shellbags (parsed SBECmd CSV) |
 | Persistence | Scheduled Tasks, Services, registry autoruns, startup folders |
 | Browser/email triage | Browser history/downloads, mail stores, webmail traces |
+| Host Information | Host Facts (Linux identity/OS attributes today) and cross-platform Local Accounts (Linux + Windows SAM/ProfileList) |
 | Linux artifacts | Authentication logs, syslog, audit logs, shell history, cron, systemd, SSH, identity, sudoers, packages, network config, OS info (partial) |
 | Disk images | RAW `.dd/.img/.raw`, EWF `.E01/.Ex01`, VMDK, VHD/VHDX, QCOW/QCOW2, and VDI with partition discovery, volume inspection and OS detection |
-| Memory analysis | Planned/experimental authorized RAM evidence upload and isolated Volatility metadata/process profiles, disabled by default |
+| Memory analysis | Preview: authorized RAM evidence upload and isolated Volatility metadata/process profiles, isolated from global Search/Timeline/Detections/Findings/Reports/SIEM |
 | Investigation outputs | Findings, Incident Timeline, Reports |
 
 ## Linux Support
@@ -282,8 +285,10 @@ default route. See [its security model](docs/symbol_fetcher_security.md).
 - [Documentation index](docs/index.md)
 - [User guide](docs/user_guide.md)
 - [Feature map](docs/feature_map.md)
+- [Parser coverage (detailed status matrix)](docs/parser-coverage.md)
 - [Artifact support matrix](docs/artifacts_matrix.md)
 - [Platform architecture](docs/platform-architecture.md)
+- [Host Information (Host Facts / Local Accounts)](docs/host-information.md)
 - [Evidence platform selection](docs/evidence-platforms.md)
 - [Linux support](docs/linux-support.md)
 - [Disk image ingestion](docs/disk-image-ingestion.md)
@@ -295,21 +300,32 @@ default route. See [its security model](docs/symbol_fetcher_security.md).
 - [Managed Windows symbols](docs/memory_symbols.md)
 - [Symbol Egress Gateway](docs/symbol_egress_gateway.md)
 - [Local Operator Approval](docs/memory_symbol_operator_approval.md)
-- [Private beta deployment](docs/deployment/beta-deployment.md)
-- [Security notes](docs/SECURITY.md)
+- [Deployment guide](docs/deployment/beta-deployment.md)
+- [Security notes](SECURITY.md)
 - [Known limitations](docs/KNOWN_LIMITATIONS.md)
 - [Validation workflow](docs/validation/README.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## Known Limitations
 
-- This beta is not a hosted SaaS security boundary.
+- Kairon DFIR is self-hosted software and does not provide a complete public-facing security boundary by itself — see [SECURITY.md](SECURITY.md).
 - OST/PST content parsing is not part of the current core parser set.
 - SRUM parsing requires a Windows-capable worker or backend alternative.
 - Some advanced Windows artifacts may require additional parser workers or tooling.
-- Memory Analysis is isolated and disabled by default. The dedicated Memory Analysis upload flow can register authorized `memory_dump` evidence when enabled, and the optional memory worker can run only the supported Volatility metadata/process profiles.
+- Memory Analysis (Preview) is isolated from global Search, Timeline, Detections, Findings, Reports, and SIEM. The capability itself is mounted by default; the dedicated Memory Analysis upload flow can register authorized `memory_dump` evidence, and the optional memory worker can run only the supported Volatility metadata/process profiles once analysis execution is explicitly enabled.
+- Host Facts (identity/OS attributes) currently has Linux producers only; there is no Windows or memory-evidence Host Facts producer yet. Local Accounts already covers both Linux and Windows. See [docs/host-information.md](docs/host-information.md).
+- Windows local group membership (e.g. local Administrators) is not yet decoded from the SAM hive.
 - Validation Matrix is optional QA metadata; it is not part of normal investigations.
 - Kairon DFIR assists analysis, but final interpretation remains the analyst's responsibility.
 
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for how to build, test, and submit changes, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community expectations.
+
 ## License
 
-See [LICENSE](LICENSE).
+Kairon DFIR is licensed under the GNU Affero General Public License v3.0 (AGPL-3.0) — see [LICENSE](LICENSE). Third-party tools and dependencies retain their own licenses and are not covered by this project's license grant; see [NOTICE](NOTICE) and [SECURITY.md](SECURITY.md#third-party-tools) for detail, in particular on Eric Zimmerman Tools, which are downloaded at Docker build time and not vendored in this repository.
+
+## Author and maintainer
+
+Kairon DFIR was created and is maintained by Alejandro Gómez Román.

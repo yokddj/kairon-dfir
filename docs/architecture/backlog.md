@@ -1,6 +1,6 @@
 # Implementation Backlog — Architecture Review Follow-up
 
-Derived from the Kairon architecture review and `docs/architecture/optional-capability-boundary.md`. Every item below is independently verifiable and scoped to avoid overlap with the others. No item in this document has been implemented; this is planning output only.
+Derived from the Kairon architecture review and `docs/architecture/optional-capability-boundary.md`. Every item below is independently verifiable and scoped to avoid overlap with the others. Most of this document is still planning output only; the P0 item below is the one exception, and its status line says exactly how far it got.
 
 Priorities: **P0** — Immediate, **P1** — High, **P2** — Medium. (No P3/long-term item is opened here; the one long-term item identified by the review — a storage-path abstraction for distributed/remote workers — is intentionally not opened until the scalability ceiling decision below is made, since building it speculatively is out of scope.)
 
@@ -8,20 +8,22 @@ Priorities: **P0** — Immediate, **P1** — High, **P2** — Medium. (No P3/lon
 
 ## P0 — Memory activation boundary
 
+**Status**: Mostly done. A single `memory_enabled` flag (`backend/app/core/config.py`) now gates both router mounting and startup reconciliation hooks in `backend/app/main.py`, and an automated boot smoke test (`backend/tests/test_memory_activation_boundary.py`) proves the Core Platform is unaffected either way. The one item below still not done is `core/storage.py`'s unconditional import of `services.memory.*`.
+
 **Goal**: make Memory's activation genuinely optional at the process level.
 
 **Scope**:
-- Introduce or consolidate one top-level `memory_enabled` authority (single settings flag; existing narrower flags may remain underneath it but must not act as independent master switches).
-- Conditionally import and mount Memory's routers (`routes_memory`, `routes_memory_experimental`, `routes_memory_recovery`) only when the flag is enabled.
-- Skip Memory's startup reconciliation hooks (batch reconciliation, symbol readiness backfill/reconciliation, upload lifecycle reconciliation, upload session cleanup) when the flag is disabled.
-- Verify, with an automated boot smoke test, that the backend starts and fully serves the core investigation loop (Case/Evidence/Host, ingestion, Search/Timeline, Findings/Reports) with Memory disabled.
+- Introduce or consolidate one top-level `memory_enabled` authority (single settings flag; existing narrower flags may remain underneath it but must not act as independent master switches). **Done.**
+- Conditionally import and mount Memory's routers (`routes_memory`, `routes_memory_experimental`, `routes_memory_recovery`) only when the flag is enabled. **Done** — see `_configure_memory_capability` in `backend/app/main.py`.
+- Skip Memory's startup reconciliation hooks (batch reconciliation, symbol readiness backfill/reconciliation, upload lifecycle reconciliation, upload session cleanup) when the flag is disabled. **Done.**
+- Verify, with an automated boot smoke test, that the backend starts and fully serves the core investigation loop (Case/Evidence/Host, ingestion, Search/Timeline, Findings/Reports) with Memory disabled. **Done** — `backend/tests/test_memory_activation_boundary.py`.
 
 **Explicitly out of scope for this item**:
 - No ORM/schema changes (see the separate Evidence/Memory ORM investigation below).
 - `core/opensearch.py` is not touched here (see the separate Core OpenSearch item below) — its imports are a general core-purity concern, unrelated to Memory's minimum activation boundary.
-- `core/storage.py`'s import of `services.memory.*` is in scope for this item, since it directly blocks activation-level optionality.
+- `core/storage.py`'s import of `services.memory.*` is in scope for this item, since it directly blocks activation-level optionality. **Not done** — `core/storage.py` still imports `app.services.memory.upload_capacity` and `app.services.memory.evidence_access` unconditionally at module level.
 
-**Definition of done**: checklist items 1, 2, and 5 of the Optional Capability Boundary verification checklist (§13) pass.
+**Definition of done**: checklist items 1, 2, and 5 of the Optional Capability Boundary verification checklist (§13) pass. Items 1, 2, and 5 pass; item 3 (no `core/` file imports the capability's package) does not yet, because of the `core/storage.py` import above.
 
 ---
 

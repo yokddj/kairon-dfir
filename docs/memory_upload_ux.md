@@ -24,14 +24,15 @@ Memory upload and memory analysis are separate steps. Upload may be available wh
 
 ## Displayed Limits
 
-The UI displays the configured maximum memory upload size. The standard remote validation target is:
+The UI displays the configured maximum memory upload size. The default is:
 
-- `MEMORY_UPLOAD_MAX_BYTES=5368709120`
-- displayed as `5 GiB`
+- `MEMORY_UPLOAD_MAX_BYTES=34359738368`
+- displayed as `32 GiB`
+- the startup configuration validator rejects any operator-configured value below `10 GiB`
 
 The practical maximum also depends on server storage. The upload readiness check reports safe capacity numbers only; it does not expose host paths, mount names, or internal directories.
 
-For a selected file, Kairon requires enough available capacity for staging, final evidence storage, output allowance, and a safety margin. Near the 5 GiB limit, operators should keep at least 12 GiB free.
+For a selected file, Kairon requires enough available capacity for staging, final evidence storage, output allowance, and a safety margin — see [memory_upload.md](memory_upload.md) for the exact per-filesystem capacity formula. Operators should keep free space well above the configured limit to cover that margin, not just the image size itself.
 
 ## Privacy
 
