@@ -4,6 +4,8 @@ from app.ingest.raw_parsers.amcache_parser import amcache_native_available
 from app.ingest.raw_parsers.evtx_parser import evtx_native_available
 from app.ingest.raw_parsers.errors import RawParserUnsupportedError
 from app.ingest.raw_parsers.registry import get_raw_parsers
+from app.ingest.raw_parsers.profile_list_parser import windows_profile_list_native_available
+from app.ingest.raw_parsers.sam_identity_parser import windows_sam_identity_native_available
 from app.ingest.raw_parsers.service_parser import windows_service_native_available
 from app.ingest.raw_parsers.shimcache_parser import shimcache_native_available
 
@@ -57,6 +59,22 @@ RAW_PARSEABLE = {
         "source_tool": "native_windows_service",
         "source_format": "registry_hive",
     },
+    "windows_sam_identity": {
+        "parser": "windows_sam_identity",
+        "parser_status": "parsed_native",
+        "supported": True,
+        "reason": "Windows local account inventory raw SAM hive can be parsed natively.",
+        "source_tool": "native_registry",
+        "source_format": "registry_hive",
+    },
+    "windows_profile_list": {
+        "parser": "windows_profile_list",
+        "parser_status": "parsed_native",
+        "supported": True,
+        "reason": "Windows ProfileList raw SOFTWARE hive can be parsed natively.",
+        "source_tool": "native_registry",
+        "source_format": "registry_hive",
+    },
 }
 
 
@@ -99,6 +117,24 @@ def describe_raw_candidate(path: str | Path, artifact_type: str) -> dict | None:
             "supported": False,
             "reason": "SYSTEM raw hive detected, but native Windows Services parsing is not enabled in this build. Upload RECmd parsed output or enable the native registry hive parser dependency.",
             "source_tool": "native_windows_service",
+            "source_format": "registry_hive",
+        }
+    if artifact_key == "windows_sam_identity" and not windows_sam_identity_native_available():
+        return {
+            "parser": "windows_sam_identity",
+            "parser_status": "detected_not_implemented",
+            "supported": False,
+            "reason": "SAM raw hive detected, but native registry hive parsing is not enabled in this build. Enable the native registry hive parser dependency to derive the local account inventory from it.",
+            "source_tool": "native_registry",
+            "source_format": "registry_hive",
+        }
+    if artifact_key == "windows_profile_list" and not windows_profile_list_native_available():
+        return {
+            "parser": "windows_profile_list",
+            "parser_status": "detected_not_implemented",
+            "supported": False,
+            "reason": "SOFTWARE raw hive detected, but native registry hive parsing is not enabled in this build. Enable the native registry hive parser dependency to derive ProfileList corroborating evidence from it.",
+            "source_tool": "native_registry",
             "source_format": "registry_hive",
         }
     return descriptor

@@ -87,15 +87,17 @@ function userEntry(overrides: Partial<CaseHostUsersResponse["users"][number]> = 
     is_synthetic_username: false,
     identity: {
       uid: fieldResolution("uid", { status: "observed", preferred_value: "1000", observations: [userObservation()] }),
+      id_kind: fieldResolution("id_kind", { status: "observed", preferred_value: "uid" }),
       primary_gid: fieldResolution("primary_gid", { status: "observed", preferred_value: "1000" }),
       gecos: fieldResolution("gecos", { status: "missing" }),
       home: fieldResolution("home", { status: "observed", preferred_value: "/home/alice" }),
       shell: fieldResolution("shell", { status: "observed", preferred_value: "/bin/bash" }),
     },
+    attributes: {},
     primary_group_name: null,
     secondary_groups: [],
     password_status: fieldResolution("password_status", { status: "missing", preferred_value: "unavailable" }),
-    account_status: "unknown",
+    account_status: fieldResolution("account_status", { status: "missing", preferred_value: null }),
     last_login: null,
     shell_classification: "login",
     effective_sudo: { has_sudo: false, via: null, granting_groups: [], observations: [] },
@@ -324,13 +326,59 @@ describe("HostInformationPage", () => {
       getCaseHostUsersMock.mockResolvedValue(usersResponse([
         userEntry({
           username: "backdoor",
-          account_status: "locked",
+          account_status: fieldResolution("account_status", { status: "observed", preferred_value: "locked" }),
           password_status: fieldResolution("password_status", { status: "observed", preferred_value: "locked" }),
         }),
       ]));
       renderPage();
       const statusPill = await screen.findByTestId("user-account-status");
       expect(statusPill).toHaveTextContent("Locked");
+    });
+
+    it("renders a disabled SAM account with the Disabled status pill", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([
+        userEntry({
+          username: "Administrator",
+          account_status: fieldResolution("account_status", { status: "observed", preferred_value: "disabled" }),
+        }),
+      ]));
+      renderPage();
+      const statusPill = await screen.findByTestId("user-account-status");
+      expect(statusPill).toHaveTextContent("Disabled");
+    });
+
+    it("labels a Windows account's identifier as RID instead of UID, with no platform branch of its own", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([
+        userEntry({
+          username: "bob",
+          identity: {
+            ...userEntry().identity,
+            uid: fieldResolution("uid", { status: "observed", preferred_value: "1001" }),
+            id_kind: fieldResolution("id_kind", { status: "observed", preferred_value: "rid" }),
+            primary_gid: fieldResolution("primary_gid", { status: "missing" }),
+            shell: fieldResolution("shell", { status: "missing" }),
+          },
+          attributes: {
+            rid: fieldResolution("rid", { status: "observed", preferred_value: "1001" }),
+            sid: fieldResolution("sid", { status: "observed", preferred_value: "S-1-5-21-1-2-3-1001" }),
+          },
+        }),
+      ]));
+      renderPage();
+      const uidCell = await screen.findByTestId("user-uid");
+      expect(uidCell).toHaveTextContent("1001");
+      expect(uidCell).toHaveTextContent("RID");
+      // Shell/Primary group are POSIX-only -- an all-Windows list must not
+      // render those columns at all (never a fake "unknown" value).
+      expect(screen.queryByTestId("user-shell")).not.toBeInTheDocument();
+      expect(screen.queryByText("Primary group")).not.toBeInTheDocument();
+
+      await userEvent.click(screen.getByTestId("user-expand-toggle"));
+      const fieldDetails = await screen.findAllByTestId("user-field-detail");
+      const ridDetail = fieldDetails.find((el) => el.dataset.field === "rid");
+      const sidDetail = fieldDetails.find((el) => el.dataset.field === "sid");
+      expect(ridDetail).toHaveTextContent("1001");
+      expect(sidDetail).toHaveTextContent("S-1-5-21-1-2-3-1001");
     });
 
     it("expands to show secondary groups and per-field provenance, with conflicts surfaced not hidden", async () => {

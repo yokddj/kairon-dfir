@@ -190,10 +190,11 @@ function FactGroupCard({ caseId, hostId, group, factsByType }: { caseId: string;
   );
 }
 
-const ACCOUNT_STATUS_LABEL: Record<string, string> = { locked: "Locked", active: "Active", unknown: "Unknown" };
+const ACCOUNT_STATUS_LABEL: Record<string, string> = { locked: "Locked", active: "Active", disabled: "Disabled", unknown: "Unknown" };
 const ACCOUNT_STATUS_STYLES: Record<string, string> = {
   locked: "border-danger/40 bg-danger/10 text-danger",
   active: "border-mint/40 bg-mint/10 text-mint",
+  disabled: "border-line bg-abyss/60 text-muted",
   unknown: "border-line bg-abyss/40 text-muted",
 };
 const PASSWORD_STATUS_LABEL: Record<string, string> = { locked: "Locked", set: "Password set", empty: "No password required", unavailable: "Unavailable" };
@@ -248,17 +249,25 @@ function UserFieldDetail({ caseId, hostId, label, resolution }: { caseId: string
   );
 }
 
-function UserRow({ caseId, hostId, entry, expanded, onToggle }: { caseId: string; hostId: string; entry: HostUserEntry; expanded: boolean; onToggle: () => void }) {
+function UserRow({
+  caseId, hostId, entry, expanded, onToggle, showPrimaryGroup, showShell, columnCount,
+}: {
+  caseId: string; hostId: string; entry: HostUserEntry; expanded: boolean; onToggle: () => void;
+  showPrimaryGroup: boolean; showShell: boolean; columnCount: number;
+}) {
   const { identity } = entry;
   const primaryGroupDisplay = entry.primary_group_name || identity.primary_gid.preferred_value;
-  const hasConflict = [...Object.values(identity), entry.password_status].some((field) => field.status === "conflicting");
+  const idLabel = identity.id_kind.preferred_value === "rid" ? "RID" : identity.id_kind.preferred_value === "uid" ? "UID" : "ID";
+  const accountStatusValue = entry.account_status.preferred_value || "unknown";
+  const attributeEntries = Object.entries(entry.attributes);
+  const hasConflict = [...Object.values(identity), entry.password_status, entry.account_status].some((field) => field.status === "conflicting");
 
   return (
     <>
-      <tr className="align-top" data-testid="user-row" data-username={entry.username} data-account-status={entry.account_status}>
+      <tr className="align-top" data-testid="user-row" data-username={entry.username} data-account-status={accountStatusValue}>
         <td className="px-4 py-3">
           {entry.is_synthetic_username ? (
-            <span className="font-mono text-sm italic text-muted" title="No passwd entry matched this uid">
+            <span className="font-mono text-sm italic text-muted" title="No passwd/SAM entry matched this identifier">
               {entry.username}
             </span>
           ) : (
@@ -270,20 +279,31 @@ function UserRow({ caseId, hostId, entry, expanded, onToggle }: { caseId: string
           {hasConflict ? <p className="mt-0.5 text-[11px] text-amber">Conflicting sources</p> : null}
         </td>
         <td className="px-4 py-3 font-mono text-xs text-muted" data-testid="user-uid">
-          {identity.uid.preferred_value || <span className="italic text-muted/70">unknown</span>}
+          {identity.uid.preferred_value ? (
+            <>
+              {identity.uid.preferred_value}
+              <span className="ml-1 text-[9px] uppercase tracking-[0.1em] text-muted/60">{idLabel}</span>
+            </>
+          ) : (
+            <span className="italic text-muted/70">unknown</span>
+          )}
         </td>
-        <td className="px-4 py-3 text-xs text-muted">{primaryGroupDisplay || <span className="italic text-muted/70">unknown</span>}</td>
+        {showPrimaryGroup ? (
+          <td className="px-4 py-3 text-xs text-muted">{primaryGroupDisplay || <span className="italic text-muted/70">unknown</span>}</td>
+        ) : null}
         <td className="px-4 py-3 font-mono text-xs text-muted">{identity.home.preferred_value || <span className="italic text-muted/70">unknown</span>}</td>
-        <td className="px-4 py-3 font-mono text-xs text-muted" data-testid="user-shell">
-          {identity.shell.preferred_value || <span className="italic text-muted/70">unknown</span>}
-          {identity.shell.preferred_value && entry.shell_classification === "non_login" ? (
-            <span className="ml-1.5 rounded-full border border-line px-1.5 py-0.5 text-[9px] uppercase tracking-[0.1em] text-muted/70">non-login</span>
-          ) : null}
-        </td>
+        {showShell ? (
+          <td className="px-4 py-3 font-mono text-xs text-muted" data-testid="user-shell">
+            {identity.shell.preferred_value || <span className="italic text-muted/70">unknown</span>}
+            {identity.shell.preferred_value && entry.shell_classification === "non_login" ? (
+              <span className="ml-1.5 rounded-full border border-line px-1.5 py-0.5 text-[9px] uppercase tracking-[0.1em] text-muted/70">non-login</span>
+            ) : null}
+          </td>
+        ) : null}
         <td className="px-4 py-3">
           <div className="flex flex-wrap items-center gap-1.5">
-            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${ACCOUNT_STATUS_STYLES[entry.account_status]}`} data-testid="user-account-status">
-              {ACCOUNT_STATUS_LABEL[entry.account_status]}
+            <span className={`rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${ACCOUNT_STATUS_STYLES[accountStatusValue]}`} data-testid="user-account-status">
+              {ACCOUNT_STATUS_LABEL[accountStatusValue]}
             </span>
             {entry.effective_sudo.has_sudo ? (
               <span className="rounded-full border border-amber/40 bg-amber/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] text-amber" data-testid="user-sudo-badge">
@@ -310,13 +330,16 @@ function UserRow({ caseId, hostId, entry, expanded, onToggle }: { caseId: string
       </tr>
       {expanded ? (
         <tr>
-          <td colSpan={8} className="border-t border-line/70 bg-abyss/30 px-4 py-4" data-testid="user-detail-panel">
+          <td colSpan={columnCount} className="border-t border-line/70 bg-abyss/30 px-4 py-4" data-testid="user-detail-panel">
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-              <UserFieldDetail caseId={caseId} hostId={hostId} label="UID" resolution={identity.uid} />
-              <UserFieldDetail caseId={caseId} hostId={hostId} label="Primary GID" resolution={identity.primary_gid} />
+              <UserFieldDetail caseId={caseId} hostId={hostId} label={idLabel} resolution={identity.uid} />
+              {showPrimaryGroup ? <UserFieldDetail caseId={caseId} hostId={hostId} label="Primary GID" resolution={identity.primary_gid} /> : null}
               <UserFieldDetail caseId={caseId} hostId={hostId} label="Home directory" resolution={identity.home} />
-              <UserFieldDetail caseId={caseId} hostId={hostId} label="Login shell" resolution={identity.shell} />
+              {showShell ? <UserFieldDetail caseId={caseId} hostId={hostId} label="Login shell" resolution={identity.shell} /> : null}
               <UserFieldDetail caseId={caseId} hostId={hostId} label="Full name" resolution={identity.gecos} />
+              {attributeEntries.map(([key, resolution]) => (
+                <UserFieldDetail key={key} caseId={caseId} hostId={hostId} label={key.replace(/_/g, " ")} resolution={resolution} />
+              ))}
               <div className="rounded-xl border border-line/70 bg-abyss/50 px-3 py-2" data-testid="user-password-status">
                 <span className="text-xs uppercase tracking-[0.12em] text-muted">Password status</span>
                 <p className="mt-1 text-sm text-ink">{PASSWORD_STATUS_LABEL[entry.password_status.preferred_value || "unavailable"]}</p>
@@ -411,7 +434,7 @@ function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostI
       if (sortKey === "username") comparison = a.username.localeCompare(b.username);
       else if (sortKey === "uid") comparison = Number(a.identity.uid.preferred_value ?? Number.MAX_SAFE_INTEGER) - Number(b.identity.uid.preferred_value ?? Number.MAX_SAFE_INTEGER);
       else if (sortKey === "last_login") comparison = (a.last_login?.timestamp ?? "").localeCompare(b.last_login?.timestamp ?? "");
-      else if (sortKey === "status") comparison = a.account_status.localeCompare(b.account_status);
+      else if (sortKey === "status") comparison = (a.account_status.preferred_value || "").localeCompare(b.account_status.preferred_value || "");
       return sortDirection === "asc" ? comparison : -comparison;
     });
     return sorted;
@@ -423,6 +446,14 @@ function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostI
       {sortKey === key ? <span>{sortDirection === "asc" ? "↑" : "↓"}</span> : null}
     </button>
   );
+
+  // Column visibility is data-driven, not platform-branched: Primary
+  // group/Shell are POSIX-only concepts (no Windows producer ever
+  // populates them), so an all-Windows host's table simply omits those
+  // columns instead of showing "unknown" in every row.
+  const showPrimaryGroup = users.some((entry) => Boolean(entry.primary_group_name || entry.identity.primary_gid.preferred_value));
+  const showShell = users.some((entry) => Boolean(entry.identity.shell.preferred_value));
+  const columnCount = 5 + (showPrimaryGroup ? 1 : 0) + (showShell ? 1 : 0);
 
   return (
     <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel" data-testid="user-inventory-section">
@@ -450,10 +481,10 @@ function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostI
             <thead className="border-b border-line bg-abyss/70 font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
               <tr>
                 <th className="px-4 py-3">{sortButton("username", "Username")}</th>
-                <th className="px-4 py-3">{sortButton("uid", "UID")}</th>
-                <th className="px-4 py-3">Primary group</th>
+                <th className="px-4 py-3">{sortButton("uid", "ID")}</th>
+                {showPrimaryGroup ? <th className="px-4 py-3">Primary group</th> : null}
                 <th className="px-4 py-3">Home</th>
-                <th className="px-4 py-3">Shell</th>
+                {showShell ? <th className="px-4 py-3">Shell</th> : null}
                 <th className="px-4 py-3">{sortButton("status", "Status")}</th>
                 <th className="px-4 py-3">{sortButton("last_login", "Last login")}</th>
                 <th className="px-4 py-3" />
@@ -461,7 +492,17 @@ function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostI
             </thead>
             <tbody className="divide-y divide-line/70">
               {filtered.map((entry) => (
-                <UserRow key={entry.username} caseId={caseId} hostId={hostId} entry={entry} expanded={expandedUsernames.has(entry.username)} onToggle={() => toggleExpanded(entry.username)} />
+                <UserRow
+                  key={entry.username}
+                  caseId={caseId}
+                  hostId={hostId}
+                  entry={entry}
+                  expanded={expandedUsernames.has(entry.username)}
+                  onToggle={() => toggleExpanded(entry.username)}
+                  showPrimaryGroup={showPrimaryGroup}
+                  showShell={showShell}
+                  columnCount={columnCount}
+                />
               ))}
             </tbody>
           </table>

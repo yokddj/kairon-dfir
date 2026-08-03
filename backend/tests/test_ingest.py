@@ -8713,10 +8713,15 @@ def test_velociraptor_uploads_detected_not_parsed(tmp_path: Path) -> None:
     (uploads / "Users/alex/AppData/Local/Google/Chrome/User Data/Default/History").write_bytes(b"placeholder")
     discovery = discover_velociraptor_evidences(tmp_path)
     types = {candidate.artifact_type for candidate in discovery.candidates if candidate.supported}
-    assert {"evtx_raw", "prefetch_raw", "chromium_history"}.issubset(types)
+    # The bare SOFTWARE hive at Windows/System32/config/SOFTWARE is now a
+    # supported windows_profile_list candidate (see
+    # app.ingest.raw_parsers.profile_list_parser) instead of the generic
+    # unsupported "registry_software_hive_usb_candidate" placeholder it
+    # used to fall through to -- a deliberate, foreseeable consequence of
+    # this producer's addition, not a regression.
+    assert {"evtx_raw", "prefetch_raw", "chromium_history", "windows_profile_list"}.issubset(types)
     unsupported = list_velociraptor_upload_artifacts(tmp_path)
-    assert {artifact["artifact_type"] for artifact in unsupported} == {"registry_software_hive_usb_candidate"}
-    assert all(artifact["status"] == "detected_not_parsed" for artifact in unsupported)
+    assert unsupported == []
 
 
 def test_raw_parser_router_describes_native_evtx_and_lnk() -> None:
@@ -10207,6 +10212,31 @@ def test_list_velociraptor_artifacts_powershell_only_selection_excludes_evtx(tmp
     assert artifacts
     assert {artifact["artifact_type"] for artifact in artifacts} == {"powershell"}
     assert all(artifact["parser"] != "evtx_raw" for artifact in artifacts)
+
+
+def test_list_velociraptor_artifacts_builds_sam_and_profile_list_jobs(tmp_path: Path) -> None:
+    # Regression test: discovery correctly classifying a candidate is not
+    # enough -- list_velociraptor_artifacts() (the candidate -> artifact
+    # conversion step actually used during a real reprocess/ingest run)
+    # needs its own branch per category, or a selected-and-supported
+    # candidate silently never becomes a processed artifact at all.
+    uploads = tmp_path / "uploads" / "auto" / "C%3A"
+    sam_path = uploads / "Windows/System32/config/SAM"
+    software_path = uploads / "Windows/System32/config/SOFTWARE"
+    sam_path.parent.mkdir(parents=True, exist_ok=True)
+    software_path.parent.mkdir(parents=True, exist_ok=True)
+    sam_path.write_bytes(b"fake")
+    software_path.write_bytes(b"fake")
+    discovery = discover_velociraptor_evidences(tmp_path)
+    selected = [candidate.as_dict() for candidate in discovery.candidates if candidate.artifact_type in {"windows_sam_identity", "windows_profile_list"}]
+    assert {candidate["artifact_type"] for candidate in selected} == {"windows_sam_identity", "windows_profile_list"}
+    artifacts = list_velociraptor_artifacts(tmp_path, selected_candidates=selected)
+    parsers = {artifact["parser"] for artifact in artifacts}
+    types = {artifact["artifact_type"] for artifact in artifacts}
+    assert "windows_sam_identity" in parsers
+    assert "windows_profile_list" in parsers
+    assert "windows_sam_identity" in types
+    assert "windows_profile_list" in types
 
 
 def test_discover_velociraptor_system_offers_service_and_scheduled_task_keeps_priority(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
