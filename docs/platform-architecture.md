@@ -94,6 +94,10 @@ Important behaviors:
 - Nested archives such as `tar.gz -> tar` are unwrapped during ingest.
 - Host fallback can come from `hostnamectl.txt` when `/etc/hostname` is missing.
 
+## Host Information
+
+Normalized observations from Linux and Windows producers also feed a platform-agnostic Host Facts / Local Accounts layer, consumed by the per-host Host Information UI. See [host-information.md](host-information.md) for the fact-type/platform coverage matrix, conflict resolution model, and what is and isn't decoded from the Windows SAM/ProfileList hives today.
+
 ## Parser Dispatch
 
 Parser registration remains plugin-based in `backend/app/parsers/*` with explicit imports in `backend/app/parsers/__init__.py`.

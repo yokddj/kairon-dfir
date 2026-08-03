@@ -1,0 +1,22 @@
+Kairon DFIR
+
+Copyright (C) 2026 Alejandro Gómez Román
+
+Kairon DFIR is licensed under the GNU Affero General Public License, version 3 or any later version.
+
+Third-Party Components
+-----------------------
+
+The following third-party tools and dependencies retain their own
+licenses and are not covered by Kairon DFIR's own AGPL-3.0 license
+grant. Review each one's license terms independently before building
+or redistributing a Kairon DFIR image or artifact that bundles them.
+
+- Eric Zimmerman Tools are downloaded during the backend Docker build
+  and are not vendored in this repository.
+- OpenSearch, PostgreSQL, Redis, FastAPI, React, and other runtime and
+  build dependencies retain their own licenses; see each project's own
+  repository for terms.
+
+See SECURITY.md for further detail on third-party tooling and
+deployment security guidance.

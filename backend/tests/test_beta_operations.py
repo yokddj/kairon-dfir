@@ -38,10 +38,10 @@ def test_beta_deployment_docs_exist_and_cover_operational_basics() -> None:
 
 def test_release_docs_and_license_exist() -> None:
     expected = {
-        "README.md": ("private-beta", "Do not expose", ".env.example"),
+        "README.md": ("self-hosted", "Do not expose", ".env.example"),
         "CHANGELOG.md": ("Private Beta Candidate", "Known Limitations"),
-        "LICENSE": ("Private Beta Evaluation", "Third-party dependencies"),
-        "docs/SECURITY.md": ("Do not expose", "Never commit `.env`"),
+        "LICENSE": ("GNU AFFERO GENERAL PUBLIC LICENSE", "Version 3"),
+        "SECURITY.md": ("Do not expose", "Never commit `.env`"),
         "docs/KNOWN_LIMITATIONS.md": ("SRUM", "Shellbags", "Outlook"),
         "docs/BETA_NOTES.md": ("What To Test", "Reporting Feedback"),
     }

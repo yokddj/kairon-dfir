@@ -107,18 +107,18 @@ Applying the checklist to Memory as it stands today (per the architecture review
 
 | Checklist item | Status |
 |---|---|
-| Single activation flag | Not yet — no master `memory_enabled` flag exists; only narrower behavioral flags. |
-| Backend starts core loop with capability disabled | Not yet — routers and multiple startup reconciliation calls are unconditional in `main.py`. |
+| Single activation flag | **Done** — `settings.memory_enabled` (`backend/app/core/config.py`) is the sole master flag; narrower behavioral flags (`memory_analysis_enabled`, `memory_allow_external_tool_execution`, ...) sit underneath it and do not act as independent master switches. |
+| Backend starts core loop with capability disabled | **Done** — routers and every startup reconciliation call are now conditional on `memory_enabled` in `main.py`, verified by an automated boot smoke test (`backend/tests/test_memory_activation_boundary.py`). |
 | No `core/` import of the capability | Partially — `core/storage.py` imports `services.memory.*` directly. (`core/opensearch.py`'s unrelated imports from `ingest.fingerprints`/`services.host_identity` are a separate, general core-purity concern, not part of this boundary — see the dedicated backlog item.) |
 | No generic/shared service imports the capability | Partially — two files (`services/investigation_memory.py`, `services/evidence_memory_workflow.py`) sit outside `services/memory/` while depending on its internals. |
-| Guarded composition point | Not yet. |
+| Guarded composition point | **Done** — router and startup-hook imports are local imports inside `_configure_memory_capability`/the `memory_enabled` branches in `main.py`, not top-level unconditional imports. |
 | Worker/queue ownership | **Already satisfied** — Memory's worker runs as its own process on its own named queue, separate from the core queues. |
 | Deployment-profile behavior | **Already satisfied** — Memory, its native-probe worker, and its symbol infrastructure each have their own Compose profile. |
 | Package perimeter | Mostly satisfied, with the two exceptions noted above. |
 | Database relationship policy | Open — `Evidence` carries `relationship()` fields into Memory models; whether this is legitimate ownership metadata or a functional dependency is exactly the open question §11 defers to a dedicated investigation. |
 | Frontend reflects backend capability state | Not yet — Memory's navigation and routes render unconditionally regardless of backend state, though they are already correctly code-split via lazy loading. |
 
-Memory already gets the *runtime infrastructure* half of this policy right (workers, queues, deployment profiles). What remains is closing the *code-boundary* half (imports, composition, and the ORM question) — a bounded, well-understood set of changes, not a redesign.
+Memory already gets the *runtime infrastructure* half of this policy right (workers, queues, deployment profiles), and the activation boundary itself (flag, composition point, boot-disabled smoke test) now also passes. What remains is the narrower *import-boundary* half — `core/storage.py`'s import, the two service files outside `services/memory/`, the ORM question, and the frontend capability-state consumer — a bounded, well-understood set of changes, not a redesign.
 
 ## 15. Applicability to future AI work
 

@@ -1,6 +1,6 @@
 # Update and Rollback
 
-Use this process for private beta updates.
+Use this process for Kairon DFIR updates.
 
 ## Pre-Update Checklist
 

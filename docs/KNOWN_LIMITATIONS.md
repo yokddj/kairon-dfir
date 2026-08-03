@@ -1,11 +1,11 @@
 # Known Limitations
 
-This document describes current private-beta limitations. It is intentionally explicit so beta testers do not mistake missing tooling for failed evidence.
+This document describes current known limitations. It is intentionally explicit so users do not mistake missing tooling for failed evidence.
 
 ## Parser / Artifact Coverage
 
 - SRUM is detected, but raw SRUM parsing on Linux is `tooling_missing` because `SrumECmd` requires Windows ESE libraries. A Windows parser worker is planned.
-- Shellbags parsing is pending a supported backend.
+- Shellbags: `SBECmd_Output.csv` (parsed CSV) is supported and indexed. Direct parsing of raw `NTUSER.DAT`/`UsrClass.dat` hives is not implemented; detected raw hives surface as discovery-only.
 - Outlook/OST/PST and rich email-message parsing are pending. Current email-related analysis is based on filesystem, browser, MFT, MOTW and user-activity evidence that is already indexed.
 - PECmd is available, but raw Prefetch parsing with PECmd is disabled on Linux when Windows decompression support is required. The internal Prefetch backend remains active.
 - EZ Tools for LNK, Jumplist, Amcache and Shimcache are advanced rebuild backends, not default activation for every case.
@@ -23,7 +23,7 @@ This document describes current private-beta limitations. It is intentionally ex
 
 ## Deployment
 
-- The private beta should run behind VPN, private network or authenticated reverse proxy.
+- Kairon DFIR should run behind VPN, private network or authenticated reverse proxy.
 - The app does not provide a complete public-facing security boundary by itself.
 - Backups require PostgreSQL and application data at minimum. OpenSearch snapshots are recommended for larger deployments.
 

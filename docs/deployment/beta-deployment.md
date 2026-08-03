@@ -1,10 +1,10 @@
-# Beta Deployment Guide
+# Deployment Guide
 
-This guide describes a controlled private-beta deployment of Kairon DFIR. It is not a public Internet deployment guide.
+This guide describes a controlled, self-hosted deployment of Kairon DFIR. It is not a guide for exposing the stack directly to the public Internet — see [`/SECURITY.md`](../../SECURITY.md) for the deployment security boundary.
 
 ## Scope
 
-The beta stack runs:
+The stack runs:
 
 - `frontend` on port `5173`
 - `backend` on port `8000`
@@ -19,7 +19,7 @@ Rules, reports, parser rebuilds and SRUM Windows-worker parsing are not part of 
 ## Requirements
 
 - Docker and Docker Compose plugin.
-- 4 CPU cores minimum for small beta use; 8+ preferred for multi-host evidence.
+- 4 CPU cores minimum for small deployments; 8+ preferred for multi-host evidence.
 - 16 GB RAM minimum; 32 GB preferred when using full MFT and OpenSearch.
 - Persistent disk sized for evidence plus indexed data. For validation or training evidence, size storage according to the dataset owner's guidance.
 - Private network access only. Do not expose the stack directly to the Internet.
@@ -97,7 +97,7 @@ The in-app System page and `/api/system/status` expose the same operational comp
 
 ## Security Notes
 
-The beta stack is intended for a trusted private network, VPN, or authenticated reverse proxy.
+The stack is intended for a trusted private network, VPN, or authenticated reverse proxy.
 
 Do not expose these ports directly to the public Internet:
 
@@ -108,7 +108,7 @@ Do not expose these ports directly to the public Internet:
 - `5432`
 - `6379`
 
-If authentication is not configured at the reverse proxy, the deployment is not suitable for public access.
+If authentication is not configured at the reverse proxy, the deployment is not suitable for exposure beyond a trusted network.
 
 Recommended reverse proxy controls:
 

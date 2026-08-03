@@ -33,6 +33,8 @@ Current backend status is summarized in [parser_backends.md](parser_backends.md)
 
 These are scoped user activity extractions from NTUSER.DAT/UsrClass.dat where data exists.
 
+- Shellbags: SBECmd CSV output is parsed and active, scoped alongside the RECmd User Activity extractions above.
+
 ## Advanced-only EZ Tool rebuilds
 
 - LNK: LECmd.
@@ -46,7 +48,7 @@ Advanced docs are indexed as advanced variants and hidden from default Search un
 
 - PECmd for raw Prefetch: disabled on Linux because raw `.pf` parsing requires Windows decompression support in this environment.
 - SrumECmd: installed but requires Windows ESE libraries; SRUM is `tooling_missing` until a Windows parser worker exists.
-- SBECmd/ShellBagsExplorer: not active in this deployment; Shellbags raw hives are pending.
+- Shellbags raw hive parsing (direct `NTUSER.DAT`/`UsrClass.dat` decoding, as opposed to parsed SBECmd CSV): not implemented; detected raw hives surface as discovery-only.
 - UsnJrnl2Csv: no active backend.
 
 ## Evidence status behavior

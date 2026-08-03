@@ -1,8 +1,8 @@
-# Beta Notes
+# Evaluation Guide
 
-## Intended Audience
+## Who This Is For
 
-This beta is for controlled DFIR labs, validation runs and private tester environments. It is not a hosted SaaS or public Internet deployment.
+This guide is for anyone trying Kairon DFIR for the first time — in a personal lab, a training environment, or a real investigation. Kairon DFIR is self-hosted software, not a hosted SaaS; see [`/SECURITY.md`](../SECURITY.md) for the deployment security boundary before exposing it beyond your own machine.
 
 ## What To Test
 
@@ -22,7 +22,7 @@ This beta is for controlled DFIR labs, validation runs and private tester enviro
 
 ## Reporting Feedback
 
-Useful beta feedback includes:
+Useful feedback includes:
 
 - exact route/action/query;
 - expected vs actual behavior;
@@ -30,4 +30,4 @@ Useful beta feedback includes:
 - sanitized logs;
 - approximate evidence size and artifact type.
 
-Avoid sharing raw evidence or screenshots with sensitive values.
+Avoid sharing raw evidence or screenshots with sensitive values. See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for how to open an issue or pull request.
