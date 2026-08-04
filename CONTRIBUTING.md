@@ -26,7 +26,7 @@ npm test
 npm run build
 ```
 
-See [`docs/testing.md`](docs/testing.md) for the full test suite breakdown, targeted test suites per feature area, and what each covers.
+See [`docs/testing.md`](./docs/operations/testing.md) for the full test suite breakdown, targeted test suites per feature area, and what each covers.
 
 ## Before opening a pull request
 
@@ -53,7 +53,7 @@ Your PR needs to pass the CI checks the repository already enforces:
 
 ## Adding or changing a parser
 
-Kairon's ingestion pipeline is registry-driven (see [`docs/parser-coverage.md`](docs/parser-coverage.md) and [`docs/platform-architecture.md`](docs/platform-architecture.md)). When you add or materially change a parser:
+Kairon's ingestion pipeline is registry-driven (see [`docs/parser-coverage.md`](./docs/artifacts/parser-coverage.md) and [`docs/platform-architecture.md`](./docs/architecture/platform-architecture.md)). When you add or materially change a parser:
 
 1. Register it in the appropriate registry (`backend/app/core/artifact_registry.py` and, for native raw parsers, `backend/app/ingest/raw_parsers/`).
 2. Add or update its dedicated doc under `docs/` (e.g. `docs/prefetch.md`, `docs/registry.md`), and update `docs/parser-coverage.md` with its real status — `stable`, `partial`, `experimental`, `planned`, `unsupported`, or `deprecated`. Don't mark something supported that isn't runnable in this deployment, and don't leave a shipped parser marked `planned`.
