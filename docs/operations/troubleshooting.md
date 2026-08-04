@@ -1,39 +1,39 @@
 # Troubleshooting
 
-## Backend no arranca
+## Backend does not start
 
-Comprueba:
+Check:
 
 - `docker compose ps`
 - `docker compose logs -f backend`
-- credenciales de PostgreSQL
-- conectividad a OpenSearch y Redis
-- migración automática de columnas nuevas
+- PostgreSQL credentials
+- connectivity to OpenSearch and Redis
+- automatic migration of new columns
 
 ## OpenSearch 502 / timeout
 
-Comprueba:
+Check:
 
-- estado de `opensearch`
-- heap disponible
-- disco libre
-- límites de bulk/refresh
-- si hay restart pendiente tras cambiar `OPENSEARCH_JAVA_HEAP`
+- `opensearch` status
+- available heap
+- free disk
+- bulk/refresh limits
+- whether a restart is pending after changing `OPENSEARCH_JAVA_HEAP`
 
 ## OpenSearch: `index_create_block_exception` / create-index blocked
 
-Síntoma típico:
+Typical symptom:
 
 - `AuthorizationException(403, 'index_create_block_exception', 'blocked by: [FORBIDDEN/10/cluster create-index blocked (api)];')`
 
-Comportamiento esperado de la app:
+Expected app behavior:
 
-- no debe empezar parsing
-- no debe marcar artefactos como parser failed si la preflight falla antes de indexar
-- debe mostrar un error claro:
+- must not start parsing
+- must not mark artifacts as parser failed if the preflight fails before indexing
+- must show a clear error:
   - `OpenSearch is not writable or cannot create indices. Ingest has not started.`
 
-Diagnóstico:
+Diagnosis:
 
 ```bash
 curl -u admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD 'http://localhost:9200/_cluster/settings?include_defaults=true&pretty'
@@ -42,7 +42,7 @@ curl -u admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD 'http://localhost:9200/_cat/all
 curl -u admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD 'http://localhost:9200/_cat/indices?v'
 ```
 
-Qué buscar:
+What to look for:
 
 - `persistent.cluster.blocks.create_index`
 - `transient.cluster.blocks.create_index`
@@ -50,16 +50,16 @@ Qué buscar:
 - `persistent.cluster.blocks.write`
 - `transient.cluster.blocks.write`
 - `defaults.cluster.blocks.write`
-- índices con `read_only_allow_delete`
-- presión de disco / flood-stage watermark
+- indices with `read_only_allow_delete`
+- disk pressure / flood-stage watermark
 
-Remediación segura:
+Safe remediation:
 
-1. libera espacio si el nodo está al límite
-2. corrige el motivo del bloqueo
-3. limpia el bloqueo de escritura o create-index
+1. free up space if the node is at its limit
+2. fix the cause of the block
+3. clear the write or create-index block
 
-Ejemplos:
+Examples:
 
 ```bash
 curl -u admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD -XPUT 'http://localhost:9200/_cluster/settings' -H 'Content-Type: application/json' -d '{
@@ -78,424 +78,424 @@ curl -u admin:$OPENSEARCH_INITIAL_ADMIN_PASSWORD -XPUT 'http://localhost:9200/_a
 }'
 ```
 
-Después:
+Afterwards:
 
-- vuelve a comprobar `/_cluster/health`
-- valida que la app marque OpenSearch como writable
-- relanza el ingest o benchmark
+- check `/_cluster/health` again
+- confirm the app marks OpenSearch as writable
+- relaunch the ingest or benchmark
 
 ## Bulk / refresh issues
 
-Síntomas:
+Symptoms:
 
-- ingestas lentas
-- eventos indexados en audit pero no visibles
+- slow ingests
+- events indexed in audit but not visible
 - refresh timeout
 
-Revisa:
+Check:
 
 - `OPENSEARCH_BULK_DOCS`
 - `OPENSEARCH_BULK_BYTES`
 - `OPENSEARCH_REFRESH_TIMEOUT`
 - `Performance & Resources`
 
-## Mounted evidence: path validation falla
+## Mounted evidence: path validation fails
 
-Comprueba:
+Check:
 
 - `DFIR_ALLOW_HOST_PATH_IMPORT=true`
-- la ruta cae dentro de `DFIR_ALLOWED_EVIDENCE_ROOTS`
-- el path existe
-- no hay symlink escape
+- the path falls within `DFIR_ALLOWED_EVIDENCE_ROOTS`
+- the path exists
+- there is no symlink escape
 
-Si introduces una ruta como `C:\Users\...` o `/home/user/...`, eso suele ser una ruta del equipo cliente, no del servidor.
+If you enter a path like `C:\Users\...` or `/home/user/...`, that is usually a path on the client machine, not the server.
 
-Acción:
+Action:
 
-- usa `Upload file`
-- o monta/compártela en el servidor bajo `/mnt/evidence`, `/data/evidence` o `/cases`
+- use `Upload file`
+- or mount/share it on the server under `/mnt/evidence`, `/data/evidence` or `/cases`
 
-## El archivo `.evtx` suelto no debería necesitar ZIP
+## A loose `.evtx` file should not need a ZIP
 
-Comportamiento esperado:
+Expected behavior:
 
-- un `.evtx` suelto debe detectarse como `Windows Event Log`
-- debe procesarse como `RAW evidence`
-- no debe pedir un flujo especial de archive ni mostrar `unknown`
+- a loose `.evtx` file must be detected as `Windows Event Log`
+- it must be processed as `RAW evidence`
+- it must not require a special archive flow or show `unknown`
 
-Si no ocurre:
+If this does not happen:
 
-- revisa que el archivo termine en `.evtx`
-- revisa `Evidence & Ingest` para ver si lo marcó como `Detected: Windows Event Log (.evtx)`
-- si usas mounted path, valida que backend y worker ven la misma ruta
-- exporta `Debug Pack` y revisa `ingest_summary.json` / `ingest_plan.json`
+- check that the file ends in `.evtx`
+- check `Evidence & Ingest` to see if it was marked as `Detected: Windows Event Log (.evtx)`
+- if you're using a mounted path, verify that backend and worker see the same path
+- export the `Debug Pack` and check `ingest_summary.json` / `ingest_plan.json`
 
-## ZIP RAW subido pero aún no parseado
+## Uploaded RAW ZIP still not parsed
 
-Un archive RAW puede pasar por dos fases:
+A RAW archive can go through two phases:
 
-- discovery de candidatos
-- parseo de los candidatos seleccionados
+- discovery of candidates
+- parsing of the selected candidates
 
-Si ves `waiting_selection`:
+If you see `waiting_selection`:
 
-- no significa que el archive haya fallado
-- significa que el discovery ya detectó artefactos compatibles y espera confirmación de selección
-- la UI o el parse endpoint deben lanzar el parseo de los candidatos recomendados
+- it does not mean the archive failed
+- it means discovery already detected compatible artifacts and is waiting for selection confirmation
+- the UI or the parse endpoint must trigger parsing of the recommended candidates
 
-Si el archive no detecta artefactos:
+If the archive does not detect any artifacts:
 
-- el mensaje correcto es que no se detectaron artefactos soportados
-- no debe aparecer un error engañoso como `Velociraptor discovery failed` para el usuario final
+- the correct message is that no supported artifacts were detected
+- a misleading error such as `Velociraptor discovery failed` must not appear to the end user
 
-## System / Performance no deja claro mounted evidence
+## System / Performance does not make mounted evidence clear
 
-La UI actual separa:
+The current UI separates:
 
 - runtime settings
 - deployment settings
 - evidence storage
 - advanced raw settings
 
-Si `Server-mounted evidence import` aparece como `Disabled`, el comportamiento esperado es:
+If `Server-mounted evidence import` shows as `Disabled`, the expected behavior is:
 
-- `Upload file` sigue disponible
-- `Register server-mounted path` queda explicado pero no se presenta como toggle runtime
-- la propia UI muestra variables de entorno y comando de restart
+- `Upload file` remains available
+- `Register server-mounted path` is explained but not presented as a runtime toggle
+- the UI itself shows the environment variables and restart command
 
-Ruta recomendada:
+Recommended path:
 
 - `System / Performance -> Evidence storage`
 - `Evidence & Ingest -> Register server-mounted path`
 
 ## Low disk space
 
-Síntomas:
+Symptoms:
 
-- ingestas paradas
-- extracción parcial
-- OpenSearch inestable
+- stalled ingests
+- partial extraction
+- unstable OpenSearch
 
-Acción:
+Action:
 
-- limpia storage no necesario
-- usa mounted evidence
-- reduce exports y copias duplicadas
+- clean up unneeded storage
+- use mounted evidence
+- reduce exports and duplicate copies
 
 ## Host contamination
 
-Si un caso mezcla hosts de forma rara:
+If a case mixes hosts in an odd way:
 
-- revisa `host_attribution_report.json`
-- revisa `host_identity_report.json`
-- valida evidencias mezcladas
-- filtra por `host`
-- revisa si el caso necesita separar evidencias
+- check `host_attribution_report.json`
+- check `host_identity_report.json`
+- validate mixed evidence
+- filter by `host`
+- check whether the case needs to separate evidence
 
-Si el problema es naming y no contaminación real:
+If the problem is naming rather than actual contamination:
 
-- abre `Overview -> Host Identity -> Manage hosts`
-- fusiona aliases solo cuando tengas confianza
-- separa el alias si el merge fue incorrecto
+- open `Overview -> Host Identity -> Manage hosts`
+- merge aliases only when you're confident
+- split the alias if the merge was incorrect
 
 ## Reingest volume drop
 
-Si tras reingest baja mucho el volumen:
+If volume drops significantly after a reingest:
 
-- exporta debug pack
-- revisa `ingest_regression_report.json`
-- revisa `parser_audit.json`
-- revisa filtros de selección de artefactos
+- export the debug pack
+- check `ingest_regression_report.json`
+- check `parser_audit.json`
+- check artifact selection filters
 
-## Reprocess: findings, detections o key events cambiaron
+## Reprocess: findings, detections or key events changed
 
-Comprueba:
+Check:
 
 - `event_identity_report.json`
 - `reconciliation_report.json`
-- si los eventos nuevos tienen `stable_event_id`
-- si el parser afectado está cayendo en `fingerprint_best_effort`
+- whether new events have a `stable_event_id`
+- whether the affected parser is falling into `fingerprint_best_effort`
 
-Puntos clave:
+Key points:
 
-- `event_id` puede cambiar tras reprocess
+- `event_id` can change after a reprocess
 
-## Reprocess parsea algo distinto a la primera vez
+## Reprocess parses something different from the first time
 
-Comprueba el `ingest_plan` de la evidencia. El modo recomendado es `Use previous parser selection`, que reutiliza el mismo conjunto de candidatos/parsers usado antes.
+Check the evidence's `ingest_plan`. The recommended mode is `Use previous parser selection`, which reuses the same set of candidates/parsers used before.
 
-Si se usa `Full rediscovery`, la app puede descubrir y seleccionar un conjunto diferente de candidatos. Eso es esperado y la UI lo avisa antes de lanzar el reprocess.
+If `Full rediscovery` is used, the app may discover and select a different set of candidates. This is expected, and the UI warns about it before launching the reprocess.
 
-Si una evidencia antigua no tiene `ingest_plan`, la UI mostrará que no existe un plan previo y pedirá usar rediscovery o selección manual.
-- `stable_event_id` es la identidad lógica que usa la reconciliación v1
-- findings y detections deben preservar estado usando fingerprints estables
-- key events deberían pasar a `current` o `remapped`; si no encuentran equivalente, quedan `stale`
+If old evidence has no `ingest_plan`, the UI will show that no previous plan exists and will ask to use rediscovery or manual selection.
+- `stable_event_id` is the logical identity used by v1 reconciliation
+- findings and detections must preserve state using stable fingerprints
+- key events should move to `current` or `remapped`; if no equivalent is found, they remain `stale`
 
-Si un artefacto cambió demasiado entre exportaciones:
+If an artifact changed too much between exports:
 
-- el fingerprint puede cambiar
-- la reconciliación puede crear un objeto nuevo en vez de reaprovechar el anterior
-- documenta el parser/fuente como limitación best-effort si no hay locator estable
+- the fingerprint may change
+- reconciliation may create a new object instead of reusing the previous one
+- document the parser/source as a best-effort limitation if there is no stable locator
 
 ## YARA unavailable
 
-Comportamiento esperado:
+Expected behavior:
 
-- estado claro de unavailable
-- warning controlado
+- clear unavailable status
+- controlled warning
 - no `500`
 
-Si esperabas YARA operativo, valida la dependencia del engine en la imagen backend.
+If you expected YARA to be operational, check the engine dependency in the backend image.
 
 ## Sigma rule invalid
 
-Comprueba:
+Check:
 
-- YAML válido
-- `detection` y `condition` presentes
-- campos mapeables al esquema normalizado
+- valid YAML
+- `detection` and `condition` present
+- fields mappable to the normalized schema
 
-## Search devuelve 0
+## Search returns 0
 
-Comprueba:
+Check:
 
-- si estás filtrando por el host correcto. Search expande aliases como `HOSTA`, `hosta` y `hosta.example.local`, pero no debe mezclar hosts no relacionados.
-- si la query está dentro del artifact correcto. Prueba primero sin `artifact_type` y luego acota.
-- si estás excluyendo MFT u otro artifact con filtros negativos.
-- si estás viendo solo backend default mientras el dato está en un backend advanced. Usa `backend_variant=advanced` o `backend_variant=all` cuando compares EZ Tool rebuilds.
-- si el término existe realmente en los datos fuente. Un Defender log puede tener eventos de configuración sin threat strings como `credential-tool` o `VirTool`.
-- que el caso activo, evidencia, host y rango temporal son los esperados.
-- que la evidencia terminó en `completed` o `completed_with_warnings` con `investigation_ready=true`.
-- que el caso no usa un índice viejo incompatible.
+- whether you're filtering by the correct host. Search expands aliases like `HOSTA`, `hosta` and `hosta.example.local`, but must not mix unrelated hosts.
+- whether the query is within the correct artifact. Try first without `artifact_type` and then narrow it down.
+- whether you're excluding MFT or another artifact with negative filters.
+- whether you're only viewing the default backend while the data is in an advanced backend. Use `backend_variant=advanced` or `backend_variant=all` when comparing EZ Tool rebuilds.
+- whether the term actually exists in the source data. A Defender log may have configuration events without threat strings such as `credential-tool` or `VirTool`.
+- that the active case, evidence, host and time range are the expected ones.
+- that the evidence finished as `completed` or `completed_with_warnings` with `investigation_ready=true`.
+- that the case is not using an old incompatible index.
 
-Queries de comandos:
+Command queries:
 
-- `-ep`, `-nop` y `-w` se tratan como texto, no como NOT.
-- rutas como `C:\Users\Public\remote-admin.exe` y `.\f\script.ps1` deberían buscarse por path completo y basename.
-- para excluir texto usa `exclude_q` o filtros `does not contain`.
+- `-ep`, `-nop` and `-w` are treated as text, not as NOT.
+- paths like `C:\Users\Public\remote-admin.exe` and `.\f\script.ps1` should be searched by full path and basename.
+- to exclude text, use `exclude_q` or `does not contain` filters.
 
-Si usas sintaxis avanzada:
+If using advanced syntax:
 
-- comprueba comillas sin cerrar.
-- usa solo campos soportados.
-- recuerda que `Search` no soporta todo KQL/Lucene.
-- prueba primero con:
+- check for unclosed quotes.
+- use only supported fields.
+- remember that `Search` does not support the full KQL/Lucene syntax.
+- try first with:
   - `artifact.type:mft`
   - `risk_score>=70`
   - `process.name:powershell.exe`
 
-Si una query avanzada es inválida, la app debe devolver `400` con ejemplos y no `500`.
+If an advanced query is invalid, the app must return `400` with examples, not `500`.
 
 ## Evidence appears failed but has searchable data
 
-Comportamiento esperado:
+Expected behavior:
 
-- si la evidencia tiene documentos indexados y es investigable, debe mostrar `investigation_ready=true`.
-- si hubo warnings no críticos, el estado correcto es `completed_with_warnings`, no `failed`.
+- if the evidence has indexed documents and is investigable, it must show `investigation_ready=true`.
+- if there were non-critical warnings, the correct status is `completed_with_warnings`, not `failed`.
 - optional parser errors, `tooling_missing`, unsupported artifacts and no-data families should not hide searchable data.
 
-Acción:
+Action:
 
-- usa `Recompute evidence status` / `Repair evidence status` si la UI lo ofrece.
-- revisa `status_reason`, `searchable_documents_count`, `warning_count` y `error_count`.
+- use `Recompute evidence status` / `Repair evidence status` if the UI offers it.
+- check `status_reason`, `searchable_documents_count`, `warning_count` and `error_count`.
 
 ## SRUM detected but not parsed
 
-Estado esperado en Linux:
+Expected status on Linux:
 
-- `SRUDB.dat` puede detectarse.
-- `SrumECmd` requiere Windows ESE libraries.
-- la app debe mostrar `tooling_missing` o `Requires Windows parser worker`.
-- no debe marcar la evidencia failed.
+- `SRUDB.dat` may be detected.
+- `SrumECmd` requires Windows ESE libraries.
+- the app must show `tooling_missing` or `Requires Windows parser worker`.
+- it must not mark the evidence as failed.
 
-Solución:
+Solution:
 
-- configurar un Windows parser worker cuando exista.
-- mientras tanto, usar otras fuentes: EVTX, Command History, MFT, Defender, Browser, Prefetch, Amcache/Shimcache.
+- configure a Windows parser worker when available.
+- in the meantime, use other sources: EVTX, Command History, MFT, Defender, Browser, Prefetch, Amcache/Shimcache.
 
 ## MFT full indexing is large
 
-MFT full puede añadir cientos de miles de documentos.
+MFT full can add hundreds of thousands of documents.
 
-Comportamiento esperado:
+Expected behavior:
 
-- se lanza solo con acción explícita.
-- Search puede encontrar cualquier path/filename presente en la MFT.
-- Timeline no incluye MFT por defecto.
-- Evidence puede seguir `completed_with_warnings` si MFT full queda parcial o falla sin afectar otros datos.
+- it is only launched with an explicit action.
+- Search can find any path/filename present in the MFT.
+- Timeline does not include MFT by default.
+- Evidence can still be `completed_with_warnings` if MFT full ends up partial or fails without affecting other data.
 
-Si Search parece inundado:
+If Search seems flooded:
 
-- filtra por `artifact_type`.
-- excluye MFT con filtros negativos.
-- usa Artifact Views MFT para paginación/columnas específicas.
+- filter by `artifact_type`.
+- exclude MFT with negative filters.
+- use Artifact Views MFT for pagination/specific columns.
 
 ## EZ advanced rebuild results look duplicated
 
-LNK, Jumplist, Amcache y Shimcache pueden tener:
+LNK, Jumplist, Amcache and Shimcache can have:
 
-- backend default/internal
-- backend advanced EZ Tool
+- default/internal backend
+- advanced EZ Tool backend
 
-Search default oculta advanced para evitar duplicados. Usa:
+Default Search hides advanced to avoid duplicates. Use:
 
 - `backend_variant=advanced`
 - `backend_variant=all`
 - `parser_backend=<backend>`
 
-para comparar. No borres internal docs sin una decisión explícita de activación default.
+to compare. Do not delete internal docs without an explicit decision to activate them by default.
 
 ## PECmd is available but Prefetch rebuild is disabled
 
-En este Linux deployment, PECmd raw `.pf` parsing requiere Windows decompression support. La plataforma usa parser interno de Prefetch.
+In this Linux deployment, raw PECmd `.pf` parsing requires Windows decompression support. The platform uses its internal Prefetch parser.
 
-Esto es una limitación de backend, no fallo de evidencia.
+This is a backend limitation, not an evidence failure.
 
 ## Shellbags detected but no rows indexed
 
-Shellbags desde raw hives (`NTUSER.DAT`, `UsrClass.dat`) están pendientes de backend dedicado.
+Shellbags from raw hives (`NTUSER.DAT`, `UsrClass.dat`) are pending a dedicated backend.
 
-Estado esperado:
+Expected status:
 
-- candidatos detectados.
-- no parseados como Shellbags.
-- User Activity puede seguir indexando UserAssist, RecentDocs, RunMRU u OpenSaveMRU si existen.
+- candidates detected.
+- not parsed as Shellbags.
+- User Activity can still index UserAssist, RecentDocs, RunMRU or OpenSaveMRU if present.
 
-## `POST /correlate` devuelve 422
+## `POST /correlate` returns 422
 
-Comportamiento esperado actual:
+Current expected behavior:
 
-- `POST /api/cases/{case_id}/correlate` acepta body vacío
-- `POST /api/cases/{case_id}/correlate` con `{}` también funciona
+- `POST /api/cases/{case_id}/correlate` accepts an empty body
+- `POST /api/cases/{case_id}/correlate` with `{}` also works
 
-Si vuelve a aparecer un `422`, revisa:
+If a `422` reappears, check:
 
-- que backend/worker estén reconstruidos con la versión actual
-- que no estés llamando a un contenedor viejo
-- que el endpoint no esté siendo interceptado por un cliente con esquema desactualizado
+- that backend/worker have been rebuilt with the current version
+- that you're not calling an old container
+- that the endpoint is not being intercepted by a client with an outdated schema
 
-## Process Graph vacío o con ambigüedad
+## Empty or ambiguous Process Graph
 
-Comprueba:
+Check:
 
-- modo `suspicious` vs `full graph`
-- filtros de host/evidence
+- `suspicious` vs `full graph` mode
+- host/evidence filters
 - `warnings_summary`
 - `process_tree_report.json`
 
-Si hay muchas ambigüedades, la app debe resumirlas, no inundar el canvas.
+If there are many ambiguities, the app must summarize them, not flood the canvas.
 
-## Build frontend lento o warning de chunk
+## Slow frontend build or chunk warning
 
-La app usa lazy loading por rutas principales para reducir el bundle inicial.
+The app uses lazy loading by main routes to reduce the initial bundle.
 
-Comprueba:
+Check:
 
 - `npm run build`
-- que `Search`, `Timeline`, `Process Graph`, `Reports`, `Rules`, `Detections`, `Docs` y el resto de workspaces salgan como chunks separados
-- que no estés sirviendo un frontend viejo tras el rebuild
+- that `Search`, `Timeline`, `Process Graph`, `Reports`, `Rules`, `Detections`, `Docs` and the rest of the workspaces come out as separate chunks
+- that you're not serving an old frontend after the rebuild
 
-Si reaparece un warning de chunk grande:
+If a large chunk warning reappears:
 
-- revisa imports pesados añadidos a `App.tsx`
-- evita importar helpers de reportes, markdown o graph fuera de su ruta
-- revisa `vite.config.ts` y los `manualChunks`
+- check for heavy imports added to `App.tsx`
+- avoid importing report, markdown or graph helpers outside their route
+- check `vite.config.ts` and the `manualChunks`
 
 ## Validation case bootstrap fails
 
-Comprueba:
+Check:
 
-- backend accesible en `http://127.0.0.1:8000`
-- worker activo para ingestas y rule runs
-- el archivo de validación existe fuera del repositorio
-- el caso de validación se creó con nombres genéricos
+- backend reachable at `http://127.0.0.1:8000`
+- worker active for ingests and rule runs
+- the validation file exists outside the repository
+- the validation case was created with generic names
 
-Si faltan detecciones YARA pero el resto del flujo de validación funciona:
+If YARA detections are missing but the rest of the validation flow works:
 
-- revisa `GET /api/rules/engines/status`
-- confirma si `yara-python` está disponible en la imagen backend
-- trátalo como limitación conocida no bloqueante si Sigma, findings, reports y debug export están sanos
+- check `GET /api/rules/engines/status`
+- confirm whether `yara-python` is available in the backend image
+- treat it as a known non-blocking limitation if Sigma, findings, reports and debug export are healthy
 
-## Rules o Detections no muestran el resultado esperado
+## Rules or Detections do not show the expected result
 
-Comprueba primero qué motor estás usando:
+First check which engine you're using:
 
 - `Sigma`
-  - corre sobre eventos indexados
+  - runs over indexed events
 - `YARA`
-  - corre sobre ficheros preservados
+  - runs over preserved files
 
-Errores de interpretación comunes:
+Common interpretation errors:
 
-- lanzar YARA esperando hits sobre logs ya indexados
-- lanzar Sigma esperando que inspeccione binarios, scripts o documentos sin indexar
-- importar un pack YARA desde la sección Sigma o al revés
+- running YARA expecting hits over already-indexed logs
+- running Sigma expecting it to inspect binaries, scripts or unindexed documents
+- importing a YARA pack from the Sigma section or vice versa
 
-Verifica:
+Verify:
 
-- `Rules -> Rule Runs` para estado, volumen y errores
-- `Detections` filtrando por `source=sigma` o `source=yara`
-- `Search` con:
+- `Rules -> Rule Runs` for status, volume and errors
+- `Detections` filtering by `source=sigma` or `source=yara`
+- `Search` with:
   - `detection.source:sigma`
   - `detection.source:yara`
 
-Si un run sigue en `queued` o `running` durante demasiado tiempo:
+If a run stays in `queued` or `running` for too long:
 
-- revisa `heartbeat`
-- si no hay heartbeat reciente, trátalo como `stale`
-- usa `Mark stale runs` o la acción individual `Mark failed/stale`
-- si necesitas repetirlo, usa `Retry run`
-- si el worker ni siquiera llegó a arrancarlo, puedes `Cancel run`
+- check the `heartbeat`
+- if there is no recent heartbeat, treat it as `stale`
+- use `Mark stale runs` or the individual `Mark failed/stale` action
+- if you need to repeat it, use `Retry run`
+- if the worker never even started it, you can `Cancel run`
 
-Si `Open Detections` desde un run parece incompleto:
+If `Open Detections` from a run looks incomplete:
 
-- recuerda que la correlación exacta por `rule_run_id` depende del contexto disponible del run
-- revisa también `Rule Runs` y `Search` para validar si hubo `duplicates skipped`
+- remember that exact correlation by `rule_run_id` depends on the run's available context
+- also check `Rule Runs` and `Search` to validate whether there were `duplicates skipped`
 
-Si necesitas limpiar el inventario de reglas:
+If you need to clean up the rule inventory:
 
-- usa `Rule Library`
-- filtra por `engine`, `namespace`, `estado` o texto
-- prueba primero con `Disable selected` si no quieres borrarlas todavía
-- `Delete all imported rules` requiere escribir `DELETE RULES`
-- borrar reglas o run records no elimina detecciones ya generadas
+- use `Rule Library`
+- filter by `engine`, `namespace`, `status` or text
+- try `Disable selected` first if you don't want to delete them yet
+- `Delete all imported rules` requires typing `DELETE RULES`
+- deleting rules or run records does not remove detections already generated
 
-## `stable_event_id` o reconciliación no aparecen en debug export
+## `stable_event_id` or reconciliation do not appear in debug export
 
-Comprueba:
+Check:
 
 - `event_identity_report.json`
 - `reconciliation_report.json`
-- que el backend indexe `stable_event_id` y `event_fingerprint`
-- que `debug_export` esté pidiendo esos campos en `_source`
+- that the backend indexes `stable_event_id` and `event_fingerprint`
+- that `debug_export` is requesting those fields in `_source`
 
-Si el runtime usa contenedores viejos:
+If the runtime is using old containers:
 
-- los tests pueden pasar localmente pero los ingests reales seguirán sin `stable_event_id`
-- reconstruye `backend` y `worker`
+- tests may pass locally but real ingests will still lack `stable_event_id`
+- rebuild `backend` and `worker`
 
-## Renombré o fusioné hosts y cambiaron los resultados
+## I renamed or merged hosts and the results changed
 
-Comportamiento esperado:
+Expected behavior:
 
-- `Search`, `Timeline` y `Reports` deben usar el host canónico con expansión a aliases
-- el detalle sigue mostrando `Observed as` cuando el evento llegó con otro nombre
-- `stable_event_id` no debería depender del nombre canónico renombrado manualmente
+- `Search`, `Timeline` and `Reports` must use the canonical host with alias expansion
+- the detail view still shows `Observed as` when the event arrived under a different name
+- `stable_event_id` should not depend on a manually renamed canonical name
 
-Si algo no cuadra:
+If something doesn't add up:
 
-- revisa `event_identity_report.json`
-- revisa `host_identity_report.json`
-- confirma que backend y worker estén reconstruidos con la versión actual
+- check `event_identity_report.json`
+- check `host_identity_report.json`
+- confirm that backend and worker have been rebuilt with the current version
 
-## Report sin key events
+## Report with no key events
 
-El informe puede salir pobre si no seleccionas:
+The report can come out sparse if you don't select:
 
-- findings relevantes
+- relevant findings
 - key events
 - process chains
 
 ## PDF unavailable
 
-Es el comportamiento esperado hoy. El estado correcto es `not yet available` / `501`, no error silencioso.
+This is the expected behavior today. The correct status is `not yet available` / `501`, not a silent error.

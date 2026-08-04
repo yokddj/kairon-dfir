@@ -1,8 +1,8 @@
 # Testing
 
-## Operational smoke suite
+## Operational Smoke Suite
 
-Run this shortlist before closing a backend/frontend hardening sprint:
+Run this shortlist before closing a backend/frontend hardening pass:
 
 ```bash
 python3 -m compileall /app/app /app/tests
@@ -24,14 +24,14 @@ This covers:
 
 ## Backend
 
-### Validación básica
+### Basic Validation
 
 ```bash
 python3 -m compileall backend/app backend/tests
 pytest -q
 ```
 
-### Suites por familias
+### Suites by Family
 
 ```bash
 pytest -q /app/tests/test_rules_v2.py
@@ -52,53 +52,53 @@ npx vitest run src/pages/CaseOverviewPage.test.tsx
 npm run build
 ```
 
-## Ejemplos por sprint
+## Examples by Feature Area
 
 - rules: `test_rules_v2.py`
 - process graph: `test_ingest.py -k process_graph`
 - reports: `CaseReportsPage.test.tsx`
 - timeline: `TimelinePage.test.tsx`
-- search: `Search` suites relevantes
-- host attribution / debug export: suites backend por keyword
+- search: relevant `Search` suites
+- host attribution / debug export: backend suites by keyword
 - stable IDs / reconciliation: `test_event_identity.py`, `test_rules_v2.py`, `test_timeline.py`, `test_search_query_syntax.py`
 
-## Reprocess / reconciliation v1
+## Reprocess / Reconciliation v1
 
-Cobertura mínima recomendada si tocas identidad de eventos o reprocess:
+Minimum recommended coverage if you touch event identity or reprocess:
 
 ```bash
 python3 -m compileall /app/app /app/tests
 pytest -q /app/tests/test_event_identity.py /app/tests/test_findings.py /app/tests/test_rules_v2.py /app/tests/test_timeline.py /app/tests/test_search_query_syntax.py
 ```
 
-Qué valida:
+What it validates:
 
-- `stable_event_id` determinístico para el mismo evento lógico
-- findings/detections preservan estado tras reprocess
-- `ingest_plan` se persiste en el primer ingest
-- `previous_selection` reutiliza exactamente los mismos candidate IDs cuando siguen disponibles
-- `updated_discovery` muestra candidatos nuevos sin autoañadirlos en `previous_selection`
-- `full_rediscovery` deja claro que el plan puede cambiar
-- key events remapean por `stable_event_id` o quedan `stale`
-- Search puede consultar por `stable_event_id`
+- deterministic `stable_event_id` for the same logical event
+- findings/detections preserve state after reprocess
+- `ingest_plan` is persisted on the first ingest
+- `previous_selection` reuses the exact same candidate IDs when they remain available
+- `updated_discovery` shows new candidates without auto-adding them to `previous_selection`
+- `full_rediscovery` makes clear that the plan may change
+- key events remap by `stable_event_id` or become `stale`
+- Search can query by `stable_event_id`
 
-## Warnings conocidos no bloqueantes
+## Known Non-Blocking Warnings
 
-- `React Router` puede seguir emitiendo warnings de future flags en tests de frontend; no bloquean runtime ni build
-- si aparece un skip/xfail, debe quedar justificado en la suite o en este documento
+- `React Router` may still emit future-flag warnings in frontend tests; these do not block runtime or build.
+- if a skip/xfail appears, it must be justified in the suite or in this document.
 
-## Limpieza de deuda técnica cerrada
+## Closed Technical Debt Cleanup
 
-Ya no deberían aparecer en la suite principal:
+These should no longer appear in the main suite:
 
-- warnings de relaciones `SQLAlchemy overlaps`
-- deprecations de `datetime.utcnow()` en código runtime tocado
-- `422` de `POST /api/cases/{case_id}/correlate` por body ausente
-- `compileall` roto en `/app/app` o `/app/tests`
-- un único chunk principal enorme por falta de lazy loading de rutas
+- `SQLAlchemy overlaps` relationship warnings
+- `datetime.utcnow()` deprecations in touched runtime code
+- `422` from `POST /api/cases/{case_id}/correlate` due to a missing body
+- broken `compileall` in `/app/app` or `/app/tests`
+- a single, enormous main chunk from missing route-level lazy loading
 
-## Recomendación práctica
+## Practical Recommendation
 
-- si cambias solo docs, no hace falta pytest completo
-- si cambias labels o navegación del frontend, al menos `npm run build`
-- si tocas integración Rules/Detections/Process Graph, ejecuta su suite específica además del build
+- if you only change docs, a full pytest run is not required
+- if you change frontend labels or navigation, run at least `npm run build`
+- if you touch Rules/Detections/Process Graph integration, run its specific suite in addition to the build

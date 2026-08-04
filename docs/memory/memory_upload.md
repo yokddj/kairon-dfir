@@ -1,6 +1,6 @@
 # Memory Upload
 
-Kairon supports browser upload for authorized Windows memory images when an administrator enables `MEMORY_UPLOAD_ENABLED=true`.
+Kairon supports browser upload for authorized memory images when an administrator enables `MEMORY_UPLOAD_ENABLED=true`.
 
 The recommended user workflow is:
 
@@ -20,17 +20,41 @@ Supported default extensions:
 
 `.aff4` is not enabled by default because container semantics must be reviewed for the deployment before accepting it as a direct memory image upload.
 
-## Safety Model
+## User Flow
 
-Memory images may contain credentials, personal data, encryption material, browser data, messages, tokens, and other sensitive information. Upload only evidence you own or are explicitly authorized to analyze. Do not commit RAM images or real plugin output to Git.
+1. Open a case.
+2. Go to Memory Analysis.
+3. Select Add memory image.
+4. Review upload readiness and analysis readiness.
+5. Select an authorized memory image.
+6. Confirm the privacy and authorization acknowledgement.
+7. Upload with progress and finalization status.
+8. Open Memory Analysis for the uploaded evidence.
+9. Start `metadata_only`, `processes_basic`, or `processes_extended` only when analysis is enabled and authorized.
 
-The dedicated Memory Upload page requires an authorization acknowledgement before upload:
+Memory upload and memory analysis are separate steps. Upload may be available while execution is disabled or while the dedicated memory worker is offline.
+
+## Privacy and Safety Model
+
+Memory images may contain credentials, personal data, encryption material, browser data, messages, tokens, and other sensitive information. Upload only evidence you own or are explicitly authorized to analyze. Do not commit RAM images, symbols, real Volatility output, credentials, malware samples, screenshots containing evidence, or server-private configuration.
+
+The dedicated Memory Upload page shows this warning and requires an authorization acknowledgement before upload:
+
+> Memory images may contain credentials, personal data, encryption material, browser data, access tokens, and other sensitive information. Upload only evidence that you own or are explicitly authorized to analyze.
 
 ```text
 I confirm that I own this memory image or am explicitly authorized to upload and analyze it.
 ```
 
-Memory uploads are classified as `memory_dump`, bypass normal disk ingest, and do not create `NormalizedEvent` rows or disk event-index documents. Results remain isolated in Memory Analysis.
+This acknowledgement is operational audit context; it is not a legal guarantee.
+
+Memory uploads are classified as `memory_dump`, bypass normal disk ingest, and do not create `NormalizedEvent` rows or disk event-index documents. Results remain isolated in the Memory Analysis workspace and memory index only.
+
+## Displayed Limits
+
+The default is `MEMORY_UPLOAD_MAX_BYTES=34359738368`, displayed as `32 GiB`. The startup configuration validator rejects any operator-configured value below `10 GiB` (`10 * 1024^3` bytes), so operators lowering the limit have a hard floor.
+
+The practical maximum also depends on server storage. The upload readiness check reports safe capacity numbers only; it does not expose host paths, mount names, or internal directories.
 
 ## Upload Readiness
 
@@ -53,13 +77,13 @@ GET /api/cases/{case_id}/memory/uploads/{upload_id}
 
 The status record contains only sanitized state, byte counts, terminal failure category, and the evidence ID after completion. It allows completion to be recovered after a browser disconnect, backend response loss, or a successful file move followed by a database error. Safe reconciliation is idempotent and never overwrites when both staging and canonical files exist.
 
-The default is `MEMORY_UPLOAD_MAX_BYTES=34359738368`, displayed as `32 GiB`. The startup configuration validator rejects any value below `10 GiB` (`10 * 1024^3` bytes), so operators lowering the limit have a hard floor. Capacity is grouped by filesystem device:
+Capacity is grouped by filesystem device:
 
 - same-filesystem finalization requires one input image, output allowance, and one safety margin before upload
 - after that input is staged, atomic finalization requires only the remaining output allowance and safety margin
 - cross-filesystem finalization checks staging, final-copy, and output requirements independently on their respective filesystems
 
-The previous implementation counted two complete input images against a single free-space value and repeated that pre-upload formula after staging was complete. A valid readiness decision could therefore fail at finalization solely because the controlled staging file had consumed space. The phase-aware model removes that double count.
+For a selected file, Kairon requires enough available capacity for staging, final evidence storage, output allowance, and a safety margin. Operators should keep free space well above the configured limit to cover that margin, not just the image size itself.
 
 ## Streaming Behavior
 
@@ -128,7 +152,7 @@ Cleanup never deletes completed Evidence. It may remove leftover staging for com
 
 Production validation should run `cleanup --dry-run --json` and `reconcile --dry-run --json` only during first deployment validation. Do not apply cleanup to real data until dry-run output has been reviewed.
 
-`Evidence.size_bytes` is stored as PostgreSQL `BIGINT`; browser memory uploads up to the configured 5 GiB limit must not be written to a 32-bit `INTEGER` column.
+`Evidence.size_bytes` is stored as PostgreSQL `BIGINT`; browser memory uploads up to the configured 32 GiB limit must not be written to a 32-bit `INTEGER` column.
 
 ## Storage Layout
 

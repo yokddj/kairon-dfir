@@ -1,28 +1,28 @@
 # Browser
 
-## Qué soporta la app
+## What the app supports
 
-La plataforma soporta dos rutas para evidencias de navegador:
+The platform supports two paths for browser evidence:
 
-1. CSV/JSON ya parseado por BrowserHistoryView, KAPE, NirSoft u otras herramientas compatibles.
-2. Parseo directo desde colecciones Velociraptor para:
+1. CSV/JSON already parsed by BrowserHistoryView, KAPE, NirSoft, or other compatible tools.
+2. Direct parsing from Velociraptor collections for:
    - Chromium `History`
    - Firefox `places.sqlite`
 
-## Artefactos priorizados
+## Prioritized artifacts
 
-- Historial
-- Descargas
-- Términos de búsqueda
+- History
+- Downloads
+- Search terms
 
-No se procesan en esta fase:
+Not processed at this stage:
 
 - Cookies
 - Passwords
 - Autofill
-- Otros datos sensibles del navegador
+- Other sensitive browser data
 
-## Navegadores soportados o inferidos
+## Supported or inferred browsers
 
 - Chrome
 - Edge
@@ -30,9 +30,9 @@ No se procesan en esta fase:
 - Chromium
 - Opera
 - Firefox
-- IE/Edge Legacy solo si ya viene parseado en CSV/JSON
+- IE/Edge Legacy only if already parsed in CSV/JSON
 
-## Campos extraídos
+## Extracted fields
 
 - `browser.name`
 - `browser.profile`
@@ -46,11 +46,11 @@ No se procesan en esta fase:
 - `url.full`
 - `file.path`
 
-## Parseo directo desde Velociraptor
+## Direct parsing from Velociraptor
 
-Para Chromium se usa extracción selectiva y copia segura de `History` y, si existen, también `History-wal` y `History-shm`. La app no necesita extraer toda la colección Velociraptor para llegar a esos SQLite.
+For Chromium, selective extraction and safe copy of `History` is used, along with `History-wal` and `History-shm` when they exist. The app does not need to extract the entire Velociraptor collection to reach those SQLite files.
 
-Tablas principales:
+Main tables:
 
 - `urls`
 - `visits`
@@ -58,16 +58,16 @@ Tablas principales:
 - `downloads_url_chains`
 - `keyword_search_terms`
 
-Para Firefox se usa extracción selectiva y copia segura de `places.sqlite` y, si existen, `places.sqlite-wal` y `places.sqlite-shm`.
+For Firefox, selective extraction and safe copy of `places.sqlite` is used, along with `places.sqlite-wal` and `places.sqlite-shm` when they exist.
 
-Tablas principales:
+Main tables:
 
 - `moz_places`
 - `moz_historyvisits`
 
-Las descargas de Firefox pueden variar según versión y no siempre se extraen con la misma claridad que en Chromium.
+Firefox downloads can vary by version and are not always extracted as clearly as in Chromium.
 
-Artefactos de navegador que no se extraen por defecto en este flujo:
+Browser artifacts not extracted by default in this flow:
 
 - `Cache`
 - `Code Cache`
@@ -79,25 +79,25 @@ Artefactos de navegador que no se extraen por defecto en este flujo:
 - `Login Data`
 - `Web Data`
 
-## Correlación
+## Correlation
 
-La app correlaciona descargas de navegador con:
+The app correlates browser downloads with:
 
-- MFT/USN para creación de archivos
-- LNK y Jump Lists para apertura
-- Prefetch y EVTX para ejecución
-- Defender para detecciones posteriores
+- MFT/USN for file creation
+- LNK and Jump Lists for opening
+- Prefetch and EVTX for execution
+- Defender for subsequent detections
 
-## Limitaciones
+## Limitations
 
-- En esta fase se priorizan outputs parseados y SQLite raw de historial/places.
-- Hindsight, XLSX o JSON de terceros pueden seguir siendo útiles, pero no siempre son la mejor fuente para automatizar la plataforma.
-- Historial no implica descarga.
-- Descarga no implica ejecución.
-- Firefox downloads pueden no aparecer según versión/perfil/base.
+- At this stage, parsed outputs and raw history/places SQLite are prioritized.
+- Hindsight, XLSX, or third-party JSON can still be useful, but are not always the best source for automating the platform.
+- History does not imply download.
+- Download does not imply execution.
+- Firefox downloads may not appear depending on version/profile/base.
 
-## Falsos positivos comunes
+## Common false positives
 
-- Descargas legítimas de herramientas administrativas
-- Visitas a servicios cloud sin actividad maliciosa
-- Búsquedas técnicas o de troubleshooting
+- Legitimate downloads of administrative tools
+- Visits to cloud services with no malicious activity
+- Technical or troubleshooting searches

@@ -96,7 +96,7 @@ Important behaviors:
 
 ## Host Information
 
-Normalized observations from Linux and Windows producers also feed a platform-agnostic Host Facts / Local Accounts layer, consumed by the per-host Host Information UI. See [host-information.md](host-information.md) for the fact-type/platform coverage matrix, conflict resolution model, and what is and isn't decoded from the Windows SAM/ProfileList hives today.
+Normalized observations from Linux and Windows producers also feed a platform-agnostic Host Facts / Local Accounts layer, consumed by the per-host Host Information UI. See [host-information.md](../evidence/host-information.md) for the fact-type/platform coverage matrix, conflict resolution model, and what is and isn't decoded from the Windows SAM/ProfileList hives today.
 
 ## Parser Dispatch
 

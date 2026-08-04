@@ -1,16 +1,16 @@
-# USB Enriquecido
+# Enriched USB
 
-## Qué evidencias USB soporta la app
+## What USB evidence the app supports
 
-La app soporta ahora:
+The app now supports:
 
-- `setupapi.dev.log` raw
-- CSVs de `USBSTOR`, `USB`, `MountedDevices`, `PortableDevices` y similares
-- correlación con `LNK`, `JumpLists`, `Shellbags`, `MFT/USN`, `Recycle Bin`, `Browser` y `PowerShell`
+- raw `setupapi.dev.log`
+- CSVs from `USBSTOR`, `USB`, `MountedDevices`, `PortableDevices`, and similar
+- correlation with `LNK`, `JumpLists`, `Shellbags`, `MFT/USN`, `Recycle Bin`, `Browser`, and `PowerShell`
 
-## Qué aporta `SetupAPI.dev.log`
+## What `SetupAPI.dev.log` provides
 
-`SetupAPI.dev.log` permite extraer bloques de instalación/configuración de dispositivos y, cuando el contenido lo permite:
+`SetupAPI.dev.log` allows extraction of device installation/configuration blocks and, when the content allows:
 
 - `Device Instance ID`
 - `Vendor`
@@ -19,20 +19,20 @@ La app soporta ahora:
 - `Serial`
 - `Service`
 - `INF`
-- versión/proveedor de driver
-- timestamps de sección
+- driver version/provider
+- section timestamps
 
-Importante:
+Important:
 
-- no todo bloque con la palabra `USB` representa un dispositivo externo concreto
-- `Install Driver Updates` suele reflejar actividad genérica de actualización/publicación de drivers
-- `USB\\Class_07`, `USB\\Class_08`, `USB\\ROOT_HUB` y similares son clases o controladores genéricos
+- not every block containing the word `USB` represents a specific external device
+- `Install Driver Updates` usually reflects generic driver update/publishing activity
+- `USB\\Class_07`, `USB\\Class_08`, `USB\\ROOT_HUB`, and similar are generic classes or controllers
 
-## Qué aporta Registry USBSTOR / MountedDevices
+## What Registry USBSTOR / MountedDevices provides
 
-Los artefactos de registro parseados pueden enriquecer:
+Parsed registry artifacts can enrich:
 
-- seriales
+- serials
 - `FriendlyName`
 - `ContainerId`
 - `ParentIdPrefix`
@@ -40,21 +40,21 @@ Los artefactos de registro parseados pueden enriquecer:
 - `Drive letter`
 - `MountedDevice` / `DosDevices`
 
-## Qué se parsea directamente desde Velociraptor
+## What is parsed directly from Velociraptor
 
-Soportado directamente:
+Directly supported:
 
 - `C:\\Windows\\INF\\setupapi.dev.log`
 
-Discovery-only en esta iteración si llegan raw:
+Discovery-only in this iteration if received raw:
 
 - `SYSTEM`
 - `SOFTWARE`
 - `NTUSER.DAT`
 
-## Qué considera la app un USB “útil”
+## What the app considers a "useful" USB
 
-La app prioriza identificadores útiles como:
+The app prioritizes useful identifiers such as:
 
 - `USBSTOR\\Disk&Ven_...&Prod_...&Rev_...\\SERIAL`
 - `USB\\VID_XXXX&PID_YYYY\\SERIAL`
@@ -62,16 +62,16 @@ La app prioriza identificadores útiles como:
 - `WPD\\...`
 - `STORAGE\\Volume\\...`
 
-Los bloques genéricos de driver update o clases USB sin serial útil se omiten del flujo principal o se tratan como diagnóstico de bajo valor.
+Generic driver update blocks or USB classes without a useful serial are omitted from the main flow or treated as low-value diagnostics.
 
-## Cómo interpretar `Device Instance ID`
+## How to interpret `Device Instance ID`
 
-Ejemplos habituales:
+Common examples:
 
 - `USBSTOR\\Disk&Ven_SanDisk&Prod_Ultra&Rev_1.00\\1234567890ABCDEF&0`
 - `USB\\VID_0781&PID_5581\\1234567890ABCDEF`
 
-La app intenta extraer:
+The app attempts to extract:
 
 - `vendor`
 - `product`
@@ -81,13 +81,13 @@ La app intenta extraer:
 - `pid`
 - `device_type`
 
-Siempre conserva también `usb.raw_instance_id`.
+It always also keeps `usb.raw_instance_id`.
 
-## Volume y drive letter
+## Volume and drive letter
 
-La letra de unidad no es identidad fuerte por sí sola.
+The drive letter is not a strong identity by itself.
 
-La correlación prioriza:
+Correlation prioritizes:
 
 - `serial`
 - `device_instance_id`
@@ -96,39 +96,39 @@ La correlación prioriza:
 - `container_id`
 - `parent_id_prefix`
 
-## USB observado, acceso y posible exfiltración
+## Observed USB, access, and possible exfiltration
 
-La app usa wording prudente:
+The app uses cautious wording:
 
-- `usb_device_install` / `usb_device_observed`: dispositivo observado
-- `usb_volume_mapping`: mapeo de volumen o letra observado
-- `usb_file_access` / `usb_folder_access`: actividad en ruta removible
-- `possible_usb_exfiltration_candidate`: hipótesis de copia o salida de datos
+- `usb_device_install` / `usb_device_observed`: device observed
+- `usb_volume_mapping`: observed volume or drive letter mapping
+- `usb_file_access` / `usb_folder_access`: activity on a removable path
+- `possible_usb_exfiltration_candidate`: hypothesis of data copy or exfiltration
 
-USB conectado no implica exfiltración.
+A connected USB does not imply exfiltration.
 
-## Correlación con otros artefactos
+## Correlation with other artifacts
 
-- `LNK`: rutas removibles, `volume.serial`, `drive_type`
-- `JumpLists`: archivos recientes en rutas removibles
-- `Shellbags`: carpetas vistas en unidad externa
-- `MFT/USN`: creaciones/modificaciones/borrados en rutas removibles
-- `Recycle Bin`: ficheros borrados/reciclados desde unidad externa
-- `Browser`: descargas directas a `E:\\`, `F:\\`, etc.
-- `PowerShell`: `Copy-Item`, `robocopy`, `xcopy`, `move`, compresión hacia unidad removible
+- `LNK`: removable paths, `volume.serial`, `drive_type`
+- `JumpLists`: recent files on removable paths
+- `Shellbags`: folders viewed on an external drive
+- `MFT/USN`: creations/modifications/deletions on removable paths
+- `Recycle Bin`: files deleted/recycled from an external drive
+- `Browser`: downloads directly to `E:\\`, `F:\\`, etc.
+- `PowerShell`: `Copy-Item`, `robocopy`, `xcopy`, `move`, compression to a removable drive
 
-## Falsos positivos comunes
+## Common false positives
 
-- pendrives corporativos legítimos
-- discos externos de backup
-- descargas manuales guardadas en USB
-- tooling portable de administración
+- legitimate corporate USB drives
+- external backup drives
+- manual downloads saved to USB
+- portable administration tooling
 
-## Limitaciones
+## Limitations
 
-- `SetupAPI.dev.log` suele indicar instalación/configuración, no cada conexión exacta
-- la letra de unidad puede cambiar
-- el serial puede faltar o ser poco distintivo
-- acceso a un archivo en USB no equivale a copia
-- `possible_usb_exfiltration_candidate` es una hipótesis, no una conclusión automática
-- algunos bloques de `SetupAPI` se omiten deliberadamente por bajo valor para evitar falsos positivos operativos
+- `SetupAPI.dev.log` usually indicates installation/configuration, not every exact connection
+- the drive letter can change
+- the serial may be missing or not very distinctive
+- accessing a file on USB does not equal copying it
+- `possible_usb_exfiltration_candidate` is a hypothesis, not an automatic conclusion
+- some `SetupAPI` blocks are deliberately omitted for low value, to avoid operational false positives

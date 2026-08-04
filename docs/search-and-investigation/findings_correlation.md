@@ -1,12 +1,12 @@
 # Findings and Correlation
 
-## Qué es un finding
+## What a finding is
 
-Un `finding` es una conclusión investigativa apoyada en uno o más eventos, detections, cadenas de proceso o IOC relacionados.
+A `finding` is an investigative conclusion supported by one or more related events, detections, process chains or IOCs.
 
-No es equivalente a una regla disparada.
+It is not equivalent to a triggered rule.
 
-## Tipos v1 principales
+## Main v1 types
 
 - `download_execute_detect`
 - `office_powershell`
@@ -25,34 +25,34 @@ No es equivalente a una regla disparada.
 - `suspicious_ui_observed_file`
 - `security_notification_observed`
 
-## Severidad, confianza y estado
+## Severity, confidence and status
 
-- severidad: `low` a `critical`
-- confianza: `low`, `medium`, `high`
-- estado: `new`, `reviewed`, `confirmed`, `dismissed`
+- severity: `low` to `critical`
+- confidence: `low`, `medium`, `high`
+- status: `new`, `reviewed`, `confirmed`, `dismissed`
 
-El estado debe preservarse si el finding o sus señales vuelven a aparecer en reruns.
+Status must be preserved if the finding or its signals reappear on reruns.
 
-## Deduplidación
+## Deduplication
 
-La correlación intenta evitar findings duplicados usando fingerprints y contexto de caso/evidencia/host/eventos.
+Correlation attempts to avoid duplicate findings using fingerprints and case/evidence/host/event context.
 
-## Relación con detections y reglas
+## Relationship with detections and rules
 
-- una `detection` puede apoyar un finding
-- una detection confirmada puede promoverse a finding
-- no toda detection high debe convertirse automáticamente en finding high
+- a `detection` can support a finding
+- a confirmed detection can be promoted to a finding
+- not every high-severity detection should automatically become a high-severity finding
 
-## Limitaciones
+## Limitations
 
-- la correlación sigue siendo heurística
-- `usb_exfil_candidate` y `cloud_exfil_candidate` expresan hipótesis, no prueba concluyente
-- los findings deben leerse junto al Timeline, Search y Process Graph
-- `user_executed_suspicious_command` se reserva para señales de alta confianza como `RunMRU` con PowerShell encoded / LOLBIN claro
-- `trusted_office_macro_document` usa `TrustRecords` como evidencia de documento confiado o contenido habilitado, pero su interpretación depende de versión Office y valor observado
-- `user_activity_suspicious_program` evita dispararse por `RecentDocs`, `TypedPaths` o `Shellbags` aislados
-- `downloaded_executable_origin` usa `Zone.Identifier` y contexto de URL/origen web para enlazar un fichero con su procedencia; no confirma ejecución por sí solo
-- `suspicious_file_deleted_or_renamed` usa USN / `$LogFile` / `$I30` para señalar staging, borrado o rename sospechoso, pero la severidad alta depende de correlación adicional
-- `office_security_alert_document` se apoya en OAlerts/Office cache/UI artifacts para resaltar Protected View, macros o content enablement; conviene leerlo junto con Email, NTFS y User Activity
-- `suspicious_ui_observed_file` usa thumbnails, ActivitiesCache o Windows Search para marcar referencias UI a ficheros sospechosos, no como prueba de ejecución
-- `security_notification_observed` resume notificaciones de seguridad de alto valor como Defender/quarantine/phishing, con cuerpo truncado y sanitizado
+- correlation is still heuristic
+- `usb_exfil_candidate` and `cloud_exfil_candidate` express hypotheses, not conclusive proof
+- findings should be read alongside the Timeline, Search and Process Graph
+- `user_executed_suspicious_command` is reserved for high-confidence signals such as `RunMRU` with encoded PowerShell / a clear LOLBIN
+- `trusted_office_macro_document` uses `TrustRecords` as evidence of a trusted document or enabled content, but its interpretation depends on the Office version and the observed value
+- `user_activity_suspicious_program` avoids triggering on isolated `RecentDocs`, `TypedPaths` or `Shellbags`
+- `downloaded_executable_origin` uses `Zone.Identifier` and URL/web-origin context to link a file to its provenance; it does not confirm execution by itself
+- `suspicious_file_deleted_or_renamed` uses USN / `$LogFile` / `$I30` to flag staging, deletion or suspicious renaming, but high severity depends on additional correlation
+- `office_security_alert_document` relies on OAlerts/Office cache/UI artifacts to highlight Protected View, macros or content enablement; it should be read together with Email, NTFS and User Activity
+- `suspicious_ui_observed_file` uses thumbnails, ActivitiesCache or Windows Search to flag UI references to suspicious files, not as proof of execution
+- `security_notification_observed` summarizes high-value security notifications such as Defender/quarantine/phishing, with a truncated and sanitized body

@@ -4,6 +4,10 @@ This document describes the canonical entity/observation model used by
 the Memory Analysis subsystem to represent processes extracted from a
 Volatility 3 memory image.
 
+## Isolation and Scope
+
+Memory process analysis is isolated to Memory Analysis. Results are not added to global Search, Timeline, Artifact Views, Detections, Findings, Reports, SIEM, Persistence, Command History, Execution Stories, or disk process-tree endpoints. Kairon normalizes process rows into `memory_process` documents and parent-child relationships into `memory_process_edge` documents, written only to `dfir-memory-{case_id}`. Command lines are bounded and may be missing; Kairon does not infer executable paths from process names. Future work may add optional analyst-driven correlation between memory and disk evidence, but this remains intentionally out of scope today — see "Why Memory Analysis does not auto-create NormalizedEvents" below.
+
 ## Why a canonical model is necessary
 
 A single memory image produces multiple process "rows" per real
@@ -145,8 +149,9 @@ merges two observations with conflicting `create_time`s.
   Provides enrichment: scan-only detection, environment variables,
   security identifiers, and privilege tokens. Does **not** create a
   second process list — it enriches the same model.
-* `windows.info` runs as part of both profiles and provides system-layer
-  metadata (kernel version, DTB, etc.).
+* `windows.info` runs first, as part of both profiles, and provides
+  system-layer metadata (kernel version, DTB, etc.). If it fails, the
+  remaining process plugins are not executed.
 * `network_basic`, `modules_basic`, `handles_basic`, `kernel_basic`,
   and `suspicious_memory` run as separate profiles and provide
   independent artifact families.
@@ -227,73 +232,7 @@ canonical model preserves per-plugin provenance and special-cases
 memory-specific signals (PID reuse, `hidden_candidate`, exit-time
 semantics) that have no direct equivalent in the disk-event model.
 
-A future sprint will provide a Search Federation layer that joins
-canonical memory entities with disk events (`EVTX 4688`, Sysmon
-Event 1, Prefetch, Amcache, UserAssist) and *then* materializes
-correlated `NormalizedEvent` rows.  This is intentionally outside
-the scope of the current sprint.
-
-## Future Architecture
-
-### Future search federation
-
-* The Memory Analysis backend will keep the canonical entity in
-  `dfir-memory-{case_id}`.
-* A federation endpoint (next sprint) will:
-  1. Resolve `process_entity_id` -> process identity
-     (PID, create_time, host_id).
-  2. Build a time-windowed query against `dfir-events-{case_id}` for
-     matching `process.entity_id` / `process.pid + process.create_time`.
-  3. Return merged hits with provenance.
-
-### Future Artifact Views
-
-* The `memory_process_entity` document type already contains the
-  fields required by the future Artifact Views pipeline:
-  `host_id`, `entity_type`, `entity_key`, `process_identity`,
-  `executable_name`, `command_line`, `parent_process_identity`.
-* A separate migration sprint will teach the Artifact Views
-  subsystem to consume memory entities without changing the disk
-  artifact shape.
-
-### Future correlation
-
-The entity schema includes placeholder fields for the future
-correlation pass:
-
-* `entity_type: "process"`
-* `entity_key` (deterministic, run-independent)
-* `process_identity` (case + evidence + identity tuple)
-* `source_kind: "memory"`
-* `source_plugins`
-* `first_seen` / `last_seen`
-* `executable_name`
-* `command_line`
-* `parent_process_identity`
-
-The correlation logic itself is **not** implemented in this sprint.
-
-## Acceptance criteria recap
-
-* processes_basic displays processes correctly.
-* Basic does not depend on psscan.
-* Extended enriches the same logical model.
-* One process is one row.
-* Plugin results are observations, not duplicate processes.
-* PID reuse is handled.
-* Command lines merge correctly.
-* PPID values are not lost.
-* Process tree uses canonical entities.
-* Unknown parent is not counted as root.
-* PID 4 is not duplicated.
-* Scan-only is visible but not automatically malicious.
-* Run selection is explicit.
-* Results from different runs are not silently mixed.
-* Existing source documents remain preserved (renormalization is
-  idempotent and additive).
-* No Volatility rerun required for migration.
-* No disk index writes.
-* No NormalizedEvent creation.
-* Browser validation passes against the deployed remote host's frontend URL.
-* Disk regression passes (no writes to `dfir-events-*`).
-* No sensitive artifacts committed.
+Joining canonical memory entities with disk events (`EVTX 4688`, Sysmon
+Event 1, Prefetch, Amcache, UserAssist) into correlated `NormalizedEvent`
+rows is intentionally not implemented — Memory Analysis stays isolated
+from the disk-event model today.

@@ -1,20 +1,20 @@
 # Scheduled Tasks / Task Scheduler
 
-## Qué son
+## What they are
 
-Las Scheduled Tasks de Windows describen **persistencia técnica y automatización**. El XML de `C:\Windows\System32\Tasks\...` representa la **definición** de la tarea, no una prueba de ejecución reciente por sí solo.
+Windows Scheduled Tasks describe **technical persistence and automation**. The XML from `C:\Windows\System32\Tasks\...` represents the task's **definition**, not by itself proof of recent execution.
 
-## Qué soporta ahora la plataforma
+## What the platform currently supports
 
-- XML raw desde:
+- raw XML from:
   - `C:\Windows\System32\Tasks\*`
-  - colecciones Velociraptor con rutas `uploads/auto/C%3A/Windows/System32/Tasks/...`
-- CSV parseados compatibles con:
+  - Velociraptor collections with paths like `uploads/auto/C%3A/Windows/System32/Tasks/...`
+- compatible parsed CSV:
   - `*ScheduledTasks*.csv`
   - `*TaskScheduler*.csv`
   - `*Tasks*.csv`
 
-## Qué campos se extraen
+## What fields are extracted
 
 - `RegistrationInfo`: `Author`, `Description`, `Date`, `URI`, `Version`
 - `Principal`: `UserId`, `GroupId`, `LogonType`, `RunLevel`
@@ -24,34 +24,34 @@ Las Scheduled Tasks de Windows describen **persistencia técnica y automatizaci�
   - `Exec`: `Command`, `Arguments`, `WorkingDirectory`
   - `ComHandler`: `ClassId`, `Data`
 
-## Cómo se interpreta
+## How it's interpreted
 
-- `scheduled_task_definition`: definición observada
-- `scheduled_task_com_handler`: tarea con acción COM handler
-- `scheduled_task_created` / `scheduled_task_updated`: eventos EVTX que prueban creación o modificación
-- `task_execution`: actividad correlacionada con EVTX/Prefetch/ejecución
+- `scheduled_task_definition`: observed definition
+- `scheduled_task_com_handler`: task with a COM handler action
+- `scheduled_task_created` / `scheduled_task_updated`: EVTX events that prove creation or modification
+- `task_execution`: activity correlated with EVTX/Prefetch/execution
 
-La app diferencia explícitamente:
+The app explicitly distinguishes:
 
-- tarea observada
-- tarea creada/modificada
-- tarea posiblemente usada como persistencia
-- tarea con ejecución correlacionada
+- observed task
+- created/modified task
+- task possibly used as persistence
+- task with correlated execution
 
-## Qué significa Enabled / Hidden
+## What Enabled / Hidden mean
 
-- `Enabled=true`: la tarea está habilitada para ejecutarse
-- `Hidden=true`: la tarea no se muestra normalmente en la interfaz
+- `Enabled=true`: the task is enabled to run
+- `Hidden=true`: the task is not normally shown in the interface
 
-Una tarea `hidden + enabled` no es automáticamente maliciosa, pero sube interés si además usa PowerShell, LOLBins, rutas de usuario o comandos codificados.
+A `hidden + enabled` task is not automatically malicious, but interest increases if it also uses PowerShell, LOLBins, user paths, or encoded commands.
 
-## Qué es ComHandler
+## What ComHandler is
 
-Una tarea con `ComHandler` no ejecuta un binario visible en `Command`, sino una clase COM. Es una técnica legítima del sistema, pero también puede ocultar persistencia menos evidente.
+A task with `ComHandler` does not execute a visible binary in `Command`, but rather a COM class. This is a legitimate system technique, but it can also hide less obvious persistence.
 
-## Correlación
+## Correlation
 
-La plataforma correlaciona Scheduled Tasks con:
+The platform correlates Scheduled Tasks with:
 
 - EVTX:
   - Security `4698`, `4699`, `4700`, `4701`, `4702`
@@ -64,19 +64,19 @@ La plataforma correlaciona Scheduled Tasks con:
 - SRUM
 - Defender
 
-## Hallazgos sospechosos típicos
+## Typical suspicious findings
 
-- PowerShell con `-EncodedCommand`
-- ejecución desde `AppData`, `Temp`, `Downloads`, `Users\Public`, `ProgramData`, `Desktop`
-- uso de `mshta`, `regsvr32`, `wscript`, `cscript`, `certutil`, `bitsadmin`
-- rutas UNC `\\server\share\...`
-- tareas `hidden + enabled`
-- nombres de tarea que imitan updates legítimos
-- `ComHandler` poco habitual
+- PowerShell with `-EncodedCommand`
+- execution from `AppData`, `Temp`, `Downloads`, `Users\Public`, `ProgramData`, `Desktop`
+- use of `mshta`, `regsvr32`, `wscript`, `cscript`, `certutil`, `bitsadmin`
+- UNC paths `\\server\share\...`
+- `hidden + enabled` tasks
+- task names that imitate legitimate updates
+- unusual `ComHandler`
 
-## Limitaciones
+## Limitations
 
-- el XML no prueba ejecución por sí solo
-- las tareas Microsoft legítimas generan mucho ruido
-- el timestamp principal puede venir de `RegistrationInfo/Date` o del `mtime` del XML
-- la confianza sube mucho cuando hay correlación con EVTX o Prefetch
+- the XML does not by itself prove execution
+- legitimate Microsoft tasks generate a lot of noise
+- the main timestamp can come from `RegistrationInfo/Date` or from the XML's `mtime`
+- confidence increases greatly when there is correlation with EVTX or Prefetch

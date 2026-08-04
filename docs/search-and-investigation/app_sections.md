@@ -1,38 +1,38 @@
-# Secciones de la aplicación
+# Application sections
 
 ## Dashboard
 
-- **Para qué sirve**: vista rápida del estado general del caso/plataforma.
-- **Qué muestra**: contadores, estado, resumen de actividad.
-- **Qué mirar primero**: si hay eventos indexados, evidencias y detections.
+- **What it's for**: quick view of the overall case/platform status.
+- **What it shows**: counters, status, activity summary.
+- **What to look at first**: whether there are indexed events, evidence and detections.
 
 ## Cases
 
-- **Para qué sirve**: crear, abrir y borrar casos.
-- **Qué muestra**: lista de casos y acceso al detalle.
-- **Qué mirar primero**: qué caso está activo y qué evidencias tiene.
+- **What it's for**: creating, opening and deleting cases.
+- **What it shows**: case list and access to case detail.
+- **What to look at first**: which case is active and what evidence it has.
 
 ## Search
 
-- **Para qué sirve**: búsqueda global sobre eventos normalizados.
-- **Qué muestra**: tabla global para resultados mixtos, con vistas específicas si el set es homogéneo.
-- **Qué admite**:
-  - query textual
+- **What it's for**: global search across normalized events.
+- **What it shows**: global table for mixed results, with specific views when the set is homogeneous.
+- **What it supports**:
+  - textual query
   - IOC
   - contains
-  - filtros por campo
-  - paginación
-- **Cuándo usarlo**: cuando todavía no sabes de qué fuente viene la pista y quieres encontrar rápido texto, usuarios, EventIDs, rutas, claves Registry, hashes o IPs.
-- **Qué mirar primero**: `windows.event_id`, `event.type`, `process.command_line`, `tags`
-- **Crear findings**: selecciona eventos y usa `Create Finding from selected events`
+  - field filters
+  - pagination
+- **When to use it**: when you don't yet know which source the lead comes from and want to quickly find text, users, EventIDs, paths, Registry keys, hashes or IPs.
+- **What to look at first**: `windows.event_id`, `event.type`, `process.command_line`, `tags`
+- **Create findings**: select events and use `Create Finding from selected events`
 
 ## Artifact Explorer
 
-- **Para qué sirve**: revisar una fuente concreta con columnas específicas por tipo de evidencia.
-- **Qué muestra**: eventos filtrados por `artifact.type` / `artifact.name`, con vistas adaptadas para `evtx`, `prefetch`, `lnk`, `jumplist`, `registry`, etc.
-- **Cuándo usarlo**: cuando ya sabes que quieres revisar una fuente concreta y no una mezcla global.
-- **Qué mirar**:
-  - detalle JSON
+- **What it's for**: reviewing a specific source with columns tailored to each evidence type.
+- **What it shows**: events filtered by `artifact.type` / `artifact.name`, with views adapted for `evtx`, `prefetch`, `lnk`, `jumplist`, `registry`, etc.
+- **When to use it**: when you already know you want to review a specific source rather than a global mix.
+- **What to look at**:
+  - JSON detail
   - `raw`
   - `windows.payload`
   - `lnk.effective_path`
@@ -42,98 +42,98 @@
   - `registry.value_data`
   - `tags`
   - `suspicious_reasons`
-- **Crear findings**: selecciona eventos del artefacto actual y crea un finding ligado al caso
+- **Create findings**: select events from the current artifact and create a finding linked to the case
 
 ## Memory Analysis
 
-- **Para qué sirve**: registrar y revisar el estado aislado de evidencia RAM/memoria autorizada.
-- **Estado actual**: Preview (Core DFIR Capability — Preview). El capability en sí está activo por defecto (`memory_enabled=true`); la ejecución de perfiles Volatility 3 permanece desactivada por defecto (`MEMORY_ANALYSIS_ENABLED=false`) hasta que un administrador la habilita explícitamente junto con upload, ejecución externa y el `memory-worker`; MemProcFS sigue como readiness-only.
-- **Flujo recomendado**: `Case -> Memory Analysis -> Add memory image`. El formulario genérico de Evidence Upload sigue funcionando, pero la subida dedicada muestra capacidad, privacidad, autorización y progreso de forma más clara.
-- **Qué muestra**: modo del caso (`empty`, `disk_only`, `memory_only`, `hybrid`), evidencias `memory_dump`, upload readiness, backend readiness, runs metadata/process y resultados aislados.
-- **Qué no hace todavía**: no añade memoria a Search, Timeline, Artifact Explorer, Detections, Reports, SIEM, Command History, Persistence ni Execution Stories. Sí permite crear Findings directamente desde filas de proceso de memoria y vistas derivadas de memoria cuando hay contexto de fila disponible — ver `docs/findings-notes.md`.
-- **Regla legal**: usa solo evidencia RAM propia, autorizada o de laboratorio creada para ese fin. No subas ni commits dumps con datos de terceros sin autorización.
+- **What it's for**: registering and reviewing the isolated state of authorized RAM/memory evidence.
+- **Current status**: Preview (Core DFIR Capability — Preview). The capability itself is enabled by default (`memory_enabled=true`); execution of Volatility 3 profiles remains disabled by default (`MEMORY_ANALYSIS_ENABLED=false`) until an administrator explicitly enables it together with upload, external execution and the `memory-worker`; MemProcFS remains readiness-only.
+- **Recommended flow**: `Case -> Memory Analysis -> Add memory image`. The generic Evidence Upload form still works, but the dedicated upload shows capability, privacy, authorization and progress more clearly.
+- **What it shows**: case mode (`empty`, `disk_only`, `memory_only`, `hybrid`), `memory_dump` evidence, upload readiness, backend readiness, run metadata/process and isolated results.
+- **What it doesn't do yet**: it doesn't add memory to Search, Timeline, Artifact Explorer, Detections, Reports, SIEM, Command History, Persistence or Execution Stories. It does allow creating Findings directly from memory process rows and memory-derived views when row context is available — see `docs/findings-notes.md`.
+- **Legal rule**: use only your own RAM evidence, authorized evidence, or lab evidence created for that purpose. Do not upload or commit dumps containing third-party data without authorization.
 
 ## Investigation Timeline
 
-- **Para qué sirve**: ordenar cronológicamente lo indexado.
-- **Qué muestra**: eventos por timestamp.
-- **Cómo usarla**: útil para reconstruir la secuencia global, entender qué pasó antes/después y pivotar a eventos concretos.
-- **Cuándo usarla**: cuando la pregunta principal es temporal, no de tipo de artefacto.
-- **Crear findings**: selecciona eventos de la secuencia temporal y conviértelos en un finding investigable
+- **What it's for**: chronologically ordering what has been indexed.
+- **What it shows**: events by timestamp.
+- **How to use it**: useful for reconstructing the overall sequence, understanding what happened before/after, and pivoting to specific events.
+- **When to use it**: when the main question is temporal rather than about artifact type.
+- **Create findings**: select events from the timeline sequence and turn them into an investigable finding
 
-## Análisis semiautomático
+## Semi-automatic analysis
 
-- **Para qué sirve**: agrupar actividad ya normalizada por categorías útiles para DFIR.
-- **Qué muestra**: programas, PowerShell, logons, RDP, tareas, servicios, red, Defender, suspicious findings, archivos abiertos, documentos recientes, aplicaciones usadas, scripts abiertos, rutas de red/USB y timeline.
-- **Fuentes actuales fuertes**: EVTX vía `EvtxECmd_Output.csv`, Prefetch vía `PECmd_Output.csv`, LNK vía `LECmd_Output.csv` y Jump Lists vía `JLECmd_Output.csv`.
-- **Qué mirar primero**: resumen, PowerShell, logons, persistencia, Defender y, si investigas interacción de usuario, `Archivos abiertos`, `Documentos recientes`, `Aplicaciones usadas` y `Scripts abiertos`.
+- **What it's for**: grouping already-normalized activity into categories useful for DFIR.
+- **What it shows**: programs, PowerShell, logons, RDP, tasks, services, network, Defender, suspicious findings, opened files, recent documents, applications used, opened scripts, network/USB paths and timeline.
+- **Currently strong sources**: EVTX via `EvtxECmd_Output.csv`, Prefetch via `PECmd_Output.csv`, LNK via `LECmd_Output.csv` and Jump Lists via `JLECmd_Output.csv`.
+- **What to look at first**: summary, PowerShell, logons, persistence, Defender and, if investigating user interaction, `Opened Files`, `Recent Documents`, `Applications Used` and `Opened Scripts`.
 
 ## Activity
 
-- **Para qué sirve**: actividad interna de la plataforma.
-- **Qué muestra**: trabajos de ingesta, importación, rule runs, errores y eventos operativos.
-- **Qué mirar primero**: si una evidencia no parsea o una regla no genera resultados.
+- **What it's for**: internal platform activity.
+- **What it shows**: ingestion jobs, imports, rule runs, errors and operational events.
+- **What to look at first**: whether a piece of evidence fails to parse or a rule produces no results.
 
 ## SIEM
 
-- **Para qué sirve**: análisis avanzado y puente con OpenSearch Dashboards.
-- **Qué muestra**:
+- **What it's for**: advanced analysis and bridge to OpenSearch Dashboards.
+- **What it shows**:
   - OpenSearch Dashboards status
   - Query Builder
   - Field Explorer
   - Saved SIEM Queries
-- **Qué mirar primero**: si necesitas pivotar por campo o abrir el caso en Dashboards.
-- **Cuándo usarlo**: cuando `Search` ya no basta y necesitas consultas técnicas precisas por campo, DSL o exploración avanzada en OpenSearch Dashboards.
+- **What to look at first**: whether you need to pivot by field or open the case in Dashboards.
+- **When to use it**: when `Search` is no longer enough and you need precise technical queries by field, DSL or advanced exploration in OpenSearch Dashboards.
 
 ## Rules
 
-- **Para qué sirve**: gestionar reglas y rule packs.
-- **Qué muestra**:
-  - reglas individuales
+- **What it's for**: managing rules and rule packs.
+- **What it shows**:
+  - individual rules
   - rule packs
   - rule runs
-- **Qué mirar primero**: engine, enabled, últimas ejecuciones y errores.
+- **What to look at first**: engine, enabled, latest runs and errors.
 
 ## Detections
 
-- **Para qué sirve**: revisar señales automáticas.
-- **Qué muestra**: detections builtin, sigma, heuristic y yara.
-- **Qué mirar primero**:
+- **What it's for**: reviewing automatic signals.
+- **What it shows**: builtin, sigma, heuristic and yara detections.
+- **What to look at first**:
   - engine
   - severity
   - source
   - target_type
   - reason
-- **Crear findings**:
-  - `Create finding` para abrir un cuadro de edición desde una detection
-  - `Create finding from selected detections` para varias detections del mismo caso
-  - `Promote to finding` para promoción rápida
+- **Create findings**:
+  - `Create finding` to open an edit box from a detection
+  - `Create finding from selected detections` for several detections from the same case
+  - `Promote to finding` for quick promotion
 
 ## Findings
 
-- **Para qué sirve**: consolidar hallazgos investigables o confirmados.
-- **Qué diferencia hay con Detections**:
-  - `Detection` = señal automática
-  - `Finding` = elemento ya promovido o confirmado por el analista
-- **Cómo se crean hoy**:
-  - manualmente desde la propia sección
-  - desde eventos seleccionados en `Search`, `Artifact Explorer` y `Investigation Timeline`
-  - desde `Detections`
+- **What it's for**: consolidating investigable or confirmed findings.
+- **How it differs from Detections**:
+  - `Detection` = automatic signal
+  - `Finding` = item already promoted or confirmed by the analyst
+- **How they're created today**:
+  - manually from the section itself
+  - from events selected in `Search`, `Artifact Explorer` and `Investigation Timeline`
+  - from `Detections`
 
 ## Docs
 
-- **Para qué sirve**: manual de uso y mantenimiento de la herramienta.
-- **Qué mirar primero**:
-  - `Primeros pasos`
+- **What it's for**: usage and maintenance manual for the tool.
+- **What to look at first**:
+  - `Getting Started`
   - `EVTX`
-  - `Análisis semiautomático`
+  - `Semi-automatic analysis`
   - `Troubleshooting`
 
 ## System
 
-- **Para qué sirve**: estado de recursos y ajustes runtime/deploy.
-- **Qué mirar primero**:
+- **What it's for**: resource status and runtime/deploy settings.
+- **What to look at first**:
   - CPU/RAM/OpenSearch
   - workers
-  - colas
+  - queues
   - `AUTO_CREATE_HEURISTIC_DETECTIONS`

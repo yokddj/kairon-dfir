@@ -1,7 +1,5 @@
 # Deployment Modes
 
-> Documentation status: technical draft pending maintainer review.
-
 Kairon DFIR supports three deployment modes. Choose based on where your browser and server are relative to each other.
 
 ## Mode Selection

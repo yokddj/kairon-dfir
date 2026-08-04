@@ -1,8 +1,8 @@
 # Autoruns / ASEP
 
-## Qué es
+## What it is
 
-Autoruns / ASEP resume mecanismos de autoarranque y persistencia de Windows:
+Autoruns / ASEP summarizes Windows auto-start and persistence mechanisms:
 
 - Run / RunOnce
 - Startup folder
@@ -17,88 +17,88 @@ Autoruns / ASEP resume mecanismos de autoarranque y persistencia de Windows:
 - Shell Extensions
 - Office add-ins
 
-La plataforma trata estas entradas como persistencia observada o candidata, no como ejecución confirmada por sí sola.
+The platform treats these entries as observed or candidate persistence, not as execution confirmed on their own.
 
-## Qué soporta la app
+## What the app supports
 
 - Autoruns CSV
 - Autoruns TSV
 - Autoruns XML
 - Autorunsc output
-- startup folder files detectados desde colecciones raw
-- correlación con Registry, Scheduled Tasks, WMI, PowerShell, Defender, Prefetch, Amcache, MFT, Browser y BITS
+- startup folder files detected from raw collections
+- correlation with Registry, Scheduled Tasks, WMI, PowerShell, Defender, Prefetch, Amcache, MFT, Browser, and BITS
 
-## Qué se parsea directamente desde Velociraptor
+## What is parsed directly from Velociraptor
 
-Si una colección raw incluye salidas parseadas de Autoruns, la app las ingiere directamente.
+If a raw collection includes already-parsed Autoruns output, the app ingests it directly.
 
-Además detecta:
+It also detects:
 
 - Startup folder files
-- `SOFTWARE`, `SYSTEM`, `NTUSER.DAT`, `UsrClass.dat` como candidatos ASEP
+- `SOFTWARE`, `SYSTEM`, `NTUSER.DAT`, `UsrClass.dat` as ASEP candidates
 - Task XML
-- repositorio WMI raw como candidato relacionado
+- raw WMI repository as a related candidate
 
-## Qué queda solo como discovery
+## What remains discovery-only
 
-Si solo hay hives raw o repositorio WMI raw:
+If only raw hives or a raw WMI repository are present:
 
-- se preservan como candidatos
-- no se marcan como parseados falsamente
-- el parser recomendado sigue siendo RECmd / Scheduled Tasks / WMI según el caso
+- they are preserved as candidates
+- they are not falsely marked as parsed
+- the recommended parser is still RECmd / Scheduled Tasks / WMI depending on the case
 
-## Campos extraídos
+## Extracted fields
 
-- categoría, entry location, entry, enabled
+- category, entry location, entry, enabled
 - profile / user / SID
 - image path, launch string, command line, arguments
 - publisher, signer, signed, verified
-- hashes MD5 / SHA1 / SHA256 / PE hashes
-- VT detection / link si existe
-- mecanismo de persistencia normalizado
+- MD5 / SHA1 / SHA256 hashes / PE hashes
+- VT detection / link if present
+- normalized persistence mechanism
 
-## Cómo interpretar signed / verified / publisher
+## How to interpret signed / verified / publisher
 
-- `signed` o `verified` ayuda a priorizar, pero no garantiza benignidad
-- ausencia de firma tampoco prueba malicia
-- Microsoft-signed en rutas estándar suele bajar prioridad
-- unsigned o unknown en AppData / Temp / ProgramData suele subirla
+- `signed` or `verified` helps prioritize, but does not guarantee benignity
+- absence of a signature does not prove malice either
+- Microsoft-signed in standard paths usually lowers priority
+- unsigned or unknown in AppData / Temp / ProgramData usually raises it
 
-## Cómo interpretar VT detection
+## How to interpret VT detection
 
-- `vt_detection > 0` es una señal adicional
-- no debe usarse aislada
-- tiene más valor cuando coincide con path sospechoso, LOLBins, descarga previa o ejecución posterior
+- `vt_detection > 0` is an additional signal
+- it should not be used in isolation
+- it has more value when it coincides with a suspicious path, LOLBins, a prior download, or subsequent execution
 
-## Correlaciones
+## Correlations
 
-La capa semiautomática enlaza Autoruns con:
+The semi-automatic layer links Autoruns with:
 
-- PowerShell que crea Run keys, tareas, servicios o WMI
-- Browser / BITS que descargan el target antes de persistirse
-- MFT / USN que crean o modifican el target cerca del timestamp
-- Prefetch que ejecuta el target después
-- Defender que detecta el target
-- WMI / Scheduled Tasks / Registry cuando reflejan el mismo mecanismo
+- PowerShell that creates Run keys, tasks, services, or WMI
+- Browser / BITS that download the target before it persists
+- MFT / USN that create or modify the target near the timestamp
+- Prefetch that executes the target afterward
+- Defender that detects the target
+- WMI / Scheduled Tasks / Registry when they reflect the same mechanism
 
-## Falsos positivos comunes
+## Common false positives
 
-- actualizadores legítimos en `Run`
-- software corporativo con services o tasks propias
-- shell extensions, Office add-ins y BHOs de software conocido
-- binarios no firmados internos o legacy
+- legitimate updaters in `Run`
+- corporate software with its own services or tasks
+- shell extensions, Office add-ins, and BHOs from known software
+- unsigned internal or legacy binaries
 
-## Limitaciones
+## Limitations
 
-- Autoruns refleja estado observado, no siempre fecha real de creación
-- una entrada deshabilitada puede seguir siendo relevante
-- firma válida no garantiza benignidad
-- ausencia de firma no garantiza malicia
-- hives raw y parte del ASEP agregado siguen dependiendo de parsers especializados ya existentes
+- Autoruns reflects observed state, not always the actual creation date
+- a disabled entry can still be relevant
+- a valid signature does not guarantee benignity
+- absence of a signature does not guarantee malice
+- raw hives and part of the aggregated ASEP still depend on already-existing specialized parsers
 
-## Ejemplos de investigación
+## Investigation examples
 
 1. `Run key -> AppData -> unsigned -> Browser/BITS download -> Prefetch`
 2. `IFEO Debugger -> cmd /c payload`
-3. `Winlogon Shell -> binario fuera de rutas estándar`
-4. `Startup folder -> script o LOLBin`
+3. `Winlogon Shell -> binary outside standard paths`
+4. `Startup folder -> script or LOLBin`

@@ -320,17 +320,6 @@ Once files are materialized from a detected installation, the following are reus
 - Search
 - Timeline
 
-## Readiness
-
-`/api/system/status` now reports disk image adapter readiness and tool visibility.
-
-Examples:
-
-- RAW adapter ready when `pytsk3` is available
-- EWF adapter ready when `pyewf` (the `libewf-python` package) is importable
-
-Optional dependencies do not mark the whole system unhealthy.
-
 ## Creating test fixtures
 
 The test suite generates minimal deterministic fixtures on the fly using small FAT filesystem images and partitioned disk images.

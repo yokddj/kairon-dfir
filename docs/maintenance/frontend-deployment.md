@@ -28,15 +28,12 @@ not as a production build.  This is a development-oriented deployment.
 
 ## Implications
 
-* A `npm run build` step does succeed (verified in the recovery sprint),
-  producing a `dist/` tree, but it is not served by the running image.
+* A `npm run build` step does succeed, producing a `dist/` tree, but it is not served by the running image.
 * The dev-server deployment is convenient for debugging but exposes the
   source over HTTP.  This is acceptable for a lab/internal network but
   not for public exposure.
 
-## Recommended production sprint (separate)
-
-A future sprint should:
+## Recommended Production Hardening (Not Yet Done)
 
 1. Change the frontend `Dockerfile` to:
    * `npm ci` (after committing a lockfile)
@@ -46,7 +43,3 @@ A future sprint should:
 3. Add CSP, HSTS, and other standard frontend hardening.
 4. Configure cache headers for hashed asset chunks.
 5. Document the build/serve separation in deploy scripts.
-
-This sprint is **separate** from the Memory UI recovery.  The recovery
-preserves the existing `npm run dev` deployment to avoid expanding scope
-and to keep the change set auditable.

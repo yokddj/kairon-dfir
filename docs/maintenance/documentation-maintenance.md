@@ -1,82 +1,84 @@
-# Mantenimiento de documentación
+# Documentation Maintenance
 
-## Objetivo
+## Goal
 
-La documentación debe cambiar junto al código. Si la herramienta evoluciona y la documentación no, acaba siendo peor que no tener docs.
+Documentation must change alongside the code. If the tool evolves and the documentation doesn't, it ends up worse than having no docs at all.
 
-## Cuándo hay que actualizar docs
+## When to Update Docs
 
-Cada vez que se añada o cambie:
+Any time you add or change:
 
-- un parser nuevo
-- una evidencia nueva
-- un endpoint nuevo
-- una sección frontend nueva
-- una regla builtin nueva
-- un `event.type` nuevo
-- un campo normalizado nuevo
-- una sección del análisis semiautomático
+- a new parser
+- a new evidence type
+- a new endpoint
+- a new frontend section
+- a new builtin rule
+- a new `event.type`
+- a new normalized field
+- a semi-automatic analysis section
 
-## Qué documentos revisar
+## Which Documents to Review
 
-- `docs/artifacts.md`
-- `docs/prefetch.md` si cambia Prefetch / PECmd / native_prefetch
-- `docs/lnk.md` si cambia LNK / LECmd / native_lnk
-- `docs/jumplists.md` si cambia Jump Lists / JLECmd / raw automaticDestinations/customDestinations
-- `docs/registry.md` si cambia Registry / RECmd
-- `docs/filesystem_mft_usn.md` si cambia MFT / USN / MFTECmd
-- `docs/browser.md` si cambia history / downloads / search terms
-- `docs/execution_artifacts.md` si cambia Amcache / ShimCache / AppCompat
-- `docs/srum.md` si cambia SrumECmd / network usage / semiauto de red
-- `docs/scheduled_tasks.md` si cambia Task Scheduler XML / CSV, correlaciones o semiauto de persistencia
-- `docs/defender.md` si cambia DetectionHistory, MPLog, correlaciones o el wording de remediación
-- `docs/powershell_artifacts.md` si cambia PSReadLine, transcripts, scripts observados o correlaciones PowerShell
-- `docs/recycle_bin.md` si cambia RBCmd, `$I/$R`, correlaciones o secciones del semi-auto relacionadas con borrado/cleanup
-- `docs/shellbags.md` si cambia SBECmd, Shellbags raw detectados desde Velociraptor, correlaciones o secciones del semi-auto relacionadas con carpetas observadas
-- `docs/usb.md` si cambia `setupapi.dev.log`, CSVs USB/Registry, correlaciones con volúmenes removibles o hipótesis de copia a USB
-- `docs/bits.md` si cambia BITS, `qmgr` discovery, CSV/JSON/TXT parseado, notify commands o correlaciones con PowerShell/Browser/Defender
-- `docs/cloud_sync.md` si cambia detección de proveedores cloud, path inference, staging/exfiltración prudente o correlaciones con Browser/BITS/PowerShell
-- `docs/velociraptor_ingest.md` si cambia ZIP inventory, discovery, selective extraction o staging de colecciones
-- `docs/semi_automatic_analysis.md`
-- `docs/builtin_rules.md`
-- `docs/wmi.md`
-- `docs/rule_authoring.md`
-- `docs/app_sections.md`
-- `docs/architecture.md`
-- `docs/opensearch.md`
-- `docs/troubleshooting.md`
+- `docs/artifacts/parser-coverage.md` (canonical parser/artifact status matrix)
+- `docs/artifacts/prefetch.md` if Prefetch / PECmd / native_prefetch changes
+- `docs/artifacts/lnk.md` if LNK / LECmd / native_lnk changes
+- `docs/artifacts/jumplists.md` if Jump Lists / JLECmd / raw automaticDestinations/customDestinations changes
+- `docs/artifacts/registry.md` if Registry / RECmd changes
+- `docs/artifacts/filesystem_mft_usn.md` if MFT / USN / MFTECmd changes
+- `docs/artifacts/browser.md` if history / downloads / search terms change
+- `docs/artifacts/execution_artifacts.md` if Amcache / ShimCache / AppCompat changes
+- `docs/artifacts/srum.md` if SrumECmd / network usage / semi-auto network sections change
+- `docs/artifacts/scheduled_tasks.md` if Task Scheduler XML/CSV, correlations, or persistence semi-auto sections change
+- `docs/artifacts/defender.md` if DetectionHistory, MPLog, correlations, or remediation wording change
+- `docs/artifacts/powershell_artifacts.md` if PSReadLine, transcripts, observed scripts, or PowerShell correlations change
+- `docs/artifacts/recycle_bin.md` if RBCmd, `$I/$R`, correlations, or delete/cleanup semi-auto sections change
+- `docs/artifacts/shellbags.md` if SBECmd, raw Shellbags detected from Velociraptor, correlations, or observed-folder semi-auto sections change
+- `docs/artifacts/usb.md` if `setupapi.dev.log`, USB/Registry CSVs, removable-media correlations, or USB-copy hypotheses change
+- `docs/artifacts/bits.md` if BITS, `qmgr` discovery, parsed CSV/JSON/TXT, notify commands, or PowerShell/Browser/Defender correlations change
+- `docs/artifacts/cloud_sync.md` if cloud-provider detection, path inference, staging/exfiltration wording, or Browser/BITS/PowerShell correlations change
+- `docs/evidence/velociraptor_ingest.md` if ZIP inventory, discovery, selective extraction, or collection staging changes
+- `docs/search-and-investigation/semi_automatic_analysis.md`
+- `docs/rules/builtin_rules.md`
+- `docs/artifacts/wmi.md`
+- `docs/rules/rule_authoring.md`
+- `docs/search-and-investigation/app_sections.md`
+- `docs/architecture/overview.md`
+- `docs/operations/opensearch.md`
+- `docs/operations/troubleshooting.md`
 - `docs/roadmap.md`
 
-## Checklist para cambios / PR
+## PR Checklist
 
-- [ ] ¿Añadí o modifiqué parser?
-- [ ] ¿Actualicé `artifacts.md`?
-- [ ] ¿Añadí `event.type` nuevo?
-- [ ] ¿Actualicé `semi_automatic_analysis.md`?
-- [ ] ¿Añadí regla builtin?
-- [ ] ¿Actualicé `builtin_rules.md`?
-- [ ] ¿Cambió UI?
-- [ ] ¿Actualicé `app_sections.md`?
-- [ ] ¿Cambió mapping OpenSearch?
-- [ ] ¿Actualicé `opensearch.md` y `troubleshooting.md`?
-- [ ] ¿Añadí tests?
-- [ ] ¿Documenté limitaciones?
+- [ ] Added or changed a parser?
+- [ ] Updated `docs/artifacts/parser-coverage.md`?
+- [ ] Added a new `event.type`?
+- [ ] Updated `semi_automatic_analysis.md`?
+- [ ] Added a builtin rule?
+- [ ] Updated `builtin_rules.md`?
+- [ ] Changed the UI?
+- [ ] Updated `app_sections.md`?
+- [ ] Changed the OpenSearch mapping?
+- [ ] Updated `opensearch.md` and `troubleshooting.md`?
+- [ ] Added tests?
+- [ ] Documented limitations?
 
-## Recomendación práctica
+## Practical Recommendation
 
-Cuando cambies una capacidad de análisis, haz estas tres preguntas:
+When you change an analysis capability, ask three questions:
 
-1. ¿Dónde se usa en la UI?
-2. ¿De qué evidencias se alimenta?
-3. ¿Qué debe comprobar un analista para validar que funciona?
+1. Where is it used in the UI?
+2. What evidence does it consume?
+3. What should an analyst check to validate that it works?
 
-Si no puedes responderlas leyendo la documentación, la documentación no está completa.
-# Recordatorio
+If you can't answer those by reading the documentation, the documentation isn't complete.
 
-- Cualquier ampliación de `Autoruns / ASEP` debe actualizar `docs/autoruns.md`, `docs/artifacts.md`, `docs/semi_automatic_analysis.md` y `docs/builtin_rules.md`.
-- Cualquier ampliación de `Cloud Sync` debe actualizar `docs/cloud_sync.md`, `docs/artifacts.md`, `docs/semi_automatic_analysis.md`, `docs/troubleshooting.md` y `docs/builtin_rules.md`.
-- Cualquier ampliación de `Network / WLAN / DNS` debe actualizar `docs/network.md`, `docs/artifacts.md`, `docs/semi_automatic_analysis.md`, `docs/troubleshooting.md`, `docs/velociraptor_ingest.md` y `docs/builtin_rules.md`.
-# Keep `docs/raw_parsers.md` aligned with parser statuses, supported native raw types and deduplication behavior.
+## Cross-Cutting Reminders
+
+- Any expansion of `Autoruns / ASEP` should update `docs/artifacts/autoruns.md`, `docs/artifacts/parser-coverage.md`, `docs/search-and-investigation/semi_automatic_analysis.md`, and `docs/rules/builtin_rules.md`.
+- Any expansion of `Cloud Sync` should update `docs/artifacts/cloud_sync.md`, `docs/artifacts/parser-coverage.md`, `docs/search-and-investigation/semi_automatic_analysis.md`, `docs/operations/troubleshooting.md`, and `docs/rules/builtin_rules.md`.
+- Any expansion of `Network / WLAN / DNS` should update `docs/artifacts/network.md`, `docs/artifacts/parser-coverage.md`, `docs/search-and-investigation/semi_automatic_analysis.md`, `docs/operations/troubleshooting.md`, `docs/evidence/velociraptor_ingest.md`, and `docs/rules/builtin_rules.md`.
+- Keep `docs/artifacts/parser-coverage.md` aligned with parser statuses, supported native raw types, and deduplication behavior.
+
 ## Debug Export Pack
 
-Cuando cambie el contenido del ZIP de validación, actualiza `docs/debug_export_pack.md` y cualquier referencia cruzada en troubleshooting, architecture y roadmap. Mantén alineados los nombres de fichero, opciones por defecto, redacción de secretos y limitaciones declaradas.
+When the validation ZIP's contents change, update `docs/operations/debug_export_pack.md` and any cross-references in troubleshooting, architecture, and roadmap docs. Keep file names, defaults, secret redaction, and declared limitations consistent across all of them.

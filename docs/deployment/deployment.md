@@ -55,6 +55,70 @@ docker compose up -d --build
 ./scripts/dfir-healthcheck.sh
 ```
 
+Default endpoints once the stack is up:
+
+- frontend: `http://localhost:5173`
+- backend docs: `http://localhost:8000/docs`
+- dashboards: `http://localhost:5601`
+
+## Environment Variables Reference
+
+### Database / queue
+
+- `POSTGRES_DB`
+- `POSTGRES_USER`
+- `POSTGRES_PASSWORD`
+- `POSTGRES_HOST`
+- `POSTGRES_PORT`
+- `REDIS_URL`
+
+### OpenSearch
+
+- `OPENSEARCH_HOST`
+- `OPENSEARCH_PORT`
+- `OPENSEARCH_USER`
+- `OPENSEARCH_PASSWORD`
+- `OPENSEARCH_INITIAL_ADMIN_PASSWORD`
+- `OPENSEARCH_INDEX_PREFIX`
+- `OPENSEARCH_JAVA_HEAP`
+- `OPENSEARCH_DASHBOARDS_INTERNAL_URL`
+- `OPENSEARCH_DASHBOARDS_PUBLIC_URL`
+
+### Backend / evidence
+
+- `BACKEND_DATA_DIR`
+- `BACKEND_TEMP_DIR`
+- `BACKEND_MAX_UPLOAD_SIZE`
+- `BACKEND_MAX_EXTRACTED_FILES`
+- `BACKEND_MAX_EXTRACTED_BYTES`
+- `DFIR_ALLOW_HOST_PATH_IMPORT`
+- `DFIR_ALLOWED_EVIDENCE_ROOTS`
+
+### Performance / ingest
+
+- `INGEST_BATCH_SIZE`
+- `OPENSEARCH_BULK_DOCS`
+- `OPENSEARCH_BULK_BYTES`
+- `BACKEND_UVICORN_WORKERS`
+- `MAX_PARALLEL_ARTIFACTS`
+- `MAX_PARALLEL_RULE_RUNS`
+- `SEARCH_DEFAULT_PAGE_SIZE`
+- `SEARCH_MAX_PAGE_SIZE`
+
+### YARA
+
+- `YARA_SCAN_RAW_EVIDENCE`
+- `YARA_SCAN_PARSED_OUTPUTS`
+- `YARA_SCAN_ARCHIVES`
+- `YARA_SCAN_TEXT_OUTPUTS`
+- `YARA_MAX_FILE_SIZE_MB`
+
+### Frontend
+
+- `FRONTEND_API_BASE_URL`
+
+See `.env.example` for the full, authoritative list with defaults.
+
 ## Volumes and Data
 
 Persistent Docker volumes:
@@ -72,7 +136,22 @@ Read-only external evidence mounts:
 - `./data/local-mounts/data-evidence:/data/evidence:ro`
 - `./data/local-mounts/cases:/cases:ro`
 
+These paths are the expected bases for `server-mounted path` selection when `DFIR_ALLOW_HOST_PATH_IMPORT=true`.
+
 Do not store secrets in repository files. `.env` is local deployment state.
+
+### Why doesn't my local path work?
+
+If you type a path into the UI such as:
+
+- `C:\Users\analyst\Desktop\Evidence`
+- `/home/user/Evidence`
+- `/opt/evidence`
+
+the backend cannot read it just because it exists on your own machine — the backend runs in its own container. You must either:
+
+1. use **Upload file** from the browser, or
+2. mount/share that folder on the server under one of the allowed roots above (e.g. `./data/local-mounts/mnt-evidence`).
 
 ## Health Checks
 
@@ -94,6 +173,30 @@ It checks:
 - task health warnings
 
 The in-app System page and `/api/system/status` expose the same operational components.
+
+## Operations
+
+Selective restarts:
+
+```bash
+docker compose up -d --force-recreate backend
+docker compose up -d --force-recreate frontend
+docker compose up -d --force-recreate opensearch
+docker compose up -d --scale worker=1
+```
+
+Checking status:
+
+```bash
+docker compose ps
+docker compose logs -f backend
+docker compose logs -f worker
+docker compose logs -f opensearch
+curl -I http://localhost:5173
+curl -I http://localhost:8000/docs
+```
+
+If you change `OPENSEARCH_JAVA_HEAP`, recreate `opensearch`. If you change `BACKEND_UVICORN_WORKERS`, recreate `backend`. To scale workers, use `docker compose up -d --scale worker=<N>`.
 
 ## Security Notes
 
@@ -117,14 +220,22 @@ Recommended reverse proxy controls:
 - HTTP basic auth or SSO in front of frontend/backend.
 - No public access to Postgres, Redis or OpenSearch.
 
+Additional operational hygiene:
+
+- Do not mount `docker.sock` without an explicit, deliberate reason.
+- Keep `DFIR_ALLOWED_EVIDENCE_ROOTS` restricted to real evidence roots.
+- Do not enable host-path import unless you need it.
+- Run YARA scans with size and scope limits.
+- Avoid publishing `postgres`, `redis`, and `opensearch` to the host unless necessary.
+
 ## Validation Datasets
 
 The main branch does not bundle evidence archives, public challenge datasets or answer keys. Validation datasets should be maintained as separate packages and imported only into environments where users expect QA or training material.
 
 Relevant docs:
 
-- `docs/validation/README.md`
-- `docs/validation/validation-matrix-format.md`
+- [Validation workflow](../validation/README.md)
+- [Validation matrix format](../validation/validation-matrix-format.md)
 
 If you import a validation dataset, treat it as evidence data and back it up like any other case.
 

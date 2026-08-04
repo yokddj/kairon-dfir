@@ -1,20 +1,20 @@
 # Search
 
-`Search` es el workspace principal de investigación. `Search Timeline` es una vista de Search para explorar resultados filtrados por tiempo; `Incident Timeline` es la historia curada/reportable del caso. `Artifact Views` son vistas especializadas por familia de artefacto.
+`Search` is the main investigation workspace. `Search Timeline` is a Search view for exploring results filtered by time; `Incident Timeline` is the curated/reportable story of the case. `Artifact Views` are specialized views by artifact family.
 
-## Qué soporta
+## What it supports
 
-- texto libre e IOC-aware search.
-- frases de comandos y rutas Windows.
-- filtros por caso, evidencia, host, tiempo, artifact type, parser, backend variant, markings y riesgo.
+- free text and IOC-aware search.
+- command flags and Windows paths as phrases.
+- filters by case, evidence, host, time, artifact type, parser, backend variant, markings and risk.
 - include/exclude filters.
-- facets y quick filters.
-- detalle de evento con pivots.
-- links a Command History, Execution Story, Search Timeline, Findings y Reports.
+- facets and quick filters.
+- event detail with pivots.
+- links to Command History, Execution Story, Search Timeline, Findings and Reports.
 
 ## Command and path queries
 
-Search trata flags de comandos como texto literal. Estos ejemplos deben buscar texto/campos técnicos, no operadores negativos:
+Search treats command flags as literal text. These examples should search for text/technical fields, not negative operators:
 
 - `powershell -ep bypass`
 - `"powershell -ep bypass"`
@@ -28,18 +28,18 @@ Search trata flags de comandos como texto literal. Estos ejemplos deben buscar t
 - `C:\Users\Public\remote-admin.exe`
 - `example-control.test`
 
-Para excluir resultados usa:
+To exclude results, use:
 
-- filtros `does not contain`
+- `does not contain` filters
 - `exclude_q`
-- filtros negativos de artifact/host/parser/source
-- sintaxis `NOT` documentada en modo avanzado
+- negative artifact/host/parser/source filters
+- `NOT` syntax documented in advanced mode
 
-No uses `-term` esperando exclusión implícita.
+Do not use `-term` expecting implicit exclusion.
 
-## Campos buscados por `q`
+## Fields searched by `q`
 
-Search da prioridad a:
+Search prioritizes:
 
 - `process.command_line`
 - parent process command line
@@ -50,7 +50,7 @@ Search da prioridad a:
 - `defender.path`
 - `threat.name`
 
-También busca en:
+It also searches in:
 
 - event message / summary
 - registry path

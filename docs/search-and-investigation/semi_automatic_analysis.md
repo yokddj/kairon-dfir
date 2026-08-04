@@ -1,101 +1,101 @@
-# Análisis semiautomático
+# Semi-automatic analysis
 
-## Qué es
+## What it is
 
-Es una capa de agrupación de eventos normalizados orientada a responder más rápido a la pregunta:
+It's a normalized-event grouping layer designed to answer more quickly the question:
 
-> ¿Qué pasó en este host o este caso?
+> What happened on this host or this case?
 
-No sustituye a la revisión manual. Resume actividad relevante.
+It does not replace manual review. It summarizes relevant activity.
 
-## Endpoint y vista
+## Endpoint and view
 
 - Backend: `GET /api/cases/{case_id}/analysis/semi-auto`
-- Frontend: `Análisis semiautomático`
+- Frontend: `Semi-automatic analysis`
 
-## Secciones actuales
+## Current sections
 
-### 1. Programas ejecutados
+### 1. Programs executed
 
-| Campo | Detalle |
+| Field | Detail |
 | --- | --- |
-| Qué busca | Creación de procesos y ejecución observada |
-| Evidencias actuales | EVTX 4688, Prefetch / PECmd, parte de PowerShell, Registry / RECmd |
-| EventIDs/artefactos | 4688, `PECmd_Output.csv`, `RECmd_Output.csv` (`userassist_execution`, `bam_execution`, `dam_execution`, `run_mru_command`, `muicache_entry`) |
-| Qué muestra | timestamp, usuario, proceso, ruta, fuente, run count, last run, previous runs, confidence |
-| Cómo interpretarlo | Busca ejecuciones anómalas, padres extraños o rutas sospechosas |
-| Limitaciones actuales | La correlación EVTX 4688 + Prefetch es básica y se apoya en nombre, host y cercanía temporal |
-| Futuro | UserAssist, BAM/DAM, Amcache, correlación más fuerte con Prefetch raw |
+| What it looks for | Process creation and observed execution |
+| Current evidence | EVTX 4688, Prefetch / PECmd, part of PowerShell, Registry / RECmd |
+| EventIDs/artifacts | 4688, `PECmd_Output.csv`, `RECmd_Output.csv` (`userassist_execution`, `bam_execution`, `dam_execution`, `run_mru_command`, `muicache_entry`) |
+| What it shows | timestamp, user, process, path, source, run count, last run, previous runs, confidence |
+| How to interpret it | Look for anomalous executions, strange parents or suspicious paths |
+| Current limitations | EVTX 4688 + Prefetch correlation is basic and relies on name, host and temporal proximity |
+| Future | UserAssist, BAM/DAM, Amcache, stronger correlation with raw Prefetch |
 
 ### 2. PowerShell
 
-| Campo | Detalle |
+| Field | Detail |
 | --- | --- |
-| Qué busca | Script blocks, module logging, pipeline execution, encoded command, download cradle |
-| Evidencias actuales | 4104, 4103, 800, 400, 403, Prefetch de `powershell.exe` / `pwsh.exe`, Jump Lists/LNK que apunten a scripts PowerShell, `ConsoleHost_history.txt`, transcripts y scripts PowerShell observados |
-| Qué muestra | script block, usuario, ScriptBlockId, razones sospechosas |
-| Cómo interpretarlo | Prioriza encoded commands, descargas y cambios Defender |
-| Limitaciones actuales | `PSReadLine` no suele tener timestamp por comando y un script observado no equivale a ejecución confirmada |
-| Futuro | más correlación con `4104`, transcripts enriquecidos y mejor agrupación por sesión |
+| What it looks for | Script blocks, module logging, pipeline execution, encoded command, download cradle |
+| Current evidence | 4104, 4103, 800, 400, 403, Prefetch of `powershell.exe` / `pwsh.exe`, Jump Lists/LNK pointing to PowerShell scripts, `ConsoleHost_history.txt`, transcripts and observed PowerShell scripts |
+| What it shows | script block, user, ScriptBlockId, suspicious reasons |
+| How to interpret it | Prioritize encoded commands, downloads and Defender changes |
+| Current limitations | `PSReadLine` usually has no per-command timestamp and an observed script does not equal confirmed execution |
+| Future | more correlation with `4104`, enriched transcripts and better session grouping |
 
 ### 3. Logons
 
-| Campo | Detalle |
+| Field | Detail |
 | --- | --- |
-| Qué busca | Logons exitosos, fallidos, explícitos y privilegios especiales |
-| Evidencias actuales | 4624, 4625, 4648, 4672 |
-| Qué muestra | usuario, LogonType, IP origen, workstation, status |
-| Cómo interpretarlo | Revisa logons remotos, cuentas de servicio y fallos reiterados |
-| Limitaciones actuales | La cobertura depende de que el EVTX parseado esté completo |
-| Futuro | Más correlación con WinRM, NTLM y Kerberos |
+| What it looks for | Successful, failed, explicit logons and special privileges |
+| Current evidence | 4624, 4625, 4648, 4672 |
+| What it shows | user, LogonType, source IP, workstation, status |
+| How to interpret it | Review remote logons, service accounts and repeated failures |
+| Current limitations | Coverage depends on the parsed EVTX being complete |
+| Future | More correlation with WinRM, NTLM and Kerberos |
 
 ### 4. RDP
 
-| Campo | Detalle |
+| Field | Detail |
 | --- | --- |
-| Qué busca | Autenticaciones RDP, reconexiones y desconexiones |
-| Evidencias actuales | 4624 LogonType 10, 1149, 21/22/23/24/25/39/40, 4778, 4779 |
-| Qué muestra | usuario, IP origen, resumen, sesión |
-| Cómo interpretarlo | Útil para accesos remotos, pivotes y sesiones tardías |
-| Limitaciones actuales | No toda la telemetría RDP tiene el mismo nivel de detalle |
-| Futuro | Correlación con LNK, Prefetch y servicios remotos |
+| What it looks for | RDP authentications, reconnections and disconnections |
+| Current evidence | 4624 LogonType 10, 1149, 21/22/23/24/25/39/40, 4778, 4779 |
+| What it shows | user, source IP, summary, session |
+| How to interpret it | Useful for remote access, pivots and late sessions |
+| Current limitations | Not all RDP telemetry has the same level of detail |
+| Future | Correlation with LNK, Prefetch and remote services |
 
-### 5. Tareas programadas
+### 5. Scheduled tasks
 
-| Campo | Detalle |
+| Field | Detail |
 | --- | --- |
-| Qué busca | Definiciones de tareas, tareas sospechosas, persistencia y ejecución correlacionada |
-| Evidencias actuales | XML raw de `C:\\Windows\\System32\\Tasks\\*`, CSVs compatibles de Scheduled Tasks, 4698, 4699, 4700, 4701, 4702, 106, 140, 141, 200, 201, 102, 129 |
-| Qué muestra | nombre, task path, command, arguments, RunAs, trigger summary, hidden/enabled, razones sospechosas |
-| Cómo interpretarlo | Diferencia entre definición observada, persistencia candidata y ejecución observada por correlación |
-| Limitaciones actuales | El XML describe configuración; la confianza sube mucho cuando hay EVTX, Prefetch, Browser, MFT o Defender relacionados |
-| Futuro | `TaskCache` de Registry y enriquecimiento más fuerte de eventos TaskScheduler |
+| What it looks for | Task definitions, suspicious tasks, persistence and correlated execution |
+| Current evidence | raw XML from `C:\\Windows\\System32\\Tasks\\*`, compatible Scheduled Tasks CSVs, 4698, 4699, 4700, 4701, 4702, 106, 140, 141, 200, 201, 102, 129 |
+| What it shows | name, task path, command, arguments, RunAs, trigger summary, hidden/enabled, suspicious reasons |
+| How to interpret it | Differentiate between observed definition, candidate persistence and execution observed through correlation |
+| Current limitations | The XML describes configuration; confidence rises significantly when related EVTX, Prefetch, Browser, MFT or Defender data exists |
+| Future | Registry `TaskCache` and stronger enrichment of TaskScheduler events |
 
-### 6. Servicios
+### 6. Services
 
-| Campo | Detalle |
+| Field | Detail |
 | --- | --- |
-| Qué busca | Servicios creados o modificados |
-| Evidencias actuales | 7045, 7040, 7036, 4697 |
-| Qué muestra | nombre, image path, cuenta, start type |
-| Cómo interpretarlo | Foco en persistencia y ejecución vía servicio |
-| Limitaciones actuales | No cruza aún con Registry SYSTEM\\Services de forma fuerte |
-| Futuro | Registry y más correlación con Prefetch del binario |
+| What it looks for | Services created or modified |
+| Current evidence | 7045, 7040, 7036, 4697 |
+| What it shows | name, image path, account, start type |
+| How to interpret it | Focus on persistence and execution via service |
+| Current limitations | Does not yet cross-reference strongly with Registry SYSTEM\\Services |
+| Future | Registry and more correlation with the binary's Prefetch |
 
-### 7. Conexiones de red
+### 7. Network connections
 
-| Campo | Detalle |
+| Field | Detail |
 | --- | --- |
-| Qué busca | Conexiones permitidas y aplicación responsable |
-| Evidencias actuales | 5156 |
-| Qué muestra | app, IP origen, IP destino, protocolo |
-| Cómo interpretarlo | Útil para ver procesos con actividad de red |
-| Limitaciones actuales | SRUM ya entra, pero sigue sin aportar IP/destino exacto por sí solo y Sysmon 3 sigue pendiente |
-| Futuro | Sysmon y correlación más fuerte por red |
+| What it looks for | Allowed connections and responsible application |
+| Current evidence | 5156 |
+| What it shows | app, source IP, destination IP, protocol |
+| How to interpret it | Useful for seeing processes with network activity |
+| Current limitations | SRUM is already included, but still doesn't provide exact IP/destination on its own and Sysmon 3 is still pending |
+| Future | Sysmon and stronger network correlation |
 
 ## Browser activity
 
-El análisis semiautomático ya incorpora:
+Semi-automatic analysis already incorporates:
 
 - `browser_history`
 - `downloaded_files`
@@ -104,7 +104,7 @@ El análisis semiautomático ya incorpora:
 - `suspicious_downloads`
 - `downloaded_and_executed`
 
-La correlación básica enlaza descargas con:
+Basic correlation links downloads with:
 
 - `MFT/USN`
 - `LNK`
@@ -113,9 +113,9 @@ La correlación básica enlaza descargas con:
 - `EVTX 4688`
 - `Defender`
 
-Estas secciones se alimentan tanto de browser CSV/JSON parseado como del parser raw de navegador desde colecciones Velociraptor.
+These sections are fed both by parsed browser CSV/JSON and by the raw browser parser from Velociraptor collections.
 
-## Secciones SRUM
+## SRUM sections
 
 - `network_activity`
 - `application_network_usage`
@@ -124,24 +124,24 @@ Estas secciones se alimentan tanto de browser CSV/JSON parseado como del parser 
 - `possible_exfiltration`
 - `downloaded_and_network_active_programs`
 
-Estas secciones usan wording prudente: SRUM refuerza **actividad de red por aplicación**, no “exfiltración confirmada” ni destino exacto por sí solo.
+These sections use cautious wording: SRUM reinforces **per-application network activity**, not "confirmed exfiltration" nor an exact destination on its own.
 
-## Secciones Scheduled Tasks
+## Scheduled Tasks sections
 
 - `scheduled_tasks`
 - `suspicious_tasks`
 - `task_executions`
 - `downloaded_and_persisted`
 
-Interpretación operativa:
+Operational interpretation:
 
-- `scheduled_task_definition` y `scheduled_task_com_handler` significan **tarea observada**, no ejecución probada.
-- La sección `scheduled_tasks` resume configuración, principal, triggers y acciones.
-- `suspicious_tasks` prioriza PowerShell codificado, LOLBins, rutas UNC, scripts en rutas de usuario, tareas `hidden + enabled` y `ComHandler`.
-- `task_executions` sube confianza cuando aparecen EVTX de TaskScheduler/Security o ejecución relacionada en Prefetch/EVTX.
-- `downloaded_and_persisted` enlaza Browser downloads con comandos o argumentos de tareas.
+- `scheduled_task_definition` and `scheduled_task_com_handler` mean **observed task**, not proven execution.
+- The `scheduled_tasks` section summarizes configuration, principal, triggers and actions.
+- `suspicious_tasks` prioritizes encoded PowerShell, LOLBins, UNC paths, scripts in user paths, `hidden + enabled` tasks and `ComHandler`.
+- `task_executions` raises confidence when TaskScheduler/Security EVTX or related Prefetch/EVTX execution appears.
+- `downloaded_and_persisted` links Browser downloads with task commands or arguments.
 
-## Secciones PowerShell fuera de EVTX
+## PowerShell sections outside EVTX
 
 - `powershell_activity`
 - `powershell_downloads`
@@ -151,14 +151,14 @@ Interpretación operativa:
 - `powershell_recon`
 - `powershell_credential_access`
 
-Interpretación operativa:
+Operational interpretation:
 
-- `powershell_console_history` significa comando observado en historial interactivo, no éxito confirmado.
-- `powershell_transcript_command` aporta mejor contexto temporal y de sesión.
-- `powershell_script_file_observed` significa script observado en disco, no ejecución probada.
-- La confianza sube cuando aparecen correlaciones con `4104`, `4688`, Prefetch, Browser, MFT, Defender, Scheduled Tasks o SRUM.
+- `powershell_console_history` means a command observed in interactive history, not confirmed success.
+- `powershell_transcript_command` provides better temporal and session context.
+- `powershell_script_file_observed` means a script observed on disk, not proven execution.
+- Confidence rises when correlations appear with `4104`, `4688`, Prefetch, Browser, MFT, Defender, Scheduled Tasks or SRUM.
 
-## Secciones Recycle Bin
+## Recycle Bin sections
 
 - `recycled_files`
 - `deleted_files`
@@ -168,14 +168,14 @@ Interpretación operativa:
 - `deleted_detected_files`
 - `cleanup_candidates`
 
-Interpretación operativa:
+Operational interpretation:
 
-- `file_recycled` significa que el archivo fue enviado a la papelera.
-- No equivale a borrado permanente.
-- La confianza sube cuando aparece correlación con `MFT/USN`, Browser downloads o Defender.
-- `cleanup_candidates` prioriza metadata `$I` sin `$R`, scripts, ejecutables y elementos sospechosos borrados después de uso o detección.
+- `file_recycled` means the file was sent to the recycle bin.
+- It does not equal permanent deletion.
+- Confidence rises when correlation appears with `MFT/USN`, Browser downloads or Defender.
+- `cleanup_candidates` prioritizes `$I` metadata without `$R`, scripts, executables and suspicious items deleted after use or detection.
 
-## Secciones USB
+## USB sections
 
 - `usb_devices`
 - `usb_storage_devices`
@@ -186,15 +186,15 @@ Interpretación operativa:
 - `possible_usb_exfiltration`
 - `suspicious_usb_activity`
 
-Interpretación operativa:
+Operational interpretation:
 
-- `usb_device_install` y `usb_volume_mapping` significan dispositivo o volumen observado, no copia confirmada.
-- `usb_file_activity` y `usb_folder_activity` resumen actividad en rutas removibles.
-- `download_to_usb` destaca descargas directas a una unidad externa.
-- `possible_usb_exfiltration` es deliberadamente prudente y debe leerse como hipótesis de trabajo.
-- `setupapi_driver_activity` es una sección secundaria para bloques de SetupAPI de valor bajo o diagnóstico, y no debe confundirse con un USB externo concreto conectado.
+- `usb_device_install` and `usb_volume_mapping` mean an observed device or volume, not a confirmed copy.
+- `usb_file_activity` and `usb_folder_activity` summarize activity on removable paths.
+- `download_to_usb` highlights downloads made directly to an external drive.
+- `possible_usb_exfiltration` is deliberately cautious and should be read as a working hypothesis.
+- `setupapi_driver_activity` is a secondary section for low-value or diagnostic SetupAPI blocks, and should not be confused with a specific connected external USB.
 
-## Secciones BITS
+## BITS sections
 
 - `background_downloads`
 - `bits_jobs`
@@ -205,15 +205,15 @@ Interpretación operativa:
 - `downloaded_then_detected`
 - `possible_persistence`
 
-Interpretación operativa:
+Operational interpretation:
 
-- un job BITS no es sospechoso por defecto
-- `Windows Update` y jobs Microsoft pueden ser benignos
-- `bits_notify_commands` merece revisión porque puede actuar como persistencia o callback
-- `downloaded_then_executed` y `downloaded_then_detected` son secciones de mayor valor porque ya combinan varias fuentes
-- `qmgr` raw sin parser no aparece falsamente como job parseado; queda como discovery
+- a BITS job is not suspicious by default
+- `Windows Update` and Microsoft jobs can be benign
+- `bits_notify_commands` deserves review because it can act as persistence or a callback
+- `downloaded_then_executed` and `downloaded_then_detected` are higher-value sections because they already combine several sources
+- raw `qmgr` without a parser does not falsely appear as a parsed job; it remains discovery-only
 
-## Secciones WMI
+## WMI sections
 
 - `wmi_persistence`
 - `wmi_filters`
@@ -223,8 +223,16 @@ Interpretación operativa:
 - `wmi_encoded_powershell`
 - `wmi_download_commands`
 - `possible_wmi_execution`
+- `wmi_activity`
 
-## Secciones Autoruns / ASEP
+Operational interpretation:
+
+- `wmi_persistence` should be read as a persistence candidate, not confirmed execution
+- the strongest signal appears when `filter + consumer + binding` all exist
+- `suspicious_wmi_consumers` summarizes consumers with commands, scripts or higher-value correlations
+- `wmi_activity` collects WMI activity observed in EVTX, but does not automatically equal persistence
+
+## Autoruns / ASEP sections
 
 - `autoruns_persistence`
 - `suspicious_autoruns`
@@ -238,13 +246,15 @@ Interpretación operativa:
 - `persisted_then_executed`
 - `persistence_detected_by_defender`
 
-Interpretación operativa:
+Operational interpretation:
 
-- una entrada Autoruns es persistencia observada o candidata, no ejecución confirmada
+- an Autoruns entry is observed or candidate persistence, not confirmed execution
+- `suspicious_autoruns` prioritizes user-writable paths, unsigned/unverified binaries, LOLBins, download commands and critical mechanisms
+- `downloaded_then_persisted` and `persisted_then_executed` are the higher-value sections because they already combine several sources
 
-## Secciones Cloud Sync
+## Cloud Sync sections
 
-Se añaden secciones:
+Added sections:
 
 - `cloud_sync_roots`
 - `cloud_accounts`
@@ -258,19 +268,17 @@ Se añaden secciones:
 - `possible_cloud_staging`
 - `possible_cloud_exfiltration`
 
-El wording sigue siendo prudente:
+The wording remains cautious:
 
 - `cloud sync root observed`
 - `cloud staging candidate`
 - `possible cloud exfiltration candidate`
 
-La existencia de un archivo dentro de OneDrive, Dropbox o Google Drive no equivale por sí sola a subida confirmada.
-- `suspicious_autoruns` prioriza rutas user-writable, unsigned/unverified, LOLBins, comandos de descarga y mecanismos críticos
-- `downloaded_then_persisted` y `persisted_then_executed` son las secciones de mayor valor porque ya combinan varias fuentes
+The existence of a file inside OneDrive, Dropbox or Google Drive does not by itself equal confirmed upload.
 
-## Secciones Network / WLAN / DNS
+## Network / WLAN / DNS sections
 
-Se añaden secciones:
+Added sections:
 
 - `network_overview`
 - `wlan_profiles`
@@ -284,47 +292,34 @@ Se añaden secciones:
 - `network_indicators`
 - `network_correlations`
 
-Interpretación operativa:
+Operational interpretation:
 
-- `wlan_profile` significa que el perfil Wi-Fi fue observado, no que exista conexión reciente confirmada
-- `wlan_connection` aporta más contexto temporal cuando llega desde EVTX
-- `hosts_entries` resume overrides locales y debe revisarse junto con Browser, Defender y MFT
-- `network_indicators` agrupa dominios, IPs, DNS y configuración observada
-- `network_correlations` es la capa de mayor valor porque conecta esos indicadores con Browser, BITS, PowerShell, Cloud Sync, SRUM o Defender
+- `wlan_profile` means the Wi-Fi profile was observed, not that a confirmed recent connection exists
+- `wlan_connection` provides more temporal context when it comes from EVTX
+- `hosts_entries` summarizes local overrides and should be reviewed together with Browser, Defender and MFT
+- `network_indicators` groups observed domains, IPs, DNS and configuration
+- `network_correlations` is the higher-value layer because it connects those indicators with Browser, BITS, PowerShell, Cloud Sync, SRUM or Defender
 
-Wording prudente:
+Cautious wording:
 
 - `network indicator observed`
 - `possible suspicious network configuration`
 - `possible correlation`
 
-La familia `network` contextualiza conectividad y configuración local, pero no debe leerse como prueba automática de C2 o intrusión sin correlación suficiente.
-- `wmi_bindings`
-- `suspicious_wmi_consumers`
-- `wmi_encoded_powershell`
-- `wmi_download_commands`
-- `possible_wmi_execution`
-- `wmi_activity`
-
-Interpretación operativa:
-
-- `wmi_persistence` debe leerse como candidato de persistencia, no como ejecución confirmada
-- la señal más fuerte aparece cuando existen `filter + consumer + binding`
-- `suspicious_wmi_consumers` resume consumers con comandos, scripts o correlaciones de mayor valor
-- `wmi_activity` recoge actividad WMI observada en EVTX, pero no equivale automáticamente a persistencia
+The `network` family contextualizes connectivity and local configuration, but should not be read as automatic proof of C2 or intrusion without sufficient correlation.
 
 ### 8. Defender / malware
 
-| Campo | Detalle |
+| Field | Detail |
 | --- | --- |
-| Qué busca | Detecciones, cuarentenas, remediación, fallos de remediación y correlaciones |
-| Evidencias actuales | 1116, 1117, 1118, 1119, 5007, 5013, `DetectionHistory`, `MPLog`, CSV/JSON Defender |
-| Qué muestra | threat name, path/resource, action, severity, status, user, related events |
-| Cómo interpretarlo | Confirma detección o acción tomada, pero no siempre implica ejecución o infección activa |
-| Limitaciones actuales | Quarantine raw solo discovery; deduplicación fina con EVTX aún mejorable |
-| Futuro | metadata más profunda de cuarentena y soporte log adicional |
+| What it looks for | Detections, quarantines, remediation, remediation failures and correlations |
+| Current evidence | 1116, 1117, 1118, 1119, 5007, 5013, `DetectionHistory`, `MPLog`, Defender CSV/JSON |
+| What it shows | threat name, path/resource, action, severity, status, user, related events |
+| How to interpret it | Confirms detection or action taken, but does not always imply execution or active infection |
+| Current limitations | Raw quarantine is discovery-only; fine-grained deduplication with EVTX still improvable |
+| Future | deeper quarantine metadata and additional log support |
 
-Secciones nuevas relacionadas:
+New related sections:
 
 - `defender_detections`
 - `detected_files`
@@ -333,278 +328,278 @@ Secciones nuevas relacionadas:
 - `quarantined_items`
 - `remediation_failures`
 
-### 9. Cambios de cuentas
+### 9. Account changes
 
-| Campo | Detalle |
+| Field | Detail |
 | --- | --- |
-| Qué busca | Altas, bajas, cambios de contraseña, usuarios en grupos |
-| Evidencias actuales | 4720, 4722, 4723, 4724, 4725, 4726, 4728, 4732, 4738, 4740 |
-| Qué muestra | título, usuario, resumen |
-| Cómo interpretarlo | Útil para abuso de cuentas y escalada |
-| Limitaciones actuales | No hay correlación con artifacts de SAM/Registry raw |
-| Futuro | RECmd y parsing de hives |
+| What it looks for | Additions, removals, password changes, users in groups |
+| Current evidence | 4720, 4722, 4723, 4724, 4725, 4726, 4728, 4732, 4738, 4740 |
+| What it shows | title, user, summary |
+| How to interpret it | Useful for account abuse and escalation |
+| Current limitations | No correlation yet with raw SAM/Registry artifacts |
+| Future | RECmd and hive parsing |
 
-### 10. Persistencia
+### 10. Persistence
 
-Qué busca:
+What it looks for:
 
-- servicios
-- tareas
+- services
+- tasks
 - WMI persistence
-- patrones persistentes ya etiquetados
-- Run Keys y Services del Registro
+- already-tagged persistent patterns
+- Registry Run Keys and Services
 
-Evidencias actuales:
+Current evidence:
 
 - EVTX 7045 / 4697 / 7040 / 7036
-- `RECmd_Output.csv` para `registry_run_key` y `registry_service`
+- `RECmd_Output.csv` for `registry_run_key` and `registry_service`
 
 ### 11. Anti-forensics
 
-Qué busca:
+What it looks for:
 
-- borrado de logs de auditoría
+- deletion of audit logs
 
-Evidencias actuales:
+Current evidence:
 
 - `1102`
 
-### 12. Hallazgos sospechosos
+### 12. Suspicious findings
 
-Qué busca:
+What it looks for:
 
-- PowerShell encoded
+- encoded PowerShell
 - download cradle
 - Defender tampering
-- rutas sospechosas
+- suspicious paths
 - LOLBins
-- ejecuciones vía Prefetch desde rutas sospechosas
-- PowerShell / cmd / mshta / rundll32 / regsvr32 / certutil / bitsadmin observados en Prefetch
-- ADS observados en MFT
-- doble extensión y nombres sospechosos en MFT/USN
-- diferencias grandes entre `$SI` y `$FN`
+- executions via Prefetch from suspicious paths
+- PowerShell / cmd / mshta / rundll32 / regsvr32 / certutil / bitsadmin observed in Prefetch
+- ADS observed in MFT
+- double extension and suspicious names in MFT/USN
+- large differences between `$SI` and `$FN`
 
-Importante:
+Important:
 
-> Un hallazgo sospechoso no equivale a malware confirmado. Significa que merece revisión manual.
+> A suspicious finding does not equal confirmed malware. It means it deserves manual review.
 
-### 13. Archivos creados / modificados / borrados / renombrados
+### 13. Files created / modified / deleted / renamed
 
-Qué busca:
+What it looks for:
 
-- creaciones, borrados, renombrados y modificaciones de archivos
+- file creations, deletions, renames and modifications
 
-Evidencias actuales:
+Current evidence:
 
 - `MFTECmd_Output.csv`
 
 ## Execution artifacts: Amcache / ShimCache / AppCompat
 
-Esta capa añade o refuerza estas secciones:
+This layer adds or reinforces these sections:
 
 - `program_inventory`
 - `execution_candidates`
 - `downloaded_and_observed_programs`
 - `suspicious_programs`
 
-Interpretación operativa:
+Operational interpretation:
 
-- `Amcache` se usa como observación de programas, inventario y metadatos.
-- `ShimCache` / `AppCompat` / `RecentFileCache` se usan como presencia o posible ejecución.
-- La confianza sube a `high` solo si la correlación encuentra `Prefetch`, `EVTX 4688`, Browser download, `MFT/USN` o `Defender`.
-- Sin correlación, no deben leerse como “ejecución confirmada”.
-- CSVs USN compatibles con MFTECmd
+- `Amcache` is used as observation of programs, inventory and metadata.
+- `ShimCache` / `AppCompat` / `RecentFileCache` are used as presence or possible execution.
+- Confidence rises to `high` only if correlation finds `Prefetch`, `EVTX 4688`, Browser download, `MFT/USN` or `Defender`.
+- Without correlation, they should not be read as "confirmed execution".
+- USN CSVs compatible with MFTECmd
 
-Qué muestra:
+What it shows:
 
 - timestamp
-- ruta
-- extensión
+- path
+- extension
 - size
-- source (`mft` o `usn`)
-- reason cuando viene de USN
+- source (`mft` or `usn`)
+- reason when it comes from USN
 
-Cómo interpretarlo:
+How to interpret it:
 
-- `USN` suele ser más útil para actividad temporal concreta
-- `MFT` suele aportar mejor contexto histórico y deleted candidates
+- `USN` is usually more useful for specific temporal activity
+- `MFT` usually provides better historical context and deleted candidates
 
-### 14. Candidateos de ejecución y archivos sospechosos
+### 14. Execution candidates and suspicious files
 
-Qué busca:
+What it looks for:
 
-- `.exe`, `.ps1`, `.bat`, `.cmd`, `.vbs`, `.js`, `.dll`, `.scr` en rutas sospechosas
+- `.exe`, `.ps1`, `.bat`, `.cmd`, `.vbs`, `.js`, `.dll`, `.scr` in suspicious paths
 - ADS
-- doble extensión
-- posibles anomalías `$SI/$FN`
+- double extension
+- possible `$SI/$FN` anomalies
 
-Evidencias actuales:
+Current evidence:
 
 - `MFTECmd_Output.csv`
-- CSVs USN compatibles con MFTECmd
+- USN CSVs compatible with MFTECmd
 
 ### 15. Timeline
 
-Qué busca:
+What it looks for:
 
-- una vista ordenada de actividades generadas
+- an ordered view of generated activities
 
-Qué muestra:
+What it shows:
 
 - timestamp
 - activity_type
 - host
 - user
-- resumen
+- summary
 
-### 16. Archivos abiertos
+### 16. Opened files
 
-Qué busca:
+What it looks for:
 
-- accesos a targets desde shortcuts `.lnk`
-- documentos abiertos
-- targets de usuario con valor contextual
+- accesses to targets from `.lnk` shortcuts
+- opened documents
+- user targets with contextual value
 
-Evidencias actuales:
+Current evidence:
 
 - `LECmd_Output.csv`
 - `JLECmd_Output.csv`
-- raw `automaticDestinations-ms` desde Velociraptor y `customDestinations-ms` con soporte parcial
-- secciones reforzadas para JumpLists: `recent_files`, `downloaded_files_opened`, `deleted_files_opened`, `network_file_activity`, `usb_file_activity`, `cloud_file_activity`, `suspicious_recent_items`
-- si una JumpList usa `timestamp_precision = source_file_mtime`, la confianza temporal baja respecto a entradas con `TargetAccessed` o `DestListLastAccessed`
-- `user_writable_path` en JumpLists se trata como contexto; no eleva por sí solo a hallazgo sospechoso
-- `RECmd_Output.csv` para `TypedPaths`, `RecentDocs` y `Shellbags`
+- raw `automaticDestinations-ms` from Velociraptor and `customDestinations-ms` with partial support
+- reinforced sections for JumpLists: `recent_files`, `downloaded_files_opened`, `deleted_files_opened`, `network_file_activity`, `usb_file_activity`, `cloud_file_activity`, `suspicious_recent_items`
+- if a JumpList uses `timestamp_precision = source_file_mtime`, temporal confidence is lower than for entries with `TargetAccessed` or `DestListLastAccessed`
+- `user_writable_path` in JumpLists is treated as context; it does not by itself elevate an item to a suspicious finding
+- `RECmd_Output.csv` for `TypedPaths`, `RecentDocs` and `Shellbags`
 
-Qué muestra:
+What it shows:
 
 - timestamp
-- usuario
-- target efectivo
-- extensión
+- user
+- effective target
+- extension
 - source LNK
 - drive type
 - network path
 
-Nota:
+Note:
 
-- cuando `TargetPath` o `TargetIDAbsolutePath` son parciales como `Desktop\\`, la app usa `lnk.effective_path` para enseñar la mejor ruta disponible
+- when `TargetPath` or `TargetIDAbsolutePath` are partial such as `Desktop\\`, the app uses `lnk.effective_path` to show the best available path
+- semi-automatic analysis also consumes EVTX and LNK events parsed natively (raw), with the same normalized schema as the external parsers; for `native_lnk` this includes `startup_lnk`, cloud targets, UNC/network paths, removable media indicators and partial/unresolved target quality flags
 
-### 17. Scripts abiertos
+### 17. Opened scripts
 
-Qué busca:
+What it looks for:
 
-- `.ps1`, `.bat`, `.cmd`, `.js`, `.vbs` y similares abiertos vía LNK
+- `.ps1`, `.bat`, `.cmd`, `.js`, `.vbs` and similar files opened via LNK
 
-Evidencias actuales:
+Current evidence:
 
 - `LECmd_Output.csv`
 - `JLECmd_Output.csv`
 
-Cómo interpretarlo:
+How to interpret it:
 
-- no siempre implica ejecución confirmada
-- sí indica interacción fuerte y merece correlación con `4688`, PowerShell y Prefetch
-- si el target mostrado parece genérico, revisa en detalle `lnk.effective_path`, `lnk.local_path` y `lnk.relative_path`
+- does not always imply confirmed execution
+- does indicate strong interaction and deserves correlation with `4688`, PowerShell and Prefetch
+- if the displayed target looks generic, check `lnk.effective_path`, `lnk.local_path` and `lnk.relative_path` in detail
 
-### 18. Rutas de red / USB
+### 18. Network / USB paths
 
-Qué busca:
+What it looks for:
 
-- targets `UNC`
+- `UNC` targets
 - shares
-- volúmenes removibles o candidatos a USB
+- removable volumes or USB candidates
 
-Evidencias actuales:
+Current evidence:
 
 - `LECmd_Output.csv`
 - `JLECmd_Output.csv`
 
-### 19. Documentos recientes
+### 19. Recent documents
 
-Qué busca:
+What it looks for:
 
-- documentos abiertos recientemente por una aplicación
-- contexto de app y usuario
+- documents recently opened by an application
+- app and user context
 
-Evidencias actuales:
-
-- `JLECmd_Output.csv`
-
-### 20. Aplicaciones usadas
-
-Qué busca:
-
-- aplicaciones con Jump Lists recientes
-- frecuencia de interacción
-- último uso observado
-
-Evidencias actuales:
+Current evidence:
 
 - `JLECmd_Output.csv`
 
-### 21. Actividad de usuario
+### 20. Applications used
 
-Qué busca:
+What it looks for:
 
-- rutas tecleadas en Explorer
-- comandos lanzados desde Ejecutar
-- documentos recientes
-- artefactos Registry que ayudan a explicar interacción del usuario sin obligar a revisar `raw`
+- applications with recent Jump Lists
+- interaction frequency
+- last observed use
 
-Qué mirar primero:
+Current evidence:
+
+- `JLECmd_Output.csv`
+
+### 21. User activity
+
+What it looks for:
+
+- paths typed in Explorer
+- commands launched from Run
+- recent documents
+- Registry artifacts that help explain user interaction without requiring a `raw` review
+
+What to look at first:
 
 - `registry.key_path`
 - `registry.value_name`
 - `registry.value_data`
 - `process.path`
 - `destination.hostname`
-- carpetas observadas por Shellbags
+- folders observed via Shellbags
 
-Evidencias actuales:
+Current evidence:
 
 - `RECmd_Output.csv`
 
-### 21b. Folder activity / Shellbags
+### 22. Folder activity / Shellbags
 
-Qué busca:
+What it looks for:
 
-- carpetas vistas o navegadas por el usuario
-- rutas UNC o shares
-- carpetas USB/removable
-- carpetas cloud sync
-- carpetas sospechosas o ya no presentes
+- folders viewed or browsed by the user
+- UNC paths or shares
+- USB/removable folders
+- cloud sync folders
+- suspicious or no-longer-present folders
 
-Evidencias actuales:
+Current evidence:
 
 - `SBECmd_Output.csv`
 - `*Shellbags*.csv`
-- `RECmd_Output.csv` cuando incluya shellbags normalizados
+- `RECmd_Output.csv` when it includes normalized shellbags
 
-Qué muestra:
+What it shows:
 
 - timestamp
-- usuario
+- user
 - path
-- tipo de ruta
+- path type
 - source hive/file
 - MRU position
 - related events
 
-Cómo interpretarlo:
+How to interpret it:
 
-- Shellbags no prueban ejecución
-- sí ayudan mucho a demostrar interacción con carpetas, shares, USB o rutas luego borradas
-- la confianza sube cuando correlacionan con LNK, JumpLists, Browser, MFT/USN o Recycle Bin
+- Shellbags do not prove execution
+- they do help a lot to demonstrate interaction with folders, shares, USB or paths later deleted
+- confidence rises when they correlate with LNK, JumpLists, Browser, MFT/USN or Recycle Bin
 
-### 20. Dispositivos USB
+### 23. USB devices
 
-Qué busca:
+What it looks for:
 
-- dispositivos USB vistos en el registro
-- mappings de unidad/volumen
-- contexto para correlación con LNK y Jump Lists
+- USB devices seen in the registry
+- drive/volume mappings
+- context for correlation with LNK and Jump Lists
 
-Evidencias actuales:
+Current evidence:
 
 - `RECmd_Output.csv`
-# Semi-automatic analysis consumes native raw EVTX and LNK events using the same normalized schema as external parsers. For `native_lnk`, this now includes `startup_lnk`, cloud targets, UNC/network paths, removable media hints and partial/unresolved target quality flags.

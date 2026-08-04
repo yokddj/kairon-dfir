@@ -1,7 +1,5 @@
 # Windows & WSL2 Setup
 
-> Documentation status: technical draft pending maintainer review.
-
 Kairon DFIR is supported on Windows through WSL2 (Windows Subsystem for Linux). Native PowerShell or CMD deployment is not supported in this beta.
 
 ## Why WSL2

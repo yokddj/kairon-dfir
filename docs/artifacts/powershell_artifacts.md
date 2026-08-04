@@ -1,47 +1,47 @@
-# PowerShell artifacts fuera de EVTX
+# PowerShell artifacts outside EVTX
 
-## Qué artefactos soporta la app
+## What artifacts the app supports
 
-La plataforma soporta hoy, fuera de EVTX:
+The platform currently supports, outside of EVTX:
 
-- `ConsoleHost_history.txt` de `PSReadLine`
-- `PowerShell_transcript*.txt` y variantes de transcript
-- scripts `*.ps1`, `*.psm1`, `*.psd1` como contenido observado
-- CSV/JSON parseados relacionados con PowerShell cuando tienen estructura compatible
-- discovery raw desde colecciones Velociraptor
+- `ConsoleHost_history.txt` from `PSReadLine`
+- `PowerShell_transcript*.txt` and transcript variants
+- `*.ps1`, `*.psm1`, `*.psd1` scripts as observed content
+- parsed CSV/JSON related to PowerShell when they have a compatible structure
+- raw discovery from Velociraptor collections
 
-## Diferencia frente a EVTX 4104/4688
+## Difference from EVTX 4104/4688
 
-- `4104` y `4688` suelen aportar mejor contexto de ejecución y timestamps.
-- `PSReadLine` aporta visibilidad de comandos interactivos escritos por el usuario.
-- `Transcript` aporta más contexto operativo, metadatos de sesión y a veces tiempo por comando.
-- Un script `.ps1` observado no prueba por sí solo ejecución.
+- `4104` and `4688` usually provide better execution context and timestamps.
+- `PSReadLine` provides visibility into interactive commands typed by the user.
+- `Transcript` provides more operational context, session metadata, and sometimes per-command timing.
+- An observed `.ps1` script does not by itself prove execution.
 
-## Qué es ConsoleHost_history.txt
+## What ConsoleHost_history.txt is
 
-Es el historial de comandos de `PSReadLine`. Suele contener un comando por línea.
+This is the `PSReadLine` command history. It usually contains one command per line.
 
-Limitaciones importantes:
+Important limitations:
 
-- normalmente no tiene timestamp por comando
-- un comando presente no prueba ejecución exitosa
-- puede contener comandos benignos junto a comandos sospechosos
+- normally has no per-command timestamp
+- a present command does not prove successful execution
+- may contain benign commands alongside suspicious commands
 
-## Qué son los PowerShell transcripts
+## What PowerShell transcripts are
 
-Los transcripts son logs textuales de sesiones PowerShell. Pueden incluir:
+Transcripts are text logs of PowerShell sessions. They can include:
 
-- usuario
+- user
 - `RunAs`
-- máquina
+- machine
 - `Host Application`
 - `Process ID`
-- versión de PowerShell
-- comandos emitidos desde el prompt
+- PowerShell version
+- commands issued from the prompt
 
-Son mucho más útiles que `PSReadLine` para reconstruir contexto temporal cuando existen.
+They are much more useful than `PSReadLine` for reconstructing temporal context when they exist.
 
-## Qué campos se extraen
+## What fields are extracted
 
 - `powershell.command`
 - `powershell.command_preview`
@@ -68,60 +68,60 @@ Son mucho más útiles que `PSReadLine` para reconstruir contexto temporal cuand
 - `powershell.paths`
 - `powershell.indicators`
 
-Además, cuando procede:
+Additionally, when applicable:
 
 - `process.command_line`
 - `url.full`
 - `url.domain`
 - `file.path`
 
-## Indicadores que detecta la app
+## Indicators the app detects
 
 - `EncodedCommand`
 - `Invoke-Expression` / `IEX`
 - download cradle
 - `ExecutionPolicy Bypass`
-- `NoProfile` / `WindowStyle Hidden` en contexto sospechoso
+- `NoProfile` / `WindowStyle Hidden` in a suspicious context
 - Defender tampering:
   - `Set-MpPreference`
   - `Add-MpPreference`
   - `DisableRealtimeMonitoring`
-  - exclusiones
-- persistencia:
+  - exclusions
+- persistence:
   - `Register-ScheduledTask`
   - `schtasks`
   - `reg add`
   - Run Keys
-  - creación de servicios
-- reconocimiento:
+  - service creation
+- reconnaissance:
   - `whoami`
   - `hostname`
   - `ipconfig`
   - `systeminfo`
   - `tasklist`
-- acceso a credenciales o dumping:
+- credential access or dumping:
   - `lsass`
   - `mimikatz`
   - `sekurlsa`
   - `procdump`
   - `comsvcs.dll`
 
-## Cómo se interpretan timestamps ausentes
+## How missing timestamps are interpreted
 
-- `PSReadLine` usa `source_file_mtime` como aproximación si está disponible.
-- Si no hay tiempo fiable, queda `timestamp_precision = unknown`.
-- En transcripts se prioriza:
+- `PSReadLine` uses `source_file_mtime` as an approximation when available.
+- If there is no reliable time, `timestamp_precision = unknown` remains.
+- In transcripts, priority is given to:
   1. `Command start time`
   2. `transcript start time`
   3. `source file mtime`
 
-Esto permite meter los eventos en timeline sin vender una precisión falsa.
+This allows events to be placed on the timeline without claiming false precision.
 
-## Cómo se correlaciona
+## How it correlates
 
-La app correlaciona PowerShell con:
+The app correlates PowerShell with:
 
-- EVTX `4104` y `4688`
+- EVTX `4104` and `4688`
 - Browser downloads
 - `MFT/USN`
 - Prefetch
@@ -130,7 +130,7 @@ La app correlaciona PowerShell con:
 - Registry
 - SRUM
 
-Se crean actividades como:
+The following activities are created:
 
 - `powershell_download`
 - `powershell_encoded_execution`
@@ -140,25 +140,25 @@ Se crean actividades como:
 - `powershell_credential_access`
 - `downloaded_and_executed_via_powershell`
 
-## Falsos positivos comunes
+## Common false positives
 
-- administración legítima con PowerShell
-- automatizaciones corporativas
-- transcripts de soporte o troubleshooting
-- scripts de login
-- `ExecutionPolicy Bypass` en tooling interno
+- legitimate administration with PowerShell
+- corporate automation
+- support or troubleshooting transcripts
+- login scripts
+- `ExecutionPolicy Bypass` in internal tooling
 
-## Limitaciones
+## Limitations
 
-- `ConsoleHost_history.txt` no suele tener timestamps por comando
-- historial observado no equivale a éxito o ejecución confirmada
-- scripts observados no prueban ejecución
-- la decodificación de Base64 es solo de vista previa y nunca ejecuta contenido
-- no se estructuran credenciales ni secretos aunque aparezcan en raw
+- `ConsoleHost_history.txt` usually has no per-command timestamps
+- observed history does not equal confirmed success or execution
+- observed scripts do not prove execution
+- Base64 decoding is preview-only and never executes content
+- credentials or secrets are not structured even if they appear in raw form
 
-## Ejemplos de investigación
+## Investigation examples
 
-- `Invoke-WebRequest` seguido de archivo creado en `Downloads` y detección de Defender
-- `IEX(New-Object Net.WebClient)...` correlacionado con `4104`
-- `Set-MpPreference -DisableRealtimeMonitoring` antes de una detección fallida
-- `schtasks /Create` o `Register-ScheduledTask` correlacionado con XML de Scheduled Tasks
+- `Invoke-WebRequest` followed by a file created in `Downloads` and a Defender detection
+- `IEX(New-Object Net.WebClient)...` correlated with `4104`
+- `Set-MpPreference -DisableRealtimeMonitoring` before a failed detection
+- `schtasks /Create` or `Register-ScheduledTask` correlated with Scheduled Tasks XML

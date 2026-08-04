@@ -1,77 +1,77 @@
-# Primeros pasos
+# Quickstart
 
-## 1. Levantar la aplicación
+## 1. Start the Application
 
-1. Copia `.env.example` a `.env`.
-2. Ejecuta:
+1. Copy `.env.example` to `.env`.
+2. Run:
 
 ```bash
 docker compose up --build
 ```
 
-3. Abre:
+3. Open:
    - frontend: `http://localhost:5173`
    - API: `http://localhost:8000`
    - OpenSearch: `http://localhost:9200`
 
-## 2. Crear o abrir un caso
+## 2. Create or Open a Case
 
-1. Entra en `Cases`.
-2. Crea un caso nuevo o abre uno existente.
-3. Si vas a trabajar en una investigación concreta, déjalo como **caso activo**.
+1. Go to `Cases`.
+2. Create a new case or open an existing one.
+3. If you're going to work on a specific investigation, set it as the **active case**.
 
-## 3. Qué evidencia subir hoy
+## 3. What Evidence to Upload Today
 
-Lo más recomendable hoy es subir:
+The most recommended evidence to upload today is:
 
-- colecciones parseadas de KAPE/EZ Tools
-- carpetas parseadas de Velociraptor
-- especialmente `*_EvtxECmd_Output.csv`
+- parsed KAPE/EZ Tools collections
+- parsed Velociraptor folders
+- especially `*_EvtxECmd_Output.csv`
 
-## 4. Cómo subir evidencia
+## 4. How to Upload Evidence
 
-1. Entra en el caso.
-2. Usa `Upload files` o `Upload folder`.
-3. Espera a que la ingesta cambie a `completed`.
+1. Open the case.
+2. Use `Upload files` or `Upload folder`.
+3. Wait for the ingest status to change to `completed`.
 
-## 5. Cómo saber si el parsing terminó bien
+## 5. How to Tell If Parsing Finished Correctly
 
-Revisa:
+Check:
 
-1. Estado de la evidencia.
-2. `Artifact Views` del caso.
-3. `Activity` por si hubo errores de parsing/indexación.
-4. `Search` para confirmar que aparecen eventos del caso.
+1. Evidence status.
+2. The case's `Artifact Views`.
+3. `Activity`, in case there were parsing/indexing errors.
+4. `Search`, to confirm the case's events appear.
 
-## 6. Cómo buscar un EventID
+## 6. How to Search for an EventID
 
-Ejemplos prácticos:
+Practical examples:
 
-- `4624` -> logons exitosos
-- `4625` -> logons fallidos
-- `4104` -> script blocks de PowerShell
-- `4688` -> creación de procesos
-- `7045` -> creación de servicios
-- `4698` -> creación de tareas programadas
-- `1116` -> detección Defender
+- `4624` -> successful logons
+- `4625` -> failed logons
+- `4104` -> PowerShell script blocks
+- `4688` -> process creation
+- `7045` -> service creation
+- `4698` -> scheduled task creation
+- `1116` -> Defender detection
 
-Consejo:
+Tip:
 
-1. Abre `Search`.
-2. Deja la query vacía para ver el volumen general.
-3. Usa `Search mode = IOC` o `smart` para EventID concretos.
-4. Si necesitas precisión extra, filtra `artifact.type = evtx`.
+1. Open `Search`.
+2. Leave the query empty to see overall volume.
+3. Use `Search mode = IOC` or `smart` for specific EventIDs.
+4. If you need extra precision, filter by `artifact.type = evtx`.
 
-## 7. Cómo abrir el detalle de un evento
+## 7. How to Open an Event's Detail
 
-Puedes llegar al evento desde:
+You can reach the event from:
 
 - `Search`
 - `Artifact Explorer`
-- `Detections` si la detection apunta a un evento
+- `Detections`, if the detection points to an event
 - `Timeline`
 
-En el detalle busca:
+In the detail view, look for:
 
 - `event.type`
 - `windows.event_id`
@@ -81,63 +81,63 @@ En el detalle busca:
 - `windows.event_data`
 - `windows.payload`
 
-## 8. Cómo revisar el análisis semiautomático
+## 8. How to Review Semi-Automatic Analysis
 
-1. Ve a `Análisis semiautomático`.
-2. Selecciona el caso.
-3. Si el resumen sale vacío, primero pulsa `Clear time filter`.
-4. Revisa:
+1. Go to `Semi-automatic Analysis`.
+2. Select the case.
+3. If the summary comes up empty, first click `Clear time filter`.
+4. Review:
    - Logons
    - PowerShell
-   - Servicios
-   - Tareas
-   - Red
+   - Services
+   - Tasks
+   - Network
    - Defender
-   - Hallazgos sospechosos
+   - Suspicious findings
 
-## 9. Cómo revisar reglas y detecciones
+## 9. How to Review Rules and Detections
 
 ### Rules
 
-Usa `Rules` para:
+Use `Rules` to:
 
-- ver reglas individuales
-- ver rule packs
-- importar Sigma/YARA/heuristic
-- activar/desactivar reglas
-- ejecutar reglas sobre un caso
+- view individual rules
+- view rule packs
+- import Sigma/YARA/heuristic rules
+- enable/disable rules
+- run rules against a case
 
 ### Detections
 
-Usa `Detections` para:
+Use `Detections` to:
 
-- ver señales automáticas
-- filtrar por engine, severity, status y caso
-- marcar reviewed o false positive
-- borrar selecciones o conjuntos filtrados
+- view automatic signals
+- filter by engine, severity, status, and case
+- mark as reviewed or false positive
+- delete selections or filtered sets
 
-## 10. Cómo crear un finding desde eventos o detections
+## 10. How to Create a Finding from Events or Detections
 
-Hoy puedes crear findings desde:
+Today you can create findings from:
 
 - `Search`
 - `Artifact Explorer`
 - `Investigation Timeline`
 - `Detections`
 
-Flujo recomendado:
+Recommended flow:
 
-1. Selecciona uno o varios eventos, o una o varias detections del mismo caso.
-2. Pulsa `Create finding`.
-3. Ajusta título, severidad y descripción.
-4. Guarda el finding y revísalo en `Findings`.
+1. Select one or more events, or one or more detections from the same case.
+2. Click `Create finding`.
+3. Adjust the title, severity, and description.
+4. Save the finding and review it in `Findings`.
 
-Usa `Promote to finding` en `Detections` si quieres una promoción rápida sin editar demasiado contexto.
+Use `Promote to finding` in `Detections` for a quick promotion without editing too much context.
 
-## 11. Qué hacer si no aparecen resultados
+## 11. What to Do If No Results Appear
 
-1. Comprueba que la ingesta terminó realmente.
-2. Comprueba que el caso activo es el correcto.
-3. Revisa `Activity` por si hubo errores de bulk indexing.
-4. Revisa si estás usando un filtro temporal demasiado estrecho.
-5. Si acabas de cambiar mappings o parser EVTX, considera reimportar el caso.
+1. Check that the ingest actually finished.
+2. Check that the active case is the correct one.
+3. Check `Activity` in case there were bulk indexing errors.
+4. Check whether you're using a time filter that's too narrow.
+5. If you just changed mappings or the EVTX parser, consider reimporting the case.

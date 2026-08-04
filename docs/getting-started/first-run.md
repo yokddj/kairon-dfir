@@ -1,7 +1,5 @@
 # First-Run Setup
 
-> Documentation status: technical draft pending maintainer review.
-
 When you first start Kairon DFIR with an empty database, you are guided through creating the administrator account via a web wizard. No CLI or manual database changes are required.
 
 ## The First-Run Experience

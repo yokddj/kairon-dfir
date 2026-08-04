@@ -1,32 +1,32 @@
 # Prefetch / PECmd / Native Prefetch
 
-## Qué es Prefetch
+## What Prefetch is
 
-Prefetch es un mecanismo de Windows que registra información resumida sobre ejecuciones de programas. En Kairon DFIR se puede consumir:
+Prefetch is a Windows mechanism that records summarized information about program executions. In Kairon DFIR the following can be consumed:
 
 - `*_PECmd_Output.csv`
 - `PECmd_Output.csv`
-- `.pf` raw detectados directamente en `C:\Windows\Prefetch\*.pf`
+- raw `.pf` files detected directly in `C:\Windows\Prefetch\*.pf`
 
-Los CSV suelen venir de **PECmd** de Eric Zimmerman. Los `.pf` raw pueden parsearse de forma nativa dentro de la plataforma.
+The CSVs usually come from Eric Zimmerman's **PECmd**. Raw `.pf` files can be parsed natively within the platform.
 
-## Qué aporta en Kairon DFIR
+## What it provides in Kairon DFIR
 
-Prefetch ayuda a responder preguntas como:
+Prefetch helps answer questions such as:
 
-- ¿Qué binarios se ejecutaron?
-- ¿Cuántas veces se ejecutaron?
-- ¿Cuál fue la última ejecución observada?
-- ¿Qué ficheros o directorios estaban relacionados con esa ejecución?
+- Which binaries were executed?
+- How many times were they executed?
+- What was the last observed execution?
+- What files or directories were related to that execution?
 
-No sustituye a EVTX ni demuestra intención maliciosa por sí solo, pero añade una fuente muy útil de **evidencia de ejecución**.
+It does not replace EVTX and does not by itself prove malicious intent, but it adds a very useful source of **execution evidence**.
 
-## Campos principales usados
+## Main fields used
 
-Kairon DFIR intenta extraer al menos:
+Kairon DFIR tries to extract at least:
 
 - `ExecutableName`
-- `ExecutablePath` cuando puede inferirse
+- `ExecutablePath` when it can be inferred
 - `RunCount`
 - `LastRun` / `LastRunTime`
 - `PreviousRun0..7`
@@ -39,149 +39,149 @@ Kairon DFIR intenta extraer al menos:
 - `Version`
 - `Signature`
 
-## Qué significa RunCount
+## What RunCount means
 
-`RunCount` es el contador de ejecuciones observado en el artefacto Prefetch. Es útil para distinguir entre:
+`RunCount` is the execution counter observed in the Prefetch artifact. It is useful for distinguishing between:
 
-- una ejecución aislada
-- una herramienta usada repetidamente
-- binarios que forman parte de la operativa normal del equipo
+- an isolated execution
+- a repeatedly used tool
+- binaries that are part of normal operation of the machine
 
-No debe interpretarse solo. Un `RunCount` alto puede ser benigno.
+It should not be interpreted alone. A high `RunCount` can be benign.
 
-## Qué significan LastRun y PreviousRuns
+## What LastRun and PreviousRuns mean
 
-- `LastRun`: última ejecución observada por Prefetch.
-- `PreviousRuns`: ejecuciones anteriores preservadas en el fichero Prefetch.
+- `LastRun`: last execution observed by Prefetch.
+- `PreviousRuns`: earlier executions preserved in the Prefetch file.
 
-Kairon DFIR usa, por orden:
+Kairon DFIR uses, in order:
 
-1. `LastRun` como `@timestamp` principal si existe
-2. el último valor disponible de `last_runs` si no hay `LastRun`
-3. `source_modified` / `source_file_mtime` solo como fallback
+1. `LastRun` as the main `@timestamp` if it exists
+2. the last available value of `last_runs` if there is no `LastRun`
+3. `source_modified` / `source_file_mtime` only as a fallback
 
-La hora real de parseo se guarda en `ingest.processed_at` y no debe usarse como tiempo forense.
+The actual parsing time is stored in `ingest.processed_at` and must not be used as forensic time.
 
-## Qué son referenced files
+## What referenced files are
 
-PECmd puede exponer ficheros y directorios relacionados con la ejecución.
+PECmd can expose files and directories related to the execution.
 
-Kairon DFIR los guarda en:
+Kairon DFIR stores them in:
 
 - `prefetch.referenced_files`
 - `prefetch.directories`
 
-Esto es útil para detectar:
+This is useful for detecting:
 
-- scripts en `Downloads`
-- binarios en `AppData`
-- ejecución apoyada en ficheros sospechosos
+- scripts in `Downloads`
+- binaries in `AppData`
+- execution supported by suspicious files
 
-## Qué significa ejecución confirmada
+## What confirmed execution means
 
-En la plataforma:
+In the platform:
 
 - `execution.source = prefetch`
 - `execution.is_execution_confirmed = true`
 - `execution.confidence = high`
 
-porque Prefetch, cuando existe y está habilitado, es evidencia fuerte de ejecución del programa.
+because Prefetch, when it exists and is enabled, is strong evidence of program execution.
 
-Esto no implica:
+This does not imply:
 
-- command line conocido
-- usuario conocido
-- proceso padre conocido
+- a known command line
+- a known user
+- a known parent process
 
-## Cómo se usa en la app
+## How it's used in the app
 
-Hoy Prefetch alimenta sobre todo:
+Today Prefetch mainly feeds:
 
 - `Search`
 - `Artifact Explorer`
 - `Investigation Timeline`
-- `Análisis semiautomático`
+- `Semi-automated Analysis`
 
-## Qué muestra el análisis semiautomático
+## What the semi-automated analysis shows
 
-### Programas ejecutados
+### Executed programs
 
-Incluye eventos Prefetch como:
+Includes Prefetch events such as:
 
-- nombre del proceso
-- ruta inferida
+- process name
+- inferred path
 - `run_count`
 - `last_run`
-- número de `previous_runs`
-- confianza
-- razones sospechosas
+- number of `previous_runs`
+- confidence
+- suspicious reasons
 
 ### PowerShell
 
-Si el ejecutable es:
+If the executable is:
 
 - `powershell.exe`
 - `pwsh.exe`
 
-Kairon DFIR también lo incluye en la sección `PowerShell` con el mensaje:
+Kairon DFIR also includes it in the `PowerShell` section with the message:
 
 > PowerShell execution observed via Prefetch
 
-### Hallazgos sospechosos
+### Suspicious findings
 
-Prefetch puede generar señales si detecta:
+Prefetch can generate signals if it detects:
 
 - LOLBins (`powershell.exe`, `cmd.exe`, `mshta.exe`, `rundll32.exe`, `regsvr32.exe`, `certutil.exe`, `bitsadmin.exe`, etc.)
-- rutas sospechosas
-- referenced files en `AppData`, `Temp`, `Downloads`, `Users\\Public`, `ProgramData`, UNC paths, etc.
+- suspicious paths
+- referenced files in `AppData`, `Temp`, `Downloads`, `Users\\Public`, `ProgramData`, UNC paths, etc.
 
-## Correlación con EVTX 4688
+## Correlation with EVTX 4688
 
-Kairon DFIR intenta una correlación básica entre:
+Kairon DFIR attempts a basic correlation between:
 
 - EVTX `4688` (`process_creation`)
 - Prefetch `program_execution`
 
-cuando se cumplen estas condiciones:
+when the following conditions are met:
 
-- mismo host
-- mismo `process.name`
-- timestamps cercanos, por defecto 10 minutos
+- same host
+- same `process.name`
+- close timestamps, 10 minutes by default
 
-Si encuentra coincidencia, el análisis semiautomático agrupa ambas evidencias en la misma actividad con mayor confianza.
+If a match is found, the semi-automated analysis groups both pieces of evidence into the same activity with higher confidence.
 
-## Parser nativo vs PECmd
+## Native parser vs PECmd
 
-- `PECmd` suele ser más cómodo cuando ya tienes la salida parseada.
-- `native_prefetch` permite trabajar directamente con `.pf` desde Velociraptor, ZIP raw o árbol copiado.
-- Ambos deben converger al mismo modelo de ejecución para que Search, Timeline, SIEM y SemiAuto no se dupliquen.
+- `PECmd` is usually more convenient when you already have the parsed output.
+- `native_prefetch` allows working directly with `.pf` files from Velociraptor, a raw ZIP, or a copied tree.
+- Both must converge on the same execution model so that Search, Timeline, SIEM, and SemiAuto are not duplicated.
 
-## Limitaciones actuales
+## Current limitations
 
-- Prefetch puede estar deshabilitado en el sistema.
-- No siempre aporta `command line`.
-- No siempre permite inferir el usuario.
-- No prueba por sí solo que una acción sea maliciosa.
-- No indica proceso padre.
-- No siempre hay ruta completa resoluble para el ejecutable.
-- La correlación con EVTX 4688 es básica; no sustituye a revisión manual.
+- Prefetch can be disabled on the system.
+- It does not always provide a `command line`.
+- It does not always allow inferring the user.
+- It does not by itself prove that an action is malicious.
+- It does not indicate parent process.
+- A fully resolvable path for the executable is not always available.
+- Correlation with EVTX 4688 is basic; it does not replace manual review.
 
-## Cómo comprobar que funciona
+## How to verify it works
 
-1. Importa un `PECmd_Output.csv`.
-2. Verifica que el artefacto se detecta como:
+1. Import a `PECmd_Output.csv`.
+2. Verify that the artifact is detected as:
    - `artifact.type = prefetch`
    - `artifact.parser = zimmerman`
-3. Busca `powershell.exe` o `cmd.exe` en `Search`.
-4. Revisa `Análisis semiautomático > Programas ejecutados`.
-5. Comprueba que aparecen:
+3. Search for `powershell.exe` or `cmd.exe` in `Search`.
+4. Check `Semi-automated Analysis > Executed programs`.
+5. Verify that the following appear:
    - `run_count`
    - `last_run`
-   - `Fuente = prefetch`
-6. Si el binario es PowerShell, comprueba también la sección `PowerShell`.
+   - `Source = prefetch`
+6. If the binary is PowerShell, also check the `PowerShell` section.
 
-## Falsos positivos y cautelas
+## False positives and caveats
 
-- Un LOLBin no implica compromiso por sí solo.
-- Un binario en `Downloads` o `AppData` merece revisión, pero no equivale automáticamente a malware.
-- Un `RunCount` alto puede corresponder a uso legítimo repetido.
+- A LOLBin does not by itself imply compromise.
+- A binary in `Downloads` or `AppData` deserves review, but does not automatically equate to malware.
+- A high `RunCount` may correspond to legitimate repeated use.

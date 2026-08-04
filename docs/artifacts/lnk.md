@@ -1,40 +1,40 @@
 # LNK / LECmd / native_lnk
 
-## Qué son los archivos LNK
+## What LNK files are
 
-Los archivos `.lnk` son shortcuts de Windows. Suelen representar que un usuario abrió o tuvo interacción con:
+`.lnk` files are Windows shortcuts. They usually represent that a user opened or interacted with:
 
-- un documento
-- un script
-- un ejecutable
-- una carpeta
-- una ruta de red
-- una unidad extraíble
+- a document
+- a script
+- an executable
+- a folder
+- a network path
+- a removable drive
 
-## Por qué son importantes en DFIR
+## Why they matter in DFIR
 
-Un `.lnk` no siempre significa ejecución, pero sí puede dar pistas muy útiles sobre:
+A `.lnk` doesn't always mean execution, but it can provide very useful clues about:
 
-- archivos abiertos por el usuario
-- scripts lanzados desde `Downloads`, `Desktop` o `AppData`
-- accesos a recursos de red `UNC`
-- posibles accesos a USB o volúmenes removibles
-- correlación con EVTX `4688` y Prefetch
+- files opened by the user
+- scripts launched from `Downloads`, `Desktop`, or `AppData`
+- access to `UNC` network resources
+- possible access to USB or removable volumes
+- correlation with EVTX `4688` and Prefetch
 
-## Qué aporta LECmd y qué aporta el parser nativo
+## What LECmd provides vs. what the native parser provides
 
-`LECmd_Output.csv` permite extraer:
+`LECmd_Output.csv` allows extraction of:
 
-- el fichero `.lnk` de origen
-- la ruta objetivo
-- argumentos
-- directorio de trabajo
-- timestamps del target
-- información de volumen
-- datos de red
+- the source `.lnk` file
+- the target path
+- arguments
+- working directory
+- target timestamps
+- volume information
+- network data
 - `MachineID`
 
-El parser nativo `lnk_raw` ahora puede ingerir directamente shortcuts raw desde colecciones Velociraptor o ZIPs de triage en rutas como:
+The native `lnk_raw` parser can now ingest raw shortcuts directly from Velociraptor collections or triage ZIPs at paths such as:
 
 - `Recent`
 - `Office\\Recent`
@@ -43,16 +43,16 @@ El parser nativo `lnk_raw` ahora puede ingerir directamente shortcuts raw desde 
 - `Start Menu`
 - `Startup`
 
-## Diferencia entre source file y target path
+## Difference between source file and target path
 
-- `source file`: el `.lnk` en sí, por ejemplo `C:\Users\analyst\Desktop\runme.lnk`
-- `target path`: el recurso al que apunta, por ejemplo `C:\Users\analyst\Downloads\runme.ps1`
+- `source file`: the `.lnk` itself, for example `C:\Users\analyst\Desktop\runme.lnk`
+- `target path`: the resource it points to, for example `C:\Users\analyst\Downloads\runme.ps1`
 
-Esto es importante porque el `.lnk` puede seguir existiendo aunque el target ya haya desaparecido.
+This matters because the `.lnk` may continue to exist even after the target has disappeared.
 
-## Ruta efectiva del target LNK
+## Effective LNK target path
 
-`LECmd` puede devolver varias rutas o pseudo-rutas para el mismo acceso:
+`LECmd` can return several paths or pseudo-paths for the same access:
 
 - `TargetPath`
 - `TargetIDAbsolutePath`
@@ -62,44 +62,44 @@ Esto es importante porque el `.lnk` puede seguir existiendo aunque el target ya 
 - `RelativePath`
 - `WorkingDirectory`
 
-No todas son igual de útiles para el analista. Valores como `Desktop\\` o `Internet Explorer (Homepage)` son **shell targets** o rutas parciales.
+Not all of them are equally useful to the analyst. Values like `Desktop\\` or `Internet Explorer (Homepage)` are **shell targets** or partial paths.
 
-Por eso la app calcula:
+That's why the app calculates:
 
 - `lnk.effective_path`
 - `lnk.effective_path_source`
 - `lnk.display_name`
 
-### Prioridad usada por la app
+### Priority used by the app
 1. `LocalPath + CommonPath`
 2. `LocalPath`
 3. `TargetPath`
 4. `TargetIDAbsolutePath`
 5. `NetworkPath`
 6. `RelativePath`
-7. `Description / NameString` si parece ruta
-8. `SourceFile` como último fallback
+7. `Description / NameString` if it looks like a path
+8. `SourceFile` as a last fallback
 
-### Ejemplo real
+### Real example
 
-Si `LECmd` devuelve:
+If `LECmd` returns:
 
 - `TargetIDAbsolutePath = Desktop\\`
 - `LocalPath = C:\Users\analyst\Desktop\DFIRLabEvidence\DFIRLab-training-dataset`
 
-el evento normalizado mostrará:
+the normalized event will show:
 
 - `lnk.effective_path = C:\Users\analyst\Desktop\DFIRLabEvidence\DFIRLab-training-dataset`
 - `lnk.effective_path_source = local_path`
 - `file.path = C:\Users\analyst\Desktop\DFIRLabEvidence\DFIRLab-training-dataset`
 
-Así `Search`, `Artifact Explorer` y `Análisis semiautomático` dejan de enseñar resúmenes inútiles como `Desktop\\`.
+This way `Search`, `Artifact Explorer`, and `Semi-automated Analysis` stop showing useless summaries like `Desktop\\`.
 
-## Qué significan TargetCreated / Modified / Accessed
+## What TargetCreated / Modified / Accessed mean
 
-Son timestamps del **target registrados dentro del LNK**, no necesariamente el momento exacto en que el usuario hizo clic.
+These are timestamps of the **target recorded inside the LNK**, not necessarily the exact moment the user clicked it.
 
-Kairon DFIR usa como prioridad:
+Kairon DFIR uses the following priority:
 
 1. `TargetAccessed`
 2. `SourceModified`
@@ -107,96 +107,96 @@ Kairon DFIR usa como prioridad:
 4. `TargetModified`
 5. `candidate/source file mtime`
 
-## Qué significa MachineID
+## What MachineID means
 
-`MachineID` suele apuntar al equipo donde el shortcut fue creado o resuelto. Puede ayudar a:
+`MachineID` usually points to the machine where the shortcut was created or resolved. It can help to:
 
-- identificar el host
-- correlacionar actividad entre accesos
-- detectar si el acceso parece venir del propio equipo o de otro contexto
+- identify the host
+- correlate activity between accesses
+- detect whether the access appears to come from the machine itself or from another context
 
-## Qué indican DriveType y VolumeSerial
+## What DriveType and VolumeSerial indicate
 
-Pueden sugerir:
+They can suggest:
 
-- volumen fijo
-- unidad removible
-- posible USB
+- fixed volume
+- removable drive
+- possible USB
 
-No prueban por sí solos que el acceso fuera malicioso, pero son muy útiles para contexto.
+They don't prove by themselves that the access was malicious, but they are very useful for context.
 
-## Cómo detectar rutas USB o UNC
+## How to detect USB or UNC paths
 
-Kairon DFIR marca como interesantes:
+Kairon DFIR flags as interesting:
 
 - `\\host\share\...`
-- rutas con `NetworkPath`, `NetName` o `ShareName`
-- `DriveType` que parezca removible
+- paths with `NetworkPath`, `NetName`, or `ShareName`
+- `DriveType` that appears removable
 
-## Cómo se usa en la app
+## How it's used in the app
 
-Hoy LNK alimenta:
+Today LNK feeds:
 
 - `Search`
 - `Artifact Explorer`
 - `Investigation Timeline`
-- `Análisis semiautomático`
+- `Semi-automated Analysis`
 - `Debug Export Pack`
 
-## Qué muestra el análisis semiautomático
+## What the semi-automated analysis shows
 
-### Archivos abiertos
+### Opened files
 
 - timestamp
-- usuario
-- target efectivo
-- extensión
+- user
+- effective target
+- extension
 - source LNK
 - drive type
 - network path
 - confidence
 - suspicious reasons
 
-### Scripts abiertos
+### Opened scripts
 
-Si el target es `.ps1`, `.bat`, `.cmd`, `.js`, etc., el acceso se resalta como `script_opened`.
+If the target is `.ps1`, `.bat`, `.cmd`, `.js`, etc., the access is highlighted as `script_opened`.
 
 ### Startup persistence
 
-Si el `.lnk` está en una carpeta `Startup`, el evento se normaliza como `startup_lnk` y rellena el namespace `persistence.*`.
-Esto sigue sin probar ejecución por sí solo; se trata como `possible startup persistence via LNK`.
+If the `.lnk` is in a `Startup` folder, the event is normalized as `startup_lnk` and fills the `persistence.*` namespace.
+This still does not prove execution by itself; it is treated as `possible startup persistence via LNK`.
 
-### Rutas de red
+### Network paths
 
-Si el target es UNC o usa `NetworkPath`, aparece también como `network_path_opened`.
+If the target is UNC or uses `NetworkPath`, it also appears as `network_path_opened`.
 
 ### USB / removable media
 
-Si `DriveType` indica removable o USB candidate, aparece en `removable_media`.
+If `DriveType` indicates removable or USB candidate, it appears in `removable_media`.
 
-## Cómo se correlaciona con EVTX y Prefetch
+## How it correlates with EVTX and Prefetch
 
-Kairon DFIR intenta una correlación básica cuando:
+Kairon DFIR attempts a basic correlation when:
 
-- el target del LNK coincide con el ejecutable visto en Prefetch
-- el target aparece en `4688` o en `process.command_line`
-- el target aparece en `PowerShell` script blocks o comandos
-- los timestamps están cerca, por defecto 30 minutos
+- the LNK target matches the executable seen in Prefetch
+- the target appears in `4688` or in `process.command_line`
+- the target appears in `PowerShell` script blocks or commands
+- the timestamps are close, 30 minutes by default
 
-Esto no sustituye a revisión manual, pero sube mucho el valor forense del shortcut.
+This does not replace manual review, but it significantly increases the forensic value of the shortcut.
 
-## Limitaciones actuales
+## Current limitations
 
-- Un LNK indica acceso o interacción, no siempre ejecución confirmada.
-- Los timestamps del target vienen del LNK, no siempre del momento exacto de apertura.
-- Puede existir el `.lnk` aunque el target ya no exista.
-- No todos los campos aparecen siempre en todas las versiones de `LECmd`.
-- Los targets parciales o shell namespace (`Desktop\\`, `Control Panel`, etc.) se preservan con `partial_lnk_target` o `unresolved_lnk_target`.
-- Si cambió el mapping y se añadieron campos `lnk.effective_*`, los índices antiguos no mostrarán esos campos hasta reimportar el caso o recrear el índice.
+- An LNK indicates access or interaction, not always confirmed execution.
+- Target timestamps come from the LNK, not always from the exact moment of opening.
+- The `.lnk` may exist even if the target no longer exists.
+- Not all fields always appear in every version of `LECmd`.
+- Partial or shell-namespace targets (`Desktop\\`, `Control Panel`, etc.) are preserved with `partial_lnk_target` or `unresolved_lnk_target`.
+- If the mapping changed and `lnk.effective_*` fields were added, older indexes will not show those fields until the case is reimported or the index is rebuilt.
 
-## Falsos positivos comunes
+## Common false positives
 
-- documentos abiertos legítimamente
-- accesos normales a shares corporativos
-- scripts o binarios usados por administradores
-- LNKs antiguos que ya no representan actividad actual
+- documents legitimately opened
+- normal access to corporate shares
+- scripts or binaries used by administrators
+- old LNKs that no longer represent current activity

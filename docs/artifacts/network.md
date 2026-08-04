@@ -1,21 +1,21 @@
 # Network / WLAN / DNS
 
-## Qué evidencias de red soporta la app
+## What network evidence the app supports
 
-La familia `network` cubre evidencias locales de conectividad y configuración de red en Windows con un enfoque prudente:
+The `network` family covers local evidence of connectivity and network configuration on Windows with a cautious approach:
 
-- perfiles WLAN (`Wlansvc` XML)
-- eventos `Microsoft-Windows-WLAN-AutoConfig/Operational` ya parseados por EVTX
-- salidas Registry/RECmd relacionadas con `NetworkList` y `Tcpip\\Parameters\\Interfaces`
-- fichero `hosts`
-- DNS cache/config en CSV/JSON
-- salidas `ipconfig`, `netsh wlan`, `netstat` y `arp` en TXT
+- WLAN profiles (`Wlansvc` XML)
+- `Microsoft-Windows-WLAN-AutoConfig/Operational` events already parsed by EVTX
+- Registry/RECmd outputs related to `NetworkList` and `Tcpip\\Parameters\\Interfaces`
+- `hosts` file
+- DNS cache/config in CSV/JSON
+- `ipconfig`, `netsh wlan`, `netstat`, and `arp` outputs in TXT
 
-No se interpreta un indicador aislado como prueba de actividad maliciosa. La prioridad es contextualizar conectividad, perfiles Wi-Fi, DNS/hosts y correlaciones con otras evidencias.
+An isolated indicator is not interpreted as proof of malicious activity. The priority is to contextualize connectivity, Wi-Fi profiles, DNS/hosts, and correlations with other evidence.
 
-## Qué se parsea directamente desde Velociraptor
+## What is parsed directly from Velociraptor
 
-Discovery detecta y puede extraer selectivamente:
+Discovery detects and can selectively extract:
 
 - `ProgramData/Microsoft/Wlansvc/Profiles/Interfaces/*/*.xml`
 - `Windows/System32/drivers/etc/hosts`
@@ -24,90 +24,90 @@ Discovery detecta y puede extraer selectivamente:
 - `*netsh*.txt`
 - `*netstat*.txt`
 - `*arp*.txt`
-- salidas `NetAdapter`, `NetIPConfiguration`, `NetRoute`, `NetTCPConnection`, `NetUDPEndpoint` cuando existan
+- `NetAdapter`, `NetIPConfiguration`, `NetRoute`, `NetTCPConnection`, `NetUDPEndpoint` outputs when present
 
-También detecta:
+It also detects:
 
-- `Microsoft-Windows-WLAN-AutoConfig%4Operational.evtx` como `handled_by_evtx_parser`
-- hives `SOFTWARE`, `SYSTEM` y `NTUSER.DAT` relacionados como candidatos `discovery_only` o `detected_not_implemented` si no hay parser raw
+- `Microsoft-Windows-WLAN-AutoConfig%4Operational.evtx` as `handled_by_evtx_parser`
+- related `SOFTWARE`, `SYSTEM`, and `NTUSER.DAT` hives as `discovery_only` or `detected_not_implemented` candidates if there is no raw parser
 
-## Qué queda como discovery
+## What remains as discovery
 
-Queda como discovery o dependencia de otro parser:
+The following remain as discovery or depend on another parser:
 
-- WLAN EVTX raw si solo está el `.evtx` y no el CSV parseado
-- hives raw `SOFTWARE` / `SYSTEM` / `NTUSER.DAT`
-- inventario de red derivado de outputs genéricos no soportados todavía
+- raw WLAN EVTX if only the `.evtx` exists and not the parsed CSV
+- raw `SOFTWARE` / `SYSTEM` / `NTUSER.DAT` hives
+- network inventory derived from generic outputs not yet supported
 
-Eso significa que la app preserva la evidencia y la muestra en la UI, pero no debe venderla como parseada si todavía no existe parser específico.
+This means the app preserves the evidence and shows it in the UI, but must not present it as parsed if a specific parser doesn't exist yet.
 
 ## WLAN profiles
 
-El parser WLAN XML extrae:
+The WLAN XML parser extracts:
 
 - `SSID`
-- nombre de perfil
+- profile name
 - `connectionType`
 - `connectionMode`
-- autenticación
-- cifrado
-- tipo de clave
-- si existe `keyMaterial`
-- hints de randomización MAC
+- authentication
+- encryption
+- key type
+- whether `keyMaterial` exists
+- MAC randomization hints
 
-Los perfiles WLAN se normalizan como:
+WLAN profiles are normalized as:
 
 - `artifact.type = network`
 - `event.type = wlan_profile`
 - `event.action = wlan_profile_observed`
 
-### Qué significan SSID / auth / encryption / keyMaterial
+### What SSID / auth / encryption / keyMaterial mean
 
-- `SSID`: nombre de la red Wi-Fi observada en el perfil
-- `authentication`: tipo de autenticación, por ejemplo `WPA2PSK`, `open`
-- `encryption`: cifrado, por ejemplo `AES`, `TKIP`, `none`
-- `keyMaterial`: indica que el perfil contenía material de clave
+- `SSID`: name of the Wi-Fi network observed in the profile
+- `authentication`: type of authentication, e.g. `WPA2PSK`, `open`
+- `encryption`: encryption, e.g. `AES`, `TKIP`, `none`
+- `keyMaterial`: indicates the profile contained key material
 
-### Por qué no se muestran claves Wi-Fi en claro
+### Why Wi-Fi keys are not shown in plaintext
 
-Si aparece `keyMaterial`, la app:
+If `keyMaterial` is present, the app:
 
-- marca `wlan.key_material_present = true`
-- añade `wlan_key_material_present`
-- redacta el valor (`[REDACTED]`)
-- no lo mete en `search_text`
-- no lo resume en `raw_summary`
+- sets `wlan.key_material_present = true`
+- adds `wlan_key_material_present`
+- redacts the value (`[REDACTED]`)
+- does not include it in `search_text`
+- does not summarize it in `raw_summary`
 
-Esto evita filtrar secretos en búsquedas, timeline o paneles de detalle.
+This prevents leaking secrets in search, timeline, or detail panels.
 
 ## NetworkList / TCPIP registry
 
-Las claves de `NetworkList` aportan:
+`NetworkList` keys provide:
 
-- nombres de perfiles de red
+- network profile names
 - GUIDs
-- categoría de red
-- timestamps de `last_write` útiles como contexto
+- network category
+- `last_write` timestamps useful as context
 
-Las claves de `Tcpip\\Parameters\\Interfaces` aportan:
+`Tcpip\\Parameters\\Interfaces` keys provide:
 
 - IPs
 - gateways
 - DNS servers
 - DHCP
-- dominio/sufijo si existe
+- domain/suffix if present
 
-La app lo normaliza como:
+The app normalizes this as:
 
 - `network_profile`
 - `interface_config`
 - `dns_config`
 
-pero sigue preservando `registry.*` para que el analista vea la clave y el valor originales.
+but still preserves `registry.*` so the analyst can see the original key and value.
 
 ## DNS cache / config
 
-El parser DNS soporta CSV/JSON genéricos con campos tipo:
+The DNS parser supports generic CSV/JSON with fields such as:
 
 - `Name`
 - `Domain`
@@ -118,42 +118,42 @@ El parser DNS soporta CSV/JSON genéricos con campos tipo:
 - `Server`
 - `Interface`
 
-Esto sirve para responder:
+This is useful to answer:
 
-- qué dominios o entradas DNS fueron observadas
-- qué servidor DNS estaba configurado
-- si el indicador coincide con Browser, BITS, PowerShell, Defender o Cloud
+- which domains or DNS entries were observed
+- which DNS server was configured
+- whether the indicator matches Browser, BITS, PowerShell, Defender, or Cloud
 
-### Limitaciones de DNS
+### DNS limitations
 
-- la cache DNS puede no existir tras reboot
-- el formato depende mucho de la fuente
-- un dominio observado no implica por sí solo navegación o malware
+- the DNS cache may not exist after reboot
+- the format depends heavily on the source
+- an observed domain does not by itself imply browsing or malware
 
 ## Hosts file
 
-El parser:
+The parser:
 
-- ignora comentarios y líneas vacías
-- soporta múltiples hostnames por línea
-- crea eventos `hosts_entry`
+- ignores comments and blank lines
+- supports multiple hostnames per line
+- creates `hosts_entry` events
 
-Qué buscar:
+What to look for:
 
-- redirecciones a `127.0.0.1` o `0.0.0.0`
-- dominios de Microsoft, Defender, cloud o seguridad redirigidos
-- overrides no comentados y no estándar
+- redirects to `127.0.0.1` or `0.0.0.0`
+- Microsoft, Defender, cloud, or security domains being redirected
+- uncommented, non-standard overrides
 
-Una entrada en `hosts` no es automáticamente maliciosa, pero gana mucho valor si correlaciona con Browser, Defender, BITS o cambios de archivo en MFT.
+An entry in `hosts` is not automatically malicious, but it gains a lot of value if it correlates with Browser, Defender, BITS, or file changes in MFT.
 
 ## ipconfig / netsh / netstat / arp
 
 ### `ipconfig /all`
 
-Permite extraer:
+Allows extraction of:
 
-- nombre de interfaz
-- descripción
+- interface name
+- description
 - MAC
 - IPv4 / IPv6
 - gateway
@@ -162,37 +162,37 @@ Permite extraer:
 
 ### `netsh wlan`
 
-Permite extraer:
+Allows extraction of:
 
-- perfiles Wi-Fi
-- nombres de perfil
-- hints de SSID
-- autenticación/cifrado si el output lo incluye
+- Wi-Fi profiles
+- profile names
+- SSID hints
+- authentication/encryption if included in the output
 
 ### `netstat`
 
-Permite extraer:
+Allows extraction of:
 
-- protocolo
+- protocol
 - local address / port
 - foreign address / port
-- estado
-- PID si existe
+- state
+- PID if present
 
 ### `arp`
 
-Permite extraer:
+Allows extraction of:
 
-- interfaz
+- interface
 - IP
 - MAC
-- tipo
+- type
 
-Estos outputs son especialmente útiles en live response, pero también son volátiles: describen un estado observado en el momento de la captura.
+These outputs are especially useful in live response, but they are also volatile: they describe a state observed at the moment of capture.
 
-## Diferencia entre indicador observado y actividad maliciosa
+## Difference between observed indicator and malicious activity
 
-La app diferencia entre:
+The app distinguishes between:
 
 - `network profile observed`
 - `wlan profile observed`
@@ -202,85 +202,85 @@ La app diferencia entre:
 - `possible suspicious network configuration`
 - `suspicious network activity candidate`
 
-No afirma C2, spoofing, intrusión ni uso malicioso solo por ver:
+It does not assert C2, spoofing, intrusion, or malicious use just from seeing:
 
-- un SSID
-- un DNS público
-- una entrada normal en `hosts`
-- un dominio observado en cache DNS
+- an SSID
+- a public DNS
+- a normal entry in `hosts`
+- a domain observed in DNS cache
 
-## Cómo correlaciona con otras evidencias
+## How it correlates with other evidence
 
 ### Browser
 
-- dominio DNS o `hosts` que coincide con histórico web
-- override de `hosts` que afecta un dominio visitado
+- DNS or `hosts` domain that matches web history
+- `hosts` override affecting a visited domain
 
 ### BITS
 
-- dominio o IP remota de BITS que coincide con DNS
-- descarga cercana a WLAN connection o cambio de red
+- BITS remote domain or IP that matches DNS
+- download near a WLAN connection or network change
 
 ### PowerShell
 
-- URLs, dominios o IPs de comandos que coinciden con DNS / netstat
-- descargas o conexiones a IP directa
+- URLs, domains, or IPs from commands that match DNS / netstat
+- downloads or direct-IP connections
 
 ### Defender
 
-- dominios, recursos o paths relacionados con indicadores de red observados
+- domains, resources, or paths related to observed network indicators
 
 ### Cloud Sync
 
-- dominios cloud como `onedrive.live.com`, `drive.google.com`, `dropbox.com`, `mega.nz`, `icloud.com`, `box.com`
-- actividad cloud cercana a indicadores WLAN o DNS
+- cloud domains like `onedrive.live.com`, `drive.google.com`, `dropbox.com`, `mega.nz`, `icloud.com`, `box.com`
+- cloud activity near WLAN or DNS indicators
 
 ### SRUM
 
-- bytes enviados/recibidos por aplicación cercanos a Browser, BITS o Cloud
+- bytes sent/received per application near Browser, BITS, or Cloud
 
 ### EVTX
 
-- actividad WLAN o de procesos cerca de otros eventos sospechosos
+- WLAN or process activity near other suspicious events
 
 ### MFT / USN
 
-- cambios en `hosts`
-- modificación de artefactos de red o outputs exportados
+- changes to `hosts`
+- modification of network artifacts or exported outputs
 
-## Falsos positivos comunes
+## Common false positives
 
-- perfiles WLAN corporativos o de hoteles
-- DNS públicos (`8.8.8.8`, `1.1.1.1`) usados legítimamente
-- entradas de `hosts` para desarrollo local
-- outputs `netstat` con software de administración o seguridad
-- dominios cloud normales observados por Browser o sync clients
+- corporate or hotel WLAN profiles
+- public DNS (`8.8.8.8`, `1.1.1.1`) used legitimately
+- `hosts` entries for local development
+- `netstat` outputs with administration or security software
+- normal cloud domains observed by Browser or sync clients
 
-## Limitaciones
+## Limitations
 
-- la cache DNS puede no existir o ser incompleta
-- un perfil WLAN no prueba conexión reciente
-- `hosts` necesita timestamp y correlación para tener peso alto
-- `netstat` y `arp` son especialmente volátiles si vienen de live response
-- BSSID, señal y razón de conexión no siempre estarán presentes
-- la app no debe inferir credenciales Wi-Fi ni mostrarlas en claro
+- the DNS cache may not exist or may be incomplete
+- a WLAN profile does not prove a recent connection
+- `hosts` needs a timestamp and correlation to carry high weight
+- `netstat` and `arp` are especially volatile when coming from live response
+- BSSID, signal, and connection reason will not always be present
+- the app must not infer Wi-Fi credentials or display them in plaintext
 
-## Ejemplos de investigación
+## Investigation examples
 
-### 1. Override en `hosts` y navegación afectada
+### 1. `hosts` override and affected browsing
 
-1. Ver un `hosts_entry` sospechoso para dominio de Microsoft o seguridad.
-2. Correlacionar con Browser para comprobar si ese dominio fue visitado.
-3. Revisar MFT/USN para saber cuándo cambió el fichero `hosts`.
+1. See a suspicious `hosts_entry` for a Microsoft or security domain.
+2. Correlate with Browser to check if that domain was visited.
+3. Check MFT/USN to find out when the `hosts` file changed.
 
-### 2. WLAN abierta cerca de actividad sospechosa
+### 2. Open WLAN near suspicious activity
 
-1. Ver un `wlan_profile` con autenticación `open`.
-2. Revisar `wlan_connection` cercanas en EVTX.
-3. Correlacionar con Browser, BITS o PowerShell en la misma ventana temporal.
+1. See a `wlan_profile` with `open` authentication.
+2. Check nearby `wlan_connection` events in EVTX.
+3. Correlate with Browser, BITS, or PowerShell in the same time window.
 
-### 3. DNS / netstat y PowerShell
+### 3. DNS / netstat and PowerShell
 
-1. Observar dominio o IP directa en DNS o `netstat`.
-2. Buscar el mismo indicador en PowerShell y BITS.
-3. Si además aparece en Defender o SRUM, tratarlo como correlación fuerte, no como indicador aislado.
+1. Observe a domain or direct IP in DNS or `netstat`.
+2. Search for the same indicator in PowerShell and BITS.
+3. If it also appears in Defender or SRUM, treat it as a strong correlation, not an isolated indicator.

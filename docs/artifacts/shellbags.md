@@ -1,46 +1,46 @@
 # Shellbags
 
-## Qué soporta la app
+## What the app supports
 
 - `SBECmd_Output.csv`
 - `*_SBECmd_Output.csv`
-- variantes `*Shellbags*.csv`
-- discovery raw desde Velociraptor de `NTUSER.DAT` y `UsrClass.dat`
+- `*Shellbags*.csv` variants
+- raw discovery from Velociraptor of `NTUSER.DAT` and `UsrClass.dat`
 
-## Qué aportan
+## What they provide
 
-Shellbags ayudan a responder qué carpetas fueron vistas o navegadas por el usuario desde Explorer o componentes del shell. No prueban ejecución.
+Shellbags help answer which folders were viewed or browsed by the user via Explorer or shell components. They do not prove execution.
 
-## Qué se parsea directamente
+## What is parsed directly
 
-- CSV parseados por `SBECmd`
+- CSV parsed by `SBECmd`
 
-## Qué queda como discovery raw
+## What remains as raw discovery
 
 - `NTUSER.DAT`
 - `UsrClass.dat`
-- logs asociados
+- associated logs
 
-Cuando solo aparecen hives raw, la UI los muestra como `detected_not_implemented` y recomienda usar `SBECmd` parseado.
+When only raw hives appear, the UI shows them as `detected_not_implemented` and recommends using parsed `SBECmd` instead.
 
-## Campos extraídos
+## Extracted fields
 
-- ruta de carpeta
+- folder path
 - bag path
 - hive/source file
 - shell type
 - MRU / slot / node slot
-- timestamps disponibles
-- user / SID si existe
-- flags de red, USB, cloud, control panel y deleted/missing candidate
+- available timestamps
+- user / SID if present
+- network, USB, cloud, control panel, and deleted/missing candidate flags
 
-## Interpretación forense
+## Forensic interpretation
 
-- Shellbags indican navegación o interacción con carpetas.
-- No implican ejecución.
-- Son muy útiles para rutas USB, UNC, carpetas borradas o ya no existentes y carpetas vistas por el usuario.
+- Shellbags indicate navigation or interaction with folders.
+- They do not imply execution.
+- They are very useful for USB paths, UNC paths, deleted or no-longer-existing folders, and folders viewed by the user.
 
-## Correlaciones principales
+## Main correlations
 
 - LNK
 - JumpLists
@@ -51,9 +51,9 @@ Cuando solo aparecen hives raw, la UI los muestra como `detected_not_implemented
 - Defender
 - USBSTOR / MountedDevices
 
-## Limitaciones
+## Limitations
 
-- Shellbags no prueban ejecución.
-- El parser raw de hives no está implementado en esta iteración.
-- Rutas virtuales o de Control Panel pueden generar ruido.
-- Los timestamps pueden variar según la fuente y la versión de Windows.
+- Shellbags do not prove execution.
+- The raw hive parser is not implemented in this iteration.
+- Virtual or Control Panel paths can generate noise.
+- Timestamps can vary depending on the source and Windows version.

@@ -1,55 +1,55 @@
-# Ingesta de evidencias
+# Evidence Ingestion
 
-## Qué pasa cuando subes un archivo o carpeta
+## What Happens When You Upload a File or Folder
 
-1. La evidencia se guarda en disco.
-2. Si es ZIP/7z, se extrae.
-3. Se recorre la estructura y se detectan artefactos.
-4. Cada artefacto se clasifica por tipo y parser.
-5. El normalizador genera eventos comunes.
-6. Los eventos se indexan en OpenSearch.
-7. Se actualiza el manifest de evidencia y la actividad de la plataforma.
+1. The evidence is saved to disk.
+2. If it's ZIP/7z, it's extracted.
+3. The structure is walked and artifacts are detected.
+4. Each artifact is classified by type and parser.
+5. The normalizer generates common events.
+6. The events are indexed in OpenSearch.
+7. The evidence manifest and platform activity are updated.
 
-## Cómo se detecta el tipo de evidencia
+## How the Evidence Type Is Detected
 
-La detección mezcla:
+Detection combines:
 
-- nombre de archivo
-- ruta
-- cabeceras del CSV/JSON
-- convenciones conocidas de Velociraptor y KAPE/EZ Tools
+- file name
+- path
+- CSV/JSON headers
+- known Velociraptor and KAPE/EZ Tools conventions
 
-## Parsers existentes hoy
+## Parsers That Exist Today
 
-### Parsers específicos
+### Specific Parsers
 
 - `eztools/evtxecmd.py` -> `EvtxECmd_Output.csv`
 - `eztools/pecmd.py` -> `PECmd_Output.csv`
 - `eztools/lecmd.py` -> `LECmd_Output.csv`
 - `eztools/jlecmd.py` -> `JLECmd_Output.csv`
-- `eztools/recmd.py` -> `RECmd_Output.csv` y CSVs compatibles de RECmd Batch
+- `eztools/recmd.py` -> `RECmd_Output.csv` and compatible RECmd Batch CSVs
 
-### Normalizadores genéricos o parciales
+### Generic or Partial Normalizers
 
-Actualmente existen rutas parciales para artefactos parseados como:
+Partial routes currently exist for parsed artifacts such as:
 
 - mft
 - srum
 - recycle bin
 - browser
-- network/process genérico
+- generic network/process
 
-### Parsers preparados para futuro
+### Parsers Prepared for the Future
 
 - `raw/evtx.py`
-- esqueletos EZ Tools:
+- EZ Tools skeletons:
   - `mftecmd.py`
 
-## Qué se indexa y qué se preserva
+## What Gets Indexed and What Gets Preserved
 
-### Se indexa
+### Indexed
 
-- campos normalizados
+- normalized fields
 - `event.category`
 - `event.type`
 - `event.message`
@@ -63,72 +63,72 @@ Actualmente existen rutas parciales para artefactos parseados como:
 - `suspicious_reasons`
 - `search_text`
 
-### Se preserva sin indexación dinámica
+### Preserved Without Dynamic Indexing
 
 - `raw`
 - `windows.event_data`
 - `windows.payload`
-- XML bruto si está disponible
+- raw XML if available
 
-## Fuente principal actual: EvtxECmd_Output.csv
+## Current Primary Source: EvtxECmd_Output.csv
 
-`EvtxECmd_Output.csv` es hoy la fuente principal de eventos Windows.
+`EvtxECmd_Output.csv` is today the primary source of Windows events.
 
-### Qué hace el parser
+### What the Parser Does
 
-- detecta el CSV por nombre y cabeceras
-- parsea filas de forma robusta
-- extrae `Payload` JSON
-- preserva `PayloadData*`
-- valida `Provider/Channel`
-- normaliza campos relevantes
-- genera mensajes y tags útiles
+- detects the CSV by name and headers
+- parses rows robustly
+- extracts the `Payload` JSON
+- preserves `PayloadData*`
+- validates `Provider/Channel`
+- normalizes relevant fields
+- generates useful messages and tags
 
-### Reglas importantes
+### Important Rules
 
-- `4625` **solo** es `logon_failed` si viene de:
+- `4625` is **only** `logon_failed` if it comes from:
   - `Channel = Security`
   - `Provider = Microsoft-Windows-Security-Auditing`
-- `1102` se interpreta como `audit_log_cleared` si viene de:
+- `1102` is interpreted as `audit_log_cleared` if it comes from:
   - `Channel = Security`
-  - `Provider = Microsoft-Windows-Eventlog` o `Eventlog`
+  - `Provider = Microsoft-Windows-Eventlog` or `Eventlog`
 
-## Fuente actual de ejecución: PECmd_Output.csv
+## Current Execution Source: PECmd_Output.csv
 
-`PECmd_Output.csv` ya tiene parser específico para Prefetch.
+`PECmd_Output.csv` already has a specific parser for Prefetch.
 
-### Qué hace el parser
+### What the Parser Does
 
-- detecta el CSV por nombre y cabeceras
-- extrae `ExecutableName`, `RunCount`, `LastRun` y `PreviousRun*`
-- preserva la fila completa en `raw`
-- normaliza `prefetch.*` y `execution.*`
-- intenta inferir binario y rutas referenciadas
-- marca LOLBins y rutas sospechosas
-- deja auditoría post-ingesta por artefacto
+- detects the CSV by name and headers
+- extracts `ExecutableName`, `RunCount`, `LastRun`, and `PreviousRun*`
+- preserves the full row in `raw`
+- normalizes `prefetch.*` and `execution.*`
+- attempts to infer the referenced binary and paths
+- flags LOLBins and suspicious paths
+- leaves a post-ingest audit trail per artifact
 
-### Qué alimenta
+### What It Feeds
 
 - `Search`
 - `Artifact Explorer`
 - `Timeline`
-- `Análisis semiautomático > Programas ejecutados`
-- `Análisis semiautomático > PowerShell` cuando el ejecutable es `powershell.exe` o `pwsh.exe`
+- `Semi-automatic Analysis > Executed Programs`
+- `Semi-automatic Analysis > PowerShell` when the executable is `powershell.exe` or `pwsh.exe`
 
-## Fuente actual de Registry: RECmd_Output.csv
+## Current Registry Source: RECmd_Output.csv
 
-`RECmd_Output.csv` y CSVs compatibles de RECmd Batch ya tienen parser específico.
+`RECmd_Output.csv` and compatible RECmd Batch CSVs already have a specific parser.
 
-### Qué hace el parser
+### What the Parser Does
 
-- detecta el CSV por nombre y cabeceras
-- clasifica subtipos prioritarios
-- preserva `raw`
-- normaliza `registry.*`, `process.*`, `service.*`, `usb.*`, `volume.*` y `shellbag.*`
-- marca persistencia, LOLBins, rutas sospechosas y actividad de usuario
-- deja auditoría post-ingesta por artefacto
+- detects the CSV by name and headers
+- classifies priority subtypes
+- preserves `raw`
+- normalizes `registry.*`, `process.*`, `service.*`, `usb.*`, `volume.*`, and `shellbag.*`
+- flags persistence, LOLBins, suspicious paths, and user activity
+- leaves a post-ingest audit trail per artifact
 
-### Subtipos soportados
+### Supported Subtypes
 
 - Run Keys / RunOnce
 - Services
@@ -144,38 +144,38 @@ Actualmente existen rutas parciales para artefactos parseados como:
 - Shellbags
 - Registry generic
 
-## Errores típicos de ingesta
+## Typical Ingestion Errors
 
-### 1. OpenSearch total fields limit
+### 1. OpenSearch Total Fields Limit
 
-Suele indicar un índice antiguo o mapping incorrecto.
+Usually indicates an old index or an incorrect mapping.
 
-Qué revisar:
+What to check:
 
-- `dynamic` debe ser `false`
-- `raw`, `windows.event_data`, `windows.payload` deben tener `enabled: false`
+- `dynamic` must be `false`
+- `raw`, `windows.event_data`, `windows.payload` must have `enabled: false`
 
-### 2. Índice antiguo con mapping viejo
+### 2. Old Index with Stale Mapping
 
-Si cambiaste campos normalizados y el caso sigue usando un índice viejo, puede haber inconsistencias.
+If you changed normalized fields and the case still uses an old index, inconsistencies can occur.
 
-Qué hacer:
+What to do:
 
-- recrear el caso
-- reimportar la evidencia
+- recreate the case
+- reimport the evidence
 
-### 3. CSV no detectado como EvtxECmd
+### 3. CSV Not Detected as EvtxECmd
 
-Qué revisar:
+What to check:
 
-- nombre del archivo
-- cabeceras típicas
-- actividad y manifest de la evidencia
+- the file name
+- typical headers
+- the evidence's activity and manifest
 
-### 4. Eventos no aparecen por fallo de bulk indexing
+### 4. Events Don't Appear Due to a Bulk Indexing Failure
 
-Qué revisar:
+What to check:
 
 - `Activity`
-- errores del worker/backend
-- auditoría post-ingesta del artefacto
+- worker/backend errors
+- the artifact's post-ingest audit trail

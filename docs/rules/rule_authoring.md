@@ -1,49 +1,49 @@
-# Cómo añadir reglas nuevas
+# How to add new rules
 
-## Dónde están hoy las reglas
+## Where rules live today
 
-### Reglas almacenadas en base de datos
+### Rules stored in the database
 
-Se crean o importan por API/UI y viven como objetos `Rule` o `RuleSet`.
+Created or imported via API/UI and live as `Rule` or `RuleSet` objects.
 
-### Ficheros YAML del repositorio
+### Repository YAML files
 
-Actualmente el repo incluye reglas auxiliares en:
+Currently the repo includes auxiliary rules in:
 
 ```text
 backend/app/rules/
 ```
 
-En este directorio ya existen, por ejemplo:
+This directory already includes, for example:
 
 - `suspicious_keywords.yaml`
 - `artifact_profiles.yaml`
 - `known_windows_artifacts.yaml`
 - `builtin_detection_overrides.yaml`
 
-Importante:
+Important:
 
-- `suspicious_keywords.yaml` ayuda a etiquetar eventos, no es una `Rule` de base de datos por sí sola.
-- Las builtin detections viven en código y se documentan aparte.
+- `suspicious_keywords.yaml` helps tag events, it is not a database `Rule` by itself.
+- Builtin detections live in code and are documented separately.
 
-## Motores soportados hoy
+## Engines supported today
 
 - `heuristic`
 - `sigma`
 - `yara`
 
-## Formato real de una regla heuristic
+## Actual format of a heuristic rule
 
-El motor heuristic soporta un formato simple con:
+The heuristic engine supports a simple format with:
 
 - `query.any`
 - `filters`
 
-Ejemplo:
+Example:
 
 ```yaml
 name: PowerShell encoded command
-description: Busca comandos PowerShell con -enc
+description: Looks for PowerShell commands with -enc
 severity: high
 query:
   any:
@@ -54,14 +54,14 @@ filters:
     - process_creation
 ```
 
-## Formato real de Sigma
+## Actual Sigma format
 
-La ruta Sigma del proyecto soporta un MVP centrado en:
+The project's Sigma path supports an MVP focused on:
 
 - `detection.selection`
 - `condition: selection`
 
-Campos Sigma conocidos se remapean a campos normalizados, por ejemplo:
+Known Sigma fields are remapped to normalized fields, for example:
 
 - `EventID` -> `windows.event_id`
 - `Image` -> `process.path`
@@ -70,14 +70,14 @@ Campos Sigma conocidos se remapean a campos normalizados, por ejemplo:
 
 ## YARA
 
-YARA se importa como:
+YARA is imported as:
 
-- regla individual
-- rule pack
+- an individual rule
+- a rule pack
 
-La ejecución YARA se hace sobre archivos preservados, no sobre CSV/JSON parseados por defecto.
+YARA execution is done over preserved files, not over CSV/JSON parsed by default.
 
-## Campos útiles para reglas
+## Useful fields for rules
 
 - `event.type`
 - `event.category`
@@ -95,9 +95,9 @@ La ejecución YARA se hace sobre archivos preservados, no sobre CSV/JSON parsead
 - `tags`
 - `suspicious_reasons`
 
-## Cómo definir severidad
+## How to define severity
 
-Usa una severidad que ayude al analista a priorizar:
+Use a severity that helps the analyst prioritize:
 
 - `info`
 - `low`
@@ -105,21 +105,21 @@ Usa una severidad que ayude al analista a priorizar:
 - `high`
 - `critical`
 
-## Cómo añadir descripción y recomendación
+## How to add description and recommendation
 
-Siempre que sea posible, una regla debe responder:
+Whenever possible, a rule should answer:
 
-1. Qué busca
-2. Por qué es relevante
-3. Qué revisar después de un match
+1. What it looks for
+2. Why it is relevant
+3. What to check after a match
 
-## Ejemplos prácticos
+## Practical examples
 
-### Regla heuristic para PowerShell encoded command
+### Heuristic rule for PowerShell encoded command
 
 ```yaml
 name: PowerShell encoded command
-description: Busca procesos PowerShell con -enc
+description: Looks for PowerShell processes with -enc
 severity: high
 query:
   any:
@@ -131,11 +131,11 @@ filters:
     - pwsh.exe
 ```
 
-### Regla heuristic para servicio desde AppData
+### Heuristic rule for service from AppData
 
 ```yaml
 name: Suspicious service path
-description: Servicio creado con binario bajo AppData
+description: Service created with binary under AppData
 severity: high
 query:
   any:
@@ -146,11 +146,11 @@ filters:
     - service_created
 ```
 
-### Regla heuristic para tarea programada que ejecuta PowerShell
+### Heuristic rule for scheduled task that runs PowerShell
 
 ```yaml
 name: Scheduled task runs PowerShell
-description: Tarea programada que llama a PowerShell
+description: Scheduled task that calls PowerShell
 severity: medium
 query:
   any:
@@ -162,11 +162,11 @@ filters:
     - scheduled_task_updated
 ```
 
-### Regla para log cleared 1102
+### Rule for log cleared 1102
 
 ```yaml
 name: Audit log cleared
-description: Busca borrado del log de auditoría
+description: Looks for deletion of the audit log
 severity: high
 query:
   any:
@@ -177,22 +177,22 @@ filters:
     - audit_log_cleared
 ```
 
-## Cómo desactivar una regla
+## How to disable a rule
 
-### Reglas almacenadas
+### Stored rules
 
-La UI y la API ya soportan `enabled = true/false`.
+The UI and API already support `enabled = true/false`.
 
 ### Builtin detections
 
-Consulta [builtin_rules.md](builtin_rules.md). Se desactivan:
+See [builtin_rules.md](builtin_rules.md). They are disabled:
 
-- globalmente con `AUTO_CREATE_HEURISTIC_DETECTIONS`
-- individualmente con `builtin_detection_overrides.yaml`
+- globally with `AUTO_CREATE_HEURISTIC_DETECTIONS`
+- individually with `builtin_detection_overrides.yaml`
 
-## Cómo evitar falsos positivos
+## How to avoid false positives
 
-1. Filtra por `event.type` o `artifact.type` cuando sea posible.
-2. No busques solo por texto si existe un campo normalizado mejor.
-3. Usa Provider/Channel correctos en eventos Windows.
-4. Añade descripción clara de contexto esperado.
+1. Filter by `event.type` or `artifact.type` whenever possible.
+2. Don't search only by text if a better normalized field exists.
+3. Use the correct Provider/Channel in Windows events.
+4. Add a clear description of the expected context.

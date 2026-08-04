@@ -2,151 +2,151 @@
 
 ## Rules Engine v2
 
-La UI de `Rules` está pensada ahora como flujo `Sigma-first`.
+The `Rules` UI is now designed as a `Sigma-first` flow.
 
-Motor común para:
+Common engine for:
 
-- `Sigma` sobre eventos normalizados
-- `YARA` sobre ficheros accesibles de la evidencia
-- detecciones builtin
+- `Sigma` over normalized events
+- `YARA` over accessible evidence files
+- builtin detections
 
-La separación importante en producto es:
+The important product-level separation is:
 
 - `Sigma`
-  - corre sobre `indexed events`
+  - runs over `indexed events`
 - `YARA`
-  - corre sobre `preserved files`
+  - runs over `preserved files`
 - `Heuristics`
-  - detecciones internas automáticas
+  - automatic internal detections
 
-No deben mezclarse visualmente en la UI.
+These must not be mixed visually in the UI.
 
 ## Sigma
 
-### Qué soporta
+### What it supports
 
-- validación de reglas YAML
-- ejecución por caso, evidencia, host o ventana temporal
-- mapping de campos frecuentes hacia el esquema normalizado
-- creación de detections enlazadas a eventos
+- YAML rule validation
+- execution per case, evidence, host or time window
+- mapping of common fields to the normalized schema
+- creation of detections linked to events
 
-### Import correcto
+### Correct import
 
 - `Import Sigma rule`
-  - un único fichero `.yml` o `.yaml`
+  - a single `.yml` or `.yaml` file
 - `Import Sigma rule pack`
-  - un `ZIP/TAR/7z` con varias reglas Sigma
+  - a `ZIP/TAR/7z` with several Sigma rules
 
-Si una colección comprimida no coincide con un formato especializado, debe caer a ingest genérica sin obligar al usuario a entender la tecnología interna.
+If a compressed collection doesn't match a specialized format, it must fall back to generic ingest without forcing the user to understand the internal technology.
 
-### Output útil
+### Useful output
 
-Cada detection Sigma debe exponer:
+Each Sigma detection must expose:
 
-- regla
-- evento enlazado
-- campos coincidentes
-- resumen de condición
-- severidad
+- rule
+- linked event
+- matching fields
+- condition summary
+- severity
 - confidence
-- tags / MITRE si existen
+- tags / MITRE if present
 
 ## YARA
 
-### Qué soporta
+### What it supports
 
-- validación y compilación de reglas
-- ejecución sobre ficheros preservados o rutas seleccionadas
-- `matched_strings` truncados y seguros
-- deduplicación y estado persistente en rerun
+- rule validation and compilation
+- execution over preserved files or selected paths
+- truncated and safe `matched_strings`
+- deduplication and persistent state on rerun
 
-### Import correcto
+### Correct import
 
 - `Import YARA rule`
-  - un único fichero `.yar` o `.yara`
+  - a single `.yar` or `.yara` file
 - `Import YARA rule pack`
-  - un `ZIP/TAR/7z` con varios ficheros YARA
+  - a `ZIP/TAR/7z` with several YARA files
 
-La UI debe dejar claro que YARA no se ejecuta sobre logs indexados.
+The UI must make it clear that YARA does not run over indexed logs.
 
-### Límites de seguridad
+### Security limits
 
-- no seguir symlink escape
-- no salir de roots permitidos
-- saltar ficheros demasiado grandes según configuración
-- no lanzar full scan masivo por defecto
+- do not follow symlink escapes
+- do not leave allowed roots
+- skip files that are too large according to configuration
+- do not launch a massive full scan by default
 
-### Recomendación operativa
+### Operational recommendation
 
-- empieza con un scope pequeño
-- usa `selected paths` o evidencia concreta
-- evita toda la colección salvo necesidad clara
+- start with a small scope
+- use `selected paths` or specific evidence
+- avoid the whole collection unless clearly necessary
 
 ## Detections
 
-Todas las ejecuciones de reglas desembocan primero aquí.
+All rule executions land here first.
 
-Estados:
+States:
 
 - `new`
 - `reviewed`
 - `confirmed`
 - `dismissed`
 
-Acciones:
+Actions:
 
-- abrir detalle
-- abrir evento o archivo relacionado
-- pivotar a Search
-- abrir Timeline
-- abrir Process Graph si hay contexto de proceso
-- promover a Finding
+- open detail
+- open related event or file
+- pivot to Search
+- open Timeline
+- open Process Graph if process context exists
+- promote to Finding
 
 ## Debug reports
 
-El debug pack puede incluir:
+The debug pack can include:
 
 - `rules_run_report.json`
 - `detections_report.json`
 - `sigma_matches.jsonl`
 - `yara_matches.jsonl`
 
-## Recomendación de uso
+## Usage recommendation
 
-- empieza por Sigma builtin/controlado
-- añade YARA cuando ya tengas un scope claro
-- usa `Rule Runs` para comprobar estado, volumen y errores
-- abre `Detections` filtrado por `source=sigma|yara` tras cada run
-- usa `Search` con queries como `detection.source:sigma` o `detection.source:yara`
-- no promociones detecciones débiles a findings high sin contexto adicional
+- start with controlled/builtin Sigma
+- add YARA once you already have a clear scope
+- use `Rule Runs` to check status, volume and errors
+- open `Detections` filtered by `source=sigma|yara` after each run
+- use `Search` with queries like `detection.source:sigma` or `detection.source:yara`
+- don't promote weak detections to high-severity findings without additional context
 
 ## Operations v2
 
-La pestaña `Rule Library` permite ahora operaciones masivas sobre reglas importadas:
+The `Rule Library` tab now allows bulk operations over imported rules:
 
-- selección múltiple por regla o pack
+- multi-selection by rule or pack
 - `Enable selected`
 - `Disable selected`
 - `Delete selected`
 - `Delete all matching`
 - `Delete all imported rules`
 
-Protecciones:
+Protections:
 
-- las heurísticas builtin no deben borrarse con `delete imported rules`
-- los borrados masivos destructivos requieren escribir `DELETE RULES`
-- borrar reglas o packs no elimina las detecciones ya creadas
+- builtin heuristics must not be deleted by `delete imported rules`
+- destructive bulk deletions require typing `DELETE RULES`
+- deleting rules or packs does not remove detections already created
 
-`Rule Runs` añade control operativo:
+`Rule Runs` adds operational control:
 
 - `Cancel run`
 - `Mark failed/stale`
 - `Retry run`
 - `Delete run record`
-- acciones bulk para runs seleccionados
+- bulk actions for selected runs
 
-Qué significa `stale`:
+What `stale` means:
 
-- el run sigue marcado como `queued` o `running` en persistencia
-- pero no hay `heartbeat` reciente del worker
-- la UI lo expone como warning operativo para que el analista lo cancele, lo marque como fallido o lo reintente
+- the run is still marked as `queued` or `running` in persistence
+- but there is no recent worker `heartbeat`
+- the UI surfaces it as an operational warning so the analyst can cancel it, mark it as failed, or retry it

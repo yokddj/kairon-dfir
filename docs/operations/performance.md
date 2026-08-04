@@ -1,41 +1,41 @@
 # Performance
 
-## Perfiles
+## Profiles
 
-La UI expone perfiles:
+The UI exposes profiles:
 
 - `safe`
 - `balanced`
 - `max`
 - `custom`
 
-## Qué ajusta cada perfil
+## What each profile adjusts
 
 ### `safe`
 
-- batches y bulks más pequeños
-- menos paralelismo
-- process graph y correlation con límites conservadores
-- adecuado para hosts con poca RAM o disco justo
+- smaller batches and bulks
+- less parallelism
+- process graph and correlation with conservative limits
+- suitable for hosts with low RAM or tight disk space
 
 ### `balanced`
 
-- defaults del despliegue
-- perfil recomendado para la mayoría de instalaciones locales
+- deployment defaults
+- recommended profile for most local installations
 
 ### `max`
 
-- batches y bulk mayores
-- más paralelismo
-- `PROCESS_GRAPH_MAX_NODES` y `CORRELATION_MAX_EVENTS` más altos
-- `OPENSEARCH_JAVA_HEAP` recomendado de `4g`
+- larger batches and bulk
+- more parallelism
+- higher `PROCESS_GRAPH_MAX_NODES` and `CORRELATION_MAX_EVENTS`
+- `OPENSEARCH_JAVA_HEAP` recommended at `4g`
 
 ### `custom`
 
-- overrides manuales desde UI/API
-- útil cuando quieres tocar solo uno o dos límites sin moverte a `max`
+- manual overrides from UI/API
+- useful when you want to touch only one or two limits without switching to `max`
 
-## Parámetros relevantes
+## Relevant parameters
 
 - `INGEST_BATCH_SIZE`
 - `OPENSEARCH_BULK_DOCS`
@@ -50,37 +50,37 @@ La UI expone perfiles:
 - `BACKEND_UVICORN_WORKERS`
 - `WORKER_SCALE`
 
-## Qué requiere restart
+## What requires a restart
 
-### Inmediato
+### Immediate
 
-- la mayoría de runtime settings como batches, search page size, graph limits y rule parallelism
+- most runtime settings such as batches, search page size, graph limits and rule parallelism
 
-### Requiere restart
+### Requires restart
 
-- `OPENSEARCH_JAVA_HEAP` -> recrear `opensearch`
-- `BACKEND_UVICORN_WORKERS` -> recrear `backend`
-- `WORKER_SCALE` -> escalar `worker`
-- límites Docker globales -> recrear servicios afectados
+- `OPENSEARCH_JAVA_HEAP` -> recreate `opensearch`
+- `BACKEND_UVICORN_WORKERS` -> recreate `backend`
+- `WORKER_SCALE` -> scale `worker`
+- global Docker limits -> recreate affected services
 
-## Warnings del panel
+## Panel warnings
 
-El panel puede avisar de:
+The panel can warn about:
 
 - `low_disk_space`
 - `low_available_memory`
 - `max_profile_low_memory_risk`
 - `opensearch_unavailable`
 
-## Cómo interpretar Performance & Resources
+## How to interpret Performance & Resources
 
-- revisa CPU, memoria disponible, disco libre y tamaño de storage usado
-- revisa colas de `dfir-ingest` y `dfir-rules`
-- revisa si hay pending settings que aún no se han aplicado por restart pendiente
+- check CPU, available memory, free disk and storage size used
+- check `dfir-ingest` and `dfir-rules` queues
+- check whether there are pending settings that have not yet been applied due to a pending restart
 
-## Recomendaciones
+## Recommendations
 
-- más RAM y heap de OpenSearch ayudan mucho más que GPU
-- SSD/NVMe mejora ingestas, mounted evidence y YARA controlado
-- mounted evidence evita duplicación de disco
-- no uses GPU salvo casos futuros específicos; hoy no aporta beneficio real
+- more RAM and OpenSearch heap help much more than a GPU
+- SSD/NVMe improves ingests, mounted evidence and controlled YARA
+- mounted evidence avoids disk duplication
+- do not use a GPU except for specific future cases; today it provides no real benefit

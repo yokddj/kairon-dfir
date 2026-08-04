@@ -1,124 +1,125 @@
 # Large Evidence
 
-## Modos de entrada
+## Intake Modes
 
 - `RAW evidence`
 - `Parsed evidence`
 - `Server-mounted path`
 
-Empaquetado recomendado:
+Recommended packaging:
 
 - `Single file`
 - `Compressed archive ZIP/TAR/7z`
-- `File or directory path` cuando la evidencia ya está montada en servidor
+- `File or directory path` when the evidence is already mounted on the server
 
-Para carpetas grandes o extracciones completas:
+For large folders or full extractions:
 
-- evita la subida directa de carpetas desde navegador
-- comprime la carpeta a `ZIP/TAR/7z`
-- o usa `Server-mounted path`
+- avoid direct browser folder upload
+- compress the folder to `ZIP/TAR/7z`
+- or use `Server-mounted path`
 
-La detección de tecnologías concretas es automática. No hace falta que el usuario elija si el archive viene de una herramienta concreta.
+Detection of the specific tooling is automatic. The user does not need to choose whether the archive came from a particular tool.
 
-Casos habituales:
+Common cases:
 
-- `.evtx` suelto -> `RAW evidence` como `Windows Event Log`
-- ZIP con varios `.evtx` -> `RAW evidence` como colección raw
-- `CSV/JSON/JSONL` ya estructurado -> `Parsed evidence`
-- carpeta grande o share NAS -> `Server-mounted path`
+- a loose `.evtx` file -> `RAW evidence` as `Windows Event Log`
+- a ZIP with several `.evtx` files -> `RAW evidence` as a raw collection
+- already-structured `CSV/JSON/JSONL` -> `Parsed evidence`
+- a large folder or NAS share -> `Server-mounted path`
 
-## Browser path vs server-mounted path
+## Browser Path vs. Server-Mounted Path
 
-La app no puede leer rutas del equipo desde el que abres el navegador solo porque existan allí.
+The app cannot read paths from the machine you're browsing from just because they exist there.
 
-Ejemplos que `no` funcionan por sí solos:
+Examples that do **not** work by themselves:
 
 - `C:\Users\analyst\Desktop\Evidence`
 - `/home/user/Evidence`
 - `/opt/evidence`
 
-Esas rutas solo sirven si:
+Those paths only work if:
 
-- haces `Upload file` desde el navegador
-- o montas/compartes esa carpeta en el servidor bajo un root permitido
+- you do an `Upload file` from the browser, or
+- you mount/share that folder on the server under an allowed root.
 
 ## `copy_to_storage`
 
-- `true`: copia la evidencia al storage interno del caso.
-- `false`: conserva referencia a la ruta montada en servidor y evita duplicar datos.
+- `true`: copies the evidence into the case's internal storage.
+- `false`: keeps a reference to the server-mounted path and avoids duplicating data.
 
-Para evidencia grande, `copy_to_storage=false` suele ser preferible si la ruta montada es estable y segura.
+For large evidence, `copy_to_storage=false` is usually preferable when the mounted path is stable and secure.
 
-## Roots permitidos
+## Allowed Roots
 
-La importación por host path solo debe usar rutas dentro de:
+Host-path import must only use paths under:
 
 - `/mnt/evidence`
 - `/data/evidence`
 - `/cases`
 
-o las rutas configuradas en `DFIR_ALLOWED_EVIDENCE_ROOTS`.
+or the paths configured in `DFIR_ALLOWED_EVIDENCE_ROOTS`.
 
-## Validación de server-mounted path
+## Server-Mounted Path Validation
 
-La app valida:
+The app validates:
 
-- que el root esté permitido
-- que la ruta exista
-- que no escape por symlink o path traversal
-- que el muestreo inicial no exceda límites razonables
-- si parece una ruta del cliente (`C:\...`, `/home/user/...`, `\\server\share`, etc.)
+- that the root is allowed
+- that the path exists
+- that it does not escape via symlink or path traversal
+- that the initial sampling does not exceed reasonable limits
+- whether it looks like a client-side path (`C:\...`, `/home/user/...`, `\\server\share`, etc.)
 
-## Why my local path does not work?
+## Why Doesn't My Local Path Work?
 
-Porque el backend y el worker corren en Docker o en un servidor remoto.
+Because the backend and worker run in Docker or on a remote server.
 
-Soluciones:
+Solutions:
 
-- usa `Upload file` para subir desde el navegador
-- monta la carpeta en el servidor, por ejemplo:
+- use `Upload file` to upload from the browser
+- mount the folder on the server, for example:
   - Docker/Linux: `/host/evidence:/mnt/evidence:ro`
-  - Windows Docker Desktop: comparte `C:\Evidence` y móntalo como `/mnt/evidence`
-  - NAS: monta el share en el servidor en `/mnt/evidence`
-- registra después la ruta del servidor, no la de tu portátil/desktop
+  - Windows Docker Desktop: share `C:\Evidence` and mount it as `/mnt/evidence`
+  - NAS: mount the share on the server at `/mnt/evidence`
+- then register the server's path, not your laptop/desktop's path
 
-## Browser folder upload
+## Browser Folder Upload
 
-La subida de carpetas desde navegador no es el flujo principal para forense:
+Browser folder upload is not the primary forensic flow:
 
-- puede omitir metadatos o comportarse de forma inconsistente según navegador
-- empeora con muchos miles de ficheros
-- no es buena opción para colecciones grandes o evidencias adquiridas
+- it can omit metadata or behave inconsistently depending on the browser
+- it degrades with many thousands of files
+- it is not a good option for large collections or acquired evidence
 
-Recomendación:
+Recommendation:
 
-- comprime primero a `ZIP/TAR/7z`
-- o usa `Server-mounted path`
-- usa folder upload solo si el despliegue lo habilitó como opción experimental
+- compress first to `ZIP/TAR/7z`
+- or use `Server-mounted path`
+- only use folder upload if the deployment enabled it as an experimental option
 
-## Qué se borra y qué no al borrar evidence
+## What Is and Isn't Deleted When Removing Evidence
 
-- Si la evidencia fue copiada a storage interno, se puede limpiar el árbol del caso.
-- Si era mounted path con `copy_to_storage=false`, la app no debe borrar la ruta original externa.
+- If the evidence was copied to internal storage, the case tree can be cleaned up.
+- If it was a mounted path with `copy_to_storage=false`, the app must not delete the original external path.
 
-## Problemas de espacio
+## Disk Space Issues
 
-Si el host va justo de disco:
+If the host is tight on disk:
 
-- usa mounted evidence
-- evita copias duplicadas
-- reduce extracción innecesaria
-- revisa `Performance & Resources`
-- exporta debug pack en scope reducido, no por caso completo si no hace falta
+- use mounted evidence
+- avoid duplicate copies
+- reduce unnecessary extraction
+- check `Performance & Resources`
+- export the debug pack with a reduced scope, not for the full case unless needed
 
-## Recomendaciones prácticas
+## Practical Recommendations
 
-- usa `RAW evidence` para datos que todavía necesitan parsing
-- usa `Parsed evidence` para CSV, JSONL, timeline exports u otros outputs ya estructurados
-- Para colecciones grandes, prioriza `server-mounted path`.
-- Mantén la evidencia en SSD/NVMe si vas a iterar mucho en Search o YARA acotado.
-- No lances YARA full scan sobre shares enormes sin paths seleccionados.
-- Si solo necesitas una familia, usa scopes reducidos y filtros de evidencia/host.
+- use `RAW evidence` for data that still needs parsing
+- use `Parsed evidence` for CSV, JSONL, timeline exports, or other already-structured outputs
+- for large collections, prefer `server-mounted path`
+- keep evidence on SSD/NVMe if you'll iterate heavily on Search or scoped YARA
+- do not launch a full YARA scan over huge shares without selected paths
+- if you only need one family, use reduced scopes and evidence/host filters
+
 ## Reprocessing Large Raw Evidence
 
 For raw archives and mounted raw collections, the recommended reprocess mode is `Use previous parser selection`. This keeps the ingest reproducible and avoids parsing newly discovered files unless the analyst explicitly chooses to do so.
