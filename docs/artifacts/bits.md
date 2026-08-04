@@ -1,44 +1,44 @@
 # BITS
 
-## Qué es
+## What it is
 
-BITS (`Background Intelligent Transfer Service`) es el servicio de Windows usado para transferencias en segundo plano.
+BITS (`Background Intelligent Transfer Service`) is the Windows service used for background transfers.
 
-Puede ser legítimo:
+It can be legitimate:
 
 - Windows Update
 - Microsoft Store
-- navegadores y aplicaciones normales
+- normal browsers and applications
 
-Pero también puede ser abusado para:
+But it can also be abused to:
 
-- descargar payloads
-- mantener jobs persistentes
-- ejecutar notify commands
-- esconder actividad de red dentro de un servicio legítimo
+- download payloads
+- maintain persistent jobs
+- run notify commands
+- hide network activity inside a legitimate service
 
-## Qué soporta la app
+## What the app supports
 
-- discovery raw de `qmgr0.dat`, `qmgr1.dat` y `qmgr.db` desde Velociraptor
-- CSV parseados de BITS
-- JSON parseados de BITS
-- salida tipo `bitsadmin`
-- correlación con PowerShell, Browser, Defender, MFT/USN, Prefetch, LNK/JumpLists y Scheduled Tasks
+- raw discovery of `qmgr0.dat`, `qmgr1.dat`, and `qmgr.db` from Velociraptor
+- parsed BITS CSV
+- parsed BITS JSON
+- `bitsadmin`-type output
+- correlation with PowerShell, Browser, Defender, MFT/USN, Prefetch, LNK/JumpLists, and Scheduled Tasks
 
-## Qué se parsea directamente desde Velociraptor
+## What is parsed directly from Velociraptor
 
-En esta iteración:
+In this iteration:
 
-- los `qmgr*.dat` y `qmgr.db` se detectan y preservan como raw
-- no se parsean todavía como base de datos binaria
-- los EVTX BITS se detectan como `handled_by_evtx_parser`
+- `qmgr*.dat` and `qmgr.db` are detected and preserved as raw
+- they are not yet parsed as a binary database
+- BITS EVTX are detected as `handled_by_evtx_parser`
 
-Esto significa:
+This means:
 
-- `qmgr` raw = discovery honesto, no parseo fingido
-- CSV/JSON/TXT parseado = soporte real
+- raw `qmgr` = honest discovery, not fake parsing
+- parsed CSV/JSON/TXT = real support
 
-## Qué campos se extraen
+## What fields are extracted
 
 - Job ID / GUID
 - display name
@@ -54,70 +54,70 @@ Esto significa:
 - notify command
 - error code / description
 
-## Cómo interpretar estados BITS
+## How to interpret BITS states
 
-- `queued`, `connecting`, `transferring`: job activo o pendiente
-- `transferred`: transferencia completada, no implica ejecución
-- `acknowledged`: job completado y reconocido
-- `suspended`, `error`, `transient_error`: job fallido o estancado
+- `queued`, `connecting`, `transferring`: active or pending job
+- `transferred`: transfer completed, does not imply execution
+- `acknowledged`: job completed and acknowledged
+- `suspended`, `error`, `transient_error`: failed or stalled job
 
 ## Notify command
 
-`notify_cmd_line` es especialmente importante:
+`notify_cmd_line` is especially important:
 
-- puede ejecutar un comando al completarse el job
-- puede ser persistencia o automatización legítima
-- sube mucho de valor si usa `powershell`, `cmd /c`, `mshta`, `rundll32` o `regsvr32`
+- it can run a command when the job completes
+- it can be persistence or legitimate automation
+- it rises significantly in value if it uses `powershell`, `cmd /c`, `mshta`, `rundll32`, or `regsvr32`
 
-## Diferencia entre uso legítimo y posible abuso
+## Difference between legitimate use and possible abuse
 
-Un job BITS no es sospechoso por sí solo.
+A BITS job is not suspicious on its own.
 
-Sube de interés si coincide con:
+It rises in interest if it coincides with:
 
-- URL externa rara o IP directa
-- HTTP claro para scripts o ejecutables
+- an unusual external URL or direct IP
+- plain HTTP for scripts or executables
 - `AppData`, `Temp`, `ProgramData`, `Public`, `Startup`
-- payloads `.exe`, `.dll`, `.ps1`, `.bat`, `.cmd`, `.vbs`, `.js`, `.hta`, `.msi`
+- `.exe`, `.dll`, `.ps1`, `.bat`, `.cmd`, `.vbs`, `.js`, `.hta`, `.msi` payloads
 - notify command
-- correlación posterior con PowerShell, Defender, MFT o ejecución
+- subsequent correlation with PowerShell, Defender, MFT, or execution
 
-## Correlación
+## Correlation
 
-La app cruza BITS con:
+The app cross-references BITS with:
 
 - PowerShell: `Start-BitsTransfer`, `bitsadmin`, `Add-BitsFile`, `Set-BitsTransfer`
-- Browser: misma URL o mismo target path
+- Browser: same URL or same target path
 - Defender: `bits.local_path`
-- MFT/USN: creación/modificación del archivo local
-- Prefetch / ejecución: archivo descargado ejecutado después
-- Scheduled Tasks: tarea que ejecuta el archivo descargado
-- JumpLists / LNK: archivo descargado luego abierto
-- SRUM: contexto de red de fondo
+- MFT/USN: creation/modification of the local file
+- Prefetch / execution: downloaded file executed afterward
+- Scheduled Tasks: task that runs the downloaded file
+- JumpLists / LNK: downloaded file later opened
+- SRUM: background network context
 
-## Falsos positivos comunes
+## Common false positives
 
 - Windows Update
 - Microsoft Store
-- instaladores corporativos
-- aplicaciones de terceros que usan BITS como backend legítimo
+- corporate installers
+- third-party applications that use BITS as a legitimate backend
 
-## Limitaciones
+## Limitations
 
-- `qmgr` raw todavía no tiene parser específico
-- Windows Update genera bastante ruido benigno
-- un job no prueba ejecución por sí solo
-- `source_file_mtime` es solo fallback temporal si faltan timestamps propios del job
+- raw `qmgr` still has no dedicated parser
+- Windows Update generates a fair amount of benign noise
+- a job does not prove execution on its own
+- `source_file_mtime` is only a temporary fallback if the job's own timestamps are missing
 
-## Cuándo considerar BITS evidencia fuerte
+## When to consider BITS strong evidence
 
-La confianza sube si hay varias piezas a la vez:
+Confidence rises if several pieces are present at once:
 
-- `remote_url` clara
-- `local_path` claro
-- timestamp de completion/modification
+- clear `remote_url`
+- clear `local_path`
+- completion/modification timestamp
 - notify command
-- correlación con PowerShell
-- creación del archivo en MFT
-- ejecución posterior en Prefetch/EVTX
-- detección posterior por Defender
+- correlation with PowerShell
+- file creation in MFT
+- subsequent execution in Prefetch/EVTX
+- subsequent detection by Defender

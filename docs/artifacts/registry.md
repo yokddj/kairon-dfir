@@ -1,32 +1,32 @@
 # Registry / RECmd
 
-## Qué es el Registro de Windows
+## What the Windows Registry is
 
-El Registro de Windows es una base de datos jerárquica donde el sistema y las aplicaciones guardan:
+The Windows Registry is a hierarchical database where the system and applications store:
 
-- configuración
-- persistencia
-- historial de uso
-- dispositivos conectados
-- artefactos de actividad del usuario
+- configuration
+- persistence
+- usage history
+- connected devices
+- user activity artifacts
 
-En DFIR no se usa solo para "configuración". También sirve para responder:
+In DFIR it is not used only for "configuration." It also helps answer:
 
-- qué programas se usaron
-- qué persistencias había
-- qué rutas escribió el usuario
-- qué USB se vieron
-- qué servidores RDP se usaron
+- what programs were used
+- what persistence existed
+- what paths the user typed
+- what USB devices were seen
+- what RDP servers were used
 
-## Por qué RECmd es importante
+## Why RECmd matters
 
-RECmd permite parsear hives y plugins de Registry a CSV. En esta app es la vía principal actual para Registry parseado:
+RECmd allows parsing Registry hives and plugins to CSV. In this app it is currently the main path for parsed Registry:
 
 - `*_RECmd_Output.csv`
 - `RECmd_Output.csv`
-- salidas CSV de RECmd Batch
+- CSV outputs from RECmd Batch
 
-## Hives que puede alimentar esta ruta
+## Hives that can feed this path
 
 - `NTUSER.DAT`
 - `UsrClass.dat`
@@ -34,27 +34,27 @@ RECmd permite parsear hives y plugins de Registry a CSV. En esta app es la vía 
 - `SOFTWARE`
 - `SAM`
 - `SECURITY`
-- `Amcache.hve` si aparece exportado en CSV compatible
+- `Amcache.hve` if exported in compatible CSV form
 
-## Subtipos soportados hoy
+## Subtypes supported today
 
-| Subtipo | Qué aporta |
+| Subtype | What it provides |
 | --- | --- |
-| Run Keys / RunOnce | Persistencia por logon |
-| Services | Persistencia y configuración de servicios |
-| UserAssist | Evidencia fuerte de uso/ejecución por usuario |
-| BAM / DAM | Ejecución observada por el sistema |
-| MUICache | Presencia o indicio de uso, no ejecución confirmada |
-| USBSTOR / USB | Dispositivos externos observados |
-| MountedDevices | Letras/unidades y mappings de volumen |
-| TypedPaths | Rutas tecleadas en Explorer |
-| RunMRU | Comandos usados en el cuadro Ejecutar |
-| RecentDocs | Documentos recientes |
-| RDP MRU | Historial de destinos RDP |
-| Shellbags | Carpetas navegadas por el usuario |
-| Registry generic | Filas no clasificadas aún en un subtipo |
+| Run Keys / RunOnce | Logon persistence |
+| Services | Service persistence and configuration |
+| UserAssist | Strong evidence of user-level use/execution |
+| BAM / DAM | Execution observed by the system |
+| MUICache | Presence or hint of use, not confirmed execution |
+| USBSTOR / USB | Observed external devices |
+| MountedDevices | Drive letters and volume mappings |
+| TypedPaths | Paths typed in Explorer |
+| RunMRU | Commands used in the Run box |
+| RecentDocs | Recent documents |
+| RDP MRU | RDP destination history |
+| Shellbags | Folders browsed by the user |
+| Registry generic | Rows not yet classified into a subtype |
 
-## Campos principales que extrae la app
+## Main fields the app extracts
 
 - `registry.hive`
 - `registry.hive_path`
@@ -68,7 +68,7 @@ RECmd permite parsear hives y plugins de Registry a CSV. En esta app es la vía 
 - `registry.plugin`
 - `registry.batch`
 
-Según el subtipo también puede rellenar:
+Depending on the subtype, it may also fill:
 
 - `process.path`
 - `process.command_line`
@@ -81,9 +81,9 @@ Según el subtipo también puede rellenar:
 - `destination.hostname`
 - `shellbag.path`
 
-## Campos clave que debe revisar el analista
+## Key fields the analyst should review
 
-Cuando revises eventos Registry en `Artifact Explorer` o `Search`, los campos más útiles suelen ser:
+When reviewing Registry events in `Artifact Explorer` or `Search`, the most useful fields are usually:
 
 - `registry.artifact_type`
 - `registry.hive`
@@ -102,24 +102,24 @@ Cuando revises eventos Registry en `Artifact Explorer` o `Search`, los campos m�
 - `usb.serial`
 - `destination.hostname`
 
-En la práctica:
+In practice:
 
-- para `Run Keys`, mira sobre todo `key_path`, `value_name`, `value_data` y `process.command_line`
-- para `Services`, mira `service.name`, `service.image_path`, `service.service_dll` y `start_type`
-- para `BAM/DAM` y `UserAssist`, mira `process.path`, `process.name`, `user.sid` y `execution.last_run`
-- para `USBSTOR`, mira `usb.vendor`, `usb.product`, `usb.serial`
-- para `RDP MRU`, mira `destination.hostname`
+- for `Run Keys`, look mainly at `key_path`, `value_name`, `value_data`, and `process.command_line`
+- for `Services`, look at `service.name`, `service.image_path`, `service.service_dll`, and `start_type`
+- for `BAM/DAM` and `UserAssist`, look at `process.path`, `process.name`, `user.sid`, and `execution.last_run`
+- for `USBSTOR`, look at `usb.vendor`, `usb.product`, `usb.serial`
+- for `RDP MRU`, look at `destination.hostname`
 
-## Cómo interpreta la app los subtipos principales
+## How the app interprets the main subtypes
 
 ### Run Keys
 
 - `event.type = registry_run_key`
-- categoría: `persistence`
-- mapea `ValueData` a `process.command_line`
-- intenta extraer ejecutable a `process.path`
+- category: `persistence`
+- maps `ValueData` to `process.command_line`
+- attempts to extract the executable into `process.path`
 
-Ejemplo de mensaje:
+Example message:
 
 ```text
 Run key persistence: Updater -> powershell.exe -enc aQ==
@@ -128,162 +128,162 @@ Run key persistence: Updater -> powershell.exe -enc aQ==
 ### Services
 
 - `event.type = registry_service`
-- categoría: `persistence`
-- extrae `service.name` desde la ruta de clave
-- interpreta `ImagePath`, `DisplayName`, `Start`, `Type`, `ObjectName`, `ServiceDll`
+- category: `persistence`
+- extracts `service.name` from the key path
+- interprets `ImagePath`, `DisplayName`, `Start`, `Type`, `ObjectName`, `ServiceDll`
 
 ### UserAssist
 
 - `event.type = userassist_execution`
-- categoría: `execution`
-- decodifica ROT13 si el valor viene codificado
-- rellena `execution.run_count`, `execution.focus_time` y `execution.last_run` si están disponibles
+- category: `execution`
+- decodes ROT13 if the value is encoded
+- fills `execution.run_count`, `execution.focus_time`, and `execution.last_run` when available
 
 ### BAM / DAM
 
-- `event.type = bam_execution` o `dam_execution`
-- categoría: `execution`
-- usa la ruta del ejecutable como `process.path`
-- si hay datos suficientes, el resumen debe mostrar el ejecutable concreto y no `unknown`
+- `event.type = bam_execution` or `dam_execution`
+- category: `execution`
+- uses the executable path as `process.path`
+- if there is enough data, the summary should show the specific executable and not `unknown`
 
 ### MUICache
 
 - `event.type = muicache_entry`
-- categoría: `execution`
-- **no** debe interpretarse como ejecución confirmada por sí sola
-- se trata como indicio o pista de presencia/uso
+- category: `execution`
+- must **not** be interpreted as confirmed execution by itself
+- treated as a hint or clue of presence/use
 
 ### USBSTOR / USB
 
 - `event.type = usb_device_seen`
-- categoría: `device`
-- intenta extraer vendor, product y serial desde `KeyPath`
+- category: `device`
+- attempts to extract vendor, product, and serial from `KeyPath`
 
 ### MountedDevices
 
 - `event.type = mounted_device`
-- categoría: `device`
-- intenta extraer `volume.drive_letter` y `volume.guid`
+- category: `device`
+- attempts to extract `volume.drive_letter` and `volume.guid`
 
 ### TypedPaths
 
 - `event.type = typed_path`
-- categoría: `file_access`
-- usa `ValueData` como `file.path`
+- category: `file_access`
+- uses `ValueData` as `file.path`
 
 ### RunMRU
 
 - `event.type = run_mru_command`
-- categoría: `execution`
-- usa `ValueData` como `process.command_line`
+- category: `execution`
+- uses `ValueData` as `process.command_line`
 
 ### RecentDocs
 
 - `event.type = recent_document`
-- categoría: `file_access`
-- intenta rellenar `file.path` o `file.name`
+- category: `file_access`
+- attempts to fill `file.path` or `file.name`
 
 ### RDP MRU
 
 - `event.type = rdp_mru`
-- categoría: `remote_access`
-- rellena `destination.hostname`
+- category: `remote_access`
+- fills `destination.hostname`
 
 ### Shellbags
 
 - `event.type = shellbag_folder_access`
-- categoría: `file_access`
-- rellena `shellbag.path`
+- category: `file_access`
+- fills `shellbag.path`
 
-## Cómo interpretar LastWriteTime
+## How to interpret LastWriteTime
 
-`LastWriteTime` es el timestamp de la **clave** de registro, no siempre del valor concreto.
+`LastWriteTime` is the timestamp of the registry **key**, not always of the specific value.
 
-Eso significa que:
+This means:
 
-- es muy útil para ordenar actividad
-- pero no siempre equivale al momento exacto en que el usuario ejecutó algo
+- it is very useful for ordering activity
+- but it does not always equal the exact moment the user executed something
 
-## Qué significa cada artefacto en términos de confianza
+## What each artifact means in terms of confidence
 
-- **Alta utilidad para ejecución**: `UserAssist`, `BAM`, `DAM`
-- **Muy útil para persistencia**: `Run Keys`, `Services`
-- **Muy útil para historial de usuario**: `RunMRU`, `TypedPaths`, `RecentDocs`, `Shellbags`
-- **Útil como indicio, no ejecución confirmada**: `MUICache`
-- **Útil para contexto de dispositivos**: `USBSTOR`, `MountedDevices`
+- **High utility for execution**: `UserAssist`, `BAM`, `DAM`
+- **Very useful for persistence**: `Run Keys`, `Services`
+- **Very useful for user history**: `RunMRU`, `TypedPaths`, `RecentDocs`, `Shellbags`
+- **Useful as a clue, not confirmed execution**: `MUICache`
+- **Useful for device context**: `USBSTOR`, `MountedDevices`
 
-## Correlación con otras evidencias
+## Correlation with other evidence
 
-La app intenta correlacionar Registry con:
+The app attempts to correlate Registry with:
 
 - EVTX `4688`, `7045`, `4697`, RDP
 - Prefetch / `PECmd_Output.csv`
 - LNK / `LECmd_Output.csv`
 - Jump Lists / `JLECmd_Output.csv`
 
-Ejemplos:
+Examples:
 
-- Run key + `4688` o Prefetch del mismo binario
+- Run key + `4688` or Prefetch for the same binary
 - Service registry + `7045` / `4697`
 - UserAssist + Prefetch
 - RecentDocs / TypedPaths / Shellbags + LNK / Jump Lists
-- RDP MRU + eventos RDP del EVTX
+- RDP MRU + RDP events from EVTX
 
-## Uso en Análisis semiautomático
+## Use in Semi-automated Analysis
 
-Registry ya alimenta:
+Registry already feeds:
 
-- `Persistencia`
-- `Programas ejecutados`
-- `Actividad de usuario`
-- `Dispositivos USB`
+- `Persistence`
+- `Executed programs`
+- `User activity`
+- `USB devices`
 - `RDP`
-- `Archivos abiertos`
-- `Hallazgos sospechosos`
+- `Opened files`
+- `Suspicious findings`
 - `Timeline`
 
-## Limitaciones actuales
+## Current limitations
 
-- `LastWriteTime` es de clave, no siempre del valor.
-- `MUICache` no demuestra ejecución confirmada.
-- `USBSTOR` no implica copia de archivos por sí solo.
-- Los servicios desde registro se indexan por fila; aún no se hace agrupación "perfecta" de todas las values en una sola entidad.
-- Algunos outputs de RECmd Batch cambian columnas según plugin y pueden requerir ampliar el parser en futuros sprints.
+- `LastWriteTime` belongs to the key, not always to the value.
+- `MUICache` does not demonstrate confirmed execution.
+- `USBSTOR` does not by itself imply file copying.
+- Services from the registry are indexed per row; there is not yet "perfect" grouping of all values into a single entity.
+- Some RECmd Batch outputs change columns depending on the plugin and may require extending the parser in future sprints.
 
-## Persistencia sospechosa: ejemplos prácticos
+## Suspicious persistence: practical examples
 
-### Run key con PowerShell encoded
+### Run key with encoded PowerShell
 
 ```text
 HKCU\Software\Microsoft\Windows\CurrentVersion\Run
 Updater = powershell.exe -enc ...
 ```
 
-Qué mirar:
+What to check:
 
-- ruta real del script o binario
-- usuario afectado
-- correlación con `4688`, `4104` y Prefetch
+- actual path of the script or binary
+- affected user
+- correlation with `4688`, `4104`, and Prefetch
 
-### Servicio en ruta de usuario
+### Service in a user path
 
 ```text
 HKLM\SYSTEM\CurrentControlSet\Services\BadSvc\ImagePath
 C:\Users\Public\svc.exe
 ```
 
-Qué mirar:
+What to check:
 
 - `ImagePath`
 - `ServiceDll`
 - `Start`
 - `ObjectName`
-- correlación con `7045`, `4697`, Prefetch y detections
+- correlation with `7045`, `4697`, Prefetch, and detections
 
-## Falsos positivos comunes
+## Common false positives
 
-- scripts internos de logon en Run keys
-- software legítimo con servicios en rutas raras
-- comandos RunMRU ejecutados por administradores
-- MUICache con binarios ya borrados
-- dispositivos USB corporativos o discos externos autorizados
+- internal logon scripts in Run keys
+- legitimate software with services in unusual paths
+- RunMRU commands executed by administrators
+- MUICache with binaries already deleted
+- authorized corporate USB devices or external drives

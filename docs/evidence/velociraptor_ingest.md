@@ -1,58 +1,58 @@
 # Velociraptor Ingest
 
-## Qué es una colección Velociraptor
+## What a Velociraptor Collection Is
 
-Una colección Velociraptor suele contener:
+A Velociraptor collection typically contains:
 
 - `uploads/`
 - `results/`
-- rutas percent-encoded como `C%3A/<Windows-profile>/...`
+- percent-encoded paths such as `C%3A/<Windows-profile>/...`
 
-La app normaliza esas rutas para poder inferir usuario, navegador, perfil y tipo de evidencia.
+The app normalizes those paths so it can infer user, browser, profile, and evidence type.
 
-## Qué soporta ahora
+## What Is Currently Supported
 
 Discovery:
 
-- Browser raw
-- EVTX raw
-- Prefetch raw
-- LNK raw
-  - `Recent`, `Office\\Recent`, `Desktop`, `Downloads`, `Start Menu` y `Startup`
+- Raw Browser
+- Raw EVTX
+- Raw Prefetch
+- Raw LNK
+  - `Recent`, `Office\\Recent`, `Desktop`, `Downloads`, `Start Menu`, and `Startup`
 - Registry hives
-- MFT/USN raw
-- Jump Lists raw
-- otros candidatos relevantes
+- Raw MFT/USN
+- Raw Jump Lists
+- other relevant candidates
 
-Parseo directo implementado en esta iteración:
+Direct parsing implemented in this iteration:
 
 - Chromium `History`
 - Firefox `places.sqlite`
-- Scheduled Tasks XML desde `Windows\\System32\\Tasks\\*`
-- Defender raw desde `DetectionHistory` y `MPLog*.log`
-- PowerShell raw desde `ConsoleHost_history.txt`, transcripts y scripts observados
-- Recycle Bin raw desde `$Recycle.Bin\\<SID>\\$I*` y pairing `$I/$R`
-- Shellbags CSV de `SBECmd` y discovery raw de `NTUSER.DAT` / `UsrClass.dat`
-- JumpLists CSV de `JLECmd`, parseo raw de `*.automaticDestinations-ms` y soporte parcial para `*.customDestinations-ms`
-- `setupapi.dev.log` raw para actividad USB enriquecida
-- Prefetch raw nativo desde `Windows\\Prefetch\\*.pf`
-- discovery raw de `qmgr0.dat`, `qmgr1.dat` y `qmgr.db` para BITS, además de CSV/JSON/TXT parseado compatible
+- Scheduled Tasks XML from `Windows\\System32\\Tasks\\*`
+- Raw Defender from `DetectionHistory` and `MPLog*.log`
+- Raw PowerShell from `ConsoleHost_history.txt`, transcripts, and observed scripts
+- Raw Recycle Bin from `$Recycle.Bin\\<SID>\\$I*` with `$I/$R` pairing
+- Shellbags CSV from `SBECmd` and raw discovery of `NTUSER.DAT` / `UsrClass.dat`
+- JumpLists CSV from `JLECmd`, raw parsing of `*.automaticDestinations-ms`, and partial support for `*.customDestinations-ms`
+- raw `setupapi.dev.log` for enriched USB activity
+- native raw Prefetch from `Windows\\Prefetch\\*.pf`
+- raw discovery of `qmgr0.dat`, `qmgr1.dat`, and `qmgr.db` for BITS, plus compatible parsed CSV/JSON/TXT
 
-## Flujo
+## Flow
 
-1. Subir ZIP o carpeta Velociraptor.
-2. Leer el inventario del contenedor sin extraerlo completo.
-3. Ejecutar discovery sobre los nombres/rutas del inventario.
-4. Revisar evidencias detectadas.
-5. Seleccionar Browser, Scheduled Tasks, Defender, PowerShell, Recycle Bin, Shellbags u otros soportados.
-6. Extraer solo los ficheros necesarios para las categorías elegidas.
-7. Encolar parseo.
+1. Upload a Velociraptor ZIP or folder.
+2. Read the container's inventory without fully extracting it.
+3. Run discovery over the inventory's names/paths.
+4. Review detected evidence.
+5. Select Browser, Scheduled Tasks, Defender, PowerShell, Recycle Bin, Shellbags, or other supported categories.
+6. Extract only the files needed for the chosen categories.
+7. Queue parsing.
 
-## ZIP inventory y selective extraction
+## ZIP Inventory and Selective Extraction
 
-La app ya no extrae todo el ZIP de Velociraptor al inicio.
+The app no longer extracts the entire Velociraptor ZIP up front.
 
-Fases principales:
+Main phases:
 
 - `indexing_zip`
 - `discovering_candidates`
@@ -61,23 +61,23 @@ Fases principales:
 - `parsing`
 - `indexing_events`
 
-Para ZIP se usa el índice interno (`ZipFile.infolist()`) y la detección trabaja sobre ese inventario. Para carpetas ya extraídas se recorre el árbol local y solo se copian a staging los ficheros que el parser necesita.
+For ZIP files, the internal index (`ZipFile.infolist()`) is used and detection works over that inventory. For already-extracted folders, the local tree is walked and only the files the parser needs are copied to staging.
 
-## Qué se ignora automáticamente
+## What Gets Automatically Ignored
 
 - `__MACOSX/`
 - `.DS_Store`
 - `._*`
 - `Thumbs.db`
 - `desktop.ini`
-- directorios
-- ficheros vacíos irrelevantes
+- directories
+- irrelevant empty files
 
-Estos elementos quedan auditados, pero no se usan en discovery ni se extraen.
+These items are logged but are not used in discovery or extracted.
 
-## Extracción selectiva de Browser
+## Selective Browser Extraction
 
-Si el usuario selecciona solo Browser, la app extrae únicamente:
+If the user selects only Browser, the app extracts only:
 
 - Chromium `History`
 - `History-wal`
@@ -86,7 +86,7 @@ Si el usuario selecciona solo Browser, la app extrae únicamente:
 - `places.sqlite-wal`
 - `places.sqlite-shm`
 
-No extrae por defecto:
+Not extracted by default:
 
 - `Cache`
 - `Code Cache`
@@ -98,91 +98,94 @@ No extrae por defecto:
 - `Login Data`
 - `Web Data`
 
-## Normalización de paths
+## Path Normalization
 
-La app convierte conceptualmente:
+The app conceptually converts:
 
 - `C%3A/<Windows-profile>/...`
 - `C:/<Windows-profile>/...`
 - `C:\\<Windows-profile>\\...`
 
-en una forma útil para investigación:
+into a form useful for investigation:
 
 - `C:\\Users\\alex\\...`
 
-El path original de Velociraptor también se preserva en:
+The original Velociraptor path is also preserved in:
 
 - `velociraptor.original_path`
 
-## Evidencias detectadas pero aún no parseadas raw
+## Evidence Detected but Not Yet Raw-Parsed
 
-Se muestran como `detected_not_implemented`:
+Shown as `detected_not_implemented`:
 
-- Registry hives raw
-- MFT/USN raw
-- Shellbags raw hives (`NTUSER.DAT`, `UsrClass.dat`) cuando no hay parser raw de hive
-- JumpList raw `customDestinations-ms` cuando una entrada concreta no puede resolverse más allá de soporte parcial
+- raw Registry hives
+- raw MFT/USN
+- raw Shellbags hives (`NTUSER.DAT`, `UsrClass.dat`) when there is no raw hive parser
+- raw JumpList `customDestinations-ms` when a specific entry cannot be resolved beyond partial support
 
-Para esas fuentes, en algunos casos sigue siendo preferible usar salidas CSV parseadas por EZ/KAPE cuando ya existan, especialmente para `customDestinations-ms`.
+For those sources, in some cases it can still be preferable to use CSV outputs already parsed by EZ/KAPE when they exist, especially for `customDestinations-ms`.
 
 ## Troubleshooting
 
-- `C%3A` en rutas:
-  la colección usa percent-encoding; la app lo normaliza.
-- `La fase extracting tarda mucho`:
-  en el flujo nuevo, si solo seleccionas Browser no debería extraerse toda la colección. Revisa `selected_files_total` y `selected_files_extracted` en la evidencia.
-- `El ZIP contiene __MACOSX`:
-  esos elementos se ignoran automáticamente y no deberían aparecer como candidatos.
-- `No aparecen candidatos Browser`:
-  comprueba que la colección contiene `History` o `places.sqlite` en rutas compatibles.
-- `Solo quiero parsear Browser`:
-  selecciona solo Browser; la app extraerá únicamente los SQLite y sus WAL/SHM asociados.
-- `Quiero investigar USB`:
-  selecciona USB; la app extraerá `setupapi.dev.log` y CSVs USB compatibles, no la colección completa.
-- `Quiero investigar BITS`:
-  selecciona BITS; la app extraerá CSV/JSON/TXT compatibles y, si existen, preservará `qmgr*.dat` / `qmgr.db` sin extraer toda la colección.
-- `La colección está ya extraída`:
-  la app no duplica toda la carpeta; recorre los paths y solo copia a staging los ficheros requeridos por el parser.
-- SQLite sin WAL/SHM:
-  puede faltar actividad reciente.
-- SQLite corrupto:
-  se registran warnings y no debe romper toda la colección.
-- CSV de NirSoft vacío:
-  el parser directo desde Velociraptor puede ser mejor opción para navegador.
+- `C%3A` in paths:
+  the collection uses percent-encoding; the app normalizes it.
+- `The extracting phase takes a long time`:
+  in the new flow, if you only selected Browser the whole collection should not be extracted. Check `selected_files_total` and `selected_files_extracted` on the evidence.
+- `The ZIP contains __MACOSX`:
+  those items are ignored automatically and should not appear as candidates.
+- `No Browser candidates appear`:
+  check that the collection contains `History` or `places.sqlite` at compatible paths.
+- `I only want to parse Browser`:
+  select only Browser; the app will extract only the SQLite files and their associated WAL/SHM files.
+- `I want to investigate USB`:
+  select USB; the app will extract `setupapi.dev.log` and compatible USB CSVs, not the whole collection.
+- `I want to investigate BITS`:
+  select BITS; the app will extract compatible CSV/JSON/TXT and, if present, preserve `qmgr*.dat` / `qmgr.db` without extracting the whole collection.
+- `The collection is already extracted`:
+  the app does not duplicate the whole folder; it walks the paths and only copies to staging the files the parser requires.
+- SQLite without WAL/SHM:
+  recent activity may be missing.
+- Corrupt SQLite:
+  warnings are logged and it should not break the whole collection.
+- Empty NirSoft CSV:
+  parsing directly from Velociraptor may be a better option for the browser.
 - Hindsight/XLSX:
-  puede ser menos cómodo para la plataforma que parsear SQLite raw directamente.
-## WMI repository raw
+  may be less convenient for the platform than parsing raw SQLite directly.
 
-La discovery de Velociraptor detecta actualmente:
+## WMI Repository Raw
+
+Velociraptor discovery currently detects:
 
 - `OBJECTS.DATA`
 - `INDEX.BTR`
 - `MAPPING*.MAP`
 - `Microsoft-Windows-WMI-Activity%4Operational.evtx`
 
-Estado actual:
+Current status:
 
-- CSV/JSON WMI parseado: `ready`
+- parsed WMI CSV/JSON: `ready`
 - `WMI Activity` EVTX: `handled_by_evtx_parser`
-- repositorio raw WMI: `detected_not_implemented`
+- raw WMI repository: `detected_not_implemented`
 
-Eso significa que el repositorio raw se preserva y aparece en la UI, pero no debe mostrarse como parseado falsamente hasta que exista parser binario real.
-# Autoruns / ASEP en Velociraptor
+This means the raw repository is preserved and appears in the UI, but must not be shown as falsely parsed until a real binary parser exists.
 
-- Discovery detecta salidas `Autoruns/Autorunsc` parseadas, startup folder files, hives ASEP candidatos, Task XML y repositorio WMI raw relacionado.
+## Autoruns / ASEP in Velociraptor
 
-# Cloud Sync en Velociraptor
+- Discovery detects parsed `Autoruns/Autorunsc` outputs, startup folder files, candidate ASEP hives, Task XML, and the related raw WMI repository.
 
-- Discovery detecta sync roots de OneDrive, Google Drive / DriveFS, Dropbox, MEGAsync, iCloud y Box.
-- También detecta configs/logs pequeños y outputs parseados `Cloud*.csv/json` cuando existan.
-- Las carpetas cloud completas quedan como `discovery_only` o `path_inference`: no se extraen masivamente por defecto.
-- Si solo hay rutas cloud observadas, la app lo tratará como evidencia de uso o staging potencial, no como upload confirmado.
+## Cloud Sync in Velociraptor
 
-# Network / WLAN / DNS en Velociraptor
+- Discovery detects sync roots for OneDrive, Google Drive / DriveFS, Dropbox, MEGAsync, iCloud, and Box.
+- It also detects small configs/logs and parsed `Cloud*.csv/json` outputs when they exist.
+- Full cloud folders remain `discovery_only` or `path_inference`: they are not extracted in bulk by default.
+- If only cloud paths are observed, the app treats it as evidence of usage or potential staging, not as confirmed upload.
 
-- Discovery detecta `WLAN` profile XML bajo `ProgramData/Microsoft/Wlansvc/Profiles/Interfaces/*/*.xml`.
-- Detecta `hosts` en `Windows/System32/drivers/etc/hosts`.
-- Detecta CSV/JSON/TXT de red como `DNSCache`, `ipconfig`, `netsh`, `netstat`, `arp`, `NetAdapter`, `NetIPConfiguration` y similares.
-- `Microsoft-Windows-WLAN-AutoConfig%4Operational.evtx` se clasifica como `handled_by_evtx_parser`.
-- Hives raw `SOFTWARE`, `SYSTEM` y `NTUSER.DAT` relacionados con `NetworkList` / `Tcpip` se preservan como candidatos y no deben mostrarse como parseados si no existe parser raw.
-# Velociraptor raw discovery can now route EVTX and LNK files to native Kairon DFIR parsers without requiring EvtxECmd or LECmd first.
+## Network / WLAN / DNS in Velociraptor
+
+- Discovery detects `WLAN` profile XML under `ProgramData/Microsoft/Wlansvc/Profiles/Interfaces/*/*.xml`.
+- Detects `hosts` under `Windows/System32/drivers/etc/hosts`.
+- Detects network CSV/JSON/TXT such as `DNSCache`, `ipconfig`, `netsh`, `netstat`, `arp`, `NetAdapter`, `NetIPConfiguration`, and similar.
+- `Microsoft-Windows-WLAN-AutoConfig%4Operational.evtx` is classified as `handled_by_evtx_parser`.
+- Raw `SOFTWARE`, `SYSTEM`, and `NTUSER.DAT` hives related to `NetworkList` / `Tcpip` are preserved as candidates and must not be shown as parsed when no raw parser exists.
+
+Raw Velociraptor discovery can route EVTX and LNK files to Kairon DFIR's native parsers without needing EvtxECmd or LECmd first.

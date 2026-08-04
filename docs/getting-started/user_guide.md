@@ -1,27 +1,27 @@
 # User Guide
 
-## Flujo end-to-end del analista
+## End-to-End Analyst Flow
 
-1. Crea o selecciona un `case`.
-2. Sube un archivo o registra una ruta montada en `Evidence & Ingest`.
-3. Introduce el host esperado/canónico, por ejemplo `HOST-A`.
-4. Indexa la evidencia.
-5. Comprueba Evidence Detail:
+1. Create or select a `case`.
+2. Upload a file or register a mounted path in `Evidence & Ingest`.
+3. Enter the expected/canonical host, e.g. `HOST-A`.
+4. Index the evidence.
+5. Check Evidence Detail:
    - `investigation_ready=true`
-   - `completed` o `completed_with_warnings`
-   - documentos indexados > 0
-   - warnings entendibles si existen.
-6. Usa `Search` como workspace principal.
-7. Cambia a `Timeline` desde Search cuando necesites reconstrucción temporal.
-8. Usa `Artifact Views` para columnas específicas por familia.
-9. Abre `Command History` para comandos consolidados.
-10. Abre `Execution Story` desde Search o Command History para procesos concretos.
-11. Marca eventos/comandos como `suspicious` o `important`.
-12. Crea findings con eventos, comandos, detections y notas.
-13. Genera reportes con findings, marked events, Command History, Execution Story y Defender.
-14. Exporta Markdown.
+   - `completed` or `completed_with_warnings`
+   - indexed documents > 0
+   - understandable warnings, if any.
+6. Use `Search` as the main workspace.
+7. Switch to `Timeline` from Search when you need temporal reconstruction.
+8. Use `Artifact Views` for family-specific columns.
+9. Open `Command History` for consolidated commands.
+10. Open `Execution Story` from Search or Command History for specific processes.
+11. Mark events/commands as `suspicious` or `important`.
+12. Create findings from events, commands, detections and notes.
+13. Generate reports with findings, marked events, Command History, Execution Story and Defender.
+14. Export Markdown.
 
-## Generic investigation example
+## Generic Investigation Example
 
 With a synthetic evidence package, a typical workflow is:
 
@@ -34,41 +34,41 @@ With a synthetic evidence package, a typical workflow is:
 
 Not every term exists in every dataset. A zero-result search can be valid when the source evidence simply does not contain that artifact or string.
 
-## Evidence status
+## Evidence Status
 
-Estados relevantes:
+Relevant statuses:
 
-- `completed`: el pipeline terminó sin warnings relevantes.
-- `completed_with_warnings`: hay datos investigables, pero también warnings, parsers opcionales fallidos o artefactos no soportados.
-- `failed`: el pipeline principal no produjo datos investigables o falló críticamente.
-- `investigation_ready`: indica que la evidencia tiene datos buscables aunque existan warnings.
+- `completed`: the pipeline finished with no relevant warnings.
+- `completed_with_warnings`: investigable data exists, but there are also warnings, failed optional parsers, or unsupported artifacts.
+- `failed`: the main pipeline produced no investigable data, or failed critically.
+- `investigation_ready`: indicates the evidence has searchable data even if warnings exist.
 
-No trates `completed_with_warnings` como fallo. Revisa `status_reason`, warnings y counts.
+Do not treat `completed_with_warnings` as failure. Review `status_reason`, warnings, and counts.
 
-## Host identity
+## Host Identity
 
-Search es alias-aware. Si el host canónico es `HOST-A`, el filtro debe recuperar documentos observados como:
+Search is alias-aware. If the canonical host is `HOST-A`, the filter should retrieve documents observed as:
 
 - `HOST-A`
 - `host-a`
 - `host-a.example.local`
 
-El detalle conserva valores observados para trazabilidad.
+The detail view preserves observed values for traceability.
 
 ## Search
 
-Search es la puerta de entrada principal. Úsalo para:
+Search is the main entry point. Use it for:
 
-- comandos
+- commands
 - paths
 - hashes
-- dominios
+- domains
 - event IDs
 - artifact filters
 - marked events
-- pivots a Command History, Execution Story, Timeline y Reports.
+- pivots to Command History, Execution Story, Timeline and Reports.
 
-Ejemplos de queries humanas válidas:
+Examples of valid human queries:
 
 - `powershell -ep bypass`
 - `-nop`
@@ -78,24 +78,24 @@ Ejemplos de queries humanas válidas:
 - `example-control.test`
 - `sample.iso`
 
-Los flags con guion se tratan como texto. Para exclusiones usa filtros explícitos o la UI de include/exclude, no `-term`.
+Flags with a leading dash are treated as text. For exclusions, use explicit filters or the include/exclude UI, not `-term`.
 
 ## Timeline
 
-Timeline es una vista de Search. Debe preservar:
+Timeline is a Search view. It should preserve:
 
 - `case_id`
 - `evidence_id`
 - host
 - query
-- rango temporal
+- time range
 - artifact filters
 
-MFT/filesystem no se incluye por defecto para evitar inundar la vista temporal. Activa `Include filesystem/MFT events` o filtra por `artifact_type=mft` cuando quieras ese timeline.
+MFT/filesystem records are not included by default to avoid flooding the timeline view. Enable `Include filesystem/MFT events` or filter by `artifact_type=mft` when you want that timeline.
 
 ## Artifact Views
 
-Artifact Views no reemplaza Search. Úsalo para revisar familias con columnas especializadas:
+Artifact Views does not replace Search. Use it to review families with specialized columns:
 
 - MFT / Filesystem
 - Defender
@@ -107,13 +107,13 @@ Artifact Views no reemplaza Search. Úsalo para revisar familias con columnas es
 - LNK / Jumplist
 - Amcache / Shimcache
 
-Cada vista debe indicar backend, cobertura y limitaciones. Cuando exista backend advanced, revisa si estás viendo default, advanced o compare.
+Each view should indicate backend, coverage, and limitations. Where an advanced backend exists, check whether you are viewing default, advanced, or compare.
 
 ## Command History
 
-Command History consolida ejecuciones desde fuentes como Sysmon 1, Security 4688, PowerShell Operational, PSReadLine/transcripts si existen y scheduled tasks.
+Command History consolidates executions from sources such as Sysmon 1, Security 4688, PowerShell Operational, PSReadLine/transcripts where they exist, and scheduled tasks.
 
-Campos clave:
+Key fields:
 
 - timestamp
 - command
@@ -125,11 +125,11 @@ Campos clave:
 - supporting events
 - risk reasons
 
-Prefetch puede aparecer como contexto de ejecución, pero no como command line exacta.
+Prefetch can appear as execution context, but not as an exact command line.
 
 ## Execution Story
 
-Execution Story responde:
+Execution Story answers:
 
 - Who launched this?
 - What did it launch?
@@ -137,36 +137,36 @@ Execution Story responde:
 - Why is it suspicious?
 - What evidence supports this?
 
-Cuando abras una story desde Search o Command History, el target debe resolverse por identidad exacta:
+When you open a story from Search or Command History, the target must resolve by exact identity:
 
 1. `source_event_id`
 2. process GUID
 3. PID + timestamp + host + evidence
-4. texto solo como último fallback
+4. text only as a last-resort fallback
 
-Clickar un nodo muestra preview. Cambiar el target requiere la acción explícita `Make target`.
+Clicking a node shows a preview. Changing the target requires the explicit `Make target` action.
 
-## Markings and findings
+## Markings and Findings
 
-Usa markings para señalizar eventos o comandos:
+Use markings to flag events or commands:
 
 - `suspicious`
 - `important`
 - `reviewed`
 - `false_positive`
 
-Después crea findings con:
+Then create findings with:
 
-- título claro
-- severidad
-- eventos/comandos relacionados
-- detections si aplican
-- notas del analista
-- resumen de Execution Story si aporta contexto
+- a clear title
+- severity
+- related events/commands
+- detections, if applicable
+- analyst notes
+- an Execution Story summary if it adds context
 
 ## Reports
 
-Reports puede incluir:
+Reports can include:
 
 - findings
 - detections
@@ -176,19 +176,18 @@ Reports puede incluir:
 - Defender section
 - analyst notes
 
-Markdown es el export validado. PDF no debe considerarse estable salvo que se valide explícitamente en el despliegue.
+Markdown is the validated export. PDF should not be considered stable unless explicitly validated for the deployment.
 
-## Rules and detections
+## Rules and Detections
 
 Sigma:
 
-- orientado a eventos normalizados.
-- usa scopes pequeños o reglas concretas para smoke/control.
-- revisa detections antes de promoverlas.
+- oriented toward normalized events.
+- use small scopes or specific rules for smoke/control runs.
+- review detections before promoting them.
 
 YARA:
 
-- orientado a ficheros preservados.
-- debe ejecutarse con límites de tamaño, roots y scope.
-- no lo lances como full scan masivo sin control.
-
+- oriented toward preserved files.
+- must run with size, root, and scope limits.
+- do not launch it as an uncontrolled full mass scan.

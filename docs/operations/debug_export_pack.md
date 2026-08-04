@@ -1,26 +1,26 @@
 # Debug Export Pack
 
-## Qué es
+## What it is
 
-ZIP reducido para validar ingest, normalización, correlación, process graph, detections y contexto de UI sin exponer toda la evidencia original.
+A reduced ZIP to validate ingest, normalization, correlation, process graph, detections and UI context without exposing all the original evidence.
 
-## Cuándo usarlo
+## When to use it
 
-- timeline vacío o incompleto
-- process graph inconsistente
-- detections o rules dudosas
-- regressions de volumen de eventos
-- problemas de host attribution
-- parsing parcial o data quality inesperada
+- empty or incomplete timeline
+- inconsistent process graph
+- questionable detections or rules
+- event volume regressions
+- host attribution issues
+- partial parsing or unexpected data quality
 
-## Scopes habituales
+## Common scopes
 
 - `case`
 - `evidence`
 - `artifact_type`
-- vistas de investigación concretas
+- specific investigation views
 
-## Reports principales
+## Main reports
 
 - `manifest.json`
 - `ingest_summary.json`
@@ -32,7 +32,7 @@ ZIP reducido para validar ingest, normalización, correlación, process graph, d
 - `data_quality_report.json`
 - `ui_context.json`
 
-## Reports de investigación / correlación
+## Investigation / correlation reports
 
 - `correlation_findings_report.json`
 - `event_identity_report.json`
@@ -45,14 +45,14 @@ ZIP reducido para validar ingest, normalización, correlación, process graph, d
 - `host_identity_report.json`
 - `ingest_regression_report.json`
 
-## Reports de reglas / detections
+## Rules / detections reports
 
 - `rules_run_report.json`
 - `detections_report.json`
 - `sigma_matches.jsonl`
 - `yara_matches.jsonl`
 
-## Reports de familias de artefactos
+## Artifact family reports
 
 - `browser_parse_report.json`
 - `defender_parse_report.json`
@@ -75,9 +75,9 @@ ZIP reducido para validar ingest, normalización, correlación, process graph, d
 - `ntfs_sample_events.jsonl`
 - `windows_ui_sample_events.jsonl`
 
-## Cómo leerlo
+## How to read it
 
-Orden recomendado:
+Recommended order:
 
 1. `manifest.json`
 2. `ingest_summary.json`
@@ -88,27 +88,27 @@ Orden recomendado:
 7. `host_identity_report.json`
 8. `event_identity_report.json`
 9. `reconciliation_report.json`
-10. reports específicos de la vista problemática
+10. specific reports for the problematic view
 
-## Qué no incluye por defecto
+## What it does not include by default
 
-- evidencia raw pesada completa
-- dumps completos de usuario
-- export masivo no truncado de strings sensibles
+- full heavy raw evidence
+- complete user dumps
+- untruncated mass export of sensitive strings
 
-## Notas
+## Notes
 
-- Es un pack de validación, no un sustituto de la evidencia original.
-- Los reports dependen del scope y de que existan datos de esa familia.
-- `yara_matches.jsonl` puede estar vacío o incluir warning si YARA no aplicó a ese scope.
-- `email_parse_report.json` resume mensajes, adjuntos, inventario de mailboxes y fallos SPF/DKIM/DMARC ya presentes en headers; no hace validación DNS externa.
-- `user_activity_parse_report.json` resume actividad de UserAssist/BAM/RunMRU/TypedPaths/RecentDocs/Shellbags/Office MRU/TrustRecords y marca raw hives como inventory-only cuando no hubo export parseado.
-- `ntfs_parse_report.json` resume Zone.Identifier, USN, `$LogFile`, `$I30`, shadow copies y raw NTFS inventory-only. `ntfs_sample_events.jsonl` ayuda a validar origen web, create/delete/rename y entradas borradas sin exportar toda la evidencia.
-- `windows_ui_parse_report.json` resume thumbnails, notifications, ActivitiesCache, Windows.edb, EventTranscript, Office alerts y Office cache. `windows_ui_sample_events.jsonl` sirve para validar señales UI/local DB de alto valor sin incluir blobs binarios o texto completo sensible.
-- `event_identity_report.json` resume cuántos eventos tienen `stable_event_id`, cuántos son best-effort, si hubo colisiones y cómo se repartieron por familia de artefacto.
-- `host_identity_report.json` resume hosts canónicos, aliases, merges manuales, splits, candidatos pendientes y cobertura de `observed_host.name`.
-- `reconciliation_report.json` resume qué pasó tras reprocess: findings/detections reconciliados, key events remapeados y referencias que quedaron stale.
-- `event_id` es el identificador técnico de indexación actual; puede cambiar tras reprocess. `stable_event_id` es la identidad lógica estable usada para reconciliación v1.
-- `ingest_plan.json` exporta el plan de ingest activo por evidencia.
-- `ingest_plan_diff.json` resume candidatos missing/changed/new del último preview de reprocess.
-- `ingest_reprocess_report.json` resume el modo de reprocess usado, candidatos seleccionados, preservación de estado del analista y warnings.
+- It is a validation pack, not a substitute for the original evidence.
+- Reports depend on the scope and on whether data for that family exists.
+- `yara_matches.jsonl` may be empty or include a warning if YARA did not apply to that scope.
+- `email_parse_report.json` summarizes messages, attachments, mailbox inventory and SPF/DKIM/DMARC failures already present in headers; it does not perform external DNS validation.
+- `user_activity_parse_report.json` summarizes UserAssist/BAM/RunMRU/TypedPaths/RecentDocs/Shellbags/Office MRU/TrustRecords activity and marks raw hives as inventory-only when no parsed export was available.
+- `ntfs_parse_report.json` summarizes Zone.Identifier, USN, `$LogFile`, `$I30`, shadow copies and raw NTFS inventory-only. `ntfs_sample_events.jsonl` helps validate web origin, create/delete/rename and deleted entries without exporting all the evidence.
+- `windows_ui_parse_report.json` summarizes thumbnails, notifications, ActivitiesCache, Windows.edb, EventTranscript, Office alerts and Office cache. `windows_ui_sample_events.jsonl` is used to validate high-value UI/local DB signals without including binary blobs or full sensitive text.
+- `event_identity_report.json` summarizes how many events have a `stable_event_id`, how many are best-effort, whether there were collisions and how they were distributed by artifact family.
+- `host_identity_report.json` summarizes canonical hosts, aliases, manual merges, splits, pending candidates and `observed_host.name` coverage.
+- `reconciliation_report.json` summarizes what happened after a reprocess: reconciled findings/detections, remapped key events and references that remained stale.
+- `event_id` is the current technical indexing identifier; it can change after a reprocess. `stable_event_id` is the stable logical identity used for v1 reconciliation.
+- `ingest_plan.json` exports the active ingest plan per evidence.
+- `ingest_plan_diff.json` summarizes missing/changed/new candidates from the last reprocess preview.
+- `ingest_reprocess_report.json` summarizes the reprocess mode used, selected candidates, analyst state preservation and warnings.

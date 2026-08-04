@@ -1,21 +1,21 @@
-# Execution Artifacts: Amcache, ShimCache y AppCompat
+# Execution Artifacts: Amcache, ShimCache, and AppCompat
 
-## Qué es cada fuente
+## What each source is
 
-- `Amcache`: inventario de programas, binarios, drivers y metadatos PE observados por Windows.
-- `ShimCache` / `AppCompatCache`: caché de compatibilidad que ayuda a reconstruir presencia y posible ejecución de binarios.
-- `RecentFileCache`: artefacto histórico relacionado con presencia o actividad de programas/archivos recientes.
+- `Amcache`: inventory of programs, binaries, drivers, and PE metadata observed by Windows.
+- `ShimCache` / `AppCompatCache`: compatibility cache that helps reconstruct the presence and possible execution of binaries.
+- `RecentFileCache`: historical artifact related to the presence or activity of recent programs/files.
 
-## Qué aportan en DFIR
+## What they contribute in DFIR
 
-- Visibilidad de binarios presentes aunque ya no tengamos el archivo original.
-- Metadatos útiles:
+- Visibility into binaries present even if we no longer have the original file.
+- Useful metadata:
   - `publisher`
   - `product_name`
   - `version`
   - `compile_time`
   - `hashes`
-- Contexto para cruzar:
+- Context for cross-referencing:
   - Browser downloads
   - MFT / USN
   - Prefetch
@@ -23,23 +23,23 @@
   - Registry
   - Defender
 
-## Diferencia clave: presencia vs posible ejecución vs ejecución confirmada
+## Key difference: presence vs possible execution vs confirmed execution
 
-- `Prefetch`: ejecución fuerte.
-- `EVTX 4688`: ejecución fuerte.
-- `UserAssist` / `BAM`: ejecución o uso con peso fuerte/medio.
-- `Amcache`: programa observado o inventario; puede sugerir instalación o uso, pero no confirma ejecución por sí solo.
-- `ShimCache` / `AppCompatCache`: indicio de presencia o posible ejecución; muy útil para orden temporal y pivotes, no para afirmar ejecución por sí solo.
-- `RecentFileCache`: indicio de presencia/uso histórico; no debe venderse como ejecución confirmada.
+- `Prefetch`: strong execution.
+- `EVTX 4688`: strong execution.
+- `UserAssist` / `BAM`: execution or use with strong/medium weight.
+- `Amcache`: observed program or inventory; may suggest installation or use, but does not confirm execution on its own.
+- `ShimCache` / `AppCompatCache`: indicator of presence or possible execution; very useful for chronological order and pivoting, not for asserting execution on its own.
+- `RecentFileCache`: indicator of historical presence/use; should not be sold as confirmed execution.
 
-La plataforma representa esto con:
+The platform represents this with:
 
 - `execution.source`
 - `execution.confidence`
 - `execution.is_execution_confirmed`
 - `execution.interpretation`
 
-## Campos extraídos
+## Extracted fields
 
 ### Execution
 
@@ -97,31 +97,31 @@ La plataforma representa esto con:
 - `appcompat.name`
 - `appcompat.last_modified`
 
-## Cómo interpretar timestamps
+## How to interpret timestamps
 
-- En `Amcache` el timestamp principal suele venir de:
+- In `Amcache` the main timestamp usually comes from:
   - `LastModified`
   - `KeyLastWrite`
   - `InstallDate`
   - `CompileTime`
-- En `ShimCache` suele venir de:
+- In `ShimCache` it usually comes from:
   - `LastModifiedTime`
   - `LastUpdate`
   - `LastWriteTime`
 
-No todos los tiempos significan “momento de ejecución”.
+Not all times mean "moment of execution."
 
-## Cómo interpretar hashes
+## How to interpret hashes
 
-- Se normalizan y validan si tienen longitud consistente.
-- Son especialmente útiles para cruzar con:
+- They are normalized and validated if they have a consistent length.
+- They are especially useful for cross-referencing with:
   - Defender
   - IOC
-  - evidencias de descarga o ficheros observados
+  - download evidence or observed files
 
-## Correlación
+## Correlation
 
-La app cruza Amcache/ShimCache/AppCompat con:
+The app cross-references Amcache/ShimCache/AppCompat with:
 
 - Browser downloads
 - MFT / USN
@@ -130,26 +130,26 @@ La app cruza Amcache/ShimCache/AppCompat con:
 - Registry Run Keys / Services / BAM / UserAssist
 - Defender
 
-Esto permite elevar confianza sin exagerar el artefacto original.
+This allows raising confidence without overstating the original artifact.
 
-## Limitaciones
+## Limitations
 
-- `Amcache` no siempre prueba ejecución.
-- `ShimCache` no siempre prueba ejecución.
-- `RecentFileCache` es un indicio, no una confirmación.
-- El orden, formato y significado de ciertos campos varían entre versiones de Windows y parsers.
-- Si faltan `path` o `timestamp`, la confianza baja de forma explícita.
+- `Amcache` does not always prove execution.
+- `ShimCache` does not always prove execution.
+- `RecentFileCache` is an indicator, not a confirmation.
+- The order, format, and meaning of certain fields vary between Windows versions and parsers.
+- If `path` or `timestamp` is missing, confidence is explicitly lowered.
 
-## Falsos positivos comunes
+## Common false positives
 
-- Instaladores legítimos en `Downloads`.
-- Software portable en `AppData`.
-- LOLBins usados por administradores.
-- Herramientas de soporte remoto autorizadas.
-- Binarios internos sin metadatos PE completos o sin publisher.
+- Legitimate installers in `Downloads`.
+- Portable software in `AppData`.
+- LOLBins used by administrators.
+- Authorized remote support tools.
+- Internal binaries without complete PE metadata or without a publisher.
 
-## Ejemplos de investigación
+## Investigation examples
 
-1. Descarga en navegador de `invoice.pdf.exe` -> aparece en `Amcache` -> luego aparece en `Prefetch`.
-2. `runme.ps1` observado en `AppData\\Local\\Temp` en `Amcache` y `ShimCache`, pero sin `4688`: indicio fuerte de presencia, no ejecución confirmada.
-3. `AnyDesk.exe` observado en `ShimCache` y `Browser history`: revisar si la herramienta estaba autorizada y si hubo actividad remota.
+1. Browser download of `invoice.pdf.exe` -> appears in `Amcache` -> later appears in `Prefetch`.
+2. `runme.ps1` observed in `AppData\\Local\\Temp` in `Amcache` and `ShimCache`, but without `4688`: strong indicator of presence, not confirmed execution.
+3. `AnyDesk.exe` observed in `ShimCache` and `Browser history`: check whether the tool was authorized and whether there was remote activity.

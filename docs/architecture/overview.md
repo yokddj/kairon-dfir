@@ -1,14 +1,14 @@
-# Arquitectura
+# Architecture
 
-## Resumen
+## Summary
 
-Kairon DFIR está dividida en tres planos:
+Kairon DFIR is split into three planes:
 
-1. **Frontend** para el flujo del analista.
-2. **Backend** para casos, evidencias, eventos, reglas y análisis.
-3. **OpenSearch + PostgreSQL + filesystem** para búsqueda, metadatos y almacenamiento.
+1. **Frontend** for the analyst workflow.
+2. **Backend** for cases, evidence, events, rules, and analysis.
+3. **OpenSearch + PostgreSQL + filesystem** for search, metadata, and storage.
 
-El pipeline actual ya tiene rutas especializadas para:
+The current pipeline already has specialized routes for:
 
 - EVTX
 - Prefetch
@@ -19,15 +19,15 @@ El pipeline actual ya tiene rutas especializadas para:
 - Amcache / ShimCache / AppCompat
 - SRUM
 - Scheduled Tasks
-- PowerShell artifacts fuera de EVTX
+- PowerShell artifacts outside EVTX
 - Recycle Bin
-- USB enriquecido
+- Enriched USB
 
-Todas convergen en `NormalizedEvent` y desde ahí alimentan Search, Artifact Explorer, Timeline, detections y análisis semiautomático.
+All of these converge on `NormalizedEvent`, which then feeds Search, Artifact Explorer, Timeline, detections, and semi-automatic analysis.
 
 ## Frontend
 
-### Stack actual
+### Current Stack
 
 - React 18
 - TypeScript
@@ -36,14 +36,14 @@ Todas convergen en `NormalizedEvent` y desde ahí alimentan Search, Artifact Exp
 - React Query
 - React Router
 
-### Páginas principales
+### Main Pages
 
 - `Dashboard`
 - `Cases`
 - `Search`
 - `Artifact Explorer`
 - `Investigation Timeline`
-- `Análisis semiautomático`
+- `Semi-automatic Analysis`
 - `Activity`
 - `SIEM`
 - `Rules`
@@ -52,13 +52,13 @@ Todas convergen en `NormalizedEvent` y desde ahí alimentan Search, Artifact Exp
 - `Docs`
 - `System`
 
-### Routing y navegación
+### Routing and Navigation
 
-El frontend usa rutas React y un `Sidebar` único como punto principal de navegación. La nueva sección `Docs` vive en `/docs`.
+The frontend uses React routes and a single `Sidebar` as the main navigation point. The `Docs` section lives at `/docs`.
 
 ## Backend
 
-### Stack actual
+### Current Stack
 
 - FastAPI
 - SQLAlchemy
@@ -66,50 +66,50 @@ El frontend usa rutas React y un `Sidebar` único como punto principal de navega
 - Redis + RQ
 - OpenSearch
 
-### Módulos principales
+### Main Modules
 
 - `backend/app/api/`
-  - Rutas REST de casos, evidencias, búsqueda, reglas, actividad, sistema y findings.
+  - REST routes for cases, evidence, search, rules, activity, system, and findings.
 - `backend/app/ingest/`
-  - Detección de artefactos, parsers y normalización.
+  - Artifact detection, parsers, and normalization.
 - `backend/app/analysis/`
-  - Generación de `ForensicActivity` y análisis semiautomático.
+  - `ForensicActivity` generation and semi-automatic analysis.
 - `backend/app/rules_engine/`
-  - Ejecución de Sigma, heurística y YARA.
+  - Sigma, heuristic, and YARA execution.
 - `backend/app/core/`
-  - Base de datos, OpenSearch, actividad, configuración y helpers.
+  - Database, OpenSearch, activity, configuration, and helpers.
 
-### Rutas API importantes
+### Important API Routes
 
-- Casos:
+- Cases:
   - `GET /api/cases`
   - `POST /api/cases`
   - `DELETE /api/cases/{case_id}`
-- Evidencias:
+- Evidence:
   - `POST /api/evidences/upload`
   - `POST /api/evidences/upload-folder`
   - `POST /api/evidences/{evidence_id}/reprocess`
-- Búsqueda:
+- Search:
   - `POST /api/search`
   - `POST /api/search/deep`
-- Reglas:
+- Rules:
   - `GET /api/rules`
   - `POST /api/rules/import-file`
   - `POST /api/rules/import-archive`
   - `POST /api/rules/{rule_id}/run`
-- Análisis semiautomático:
+- Semi-automatic analysis:
   - `GET /api/cases/{case_id}/analysis/semi-auto`
 
-## Almacenamiento
+## Storage
 
 ### PostgreSQL
 
-Se usa para:
+Used for:
 
-- casos
-- evidencias
-- artefactos
-- reglas
+- cases
+- evidence
+- artifacts
+- rules
 - detections
 - findings
 - activity
@@ -117,261 +117,262 @@ Se usa para:
 
 ### OpenSearch
 
-Se usa para:
+Used for:
 
-- eventos normalizados
-- búsqueda global
+- normalized events
+- global search
 - timeline
-- filtros por campo
+- field filters
 - SIEM Lite
-- base del análisis semiautomático
+- the basis of semi-automatic analysis
 
 ### Filesystem
 
-Se usa para:
+Used for:
 
-- conservar el archivo original subido
-- staging selectivo de ficheros requeridos por el parser
-- guardar manifest y árbol de evidencia
+- keeping the original uploaded file
+- selective staging of files required by the parser
+- storing the evidence manifest and tree
 
-### Velociraptor ZIP inventory
+### Velociraptor ZIP Inventory
 
-Para colecciones Velociraptor ZIP, el backend ya no extrae todo el contenedor al inicio.
+For Velociraptor ZIP collections, the backend no longer extracts the entire container up front.
 
-Ahora el flujo es:
+The flow is now:
 
-- inventario del ZIP
-- discovery por rutas/nombres del inventario
-- selección de categorías
-- extracción selectiva de los ficheros requeridos
-- parseo
-- indexación
+- ZIP inventory
+- discovery by inventory paths/names
+- category selection
+- selective extraction of the required files
+- parsing
+- indexing
 
-Esto reduce drásticamente el coste cuando el analista solo quiere parsear una categoría concreta como Browser.
+This drastically reduces cost when the analyst only wants to parse a specific category such as Browser.
 
-## Flujo de datos
+## Data Flow
 
 ```text
-Colección / evidencia
-  -> detector de tipo
-  -> parser específico o genérico
-  -> evento normalizado
+Collection / evidence
+  -> type detector
+  -> specific or generic parser
+  -> normalized event
   -> OpenSearch
-  -> reglas / detections
+  -> rules / detections
   -> forensic activities
   -> UI
 ```
 
-## Modelo conceptual
+## Conceptual Model
 
-- **Raw evidence**: archivo original conservado.
-- **Parsed artifact**: CSV/JSON/JSONL/TXT ya procesado por otra herramienta.
-- **NormalizedEvent**: documento común indexado.
-- **Detection**: señal automática o match de regla.
-- **Finding**: hallazgo consolidado por el analista.
-- **ForensicActivity**: actividad agrupada para el análisis semiautomático.
+- **Raw evidence**: the original file, preserved.
+- **Parsed artifact**: CSV/JSON/JSONL/TXT already processed by another tool.
+- **NormalizedEvent**: common indexed document.
+- **Detection**: automatic signal or rule match.
+- **Finding**: hallmark consolidated by the analyst.
+- **ForensicActivity**: grouped activity for semi-automatic analysis.
 
-## Decisiones importantes actuales
+## Current Key Decisions
 
-### CSV de EZ Tools como fuente principal
+### EZ Tools CSV as the Primary Source
 
-La fuente principal actual para Windows es **EZ Tools parseado**, no el raw EVTX.
+The current primary source for Windows is **parsed EZ Tools**, not raw EVTX.
 
-### EVTX vía EvtxECmd
+### EVTX via EvtxECmd
 
-`EvtxECmd_Output.csv` es hoy la ruta principal y más robusta para:
+`EvtxECmd_Output.csv` is today the main and most robust route for:
 
 - logons
 - PowerShell
-- servicios
-- tareas
-- red
+- services
+- tasks
+- network
 - Defender
 - RDP
 
-### PowerShell fuera de EVTX
+### PowerShell Outside EVTX
 
-`ConsoleHost_history.txt`, transcripts y scripts observados ya tienen parser específico propio y convergen también en `NormalizedEvent`.
+`ConsoleHost_history.txt`, transcripts, and observed scripts already have their own specific parser and also converge on `NormalizedEvent`.
 
-Se usan para:
+Used for:
 
-- comandos interactivos observados
+- observed interactive commands
 - `EncodedCommand`
 - `Invoke-WebRequest` / `DownloadString` / `IEX`
 - Defender tampering
-- persistencia vía tareas, Run Keys o servicios
-- correlación con `4104`, `4688`, Prefetch, Browser, MFT, Defender y SRUM
+- persistence via tasks, Run Keys, or services
+- correlation with `4104`, `4688`, Prefetch, Browser, MFT, Defender, and SRUM
 
 ### Recycle Bin
 
-`RBCmd_Output.csv` y los artefactos raw `$I/$R` desde Velociraptor ya tienen parser específico y también convergen en `NormalizedEvent`.
+`RBCmd_Output.csv` and raw `$I/$R` artifacts from Velociraptor already have a specific parser and also converge on `NormalizedEvent`.
 
-Se usan para:
+Used for:
 
-- reconstruir archivos enviados a la papelera
-- recuperar ruta original, SID, tamaño y `deleted_time`
-- emparejar `$I` y `$R`
-- correlacionar con Browser downloads, `MFT/USN`, Defender, PowerShell, Prefetch y Scheduled Tasks
+- reconstructing files sent to the recycle bin
+- recovering original path, SID, size, and `deleted_time`
+- pairing `$I` and `$R`
+- correlating with Browser downloads, `MFT/USN`, Defender, PowerShell, Prefetch, and Scheduled Tasks
 
-### USB enriquecido
+### Enriched USB
 
-`setupapi.dev.log` y CSVs USB/Registry compatibles ya tienen parser específico y también convergen en `NormalizedEvent`.
+`setupapi.dev.log` and compatible USB/Registry CSVs already have a specific parser and also converge on `NormalizedEvent`.
 
-Se usan para:
+Used for:
 
-- observar dispositivos USB y volúmenes removibles
-- extraer `vendor`, `product`, `serial`, `device_instance_id` y mapeos de volumen
-- correlacionar con `LNK`, `JumpLists`, `Shellbags`, `Browser`, `PowerShell`, `MFT/USN` y `Recycle Bin`
+- observing USB devices and removable volumes
+- extracting `vendor`, `product`, `serial`, `device_instance_id`, and volume mappings
+- correlating with `LNK`, `JumpLists`, `Shellbags`, `Browser`, `PowerShell`, `MFT/USN`, and `Recycle Bin`
 
 ### BITS
 
-BITS ya entra como familia específica de `NormalizedEvent`.
+BITS is already a specific `NormalizedEvent` family.
 
-Fuentes soportadas en esta iteración:
+Sources supported in this iteration:
 
-- CSV/JSON/TXT parseado compatible
-- discovery raw de `qmgr*.dat` y `qmgr.db`
-- EVTX BITS manejado por el parser de eventos cuando exista esa ruta
+- compatible parsed CSV/JSON/TXT
+- raw discovery of `qmgr*.dat` and `qmgr.db`
+- EVTX BITS handled by the event parser when that route exists
 
-Objetivo semántico:
+Semantic goal:
 
-- observar jobs y transferencias en segundo plano
-- distinguir jobs benignos de candidatos de abuso
-- elevar la confianza cuando el archivo descargado luego se ejecuta o es detectado
+- observe background jobs and transfers
+- distinguish benign jobs from abuse candidates
+- raise confidence when the downloaded file is later executed or detected
 
-### Prefetch vía PECmd
+### Prefetch via PECmd
 
-`PECmd_Output.csv` ya tiene parser específico y se usa para:
+`PECmd_Output.csv` already has a specific parser and is used for:
 
-- programas ejecutados
-- PowerShell observado por Prefetch
-- hallazgos sospechosos por LOLBins o rutas
+- executed programs
+- PowerShell observed via Prefetch
+- suspicious findings via LOLBins or paths
 - timeline
-- correlación básica con EVTX 4688
+- basic correlation with EVTX 4688
 
-### LNK vía LECmd
+### LNK via LECmd
 
-`LECmd_Output.csv` ya tiene parser específico y se usa para:
+`LECmd_Output.csv` already has a specific parser and is used for:
 
-- archivos abiertos
-- documentos accedidos
-- scripts y ejecutables abiertos por el usuario
-- rutas UNC y accesos a red
-- indicios de USB o medios removibles
-- correlación básica con Prefetch y EVTX 4688
+- opened files
+- accessed documents
+- scripts and executables opened by the user
+- UNC paths and network access
+- indicators of USB or removable media
+- basic correlation with Prefetch and EVTX 4688
 
-### Jump Lists vía JLECmd y raw Velociraptor
+### Jump Lists via JLECmd and Raw Velociraptor
 
-`JLECmd_Output.csv` ya tiene parser específico y ahora se complementa con parseo raw de `automaticDestinations-ms` y soporte parcial para `customDestinations-ms`:
+`JLECmd_Output.csv` already has a specific parser and is now complemented by raw parsing of `automaticDestinations-ms` and partial support for `customDestinations-ms`:
 
-- documentos recientes por aplicación
-- archivos y scripts abiertos
-- interacción de usuario por `AppID`
-- rutas UNC y posibles USB
-- correlación básica con LNK, Browser, Recycle Bin, Shellbags, Prefetch y EVTX 4688
-- `automaticDestinations` raw parseable desde colecciones Velociraptor
-- `customDestinations` raw con soporte parcial y warnings controlados
+- recent documents per application
+- opened files and scripts
+- user interaction via `AppID`
+- UNC paths and possible USB
+- basic correlation with LNK, Browser, Recycle Bin, Shellbags, Prefetch, and EVTX 4688
+- raw `automaticDestinations` parseable from Velociraptor collections
+- raw `customDestinations` with partial support and controlled warnings
 
-### Registry vía RECmd
+### Registry via RECmd
 
-`RECmd_Output.csv` y CSVs compatibles de RECmd Batch ya tienen parser específico y se usan para:
+`RECmd_Output.csv` and compatible RECmd Batch CSVs already have a specific parser and are used for:
 
-- persistencia por Run Keys y Services
-- ejecución observada vía UserAssist y BAM/DAM
-- indicios de presencia/uso vía MUICache
-- USBSTOR y MountedDevices
-- TypedPaths, RunMRU, RecentDocs, RDP MRU y Shellbags
-- `SBECmd` como fuente específica de `folder_activity`, `network_share_activity`, `usb_folder_activity`, `cloud_folder_activity` y correlaciones con LNK/JumpLists/Recycle Bin
-- `WMI` como fuente específica de `wmi_filter`, `wmi_consumer`, `wmi_binding`, `wmi_persistence_candidate`, `wmi_activity_query` y correlaciones con PowerShell, Defender, Prefetch, Amcache, MFT, Browser y BITS
-- correlación básica con EVTX, Prefetch, LNK y Jump Lists
+- persistence via Run Keys and Services
+- observed execution via UserAssist and BAM/DAM
+- presence/usage indicators via MUICache
+- USBSTOR and MountedDevices
+- TypedPaths, RunMRU, RecentDocs, RDP MRU, and Shellbags
+- `SBECmd` as a specific source for `folder_activity`, `network_share_activity`, `usb_folder_activity`, `cloud_folder_activity`, and correlations with LNK/JumpLists/Recycle Bin
+- `WMI` as a specific source for `wmi_filter`, `wmi_consumer`, `wmi_binding`, `wmi_persistence_candidate`, `wmi_activity_query`, and correlations with PowerShell, Defender, Prefetch, Amcache, MFT, Browser, and BITS
+- basic correlation with EVTX, Prefetch, LNK, and Jump Lists
 
-### Sistema de archivos vía MFTECmd
+### Filesystem via MFTECmd
 
-`MFTECmd_Output.csv` y CSVs compatibles de `USN Journal` ya tienen parser específico y se usan para:
+`MFTECmd_Output.csv` and compatible `USN Journal` CSVs already have a specific parser and are used for:
 
-- observación de archivos y carpetas históricas
-- deleted candidates vía `InUse = false`
+- observing historical files and folders
+- deleted candidates via `InUse = false`
 - ADS
-- creaciones, borrados, renombrados y modificaciones vía USN
-- detección básica de posibles discrepancias `$SI/$FN`
-- correlación básica con EVTX, Prefetch, LNK, Jump Lists y Registry
+- creations, deletions, renames, and modifications via USN
+- basic detection of possible `$SI/$FN` discrepancies
+- basic correlation with EVTX, Prefetch, LNK, Jump Lists, and Registry
 
-### Browser activity vía CSV/JSON parseado
+### Browser Activity via Parsed CSV/JSON
 
-Outputs compatibles de `BrowserHistoryView`, `BrowsingHistoryView`, exports CSV/JSON de `History` / `Downloads` y formatos similares ya tienen parser específico y se usan para:
+Compatible outputs from `BrowserHistoryView`, `BrowsingHistoryView`, CSV/JSON exports of `History` / `Downloads`, and similar formats already have a specific parser and are used for:
 
-- historial de navegación
-- descargas
-- términos de búsqueda
-- correlación básica descarga -> archivo creado -> archivo abierto -> ejecución
+- browsing history
+- downloads
+- search terms
+- basic correlation: download -> file created -> file opened -> execution
 
-### Execution artifacts vía CSV parseado
+### Execution Artifacts via Parsed CSV
 
-Outputs compatibles de `AmcacheParser`, `AppCompatCacheParser`, `ShimCacheParser`, `RecentFileCache` y algunos CSVs de `RECmd Batch` ya tienen parser específico y se usan para:
+Compatible outputs from `AmcacheParser`, `AppCompatCacheParser`, `ShimCacheParser`, `RecentFileCache`, and some `RECmd Batch` CSVs already have a specific parser and are used for:
 
-- inventario de programas observados
-- presencia o posible ejecución histórica
-- hashes y metadatos PE
-- correlación con Browser, MFT/USN, Prefetch, EVTX, Registry y Defender
+- inventory of observed programs
+- presence or possible historical execution
+- hashes and PE metadata
+- correlation with Browser, MFT/USN, Prefetch, EVTX, Registry, and Defender
 
-Se interpretan de forma conservadora:
+Interpreted conservatively:
 
-- `Amcache`: observación / inventario, no ejecución confirmada por defecto
-- `ShimCache` / `AppCompat`: presencia o posible ejecución, no ejecución confirmada por defecto
+- `Amcache`: observation / inventory, not confirmed execution by default
+- `ShimCache` / `AppCompat`: presence or possible execution, not confirmed execution by default
 
-### Velociraptor collection discovery
+### Velociraptor Collection Discovery
 
-La app ya tiene una ruta específica para colecciones Velociraptor:
+The app already has a specific route for Velociraptor collections:
 
-1. subir ZIP o carpeta
-2. hacer discovery de evidencias
-3. seleccionar candidatos soportados
-4. encolar parseo selectivo
+1. upload ZIP or folder
+2. run evidence discovery
+3. select supported candidates
+4. queue selective parsing
 
-En esta fase el parseo raw implementado directamente sobre Velociraptor es:
+At this stage, the raw parsing implemented directly over Velociraptor is:
 
 - Chromium `History`
-- XML raw de `C:\Windows\System32\Tasks\*`
-- artefactos raw de Defender como `DetectionHistory` y `MPLog*.log`
+- raw XML from `C:\Windows\System32\Tasks\*`
+- raw Defender artifacts such as `DetectionHistory` and `MPLog*.log`
 
 ### Scheduled Tasks
 
-XML raw de `C:\Windows\System32\Tasks\*` y CSVs compatibles de Scheduled Tasks ya tienen parser específico y se usan para:
+Raw XML from `C:\Windows\System32\Tasks\*` and compatible Scheduled Tasks CSVs already have a specific parser and are used for:
 
-- observar definición de tareas
-- detectar persistencia por tareas habilitadas con acciones `Exec` o `ComHandler`
-- extraer `RunAs`, `RunLevel`, triggers, command, arguments y working directory
-- detectar PowerShell codificado, LOLBins, rutas sospechosas, rutas UNC y tareas `hidden + enabled`
-- correlacionar con EVTX `4698/4702/106/140/200/201/102`, Prefetch, Browser downloads, MFT/USN, Registry, SRUM y Defender
+- observing task definitions
+- detecting persistence via enabled tasks with `Exec` or `ComHandler` actions
+- extracting `RunAs`, `RunLevel`, triggers, command, arguments, and working directory
+- detecting encoded PowerShell, LOLBins, suspicious paths, UNC paths, and `hidden + enabled` tasks
+- correlating with EVTX `4698/4702/106/140/200/201/102`, Prefetch, Browser downloads, MFT/USN, Registry, SRUM, and Defender
 
-Se interpretan de forma conservadora:
+Interpreted conservatively:
 
-- XML raw o CSV de tarea: **definición observada**
-- EVTX TaskScheduler/Security: **creación, modificación o ejecución observada**
-- la confianza sube cuando hay correlación con ejecución o con archivos descargados/presentes
-- Defender raw/log/CSV/JSON sigue el mismo patrón del resto: parser específico, normalización a `artifact.type = defender` y correlación posterior con Browser, MFT/USN, Prefetch, EVTX, Scheduled Tasks, Registry y SRUM
+- raw XML or task CSV: **observed definition**
+- EVTX TaskScheduler/Security: **observed creation, modification, or execution**
+- confidence rises when there is correlation with execution or with downloaded/present files
+- raw/log/CSV/JSON Defender follows the same pattern as the rest: specific parser, normalization to `artifact.type = defender`, and later correlation with Browser, MFT/USN, Prefetch, EVTX, Scheduled Tasks, Registry, and SRUM
 - Firefox `places.sqlite`
-- correlación básica con MFT/USN, LNK, Jump Lists, Prefetch, EVTX y Defender
+- basic correlation with MFT/USN, LNK, Jump Lists, Prefetch, EVTX, and Defender
 
-### Raw preservado, no indexado dinámicamente
+### Raw Preserved, Not Dynamically Indexed
 
-Los eventos preservan:
+Events preserve:
 
 - `raw`
 - `windows.event_data`
 - `windows.payload`
 
-pero esos contenedores no se expanden dinámicamente en OpenSearch.
+but these containers are not dynamically expanded in OpenSearch.
 
-### OpenSearch con `dynamic: false`
+### OpenSearch with `dynamic: false`
 
-Se usa para evitar explosión de campos al indexar EVTX con payloads variables.
-# Actualización de arquitectura
+Used to avoid field explosion when indexing EVTX with variable payloads. The more recent families follow the same pattern:
 
-- La familia `autoruns` añade un namespace `autoruns.*` y otro `persistence.*` con mapping explícito `dynamic: false`, además de correlación semiautomática con Browser, BITS, Defender, Prefetch, WMI, Scheduled Tasks y Registry.
-- La familia `cloud_sync` añade un namespace `cloud.*` con mapping explícito `dynamic: false`, detección por path inference, parse genérico CSV/JSON/log, y correlación semiautomática con Browser, BITS, PowerShell, MFT, Recycle Bin, Defender, Autoruns, WMI y USB.
-- La familia `network` añade namespaces `network.*`, `wlan.*` y `dns.*` con mapping explícito `dynamic: false`, parse de WLAN XML / `hosts` / DNS-network CSV-JSON-TXT, clasificación de WLAN AutoConfig EVTX y Registry `NetworkList` / `Tcpip`, además de correlación semiautomática con Browser, BITS, PowerShell, Defender, Cloud Sync, SRUM y MFT.
-# Raw parser foundation now exists for direct native parsing of EVTX and LNK, alongside the existing external CSV workflows.
+- `autoruns` adds an `autoruns.*` namespace and a `persistence.*` namespace with explicit `dynamic: false` mapping, plus semi-automatic correlation with Browser, BITS, Defender, Prefetch, WMI, Scheduled Tasks, and Registry.
+- `cloud_sync` adds a `cloud.*` namespace with explicit `dynamic: false` mapping, detection via path inference, generic CSV/JSON/log parsing, and semi-automatic correlation with Browser, BITS, PowerShell, MFT, Recycle Bin, Defender, Autoruns, WMI, and USB.
+- `network` adds `network.*`, `wlan.*`, and `dns.*` namespaces with explicit `dynamic: false` mapping, parsing of WLAN XML / `hosts` / DNS-network CSV-JSON-TXT, classification of WLAN AutoConfig EVTX and Registry `NetworkList` / `Tcpip`, plus semi-automatic correlation with Browser, BITS, PowerShell, Defender, Cloud Sync, SRUM, and MFT.
+
+In addition to the external pipeline (EvtxECmd/LECmd), there is also a foundation of native raw parsers for direct parsing of EVTX and LNK.
+
 ## Debug Export Pack
 
-La arquitectura incluye un servicio de exportación de validación/debug que genera un ZIP reducido por caso, evidencia, búsqueda, vista de artefactos o análisis semiautomático. El pack reutiliza manifests de evidencia, muestras indexadas desde OpenSearch, resultados de reglas, análisis semiautomático y errores de ingesta, con redacción y truncado por defecto para facilitar revisión externa sin compartir la evidencia completa.
+The architecture includes a validation/debug export service that generates a reduced ZIP per case, evidence, search, artifact view, or semi-automatic analysis. The pack reuses evidence manifests, samples indexed from OpenSearch, rule results, semi-automatic analysis, and ingest errors, with redaction and truncation on by default to make external review easier without sharing the full evidence.

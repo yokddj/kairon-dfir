@@ -1,28 +1,28 @@
-# OpenSearch en Kairon DFIR
+# OpenSearch in Kairon DFIR
 
-## Para qué se usa
+## What it's used for
 
-OpenSearch es el motor de:
+OpenSearch is the engine for:
 
-- indexación de eventos normalizados
-- búsqueda global
+- indexing normalized events
+- global search
 - timeline
 - SIEM Lite
-- base del análisis semiautomático
+- the basis of semi-automated analysis
 
-## Índices por caso
+## Indices per case
 
-La plataforma crea índices de eventos por caso. Eso permite:
+The platform creates event indices per case. This allows:
 
-- separar investigaciones
-- borrar un caso limpiando su índice
-- aplicar mappings controlados
+- separating investigations
+- deleting a case by clearing its index
+- applying controlled mappings
 
-## Por qué `dynamic: false`
+## Why `dynamic: false`
 
-Los eventos EVTX pueden traer payloads muy variables. Si OpenSearch expandiera automáticamente todos esos campos, se dispararía el número total de fields.
+EVTX events can carry highly variable payloads. If OpenSearch automatically expanded all those fields, the total field count would spike.
 
-Por eso los índices nuevos usan:
+That's why new indices use:
 
 ```json
 {
@@ -30,19 +30,19 @@ Por eso los índices nuevos usan:
 }
 ```
 
-## Por qué `raw`, `windows.event_data` y `windows.payload` tienen `enabled: false`
+## Why `raw`, `windows.event_data` and `windows.payload` have `enabled: false`
 
-Esos contenedores se conservan para:
+Those containers are kept for:
 
-- trazabilidad
-- detalle del evento
-- validación manual
+- traceability
+- event detail
+- manual validation
 
-pero **no** deben abrir miles de campos en el mapping.
+but they must **not** open up thousands of fields in the mapping.
 
-## Qué campos sí son buscables
+## Which fields are actually searchable
 
-Ejemplos típicos:
+Typical examples:
 
 - `event.type`
 - `event.category`
@@ -72,75 +72,75 @@ Ejemplos típicos:
 - `suspicious_reasons`
 - `search_text`
 
-## Qué campos solo se ven en detalle
+## Which fields are only visible in detail
 
 - `raw`
 - `windows.event_data`
 - `windows.payload`
-- partes no mapeadas del XML/payload
+- unmapped parts of the XML/payload
 
-## Cómo comprobar el mapping
+## How to check the mapping
 
-Ejemplo orientativo:
+Illustrative example:
 
 ```bash
-curl http://localhost:9200/<indice-del-caso>/_mapping?pretty
+curl http://localhost:9200/<case-index>/_mapping?pretty
 ```
 
-## Si cambia el mapping
+## If the mapping changes
 
-Si modificas los campos normalizados o el mapping base:
+If you modify the normalized fields or the base mapping:
 
-1. recrea el caso o su índice
-2. reimporta la evidencia
+1. recreate the case or its index
+2. reimport the evidence
 
-Si no lo haces, puedes mezclar un parser nuevo con un índice viejo.
+If you don't do this, you may end up mixing a new parser with an old index.
 
 ## Error: total fields limit
 
-Suele significar:
+This usually means:
 
-- índice antiguo
-- `dynamic` mal configurado
-- `raw` / `event_data` / `payload` expandiéndose
+- an old index
+- misconfigured `dynamic`
+- `raw` / `event_data` / `payload` expanding
 
 ## Bulk indexing errors
 
-La ingesta ya intenta detectar errores de bulk y no fallar silenciosamente.
+Ingest already attempts to detect bulk errors and not fail silently.
 
-Qué revisar:
+What to check:
 
 - `Activity`
-- logs del backend/worker
-- manifest o auditoría de ingesta
+- backend/worker logs
+- ingest manifest or audit
 
-## Preflight de ingest
+## Ingest preflight
 
-Antes de arrancar una ingesta, reprocess o benchmark, la plataforma debe validar que OpenSearch:
+Before starting an ingest, reprocess or benchmark, the platform must validate that OpenSearch:
 
-- es alcanzable
-- no está en `red`
-- no tiene `cluster.blocks.create_index=true`
-- no tiene `cluster.blocks.write=true`
-- no tiene índices relevantes en `read_only_allow_delete`
-- puede crear el índice del caso si aún no existe
+- is reachable
+- is not in `red`
+- does not have `cluster.blocks.create_index=true`
+- does not have `cluster.blocks.write=true`
+- does not have relevant indices in `read_only_allow_delete`
+- can create the case index if it does not already exist
 
-Si falla esa preflight:
+If that preflight fails:
 
-- no empieza el parsing
-- el run se clasifica como `infrastructure_blocked_opensearch`
-- la UI debe mostrar que OpenSearch no está writable
+- parsing does not start
+- the run is classified as `infrastructure_blocked_opensearch`
+- the UI must show that OpenSearch is not writable
 
-Esto evita confundir un problema de infraestructura con un problema de parser o throughput.
+This avoids confusing an infrastructure problem with a parser or throughput problem.
 
-## Comandos útiles
+## Useful commands
 
 ```bash
 curl http://localhost:9200/_cat/indices?v
-curl http://localhost:9200/<indice-del-caso>/_count?pretty
-curl http://localhost:9200/<indice-del-caso>/_mapping?pretty
+curl http://localhost:9200/<case-index>/_count?pretty
+curl http://localhost:9200/<case-index>/_mapping?pretty
 ```
 
-Advertencia:
+Warning:
 
-> Host, puerto y credenciales pueden variar según tu despliegue.
+> Host, port and credentials may vary depending on your deployment.

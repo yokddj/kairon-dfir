@@ -1,6 +1,6 @@
 # Memory Analysis
 
-Memory Analysis is a Preview Kairon capability for authorized RAM and memory evidence triage. See [roadmap.md](roadmap.md) for its Preview classification and [architecture/optional-capability-boundary.md](architecture/optional-capability-boundary.md) for what "optional" means technically for this capability.
+Memory Analysis is a Preview Kairon capability for authorized RAM and memory evidence triage. See [roadmap.md](../roadmap.md) for its Preview classification and [architecture/optional-capability-boundary.md](../architecture/optional-capability-boundary.md) for what "optional" means technically for this capability.
 
 The primary upload workflow is now:
 
@@ -164,6 +164,6 @@ retry.
 
 Command settings are administrator-controlled and require trusted server access to change. Shell fragments and embedded arguments are rejected.
 
-## Sprint boundary
+## Scope Boundary
 
 The current runner scope is isolated memory analysis only. It does not add MemProcFS execution, credential extraction, file extraction, memory dumping, process dumping, DLL dumping, malware verdicts, hybrid correlation, or global Search/Timeline integration.

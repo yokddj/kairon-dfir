@@ -1,47 +1,47 @@
 # WMI
 
-## Qué soporta la app
+## What the app supports
 
-La app soporta actualmente:
+The app currently supports:
 
-- CSV parseado de `__EventFilter`
-- CSV parseado de `CommandLineEventConsumer`
-- CSV parseado de `ActiveScriptEventConsumer`
-- CSV parseado de `__FilterToConsumerBinding`
-- JSON parseado equivalente
-- CSV de Autoruns/Sysinternals cuando contiene entradas WMI
-- clasificación de eventos `Microsoft-Windows-WMI-Activity/Operational` ya parseados por EVTX
-- discovery raw del repositorio WMI:
+- parsed CSV of `__EventFilter`
+- parsed CSV of `CommandLineEventConsumer`
+- parsed CSV of `ActiveScriptEventConsumer`
+- parsed CSV of `__FilterToConsumerBinding`
+- equivalent parsed JSON
+- Autoruns/Sysinternals CSV when it contains WMI entries
+- classification of `Microsoft-Windows-WMI-Activity/Operational` events already parsed by EVTX
+- raw discovery of the WMI repository:
   - `OBJECTS.DATA`
   - `INDEX.BTR`
   - `MAPPING*.MAP`
 
-## Qué se parsea directamente desde Velociraptor
+## What is parsed directly from Velociraptor
 
-Se parsea directamente desde una colección Velociraptor cuando la colección ya contiene:
+It is parsed directly from a Velociraptor collection when the collection already contains:
 
-- CSV/JSON WMI parseado
-- EVTX WMI Activity que luego entra por el parser EVTX
+- parsed WMI CSV/JSON
+- WMI Activity EVTX that then goes through the EVTX parser
 
-El repositorio raw WMI bajo `C:\Windows\System32\wbem\Repository\` se detecta y preserva, pero en esta iteración queda como `detected_not_implemented`.
+The raw WMI repository under `C:\Windows\System32\wbem\Repository\` is detected and preserved, but in this iteration it remains `detected_not_implemented`.
 
-## Qué son Filter, Consumer y Binding
+## What Filter, Consumer, and Binding are
 
-- `__EventFilter`: define la condición WQL que dispara algo.
-- `EventConsumer`: define qué hacer cuando el filtro se cumple.
-- `__FilterToConsumerBinding`: une filtro y consumer.
+- `__EventFilter`: defines the WQL condition that triggers something.
+- `EventConsumer`: defines what to do when the filter is met.
+- `__FilterToConsumerBinding`: joins filter and consumer.
 
-La persistencia WMI útil suele requerir la cadena completa:
+Useful WMI persistence usually requires the full chain:
 
 1. filter
 2. consumer
 3. binding
 
-## Consumers importantes
+## Important consumers
 
 ### CommandLineEventConsumer
 
-Es especialmente relevante porque puede ejecutar:
+This is especially relevant because it can execute:
 
 - `powershell`
 - `cmd.exe`
@@ -53,17 +53,17 @@ Es especialmente relevante porque puede ejecutar:
 
 ### ActiveScriptEventConsumer
 
-Es relevante porque puede contener `VBScript` o `JScript` embebido en `ScriptText`.
+This is relevant because it can contain `VBScript` or `JScript` embedded in `ScriptText`.
 
-## Cómo interpretar WMI Activity vs WMI Persistence
+## How to interpret WMI Activity vs WMI Persistence
 
-- `WMI Activity EVTX` puede indicar consultas, errores o actividad del subsistema WMI.
-- `WMI Activity EVTX` por sí solo no prueba persistencia.
-- `WMI persistence candidate` requiere al menos una correlación razonable entre filter, consumer y binding.
+- `WMI Activity EVTX` can indicate queries, errors, or activity in the WMI subsystem.
+- `WMI Activity EVTX` alone does not prove persistence.
+- `WMI persistence candidate` requires at least a reasonable correlation between filter, consumer, and binding.
 
-## Campos principales
+## Main fields
 
-La app extrae y normaliza, cuando están disponibles:
+The app extracts and normalizes, when available:
 
 - `wmi.namespace`
 - `wmi.class_name`
@@ -80,53 +80,53 @@ La app extrae y normaliza, cuando están disponibles:
 - `wmi.binding_consumer`
 - `wmi.creator_sid`
 - `wmi.creator_user`
-- timestamps WMI
+- WMI timestamps
 
-## Qué aumenta el riesgo
+## What increases risk
 
-- `CommandLineEventConsumer` con `powershell -enc`
-- `ActiveScriptEventConsumer` con script no vacío
-- query WQL con:
+- `CommandLineEventConsumer` with `powershell -enc`
+- `ActiveScriptEventConsumer` with a non-empty script
+- WQL query with:
   - `Win32_ProcessStartTrace`
   - `RegistryValueChangeEvent`
   - `__InstanceCreationEvent`
   - `__InstanceModificationEvent`
   - `__TimerEvent`
-- `binding` completo entre filter y consumer
-- URLs, downloads o rutas en `AppData`, `Temp`, `ProgramData`, `Public`
-- correlación posterior con Defender, Prefetch, Amcache o MFT
+- complete `binding` between filter and consumer
+- URLs, downloads, or paths in `AppData`, `Temp`, `ProgramData`, `Public`
+- subsequent correlation with Defender, Prefetch, Amcache, or MFT
 
-## Correlaciones que hace la app
+## Correlations the app makes
 
 - WMI -> PowerShell
 - WMI -> Defender
-- WMI -> Prefetch / ejecución
+- WMI -> Prefetch / execution
 - WMI -> Amcache / ShimCache
 - WMI -> MFT / USN
 - WMI -> Browser / BITS
 - WMI -> Scheduled Tasks
 
-## Falsos positivos comunes
+## Common false positives
 
-- agentes de gestión
-- monitorización legítima basada en WMI
-- software corporativo que usa consumers benignos
-- WMI Activity EVTX con errores o queries administrativas sin persistencia real
+- management agents
+- legitimate WMI-based monitoring
+- corporate software using benign consumers
+- WMI Activity EVTX with errors or administrative queries without real persistence
 
-## Limitaciones actuales
+## Current limitations
 
-- `OBJECTS.DATA` raw aún no tiene parser binario real
-- `WMI Activity EVTX` no siempre prueba persistencia
-- un `consumer` o `binding` por sí solo no prueba ejecución real
+- raw `OBJECTS.DATA` still has no real binary parser
+- `WMI Activity EVTX` does not always prove persistence
+- a `consumer` or `binding` alone does not prove real execution
 
-## Ejemplos de investigación
+## Investigation examples
 
-- buscar `artifact.type = wmi` y filtrar `wmi.consumer_name`, `wmi.query` o `wmi.command_line_template`
-- revisar si existe:
+- search `artifact.type = wmi` and filter by `wmi.consumer_name`, `wmi.query`, or `wmi.command_line_template`
+- check whether the following exist:
   - filter
   - consumer
   - binding
-- pivotar el `executable_path` o la URL hacia:
+- pivot the `executable_path` or the URL toward:
   - Defender
   - Prefetch
   - PowerShell

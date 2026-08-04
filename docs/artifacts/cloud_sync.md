@@ -1,10 +1,10 @@
 # Cloud Sync
 
-## Qué es
+## What it is
 
-`Cloud Sync` agrupa evidencias de clientes de sincronización cloud y carpetas sincronizadas locales. En Kairon DFIR no se interpreta por defecto como exfiltración confirmada.
+`Cloud Sync` groups evidence of cloud sync clients and locally synced folders. In Kairon DFIR it is not interpreted by default as confirmed exfiltration.
 
-Proveedores cubiertos:
+Providers covered:
 
 - OneDrive
 - Google Drive / Drive for Desktop / DriveFS
@@ -12,21 +12,21 @@ Proveedores cubiertos:
 - MEGAsync
 - iCloud Drive
 - Box Drive / Box Sync
-- carpetas cloud genéricas detectadas por ruta
+- generic cloud folders detected by path
 
-## Qué soporta la app
+## What the app supports
 
-La app soporta:
+The app supports:
 
-- discovery de sync roots y rutas de configuración/log
-- parse CSV/JSON cloud genérico
-- parse básico de logs de texto simples
-- inferencia por ruta sobre eventos ya normalizados
-- correlación con Browser, BITS, PowerShell, MFT/USN, LNK, JumpLists, Recycle Bin, Defender, Autoruns, Scheduled Tasks, WMI y USB
+- discovery of sync roots and configuration/log paths
+- generic cloud CSV/JSON parsing
+- basic parsing of simple text logs
+- path-based inference on already normalized events
+- correlation with Browser, BITS, PowerShell, MFT/USN, LNK, JumpLists, Recycle Bin, Defender, Autoruns, Scheduled Tasks, WMI, and USB
 
-## Qué se parsea directamente desde Velociraptor
+## What is parsed directly from Velociraptor
 
-Si la colección ya contiene salidas parseadas pequeñas o logs/configs legibles, la app puede procesar:
+If the collection already contains small parsed outputs or readable logs/configs, the app can process:
 
 - `*OneDrive*.csv`
 - `*GoogleDrive*.csv`
@@ -36,48 +36,48 @@ Si la colección ya contiene salidas parseadas pequeñas o logs/configs legibles
 - `*iCloud*.csv`
 - `*BoxDrive*.csv`
 - `*CloudSync*.json`
-- logs/configs pequeños reconocibles del cliente
+- small recognizable client logs/configs
 
-También detecta sync roots observados por ruta sin extraer por defecto todo su contenido.
+It also detects sync roots observed by path without extracting all of their content by default.
 
-## Qué queda como discovery
+## What remains as discovery
 
-Se detectan como discovery o `path_inference`:
+Detected as discovery or `path_inference`:
 
-- carpetas completas OneDrive/Dropbox/Google Drive/MEGA/iCloud/Box
-- rutas grandes de `DriveFS`
-- configs o bases propietarias no parseadas
+- complete OneDrive/Dropbox/Google Drive/MEGA/iCloud/Box folders
+- large `DriveFS` paths
+- unparsed configs or proprietary databases
 
-La app no extrae masivamente carpetas cloud completas por defecto.
+The app does not massively extract complete cloud folders by default.
 
-## Campos extraídos
+## Extracted fields
 
-- proveedor
-- cuenta / email si aparece
+- provider
+- account / email if present
 - sync root
-- ruta local
-- ruta remota / cloud path
-- estado / sync status
-- timestamps de sync, upload, download y file activity
-- URL/domain si existe
+- local path
+- remote path / cloud path
+- status / sync status
+- sync, upload, download, and file activity timestamps
+- URL/domain if present
 - direction / detection_method / confidence
 
-## Tipos de artefacto cloud
+## Cloud artifact types
 
-La app diferencia entre:
+The app distinguishes between:
 
-- `cloud_client_config`: configuración del cliente cloud, por ejemplo `OneDrive\\settings\\ECSConfig.json`
-- `cloud_client_log`: logs del cliente cloud, por ejemplo `OneDrive\\logs\\...`
-- `cloud_sync_root`: raíz sincronizada real, por ejemplo `C:\\Users\\user\\OneDrive` o `C:\\Users\\user\\Dropbox`
-- `cloud_file_activity`: archivo observado dentro de una carpeta cloud
-- `cloud_staging_candidate`: evidencia prudente de staging hacia cloud
-- `possible_cloud_exfiltration`: candidato de exfiltración cloud, no subida confirmada
+- `cloud_client_config`: cloud client configuration, e.g. `OneDrive\\settings\\ECSConfig.json`
+- `cloud_client_log`: cloud client logs, e.g. `OneDrive\\logs\\...`
+- `cloud_sync_root`: actual synced root, e.g. `C:\\Users\\user\\OneDrive` or `C:\\Users\\user\\Dropbox`
+- `cloud_file_activity`: file observed inside a cloud folder
+- `cloud_staging_candidate`: cautious evidence of staging toward cloud
+- `possible_cloud_exfiltration`: cloud exfiltration candidate, not confirmed upload
 
-Un `cloud_client_config` o `cloud_client_log` no se interpreta como sync root ni como subida.
+A `cloud_client_config` or `cloud_client_log` is not interpreted as a sync root or as an upload.
 
-## Sync roots y actividad cloud
+## Sync roots and cloud activity
 
-La app diferencia entre:
+The app distinguishes between:
 
 - `cloud folder observed`
 - `cloud client config`
@@ -86,52 +86,52 @@ La app diferencia entre:
 - `cloud staging candidate`
 - `possible cloud exfiltration candidate`
 
-Un archivo dentro de OneDrive o Dropbox no prueba subida. Para subir confianza se buscan:
+A file inside OneDrive or Dropbox does not prove an upload. To raise confidence, the app looks for:
 
-- archivos sensibles dentro del sync root
-- comprimidos creados dentro del sync root
-- actividad de copia o compresión hacia cloud
-- descargas Browser/BITS directas a cloud
-- muchos ficheros creados o modificados en ventana corta
-- detecciones Defender o borrado posterior en Recycle Bin
+- sensitive files inside the sync root
+- archives created inside the sync root
+- copy or compression activity toward cloud
+- Browser/BITS downloads directly to cloud
+- many files created or modified in a short window
+- Defender detections or subsequent deletion in Recycle Bin
 
-## Correlaciones
+## Correlations
 
-Se correlaciona con:
+It is correlated with:
 
-- Browser history y downloads
+- Browser history and downloads
 - BITS `local_path`
 - PowerShell `Copy-Item`, `Move-Item`, `Compress-Archive`, `robocopy`, etc.
-- MFT/USN en rutas cloud
-- LNK y JumpLists con targets en carpetas cloud
-- Recycle Bin con `original_path` en cloud
-- Defender detections en rutas cloud
-- Prefetch / Amcache / ShimCache si se ejecuta contenido desde cloud
-- Autoruns / Scheduled Tasks / WMI si la persistencia apunta a cloud
-- USB cuando hay nombres/rutas coincidentes y cercanía temporal
+- MFT/USN in cloud paths
+- LNK and JumpLists with targets in cloud folders
+- Recycle Bin with `original_path` in cloud
+- Defender detections in cloud paths
+- Prefetch / Amcache / ShimCache if content is executed from cloud
+- Autoruns / Scheduled Tasks / WMI if persistence points to cloud
+- USB when there are matching names/paths and temporal proximity
 
-## Falsos positivos comunes
+## Common false positives
 
-- trabajo colaborativo normal en OneDrive o Google Drive
-- backups o zips legítimos en carpetas sincronizadas
-- scripts o herramientas internas compartidas entre usuarios
-- sincronización masiva legítima tras migraciones
+- normal collaborative work in OneDrive or Google Drive
+- legitimate backups or zips in synced folders
+- internal scripts or tools shared between users
+- legitimate mass sync after migrations
 
-## Limitaciones
+## Limitations
 
-- un archivo dentro de una carpeta cloud no prueba subida real
-- muchos clientes no dejan logs locales útiles
-- `DriveFS` puede usar rutas virtuales
-- `sync status` o `last_upload_time` puede faltar
-- no se parsean bases propietarias complejas en este sprint
+- a file inside a cloud folder does not prove an actual upload
+- many clients do not leave useful local logs
+- `DriveFS` may use virtual paths
+- `sync status` or `last_upload_time` may be missing
+- complex proprietary databases are not parsed yet
 
-## Ejemplos de investigación
+## Investigation examples
 
-Investiga primero como `possible cloud staging` cuando veas:
+Investigate first as `possible cloud staging` when you see:
 
-- `credentials.kdbx`, `backup.zip` o `export.db` dentro de OneDrive/Dropbox
-- `Copy-Item` o `robocopy` hacia el sync root
-- Browser/BITS descargando directamente a cloud
-- Defender detectando un payload dentro del sync root
+- `credentials.kdbx`, `backup.zip`, or `export.db` inside OneDrive/Dropbox
+- `Copy-Item` or `robocopy` toward the sync root
+- Browser/BITS downloading directly to cloud
+- Defender detecting a payload inside the sync root
 
-Solo sube a hipótesis de exfiltración cuando además exista una cadena razonable de staging, compresión o sync explícito.
+Only escalate to an exfiltration hypothesis when there is also a reasonable chain of staging, compression, or explicit sync.

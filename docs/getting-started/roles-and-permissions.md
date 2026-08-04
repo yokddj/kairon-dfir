@@ -1,7 +1,5 @@
 # Roles and Permissions
 
-> Documentation status: technical draft pending maintainer review.
-
 Kairon DFIR uses two roles:
 
 - **Administrator**

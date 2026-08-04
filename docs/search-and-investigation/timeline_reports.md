@@ -8,11 +8,11 @@ Use it when you need to:
 
 - preserve Search filters while moving from results to time order
 - inspect events around a query, host, evidence, artifact type, or time range
-- abrir alrededor de un evento
-- pivotar desde findings
-- crear `key events / bookmarks`
-- abrir en Process Graph
-- filtrar por host canónico incluyendo aliases consolidados
+- open around a specific event
+- pivot from findings
+- create `key events / bookmarks`
+- open in Process Graph
+- filter by canonical host including consolidated aliases
 
 Legacy `/timeline` and `/cases/{case_id}/timeline` routes redirect to `Search -> Search Timeline` and preserve filters.
 
@@ -35,46 +35,46 @@ Use Incident Timeline to:
 - link evidence back to Search and Execution Story
 - export a concise timeline into Reports
 
-## Host identity en Timeline
+## Host Identity in Timeline
 
-Si el analista fusiona aliases de un endpoint:
+If the analyst merges aliases for an endpoint:
 
-- el filtro por host usa el nombre canónico
-- la consulta incluye también `observed_host.name` y aliases asociados
-- el detalle del evento puede mostrar `Observed as` cuando el hostname original fue distinto
+- the host filter uses the canonical name
+- the query also includes `observed_host.name` and associated aliases
+- the event detail can show `Observed as` when the original hostname was different
 
-Esto evita perder eventos históricos al cambiar hostname, pasar de FQDN a NetBIOS o consolidar nombres de colección.
+This avoids losing historical events when a hostname changes, when moving from FQDN to NetBIOS, or when consolidating collection names.
 
-## Key events
+## Key Events
 
-Los key events sirven para:
+Key events are used to:
 
-- resaltar hitos
-- capturar nota analítica
-- seleccionar material para reportes
+- highlight milestones
+- capture analyst notes
+- select material for reports
 
-Si un informe no tiene key events, suele quedar con menos narrativa y menos trazabilidad temporal.
+A report with no key events usually ends up with less narrative and less temporal traceability.
 
 ## Report Builder
 
-Permite seleccionar:
+Lets you select:
 
 - findings
 - key events
 - Incident Timeline items
 - process chains
-- notas del analista
+- analyst notes
 - marked events
 - Command History suspicious commands
 - Execution Story summaries
 - Defender events
 
-## Exportes
+## Exports
 
-- `Markdown`: disponible y sigue siendo la fuente editable más simple
-- `PDF`: no debe considerarse estable salvo validación específica del despliegue
+- `Markdown`: available and remains the simplest, most editable source.
+- `PDF`: should not be considered stable unless validated for the specific deployment.
 
-## Secciones típicas del informe
+## Typical Report Sections
 
 - summary
 - scope
@@ -85,24 +85,24 @@ Permite seleccionar:
 - suspicious command history
 - execution story summaries
 - Defender detections/configuration events where selected
-- hosts canónicos y aliases relevantes
-- IOCs deduplicados
-- notas y recomendaciones
+- canonical hosts and relevant aliases
+- deduplicated IOCs
+- notes and recommendations
 
-## Host identity en Reports
+## Host Identity in Reports
 
-Cuando el caso usa gestión de aliases:
+When the case uses alias management:
 
-- el informe debe referirse al `Canonical Host`
-- puede listar aliases conocidos para contexto
-- los merges manuales deben entenderse como decisión analítica, no como sobrescritura de la evidencia original
+- the report should refer to the `Canonical Host`
+- it can list known aliases for context
+- manual merges should be understood as an analyst decision, not an overwrite of the original evidence
 
-El nombre observado original sigue siendo la referencia técnica útil para trazabilidad y debug.
+The original observed name remains the useful technical reference for traceability and debugging.
 
-## Limitaciones
+## Limitations
 
-- Markdown es el export validado
-- no todos los gráficos o visualizaciones complejas se incrustan como imágenes
-- secretos y tokens se redactan automáticamente cuando el export path lo soporta
-- la calidad narrativa depende de findings y key events bien curados
-- el informe no debe sustituir la validación técnica del caso
+- Markdown is the validated export.
+- Not all charts or complex visualizations are embedded as images.
+- Secrets and tokens are automatically redacted where the export path supports it.
+- Narrative quality depends on well-curated findings and key events.
+- The report should not replace the case's technical validation.

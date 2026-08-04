@@ -2,7 +2,7 @@
 
 ## Who This Is For
 
-This guide is for anyone trying Kairon DFIR for the first time — in a personal lab, a training environment, or a real investigation. Kairon DFIR is self-hosted software, not a hosted SaaS; see [`/SECURITY.md`](../SECURITY.md) for the deployment security boundary before exposing it beyond your own machine.
+This guide is for anyone trying Kairon DFIR for the first time — in a personal lab, a training environment, or a real investigation. Kairon DFIR is self-hosted software, not a hosted SaaS; see [`/SECURITY.md`](../../SECURITY.md) for the deployment security boundary before exposing it beyond your own machine.
 
 ## What To Test
 
@@ -30,4 +30,4 @@ Useful feedback includes:
 - sanitized logs;
 - approximate evidence size and artifact type.
 
-Avoid sharing raw evidence or screenshots with sensitive values. See [`CONTRIBUTING.md`](../CONTRIBUTING.md) for how to open an issue or pull request.
+Avoid sharing raw evidence or screenshots with sensitive values. See [`CONTRIBUTING.md`](../../CONTRIBUTING.md) for how to open an issue or pull request.

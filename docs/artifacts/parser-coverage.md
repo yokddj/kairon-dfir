@@ -1,8 +1,8 @@
 # Parser Coverage Matrix
 
-Kairon supports a growing set of Windows, Linux, and memory artifacts. This page describes exact parser coverage. It is not a promise of complete forensic coverage.
+Kairon supports a growing set of Windows, Linux, and memory artifacts. This page describes exact parser coverage. It is not a promise of complete forensic coverage. This is the canonical reference for parser/artifact status — other documents should link here rather than maintaining their own copy.
 
-The structured source of truth is [`docs/data/parser-coverage.json`](data/parser-coverage.json). Evidence upload also records platform selection; see [`Evidence Platform Selection`](evidence-platforms.md).
+The structured source of truth is [`docs/data/parser-coverage.json`](../data/parser-coverage.json). Evidence upload also records platform selection; see [Evidence Platform Selection](../evidence/evidence-platforms.md).
 
 ## Status Meanings
 
@@ -22,7 +22,7 @@ The structured source of truth is [`docs/data/parser-coverage.json`](data/parser
 | Windows Event Logs / EVTX | stable | EVTX, CSV, JSON, JSONL | EvtxECmd, Velociraptor, KAPE | Artifact Explorer, Search, Timeline, Detections, Command History, Process Graph | Field richness depends on event payload and audit policy. |
 | $MFT / MFTECmd | stable | CSV, JSON, JSONL, raw $MFT inventory | MFTECmd, KAPE, Velociraptor | Artifact Explorer, Search, Timeline | Full indexing is explicit because volume can be high. |
 | USN Journal | partial | CSV, JSON, JSONL | MFTECmd parsed output | Artifact Explorer, Search, Timeline | No active raw UsnJrnl2Csv backend. |
-| Prefetch | stable | PF, CSV | native raw parser, PECmd CSV | Artifact Explorer, Search, Timeline | Prefetch has no parent process or command line. |
+| Prefetch | stable | PF, CSV | native raw parser, PECmd CSV | Artifact Explorer, Search, Timeline | Prefetch has no parent process or command line; raw PECmd rebuild is disabled on Linux (Windows decompression dependency). |
 | Registry / RECmd | partial | CSV, raw hives | RECmd, KAPE, Velociraptor | Artifact Explorer, Search, Timeline | Not every registry key has a semantic parser. |
 | LNK | stable | LNK, CSV | native raw parser, LECmd | Artifact Explorer, Search, Timeline | LNK interaction is not guaranteed execution. |
 | Jump Lists | stable | automaticDestinations, customDestinations, CSV | native raw parser, JLECmd | Artifact Explorer, Search, Timeline | Recent-item activity is not direct execution proof. |
@@ -40,13 +40,42 @@ The structured source of truth is [`docs/data/parser-coverage.json`](data/parser
 | Network / DNS / WLAN | partial | CSV, JSON, JSONL, TXT, XML, hosts file | Velociraptor, netsh, ipconfig | Artifact Explorer, Search, Timeline | Many outputs are configuration/context, not events. |
 | Cloud Sync | partial | CSV, JSON, JSONL, LOG, TXT, INI | KAPE, Velociraptor, manual collections | Artifact Explorer, Search, Timeline | Does not prove exfiltration by itself. |
 | WMI | partial | CSV, JSON, JSONL, EVTX, registry rows | Autoruns, Velociraptor, KAPE | Artifact Explorer, Search, Timeline, Detections | Raw WMI repository parsing is incomplete. |
-| Shellbags | partial | CSV | SBECmd output | Artifact Explorer, Search, Timeline | Raw hive shellbag extraction is not stable. |
-| SRUM | partial | CSV, JSON, JSONL, SRUDB inventory | SrumECmd parsed output | Artifact Explorer, Search, Timeline | SrumECmd cannot run in current Linux deployment. |
+| Shellbags | partial | CSV | SBECmd output | Artifact Explorer, Search, Timeline | SBECmd CSV is parsed and indexed; direct raw `NTUSER.DAT`/`UsrClass.dat` hive decoding is not implemented. |
+| SRUM | partial | CSV, JSON, JSONL, SRUDB inventory | SrumECmd parsed output | Artifact Explorer, Search, Timeline | SrumECmd cannot run in current Linux deployment (requires Windows ESE libraries). |
 | Email | experimental | EML, MBOX, PST/OST inventory | manual collections, KAPE, Velociraptor | Artifact Explorer, Search | PST/OST support is inventory-oriented. |
 | Windows UI local DBs | partial | CSV, raw DB inventory | manual collections, KAPE, Velociraptor | Artifact Explorer, Search, Timeline | Many raw DB files are preserved but not fully parsed. |
-| Memory | experimental | RAW, DMP, VMEM, LIME, AFF4 | Volatility 3 optional external backend | Memory views, Process Graph | Isolated from global Search/Timeline/Detections. |
+| Memory | experimental | RAW, DMP, VMEM, LIME, AFF4 | Volatility 3 optional external backend | Memory views, Process Graph | Isolated from global Search/Timeline/Detections. See Memory Analysis Backends below. |
 | PCAP / network captures | experimental | PCAP, PCAPNG, Zeek-style outputs | manual collections, Zeek outputs | Artifact Explorer, Search | Not complete PCAP forensic coverage. |
 | Sigma/YARA rule files | stable | YAML, YML, YAR, YARA | manual rule upload | Detections, Rules | Rule files are detection content, not evidence artifacts. |
+
+## Backend Modules and Common Source Filenames
+
+Quick reference for locating the parser code and recognizing typical input filenames for each family. Forensic interpretation (what each family contributes to an investigation, and how it correlates with others) lives in each family's own document under [`docs/artifacts/`](.).
+
+| Family | Common source filenames | Backend module |
+| --- | --- | --- |
+| EVTX | `*_EvtxECmd_Output.csv` | `backend/app/ingest/eztools/evtxecmd.py` |
+| Prefetch | `*_PECmd_Output.csv`, raw `*.pf` | `backend/app/ingest/eztools/pecmd.py`, `backend/app/ingest/raw_parsers/prefetch_parser.py` |
+| LNK | `*_LECmd_Output.csv`, raw `*.lnk` | `backend/app/ingest/eztools/lecmd.py`, `backend/app/ingest/raw_parsers/lnk_parser.py` |
+| Jump Lists | `*_JLECmd_Output.csv`, raw `automaticDestinations`/`customDestinations` | `backend/app/ingest/jumplists/*` |
+| Registry | `*_RECmd_Output.csv`, RECmd Batch outputs | `backend/app/ingest/eztools/recmd.py` |
+| MFT | `*_MFTECmd_Output.csv` | `backend/app/ingest/eztools/mftecmd.py` |
+| USN Journal | CSVs of `$J`/`UsnJrnl` parsed by MFTECmd | `backend/app/ingest/eztools/mftecmd.py` |
+| SRUM | `*_SrumECmd_Output.csv`, `*NetworkUsage*.csv`, `*ApplicationResourceUsage*.csv` | `backend/app/ingest/eztools/srumecmd.py` |
+| Scheduled Tasks | raw Task Scheduler XML, `*ScheduledTasks*.csv`, `*TaskScheduler*.csv` | `backend/app/ingest/scheduled_tasks/*` |
+| Defender | `DetectionHistory`, `MPLog*.log`, `*Defender*.csv/json` | `backend/app/ingest/defender/*` |
+| PowerShell (non-EVTX) | `ConsoleHost_history.txt`, `PowerShell_transcript*.txt`, `*.ps1` | `backend/app/ingest/powershell/*` |
+| Recycle Bin | `*_RBCmd_Output.csv`, raw `$I`/`$R` | `backend/app/ingest/recycle_bin/*` |
+| Browser | parsed CSV/JSON, raw `History`/`places.sqlite` | `backend/app/ingest/browser/*` |
+| Amcache | `*Amcache*.csv`, `AmcacheParser_Output.csv` | normalizer: `normalize_amcache_row` |
+| Shimcache / AppCompat | `*ShimCache*.csv`, `*AppCompatCache*.csv`, `*RecentFileCache*.csv` | normalizer: `normalize_shimcache_row` |
+| Shellbags | `*_SBECmd_Output.csv`, raw hives from Velociraptor | `backend/app/ingest/shellbags/*` |
+| USB | `setupapi.dev.log`, `*USB*.csv`, `*USBSTOR*.csv`, `*MountedDevices*.csv` | `backend/app/ingest/usb/*` |
+| BITS | `*BITS*.csv/json`, `*bitsadmin*.txt`, `qmgr*.dat`, `qmgr.db` | `backend/app/ingest/bits/*` |
+| WMI | `*WMI*.csv/json`, `OBJECTS.DATA`, `INDEX.BTR`, `MAPPING*.MAP`, WMI-Activity EVTX/CSV | `backend/app/ingest/wmi/*` |
+| Autoruns / ASEP | `Autoruns.csv/tsv/xml`, startup folder files, hive/Task XML/WMI raw candidates | `backend/app/ingest/autoruns/*` |
+| Cloud Sync | OneDrive/Dropbox/Google Drive/DriveFS/MEGAsync/iCloud/Box paths, `*Cloud*.csv/json` | `backend/app/ingest/cloud_sync/*` |
+| Network / WLAN / DNS | WLAN profile XML, `hosts`, `*DNS*.csv/json`, `*netstat*.txt`, `*arp*.txt` | `backend/app/ingest/network/*` |
 
 ## Format Matrix
 
@@ -62,27 +91,7 @@ The structured source of truth is [`docs/data/parser-coverage.json`](data/parser
 
 ## Linux Artifact Support
 
-Linux artifacts are now supported with partial parser coverage. Evidence from Linux triage collections is ingested and searchable across 12 artifact families.
-
-See [docs/linux-artifacts.md](linux-artifacts.md) for detailed per-family documentation and collection layout.
-
-| Family | Status | Main sources | Key Fields |
-| --- | --- | --- | --- |
-| Linux Authentication | partial | auth.log, secure | timestamp, username, process, source_ip, auth_method, event_action |
-| Linux Syslog | partial | syslog, messages, kern.log | timestamp, detected_host, process, pid, severity, message |
-| Linux Audit | partial | audit.log | timestamp, audit_type, uid, pid, exe, command, success |
-| Linux Shell History | partial | .bash_history, .zsh_history | username, shell, command, source_file |
-| Linux Cron | partial | crontab, cron.d/* | schedule, username, command, source_file |
-| Linux Systemd Units | partial | *.service, *.timer | unit_name, unit_type, exec_start, wanted_by |
-| Linux SSH Artifacts | partial | authorized_keys, known_hosts, sshd_config | key_type, key_fingerprint, host_pattern, option, value |
-| Linux Identity | partial | passwd, group, shadow | username, uid, gid, home, shell, group_name |
-| Linux Sudoers | partial | sudoers, sudoers.d/* | principal, host_spec, run_as, command_spec, options |
-| Linux Package Logs | partial | dpkg.log, yum.log, dnf.log | timestamp, package_manager, action, package, version |
-| Linux Network Config | partial | hosts, resolv.conf, interfaces, netplan | config_type, interface, address, gateway, dns |
-| Linux OS Information | partial | os-release, hostname, /proc/version | hostname, os_name, os_version, kernel_version |
-| Linux Memory Images | experimental | .raw, .mem, .lime | filename, size_bytes, sha256, effective_platform |
-
-macOS artifact support remains unsupported.
+Linux artifacts are supported with partial parser coverage. Evidence from Linux triage collections is ingested and searchable across 12 artifact families. See [Linux Support](../linux/linux-support.md) for detailed per-family documentation and collection layout.
 
 ## Collector Compatibility
 
@@ -98,12 +107,45 @@ Kairon documents compatible outputs, but does not redistribute third-party colle
 | SIFT | Kairon does not integrate SIFT as a collector. Files exported from SIFT workflows may be ingested if they match supported formats. |
 | Manual ZIP collections | Supported when files match recognized filenames, extensions or headers. Unsupported files are preserved/detected but may not generate artifacts. |
 
-## Interpreting Processing Queue Results
+## Memory Analysis Backends
+
+These backends are external, optional, not bundled, and not installed by Kairon. Do not add memory dumps, third-party memory-forensics outputs, symbol packs, malware samples, credentials, Volatility plugins, or MemProcFS binaries to the repository.
+
+| Backend | Distribution | Readiness detection | Evidence execution |
+| --- | --- | --- | --- |
+| Volatility 3 | external optional tool, not bundled | supported through configured executable detection and harmless help/version check | metadata and process profiles supported conditionally for a fixed set of read-only plugins (see [Memory Analysis](../memory/memory_analysis.md) for the current list) |
+| MemProcFS | external optional tool, not bundled | supported through configured executable detection and harmless help/version check | not implemented |
+
+Readiness detection does not supply a memory-image path, run plugins, mount devices, create artifacts, create MemoryScanRun rows, or write OpenSearch documents.
+
+Volatility 3 execution is disabled by default and controlled by administrator configuration. Kairon builds a fixed `shell=False` argv from named profiles and never accepts plugin names or command arguments from API/UI requests. It writes normalized metadata, memory process, and memory process edge documents only to the isolated `dfir-memory-{case_id}` index.
+
+An optional `memory-worker` Compose profile can be built by the operator to install pinned Volatility 3 from official PyPI inside an isolated worker image. Kairon does not commit or publish Volatility source, wheels, binaries, symbol packs, plugins, or prebuilt memory-worker images.
+
+## Advanced Backend Search Behavior
+
+Advanced EZ Tool rebuilds (LECmd, JLECmd, AmcacheParser, AppCompatCacheParser) do not replace default artifact results automatically. Search keeps default/internal results unless the analyst selects an advanced backend filter such as:
+
+- `backend_variant=advanced`
+- `backend_variant=all`
+- `parser_backend=amcacheparser_csv`
+
+This avoids duplicate-looking results in normal Search while preserving the richer advanced output for comparison. Advanced docs are hidden from default Search unless one of these filters is selected.
+
+## Evidence and Processing Status
+
+Optional parser failure, `tooling_missing` conditions, unsupported artifacts, or no-data results should not mark an evidence item failed when other searchable data exists. Kairon uses, instead of a blanket `failed`:
+
+- `completed_with_warnings`
+- `investigation_ready=true`
+- parser-specific status metadata
+
+When interpreting Processing Queue results:
 
 - `parser failed`: a parser was applicable but recorded an error. Review Processing details and parser error text.
 - `parser not applicable`: the evidence did not contain a recognized artifact for that parser family.
 - `unsupported format`: Kairon may preserve or inventory the file, but no parsed results should be expected.
-- `no artifacts found`: the parser or source can be valid but legitimately empty.
+- `no artifacts found`: the parser or source can be valid but legitimately empty — this is not failure.
 - `partial support`: some fields/views are available, but full forensic semantics are not guaranteed.
 
 ## Not Supported Yet

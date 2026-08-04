@@ -65,7 +65,7 @@ local staged path, moved (not copied) into evidence storage with
 [docs/preflight-inspection.md#temporary-upload-session](preflight-inspection.md#temporary-upload-session)
 for the full lifecycle, expiry, and cleanup guarantees.
 
-This replaced the original design (Sprint 2), where Preflight and Start
+This replaced the original design, where Preflight and Start
 Processing were two independent HTTP requests and large evidence was sent
 over the network twice. That two-request design is why the wizard used to
 call the real, unmodified upload endpoints

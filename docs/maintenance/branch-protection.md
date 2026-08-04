@@ -1,7 +1,5 @@
 # Branch Protection Setup
 
-> Documentation status: technical draft pending maintainer review.
-
 ## Recommended Configuration
 
 After the CI workflows are green, configure branch protection on `main`:

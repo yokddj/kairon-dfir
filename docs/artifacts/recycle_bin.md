@@ -1,42 +1,42 @@
 # Recycle Bin
 
-## Qué soporta la app
+## What the app supports
 
-- `RBCmd_Output.csv` y variantes compatibles
-- artefactos raw de Velociraptor:
+- `RBCmd_Output.csv` and compatible variants
+- raw Velociraptor artifacts:
   - `$Recycle.Bin\<SID>\$I*`
   - `$Recycle.Bin\<SID>\$R*`
 
-## Qué son `$I` y `$R`
+## What `$I` and `$R` are
 
-- `$I*` guarda metadata del elemento reciclado:
-  - tamaño original
-  - fecha/hora de borrado
-  - ruta original
-- en versiones modernas de Windows suele incluir:
+- `$I*` stores metadata about the recycled item:
+  - original size
+  - deletion date/time
+  - original path
+- in modern Windows versions it usually includes:
   - `version`
   - `original file size`
   - `deletion FILETIME`
-  - longitud de ruta o metadata relacionada
-  - ruta original en `UTF-16LE`
-- `$R*` es el contenido reciclado.
-- Si `$I` y `$R` comparten sufijo, la app los empareja como un mismo candidato lógico.
+  - path length or related metadata
+  - original path in `UTF-16LE`
+- `$R*` is the recycled content.
+- If `$I` and `$R` share a suffix, the app pairs them as the same logical candidate.
 
-## Qué aporta RBCmd
+## What RBCmd provides
 
-RBCmd ya entrega en CSV gran parte de la metadata útil de la papelera y es la ruta más cómoda cuando ya existe salida parseada.
+RBCmd already delivers most of the useful Recycle Bin metadata in CSV form and is the most convenient path when parsed output already exists.
 
-## Qué se parsea directamente desde Velociraptor
+## What is parsed directly from Velociraptor
 
-La app ya parsea directamente:
+The app already parses directly:
 
-- `$I` raw
-- pairing `$I/$R`
-- `$R` huérfano como evidencia parcial
+- raw `$I`
+- `$I/$R` pairing
+- orphan `$R` as partial evidence
 
-Si la ruta original no puede resolverse por el offset principal, la app intenta un fallback buscando una cadena `UTF-16LE` que parezca una ruta Windows real dentro del blob.
+If the original path cannot be resolved from the main offset, the app attempts a fallback by searching for a `UTF-16LE` string that looks like a real Windows path within the blob.
 
-## Qué campos se extraen
+## What fields are extracted
 
 - `recycle.original_path`
 - `recycle.original_file_name`
@@ -52,7 +52,7 @@ Si la ruta original no puede resolverse por el offset principal, la app intenta 
 - `recycle.drive_letter`
 - `recycle.content_status`
 
-También se rellenan:
+The following are also filled:
 
 - `file.path`
 - `file.name`
@@ -60,53 +60,53 @@ También se rellenan:
 - `file.size`
 - `file.deleted_time`
 - `user.sid`
-- `user.name` cuando puede inferirse
+- `user.name` when it can be inferred
 
-## Cómo interpretar `deleted_time`
+## How to interpret `deleted_time`
 
-La hora principal del evento es la fecha/hora de reciclado observada en `$I` o en la salida de RBCmd.
+The main event time is the recycle date/time observed in `$I` or in the RBCmd output.
 
-Esto significa:
+This means:
 
-- evidencia de envío a la papelera
-- no prueba borrado permanente
-- no garantiza por sí solo cuándo se ejecutó el archivo
+- evidence of being sent to the Recycle Bin
+- does not prove permanent deletion
+- does not by itself guarantee when the file was executed
 
-## Qué significa `content_missing`
+## What `content_missing` means
 
-- `content_missing_confirmed`: se encontró `$I`, pero en la colección no existe el `$R` correspondiente
-- `present`: existe el `$R` correspondiente
+- `content_missing_confirmed`: `$I` was found, but the corresponding `$R` does not exist in the collection
+- `present`: the corresponding `$R` exists
 
-La ausencia de `$R` no implica por sí sola actividad maliciosa. Puede deberse a limpieza previa o a una colección incompleta.
+The absence of `$R` does not by itself imply malicious activity. It can be due to prior cleanup or an incomplete collection.
 
-## Qué significa `original_path_extracted_by_utf16_fallback`
+## What `original_path_extracted_by_utf16_fallback` means
 
-Es un warning de parseo que indica:
+This is a parsing warning indicating that:
 
-- el offset principal del `$I` no produjo una ruta válida
-- la app encontró una ruta Windows plausible escaneando el blob `UTF-16LE`
-- la ruta resultante es útil para investigación, pero conviene validarla con otros artefactos
+- the main offset of `$I` did not produce a valid path
+- the app found a plausible Windows path by scanning the `UTF-16LE` blob
+- the resulting path is useful for investigation, but should be validated against other artifacts
 
-## Qué significa `invalid_recycle_original_path`
+## What `invalid_recycle_original_path` means
 
-Se marca cuando:
+This is set when:
 
-- el parser obtiene un valor que no parece una ruta Windows válida
-- o no consigue extraer una ruta útil ni siquiera con el fallback
+- the parser obtains a value that does not look like a valid Windows path
+- or it fails to extract a useful path even with the fallback
 
-En ese caso la app:
+In that case the app:
 
-- no indexa valores basura como `5`, `^` o una letra aislada como `file.path`
-- conserva el resto de metadata útil (`SID`, tamaño, deleted_time, source file)
-- muestra el evento como metadata observada, no como un reciclado completo con path fiable
+- does not index garbage values like `5`, `^`, or a single letter as `file.path`
+- keeps the rest of the useful metadata (`SID`, size, deleted_time, source file)
+- shows the event as observed metadata, not as a fully recycled item with a reliable path
 
-## Cómo interpretar SID y usuario
+## How to interpret SID and user
 
-- el SID suele venir del path `$Recycle.Bin\<SID>\...`
-- si existe resolución con otros artefactos, la app puede enriquecer `user.name`
-- si no, conserva `user.sid` y marca calidad de dato no resuelta
+- the SID usually comes from the `$Recycle.Bin\<SID>\...` path
+- if resolution with other artifacts exists, the app can enrich `user.name`
+- otherwise, it keeps `user.sid` and marks the data quality as unresolved
 
-## Correlaciones que hace la app
+## Correlations the app makes
 
 - `Recycle Bin -> MFT/USN`
 - `Recycle Bin -> Browser downloads`
@@ -116,7 +116,7 @@ En ese caso la app:
 - `Recycle Bin -> Prefetch / Amcache`
 - `Recycle Bin -> Scheduled Tasks`
 
-Actividades derivadas:
+Derived activities:
 
 - `file_recycled`
 - `deleted_download`
@@ -125,25 +125,25 @@ Actividades derivadas:
 - `deleted_script`
 - `cleanup_candidate`
 
-## Falsos positivos comunes
+## Common false positives
 
-- descargas legítimas que el usuario descartó
-- scripts temporales de administración o desarrollo
-- software legítimo borrado manualmente
-- colecciones parciales donde falta `$R`
+- legitimate downloads discarded by the user
+- temporary administration or development scripts
+- legitimate software deleted manually
+- partial collections missing `$R`
 
-## Limitaciones
+## Limitations
 
-- papelera no equivale a borrado permanente
-- `$R` puede faltar por colección parcial o limpieza previa
-- SID puede no resolverse a nombre
-- algunos borrados nunca pasan por la papelera
-- la app no calcula hashes grandes del contenido `$R` por defecto
-- algunos `$I` pueden requerir fallback `UTF-16LE` si la variante concreta no coincide con el layout esperado
+- Recycle Bin does not equal permanent deletion
+- `$R` may be missing due to partial collection or prior cleanup
+- SID may not resolve to a name
+- some deletions never go through the Recycle Bin
+- the app does not compute large hashes of `$R` content by default
+- some `$I` files may require `UTF-16LE` fallback if the specific variant does not match the expected layout
 
-## Ejemplos de investigación
+## Investigation examples
 
-- descarga enviada a la papelera tras ejecución
-- payload detectado por Defender y luego reciclado
-- script usado desde PowerShell y luego borrado
-- metadata `$I` presente sin `$R`, posible limpieza parcial de evidencias
+- download sent to the Recycle Bin after execution
+- payload detected by Defender and then recycled
+- script used from PowerShell and then deleted
+- `$I` metadata present without `$R`, possible partial evidence cleanup

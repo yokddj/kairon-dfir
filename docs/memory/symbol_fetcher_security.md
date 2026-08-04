@@ -58,7 +58,7 @@ The acquisition API remains blocked with
 `SYMBOL_ACQUISITION_LOCAL_APPROVAL_DISABLED` when
 `MEMORY_SYMBOL_LOCAL_APPROVAL_ENABLED=false`.  Do not replace this with a
 hidden frontend control, source-IP trust, or a static secret header.  A
-future authentication sprint must add an authenticated
+future release must add an authenticated
 `memory:symbols:acquire` capability and actor audit identity, and replace
 the local-operator CLI.
 
@@ -66,5 +66,5 @@ the local-operator CLI.
 
 Stop the optional profile and restore `MEMORY_SYMBOL_MODE=offline_only` and
 `MEMORY_SYMBOL_MANAGED_DOWNLOAD_ENABLED=false`.  Cached third-party artifacts
-must not be committed, embedded in images or redistributed.  This sprint
-does not implement broad cache deletion or automatic eviction.
+must not be committed, embedded in images or redistributed.  Broad cache
+deletion and automatic eviction are not implemented yet.
