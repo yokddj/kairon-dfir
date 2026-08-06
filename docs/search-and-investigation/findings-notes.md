@@ -2,6 +2,8 @@
 
 Findings are analyst-owned notes and conclusions attached to a case. They let investigators document what is relevant, suspicious, pending review, confirmed, or ready to include in a later report without leaving Kairon.
 
+![Findings workspace showing status counts, severity, and correlated finding cards with explanations.](../assets/screenshots/findings.png)
+
 ## Notes vs Confirmed Findings
 
 - Use `draft` for working notes, hypotheses, or follow-up reminders.

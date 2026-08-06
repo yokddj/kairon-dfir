@@ -2,6 +2,8 @@
 
 `Search` is the main investigation workspace. `Search Timeline` is a Search view for exploring results filtered by time; `Incident Timeline` is the curated/reportable story of the case. `Artifact Views` are specialized views by artifact family.
 
+![Search workspace showing a query, filters and facets, and matching result rows.](../assets/screenshots/search.png)
+
 ## What it supports
 
 - free text and IOC-aware search.
