@@ -90,16 +90,16 @@ describe("registry-driven sidebar", () => {
     logoutMock.mockReset();
   });
 
-  it("renders fixed Investigation and Technical Tools groups untouched", async () => {
+  it("renders the fixed Investigation group untouched, including Artifact Views", async () => {
     getCaseCapabilitiesMock.mockResolvedValue(registry());
     renderSidebar();
 
     const investigation = screen.getByText("Investigation").closest("section")!;
-    for (const label of ["Overview", "Evidence", "Search", "Timeline", "Incident Timeline", "Detections", "Findings", "Reports"]) {
+    for (const label of ["Overview", "Evidence", "Host Information", "Search", "Artifact Views", "Timeline", "Incident Timeline", "Detections", "Findings", "Reports"]) {
       expect(within(investigation).getByRole("link", { name: label })).toBeInTheDocument();
     }
-    const tools = screen.getByText("Technical Tools").closest("section")!;
-    expect(within(tools).getByRole("link", { name: "Artifact Views" })).toHaveAttribute("href", "/cases/case-1/artifacts");
+    expect(within(investigation).getByRole("link", { name: "Artifact Views" })).toHaveAttribute("href", "/cases/case-1/artifacts");
+    expect(screen.queryByText("Technical Tools")).not.toBeInTheDocument();
   });
 
   it("renders exactly one row per surface, in the order the backend returns", async () => {
@@ -230,7 +230,8 @@ describe("registry-driven sidebar", () => {
   it("renders an empty registry with only the fixed sections", async () => {
     getCaseCapabilitiesMock.mockResolvedValue(registry());
     renderSidebar();
-    await screen.findByText("Technical Tools");
+    await screen.findByText("Investigation");
+    expect(screen.getByRole("link", { name: "Artifact Views" })).toBeInTheDocument();
     expect(screen.queryByTestId(/^surface-/)).not.toBeInTheDocument();
   });
 

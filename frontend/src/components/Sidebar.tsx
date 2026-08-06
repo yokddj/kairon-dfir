@@ -32,6 +32,7 @@ const INVESTIGATION_ITEMS: NavItem[] = [
   { to: "/cases/:caseId/evidence", label: "Evidence", icon: Database, requiresCase: true },
   { to: "/cases/:caseId/host-information", label: "Host Information", icon: Fingerprint, requiresCase: true },
   { to: "/cases/:caseId/search", label: "Search", icon: Search, requiresCase: true },
+  { to: "/cases/:caseId/artifacts", label: "Artifact Views", icon: FolderSearch2, requiresCase: true },
   {
     to: "/cases/:caseId/timeline",
     label: "Timeline",
@@ -49,13 +50,6 @@ const INVESTIGATION_ITEMS: NavItem[] = [
   { to: "/cases/:caseId/detections", label: "Detections", icon: ShieldAlert, requiresCase: true },
   { to: "/cases/:caseId/findings", label: "Findings", icon: ShieldAlert, requiresCase: true },
   { to: "/cases/:caseId/reports", label: "Reports", icon: FileArchive, requiresCase: true },
-];
-
-// Internal utilities that support an investigation but aren't investigative
-// findings themselves -- kept deliberately small so they never compete with
-// the Investigation section above for attention.
-const TECHNICAL_TOOL_ITEMS: NavItem[] = [
-  { to: "/cases/:caseId/artifacts", label: "Artifact Views", icon: FolderSearch2, requiresCase: true },
 ];
 
 function activeMemoryEvidenceId(pathname: string, activeCaseId: string): string | null {
@@ -195,8 +189,6 @@ export default function Sidebar() {
             </div>
           </section>
         ) : null}
-
-        <NavigationSection title="Technical Tools" items={TECHNICAL_TOOL_ITEMS} activeCaseId={activeCaseId} />
       </nav>
 
       <div className="mt-auto border-t border-line/80 pt-5">
