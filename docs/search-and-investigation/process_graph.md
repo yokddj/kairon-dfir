@@ -2,6 +2,8 @@
 
 The main process-investigation experience is `Execution Story`. The advanced graph remains available for broader graph/debug work.
 
+![Execution Story view showing the investigation target, what-happened narrative, and a connected process graph.](../assets/screenshots/execution-story.png)
+
 ## Execution Story answers
 
 - Who launched this process?

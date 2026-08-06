@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/assets/kairon-dfir-execution-story.png" alt="Synthetic screenshot of the Kairon DFIR investigation workspace with case, indexing, search, artifacts, findings, and timeline panels." width="900" />
+  <img src="docs/assets/screenshots/hero.png" alt="Kairon DFIR investigation workspace overview, showing case navigation, indexed events, detections, findings, and high-severity counts." width="900" />
 </p>
 
 <p align="center">
@@ -25,6 +25,8 @@
 Kairon DFIR is a self-hosted, case-centric digital forensics and incident response platform. It ingests Windows, Linux, disk-image, and memory evidence into a single investigation workspace, normalizes it into a common searchable model, and supports the analyst through Search, Timeline, Artifact Views, detections, findings, and reporting — without replacing analyst judgment.
 
 Kairon DFIR is intended for trusted labs and controlled, self-hosted deployments, not as a hosted SaaS. Evidence can contain highly sensitive data; see [SECURITY.md](SECURITY.md) before exposing any deployment beyond your own machine.
+
+![Kairon DFIR walkthrough: Overview, Search, Artifact Views, Host Information, Timeline, Execution Story, Findings, and Reports.](docs/assets/screenshots/demo.gif)
 
 ## Key Capabilities
 

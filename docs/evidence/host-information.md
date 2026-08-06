@@ -16,6 +16,8 @@ A Host Fact or Host User Fact row never duplicates evidence: the raw file stays 
 
 Both layers are idempotent per evidence: reprocessing an evidence item deletes and rebuilds its own observations (matched by a content fingerprint) rather than accumulating duplicates alongside stale rows.
 
+![Host Information page showing identity, operating system, platform, timezone, and local accounts for a case host.](../assets/screenshots/host-information.png)
+
 ## Host Facts
 
 Host Facts describe the host itself, not its accounts. Today, Host Facts producers are **Linux-only** — there is no Windows or memory-evidence producer yet. A host whose only evidence is Windows currently has no Host Facts observations at all; this is honest absence, not a bug, and is not yet documented anywhere else in this repository.
