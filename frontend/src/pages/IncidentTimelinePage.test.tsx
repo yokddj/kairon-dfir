@@ -10,7 +10,6 @@ const regenerateIncidentTimelineDraftMock = vi.fn();
 const exportIncidentTimelineMarkdownMock = vi.fn();
 const updateIncidentTimelineItemStatusMock = vi.fn();
 const getIncidentTimelineStoryBundleMock = vi.fn();
-let showValidationMatrix = false;
 
 vi.mock("../api/client", () => ({
   api: {
@@ -28,13 +27,6 @@ vi.mock("../context/ActiveCaseContext", () => ({
     selectedHost: "",
     selectedEvidenceId: "",
     setActiveCaseId: vi.fn(),
-    caseContext: {
-      summary: {
-        validation_matrix: {
-          show_validation_matrix: showValidationMatrix,
-        },
-      },
-    },
   }),
 }));
 
@@ -61,7 +53,6 @@ function renderPage() {
 
 describe("IncidentTimelinePage", () => {
   beforeEach(() => {
-    showValidationMatrix = false;
     Object.assign(navigator, {
       clipboard: { writeText: vi.fn().mockResolvedValue(undefined) },
     });
@@ -155,14 +146,6 @@ describe("IncidentTimelinePage", () => {
     expect(screen.getByRole("button", { name: /Official Timeline/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Suggested Candidates/i })).toBeInTheDocument();
     expect(screen.getByText(/Raw MFT and broad EVTX excluded by default/i)).toBeInTheDocument();
-    expect(screen.queryByText("Validation seeds")).not.toBeInTheDocument();
-  });
-
-  it("shows Validation seeds source only when validation is enabled for the case", async () => {
-    showValidationMatrix = true;
-    renderPage();
-    expect(await screen.findByText("Incident Timeline")).toBeInTheDocument();
-    expect(screen.getByText("Validation seeds")).toBeInTheDocument();
   });
 
   it("opens contextual movement evidence instead of forcing an execution story", async () => {
@@ -233,8 +216,8 @@ describe("IncidentTimelinePage", () => {
           phase: "initial_access",
           title: "Suspicious ISO appears on HOSTA",
           summary: "User activity and filesystem evidence identify the lure that starts the investigation. sample.iso",
-          source: "validation_matrix",
-          source_type: "validation_matrix",
+          source: "manual_note",
+          source_type: "manual_note",
           status: "accepted",
           artifact_type: "mft",
           query: "sample.iso",
@@ -251,7 +234,7 @@ describe("IncidentTimelinePage", () => {
         host: "HOSTA",
         phase: "initial_access",
         title: "Suspicious ISO appears on HOSTA",
-        source: "validation_matrix",
+        source: "manual_note",
         story_target_type: "file_artifact",
       },
       target: { type: "file_artifact", primary_action: "Open File Story", reason: "artifact/file evidence only" },
@@ -267,7 +250,7 @@ describe("IncidentTimelinePage", () => {
         resolution_status: "found_in_artifacts",
         found_in_mft: true,
       },
-      linked_evidence: { source_type: "validation_matrix" },
+      linked_evidence: { source_type: "manual_note" },
     });
     renderPage();
     fireEvent.click(await screen.findByRole("button", { name: /Open File Story/i }));

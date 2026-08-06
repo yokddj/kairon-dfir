@@ -13,7 +13,7 @@ from app.ingest.eztools.evtxecmd import parse_evtxecmd_file
 from app.ingest.artifact_normalizers import normalize_evtx_row
 from app.ingest.normalizer import base_document
 from app.rules_engine.sigma import build_sigma_case_profile
-from app.services.debug_export import _build_process_graph
+from app.services.process_tree import _build_process_graph
 
 
 def _evtx_doc(row: dict) -> dict:
@@ -115,6 +115,43 @@ def test_evtxecmd_csv_normalizes_to_searchable_windows_event_contract(tmp_path: 
     assert doc["event"]["provider"] == "Microsoft-Windows-Security-Auditing"
     assert doc["host"]["name"] == "hosta"
     assert "4624" in doc["search_text"]
+    # Host Facts extraction (app.ingest.windows.host_facts) reads exclusively
+    # this field on the real EvtxECmd CSV path -- it must survive with the
+    # original observed casing, unlike doc["host"]["name"] above.
+    assert doc["windows"]["computer_field"] == "HOSTA"
+
+
+def test_evtxecmd_csv_computer_field_feeds_windows_host_identity_extraction(tmp_path: Path) -> None:
+    from app.ingest.host_facts_extraction import extract_host_fact_documents
+    from app.ingest.windows.host_facts import FACT_FQDN, FACT_HOSTNAME
+
+    fixture = tmp_path / "EvtxECmd_Output.csv"
+    fixture.write_text(
+        "TimeCreatedUtc,EventId,Provider,Channel,Computer,EventRecordId,Message\n"
+        "2026-05-28T10:00:00Z,4624,Microsoft-Windows-Security-Auditing,Security,WS01.megacorp.local,123,Successful logon\n",
+        encoding="utf-8",
+    )
+
+    docs = parse_evtxecmd_file(
+        "case-1",
+        "evidence-1",
+        "artifact-1",
+        fixture,
+        {
+            "artifact_type": "windows_event",
+            "parser": EVTXECMD_BACKEND_CSV,
+            "source_path": "Windows/System32/winevt/Logs/Security.evtx",
+            "ingest_run_id": "run-1",
+            "contract_version": "v1",
+        },
+    )
+
+    host_fact_documents = extract_host_fact_documents(docs)
+
+    fact_types = {doc["host_fact"]["fact_type"] for doc in host_fact_documents}
+    assert fact_types == {FACT_HOSTNAME, FACT_FQDN}
+    for doc in host_fact_documents:
+        assert doc["host_fact"]["raw_value"] == "WS01.megacorp.local"
 
 
 def test_evtxecmd_zero_record_csv_is_parsed_empty_not_failed(tmp_path: Path, monkeypatch) -> None:

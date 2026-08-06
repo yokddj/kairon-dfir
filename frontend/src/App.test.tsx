@@ -69,7 +69,6 @@ vi.mock("./pages/LinuxAuthenticationPage", () => ({ default: () => <div>Linux Au
 vi.mock("./pages/IncidentTimelinePage", () => ({ default: () => <div>Incident Timeline Page</div> }));
 vi.mock("./pages/TimelinePage", () => ({ default: () => <div>Timeline Page</div> }));
 vi.mock("./pages/CaseReportsPage", () => ({ default: () => <div>Reports Page</div> }));
-vi.mock("./pages/DebugExportPage", () => ({ default: () => <div>Debug Export Page</div> }));
 vi.mock("./pages/EvidenceDetail", () => ({ default: () => <div>Evidence Detail Page</div> }));
 vi.mock("./pages/Search", () => ({ default: () => <div>Search Page</div> }));
 vi.mock("./pages/ArtifactExplorer", () => ({ default: () => <div>Artifact Views Page</div> }));

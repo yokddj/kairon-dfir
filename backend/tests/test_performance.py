@@ -1,13 +1,9 @@
-from types import SimpleNamespace
-
 import pytest
 
 from app.core import performance as performance_module
 from app.core.app_settings import PERFORMANCE_PROFILE_KEY, set_setting
 from app.core.performance import apply_recommended_profile, build_resource_warnings, describe_ingest_parallelism, manual_restart_instructions, performance_resources, performance_state, save_performance_profile
 from app.models.app_setting import AppSetting
-from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
-from app.services.debug_export import _build_ingest_summary
 
 
 class FakeQuery:
@@ -329,36 +325,3 @@ def test_low_disk_warning():
     )
 
     assert "low_disk_space" in warnings
-
-
-def test_ingest_summary_includes_performance_snapshot():
-    evidence = Evidence(
-        id="ev-1",
-        case_id="case-1",
-        original_filename="sample",
-        stored_path="/tmp/sample",
-        original_path="/tmp/sample",
-        storage_mode=EvidenceStorageMode.uploaded,
-        is_external=False,
-        copy_to_storage=True,
-        evidence_type=EvidenceType.parsed_folder,
-        sha256="00",
-        size_bytes=123,
-        file_count=1,
-        ingest_status=IngestStatus.completed,
-        path_validation={},
-        ingest_source={},
-        metadata_json={
-            "performance_profile": "max",
-            "performance_settings": {"ingest_batch_size": 2000},
-            "resource_warnings": ["low_disk_space"],
-        },
-        error_log={},
-    )
-    context = SimpleNamespace(evidences=[evidence])
-
-    rows = _build_ingest_summary(context, {"ev-1": {"stats": {}}})
-
-    assert rows[0]["performance_profile"] == "max"
-    assert rows[0]["performance_settings"]["ingest_batch_size"] == 2000
-    assert "low_disk_space" in rows[0]["resource_warnings"]

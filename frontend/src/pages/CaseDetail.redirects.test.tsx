@@ -48,7 +48,6 @@ vi.mock("../components/FindingsWorkspace", () => ({ default: () => <div data-tes
 vi.mock("../components/ProcessTreePanel", () => ({ default: () => <div data-testid="process-tree" /> }));
 vi.mock("../components/Timeline", () => ({ default: () => <div data-testid="timeline" /> }));
 vi.mock("../components/CreateFindingDialog", () => ({ default: () => null }));
-vi.mock("../components/DebugExportDialog", () => ({ default: () => null }));
 vi.mock("../components/ArtifactBadge", () => ({ default: ({ type }: { type: string }) => <span>{type}</span> }));
 
 function Sentinel({ label }: { label: string }) {

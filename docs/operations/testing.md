@@ -7,7 +7,7 @@ Run this shortlist before closing a backend/frontend hardening pass:
 ```bash
 python3 -m compileall /app/app /app/tests
 pytest -q /app/tests/test_search_v2.py /app/tests/test_search_query_syntax.py /app/tests/test_event_identity.py /app/tests/test_findings.py /app/tests/test_rules_v2.py /app/tests/test_timeline.py /app/tests/test_reports.py /app/tests/test_evidence_storage.py
-pytest -q /app/tests/test_ingest.py -k "ntfs or windows_ui or user_activity or debug_pack_creates_expected_artifacts"
+pytest -q /app/tests/test_ingest.py -k "ntfs or windows_ui or user_activity"
 npx vitest run src/pages/Search.test.tsx src/pages/TimelinePage.test.tsx src/components/ProcessTreePanel.test.tsx src/pages/CaseReportsPage.test.tsx src/pages/Rules.test.tsx src/pages/Detections.test.tsx src/components/NavigationWorkspace.test.tsx src/components/EvidenceUpload.test.tsx src/pages/Siem.test.tsx src/pages/DocsPage.test.tsx src/App.test.tsx
 npm run build
 ```
@@ -19,7 +19,7 @@ This covers:
 - findings / detections / timeline status preservation
 - evidence path validation and mounted path UX
 - System / Performance Evidence storage guidance and deployment metadata
-- targeted ingest families with debug export
+- targeted ingest families
 - route-level lazy loading and the main frontend workspaces
 
 ## Backend
@@ -36,7 +36,7 @@ pytest -q
 ```bash
 pytest -q /app/tests/test_rules_v2.py
 pytest -q /app/tests/test_ingest.py -k process_graph
-pytest -q /app/tests -k "rules or detections or sigma or yara or debug_export"
+pytest -q /app/tests -k "rules or detections or sigma or yara"
 pytest -q /app/tests -k "timeline or reports or search or host"
 pytest -q /app/tests/test_event_identity.py
 pytest -q /app/tests/test_search_query_syntax.py
@@ -59,7 +59,7 @@ npm run build
 - reports: `CaseReportsPage.test.tsx`
 - timeline: `TimelinePage.test.tsx`
 - search: relevant `Search` suites
-- host attribution / debug export: backend suites by keyword
+- host attribution: backend suites by keyword
 - stable IDs / reconciliation: `test_event_identity.py`, `test_rules_v2.py`, `test_timeline.py`, `test_search_query_syntax.py`
 
 ## Reprocess / Reconciliation v1

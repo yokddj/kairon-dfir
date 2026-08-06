@@ -35,9 +35,7 @@ from app.rules_engine.sigma import (
     validate_sigma_rule_content,
 )
 from app.api.routes_rules import _queue_case_rules_run, _resolve_sigma_smoke_rules, _sigma_smoke_preflight_results, delete_bulk_detections, detections_summary, update_bulk_detections
-from app.schemas.debug_export import DebugExportRequest
 from app.schemas.rule import DetectionBulkActionRequestV2, DetectionBulkFilterSet, RulesRunRequest, SigmaSmokeRequest
-from app.services.debug_export import _DebugPackContext, _build_detections_report, _build_rules_run_report
 
 CASE_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 EVIDENCE_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -1215,59 +1213,3 @@ def test_yara_marker_match_size_limit_and_symlink_escape() -> None:
                 assert result["skipped_by_reason"].get("symlink", 0) >= 1
         finally:
             yara_engine.settings.backend_data_dir = original_data_dir
-
-
-def test_debug_reports_include_detections_and_runs() -> None:
-    db = _session()
-    case = Case(id=CASE_ID, name="Case")
-    db.add(case)
-    db.add(
-        DetectionResult(
-            case_id=CASE_ID,
-            evidence_id=EVIDENCE_ID,
-            artifact_id=None,
-            rule_id=RULE_ID,
-            rule_set_id=None,
-            engine="sigma",
-            source_engine="sigma",
-            rule_name="Encoded PowerShell",
-            rule_title="Encoded PowerShell",
-            severity="high",
-            confidence=0.9,
-            event_id="evt-1",
-            event_index="case-1-events",
-            opensearch_id="os-1",
-            target_type="event",
-            target_path=None,
-            matched_at="2026-05-18T19:00:00Z",
-            host_name="movistar-pc",
-            message="match",
-            status="new",
-            dedup_fingerprint="fp-1",
-            engine_version="rules_v2",
-            raw={},
-        )
-    )
-    db.add(
-        RuleRun(
-            case_id=CASE_ID,
-            evidence_id=EVIDENCE_ID,
-            engine="multi",
-            status=RuleRunStatus.completed,
-            matched=2,
-            created_detections=1,
-            duplicates=1,
-            scanned_files=3,
-            skipped_files=2,
-            errors=[],
-            metadata_json={"rule_types": ["sigma", "yara"], "rules_evaluated": 2, "events_scanned": 10, "files_scanned": 3, "warnings": []},
-        )
-    )
-    db.commit()
-    context = _DebugPackContext(case=case, evidences=[], request=DebugExportRequest(scope="case", evidence_id=EVIDENCE_ID), export_timestamp=datetime.now(UTC))
-    detections_report = _build_detections_report(db, context)
-    rules_run_report = _build_rules_run_report(db, context)
-    assert detections_report["detections_total"] == 1
-    assert detections_report["by_source"]["sigma"] == 1
-    assert rules_run_report["rules_evaluated"] == 2
-    assert rules_run_report["detections_created"] == 1

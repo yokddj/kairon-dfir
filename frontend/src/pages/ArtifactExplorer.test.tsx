@@ -57,10 +57,6 @@ vi.mock("../components/CreateFindingDialog", () => ({
   default: () => null,
 }));
 
-vi.mock("../components/DebugExportDialog", () => ({
-  default: () => null,
-}));
-
 function renderPage(path = "/cases/case-1/artifact-search") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -385,7 +381,6 @@ describe("ArtifactExplorer", () => {
     expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
     expect(screen.getByText(/Open focused views for parsed artifact families/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Open selected artifact in OpenSearch/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /Export artifact debug pack/i })).toBeInTheDocument();
   });
 
   it("uses user-facing artifact view labels and hides registry_persistence from the main selector", async () => {

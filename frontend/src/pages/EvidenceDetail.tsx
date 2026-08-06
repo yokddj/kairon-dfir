@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api, type CaseReport, type EvidenceBenchmark, type EvidenceIndexingPlan, type EvidenceIndexingStep, type EvidencePlatformProfile, type EvidenceRun, type EvtxHealthCheckResult, type EvtxProfile, type IngestPlanCandidate, type OnDemandModule, type ProblematicArtifact, type RuleRun, type VelociraptorCandidate } from "../api/client";
-import DebugExportDialog from "../components/DebugExportDialog";
 import HostAssignmentPanel from "../components/HostAssignmentPanel";
 import { InvestigationBreadcrumbs } from "../components/InvestigationContext";
 import { Disclosure } from "../components/common/Disclosure";
@@ -51,7 +50,6 @@ export default function EvidenceDetail() {
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<string[]>([]);
   const [parseEvtxProfile, setParseEvtxProfile] = useState<EvtxProfile>("full");
   const [expandedCategories, setExpandedCategories] = useState<Record<string, boolean>>({});
-  const [debugExportOpen, setDebugExportOpen] = useState(false);
   const [reprocessDialogOpen, setReprocessDialogOpen] = useState(false);
   const [reprocessMode, setReprocessMode] = useState<"previous_selection" | "choose_again" | "full_rediscovery" | "manual_selection">("previous_selection");
   const [reprocessIngestMode, setReprocessIngestMode] = useState<"usable_search" | "full_forensic">("usable_search");
@@ -764,7 +762,7 @@ export default function EvidenceDetail() {
     { id: "problematic", label: "Problematic artifacts", href: problematicHref, description: "Review deferred, failed or retryable artifacts for this evidence." },
     { id: "indexed", label: "View indexed artifacts", href: "#artifact-manifest", description: "Inspect manifest, parsed artifacts and raw-preserved items." },
   ];
-  const orderedModuleIds = ["rules", "reports", "host_enrichment", "deep_retry", "benchmark", "advanced_exports"];
+  const orderedModuleIds = ["rules", "reports", "host_enrichment", "deep_retry", "benchmark"];
   const onDemandEntries = orderedModuleIds
     .map((moduleId) => onDemandModules[moduleId] as OnDemandModule | undefined)
     .filter((entry): entry is OnDemandModule => Boolean(entry))

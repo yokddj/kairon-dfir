@@ -10,9 +10,6 @@ from app.core import storage as storage_module
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
 from app.schemas.evidence import EvidenceRead
-from app.schemas.debug_export import DebugExportRequest
-from app.services.debug_export import _DebugPackContext
-from app.services.debug_export import _build_ingest_summary
 
 
 class FakeSession:
@@ -576,35 +573,6 @@ def test_evidence_read_exposes_raw_collection_for_mounted_raw_archive() -> None:
     assert payload.source_tool == "raw_collection"
 
 
-def test_debug_pack_ingest_summary_exposes_raw_collection_for_mounted_raw_archive() -> None:
-    case = Case(id="case-1", name="Debug Case")
-    evidence = Evidence(
-        id="ev-1",
-        case_id="case-1",
-        original_filename="EVTX-ATTACK-SAMPLES.zip",
-        stored_path="/mnt/evidence/EVTX-ATTACK-SAMPLES.zip",
-        original_path="/mnt/evidence/EVTX-ATTACK-SAMPLES.zip",
-        evidence_type=EvidenceType.velociraptor_zip,
-        storage_mode=EvidenceStorageMode.mounted_path,
-        is_external=True,
-        copy_to_storage=False,
-        sha256="00",
-        size_bytes=1,
-        ingest_status=IngestStatus.completed,
-        source_tool="raw_collection",
-        path_validation={},
-        metadata_json={"selected_candidates": 278, "collection_kind": "raw_evidence_collection", "source_type": "raw_collection"},
-        error_log={},
-    )
-    rows = _build_ingest_summary(
-        _DebugPackContext(case=case, evidences=[evidence], request=DebugExportRequest(scope="evidence"), export_timestamp=evidence.created_at),
-        {"ev-1": {"stats": {}}},
-    )
-
-    assert rows[0]["evidence_type"] == "raw_collection"
-    assert rows[0]["source_tool"] == "raw_collection"
-
-
 def test_register_mounted_directory_evidence(monkeypatch, tmp_path: Path):
     allowed_root = _patch_allowed_roots(monkeypatch, tmp_path)
     source_dir = allowed_root / "CASE001"
@@ -918,69 +886,3 @@ def test_reprocess_returns_existing_active_run_without_duplicate_enqueue(monkeyp
     }
     assert enqueue_calls == []
     assert evidence.metadata_json["current_ingest_run_id"] == "ingest-existing"
-
-
-def test_debug_pack_ingest_summary_includes_storage_metadata():
-    evidence = Evidence(
-        id="ev-1",
-        case_id="case-1",
-        original_filename="sample",
-        stored_path="/mnt/evidence/sample",
-        original_path="/mnt/evidence/sample",
-        storage_mode=EvidenceStorageMode.mounted_path,
-        is_external=True,
-        copy_to_storage=False,
-        evidence_type=EvidenceType.parsed_folder,
-        sha256="00",
-        size_bytes=123,
-        file_count=12,
-        ingest_status=IngestStatus.completed,
-        path_validation={"within_allowed_root": True},
-        ingest_source={"mode": "mounted_path"},
-        metadata_json={},
-        error_log={},
-    )
-    context = SimpleNamespace(evidences=[evidence])
-
-    rows = _build_ingest_summary(context, {"ev-1": {"stats": {}}})
-
-    assert rows[0]["storage_mode"] == "mounted_path"
-    assert rows[0]["is_external"] is True
-    assert rows[0]["copy_to_storage"] is False
-    assert rows[0]["original_path"] == "/mnt/evidence/sample"
-
-
-def test_debug_pack_ingest_summary_includes_single_evtx_plan_counts() -> None:
-    evidence = Evidence(
-        id="ev-1",
-        case_id="case-1",
-        original_filename="Security.evtx",
-        stored_path="/mnt/evidence/Security.evtx",
-        original_path="/mnt/evidence/Security.evtx",
-        storage_mode=EvidenceStorageMode.mounted_path,
-        is_external=True,
-        copy_to_storage=False,
-        evidence_type=EvidenceType.evtx,
-        sha256="00",
-        size_bytes=123,
-        file_count=1,
-        ingest_status=IngestStatus.completed,
-        source_tool="windows_event_log",
-        path_validation={"within_allowed_root": True},
-        ingest_source={"mode": "mounted_path"},
-        metadata_json={
-            "ingest_plan": {
-                "selected_by_artifact_type": {"windows_event": 1},
-                "selected_by_parser": {"evtx_raw": 1},
-                "selected_candidates": [{"artifact_type": "windows_event", "parser": "evtx_raw"}],
-            }
-        },
-        error_log={},
-    )
-    context = SimpleNamespace(evidences=[evidence])
-
-    rows = _build_ingest_summary(context, {"ev-1": {"stats": {}}})
-
-    assert rows[0]["evidence_type"] == "evtx"
-    assert rows[0]["source_tool"] == "windows_event_log"
-    assert rows[0]["selected_by_artifact_type"] == {"windows_event": 1}

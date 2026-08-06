@@ -5,7 +5,7 @@ import { API_BASE_URL, api, type PerformanceSettingEntry, type PerformanceState,
 
 type ProfileName = "safe" | "balanced" | "performance" | "max" | "custom";
 type SectionKey = "overview" | "performance" | "evidence" | "branding" | "opensearch" | "deployment" | "advanced";
-type PerformanceGroupKey = "ingest" | "opensearch_bulk" | "search_timeline" | "graph_correlation" | "debug_export" | "other";
+type PerformanceGroupKey = "ingest" | "opensearch_bulk" | "search_timeline" | "graph_correlation" | "other";
 type DeploymentDiagnostic = NonNullable<NonNullable<PerformanceState["deployment"]>["pending_changes"][number]["diagnostic"]>;
 
 const SECTION_LABELS: Array<{ key: SectionKey; label: string }> = [
@@ -43,7 +43,6 @@ const PERFORMANCE_GROUP_LABELS: Record<PerformanceGroupKey, string> = {
   opensearch_bulk: "OpenSearch bulk / indexing",
   search_timeline: "Search & Timeline",
   graph_correlation: "Graph / Correlation",
-  debug_export: "Debug export",
   other: "Other runtime settings",
 };
 
@@ -112,7 +111,6 @@ function performanceGroup(entry: PerformanceSettingEntry): PerformanceGroupKey {
   if (matchesAny(name, ["opensearch_bulk_", "opensearch_refresh_timeout"])) return "opensearch_bulk";
   if (matchesAny(name, ["search_default_page_size", "search_max_page_size"])) return "search_timeline";
   if (matchesAny(name, ["process_graph_max_nodes", "correlation_max_events"])) return "graph_correlation";
-  if (matchesAny(name, ["debug_export_max_events"])) return "debug_export";
   return "other";
 }
 
@@ -327,7 +325,6 @@ export default function SystemPage() {
           opensearch_bulk: [],
           search_timeline: [],
           graph_correlation: [],
-          debug_export: [],
           other: [],
         },
       ),

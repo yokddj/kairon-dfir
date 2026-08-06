@@ -14,7 +14,6 @@ This demo shows the end-to-end analyst workflow in DFIR APP using a fully synthe
 - process graph
 - Sigma and YARA detections
 - report draft and export
-- debug export
 - OpenSearch Discover
 - evidence intake UX for upload vs mounted paths
 
@@ -150,18 +149,6 @@ Show:
 - Markdown export
 - PDF export
 
-### H. Debug Export
-
-Show that the debug pack includes:
-
-- `correlation_findings_report.json`
-- `event_identity_report.json`
-- `reconciliation_report.json`
-- `email_parse_report.json`
-- `user_activity_parse_report.json`
-- `ntfs_parse_report.json`
-- `windows_ui_parse_report.json`
-
 ### I. OpenSearch Console
 
 Show:
@@ -188,7 +175,6 @@ Show:
 - Sigma and YARA operationalized in one platform
 - detections are the landing zone for all rule hits
 - analyst workflow remains consistent across Search, Findings, Timeline and Process Graph
-- debug export supports supportability and validation
 
 ## Known Limitations
 
@@ -204,7 +190,6 @@ Show:
 
 - report markdown
 - report PDF
-- debug export ZIP
 - a bootstrap summary JSON
 
 under:

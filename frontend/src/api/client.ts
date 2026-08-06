@@ -2378,16 +2378,6 @@ export type CaseContextResponse = {
       secondary: CaseNextAction[];
       unavailable: CaseNextAction[];
     };
-    validation_matrix?: {
-      case_id: string;
-      mode: "investigation" | "demo" | "training" | "validation";
-      has_validation_matrix: boolean;
-      show_validation_matrix: boolean;
-      demo_cases_enabled?: boolean;
-      validation_features_enabled?: boolean;
-      label: string;
-      reason: string;
-    };
   };
 };
 
@@ -3472,71 +3462,6 @@ export type CaseReportPreview = {
   filters_applied?: Record<string, unknown>;
 };
 
-export type ValidationMatrixResult =
-  | "found"
-  | "partial"
-  | "not_found"
-  | "memory_only"
-  | "not_present_in_evidence"
-  | "parser_gap"
-  | "ux_gap";
-
-export type ValidationMatrixItem = {
-  case_id: string;
-  validation_id: string;
-  source_name: string;
-  source_urls: Record<string, string>;
-  finding_id: string;
-  title: string;
-  description: string;
-  phase: string;
-  host: string;
-  result: ValidationMatrixResult;
-  confidence: string;
-  expected_indicators: string[];
-  expected_artifacts: string[];
-  evidence_source_used: string[];
-  supporting_event_ids: string[];
-  related_timeline_items: string[];
-  related_findings: string[];
-  notes: string;
-  source_part: string[];
-  memory_required: boolean;
-  search_url?: string | null;
-  timeline_url?: string | null;
-  docs_url?: string | null;
-  created_at?: string | null;
-  updated_at?: string | null;
-};
-
-export type ValidationMatrixResponse = {
-  case_id: string;
-  validation_id: string | null;
-  source_name: string | null;
-  source_urls: Record<string, string>;
-  source_parts: string[];
-  items: ValidationMatrixItem[];
-  summary: Record<string, number | Record<string, number>>;
-  filtered_summary?: Record<string, number | Record<string, number>>;
-  filters: {
-    hosts: string[];
-    phases: string[];
-    results: ValidationMatrixResult[];
-    source_parts: string[];
-  };
-  generated_at: string;
-  warnings: string[];
-  visibility?: {
-    case_id: string;
-    mode: "investigation" | "demo" | "training" | "validation";
-    has_validation_matrix: boolean;
-    show_validation_matrix: boolean;
-    demo_cases_enabled?: boolean;
-    validation_features_enabled?: boolean;
-    label: string;
-    reason: string;
-  };
-};
 
 export type Rule = {
   id: string;
@@ -5288,24 +5213,6 @@ export type SemiAutoAnalysisStatus = {
   updated_at: string | null;
 };
 
-export type DebugExportRequest = {
-  scope: "case" | "evidence" | "selected_events" | "search" | "artifact_type" | "semiauto";
-  evidence_id?: string | null;
-  event_ids?: string[];
-  artifact_types?: string[];
-  include_raw_samples?: boolean;
-  include_raw_xml?: boolean;
-  include_source_paths?: boolean;
-  include_full_raw?: boolean;
-  max_events_per_type?: number;
-  max_field_length?: number;
-  redact_secrets?: boolean;
-  include_cached_semiauto?: boolean;
-  rebuild_semiauto_for_export?: boolean;
-  ui_context?: Record<string, unknown>;
-  search_request?: Record<string, unknown>;
-};
-
 export type MemoryArtifactList = {
   document_type: string;
   selected_run: string | null;
@@ -5722,29 +5629,6 @@ export const api = {
   getCase: (caseId: string) => request<DfirCase>(`/cases/${caseId}`),
   getCaseContext: (caseId: string) => request<CaseContextResponse>(`/cases/${caseId}/context`),
   getCaseCapabilities: (caseId: string) => request<CaseCapabilitiesResponse>(`/cases/${caseId}/capabilities`),
-  getValidationMatrix: (
-    caseId: string,
-    params?: { host?: string; phase?: string; result?: string; source_part?: string; memory_required?: boolean | null },
-  ) => {
-    const query = new URLSearchParams();
-    if (params?.host) query.set("host", params.host);
-    if (params?.phase) query.set("phase", params.phase);
-    if (params?.result) query.set("result", params.result);
-    if (params?.source_part) query.set("source_part", params.source_part);
-    if (params?.memory_required !== undefined && params.memory_required !== null) query.set("memory_required", String(params.memory_required));
-    return request<ValidationMatrixResponse>(`/cases/${caseId}/validation-matrix${query.size ? `?${query.toString()}` : ""}`);
-  },
-  exportValidationMatrixMarkdown: async (caseId: string) => {
-    const response = await apiFetch(`/cases/${caseId}/validation-matrix/export`);
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(body || `HTTP ${response.status}`);
-    }
-    return {
-      blob: await response.blob(),
-      filename: extractDownloadFilename(response.headers.get("content-disposition"), `validation-matrix-${caseId}.md`),
-    };
-  },
   getCaseHosts: (caseId: string) => request<CaseHostsResponse>(`/cases/${caseId}/hosts`),
   getCaseHostFacts: (caseId: string, params: { host_id?: string; evidence_id?: string; fact_type?: string }) => {
     const query = new URLSearchParams();
@@ -5832,37 +5716,6 @@ export const api = {
       throw new Error(body || `HTTP ${response.status}`);
     }
     return { blob: await response.blob(), filename: response.headers.get("content-disposition") ?? "" };
-  },
-  exportDebugPack: async (caseId: string, payload: DebugExportRequest) => {
-    const response = await apiFetch(`/cases/${caseId}/debug-export`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(body || `HTTP ${response.status}`);
-    }
-    return { blob: await response.blob(), filename: response.headers.get("content-disposition") ?? "" };
-  },
-  buildDebugPackDownloadUrl: (caseId: string, payload: DebugExportRequest) => {
-    const query = new URLSearchParams();
-    query.set("scope", payload.scope);
-    if (payload.evidence_id) query.set("evidence_id", payload.evidence_id);
-    if (payload.artifact_types?.length) query.set("artifact_types", payload.artifact_types.join(","));
-    query.set("include_raw_samples", String(payload.include_raw_samples ?? false));
-    query.set("include_raw_xml", String(payload.include_raw_xml ?? false));
-    query.set("include_source_paths", String(payload.include_source_paths ?? true));
-    query.set("include_full_raw", String(payload.include_full_raw ?? false));
-    query.set("max_events_per_type", String(payload.max_events_per_type ?? 25));
-    query.set("max_field_length", String(payload.max_field_length ?? 2000));
-    query.set("redact_secrets", String(payload.redact_secrets ?? true));
-    query.set("include_cached_semiauto", String(payload.include_cached_semiauto ?? true));
-    query.set("rebuild_semiauto_for_export", String(payload.rebuild_semiauto_for_export ?? false));
-    if (payload.ui_context && Object.keys(payload.ui_context).length) {
-      query.set("ui_context_json", JSON.stringify(payload.ui_context));
-    }
-    return buildApiUrl(`/cases/${caseId}/debug-export/download?${query.toString()}`);
   },
   listDocs: () => request<DocEntry[]>("/docs"),
   getDoc: (slug: string) => request<DocPage>(`/docs/${slug}`),

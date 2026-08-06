@@ -49,7 +49,6 @@ SETTING_ALIASES = {
     "MOUNTED_PATH_SCAN_LIMIT": "mounted_path_scan_limit",
     "PROCESS_GRAPH_MAX_NODES": "process_graph_max_nodes",
     "CORRELATION_MAX_EVENTS": "correlation_max_events",
-    "DEBUG_EXPORT_MAX_EVENTS": "debug_export_max_events",
     "SIGMA_MAX_MATCHES_PER_RULE": "sigma_max_matches_per_rule",
     "SIGMA_MAX_DETECTIONS_PER_RULE": "sigma_max_detections_per_rule",
     "SIGMA_NOISY_RULE_THRESHOLD": "sigma_noisy_rule_threshold",

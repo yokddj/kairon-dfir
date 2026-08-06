@@ -56,6 +56,7 @@ from app.ingest.archive import ArchiveExtractionError, copy_folder, extract_arch
 from app.ingest.csv_json import list_generic_artifacts
 from app.ingest.detector import detect_evidence_type
 from app.ingest.host_detection import detect_host_from_artifacts, detect_host_from_velociraptor_collection, normalize_hostname
+from app.ingest.host_facts_extraction import extract_host_fact_documents
 from app.ingest.host_user_extraction import extract_host_user_documents
 from app.ingest.linux.discovery import build_linux_inventory
 from app.ingest.normalizer import base_document, build_raw_summary
@@ -1264,12 +1265,18 @@ def _finalize_artifact_status(*, parser_name: str | None, record_count: int, raw
     }
     if parser_name == "evtx_raw" and record_count == 0 and raw_parser_status == "parsed_empty":
         return "skipped_empty"
-    if parser_name in ("windows_sam_identity", "windows_profile_list") and record_count == 0:
+    if parser_name == "windows_system_hive_facts" and record_count == 0:
         # Unlike evtx_raw/shimcache_raw/service (bulk record extraction,
-        # where zero records is unusual), a SAM hive with zero decodable
-        # accounts (e.g. Names subkey missing/empty) or a SOFTWARE hive
-        # with no ProfileList entries is a real, honest "nothing here",
-        # not a parser failure.
+        # where zero records is unusual), this parser only ever emits a
+        # handful of Host Facts and legitimately finds none on a SYSTEM
+        # hive that predates TimeZoneKeyName or is missing BuildLayers --
+        # that is a real, honest "nothing here", not a parser failure.
+        return "skipped_empty" if raw_parser_status == "parsed_empty" else "failed"
+    if parser_name in ("windows_sam_identity", "windows_profile_list") and record_count == 0:
+        # Same reasoning as windows_system_hive_facts: a SAM hive with zero
+        # decodable accounts (e.g. Names subkey missing/empty) or a
+        # SOFTWARE hive with no ProfileList entries is a real, honest
+        # "nothing here", not a parser failure.
         return "skipped_empty" if raw_parser_status == "parsed_empty" else "failed"
     if parser_name in native_raw_parsers and record_count == 0:
         if raw_parser_status in {"partial", "failed", "failed_unsupported"}:
@@ -1987,6 +1994,7 @@ def _parallel_evidence_ref(evidence: Evidence) -> dict[str, object]:
     evidence_ref: dict[str, object] = {
         "id": str(evidence.id),
         "case_id": str(evidence.case_id),
+        "host_id": str(evidence.host_id) if getattr(evidence, "host_id", None) else None,
         "detected_host": preferred_host,
         "detected_user": getattr(evidence, "detected_user", None),
     }
@@ -2170,7 +2178,6 @@ def _benchmark_finalize_state(
         "indexing_seconds": float((phase_map.get("bulk_indexing") or {}).get("duration_seconds") or 0),
         "db_seconds": float((phase_map.get("reconciliation") or {}).get("duration_seconds") or 0),
         "finalizer_seconds": float((phase_map.get("finalizer") or {}).get("duration_seconds") or 0),
-        "debug_export_seconds": 0.0,
         "records_read": int(records_read),
         "records_indexed": int(events_indexed),
         "events_indexed": int(events_indexed),
@@ -2767,6 +2774,21 @@ def _process_parallel_evtx_artifact(
                 )
             if warning:
                 detection_warnings.append({"artifact": artifact_info["name"], "warning": warning})
+            # Mirrors the sequential EVTX-native loop in ingest_evidence() --
+            # see app.ingest.host_facts_extraction.
+            host_fact_documents = extract_host_fact_documents(batch_documents)
+            if host_fact_documents:
+                host_facts_warning = _safe_create_host_facts_isolated(
+                    case_id=str(evidence_ref["case_id"]),
+                    evidence_id=str(evidence_ref["id"]),
+                    artifact_id=artifact_id,
+                    host_id=evidence_ref.get("host_id"),
+                    observed_at=utc_now(),
+                    artifact_name=artifact_info["name"],
+                    documents=host_fact_documents,
+                )
+                if host_facts_warning:
+                    detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_facts: {host_facts_warning}"})
             docs_processed_in_artifact += len(batch_documents)
             with tracker_lock:
                 state = tracker.setdefault(artifact_id, {})
@@ -3001,6 +3023,21 @@ def _process_parallel_normalized_artifact(
             detections_created += created_count
             if warning:
                 detection_warnings.append({"artifact": artifact_info["name"], "warning": warning})
+            # Mirrors the sequential normalize_file() branch in ingest_evidence()
+            # -- see app.ingest.host_facts_extraction.
+            host_fact_documents = extract_host_fact_documents(batch_documents)
+            if host_fact_documents:
+                host_facts_warning = _safe_create_host_facts_isolated(
+                    case_id=str(evidence_ref["case_id"]),
+                    evidence_id=str(evidence_ref["id"]),
+                    artifact_id=artifact_id,
+                    host_id=evidence_ref.get("host_id"),
+                    observed_at=utc_now(),
+                    artifact_name=artifact_info["name"],
+                    documents=host_fact_documents,
+                )
+                if host_facts_warning:
+                    detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_facts: {host_facts_warning}"})
             docs_processed_in_artifact += len(batch_documents)
             with tracker_lock:
                 tracker.setdefault(artifact_id, {}).update(
@@ -4087,11 +4124,12 @@ def _safe_create_host_facts_isolated(
 ) -> str | None:
     """Best-effort Host Facts aggregation for one artifact's documents.
 
-    Generic over fact_type: any normalized document carrying a
-    ``linux.fact_type`` (currently only ``linux_timezone`` sets it) is
-    picked up here without this call site needing to know which artifact
-    family it came from. Failures never interrupt ingest -- Host Facts are
-    a derived convenience layer, not part of the forensic record itself.
+    Platform-agnostic: ``documents`` is already the output of
+    app.ingest.host_facts_extraction.extract_host_fact_documents(), so this
+    function (and create_host_fact_observations below it) never needs to
+    know which platform or artifact family the observations came from.
+    Failures never interrupt ingest -- Host Facts are a derived convenience
+    layer, not part of the forensic record itself.
     """
     isolated_db: Session = SessionLocal()
     try:
@@ -5696,6 +5734,25 @@ def ingest_evidence(evidence_id: str) -> None:
                                 if warning:
                                     detection_warnings.append({"artifact": artifact_info["name"], "warning": warning})
                                 detections_created_inline = True
+                                # Platform-agnostic, mirrors the generic (non-EVTX-native)
+                                # branch below -- this streaming batch loop is the actual
+                                # path real .evtx files take (EvtxECmdCsvBackend /
+                                # EvtxRawParser), so Host Facts extraction must run here
+                                # too, not only in the generic normalize_file() branch.
+                                # See app.ingest.host_facts_extraction.
+                                host_fact_documents = extract_host_fact_documents(batch_documents)
+                                if host_fact_documents:
+                                    host_facts_warning = _safe_create_host_facts_isolated(
+                                        case_id=evidence.case_id,
+                                        evidence_id=evidence.id,
+                                        artifact_id=artifact_id,
+                                        host_id=evidence.host_id,
+                                        observed_at=utc_now(),
+                                        artifact_name=artifact_info["name"],
+                                        documents=host_fact_documents,
+                                    )
+                                    if host_facts_warning:
+                                        detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_facts: {host_facts_warning}"})
                                 indexed_count += len(batch_documents)
                                 records_processed += len(batch_documents)
                                 docs_processed_in_artifact += len(batch_documents)
@@ -5935,18 +5992,26 @@ def ingest_evidence(evidence_id: str) -> None:
                         detection_count += created_count
                         if warning:
                             detection_warnings.append({"artifact": artifact_info["name"], "warning": warning})
-                    if documents and any((document.get("linux") or {}).get("fact_type") for document in documents):
-                        host_facts_warning = _safe_create_host_facts_isolated(
-                            case_id=evidence.case_id,
-                            evidence_id=evidence.id,
-                            artifact_id=artifact_id,
-                            host_id=evidence.host_id,
-                            observed_at=utc_now(),
-                            artifact_name=artifact_info["name"],
-                            documents=documents,
-                        )
-                        if host_facts_warning:
-                            detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_facts: {host_facts_warning}"})
+                    if documents:
+                        # Platform-agnostic: extract_host_fact_documents()
+                        # dispatches to every registered platform extractor
+                        # (Linux, Windows, ...) internally -- this call site
+                        # never needs a platform branch of its own, now or
+                        # when a future platform gains Host Facts support.
+                        # See app.ingest.host_facts_extraction.
+                        host_fact_documents = extract_host_fact_documents(documents)
+                        if host_fact_documents:
+                            host_facts_warning = _safe_create_host_facts_isolated(
+                                case_id=evidence.case_id,
+                                evidence_id=evidence.id,
+                                artifact_id=artifact_id,
+                                host_id=evidence.host_id,
+                                observed_at=utc_now(),
+                                artifact_name=artifact_info["name"],
+                                documents=host_fact_documents,
+                            )
+                            if host_facts_warning:
+                                detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_facts: {host_facts_warning}"})
                     if documents:
                         # Platform-agnostic: extract_host_user_documents()
                         # dispatches to every registered platform extractor

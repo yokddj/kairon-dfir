@@ -3,7 +3,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 
 import { api, type CaseReport, type Finding, type TimelineBookmark } from "../api/client";
-import DebugExportDialog from "../components/DebugExportDialog";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
 const SECTION_LABELS: Record<string, string> = {
@@ -14,7 +13,6 @@ const SECTION_LABELS: Record<string, string> = {
   findings: "Findings",
   timeline: "Timeline",
   incident_timeline: "Incident Timeline",
-  ground_truth_coverage: "Ground Truth Coverage",
   process_chains: "Process Chains",
   command_history: "Command History",
   defender: "Defender",
@@ -42,7 +40,6 @@ export default function CaseReportsPage() {
   const { caseId = "" } = useParams();
   const { setActiveCaseId, selectedHost, selectedEvidenceId, caseContext } = useActiveCase();
   const queryClient = useQueryClient();
-  const [debugExportOpen, setDebugExportOpen] = useState(false);
   const [selectedReportId, setSelectedReportId] = useState("");
   const [executiveNote, setExecutiveNote] = useState("");
   const [recommendationsNote, setRecommendationsNote] = useState("");
@@ -50,7 +47,6 @@ export default function CaseReportsPage() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusTone, setStatusTone] = useState<"default" | "error">("default");
   const [advancedFiltersOpen, setAdvancedFiltersOpen] = useState(false);
-  const showValidationCoverage = Boolean(caseContext?.summary?.validation_matrix?.show_validation_matrix);
 
   useEffect(() => {
     if (caseId) setActiveCaseId(caseId);
@@ -124,7 +120,6 @@ export default function CaseReportsPage() {
           command_only_suspicious: true,
           include_execution_stories: true,
           include_incident_timeline: true,
-          include_ground_truth_coverage: showValidationCoverage,
           max_commands: 50,
           max_execution_stories: 10,
           max_incident_timeline_items: 60,
@@ -151,7 +146,6 @@ export default function CaseReportsPage() {
     ["include_timeline_events", "Include timeline events"],
     ["include_command_history", "Include suspicious commands"],
     ["include_incident_timeline", "Include incident timeline"],
-    ...(showValidationCoverage ? [["include_ground_truth_coverage", "Include ground truth coverage"]] : []),
   ];
 
   const patchReport = useMutation({
@@ -256,9 +250,6 @@ export default function CaseReportsPage() {
           <div className="flex flex-wrap gap-3">
             <button type="button" onClick={() => createDraft.mutate()} className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">
               Create investigation report
-            </button>
-            <button type="button" onClick={() => setDebugExportOpen(true)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">
-              Export full case debug pack
             </button>
           </div>
         </div>
@@ -701,27 +692,6 @@ export default function CaseReportsPage() {
           )}
         </div>
       </section>
-
-      <DebugExportDialog
-        open={debugExportOpen}
-        onClose={() => setDebugExportOpen(false)}
-        caseId={caseId}
-        title="Export case debug pack"
-        defaultRequest={{
-          scope: "case",
-          include_raw_samples: false,
-          include_raw_xml: false,
-          include_source_paths: true,
-          include_full_raw: false,
-          max_events_per_type: 25,
-          max_field_length: 2000,
-          redact_secrets: true,
-          ui_context: {
-            page: "CaseReportsPage",
-            selected_case: caseId,
-          },
-        }}
-      />
     </div>
   );
 }

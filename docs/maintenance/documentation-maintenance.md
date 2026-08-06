@@ -78,7 +78,3 @@ If you can't answer those by reading the documentation, the documentation isn't 
 - Any expansion of `Cloud Sync` should update `docs/artifacts/cloud_sync.md`, `docs/artifacts/parser-coverage.md`, `docs/search-and-investigation/semi_automatic_analysis.md`, `docs/operations/troubleshooting.md`, and `docs/rules/builtin_rules.md`.
 - Any expansion of `Network / WLAN / DNS` should update `docs/artifacts/network.md`, `docs/artifacts/parser-coverage.md`, `docs/search-and-investigation/semi_automatic_analysis.md`, `docs/operations/troubleshooting.md`, `docs/evidence/velociraptor_ingest.md`, and `docs/rules/builtin_rules.md`.
 - Keep `docs/artifacts/parser-coverage.md` aligned with parser statuses, supported native raw types, and deduplication behavior.
-
-## Debug Export Pack
-
-When the validation ZIP's contents change, update `docs/operations/debug_export_pack.md` and any cross-references in troubleshooting, architecture, and roadmap docs. Keep file names, defaults, secret redaction, and declared limitations consistent across all of them.

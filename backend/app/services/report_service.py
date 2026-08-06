@@ -35,7 +35,6 @@ from app.models.finding import Finding
 from app.models.timeline_bookmark import TimelineBookmark
 from app.services.case_capabilities import capability_route
 from app.services.command_history import get_command_history
-from app.services.debug_export import build_execution_story
 from app.services.email_artifacts import build_email_artifacts_report_context, render_email_artifacts_markdown
 from app.services.parser_registry import (
     SEARCHABLE_CONTRACT_VERSION,
@@ -49,7 +48,6 @@ from app.services.search_service import search_events_v2
 from app.services.motw import build_motw_report_context, render_motw_markdown
 from app.services.startup_persistence import build_startup_persistence_report_context, render_startup_persistence_markdown
 from app.services.timeline_service import build_incident_timeline_draft, export_incident_timeline_markdown
-from app.services.validation_matrix import get_validation_matrix, render_validation_matrix_markdown, should_show_validation_matrix
 
 
 REPORT_TEMPLATES = [
@@ -65,7 +63,6 @@ REPORT_TEMPLATES = [
             "findings",
             "timeline",
             "incident_timeline",
-            "ground_truth_coverage",
             "process_chains",
             "command_history",
             "defender",
@@ -101,7 +98,6 @@ DEFAULT_FILTERS = {
     "include_marked_events": True,
     "include_timeline_events": True,
     "include_incident_timeline": True,
-    "include_ground_truth_coverage": False,
     "include_command_history": True,
     "include_defender": True,
     "include_email": True,
@@ -134,13 +130,7 @@ DEFAULT_FILTERS = {
 
 
 def _default_report_filters_for_case(case: Case) -> dict[str, Any]:
-    filters = dict(DEFAULT_FILTERS)
-    filters["include_ground_truth_coverage"] = should_show_validation_matrix(
-        case.id,
-        getattr(case, "mode", None),
-        validation_mode_enabled=get_settings().validation_features_enabled,
-    )
-    return filters
+    return dict(DEFAULT_FILTERS)
 SEVERITY_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 _SECRET_INLINE = re.compile(r"(?i)\b(password|secret|token|access_token|refresh_token|apikey|api_key|authorization|bearer|keymaterial)\b\s*[:=]\s*([^\s|,;]+)")
 _BEARER_TOKEN = re.compile(r"(?i)\bbearer\s+[A-Za-z0-9._~+/=-]{20,}\b")
@@ -286,11 +276,6 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
     ioc_rows = _extract_iocs(case_id, selected_findings, selected_bookmarks)
     sections = []
     warnings: list[str] = []
-    ground_truth_visible = should_show_validation_matrix(
-        case_id,
-        getattr(case, "mode", None),
-        validation_mode_enabled=get_settings().validation_features_enabled,
-    )
     stats = {
         "findings_matched": len(findings),
         "detections_matched": len(detections),
@@ -317,7 +302,6 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
         "incident_timeline_items": int(incident_timeline_report["counts"]["incident_timeline_items"]),
         "startup_persistence_items": int(persistence_report["counts"].get("total") or 0),
         "startup_persistence_suspicious": int(persistence_report["counts"].get("suspicious") or 0),
-        "ground_truth_total_expected": int(get_validation_matrix(case_id)["summary"].get("total_expected") or 0) if ground_truth_visible else 0,
         "commands_by_shell": command_report["counts"]["commands_by_shell"],
         "commands_by_family": command_report["counts"].get("commands_by_family", command_report["counts"]["commands_by_shell"]),
         "commands_by_launcher": command_report["counts"].get("commands_by_launcher", {}),
@@ -351,16 +335,6 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
                 "title": "Incident Timeline",
                 "markdown": _render_incident_timeline_section(case_id, incident_timeline_report["items"]),
                 "warnings": incident_timeline_report["warnings"] or ([] if incident_timeline_report["items"] else ["No incident timeline items were generated."]),
-            }
-        )
-    if sections_enabled.get("ground_truth_coverage", True) and filters.get("include_ground_truth_coverage", False) and ground_truth_visible:
-        matrix = get_validation_matrix(case_id)
-        sections.append(
-            {
-                "id": "ground_truth_coverage",
-                "title": "Ground Truth Coverage",
-                "markdown": render_validation_matrix_markdown(matrix),
-                "warnings": matrix.get("warnings") or ([] if matrix.get("items") else ["No validation matrix is available for this case."]),
             }
         )
     if sections_enabled.get("process_chains", True):
@@ -1290,7 +1264,6 @@ def _build_evidence_summary_payload(
             "search_this_evidence": f"/cases/{evidence.case_id}/search?evidence_id={evidence.id}&tab=results",
             "timeline": f"/cases/{evidence.case_id}/timeline?evidence_id={evidence.id}",
             "detections": f"/cases/{evidence.case_id}/detections?evidence_id={evidence.id}",
-            "debug_export": f"/evidences/{evidence.id}#debug-export",
         },
         "warnings": warnings,
     }
@@ -1345,7 +1318,6 @@ def _render_evidence_summary_markdown(summary: dict[str, Any]) -> str:
         f"- Search this evidence: `{links.get('search_this_evidence') or '-'}`",
         f"- Timeline: `{links.get('timeline') or '-'}`",
         f"- Detections: `{links.get('detections') or '-'}`",
-        f"- Debug export: `{links.get('debug_export') or '-'}`",
     ]
     warnings = list(summary.get("warnings") or [])
     if warnings:

@@ -45,13 +45,11 @@
 - `Artifact Search` opens from the case workspace, not from Evidence
 - page title says `Artifact Search`
 
-## Reports and Debug
+## Reports
 
 - report draft created
 - Markdown export works
 - PDF export works
-- debug export works
-- debug export contains identity and reconciliation reports
 
 ## UI / Ops
 

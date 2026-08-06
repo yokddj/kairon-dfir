@@ -16,7 +16,7 @@ from app.core.opensearch import iter_case_events
 from app.models.case import Case
 from app.models.evidence import Evidence
 from app.models.finding import Finding, FindingSeverity, FindingStatus
-from app.services.debug_export import build_process_tree_bundle
+from app.services.process_tree import build_process_tree_bundle
 from app.services.host_identity import expand_host_filter, normalize_host_alias, resolve_canonical_host
 
 

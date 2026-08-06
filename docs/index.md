@@ -105,7 +105,6 @@ This documentation describes the real state of the platform. Partial capabilitie
 - [deployment/deployment.md](deployment/deployment.md): canonical deployment guide — requirements, environment variables, volumes, operations, and security.
 - [deployment/deployment-modes.md](deployment/deployment-modes.md): localhost/lan/https modes.
 - [deployment/deployment-remote.md](deployment/deployment-remote.md): remote deployment runbook.
-- [deployment/beta-vs-validation-mode.md](deployment/beta-vs-validation-mode.md): difference between normal deployment mode and validation/QA mode.
 - [deployment/backup-restore.md](deployment/backup-restore.md): backup and restore.
 - [deployment/update-rollback.md](deployment/update-rollback.md): update and rollback.
 - [deployment/troubleshooting.md](deployment/troubleshooting.md): operational/infrastructure troubleshooting.
@@ -116,14 +115,8 @@ This documentation describes the real state of the platform. Partial capabilitie
 - [operations/performance.md](operations/performance.md): performance profiles.
 - [operations/opensearch.md](operations/opensearch.md): OpenSearch mapping and behavior.
 - [operations/api_summary.md](operations/api_summary.md): high-level endpoint map.
-- [operations/debug_export_pack.md](operations/debug_export_pack.md): debug export pack catalog.
 - [operations/testing.md](operations/testing.md): backend/frontend test suite.
 - [operations/demo_checklist.md](operations/demo_checklist.md): QA checklist for demos.
-
-## Validation
-
-- [validation/README.md](validation/README.md): general use of the Validation Matrix for QA and imported datasets.
-- [validation/validation-matrix-format.md](validation/validation-matrix-format.md): JSON format of the validation matrix.
 
 ## Releases
 

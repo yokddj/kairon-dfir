@@ -20,7 +20,7 @@ MFT/filesystem records are excluded by default to avoid flooding the view. Use `
 
 ## Incident Timeline
 
-Incident Timeline is the curated, reportable story of the incident. It is built from reviewed evidence, marked events, findings, command history, Defender events, selected high-signal artifacts and, for validation cases, optional ground-truth seeds.
+Incident Timeline is the curated, reportable story of the incident. It is built from reviewed evidence, marked events, findings, command history, Defender events, and selected high-signal artifacts.
 
 It should not be treated as:
 

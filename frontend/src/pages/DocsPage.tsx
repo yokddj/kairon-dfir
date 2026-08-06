@@ -32,7 +32,6 @@ const docSlugByHref: Record<string, string> = {
   "timeline_reports.md": "timeline-reports",
   "process_graph.md": "process-graph",
   "rules_sigma_yara.md": "rules-sigma-yara",
-  "debug_export_pack.md": "debug-export-pack",
   "architecture.md": "architecture",
   "quickstart.md": "quickstart",
   "ingestion.md": "ingestion",
@@ -49,8 +48,6 @@ const docSlugByHref: Record<string, string> = {
   "demo_checklist.md": "demo-checklist",
   "demo/README.md": "demo-readme",
   "demo/generic-demo-guide.md": "generic-demo-guide",
-  "validation/README.md": "validation-readme",
-  "validation/validation-matrix-format.md": "validation-matrix-format",
   "maintenance/documentation-maintenance.md": "documentation-maintenance",
   "deployment/beta-vs-demo-mode.md": "beta-vs-demo-mode",
 };

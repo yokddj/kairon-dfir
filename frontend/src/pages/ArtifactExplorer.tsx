@@ -4,7 +4,6 @@ import { Link } from "react-router-dom";
 import { useParams, useSearchParams } from "react-router-dom";
 import { api, type DfirCase, type EmailArtifactItem, type MotwItem, type StartupPersistenceItem } from "../api/client";
 import CreateFindingDialog from "../components/CreateFindingDialog";
-import DebugExportDialog from "../components/DebugExportDialog";
 import EventTable, { type EventView } from "../components/EventTable";
 import IndicatorResolutionPanel from "../components/IndicatorResolutionPanel";
 import InvestigationContext from "../components/InvestigationContext";
@@ -600,8 +599,6 @@ export default function ArtifactExplorer() {
   const [emailClient, setEmailClient] = useState("");
   const [emailInterestingOnly, setEmailInterestingOnly] = useState(searchParams.get("interesting_only") === "true");
   const [emailRiskMin, setEmailRiskMin] = useState("");
-  const [debugExportOpen, setDebugExportOpen] = useState(false);
-  const [debugExportScope, setDebugExportScope] = useState<"artifact_type" | "selected_events">("artifact_type");
   const evidenceIdFilter = searchParams.get("evidence_id") || selectedEvidenceId;
   const hostIdFilter = searchParams.get("host_id") || activeHostId;
   const hostFilter = searchParams.get("host") || activeHost || selectedHost;
@@ -956,12 +953,6 @@ export default function ArtifactExplorer() {
           <button disabled={!caseId || !selectedEventIds.length} onClick={() => setFindingDialogOpen(true)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-muted disabled:opacity-50">
             Create Finding from selected events
           </button>
-          <button disabled={!caseId} onClick={() => { setDebugExportScope("artifact_type"); setDebugExportOpen(true); }} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-muted disabled:opacity-50">
-            Export artifact debug pack
-          </button>
-          <button disabled={!caseId || !selectedEventIds.length} onClick={() => { setDebugExportScope("selected_events"); setDebugExportOpen(true); }} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-muted disabled:opacity-50">
-            Export selected events debug pack
-          </button>
         </div>
         {artifactType === "mft" ? (
           <div className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4">
@@ -1264,36 +1255,6 @@ export default function ArtifactExplorer() {
           setFindingPrefill(null);
         }}
       />
-      {caseId ? (
-        <DebugExportDialog
-          open={debugExportOpen}
-          onClose={() => setDebugExportOpen(false)}
-          caseId={caseId}
-          title={debugExportScope === "selected_events" ? "Export selected events debug pack" : "Export artifact debug pack"}
-          defaultRequest={{
-            scope: debugExportScope,
-            event_ids: debugExportScope === "selected_events" ? selectedEventIds : [],
-            artifact_types: artifactType ? [artifactType] : [],
-            include_raw_samples: false,
-            include_raw_xml: false,
-            include_source_paths: true,
-            include_full_raw: false,
-            max_events_per_type: 25,
-            max_field_length: 2000,
-            redact_secrets: true,
-            search_request: payload,
-            ui_context: {
-              page: "ArtifactSearch",
-              selected_case: caseId,
-              selected_artifact_type: artifactType,
-              artifact_name: artifactName,
-              query,
-              current_view: view,
-              selected_event_ids: selectedEventIds,
-            },
-          }}
-        />
-      ) : null}
     </div>
   );
 }

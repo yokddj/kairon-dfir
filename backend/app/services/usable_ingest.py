@@ -79,7 +79,7 @@ def ingest_mode_metadata(mode: object | None) -> dict[str, Any]:
             "skip_detections": True,
             "skip_heavy_enrichment": True,
             "skip_benchmark": True,
-            "on_demand_modules_available": ["rules", "reports", "host_enrichment", "deep_retry", "benchmark", "advanced_exports"],
+            "on_demand_modules_available": ["rules", "reports", "host_enrichment", "deep_retry", "benchmark"],
         }
     return {
         "ingest_mode": FULL_FORENSIC_MODE,
@@ -95,7 +95,7 @@ def ingest_mode_metadata(mode: object | None) -> dict[str, Any]:
         "skip_detections": False,
         "skip_heavy_enrichment": False,
         "skip_benchmark": False,
-        "on_demand_modules_available": ["rules", "reports", "host_enrichment", "deep_retry", "benchmark", "advanced_exports"],
+        "on_demand_modules_available": ["rules", "reports", "host_enrichment", "deep_retry", "benchmark"],
     }
 
 

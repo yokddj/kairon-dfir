@@ -1,4 +1,4 @@
-from app.services.debug_export import _build_process_graph
+from app.services.process_tree import _build_process_graph
 
 
 def _process_event(

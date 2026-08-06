@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from app.services import debug_export
+from app.services import process_tree
 
 
 def _process_event(
@@ -63,8 +63,8 @@ def test_expand_children_returns_child_nodes(monkeypatch) -> None:
     def fake_search(*_args, **_kwargs):
         return responses.pop(0), 0, {}
 
-    monkeypatch.setattr(debug_export, "_search_scope_events", fake_search)
-    result = debug_export.build_process_tree_expansion(
+    monkeypatch.setattr(process_tree, "_search_scope_events", fake_search)
+    result = process_tree.build_process_tree_expansion(
         SimpleNamespace(id="case-1"),
         [],
         scope="evidence",
@@ -108,8 +108,8 @@ def test_expand_siblings_returns_processes_with_shared_parent(monkeypatch) -> No
     def fake_search(*_args, **_kwargs):
         return responses.pop(0), 0, {}
 
-    monkeypatch.setattr(debug_export, "_search_scope_events", fake_search)
-    result = debug_export.build_process_tree_expansion(
+    monkeypatch.setattr(process_tree, "_search_scope_events", fake_search)
+    result = process_tree.build_process_tree_expansion(
         SimpleNamespace(id="case-1"),
         [],
         scope="evidence",
@@ -133,8 +133,8 @@ def test_expand_activity_returns_grouped_activity(monkeypatch) -> None:
     def fake_search(*_args, **_kwargs):
         return responses.pop(0), 0, {}
 
-    monkeypatch.setattr(debug_export, "_search_scope_events", fake_search)
-    result = debug_export.build_process_tree_expansion(
+    monkeypatch.setattr(process_tree, "_search_scope_events", fake_search)
+    result = process_tree.build_process_tree_expansion(
         SimpleNamespace(id="case-1"),
         [],
         scope="evidence",
@@ -218,10 +218,10 @@ def test_focused_tree_by_pid_returns_parent_child_sibling_context(monkeypatch) -
             return {"added_nodes": [child], "added_edges": [{"source": "guid-ps", "target": "guid-cmd", "type": "spawned", "confidence": "high", "reason": "test"}], "activity_groups": [], "omitted_counts": {}, "warnings": []}
         return {"added_nodes": [], "added_edges": [], "activity_groups": [], "omitted_counts": {}, "warnings": []}
 
-    monkeypatch.setattr(debug_export, "build_process_tree_bundle", fake_bundle)
-    monkeypatch.setattr(debug_export, "build_process_tree_expansion", fake_expansion)
+    monkeypatch.setattr(process_tree, "build_process_tree_bundle", fake_bundle)
+    monkeypatch.setattr(process_tree, "build_process_tree_expansion", fake_expansion)
 
-    result = debug_export.build_process_tree_focused(
+    result = process_tree.build_process_tree_focused(
         SimpleNamespace(id="case-1"),
         [],
         scope="evidence",
@@ -242,13 +242,13 @@ def test_focused_tree_pid_only_reports_ambiguity(monkeypatch) -> None:
     first = {"id": "guid-a", "pid": 4444, "name": "cmd.exe", "host": "HOSTA", "source_events": [], "risk_score": 0, "risk_reasons": [], "badges": [], "data_quality": [], "confidence": "medium"}
     second = {"id": "guid-b", "pid": 4444, "name": "cmd.exe", "host": "HOSTA", "source_events": [], "risk_score": 0, "risk_reasons": [], "badges": [], "data_quality": [], "confidence": "medium"}
     monkeypatch.setattr(
-        debug_export,
+        process_tree,
         "build_process_tree_bundle",
         lambda *_args, **_kwargs: {"graph": {"nodes": [first, second], "edges": [], "groups": [], "omitted_counts": {}, "summary": {}}, "report": {}, "sample_chains": []},
     )
-    monkeypatch.setattr(debug_export, "build_process_tree_expansion", lambda *_args, **_kwargs: {"added_nodes": [], "added_edges": [], "activity_groups": [], "omitted_counts": {}, "warnings": []})
+    monkeypatch.setattr(process_tree, "build_process_tree_expansion", lambda *_args, **_kwargs: {"added_nodes": [], "added_edges": [], "activity_groups": [], "omitted_counts": {}, "warnings": []})
 
-    result = debug_export.build_process_tree_focused(SimpleNamespace(id="case-1"), [], scope="case", pid=4444)
+    result = process_tree.build_process_tree_focused(SimpleNamespace(id="case-1"), [], scope="case", pid=4444)
 
     assert result["identity_resolution"]["method"] == "pid_only"
     assert result["identity_resolution"]["ambiguous_candidates"]
@@ -309,9 +309,9 @@ def test_execution_story_returns_narrative_and_visual_tree(monkeypatch) -> None:
             },
         }
 
-    monkeypatch.setattr(debug_export, "build_process_tree_focused", fake_focused)
+    monkeypatch.setattr(process_tree, "build_process_tree_focused", fake_focused)
 
-    result = debug_export.build_execution_story(SimpleNamespace(id="case-1"), [], scope="evidence", evidence_id="ev-1", host="HOSTA", pid=12720)
+    result = process_tree.build_execution_story(SimpleNamespace(id="case-1"), [], scope="evidence", evidence_id="ev-1", host="HOSTA", pid=12720)
 
     assert result["target"]["id"] == "guid-ps"
     assert "was launched by powershell.exe PID 11784" in result["story"]["parent_sentence"]
@@ -388,11 +388,11 @@ def test_execution_story_source_event_id_wins_over_similar_text(monkeypatch) -> 
             "sample_chains": [],
         }
 
-    monkeypatch.setattr(debug_export, "_search_scope_events", fake_search)
-    monkeypatch.setattr(debug_export, "build_process_tree_bundle", fake_bundle)
-    monkeypatch.setattr(debug_export, "build_process_tree_expansion", lambda *_args, **_kwargs: {"added_nodes": [], "added_edges": [], "activity_groups": [], "omitted_counts": {}, "warnings": []})
+    monkeypatch.setattr(process_tree, "_search_scope_events", fake_search)
+    monkeypatch.setattr(process_tree, "build_process_tree_bundle", fake_bundle)
+    monkeypatch.setattr(process_tree, "build_process_tree_expansion", lambda *_args, **_kwargs: {"added_nodes": [], "added_edges": [], "activity_groups": [], "omitted_counts": {}, "warnings": []})
 
-    result = debug_export.build_execution_story(
+    result = process_tree.build_execution_story(
         SimpleNamespace(id="case-1"),
         [],
         scope="evidence",
@@ -482,11 +482,11 @@ def test_execution_story_command_history_explicit_target_metadata(monkeypatch) -
             "sample_chains": [],
         }
 
-    monkeypatch.setattr(debug_export, "_search_scope_events", fake_search)
-    monkeypatch.setattr(debug_export, "build_process_tree_bundle", fake_bundle)
-    monkeypatch.setattr(debug_export, "build_process_tree_expansion", lambda *_args, **_kwargs: {"added_nodes": [], "added_edges": [], "activity_groups": [], "omitted_counts": {}, "warnings": []})
+    monkeypatch.setattr(process_tree, "_search_scope_events", fake_search)
+    monkeypatch.setattr(process_tree, "build_process_tree_bundle", fake_bundle)
+    monkeypatch.setattr(process_tree, "build_process_tree_expansion", lambda *_args, **_kwargs: {"added_nodes": [], "added_edges": [], "activity_groups": [], "omitted_counts": {}, "warnings": []})
 
-    result = debug_export.build_execution_story(
+    result = process_tree.build_execution_story(
         SimpleNamespace(id="case-1"),
         [],
         scope="evidence",
@@ -551,10 +551,10 @@ def test_execution_story_exact_identity_does_not_fallback_to_similar_node(monkey
             "sample_chains": [],
         }
 
-    monkeypatch.setattr(debug_export, "_search_scope_events", fake_search)
-    monkeypatch.setattr(debug_export, "build_process_tree_bundle", fake_bundle)
+    monkeypatch.setattr(process_tree, "_search_scope_events", fake_search)
+    monkeypatch.setattr(process_tree, "build_process_tree_bundle", fake_bundle)
 
-    result = debug_export.build_execution_story(
+    result = process_tree.build_execution_story(
         SimpleNamespace(id="case-1"),
         [],
         scope="evidence",
@@ -571,7 +571,7 @@ def test_execution_story_exact_identity_does_not_fallback_to_similar_node(monkey
 
 
 def test_execution_story_power_shell_operational_returns_light_candidates(monkeypatch) -> None:
-    debug_export._EXECUTION_STORY_LIGHT_CACHE.clear()
+    process_tree._EXECUTION_STORY_LIGHT_CACHE.clear()
     source = {
         "id": "evt-psop",
         "@timestamp": "2024-03-22T11:26:45Z",
@@ -596,9 +596,9 @@ def test_execution_story_power_shell_operational_returns_light_candidates(monkey
     def fake_search(*_args, **_kwargs):
         return responses.pop(0), 0, {}
 
-    monkeypatch.setattr(debug_export, "_search_scope_events", fake_search)
+    monkeypatch.setattr(process_tree, "_search_scope_events", fake_search)
 
-    result = debug_export.build_execution_story(
+    result = process_tree.build_execution_story(
         SimpleNamespace(id="case-1"),
         [],
         scope="evidence",
@@ -616,7 +616,7 @@ def test_execution_story_power_shell_operational_returns_light_candidates(monkey
 
 
 def test_execution_story_light_cache_hit(monkeypatch) -> None:
-    debug_export._EXECUTION_STORY_LIGHT_CACHE.clear()
+    process_tree._EXECUTION_STORY_LIGHT_CACHE.clear()
     source = {
         "id": "evt-generic",
         "@timestamp": "2024-03-22T11:26:45Z",
@@ -631,9 +631,9 @@ def test_execution_story_light_cache_hit(monkeypatch) -> None:
         calls["count"] += 1
         return ([source] if calls["count"] == 1 else []), 0, {}
 
-    monkeypatch.setattr(debug_export, "_search_scope_events", fake_search)
-    first = debug_export.build_execution_story(SimpleNamespace(id="case-1"), [], scope="evidence", evidence_id="ev-1", source_event_id="evt-generic")
-    second = debug_export.build_execution_story(SimpleNamespace(id="case-1"), [], scope="evidence", evidence_id="ev-1", source_event_id="evt-generic")
+    monkeypatch.setattr(process_tree, "_search_scope_events", fake_search)
+    first = process_tree.build_execution_story(SimpleNamespace(id="case-1"), [], scope="evidence", evidence_id="ev-1", source_event_id="evt-generic")
+    second = process_tree.build_execution_story(SimpleNamespace(id="case-1"), [], scope="evidence", evidence_id="ev-1", source_event_id="evt-generic")
 
     assert first["quality"]["cache"]["hit"] is False
     assert second["quality"]["cache"]["hit"] is True

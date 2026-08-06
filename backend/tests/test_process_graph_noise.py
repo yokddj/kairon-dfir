@@ -1,4 +1,4 @@
-from app.services.debug_export import _compact_process_graph
+from app.services.process_tree import _compact_process_graph
 
 
 def _graph():
