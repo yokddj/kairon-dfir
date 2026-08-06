@@ -48,7 +48,6 @@ from app.services.search_service import (
     search_findings_v2,
     search_related_to_finding as search_related_to_finding_v2,
 )
-from app.services.validation_matrix import should_show_validation_matrix
 
 
 INCIDENT_PHASES = [
@@ -77,7 +76,6 @@ DEFAULT_INCIDENT_TIMELINE_SOURCES = [
     "defender",
     "memory",
 ]
-VALIDATION_SEED_QUERIES: list[dict[str, Any]] = []
 TIMELINE_QUICK_FILTERS = [
     {"id": "high_risk", "label": "High risk", "params": {"risk_min": 70}},
     {"id": "findings_only", "label": "Findings only", "params": {"include_findings": True, "kind": "finding"}},
@@ -576,8 +574,6 @@ def _incident_item(
 def _timeline_source_type(source: str | None) -> str:
     normalized = str(source or "").strip().lower()
     mapping = {
-        "ground_truth": "validation_matrix",
-        "ground_truth_seed": "validation_matrix",
         "finding": "finding",
         "marked_event": "marked_event",
         "defender": "defender_detection",
@@ -594,8 +590,6 @@ def _timeline_source_type(source: str | None) -> str:
 def _timeline_provenance_badge(item: dict[str, Any]) -> str:
     confidence = str(item.get("confidence") or "").lower()
     source_type = str(item.get("source_type") or item.get("source") or "").lower()
-    if confidence == "ground_truth" or source_type == "validation_matrix":
-        return "Ground truth seed"
     if confidence == "analyst_verified":
         return "Analyst verified"
     if source_type == "finding":
@@ -666,13 +660,6 @@ def _classify_story_target(item: dict[str, Any]) -> dict[str, str]:
             "story_target_reason": "event link exists but exact process identity is uncertain",
             "story_primary_action": "Choose related process",
         }
-    if source_type == "validation_matrix":
-        return {
-            "story_target_type": "validation_item",
-            "story_target_confidence": "medium",
-            "story_target_reason": "validation-only summary",
-            "story_primary_action": "Open Validation Detail",
-        }
     if item.get("search_url"):
         return {
             "story_target_type": "evidence_bundle",
@@ -690,8 +677,6 @@ def _classify_story_target(item: dict[str, Any]) -> dict[str, str]:
 
 def _curation_defaults(source: str, *, case_mode: str = "investigation") -> dict[str, str]:
     source_type = _timeline_source_type(source)
-    if source_type == "validation_matrix":
-        return {"source_type": source_type, "status": "accepted", "confidence": "ground_truth"}
     if source_type in {"finding", "marked_event"}:
         return {"source_type": source_type, "status": "accepted", "confidence": "analyst_verified"}
     if case_mode in {"validation", "demo", "training"}:
@@ -1203,51 +1188,6 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
         except Exception as exc:  # noqa: BLE001
             warnings.append(f"Memory source could not be loaded: {exc}")
 
-    ground_truth_enabled = should_show_validation_matrix(case_id, case_mode, validation_mode_enabled=get_settings().validation_features_enabled)
-    if "ground_truth" in source_set and ground_truth_enabled:
-        for seed in VALIDATION_SEED_QUERIES:
-            try:
-                search_params = {
-                    "q": seed["query"],
-                    "host": seed["host"],
-                    "artifact_type": seed.get("artifact_type"),
-                    "page": 1,
-                    "page_size": 1,
-                    "sort": "timestamp_asc",
-                    "include_facets": False,
-                }
-                _total, rows, seed_warnings, _facets = search_events_v2(case_id, search_params, db=db)
-                warnings.extend(seed_warnings[:1])
-                if rows:
-                    item = _event_to_incident_item(
-                        case_id,
-                        rows[0],
-                        source="ground_truth_seed",
-                        phase=str(seed["phase"]),
-                        query=str(seed["query"]),
-                        title=str(seed["title"]),
-                        summary=str(seed["summary"]),
-                    )
-                    item["phase"] = str(seed["phase"])
-                    item["phase_confidence"] = "high"
-                    items.append(item)
-                elif include_low_signal:
-                    items.append(
-                        _incident_item(
-                            case_id,
-                            source="ground_truth_seed",
-                            title=str(seed["title"]),
-                            summary=f"No direct indexed event matched `{seed['query']}`. Keep as a validation gap or search manually.",
-                            host=str(seed["host"]),
-                            phase=str(seed["phase"]),
-                            phase_confidence="high",
-                            query=str(seed["query"]),
-                            notes="No direct match in draft builder.",
-                        )
-                    )
-            except Exception as exc:  # noqa: BLE001
-                warnings.append(f"Ground truth seed `{seed['query']}` could not be searched: {exc}")
-
     items = _apply_curation_metadata(items, case_mode=case_mode)
     items = _canonicalize_incident_item_hosts(db, case_id, items)
     items = _apply_story_target_metadata(items)
@@ -1278,7 +1218,6 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
         "warnings": _dedupe([str(warning) for warning in warnings if str(warning).strip()])[:20],
         "no_mft_flood_default": True,
         "available_sources": DEFAULT_INCIDENT_TIMELINE_SOURCES
-        + (["ground_truth"] if ground_truth_enabled else [])
         + ["sigma_detections", "selected_search", "mft_user_activity"],
         "phase_options": INCIDENT_PHASES,
         "cache": {
@@ -1422,7 +1361,6 @@ def build_incident_timeline_story_bundle(db: Session, case_id: str, item_id: str
         "view_activity_around_time": _incident_search_around_url(case_id, item, query=file_basename or file_reference or query),
         "search_exact_command_reference": _incident_search_url(case_id, {**item, "query": exact_reference_query}) if exact_reference_query else None,
         "execution_story": item.get("execution_story_url") if target_type == "exact_process" else None,
-        "validation_matrix": f"/cases/{case_id}/validation-matrix" if item.get("source_type") == "validation_matrix" else None,
         "open_artifact_evidence": f"/cases/{case_id}/artifacts" + (f"?host={host}" if host else ""),
     }
     text = " ".join(str(item.get(key) or "") for key in ("title", "summary", "query"))

@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type DfirCase, type SemiAutoActivity } from "../api/client";
-import DebugExportDialog from "../components/DebugExportDialog";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { compareValues, nextSortDirection, type SortDirection } from "../lib/sorting";
 
@@ -144,7 +143,6 @@ export default function SemiAutoAnalysis() {
   const [caseId, setCaseId] = useState(activeCaseId);
   const [timeFrom, setTimeFrom] = useState("");
   const [timeTo, setTimeTo] = useState("");
-  const [debugExportOpen, setDebugExportOpen] = useState(false);
   const [tableSortState, setTableSortState] = useState<Record<string, { key: string; direction: SortDirection }>>({});
   const casesQuery = useQuery({ queryKey: ["cases"], queryFn: api.listCases, staleTime: 30_000, refetchOnWindowFocus: false });
   const normalizedTimeFrom = timeFrom ? new Date(timeFrom).toISOString() : undefined;
@@ -334,9 +332,6 @@ export default function SemiAutoAnalysis() {
           <button onClick={() => void exportPdf()} disabled={!caseId || !analysis} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm text-muted disabled:opacity-50">
             Export report (.pdf)
           </button>
-          <button onClick={() => setDebugExportOpen(true)} disabled={!caseId} className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm text-muted disabled:opacity-50">
-            Export analysis debug pack
-          </button>
           {analysis ? <span className="rounded-2xl border border-line bg-abyss/70 px-4 py-3 text-sm text-muted">Generated at {analysis.generated_at}</span> : null}
         </div>
         {analysis ? (
@@ -390,30 +385,6 @@ export default function SemiAutoAnalysis() {
       {stopMutation.error instanceof Error ? <div className="rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger">Could not stop analysis: {stopMutation.error.message}</div> : null}
       {analysisStatusQuery.data?.status === "failed" && analysisStatusQuery.data.error_message ? (
         <div className="rounded-2xl border border-danger/30 bg-danger/10 p-4 text-sm text-danger">Semi-automatic analysis failed: {analysisStatusQuery.data.error_message}</div>
-      ) : null}
-      {caseId ? (
-        <DebugExportDialog
-          open={debugExportOpen}
-          onClose={() => setDebugExportOpen(false)}
-          caseId={caseId}
-          title="Export analysis debug pack"
-          defaultRequest={{
-            scope: "semiauto",
-            include_raw_samples: false,
-            include_raw_xml: false,
-            include_source_paths: true,
-            include_full_raw: false,
-            max_events_per_type: 25,
-            max_field_length: 2000,
-            redact_secrets: true,
-            ui_context: {
-              page: "SemiAutoAnalysis",
-              selected_case: caseId,
-              time_from: normalizedTimeFrom,
-              time_to: normalizedTimeTo,
-            },
-          }}
-        />
       ) : null}
       {!analysis && !isActive && caseId ? (
         <div className="rounded-2xl border border-line bg-panel/70 p-4 text-sm text-muted">Run analysis to generate the semi-automatic summary for this case.</div>

@@ -123,7 +123,7 @@ See `.env.example` for the full, authoritative list with defaults.
 
 Persistent Docker volumes:
 
-- `postgres_data`: cases, evidence metadata, findings, reports, rules, validation matrix, timeline metadata.
+- `postgres_data`: cases, evidence metadata, findings, reports, rules, timeline metadata.
 - `opensearch_data`: indexed events and search data.
 
 Repository data directory:
@@ -227,17 +227,6 @@ Additional operational hygiene:
 - Do not enable host-path import unless you need it.
 - Run YARA scans with size and scope limits.
 - Avoid publishing `postgres`, `redis`, and `opensearch` to the host unless necessary.
-
-## Validation Datasets
-
-The main branch does not bundle evidence archives, public challenge datasets or answer keys. Validation datasets should be maintained as separate packages and imported only into environments where users expect QA or training material.
-
-Relevant docs:
-
-- [Validation workflow](../validation/README.md)
-- [Validation matrix format](../validation/validation-matrix-format.md)
-
-If you import a validation dataset, treat it as evidence data and back it up like any other case.
 
 ## Operational Smoke After Deploy
 

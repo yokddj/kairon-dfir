@@ -18,7 +18,6 @@ const logoutMock = vi.fn();
 const activeCaseState: any = {
   activeCaseId: "case-1",
   activeCase: { id: "case-1", name: "Case Alpha" },
-  caseContext: { summary: { validation_matrix: { show_validation_matrix: false } } },
   setActiveCaseId: vi.fn(),
 };
 
@@ -101,8 +100,6 @@ describe("registry-driven sidebar", () => {
     }
     const tools = screen.getByText("Technical Tools").closest("section")!;
     expect(within(tools).getByRole("link", { name: "Artifact Views" })).toHaveAttribute("href", "/cases/case-1/artifacts");
-    expect(within(tools).getByRole("link", { name: "Validation Matrix" })).toHaveAttribute("href", "/cases/case-1/validation-matrix");
-    expect(within(tools).getByRole("link", { name: "Debug Export" })).toHaveAttribute("href", "/cases/case-1/debug-export");
   });
 
   it("renders exactly one row per surface, in the order the backend returns", async () => {

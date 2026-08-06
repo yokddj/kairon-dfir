@@ -372,7 +372,3 @@ Used to avoid field explosion when indexing EVTX with variable payloads. The mor
 - `network` adds `network.*`, `wlan.*`, and `dns.*` namespaces with explicit `dynamic: false` mapping, parsing of WLAN XML / `hosts` / DNS-network CSV-JSON-TXT, classification of WLAN AutoConfig EVTX and Registry `NetworkList` / `Tcpip`, plus semi-automatic correlation with Browser, BITS, PowerShell, Defender, Cloud Sync, SRUM, and MFT.
 
 In addition to the external pipeline (EvtxECmd/LECmd), there is also a foundation of native raw parsers for direct parsing of EVTX and LNK.
-
-## Debug Export Pack
-
-The architecture includes a validation/debug export service that generates a reduced ZIP per case, evidence, search, artifact view, or semi-automatic analysis. The pack reuses evidence manifests, samples indexed from OpenSearch, rule results, semi-automatic analysis, and ingest errors, with redaction and truncation on by default to make external review easier without sharing the full evidence.

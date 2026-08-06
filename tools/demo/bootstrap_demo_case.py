@@ -212,22 +212,11 @@ def bootstrap_demo_case(*, base_url: str = BASE_URL) -> dict:
     report_preview = client.get(f"/cases/{case_id}/reports/{report_id}/preview")
     markdown_bytes = client.download(f"/cases/{case_id}/reports/{report_id}/export", query={"format": "markdown"})
     pdf_bytes = client.download(f"/cases/{case_id}/reports/{report_id}/export", query={"format": "pdf"})
-    debug_bytes = client.download(
-        f"/cases/{case_id}/debug-export",
-        payload={
-            "scope": "case",
-            "artifact_types": ["email", "user_activity", "ntfs", "windows_ui", "cloud", "usb"],
-            "include_source_paths": True,
-            "redact_secrets": True,
-        },
-    )
 
     markdown_path = OUTPUT_ROOT / f"{case_id}-demo-report.md"
     pdf_path = OUTPUT_ROOT / f"{case_id}-demo-report.pdf"
-    debug_path = OUTPUT_ROOT / f"{case_id}-debug-pack.zip"
     markdown_path.write_bytes(markdown_bytes)
     pdf_path.write_bytes(pdf_bytes)
-    debug_path.write_bytes(debug_bytes)
 
     search_check = client.get(f"/cases/{case_id}/search", {"q": "process.name:powershell.exe", "page_size": 5})
     timeline_check = client.get(f"/cases/{case_id}/timeline", {"mode": "investigation", "page_size": 25})
@@ -241,7 +230,6 @@ def bootstrap_demo_case(*, base_url: str = BASE_URL) -> dict:
         "key_events_count": len(bookmarks),
         "report_markdown_ok": bool(markdown_bytes),
         "report_pdf_ok": bool(pdf_bytes),
-        "debug_export_ok": bool(debug_bytes),
         "opensearch_discover_ready": True,
         "demo_zip_path": str(demo_zip),
         "report_preview_sections": len(report_preview.get("sections") or []),

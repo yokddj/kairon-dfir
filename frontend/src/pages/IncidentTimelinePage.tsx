@@ -16,8 +16,6 @@ const BASE_SOURCE_OPTIONS = [
   { id: "defender", label: "Defender" },
   { id: "memory", label: "Memory" },
 ];
-const GROUND_TRUTH_SOURCE_OPTION = { id: "ground_truth", label: "Validation seeds" };
-
 const TIMELINE_TABS = [
   { id: "official", label: "Official Timeline" },
   { id: "candidates", label: "Suggested Candidates" },
@@ -47,7 +45,6 @@ function sourceLabel(value: string | null | undefined) {
     open_artifact_evidence: "Open artifact evidence",
     search_exact_command_reference: "Search exact command/reference",
     execution_story: "Open Execution Story",
-    validation_matrix: "Open Validation Matrix",
   };
   if (value && labels[value]) return labels[value];
   return (value || "source")
@@ -80,7 +77,6 @@ function pivotTooltip(value: string) {
     open_artifact_evidence: "Open specialized artifact evidence linked to this item.",
     search_exact_command_reference: "Search the exact command or referenced string.",
     execution_story: "Open the exact process story when process identity is available.",
-    validation_matrix: "Open the training/validation ground-truth item context.",
   };
   return labels[value] || sourceLabel(value);
 }
@@ -94,7 +90,6 @@ function targetLabel(value: string | null | undefined) {
     lateral_movement: "Movement",
     file_artifact: "File",
     defender_detection: "Defender",
-    validation_item: "Validation",
     search_context: "Search context",
     none: "No exact story",
   };
@@ -134,11 +129,9 @@ function groupItems(items: IncidentTimelineItem[], groupBy: string) {
 
 export default function IncidentTimelinePage() {
   const { caseId: routeCaseId } = useParams();
-  const { activeCaseId, selectedHost, setActiveCaseId, caseContext } = useActiveCase();
+  const { activeCaseId, selectedHost, setActiveCaseId } = useActiveCase();
   const { effectiveTimezone } = useTimezonePreference();
   const caseId = routeCaseId || activeCaseId;
-  const showValidationMatrix = Boolean(caseContext?.summary?.validation_matrix?.show_validation_matrix);
-  const sourceOptions = useMemo(() => (showValidationMatrix ? [...BASE_SOURCE_OPTIONS, GROUND_TRUTH_SOURCE_OPTION] : BASE_SOURCE_OPTIONS), [showValidationMatrix]);
   const [sources, setSources] = useState<string[]>(BASE_SOURCE_OPTIONS.map((item) => item.id));
   const [hostFilter, setHostFilter] = useState<string[]>(selectedHost ? [selectedHost] : []);
   const [phaseFilter, setPhaseFilter] = useState<string[]>([]);
@@ -152,14 +145,6 @@ export default function IncidentTimelinePage() {
   const [exportStatus, setExportStatus] = useState("");
   const [regenerateStatus, setRegenerateStatus] = useState("");
   const [storyBundleItem, setStoryBundleItem] = useState<IncidentTimelineItem | null>(null);
-
-  useEffect(() => {
-    const allowedSources = new Set(sourceOptions.map((item) => item.id));
-    setSources((current) => {
-      const filtered = current.filter((item) => allowedSources.has(item));
-      return filtered.length ? filtered : sourceOptions.map((item) => item.id);
-    });
-  }, [sourceOptions]);
 
   useEffect(() => {
     if (routeCaseId && routeCaseId !== activeCaseId) {
@@ -274,11 +259,7 @@ export default function IncidentTimelinePage() {
               Curated reportable story of the incident built from reviewed evidence, findings and marked events. Use Search Timeline for broad event exploration.
             </p>
             <div className="mt-3 flex flex-wrap gap-2">
-              {caseContext?.summary?.validation_matrix?.show_validation_matrix ? (
-                <span className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 text-xs text-accent">Ground truth seed</span>
-              ) : (
-                <span className="rounded-full border border-line bg-abyss/70 px-3 py-1 text-xs text-muted">Start from marked events, findings, or high-confidence suggestions.</span>
-              )}
+              <span className="rounded-full border border-line bg-abyss/70 px-3 py-1 text-xs text-muted">Start from marked events, findings, or high-confidence suggestions.</span>
               <span className="rounded-full border border-line bg-abyss/70 px-3 py-1 text-xs text-muted">Raw MFT and broad EVTX excluded by default</span>
             </div>
           </div>
@@ -311,7 +292,7 @@ export default function IncidentTimelinePage() {
               Sources
             </div>
             <div className="mt-3 space-y-2">
-              {sourceOptions.map((option) => (
+              {BASE_SOURCE_OPTIONS.map((option) => (
                 <label key={option.id} className="flex items-center gap-2 rounded-xl border border-line/70 bg-abyss/50 px-3 py-2 text-sm text-muted">
                   <input
                     type="checkbox"
@@ -458,15 +439,9 @@ export default function IncidentTimelinePage() {
                     <FileText size={16} className="text-accent" />
                     <h2 className="font-semibold text-ink">Sources / Provenance</h2>
                   </div>
-                  {caseContext?.summary?.validation_matrix?.show_validation_matrix ? (
-                    <p className="mb-4 rounded-xl border border-accent/30 bg-accent/10 px-3 py-2 text-sm text-accent">
-                      This validation/training case includes timeline items seeded from imported ground truth. They are labeled as Ground truth seed.
-                    </p>
-                  ) : (
-                    <p className="mb-4 rounded-xl border border-line bg-abyss/60 px-3 py-2 text-sm text-muted">
-                      Normal investigations start with analyst-added items, findings, marked events, or accepted candidates.
-                    </p>
-                  )}
+                  <p className="mb-4 rounded-xl border border-line bg-abyss/60 px-3 py-2 text-sm text-muted">
+                    Normal investigations start with analyst-added items, findings, marked events, or accepted candidates.
+                  </p>
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                     {sourceSummary.map(([source, count]) => (
                       <div key={source} className="rounded-xl border border-line bg-abyss/60 p-3">

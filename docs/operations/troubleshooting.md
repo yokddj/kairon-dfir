@@ -128,7 +128,6 @@ If this does not happen:
 - check that the file ends in `.evtx`
 - check `Evidence & Ingest` to see if it was marked as `Detected: Windows Event Log (.evtx)`
 - if you're using a mounted path, verify that backend and worker see the same path
-- export the `Debug Pack` and check `ingest_summary.json` / `ingest_plan.json`
 
 ## Uploaded RAW ZIP still not parsed
 
@@ -202,9 +201,6 @@ If the problem is naming rather than actual contamination:
 
 If volume drops significantly after a reingest:
 
-- export the debug pack
-- check `ingest_regression_report.json`
-- check `parser_audit.json`
 - check artifact selection filters
 
 ## Reprocess: findings, detections or key events changed
@@ -414,7 +410,7 @@ If YARA detections are missing but the rest of the validation flow works:
 
 - check `GET /api/rules/engines/status`
 - confirm whether `yara-python` is available in the backend image
-- treat it as a known non-blocking limitation if Sigma, findings, reports and debug export are healthy
+- treat it as a known non-blocking limitation if Sigma, findings and reports are healthy
 
 ## Rules or Detections do not show the expected result
 
@@ -460,14 +456,12 @@ If you need to clean up the rule inventory:
 - `Delete all imported rules` requires typing `DELETE RULES`
 - deleting rules or run records does not remove detections already generated
 
-## `stable_event_id` or reconciliation do not appear in debug export
+## `stable_event_id` or reconciliation do not appear in Search results
 
 Check:
 
-- `event_identity_report.json`
-- `reconciliation_report.json`
 - that the backend indexes `stable_event_id` and `event_fingerprint`
-- that `debug_export` is requesting those fields in `_source`
+- query for the field directly in `Search` (`stable_event_id:*`)
 
 If the runtime is using old containers:
 

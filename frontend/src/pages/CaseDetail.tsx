@@ -4,7 +4,6 @@ import { Link, Navigate, useNavigate, useParams, useSearchParams } from "react-r
 import { api, type DfirCase, type ResumableUploadSessionRead } from "../api/client";
 import ArtifactBadge from "../components/ArtifactBadge";
 import CreateFindingDialog from "../components/CreateFindingDialog";
-import DebugExportDialog from "../components/DebugExportDialog";
 import EvidenceIngestionWizard from "../components/EvidenceIngestionWizard";
 import EventTable from "../components/EventTable";
 import FindingsWorkspace from "../components/FindingsWorkspace";
@@ -98,7 +97,6 @@ export default function CaseDetail() {
   const [selectedEventIds, setSelectedEventIds] = useState<string[]>([]);
   const [selectedProcessingId, setSelectedProcessingId] = useState<string>("");
   const [findingDialogOpen, setFindingDialogOpen] = useState(false);
-  const [debugExportOpen, setDebugExportOpen] = useState(false);
   const [metadataEditorOpen, setMetadataEditorOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [ingestionWizardOpen, setIngestionWizardOpen] = useState(false);
@@ -367,9 +365,6 @@ export default function CaseDetail() {
           <button onClick={() => setMetadataEditorOpen(true)} className="rounded-full border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Edit case</button>
           {normalizedCaseStatus === "archived" ? <button onClick={() => caseStatusMutation.mutate("unarchive")} className="rounded-full border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Unarchive case</button> : <button onClick={() => window.confirm("Archive this case? Evidence and indexes are preserved.") && caseStatusMutation.mutate("archive")} className="rounded-full border border-line bg-white/5 px-4 py-2 text-sm text-muted">Archive case</button>}
           {normalizedCaseStatus === "closed" ? <button onClick={() => caseStatusMutation.mutate("reopen")} className="rounded-full border border-accent/40 bg-accent/10 px-4 py-2 text-sm text-accent">Reopen case</button> : <button onClick={() => window.confirm("Close this case? You can reopen it later.") && caseStatusMutation.mutate("close")} className="rounded-full border border-line bg-white/5 px-4 py-2 text-sm text-muted">Close case</button>}
-          <button onClick={() => setDebugExportOpen(true)} className="rounded-full border border-line bg-white/5 px-4 py-2 text-sm text-muted">
-            Export full case validation pack
-          </button>
           <button onClick={() => setDeleteDialogOpen(true)} className="rounded-full border border-danger/40 bg-danger/10 px-4 py-2 text-sm text-danger">
             Delete case
           </button>
@@ -396,7 +391,6 @@ export default function CaseDetail() {
               <Link to={`/cases/${caseId}/timeline`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Timeline</Link>
               <Link to={`/cases/${caseId}/artifacts`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Artifact Search</Link>
               <Link to={`/cases/${caseId}/findings`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Run correlation in Findings</Link>
-              <Link to={`/cases/${caseId}/debug-export`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Debug Export</Link>
               {siemLinksQuery.data?.discover_url ? (
                 <a href={siemLinksQuery.data.discover_url} target="_blank" rel="noreferrer" className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">
                   Open in OpenSearch
@@ -916,29 +910,6 @@ export default function CaseDetail() {
           </div>
         </div>
       ) : null}
-      <DebugExportDialog
-        open={debugExportOpen}
-        onClose={() => setDebugExportOpen(false)}
-        caseId={caseId}
-        title="Export full case validation pack"
-        defaultRequest={{
-          scope: "case",
-          include_raw_samples: false,
-          include_raw_xml: false,
-          include_source_paths: true,
-          include_full_raw: false,
-          max_events_per_type: 25,
-          max_field_length: 2000,
-          redact_secrets: true,
-          ui_context: {
-            page: "CaseDetail",
-            tab,
-            selected_case: caseId,
-            selected_event_ids: selectedEventIds,
-            query,
-          },
-        }}
-      />
       <DeleteCaseDialog
         open={deleteDialogOpen}
         caseItem={caseQuery.data ?? null}

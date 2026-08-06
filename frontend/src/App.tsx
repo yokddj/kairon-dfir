@@ -27,7 +27,6 @@ const CommandHistoryPage = lazy(() => import("./pages/CommandHistoryPage"));
 const LinuxAuthenticationPage = lazy(() => import("./pages/LinuxAuthenticationPage"));
 const IncidentTimelinePage = lazy(() => import("./pages/IncidentTimelinePage"));
 const TimelinePage = lazy(() => import("./pages/TimelinePage"));
-const ValidationMatrixPage = lazy(() => import("./pages/ValidationMatrixPage"));
 const CaseReportsPage = lazy(() => import("./pages/CaseReportsPage"));
 const EvidenceDetail = lazy(() => import("./pages/EvidenceDetail"));
 const Search = lazy(() => import("./pages/Search"));
@@ -40,7 +39,6 @@ const Detections = lazy(() => import("./pages/Detections"));
 const SystemPage = lazy(() => import("./pages/SystemPage"));
 const DocsPage = lazy(() => import("./pages/DocsPage"));
 const ParserCoveragePage = lazy(() => import("./pages/ParserCoveragePage"));
-const DebugExportPage = lazy(() => import("./pages/DebugExportPage"));
 const MemoryEvidencePage = lazy(() => import("./pages/MemoryEvidencePage"));
 const WorkbenchOverviewPage = lazy(() => import("./pages/WorkbenchOverviewPage"));
 const MemoryProcessEntityPage = lazy(() => import("./pages/MemoryProcessEntityPage"));
@@ -163,12 +161,10 @@ export default function App() {
                         <Route path="/cases/:caseId/w/execution/command-history" element={<CommandHistoryPage />} />
                         <Route path="/cases/:caseId/artifacts" element={<ArtifactExplorer />} />
                         <Route path="/cases/:caseId/incident-timeline" element={<IncidentTimelinePage />} />
-                        <Route path="/cases/:caseId/validation-matrix" element={<ValidationMatrixPage />} />
                         <Route path="/cases/:caseId/evidence" element={<CaseDetail />} />
                         <Route path="/cases/:caseId/ingest" element={<LegacyCaseParamRedirect suffix="/evidence?tab=processing" preserveQuery={false} />} />
                         <Route path="/cases/:caseId/detections" element={<Detections />} />
                         <Route path="/cases/:caseId/reports" element={<CaseReportsPage />} />
-                        <Route path="/cases/:caseId/debug-export" element={<DebugExportPage />} />
                         <Route path="/cases/:caseId/w" element={<WorkbenchOverviewPage workbenchId="windows" />} />
                         <Route path="/cases/:caseId/l" element={<WorkbenchOverviewPage workbenchId="linux" />} />
                         <Route path="/cases/:caseId/m" element={<WorkbenchOverviewPage workbenchId="memory" />} />

@@ -86,10 +86,6 @@ vi.mock("../api/client", () => ({
   },
 }));
 
-vi.mock("../components/DebugExportDialog", () => ({
-  default: () => null,
-}));
-
 const notifyMock = vi.fn();
 vi.mock("../context/NotificationsContext", () => ({
   useNotifications: () => ({ notify: notifyMock }),
@@ -910,7 +906,6 @@ describe.skip("EvidenceDetail reprocess UX", () => {
         host_enrichment: { id: "host_enrichment", label: "Enrich hosts", group: "on_demand", module_category: "advanced", status: "beta", badge: "Advanced/Beta", requires: ["indexed_artifacts"], case_route: "/cases/case-1/hosts", description: "Optional host identity and context enrichment after ingest completes.", warning: "May be slow. Use only when host context is needed beyond Search/Timeline." },
         deep_retry: { id: "deep_retry", label: "Deep retry problematic artifacts", group: "on_demand", module_category: "advanced", status: "beta", badge: "Advanced/Beta", requires: ["problematic_artifacts"], evidence_route: "/evidences/evidence-1", description: "Retry only the artifacts that failed or were deferred, preserving the main ingest result.", warning: "Potentially slow. Use only when the main ingest has already finished and you need deeper recovery." },
         benchmark: { id: "benchmark", label: "Benchmark & tuning", group: "on_demand", module_category: "advanced", status: "advanced", badge: "Advanced/Beta", requires: ["admin"], evidence_route: "/evidences/evidence-1", description: "Advanced benchmarking for test or demo evidence. Not part of the main ingest flow.", warning: "May be slow and should only be used for test/demo evidence." },
-        advanced_exports: { id: "advanced_exports", label: "Advanced debug export", group: "on_demand", module_category: "advanced", status: "advanced", badge: "Advanced", requires: ["indexed_artifacts"], case_route: "/cases/case-1/debug-export", description: "Export technical validation packs and low-level ingest diagnostics on demand.", warning: "For debugging and validation. Not part of the main analyst workflow." },
       },
     });
     getEvidenceSearchSummaryMock.mockResolvedValue({
@@ -2359,7 +2354,6 @@ describe.skip("EvidenceDetail ingest progress diagnostics", () => {
         host_enrichment: { id: "host_enrichment", label: "Enrich hosts", group: "on_demand", module_category: "advanced", status: "beta", badge: "Advanced/Beta", requires: ["indexed_artifacts"], case_route: "/cases/case-1/hosts", description: "Optional host identity and context enrichment after ingest completes." },
         deep_retry: { id: "deep_retry", label: "Deep retry problematic artifacts", group: "on_demand", module_category: "advanced", status: "beta", badge: "Advanced/Beta", requires: ["problematic_artifacts"], evidence_route: "/evidences/evidence-1", description: "Retry only the artifacts that failed or were deferred, preserving the main ingest result." },
         benchmark: { id: "benchmark", label: "Benchmark & tuning", group: "on_demand", module_category: "advanced", status: "advanced", badge: "Advanced/Beta", requires: ["admin"], evidence_route: "/evidences/evidence-1", description: "Advanced benchmarking for test or demo evidence. Not part of the main ingest flow." },
-        advanced_exports: { id: "advanced_exports", label: "Advanced debug export", group: "on_demand", module_category: "advanced", status: "advanced", badge: "Advanced", requires: ["indexed_artifacts"], case_route: "/cases/case-1/debug-export", description: "Export technical validation packs and low-level ingest diagnostics on demand." },
       },
     });
     previewReprocessEvidenceMock.mockResolvedValue({

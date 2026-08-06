@@ -21,16 +21,14 @@ from app.models.finding import Finding
 from app.models.incident_timeline_draft import IncidentTimelineDraft
 from app.models.case_report import CaseReport
 from app.models.case_host import CaseHost
-from app.schemas.debug_export import DebugExportRequest
 from app.services import case_deletion
-from app.services.debug_export import build_execution_story, build_process_tree_bundle, build_process_tree_expansion, build_process_tree_focused, generate_debug_pack
+from app.services.process_tree import build_execution_story, build_process_tree_bundle, build_process_tree_expansion, build_process_tree_focused
 from app.services.host_attribution import build_host_attribution
 from app.services.host_identity import build_case_host_candidates, get_case_hosts
 from app.services.case_capabilities import build_case_capabilities
 from app.services.case_state import build_case_next_actions, derive_case_investigation_state
 from app.services.indexing_profiles import evidence_has_active_indexing
 from app.services.stats_service import count_detections, count_events, count_findings
-from app.services.validation_matrix import get_validation_matrix, render_validation_matrix_markdown, validation_matrix_visibility
 from app.schemas.case import CaseCreate, CaseRead, CaseUpdate, normalize_case_tags
 from app.workers.tasks import enqueue_semi_auto_analysis
 
@@ -352,12 +350,6 @@ def _build_case_context(db: Session, case_id: str) -> dict:
 
     serialized_case = CaseRead.model_validate(_apply_case_counts(db, item)).model_dump(mode="json")
     settings = get_settings()
-    visibility = validation_matrix_visibility(
-        case_id,
-        getattr(item, "mode", None),
-        validation_mode_enabled=settings.validation_features_enabled,
-        demo_cases_enabled=settings.demo_cases_enabled,
-    )
     timeline_counts = _timeline_curation_counts(db, case_id)
     marked_events_count = db.query(EventMarking).filter(EventMarking.case_id == case_id).count()
     reports_count = db.query(CaseReport).filter(CaseReport.case_id == case_id).count()
@@ -425,7 +417,6 @@ def _build_case_context(db: Session, case_id: str) -> dict:
                 "alias_candidates": len(host_candidates),
                 "rejected_candidates": len(host_attribution.get("rejected_host_candidates") or []),
             },
-            "validation_matrix": visibility,
         },
     }
 
@@ -514,67 +505,6 @@ def get_case_capabilities(case_id: str, db: Session = Depends(get_db)) -> dict:
     if payload is None:
         raise HTTPException(status_code=404, detail="Case not found")
     return payload
-
-
-@router.get("/{case_id}/validation-matrix")
-def get_case_validation_matrix(
-    case_id: str,
-    host: str | None = Query(default=None),
-    phase: str | None = Query(default=None),
-    result: str | None = Query(default=None),
-    source_part: str | None = Query(default=None),
-    memory_required: bool | None = Query(default=None),
-    db: Session = Depends(get_db),
-) -> dict:
-    case = db.get(Case, case_id)
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
-    settings = get_settings()
-    visibility = validation_matrix_visibility(
-        case_id,
-        getattr(case, "mode", None),
-        validation_mode_enabled=settings.validation_features_enabled,
-        demo_cases_enabled=settings.demo_cases_enabled,
-    )
-    if visibility["show_validation_matrix"]:
-        matrix = get_validation_matrix(
-            case_id,
-            host=host,
-            phase=phase,
-            result=result,
-            source_part=source_part,
-            memory_required=memory_required,
-        )
-    else:
-        matrix = get_validation_matrix("__validation_features_disabled__")
-        matrix["case_id"] = case_id
-        matrix["warnings"] = ["Validation matrix is disabled for this investigation mode case."]
-    matrix["visibility"] = visibility
-    return matrix
-
-
-@router.get("/{case_id}/validation-matrix/export")
-def export_case_validation_matrix(case_id: str, db: Session = Depends(get_db)) -> Response:
-    case = db.get(Case, case_id)
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
-    settings = get_settings()
-    visibility = validation_matrix_visibility(
-        case_id,
-        getattr(case, "mode", None),
-        validation_mode_enabled=settings.validation_features_enabled,
-        demo_cases_enabled=settings.demo_cases_enabled,
-    )
-    if not visibility["show_validation_matrix"]:
-        raise HTTPException(status_code=403, detail="Validation matrix is disabled for this case")
-    matrix = get_validation_matrix(case_id)
-    content = render_validation_matrix_markdown(matrix)
-    filename = f"validation-matrix-{case_id}.md"
-    return Response(
-        content=content,
-        media_type="text/markdown; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
-    )
 
 
 @router.patch("/{case_id}", response_model=CaseRead)
@@ -669,83 +599,6 @@ def delete_case(case_id: str, db: Session = Depends(get_db)) -> dict:
             "cleanup_errors": result.cleanup_errors,
         },
     }
-
-
-@router.post("/{case_id}/debug-export")
-def export_debug_pack(case_id: str, payload: DebugExportRequest, db: Session = Depends(get_db)) -> Response:
-    try:
-        zip_bytes, filename = generate_debug_pack(db, case_id, payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Debug export failed for case %s", case_id)
-        raise HTTPException(status_code=500, detail=f"Debug export failed: {exc.__class__.__name__}: {exc}") from exc
-    return Response(
-        content=zip_bytes,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Access-Control-Expose-Headers": "Content-Disposition",
-        },
-    )
-
-
-@router.get("/{case_id}/debug-export/download")
-def download_debug_pack(
-    case_id: str,
-    scope: str = Query(default="case"),
-    evidence_id: str | None = Query(default=None),
-    artifact_types: str | None = Query(default=None),
-    include_raw_samples: bool = Query(default=False),
-    include_raw_xml: bool = Query(default=False),
-    include_source_paths: bool = Query(default=True),
-    include_full_raw: bool = Query(default=False),
-    max_events_per_type: int = Query(default=25, ge=1, le=250),
-    max_field_length: int = Query(default=2000, ge=200, le=20000),
-    redact_secrets: bool = Query(default=True),
-    include_cached_semiauto: bool = Query(default=True),
-    rebuild_semiauto_for_export: bool = Query(default=False),
-    ui_context_json: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-) -> Response:
-    ui_context = {"transport": "download_get", "scope": scope, "case_id": case_id}
-    if ui_context_json:
-        try:
-            parsed_ui_context = json.loads(ui_context_json)
-            if isinstance(parsed_ui_context, dict):
-                ui_context.update(parsed_ui_context)
-        except Exception:  # noqa: BLE001
-            ui_context["ui_context_parse_error"] = True
-    payload = DebugExportRequest(
-        scope=scope,
-        evidence_id=evidence_id,
-        artifact_types=[item for item in (artifact_types or "").split(",") if item],
-        include_raw_samples=include_raw_samples,
-        include_raw_xml=include_raw_xml,
-        include_source_paths=include_source_paths,
-        include_full_raw=include_full_raw,
-        max_events_per_type=max_events_per_type,
-        max_field_length=max_field_length,
-        redact_secrets=redact_secrets,
-        include_cached_semiauto=include_cached_semiauto,
-        rebuild_semiauto_for_export=rebuild_semiauto_for_export,
-        ui_context=ui_context,
-    )
-    try:
-        zip_bytes, filename = generate_debug_pack(db, case_id, payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:  # noqa: BLE001
-        logger.exception("Debug export download failed for case %s", case_id)
-        raise HTTPException(status_code=500, detail=f"Debug export failed: {exc.__class__.__name__}: {exc}") from exc
-    return Response(
-        content=zip_bytes,
-        media_type="application/zip",
-        headers={
-            "Content-Disposition": f'attachment; filename="{filename}"',
-            "Access-Control-Expose-Headers": "Content-Disposition",
-        },
-    )
 
 
 @router.get("/{case_id}/process-tree")

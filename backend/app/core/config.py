@@ -412,7 +412,6 @@ class Settings(BaseSettings):
     dfir_allow_host_path_import: bool = False
     dfir_allowed_evidence_roots: str = "/mnt/evidence,/data/evidence,/cases"
     dfir_enable_demo_cases: bool = False
-    dfir_enable_validation_features: bool = False
     dfir_default_case_mode: str = "investigation"
     kairon_public_url: str = os.getenv("KAIRON_PUBLIC_URL", "http://localhost:5173")
     kairon_deployment_mode: str = os.getenv("KAIRON_DEPLOYMENT_MODE", "localhost")
@@ -455,10 +454,6 @@ class Settings(BaseSettings):
     @property
     def demo_cases_enabled(self) -> bool:
         return bool(self.dfir_enable_demo_cases)
-
-    @property
-    def validation_features_enabled(self) -> bool:
-        return bool(self.dfir_enable_validation_features)
 
     @property
     def default_case_mode(self) -> str:

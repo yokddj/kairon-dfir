@@ -25,8 +25,6 @@ This file documents the current task contract for the Search-first DFIR flow.
 
 - `app.workers.tasks.run_case_semi_auto_analysis`
   - Queue: `dfir-analysis`
-- `app.services.debug_export.generate_debug_pack`
-  - Queue: inline
 - `app.services.ingest_benchmarks.create_ingest_benchmark`
   - Queue: `dfir-ingest`
 

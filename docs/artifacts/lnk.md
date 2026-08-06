@@ -141,7 +141,6 @@ Today LNK feeds:
 - `Artifact Explorer`
 - `Investigation Timeline`
 - `Semi-automated Analysis`
-- `Debug Export Pack`
 
 ## What the semi-automated analysis shows
 

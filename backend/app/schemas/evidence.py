@@ -220,7 +220,6 @@ class EvidenceBenchmarkRead(BaseModel):
     indexing_seconds: float | None = None
     db_seconds: float | None = None
     finalizer_seconds: float | None = None
-    debug_export_seconds: float | None = None
     records_read: int | None = None
     records_indexed: int | None = None
     events_indexed: int | None = None

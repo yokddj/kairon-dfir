@@ -115,7 +115,6 @@ describe("CaseOverviewPage", () => {
     expect(screen.getByText(/Review Artifacts/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Add more evidence/i })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Generate Report/i })).toBeInTheDocument();
-    expect(screen.queryByText(/Review Validation Matrix/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Open Analyst Playbook/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Open Source Traceability/i)).not.toBeInTheDocument();
     expect(await screen.findByText(/Official: 1 · Candidates: 1 · Needs review: 1/i)).toBeInTheDocument();

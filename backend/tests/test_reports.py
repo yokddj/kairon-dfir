@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from fastapi import HTTPException
 
-from app.models.case import Case, CaseMode
+from app.models.case import Case
 from app.models.case_report import CaseReport
 from app.models.detection_result import DetectionResult
 from app.models.event_marking import EventMarking
@@ -218,31 +218,6 @@ def test_create_draft_uses_generic_title_when_case_name_missing() -> None:
     assert report["title"] == "Kairon DFIR Investigation Report - Case 12345678"
 
 
-def test_create_draft_includes_ground_truth_only_for_validation_cases(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _SettingsDisabled:
-        validation_features_enabled = False
-
-    class _SettingsEnabled:
-        validation_features_enabled = True
-
-    monkeypatch.setattr(report_service, "get_settings", lambda: _SettingsDisabled())
-    normal_case = Case(id="normal-case", name="Normal investigation", status="open")
-    normal_db = _FakeDb(case=normal_case, findings=[], bookmarks=[])
-    normal_report = report_service.create_case_report_draft(normal_db, normal_case.id, {"auto_select": False})
-
-    validation_case = Case(id="validation-case", name="Validation sample", status="open", mode=CaseMode.validation)
-    disabled_db = _FakeDb(case=validation_case, findings=[], bookmarks=[])
-    disabled_report = report_service.create_case_report_draft(disabled_db, validation_case.id, {"auto_select": False})
-
-    monkeypatch.setattr(report_service, "get_settings", lambda: _SettingsEnabled())
-    enabled_db = _FakeDb(case=validation_case, findings=[], bookmarks=[])
-    validation_report = report_service.create_case_report_draft(enabled_db, validation_case.id, {"auto_select": False})
-
-    assert normal_report["filters"]["include_ground_truth_coverage"] is False
-    assert disabled_report["filters"]["include_ground_truth_coverage"] is False
-    assert validation_report["filters"]["include_ground_truth_coverage"] is True
-
-
 def test_preview_contains_core_sections_and_respects_disabled_sections(monkeypatch: pytest.MonkeyPatch) -> None:
     case = Case(id="case-1", name="Movistar", status="open", timezone="UTC")
     finding = _finding("finding-1", title="Office spawned PowerShell", severity=FindingSeverity.high, status=FindingStatus.confirmed)
@@ -385,22 +360,6 @@ def test_preview_and_markdown_include_command_history_and_execution_story(monkey
             "summary": {"commands_total": 1, "suspicious_total": 1},
         },
     )
-    monkeypatch.setattr(
-        report_service,
-        "build_execution_story",
-        lambda *args, **kwargs: {
-            "target": {"name": "powershell.exe", "pid": 6996},
-            "story": {
-                "parent_sentence": "Parent process could not be linked from available events.",
-                "children_sentence": "It launched powershell.exe PID 5528.",
-                "activity_sentence": "It produced 22 file events.",
-                "risk_sentence": "Suspicious because PowerShell execution policy bypass.",
-            },
-            "activity_groups": {"items": [{"group": "file", "count": 22}], "omitted_counts": {}},
-            "source_events": ["evt-ps"],
-        },
-    )
-
     preview = report_service.build_case_report_preview(db, "case-1", "report-1")
     command_section = next(section for section in preview["sections"] if section["id"] == "command_history")
 

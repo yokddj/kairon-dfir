@@ -51,13 +51,13 @@ Do not commit or upload private evidence to GitHub:
 - uploaded/extracted evidence under `data/`;
 - OpenSearch/Postgres volumes;
 - backups;
-- generated reports/debug exports.
+- generated reports.
 
 ## Reporting a Vulnerability
 
 This project does not yet have a dedicated security-disclosure contact configured. Until one is published here, please use GitHub's private reporting channel — repository **Security** tab → **Report a vulnerability** — instead of opening a public issue, so the report is not visible before a fix is available.
 
-Do not attach raw evidence, full reports, backups, debug export packs or screenshots with sensitive content to a vulnerability report unless there is an approved secure transfer path.
+Do not attach raw evidence, full reports, backups, or screenshots with sensitive content to a vulnerability report unless there is an approved secure transfer path.
 
 ## Bug Reports
 

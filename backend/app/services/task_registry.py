@@ -117,18 +117,6 @@ TASK_REGISTRY: dict[str, dict[str, Any]] = {
         "status": "stable",
         "notes": "Safe watchdog/reconciliation for benchmark and orphaned ingest state.",
     },
-    "app.services.debug_export.generate_debug_pack": {
-        "task_name": "advanced_debug_export",
-        "category": "advanced",
-        "queue": "inline",
-        "entrypoint": "app.services.debug_export.generate_debug_pack",
-        "allowed_ingest_modes": [USABLE_INGEST_MODE, FULL_FORENSIC_MODE],
-        "triggered_by": ["advanced_export_ui"],
-        "destructive": False,
-        "idempotent": False,
-        "status": "advanced",
-        "notes": "Diagnostic export outside the core evidence-to-search workflow.",
-    },
     "app.services.ingest_benchmarks.create_ingest_benchmark": {
         "task_name": "benchmark_tuning",
         "category": "advanced",

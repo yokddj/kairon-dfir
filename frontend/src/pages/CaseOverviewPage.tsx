@@ -189,8 +189,6 @@ export default function CaseOverviewPage() {
     .slice(0, 5);
   const readyEvidence = context?.evidences.filter((evidence) => evidence.status === "completed" || evidence.status === "completed_with_warnings").length ?? 0;
   const hostNames = (context?.hosts ?? []).map((host) => host.display_name || host.canonical_name).filter(Boolean);
-  const validationVisibility = context?.summary?.validation_matrix;
-  const showValidationMatrix = Boolean(validationVisibility?.show_validation_matrix);
   const timelineItems = timelineQuery.data?.items ?? [];
   const officialTimelineCount = investigationState?.official_timeline_count ?? timelineItems.filter((item) => item.status === "accepted").length;
   const candidateTimelineCount = investigationState?.candidate_timeline_count ?? timelineItems.filter((item) => item.status === "candidate").length;
@@ -319,20 +317,7 @@ export default function CaseOverviewPage() {
           <span className="rounded-full border border-line bg-abyss/70 px-3 py-1">Investigation-ready evidence: {readyEvidence}/{context.evidences.length}</span>
           {investigationState ? <span className="rounded-full border border-line bg-abyss/70 px-3 py-1">Active jobs: {investigationState.active_job_count}</span> : null}
           {hostNames.length ? <span className="rounded-full border border-line bg-abyss/70 px-3 py-1">Hosts: {hostNames.join(", ")}</span> : null}
-          {validationVisibility && validationVisibility.mode !== "investigation" ? <span className="rounded-full border border-accent/40 bg-accent/10 px-3 py-1 text-accent">{validationVisibility.label}</span> : null}
         </div>
-        {showValidationMatrix && currentState === "empty_case" ? (
-          <div className="mt-4 rounded-2xl border border-accent/30 bg-accent/10 px-4 py-3 text-sm text-accent">
-            Demo metadata is available, but evidence must be uploaded/indexed to activate pivots.
-          </div>
-        ) : null}
-        {showValidationMatrix ? (
-          <div className="mt-3 flex flex-wrap gap-2">
-            <Link to={`/cases/${caseId}/validation-matrix`} className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">Review Validation Matrix</Link>
-            <Link to="/docs/generic-demo-guide" className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Demo Guide</Link>
-            <Link to="/docs/validation-matrix-format" className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">Open Validation Format</Link>
-          </div>
-        ) : null}
         <details className="mt-4 rounded-2xl border border-line bg-abyss/50 p-3 text-sm text-muted">
           <summary className="cursor-pointer text-ink">Known limitations for this case</summary>
           <ul className="mt-2 list-disc space-y-1 pl-5">

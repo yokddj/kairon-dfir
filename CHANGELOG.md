@@ -34,6 +34,11 @@
 - Stale indexing-plan completion state now reconciles correctly instead of leaving a plan looking incomplete after it finished.
 - Memory tab parameter routing and the Memory runs evidence route.
 
+### Removed
+
+- Debug Export (the technical ZIP export of ingest, process-graph, and rules diagnostics). Its shared process-tree/execution-story code was decoupled into `app/services/process_tree.py` and continues to power the `/process-tree`, `/process-tree/expand`, `/process-tree/focused`, and `/execution-story` endpoints as well as correlation findings.
+- Validation Matrix (the demo/training ground-truth coverage view and its report section, timeline seeding, and case-mode visibility gating). The underlying case mode classification (`investigation`/`demo`/`training`/`validation`) and demo cases remain.
+
 ## 0.9.0-beta - 2026-07-18
 
 ### Highlights

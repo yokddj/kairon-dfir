@@ -6,7 +6,6 @@ import {
   GitCommitHorizontal,
   Home,
   KeyRound,
-  ListChecks,
   LogOut,
   Search,
   ShieldAlert,
@@ -57,8 +56,6 @@ const INVESTIGATION_ITEMS: NavItem[] = [
 // the Investigation section above for attention.
 const TECHNICAL_TOOL_ITEMS: NavItem[] = [
   { to: "/cases/:caseId/artifacts", label: "Artifact Views", icon: FolderSearch2, requiresCase: true },
-  { to: "/cases/:caseId/validation-matrix", label: "Validation Matrix", icon: ListChecks, requiresCase: true },
-  { to: "/cases/:caseId/debug-export", label: "Debug Export", icon: FileArchive, requiresCase: true },
 ];
 
 function activeMemoryEvidenceId(pathname: string, activeCaseId: string): string | null {

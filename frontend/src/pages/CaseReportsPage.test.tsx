@@ -30,10 +30,6 @@ vi.mock("../api/client", () => ({
   },
 }));
 
-vi.mock("../components/DebugExportDialog", () => ({
-  default: () => null,
-}));
-
 vi.mock("../context/ActiveCaseContext", () => ({
   useActiveCase: () => ({
     setActiveCaseId: vi.fn(),

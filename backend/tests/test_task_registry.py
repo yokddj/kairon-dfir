@@ -332,6 +332,5 @@ def test_on_demand_module_registry_classifies_stable_and_advanced_modules() -> N
     assert registry["benchmark"]["module_category"] == "advanced"
     assert registry["host_enrichment"]["module_category"] == "advanced"
     assert registry["benchmark"]["auto_runs"] is False
-    assert registry["advanced_exports"]["auto_runs"] is False
     assert registry["deep_retry"]["status"] == "disabled"
     assert "No problematic artifacts" in str(registry["deep_retry"]["disabled_reason"])

@@ -385,8 +385,8 @@ def test_incident_story_bundle_returns_context_for_non_process_item(monkeypatch)
         "phase": "initial_access",
         "title": "sample.iso opened",
         "summary": "C:\\Users\\usera\\Downloads\\sample.iso",
-        "source": "validation_matrix",
-        "source_type": "validation_matrix",
+        "source": "manual_note",
+        "source_type": "manual_note",
         "artifact_type": "mft",
         "status": "accepted",
         "search_url": "/cases/case-1/search?q=sample.iso",
@@ -399,7 +399,6 @@ def test_incident_story_bundle_returns_context_for_non_process_item(monkeypatch)
     assert bundle["file_story"]["file_name"] == "sample.iso"
     assert bundle["file_story"]["found_in_mft"] is True
     assert bundle["pivots"]["find_this_file"] == "/cases/case-1/search?host=HOSTA&q=sample.iso"
-    assert bundle["pivots"]["validation_matrix"] == "/cases/case-1/validation-matrix"
 
 
 def test_file_reference_extraction_prefers_query_over_narrative():
