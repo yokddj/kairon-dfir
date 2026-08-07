@@ -4,6 +4,7 @@ import { Link } from "react-router-dom";
 import { useParams, useSearchParams } from "react-router-dom";
 import { api, type DfirCase, type EmailArtifactItem, type MotwItem, type StartupPersistenceItem } from "../api/client";
 import CreateFindingDialog from "../components/CreateFindingDialog";
+import EmptyState from "../components/EmptyState";
 import EventTable, { type EventView } from "../components/EventTable";
 import IndicatorResolutionPanel from "../components/IndicatorResolutionPanel";
 import InvestigationContext from "../components/InvestigationContext";
@@ -603,15 +604,33 @@ export default function ArtifactExplorer() {
   const hostIdFilter = searchParams.get("host_id") || activeHostId;
   const hostFilter = searchParams.get("host") || activeHost || selectedHost;
   const casesQuery = useQuery({ queryKey: ["cases"], queryFn: api.listCases });
-  const facetsQuery = useQuery({ queryKey: ["artifact-explorer-facets", caseId], queryFn: () => api.searchFacets({ caseId: caseId || undefined }) });
+  const facetsQuery = useQuery({
+    queryKey: ["artifact-explorer-facets", caseId, hostIdFilter],
+    queryFn: () => api.searchFacets({ caseId: caseId || undefined, hostId: hostIdFilter || undefined }),
+  });
+  // Startup & Persistence is a derived cross-artifact view (scheduled tasks,
+  // services, registry events, Defender config) with no single indexed
+  // artifact.type value of its own, so it can't be discovered via facets.
+  // Probe the dedicated endpoint (already host-aware) instead of hardcoding it.
+  const startupPersistencePresenceQuery = useQuery({
+    queryKey: ["artifact-explorer-startup-persistence-presence", caseId, hostFilter],
+    queryFn: () => api.getStartupPersistence(caseId!, { host: hostFilter ? [hostFilter] : undefined, page: 1, page_size: 1 }),
+    enabled: Boolean(caseId),
+    staleTime: 30_000,
+  });
   const artifactTypeOptions = Object.keys(facetsQuery.data?.["artifact.type"] ?? {});
   const artifactTypeSelectOptions = useMemo(() => {
+    const derivedExtras = (startupPersistencePresenceQuery.data?.total ?? 0) > 0 ? ["startup_persistence"] : [];
     return artifactOptions(
       artifactTypeOptions.filter((option) => !INTERNAL_ARTIFACT_TYPES_HIDDEN_FROM_MAIN.has(option)),
-      ["startup_persistence", "scheduled_task", "evtx", "motw", "email", ...artifactOptionsForPlatforms(["linux"])],
+      derivedExtras,
     );
-  }, [artifactTypeOptions]);
+  }, [artifactTypeOptions, startupPersistencePresenceQuery.data?.total]);
   const artifactNameOptions = Object.keys(facetsQuery.data?.["artifact.name"] ?? {});
+  const linuxShortcutOptions = useMemo(() => {
+    const present = new Set(artifactTypeOptions);
+    return artifactOptionsForPlatforms(["linux"], { shortcutOnly: true }).filter((viewName) => present.has(viewName));
+  }, [artifactTypeOptions]);
   const view = artifactEventView(artifactType) as EventView;
   const payload = useMemo(
     () => ({
@@ -899,27 +918,29 @@ export default function ArtifactExplorer() {
             .
           </p>
         </div>
-        <div className="mt-4 rounded-2xl border border-mint/25 bg-mint/10 p-4" data-testid="linux-artifacts-view">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mint">Linux Artifacts</p>
-              <p className="mt-1 text-sm text-muted">Jump to supported Linux artifact families discovered from Linux collections.</p>
+        {linuxShortcutOptions.length ? (
+          <div className="mt-4 rounded-2xl border border-mint/25 bg-mint/10 p-4" data-testid="linux-artifacts-view">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-mint">Linux Artifacts</p>
+                <p className="mt-1 text-sm text-muted">Jump to Linux artifact families actually present in this case.</p>
+              </div>
+              <span className="rounded-full border border-mint/30 bg-abyss/60 px-3 py-1 text-xs text-mint">Auto-discovery aware</span>
             </div>
-            <span className="rounded-full border border-mint/30 bg-abyss/60 px-3 py-1 text-xs text-mint">Auto-discovery aware</span>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {linuxShortcutOptions.map((viewName) => (
+                <button key={viewName} type="button" onClick={() => setArtifactType(viewName)} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted hover:border-mint/40 hover:text-mint">
+                  {artifactViewLabel(viewName)}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {artifactOptionsForPlatforms(["linux"], { shortcutOnly: true }).map((viewName) => (
-              <button key={viewName} type="button" onClick={() => setArtifactType(viewName)} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted hover:border-mint/40 hover:text-mint">
-                {artifactViewLabel(viewName)}
-              </button>
-            ))}
-          </div>
-        </div>
+        ) : null}
         {!caseId ? <p className="mt-2 text-sm text-amber-300">Artifact Views are available after selecting a case.</p> : null}
           {hostFilter || evidenceIdFilter ? (
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted">
-            <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{hostFilter ? `Host filter: ${hostFilter}` : "Host filter: all hosts"}</span>
-            <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{evidenceIdFilter ? `Evidence filter: ${evidenceIdFilter.slice(0, 8)}` : "Evidence filter: all evidence"}</span>
+            <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{hostFilter ? `Host filter: ${hostFilter}` : "Host filter: All hosts"}</span>
+            <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{evidenceIdFilter ? `Evidence filter: ${evidenceIdFilter.slice(0, 8)}` : "Evidence filter: All evidence"}</span>
             {hasHostFilter ? <button type="button" onClick={clearHostFilter} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-accent">Clear host filter</button> : null}
           </div>
         ) : null}
@@ -1163,14 +1184,33 @@ export default function ArtifactExplorer() {
         ) : null}
       </section>
       {!caseId ? (
-        <section className="rounded-[28px] border border-line bg-panel/50 p-6 text-sm text-muted">
-          Select a case and search processed artifacts.
-        </section>
+        <EmptyState
+          testId="artifact-explorer-no-case"
+          title="Select a case"
+          description="Artifact Views opens focused, per-family views (Windows Events, Prefetch, Registry, Linux logs, and more) over evidence that has already been parsed for a case. Choose a case above to search processed artifacts."
+        />
       ) : null}
       {caseId && !isStartupPersistenceView && !isMotwView && !isEmailView && !(result.data?.total ?? 0) && !result.isPending ? (
-        <section className="rounded-[28px] border border-line bg-panel/50 p-6 text-sm text-muted">
-          {hasHostFilter ? <>No artifacts for {hostFilter} with current filters. <button type="button" onClick={clearHostFilter} className="text-accent underline underline-offset-4">Clear the host filter</button> or check Processing.</> : "No processed artifacts are available yet. Upload or process evidence first."}
-        </section>
+        <EmptyState
+          testId="artifact-explorer-no-results"
+          title={hasHostFilter ? `No artifacts for ${hostFilter} with current filters` : "No processed artifacts yet"}
+          description={
+            hasHostFilter
+              ? "The selected host has no indexed data for the current artifact type/query, or its evidence hasn't finished processing yet."
+              : "This case has no parsed artifacts yet. Upload evidence and run indexing, then results will appear here automatically."
+          }
+          action={
+            hasHostFilter ? (
+              <button type="button" onClick={clearHostFilter} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted hover:border-accent/40 hover:text-accent">
+                Clear the host filter
+              </button>
+            ) : (
+              <Link to={`/cases/${caseId}/evidence`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted hover:border-accent/40 hover:text-accent">
+                Go to Evidence &amp; Ingest
+              </Link>
+            )
+          }
+        />
       ) : null}
       {isStartupPersistenceView ? (
         <StartupPersistenceView

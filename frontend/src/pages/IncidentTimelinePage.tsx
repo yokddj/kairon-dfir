@@ -8,6 +8,7 @@ import IndicatorResolutionPanel from "../components/IndicatorResolutionPanel";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { formatTimestamp } from "../lib/time";
+import EmptyState from "../components/EmptyState";
 
 const BASE_SOURCE_OPTIONS = [
   { id: "marked_events", label: "Marked events" },
@@ -580,11 +581,15 @@ export default function IncidentTimelinePage() {
               ))}
 
               {activeTab !== "sources" && !visibleItems.length ? (
-                <div className="rounded-2xl border border-line bg-panel/70 p-6 text-sm text-muted">
-                  {activeTab === "official"
-                    ? "No official timeline yet. Add marked events, create findings, or review suggested candidates."
-                    : "No suggested timeline candidates matched the selected sources and filters."}
-                </div>
+                <EmptyState
+                  testId="incident-timeline-empty-state"
+                  title={activeTab === "official" ? "No official timeline yet" : "No suggested candidates"}
+                  description={
+                    activeTab === "official"
+                      ? "The Incident Timeline is a curated, reportable chronology you build by hand — it starts empty for every case. Promote a marked event from Search or Timeline, create a finding, or review the Candidates tab for suggestions."
+                      : "Candidates are generated from key events, findings, and high-risk activity already indexed for this case. An empty list here usually means those source types have no data yet, or the selected sources/filters exclude them."
+                  }
+                />
               ) : null}
             </>
           )}

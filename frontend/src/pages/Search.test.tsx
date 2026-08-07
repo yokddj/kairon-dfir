@@ -1344,6 +1344,6 @@ describe("Search page", () => {
   it("renders empty state", async () => {
     searchCaseMock.mockResolvedValueOnce({ ...baseResponse, total: 0, results: [] });
     renderPage();
-    expect(await screen.findByText(/No results yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Search indexed evidence/i)).toBeInTheDocument();
   });
 });

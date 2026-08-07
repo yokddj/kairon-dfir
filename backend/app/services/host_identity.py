@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import utc_now
+from app.models.assignment_history import AssignmentHistory
 from app.models.case_host import CaseHost
 from app.models.case_host_alias import CaseHostAlias
 from app.models.case_host_identity_audit import CaseHostIdentityAudit
@@ -1065,3 +1066,133 @@ def rename_canonical_host(
     db.commit()
     _sync_case_host_rollups(db, case_id)
     return _serialize_case_host(db.get(CaseHost, host.id))
+
+
+def get_case_host_deletion_preview(db: Session, case_id: str, host_id: str) -> dict[str, Any]:
+    host = (
+        db.query(CaseHost)
+        .options(joinedload(CaseHost.aliases))
+        .filter(CaseHost.id == host_id, CaseHost.case_id == case_id)
+        .first()
+    )
+    if not host:
+        raise ValueError("Host not found")
+    evidences = db.query(Evidence).filter(Evidence.host_id == host.id).all()
+    findings_count = db.query(Finding).filter(Finding.linked_host_id == host.id).count()
+    other_hosts = (
+        db.query(CaseHost)
+        .filter(CaseHost.case_id == case_id, CaseHost.id != host.id)
+        .order_by(CaseHost.display_name.asc())
+        .all()
+    )
+    return {
+        "host": _serialize_case_host(host),
+        "evidence_count": len(evidences),
+        "evidences": [
+            {
+                "id": evidence.id,
+                "name": evidence.original_filename,
+                "evidence_type": evidence.evidence_type.value if evidence.evidence_type else None,
+            }
+            for evidence in evidences
+        ],
+        "findings_count": int(findings_count or 0),
+        "requires_reassignment": bool(evidences),
+        "eligible_target_hosts": [{"id": item.id, "display_name": item.display_name} for item in other_hosts],
+        "can_delete": bool(other_hosts) or not evidences,
+    }
+
+
+def delete_case_host(
+    db: Session,
+    case_id: str,
+    host_id: str,
+    *,
+    target_host_id: str | None = None,
+    reason: str | None = None,
+    analyst: str | None = None,
+    actor_user_id: str | None = None,
+) -> dict[str, Any]:
+    # Local import to avoid a circular dependency: host_resolution.py already
+    # imports from this module at load time.
+    from app.services.host_resolution import assign_evidence_host
+
+    host = (
+        db.query(CaseHost)
+        .options(joinedload(CaseHost.aliases))
+        .filter(CaseHost.id == host_id, CaseHost.case_id == case_id)
+        .first()
+    )
+    if not host:
+        raise ValueError("Host not found")
+
+    evidences = db.query(Evidence).filter(Evidence.host_id == host.id).all()
+    target: CaseHost | None = None
+    if evidences:
+        # Evidence must always move to another real host before the host it
+        # currently points to can be deleted -- evidence is never left
+        # unassigned as a side effect of this action.
+        if not target_host_id:
+            raise ValueError("This host has evidence assigned. Move its evidence to another host before deleting, or cancel.")
+        target = db.query(CaseHost).filter(CaseHost.id == target_host_id, CaseHost.case_id == case_id).first()
+        if not target:
+            raise ValueError("Target host not found in this case")
+        if target.id == host.id:
+            raise ValueError("Target host must be different from the host being deleted")
+
+    moved_evidence_ids: list[str] = []
+    if target is not None:
+        for evidence in evidences:
+            assign_evidence_host(
+                db,
+                evidence,
+                host_id=target.id,
+                actor_user_id=actor_user_id,
+                actor=analyst or "analyst",
+                reason=reason or f"Evidence moved because host '{host.display_name}' was deleted.",
+                method="host_deletion_reassign",
+                confidence="high",
+            )
+            moved_evidence_ids.append(evidence.id)
+
+    snapshot = _serialize_case_host(host)
+    # Detach this host's own audit history instead of letting the cascade
+    # delete it, so the record of what this host was (merges, renames,
+    # aliases) survives at the case level after the host itself is gone.
+    db.query(CaseHostIdentityAudit).filter(CaseHostIdentityAudit.case_host_id == host.id).update({"case_host_id": None})
+    # AssignmentHistory.previous_host_id/new_host_id reference case_hosts.id
+    # with no ON DELETE clause (unlike every other FK into this table), so
+    # Postgres rejects the delete unless these are detached first. The
+    # history rows themselves are kept -- only the pointer to the host being
+    # removed is cleared.
+    db.query(AssignmentHistory).filter(AssignmentHistory.previous_host_id == host.id).update({"previous_host_id": None})
+    db.query(AssignmentHistory).filter(AssignmentHistory.new_host_id == host.id).update({"new_host_id": None})
+    unlinked_findings = db.query(Finding).filter(Finding.linked_host_id == host.id).count()
+
+    _audit_entry(
+        db,
+        case_id=case_id,
+        case_host_id=None,
+        action="host_deleted",
+        old_value=snapshot,
+        new_value={
+            "target_host_id": target.id if target else None,
+            "target_host_name": target.display_name if target else None,
+            "moved_evidence_count": len(moved_evidence_ids),
+            "moved_evidence_ids": moved_evidence_ids,
+            "unlinked_findings_count": int(unlinked_findings or 0),
+        },
+        reason=reason,
+        analyst=analyst,
+    )
+    db.delete(host)
+    db.commit()
+    if target is not None:
+        _sync_case_host_rollups(db, case_id)
+    return {
+        "case_id": case_id,
+        "deleted_host_id": host_id,
+        "moved_evidence_count": len(moved_evidence_ids),
+        "target_host_id": target.id if target else None,
+        "unlinked_findings_count": int(unlinked_findings or 0),
+    }

@@ -276,7 +276,9 @@ export default function CaseReportsPage() {
                   <p className="mt-1 text-xs uppercase tracking-[0.14em]">{report.status}</p>
                 </button>
               ))}
-              {!reportsQuery.data?.length ? <p className="text-sm text-muted">No report drafts yet.</p> : null}
+              {!reportsQuery.data?.length ? (
+                <p className="text-sm text-muted">No report drafts yet. Use &quot;Create investigation report&quot; above to generate one from this case's findings, key events and hosts.</p>
+              ) : null}
             </div>
           </div>
 

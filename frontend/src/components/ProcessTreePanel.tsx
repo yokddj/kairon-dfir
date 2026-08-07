@@ -14,11 +14,14 @@ import {
   Globe,
   Network,
   RefreshCw,
+  RotateCcw,
   Search,
   Shield,
   Sparkles,
   TerminalSquare,
   Workflow,
+  ZoomIn,
+  ZoomOut,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -677,6 +680,7 @@ export default function ProcessTreePanel({
   const [contextDepthChildren, setContextDepthChildren] = useState<number>(initialMode === "focused" ? 1 : 0);
   const [includeSiblings, setIncludeSiblings] = useState(false);
   const [fullGraphConfirmed, setFullGraphConfirmed] = useState(false);
+  const [graphZoom, setGraphZoom] = useState(1);
   const [includeActivity, setIncludeActivity] = useState(false);
   const [maxNodes, setMaxNodes] = useState(50);
   const [maxActivityPerProcess, setMaxActivityPerProcess] = useState(10);
@@ -2449,8 +2453,38 @@ export default function ProcessTreePanel({
                         : "Full graph can be noisy on large cases. Use Suspicious only or Focused chain for investigation."}
                   </p>
                 </div>
-                <div className="text-xs text-muted">
-                  Showing {graphNodes.length} of {isExactStoryActive ? graphNodes.length : visibleNodes.length || graphNodes.length} visible nodes · hidden {Math.max(summary.totalGraphNodes - graphNodes.length, 0)}
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="text-xs text-muted">
+                    Showing {graphNodes.length} of {isExactStoryActive ? graphNodes.length : visibleNodes.length || graphNodes.length} visible nodes · hidden {Math.max(summary.totalGraphNodes - graphNodes.length, 0)}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setGraphZoom((z) => Math.min(2.5, Number((z + 0.1).toFixed(2))))}
+                      aria-label="Zoom in"
+                      className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs"
+                    >
+                      <ZoomIn className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGraphZoom((z) => Math.max(0.5, Number((z - 0.1).toFixed(2))))}
+                      aria-label="Zoom out"
+                      className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs"
+                    >
+                      <ZoomOut className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGraphZoom(1)}
+                      className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs"
+                      data-testid="execution-story-graph-zoom-reset"
+                    >
+                      <RotateCcw className="mr-1 inline h-3.5 w-3.5" />
+                      Reset
+                    </button>
+                    <span className="text-xs text-muted" data-testid="execution-story-graph-zoom-level">{Math.round(graphZoom * 100)}%</span>
+                  </div>
                 </div>
               </div>
 
@@ -2469,7 +2503,8 @@ export default function ProcessTreePanel({
                 </div>
               ) : (
                 <div ref={graphViewportRef} className="mt-4 max-h-[38rem] overflow-auto rounded-2xl border border-line bg-abyss/50 p-3">
-                  <div className="relative" style={{ width: graphLayout.width, height: graphLayout.height }}>
+                  <div style={{ width: graphLayout.width * graphZoom, height: graphLayout.height * graphZoom }}>
+                  <div className="relative origin-top-left" style={{ width: graphLayout.width, height: graphLayout.height, transform: `scale(${graphZoom})` }}>
                     <svg className="absolute inset-0 h-full w-full" width={graphLayout.width} height={graphLayout.height} aria-label="Graph canvas">
                       {graphEdges.map((edge) => {
                         const source = graphLayoutMap.get(edge.source);
@@ -2527,6 +2562,7 @@ export default function ProcessTreePanel({
                         </button>
                       );
                     })}
+                  </div>
                   </div>
                 </div>
               )}

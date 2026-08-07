@@ -2399,6 +2399,17 @@ export type CaseHostsResponse = {
   host_candidates: Array<Record<string, unknown>>;
 };
 
+export type CaseHostDeletionPreview = {
+  case_id: string;
+  host: CaseContextHostSummary;
+  evidence_count: number;
+  evidences: Array<{ id: string; name: string | null; evidence_type: string | null }>;
+  findings_count: number;
+  requires_reassignment: boolean;
+  eligible_target_hosts: Array<{ id: string; display_name: string }>;
+  can_delete: boolean;
+};
+
 export type HostFactObservation = {
   id: string;
   source_kind: string;
@@ -5658,6 +5669,13 @@ export const api = {
     return request<{ case_id: string; detached_host: CaseContextHostSummary; source_host_id: string }>(`/cases/${caseId}/hosts/${hostId}/aliases/${aliasId}${suffix}`, { method: "DELETE" });
   },
   getCaseHostAudit: (caseId: string) => request<CaseHostAuditResponse>(`/cases/${caseId}/hosts/audit`),
+  getCaseHostDeletionPreview: (caseId: string, hostId: string) =>
+    request<CaseHostDeletionPreview>(`/cases/${caseId}/hosts/${hostId}/deletion-preview`),
+  deleteCaseHost: (caseId: string, hostId: string, payload: { target_host_id?: string | null; reason?: string | null; analyst?: string | null }) =>
+    request<{ case_id: string; deleted_host_id: string; moved_evidence_count: number; target_host_id: string | null; unlinked_findings_count: number }>(
+      `/cases/${caseId}/hosts/${hostId}`,
+      { method: "DELETE", body: JSON.stringify(payload) },
+    ),
   assignEvidenceHost: (evidenceId: string, payload: { host_id: string; reason?: string | null; analyst?: string | null }) =>
     request<{ evidence_id: string; host_id: string; status: string }>(`/evidences/${evidenceId}/assign-host`, { method: "POST", body: JSON.stringify(payload) }),
   unassignEvidenceHost: (evidenceId: string) =>
@@ -7396,10 +7414,11 @@ export const api = {
       filename: extractDownloadFilename(response.headers.get("content-disposition"), `case-report-${caseId}.${format === "pdf" ? "pdf" : "md"}`),
     };
   },
-  searchFacets: (params?: { caseId?: string; evidenceId?: string }) => {
+  searchFacets: (params?: { caseId?: string; evidenceId?: string; hostId?: string }) => {
     const query = new URLSearchParams();
     if (params?.caseId) query.append("case_id", params.caseId);
     if (params?.evidenceId) query.append("evidence_id", params.evidenceId);
+    if (params?.hostId) query.append("host_id", params.hostId);
     return request<SearchFacets>(`/search/facets${query.size ? `?${query.toString()}` : ""}`);
   },
   siem: (payload: Record<string, unknown>) => request<SearchResponse>("/siem", { method: "POST", body: JSON.stringify(payload) }),

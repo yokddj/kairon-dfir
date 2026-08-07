@@ -11,6 +11,8 @@ const getCaseHostAuditMock = vi.fn();
 const mergeCaseHostsMock = vi.fn();
 const renameCaseHostMock = vi.fn();
 const splitCaseHostAliasMock = vi.fn();
+const getCaseHostDeletionPreviewMock = vi.fn();
+const deleteCaseHostMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -19,6 +21,8 @@ vi.mock("../api/client", () => ({
     mergeCaseHosts: (...args: unknown[]) => mergeCaseHostsMock(...args),
     renameCaseHost: (...args: unknown[]) => renameCaseHostMock(...args),
     splitCaseHostAlias: (...args: unknown[]) => splitCaseHostAliasMock(...args),
+    getCaseHostDeletionPreview: (...args: unknown[]) => getCaseHostDeletionPreviewMock(...args),
+    deleteCaseHost: (...args: unknown[]) => deleteCaseHostMock(...args),
   },
 }));
 
@@ -93,6 +97,17 @@ describe("CaseHostsPage", () => {
     mergeCaseHostsMock.mockResolvedValue({ case_id: "case-1", host: hostsPayload.hosts[0] });
     renameCaseHostMock.mockResolvedValue({ case_id: "case-1", host: hostsPayload.hosts[0] });
     splitCaseHostAliasMock.mockResolvedValue({ case_id: "case-1", detached_host: hostsPayload.hosts[1], source_host_id: "host-1" });
+    getCaseHostDeletionPreviewMock.mockResolvedValue({
+      case_id: "case-1",
+      host: hostsPayload.hosts[0],
+      evidence_count: 2,
+      evidences: [{ id: "ev-1", name: "collection.zip", evidence_type: "velociraptor_zip" }],
+      findings_count: 1,
+      requires_reassignment: true,
+      eligible_target_hosts: [{ id: "host-2", display_name: "DESKTOP-OLD01" }],
+      can_delete: true,
+    });
+    deleteCaseHostMock.mockResolvedValue({ case_id: "case-1", deleted_host_id: "host-1", moved_evidence_count: 2, target_host_id: "host-2", unlinked_findings_count: 1 });
   });
 
   it("lists detected hosts and unresolved candidates", async () => {
@@ -109,5 +124,50 @@ describe("CaseHostsPage", () => {
     await userEvent.click(await screen.findByLabelText("Select DESKTOP-OLD01"));
     await userEvent.click(screen.getByRole("button", { name: /Merge selected hosts/i }));
     await waitFor(() => expect(mergeCaseHostsMock).toHaveBeenCalled());
+  });
+
+  it("requires moving evidence to another host before deleting, then deletes", async () => {
+    renderPage();
+    await screen.findByLabelText("Select DESKTOP-OLD01");
+
+    await userEvent.click(screen.getByTestId("delete-host-host-1"));
+    expect(await screen.findByText("This host has evidence assigned")).toBeInTheDocument();
+
+    const deleteButton = screen.getByRole("button", { name: /^Delete host$/i });
+    expect(deleteButton).toBeDisabled();
+
+    await userEvent.type(screen.getByLabelText(/Type DELETE to confirm/i), "DELETE");
+    expect(deleteButton).toBeDisabled();
+
+    await userEvent.selectOptions(screen.getByLabelText("Move evidence to host"), "host-2");
+    expect(deleteButton).toBeEnabled();
+
+    await userEvent.click(deleteButton);
+    await waitFor(() => expect(deleteCaseHostMock).toHaveBeenCalledWith("case-1", "host-1", expect.objectContaining({ target_host_id: "host-2" })));
+  });
+
+  it("does not require a target host when the host has no evidence", async () => {
+    getCaseHostDeletionPreviewMock.mockResolvedValueOnce({
+      case_id: "case-1",
+      host: hostsPayload.hosts[1],
+      evidence_count: 0,
+      evidences: [],
+      findings_count: 0,
+      requires_reassignment: false,
+      eligible_target_hosts: [{ id: "host-1", display_name: "hosta" }],
+      can_delete: true,
+    });
+    renderPage();
+    await screen.findByLabelText("Select DESKTOP-OLD01");
+
+    await userEvent.click(screen.getByTestId("delete-host-host-2"));
+    expect(await screen.findByText(/No evidence is assigned to this host/i)).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(/Type DELETE to confirm/i), "DELETE");
+    const deleteButton = screen.getByRole("button", { name: /^Delete host$/i });
+    expect(deleteButton).toBeEnabled();
+
+    await userEvent.click(deleteButton);
+    await waitFor(() => expect(deleteCaseHostMock).toHaveBeenCalledWith("case-1", "host-2", expect.objectContaining({ target_host_id: null })));
   });
 });
