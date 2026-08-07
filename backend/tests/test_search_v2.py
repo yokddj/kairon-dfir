@@ -811,3 +811,43 @@ def test_search_facets_supports_evidence_scope_with_counts(monkeypatch: pytest.M
     first_body = captured["calls"][0]["body"]
     assert {"term": {"case_id": "case-1"}} in first_body["query"]["bool"]["filter"]
     assert {"term": {"evidence_id": "ev-1"}} in first_body["query"]["bool"]["filter"]
+
+
+def test_search_facets_with_host_id_scopes_query_and_does_not_crash(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression test for a NameError that made every host-scoped facets
+    request return HTTP 500 in production: ``CaseHost`` was referenced in
+    the host_id branch of search_facets but never imported in
+    routes_search.py. Nothing exercised this branch before the frontend
+    started passing host_id to /api/search/facets, so it went untested."""
+    captured: dict[str, object] = {}
+
+    class _FakeClient:
+        def search(self, **kwargs):  # noqa: ANN003
+            captured.setdefault("calls", []).append(kwargs)
+            agg_name = next(iter((kwargs.get("body") or {}).get("aggs", {}).keys()))
+            return {"aggregations": {agg_name: {"buckets": [{"key": "windows_event", "doc_count": 41954}]}}}
+
+    fake_host = SimpleNamespace(id="host-1", case_id="case-1", canonical_name="ws01")
+
+    class _FakeHostDb:
+        def get(self, model, identifier):  # noqa: ANN001
+            if model is routes_search.CaseHost and identifier == "host-1":
+                return fake_host
+            return None
+
+    monkeypatch.setattr(routes_search, "get_opensearch_client", lambda: _FakeClient())
+    monkeypatch.setattr(routes_search, "_resolve_index", lambda case_id: "dfir-events-case-1")
+    monkeypatch.setattr(routes_search, "_index_available", lambda index: True)
+    monkeypatch.setattr(routes_search, "is_index_queryable", lambda client, index: True)
+    monkeypatch.setattr(routes_search, "resolve_aggregatable_field", lambda client, index, field: field)
+    monkeypatch.setattr(routes_search, "_cache_get", lambda *args, **kwargs: None)
+    monkeypatch.setattr(routes_search, "_cache_put", lambda _cache, _key, _ttl, value: value)
+    monkeypatch.setattr(routes_search, "expand_host_filter", lambda db, case_id, canonical: [canonical])
+
+    facets = routes_search.search_facets(case_id="case-1", host_id="host-1", db=_FakeHostDb())
+
+    assert facets["artifact.type"]["windows_event"] == 41954
+    first_body = captured["calls"][0]["body"]
+    scope_filters = first_body["query"]["bool"]["filter"]
+    host_filter = next(item for item in scope_filters if "bool" in item and item["bool"].get("should"))
+    assert {"term": {"host.evidence_host_id": "host-1"}} in host_filter["bool"]["should"]
