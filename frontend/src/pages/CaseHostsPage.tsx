@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
-import { api } from "../api/client";
+import { api, type CaseContextHostSummary } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
 export default function CaseHostsPage() {
@@ -12,6 +12,7 @@ export default function CaseHostsPage() {
   const [canonicalHostId, setCanonicalHostId] = useState("");
   const [mergeReason, setMergeReason] = useState("Same endpoint renamed during investigation");
   const [renameDrafts, setRenameDrafts] = useState<Record<string, string>>({});
+  const [deleteTarget, setDeleteTarget] = useState<CaseContextHostSummary | null>(null);
 
   useEffect(() => {
     if (caseId) setActiveCaseId(caseId);
@@ -61,6 +62,41 @@ export default function CaseHostsPage() {
     mutationFn: async ({ hostId, aliasId }: { hostId: string; aliasId: string }) => api.splitCaseHostAlias(caseId, hostId, aliasId, { reason: "Alias split by analyst" }),
     onSuccess: refreshHosts,
   });
+
+  const [reassignTargetId, setReassignTargetId] = useState("");
+  const [deleteConfirmText, setDeleteConfirmText] = useState("");
+  const [deleteReason, setDeleteReason] = useState("");
+
+  const closeDeleteDialog = () => {
+    setDeleteTarget(null);
+    setReassignTargetId("");
+    setDeleteConfirmText("");
+    setDeleteReason("");
+  };
+
+  const deletionPreviewQuery = useQuery({
+    queryKey: ["case-host-deletion-preview", caseId, deleteTarget?.id],
+    queryFn: () => api.getCaseHostDeletionPreview(caseId, deleteTarget!.id),
+    enabled: Boolean(caseId && deleteTarget),
+  });
+
+  const deleteHostMutation = useMutation({
+    mutationFn: async () => {
+      if (!deleteTarget) throw new Error("No host selected");
+      return api.deleteCaseHost(caseId, deleteTarget.id, {
+        target_host_id: reassignTargetId || null,
+        reason: deleteReason || null,
+        analyst: null,
+      });
+    },
+    onSuccess: async () => {
+      await refreshHosts();
+      closeDeleteDialog();
+    },
+  });
+
+  const requiresReassignment = Boolean(deletionPreviewQuery.data?.requires_reassignment);
+  const deleteConfirmationValid = deleteConfirmText.trim().toUpperCase() === "DELETE" && (!requiresReassignment || Boolean(reassignTargetId));
 
   const selectedHosts = (hostsQuery.data?.hosts ?? []).filter((item) => selectedHostIds.includes(item.id));
 
@@ -150,6 +186,14 @@ export default function CaseHostsPage() {
                     <button type="button" onClick={() => renameMutation.mutate({ hostId: host.id, value: renameValue })} className="rounded-xl border border-line bg-panel/40 px-3 py-2 text-xs text-muted">
                       Rename canonical host
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteTarget(host)}
+                      className="rounded-xl border border-danger/40 bg-danger/10 px-3 py-2 text-xs font-medium text-danger hover:bg-danger/20"
+                      data-testid={`delete-host-${host.id}`}
+                    >
+                      Delete host&hellip;
+                    </button>
                   </div>
                 </article>
               );
@@ -208,6 +252,85 @@ export default function CaseHostsPage() {
           </section>
         </div>
       </section>
+
+      {deleteTarget ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+          <div className="w-full max-w-xl rounded-[28px] border border-danger/40 bg-panel p-6 shadow-panel">
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-danger">Delete host</p>
+            <h3 className="mt-2 text-2xl font-semibold text-ink">{deleteTarget.display_name}</h3>
+
+            {deletionPreviewQuery.isLoading ? (
+              <p className="mt-4 text-sm text-muted">Checking evidence, findings and identity impact…</p>
+            ) : deletionPreviewQuery.isError ? (
+              <p className="mt-4 text-sm text-danger">Could not load the deletion impact preview. Try again.</p>
+            ) : deletionPreviewQuery.data ? (
+              <>
+                <div className="mt-4 grid gap-2 text-sm text-muted">
+                  <p>Evidence assigned: <span className="text-ink">{deletionPreviewQuery.data.evidence_count}</span></p>
+                  <p>Findings linked: <span className="text-ink">{deletionPreviewQuery.data.findings_count}</span></p>
+                  <p>Aliases: <span className="text-ink">{deleteTarget.all_names.join(", ")}</span></p>
+                </div>
+
+                {requiresReassignment ? (
+                  <div className="mt-5 rounded-2xl border border-warning/40 bg-warning/10 p-4 text-sm">
+                    <p className="font-medium text-warning">This host has evidence assigned</p>
+                    <p className="mt-1 text-muted">
+                      Kairon never leaves evidence without a host. Move the {deletionPreviewQuery.data.evidence_count} evidence item{deletionPreviewQuery.data.evidence_count === 1 ? "" : "s"} listed below to another host to continue, or cancel.
+                    </p>
+                    <ul className="mt-3 space-y-1 text-xs text-muted">
+                      {deletionPreviewQuery.data.evidences.map((item) => (
+                        <li key={item.id}>{item.name || item.id} <span className="text-muted/70">({item.evidence_type || "unknown"})</span></li>
+                      ))}
+                    </ul>
+                    {deletionPreviewQuery.data.eligible_target_hosts.length ? (
+                      <label className="mt-4 block text-xs text-muted">
+                        <span className="mb-2 block font-mono uppercase tracking-[0.14em]">Move evidence to</span>
+                        <select
+                          aria-label="Move evidence to host"
+                          value={reassignTargetId}
+                          onChange={(event) => setReassignTargetId(event.target.value)}
+                          className="w-full rounded-xl border border-line bg-abyss px-3 py-2 text-sm text-ink"
+                        >
+                          <option value="">Select a host…</option>
+                          {deletionPreviewQuery.data.eligible_target_hosts.map((item) => (
+                            <option key={item.id} value={item.id}>{item.display_name}</option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : (
+                      <p className="mt-4 text-xs text-danger">There is no other host in this case to move evidence to. Create one first, or cancel.</p>
+                    )}
+                  </div>
+                ) : (
+                  <p className="mt-4 text-sm text-muted">No evidence is assigned to this host. Deleting it will not affect any evidence.</p>
+                )}
+
+                <label className="mt-5 block text-sm text-muted">
+                  Reason (optional, kept in the audit trail).
+                  <input value={deleteReason} onChange={(event) => setDeleteReason(event.target.value)} className="mt-2 w-full rounded-2xl border border-line bg-abyss px-4 py-3 text-sm text-ink outline-none focus:border-danger" />
+                </label>
+                <label className="mt-4 block text-sm text-muted">
+                  Type DELETE to confirm.
+                  <input value={deleteConfirmText} onChange={(event) => setDeleteConfirmText(event.target.value)} className="mt-2 w-full rounded-2xl border border-line bg-abyss px-4 py-3 font-mono text-sm text-ink outline-none focus:border-danger" />
+                </label>
+                {deleteHostMutation.error instanceof Error ? <p className="mt-3 text-sm text-danger">{deleteHostMutation.error.message}</p> : null}
+              </>
+            ) : null}
+
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button type="button" onClick={closeDeleteDialog} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Cancel</button>
+              <button
+                type="button"
+                onClick={() => deleteHostMutation.mutate()}
+                disabled={!deleteConfirmationValid || deleteHostMutation.isPending || deletionPreviewQuery.isLoading}
+                className="rounded-2xl bg-danger px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+              >
+                {deleteHostMutation.isPending ? "Deleting…" : "Delete host"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

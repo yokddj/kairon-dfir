@@ -104,7 +104,7 @@ describe("FindingsWorkspace", () => {
 
   it("shows empty state and creates a finding", async () => {
     renderWorkspace();
-    expect(await screen.findByText("No findings yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No findings yet")).toBeInTheDocument();
     await userEvent.click(screen.getAllByRole("button", { name: /Create finding/i })[0]);
     const dialog = screen.getByRole("dialog", { name: /Finding editor/i });
     await userEvent.type(within(dialog).getByLabelText(/Title/i), "Manual note");

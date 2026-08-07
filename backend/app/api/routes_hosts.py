@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db, utc_now
 from app.models.case import Case
 from app.models.evidence import Evidence
-from app.services.host_identity import build_case_host_candidates, create_manual_case_host, get_case_hosts, get_host_identity_audit, merge_hosts, rename_canonical_host, split_alias
+from app.services.host_identity import build_case_host_candidates, create_manual_case_host, delete_case_host, get_case_host_deletion_preview, get_case_hosts, get_host_identity_audit, merge_hosts, rename_canonical_host, split_alias
 
 
 router = APIRouter(prefix="/api/cases/{case_id}/hosts", tags=["hosts"])
@@ -40,6 +40,12 @@ class CreateHostRequest(BaseModel):
 
 
 class SplitAliasRequest(BaseModel):
+    reason: str | None = None
+    analyst: str | None = None
+
+
+class DeleteHostRequest(BaseModel):
+    target_host_id: str | None = None
     reason: str | None = None
     analyst: str | None = None
 
@@ -138,6 +144,33 @@ def update_case_host(case_id: str, host_id: str, payload: RenameHostRequest, db:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"case_id": case_id, "host": host}
+
+
+@router.get("/{host_id}/deletion-preview")
+def preview_case_host_deletion(case_id: str, host_id: str, db: Session = Depends(get_db)) -> dict:
+    _ensure_case(db, case_id)
+    try:
+        preview = get_case_host_deletion_preview(db, case_id, host_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"case_id": case_id, **preview}
+
+
+@router.delete("/{host_id}")
+def remove_case_host(case_id: str, host_id: str, payload: DeleteHostRequest = DeleteHostRequest(), db: Session = Depends(get_db)) -> dict:
+    _ensure_case(db, case_id)
+    try:
+        result = delete_case_host(
+            db,
+            case_id,
+            host_id,
+            target_host_id=payload.target_host_id,
+            reason=payload.reason,
+            analyst=payload.analyst,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
 
 
 @router.get("/audit")

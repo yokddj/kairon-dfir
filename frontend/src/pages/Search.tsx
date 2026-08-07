@@ -14,6 +14,7 @@ import { useHostContext } from "../hooks/useHostContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 import { artifactLabel } from "../lib/artifactRegistry";
+import EmptyState from "../components/EmptyState";
 
 type Scope = "events" | "findings" | "all";
 type SortValue = "timestamp_desc" | "timestamp_asc" | "risk_desc" | "risk_asc" | "relevance";
@@ -2654,10 +2655,23 @@ export default function Search() {
             </div>
           ) : null}
           {!searchQuery.isLoading && !searchQuery.isError && !results.length && !hasFalseEmptyPage ? (
-            <div className="rounded-[24px] border border-line bg-panel/70 p-6 text-sm text-muted shadow-panel">
-              <p className="font-medium text-slate-100">No results yet</p>
-              <p className="mt-2">Try a quick filter, a full path, domain, IOC or process name.</p>
-            </div>
+            <EmptyState
+              className="shadow-panel"
+              testId="search-empty-state"
+              title={activeFilterChips.length ? "No events match the current query and filters" : "Search indexed evidence"}
+              description={
+                activeFilterChips.length
+                  ? "This can happen when the query is too specific, a filter excludes the host/evidence that has the data, or the matching evidence hasn't been indexed yet."
+                  : "Enter a quick filter, a full path, domain, IOC or process name, or apply a filter from the panel above. Results come from evidence that has already been indexed for this case."
+              }
+              action={
+                activeFilterChips.length ? (
+                  <button type="button" onClick={resetFilters} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted hover:border-accent/40 hover:text-accent">
+                    Clear query and filters
+                  </button>
+                ) : undefined
+              }
+            />
           ) : null}
           {groupedSearchSummary ? (
             <div className="rounded-[24px] border border-line bg-panel/70 p-5 text-sm shadow-panel" data-testid="search-grouped-summary">

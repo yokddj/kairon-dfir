@@ -20,10 +20,10 @@ export default function Findings() {
       <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Findings</p>
         <h2 className="mt-2 text-2xl font-semibold">Correlation-driven investigation workspace</h2>
-        <p className="mt-2 text-sm text-muted">Trabaja los hallazgos del motor de correlación como una cola priorizada de investigación, no solo como una lista de eventos.</p>
+        <p className="mt-2 text-sm text-muted">Work findings from the correlation engine as a prioritized investigation queue, not just a list of events.</p>
         <div className="mt-5 flex flex-wrap gap-2 text-xs text-muted">
-          <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{selectedHost ? `Host filter: ${selectedHost}` : "Host filter: all hosts"}</span>
-          <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{selectedEvidenceId ? `Evidence filter: ${selectedEvidenceId.slice(0, 8)}` : "Evidence filter: all evidence"}</span>
+          <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{selectedHost ? `Host filter: ${selectedHost}` : "Host filter: All hosts"}</span>
+          <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{selectedEvidenceId ? `Evidence filter: ${selectedEvidenceId.slice(0, 8)}` : "Evidence filter: All evidence"}</span>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <label className="flex items-center gap-2 text-xs text-muted">

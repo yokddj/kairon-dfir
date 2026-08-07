@@ -473,7 +473,7 @@ function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostI
       </div>
       {users.length === 0 ? (
         <p className="mt-4 text-sm text-muted" data-testid="user-inventory-empty">
-          No local accounts have been identified for this host yet.
+          No local accounts have been identified for this host yet. This appears once evidence with a supported source (Linux passwd/shadow, or a Windows SAM hive) has been processed and assigned to this host.
         </p>
       ) : (
         <div className="mt-4 overflow-x-auto">

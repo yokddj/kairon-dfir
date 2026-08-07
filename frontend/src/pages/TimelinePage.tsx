@@ -596,7 +596,10 @@ function TimelinePage() {
                   </div>
                 ))
               ) : (
-                <div className="px-4 py-6 text-sm text-muted">No timeline items match the current filters.</div>
+                <div className="px-4 py-6 text-sm text-muted">
+                  <p className="font-medium text-ink">No timeline items match the current filters.</p>
+                  <p className="mt-1">Timeline shows indexed events across the case ordered by time. This is usually a filter (host, time range, or artifact type) excluding all events — widen or clear the filters above to check.</p>
+                </div>
               )}
             </div>
           </div>

@@ -10,6 +10,7 @@ import EventTable from "./EventTable";
 import IndicatorResolutionPanel from "./IndicatorResolutionPanel";
 import PaginationControls from "./PaginationControls";
 import { linuxCommandHistoryRoute, memoryEvidenceRoute, memoryWorkbenchRoute, windowsExecutionStoriesRoute } from "../lib/canonicalRoutes";
+import EmptyState from "./EmptyState";
 
 type Props = {
   caseId: string;
@@ -947,19 +948,36 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
       {findingsQuery.error instanceof Error ? <div className="rounded-3xl border border-danger/40 bg-danger/10 p-6 text-sm text-danger">{findingsQuery.error.message}</div> : null}
 
       {!findingsQuery.isPending && !filteredFindings.length ? (
-        <div className="rounded-3xl border border-line bg-panel/40 p-6 text-sm text-muted">
-          <p className="text-base font-semibold text-white">{filters.search || filters.severity || filters.status || filters.tag ? "No findings match these filters." : "No findings yet."}</p>
-          <p className="mt-2">Create a finding from this case or from evidence, memory, search, or artifacts.</p>
-          {(filters.search || filters.severity || filters.status || filters.tag) ? <p className="mt-2">Clear filters.</p> : null}
-          <button type="button" onClick={() => openEditor(null)} className="mt-4 mr-2 rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent">Create finding</button>
-          <button
-            type="button"
-            onClick={() => runCorrelationMutation.mutate({ page: 1 })}
-            className="mt-4 rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss"
-          >
-            Run correlation
-          </button>
-        </div>
+        <EmptyState
+          testId="findings-empty-state"
+          title={filters.search || filters.severity || filters.status || filters.tag ? "No findings match these filters" : "No findings yet"}
+          description={
+            filters.search || filters.severity || filters.status || filters.tag
+              ? "The current search, severity, status or tag filter excludes every finding in this case. Clear the filters to see the full list, or narrow your search differently."
+              : "Findings are analyst notes and conclusions, not automatically generated events. Create one from this workspace, from Evidence Detail, Search, Artifact Views, or Memory -- or run correlation to surface automatically generated candidates from indexed evidence."
+          }
+          action={
+            <>
+              {(filters.search || filters.severity || filters.status || filters.tag) ? (
+                <button
+                  type="button"
+                  onClick={() => setFilters({ severity: "", confidence: "", status: "", findingType: "", source: "", evidenceId: "", process: "", pid: "", search: "", tag: "", includeArchived: false })}
+                  className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted hover:border-accent/40 hover:text-accent"
+                >
+                  Clear filters
+                </button>
+              ) : null}
+              <button type="button" onClick={() => openEditor(null)} className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-semibold text-accent">Create finding</button>
+              <button
+                type="button"
+                onClick={() => runCorrelationMutation.mutate({ page: 1 })}
+                className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss"
+              >
+                Run correlation
+              </button>
+            </>
+          }
+        />
       ) : null}
 
       {filteredFindings.length ? (

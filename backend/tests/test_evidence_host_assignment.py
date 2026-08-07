@@ -1,11 +1,12 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.api import routes_evidence, routes_hosts
 from app.core.database import Base, get_db
+from app.models.assignment_history import AssignmentHistory
 from app.models.case import Case
 from app.models.case_host import CaseHost
 from app.models.case_host_alias import CaseHostAlias
@@ -143,3 +144,149 @@ def test_unassigned_evidence_without_detected_host_does_not_break_memory_listing
 
     assert [item.id for item in list_memory_evidences(db, CASE_ID)] == [EVIDENCE_ID]
     assert list_memory_evidences(db, CASE_ID, host="WS-01") == []
+
+
+def test_delete_host_without_evidence_succeeds_immediately():
+    db = _db()
+    _case(db)
+    _host(db)
+    client = _client(db)
+
+    preview = client.get(f"/api/cases/{CASE_ID}/hosts/{HOST_WS01_ID}/deletion-preview")
+    assert preview.status_code == 200
+    assert preview.json()["evidence_count"] == 0
+    assert preview.json()["requires_reassignment"] is False
+
+    response = client.delete(f"/api/cases/{CASE_ID}/hosts/{HOST_WS01_ID}")
+
+    assert response.status_code == 200
+    assert response.json()["moved_evidence_count"] == 0
+    listed = client.get(f"/api/cases/{CASE_ID}/hosts")
+    assert HOST_WS01_ID not in {host["id"] for host in listed.json()["hosts"]}
+
+
+def test_delete_host_with_evidence_requires_target_host():
+    db = _db()
+    _case(db)
+    _host(db)
+    _evidence(db, host_id=HOST_WS01_ID)
+    client = _client(db)
+
+    preview = client.get(f"/api/cases/{CASE_ID}/hosts/{HOST_WS01_ID}/deletion-preview")
+    assert preview.status_code == 200
+    assert preview.json()["evidence_count"] == 1
+    assert preview.json()["requires_reassignment"] is True
+    assert preview.json()["eligible_target_hosts"] == []
+    assert preview.json()["can_delete"] is False
+
+    response = client.delete(f"/api/cases/{CASE_ID}/hosts/{HOST_WS01_ID}")
+
+    assert response.status_code == 400
+    # Nothing changed: host and evidence assignment are untouched.
+    listed = client.get(f"/api/cases/{CASE_ID}/hosts")
+    assert HOST_WS01_ID in {host["id"] for host in listed.json()["hosts"]}
+    evidence = db.get(Evidence, EVIDENCE_ID)
+    assert evidence.host_id == HOST_WS01_ID
+
+
+def test_delete_host_moves_evidence_to_target_and_preserves_audit():
+    db = _db()
+    _case(db)
+    _host(db, HOST_WS01_ID, "WS-01")
+    _host(db, HOST_WS02_ID, "WS-02")
+    _evidence(db, host_id=HOST_WS01_ID)
+    client = _client(db)
+
+    preview = client.get(f"/api/cases/{CASE_ID}/hosts/{HOST_WS01_ID}/deletion-preview")
+    assert preview.json()["eligible_target_hosts"] == [{"id": HOST_WS02_ID, "display_name": "WS-02"}]
+
+    response = client.request(
+        "DELETE",
+        f"/api/cases/{CASE_ID}/hosts/{HOST_WS01_ID}",
+        json={"target_host_id": HOST_WS02_ID, "reason": "duplicate host", "analyst": "tester"},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["moved_evidence_count"] == 1
+    assert body["target_host_id"] == HOST_WS02_ID
+
+    evidence = db.get(Evidence, EVIDENCE_ID)
+    assert evidence.host_id == HOST_WS02_ID
+
+    listed = client.get(f"/api/cases/{CASE_ID}/hosts")
+    host_ids = {host["id"] for host in listed.json()["hosts"]}
+    assert HOST_WS01_ID not in host_ids
+    assert HOST_WS02_ID in host_ids
+
+    # The deletion itself, and the host's prior identity history, survive as
+    # case-level audit entries instead of being cascade-deleted with the host.
+    audit = client.get(f"/api/cases/{CASE_ID}/hosts/audit")
+    actions = [item["action"] for item in audit.json()["items"]]
+    assert "host_deleted" in actions
+
+
+def test_delete_host_rejects_target_from_another_case():
+    db = _db()
+    _case(db)
+    _case(db, OTHER_CASE_ID)
+    _host(db, HOST_WS01_ID, "WS-01")
+    _host(db, HOST_WS02_ID, "WS-02", case_id=OTHER_CASE_ID)
+    _evidence(db, host_id=HOST_WS01_ID)
+    client = _client(db)
+
+    response = client.request(
+        "DELETE",
+        f"/api/cases/{CASE_ID}/hosts/{HOST_WS01_ID}",
+        json={"target_host_id": HOST_WS02_ID},
+    )
+
+    assert response.status_code == 400
+
+
+def _db_with_foreign_keys():
+    # Plain SQLite (used by _db() above) does not enforce foreign keys by
+    # default, which is why the AssignmentHistory regression below was not
+    # caught by earlier tests -- production runs on Postgres, which does
+    # enforce them. Enabling the pragma here makes this engine behave like
+    # Postgres for FK purposes.
+    engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool, future=True)
+    event.listen(engine, "connect", lambda dbapi_conn, _: dbapi_conn.execute("PRAGMA foreign_keys=ON"))
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, future=True)()
+
+
+def test_delete_host_with_prior_reassignment_history_does_not_violate_foreign_keys():
+    """Regression test: AssignmentHistory.previous_host_id/new_host_id
+    reference case_hosts.id with no ON DELETE clause. A host that had ever
+    been the source or target of an evidence reassignment (including the
+    reassignment delete_case_host itself performs) could not be deleted on
+    Postgres -- it failed with a ForeignKeyViolation that plain in-memory
+    SQLite (no FK enforcement) let slip through undetected."""
+    db = _db_with_foreign_keys()
+    _case(db)
+    _host(db, HOST_WS01_ID, "WS-01")
+    _host(db, HOST_WS02_ID, "WS-02")
+    _evidence(db, host_id=HOST_WS01_ID)
+    client = _client(db)
+
+    # Reassign the evidence onto WS-01 once before the delete, so WS-01 is
+    # referenced as assignment_history.new_host_id even before deletion
+    # starts moving it elsewhere.
+    reassigned = client.patch(f"/api/cases/{CASE_ID}/evidence/{EVIDENCE_ID}/host", json={"host_id": HOST_WS01_ID})
+    assert reassigned.status_code == 200
+    assert db.query(AssignmentHistory).filter(AssignmentHistory.new_host_id == HOST_WS01_ID).count() >= 1
+
+    response = client.request(
+        "DELETE",
+        f"/api/cases/{CASE_ID}/hosts/{HOST_WS01_ID}",
+        json={"target_host_id": HOST_WS02_ID},
+    )
+
+    assert response.status_code == 200
+    evidence = db.get(Evidence, EVIDENCE_ID)
+    assert evidence.host_id == HOST_WS02_ID
+    # The history rows survive deletion; only the pointer to the removed
+    # host is cleared, matching the identity-audit detach pattern.
+    assert db.query(AssignmentHistory).filter(AssignmentHistory.new_host_id == HOST_WS01_ID).count() == 0
+    assert db.query(AssignmentHistory).filter(AssignmentHistory.previous_host_id == HOST_WS01_ID).count() == 0

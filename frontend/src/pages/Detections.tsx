@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useParams, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import CreateFindingDialog from "../components/CreateFindingDialog";
+import EmptyState from "../components/EmptyState";
 import EventDetailDrawer from "../components/EventDetailDrawer";
 import PaginationControls from "../components/PaginationControls";
 import ResponsiveDetailPanel from "../components/ResponsiveDetailPanel";
@@ -630,8 +631,8 @@ export default function Detections() {
         {!selectedCaseId ? <p className="mt-2 text-sm text-amber-300">All cases selected. Results include detections across the workspace.</p> : null}
         {selectedHost || selectedEvidenceId ? (
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted">
-            <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{selectedHost ? `Host filter not supported in this view yet: ${selectedHost}` : "Host filter: all hosts"}</span>
-            <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{evidenceFilter ? `Evidence filter: ${evidenceFilter.slice(0, 8)}` : "Evidence filter: all evidence"}</span>
+            <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{selectedHost ? `Host filter not supported in this view yet: ${selectedHost}` : "Host filter: All hosts"}</span>
+            <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{evidenceFilter ? `Evidence filter: ${evidenceFilter.slice(0, 8)}` : "Evidence filter: All evidence"}</span>
           </div>
         ) : null}
         {ruleRunIdFilter ? (
@@ -1173,7 +1174,11 @@ export default function Detections() {
               );
             })
           ) : (
-            <div className="rounded-3xl border border-line bg-panel/40 p-6 text-sm text-muted">No detections yet for the current filters. Run Sigma/YARA rules or clear the current filters.</div>
+            <EmptyState
+              testId="detections-empty-state"
+              title="No detections for the current filters"
+              description="Detections are analyst-triggered: they only appear here after a Sigma or YARA rule run has matched something in this case's indexed evidence. This can mean no rule run has been triggered yet, the last run found nothing, or the current status/severity/search filters exclude everything that matched."
+            />
           )}
         </div>
       </section>
