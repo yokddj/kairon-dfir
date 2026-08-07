@@ -19,6 +19,7 @@ from app.core.app_settings import load_runtime_settings
 from app.core.config import get_settings
 from app.core.database import SessionLocal, get_db
 from app.core.opensearch import count_documents, get_events_index, get_index_health, get_opensearch_client, index_exists, is_index_queryable, resolve_aggregatable_field
+from app.models.case_host import CaseHost
 from app.models.evidence import Evidence
 from app.schemas.event import SearchRequest, SearchResponse, SiemRequest
 from app.ingest.normalization.field_quality import normalize_event_fields

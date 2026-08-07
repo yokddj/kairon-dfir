@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import ArtifactExplorer from "./ArtifactExplorer";
@@ -35,7 +35,12 @@ vi.mock("../context/ActiveCaseContext", () => ({
     activeCaseId: "case-1",
     selectedEvidenceId: "ev-1",
     selectedHost: "HOST-01",
+    selectedHostId: "",
+    caseContext: null,
     setActiveCaseId: vi.fn(),
+    setSelectedHost: vi.fn(),
+    setSelectedHostId: vi.fn(),
+    clearSelectedHost: vi.fn(),
   }),
 }));
 
@@ -398,11 +403,148 @@ describe("ArtifactExplorer", () => {
 
     expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
     const artifactSelector = screen.getByLabelText("Artifact view");
-    expect(artifactSelector).toHaveTextContent("Startup & Persistence");
+    // Startup & Persistence is a derived view confirmed by a separate presence
+    // probe (getStartupPersistence), so it appears asynchronously.
+    await waitFor(() => expect(artifactSelector).toHaveTextContent("Startup & Persistence"));
     expect(artifactSelector).toHaveTextContent("Scheduled Tasks");
     expect(artifactSelector).toHaveTextContent("Windows Events");
     expect(artifactSelector).not.toHaveTextContent("registry_persistence");
     expect(artifactSelector).not.toHaveTextContent("scheduled_task");
+  });
+
+  it("hides Startup & Persistence from the selector when the case/host has none", async () => {
+    searchFacetsMock.mockResolvedValueOnce({
+      "artifact.type": { windows_event: 4 },
+      "artifact.name": {},
+    });
+    getStartupPersistenceMock.mockResolvedValueOnce({
+      case_id: "case-1",
+      total: 0,
+      page: 1,
+      page_size: 1,
+      total_pages: 0,
+      summary: { total: 0, suspicious: 0, high_risk: 0, by_host: {}, by_type: {}, by_source: {} },
+      warnings: [],
+      wmi_status: "not_present",
+      items: [],
+    });
+
+    renderPage();
+
+    expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
+    await waitFor(() => expect(getStartupPersistenceMock).toHaveBeenCalled());
+    const artifactSelector = screen.getByLabelText("Artifact view");
+    expect(artifactSelector).not.toHaveTextContent("Startup & Persistence");
+  });
+
+  it("hides the Linux Artifacts shortcut panel when the case has no Linux artifact data", async () => {
+    renderPage();
+    expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
+    expect(screen.queryByTestId("linux-artifacts-view")).not.toBeInTheDocument();
+  });
+
+  it("shows only the Linux artifact types actually present as shortcuts", async () => {
+    searchFacetsMock.mockResolvedValueOnce({
+      "artifact.type": { linux_journal: 5, linux_auth: 2, evtx: 3 },
+      "artifact.name": {},
+    });
+
+    renderPage();
+
+    expect(await screen.findByTestId("linux-artifacts-view")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Linux Journal" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Linux Auth" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Linux Syslog" })).not.toBeInTheDocument();
+  });
+
+  it("passes the selected host_id through to searchFacets so the dropdown can be host-scoped", async () => {
+    renderPage("/cases/case-1/artifact-search?host_id=host-ws01&host=ws01");
+    await screen.findByRole("heading", { name: "Artifact Views" });
+    await waitFor(() => expect(searchFacetsMock).toHaveBeenCalledWith(expect.objectContaining({ caseId: "case-1", hostId: "host-ws01" })));
+  });
+
+  it("Windows host with several artifact types: dropdown shows those types and no Linux types", async () => {
+    searchFacetsMock.mockResolvedValueOnce({
+      "artifact.type": { windows_event: 41954, powershell: 22368, prefetch: 454, amcache: 891 },
+      "artifact.name": {},
+    });
+
+    renderPage("/cases/case-1/artifact-search?host_id=host-ws01&host=ws01");
+
+    expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
+    const artifactSelector = await screen.findByLabelText("Artifact view");
+    await waitFor(() => expect(artifactSelector).toHaveTextContent("Windows Events"));
+    expect(artifactSelector).toHaveTextContent("PowerShell");
+    expect(artifactSelector).toHaveTextContent("Prefetch");
+    expect(artifactSelector).toHaveTextContent("Amcache");
+    expect(artifactSelector).not.toHaveTextContent("Linux");
+  });
+
+  it("Linux host: dropdown shows the Linux types present and no Windows-only types", async () => {
+    searchFacetsMock.mockResolvedValueOnce({
+      "artifact.type": { linux_auth: 10, linux_syslog: 4, linux_cron: 1 },
+      "artifact.name": {},
+    });
+
+    renderPage("/cases/case-1/artifact-search?host_id=host-linux01&host=vulnosv2");
+
+    expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
+    const artifactSelector = await screen.findByLabelText("Artifact view");
+    await waitFor(() => expect(artifactSelector).toHaveTextContent("Linux Auth"));
+    expect(artifactSelector).toHaveTextContent("Linux Syslog");
+    expect(artifactSelector).toHaveTextContent("Linux Cron");
+    expect(artifactSelector).not.toHaveTextContent("Windows Events");
+    expect(artifactSelector).not.toHaveTextContent("PowerShell");
+  });
+
+  it("mixed case with no host filter: dropdown shows the real union of types present in the case", async () => {
+    searchFacetsMock.mockResolvedValueOnce({
+      "artifact.type": { windows_event: 100, linux_syslog: 50 },
+      "artifact.name": {},
+    });
+
+    renderPage("/cases/case-1/artifact-search");
+
+    expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
+    const artifactSelector = await screen.findByLabelText("Artifact view");
+    await waitFor(() => expect(artifactSelector).toHaveTextContent("Windows Events"));
+    expect(artifactSelector).toHaveTextContent("Linux Syslog");
+  });
+
+  it("host with real data never leaves the dropdown on only 'All artifact types'", async () => {
+    searchFacetsMock.mockResolvedValueOnce({
+      "artifact.type": { windows_event: 71671 },
+      "artifact.name": {},
+    });
+
+    renderPage("/cases/case-1/artifact-search?host_id=host-ws01&host=ws01");
+
+    expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
+    const artifactSelector = await screen.findByLabelText("Artifact view");
+    await waitFor(() => expect(within(artifactSelector).getAllByRole("option").length).toBeGreaterThan(1));
+  });
+
+  it("host with no data at all: 'All artifact types' is the only valid option", async () => {
+    searchFacetsMock.mockResolvedValueOnce({ "artifact.type": {}, "artifact.name": {} });
+    getStartupPersistenceMock.mockResolvedValueOnce({
+      case_id: "case-1",
+      total: 0,
+      page: 1,
+      page_size: 1,
+      total_pages: 0,
+      summary: { total: 0, suspicious: 0, high_risk: 0, by_host: {}, by_type: {}, by_source: {} },
+      warnings: [],
+      wmi_status: "not_present",
+      items: [],
+    });
+
+    renderPage("/cases/case-1/artifact-search?host_id=host-empty&host=empty-host");
+
+    expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
+    const artifactSelector = await screen.findByLabelText("Artifact view");
+    await waitFor(() => expect(getStartupPersistenceMock).toHaveBeenCalled());
+    expect(within(artifactSelector).getAllByRole("option")).toHaveLength(1);
+    expect(within(artifactSelector).getByRole("option", { name: "All artifact types" })).toBeInTheDocument();
   });
 
   it("renders user activity tabs for RECmd artifacts", async () => {
