@@ -5,16 +5,18 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import HostInformationPage from "./HostInformationPage";
-import type { CaseHostFactsResponse, CaseHostUsersResponse, HostUserFieldResolution } from "../api/client";
+import type { CaseHostFactsResponse, CaseHostNetworkResponse, CaseHostUsersResponse, HostNetworkAddress, HostUserFieldResolution } from "../api/client";
 
 const getCaseHostFactsMock = vi.fn();
 const getCaseHostUsersMock = vi.fn();
+const getCaseHostNetworkMock = vi.fn();
 const useActiveCaseMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
     getCaseHostFacts: (...args: unknown[]) => getCaseHostFactsMock(...args),
     getCaseHostUsers: (...args: unknown[]) => getCaseHostUsersMock(...args),
+    getCaseHostNetwork: (...args: unknown[]) => getCaseHostNetworkMock(...args),
   },
 }));
 
@@ -109,6 +111,42 @@ function usersResponse(users: CaseHostUsersResponse["users"]): CaseHostUsersResp
   return { case_id: "case-1", scope: "host", host_id: "host-1", users };
 }
 
+function networkSource(overrides: Partial<HostNetworkAddress["sources"][number]> = {}): HostNetworkAddress["sources"][number] {
+  return {
+    source_kind: "sysmon_network_connection",
+    source_label: "Sysmon network connection (Event ID 3)",
+    observation_count: 1611,
+    first_seen: "2024-03-22T11:21:41Z",
+    last_seen: "2024-03-22T19:48:41Z",
+    evidence_id: "ev-1",
+    artifact_id: "art-1",
+    ...overrides,
+  };
+}
+
+function networkAddress(overrides: Partial<HostNetworkAddress> = {}): HostNetworkAddress {
+  return {
+    ip: "192.168.20.41",
+    ip_version: 4,
+    classification: "private",
+    is_private: true,
+    is_public: false,
+    is_loopback: false,
+    is_link_local: false,
+    is_multicast: false,
+    is_unspecified: false,
+    first_seen: "2024-03-22T11:21:41Z",
+    last_seen: "2024-03-22T19:48:41Z",
+    observation_count: 1611,
+    sources: [networkSource()],
+    ...overrides,
+  };
+}
+
+function networkResponse(addresses: HostNetworkAddress[]): CaseHostNetworkResponse {
+  return { case_id: "case-1", host_id: "host-1", addresses };
+}
+
 function renderPage(path = "/cases/case-1/host-information") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -126,6 +164,7 @@ describe("HostInformationPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getCaseHostUsersMock.mockResolvedValue(usersResponse([]));
+    getCaseHostNetworkMock.mockResolvedValue(networkResponse([]));
   });
 
   it("shows an empty state when the case has no identified hosts", async () => {
@@ -458,6 +497,105 @@ describe("HostInformationPage", () => {
       await userEvent.selectOptions(screen.getByTestId("host-selector"), "host-2");
       await waitFor(() => expect(screen.getByTestId("user-row")).toHaveTextContent("carol"));
       expect(screen.queryByText("alice")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Network", () => {
+    beforeEach(() => {
+      useActiveCaseMock.mockReturnValue(activeCaseValue([host()]));
+      getCaseHostFactsMock.mockResolvedValue(factsResponse([]));
+    });
+
+    it("shows the shared honest empty state when no reliable network addresses were observed", async () => {
+      getCaseHostNetworkMock.mockResolvedValue(networkResponse([]));
+      renderPage();
+      const emptyState = await screen.findByTestId("network-empty-state");
+      expect(emptyState).toHaveTextContent("No reliable host network addresses were observed in the collected evidence.");
+      expect(screen.queryByTestId("network-address-row")).not.toBeInTheDocument();
+    });
+
+    it("renders observed addresses most-recently-seen first with classification and observation count", async () => {
+      getCaseHostNetworkMock.mockResolvedValue(
+        networkResponse([
+          networkAddress({ ip: "192.168.20.99", last_seen: "2024-06-01T00:00:00Z", observation_count: 5, classification: "private" }),
+          networkAddress({ ip: "192.168.20.41", last_seen: "2024-01-01T00:00:00Z", observation_count: 1611, classification: "private" }),
+        ]),
+      );
+      renderPage();
+      const rows = await screen.findAllByTestId("network-address-row");
+      expect(rows.map((row) => row.dataset.ip)).toEqual(["192.168.20.99", "192.168.20.41"]);
+      expect(rows[0]).toHaveTextContent("Private");
+      expect(rows[0]).toHaveTextContent("5 observations");
+    });
+
+    it("labels IPv4 and IPv6 addresses distinctly", async () => {
+      getCaseHostNetworkMock.mockResolvedValue(
+        networkResponse([
+          networkAddress({ ip: "192.168.20.41", ip_version: 4 }),
+          networkAddress({ ip: "fe80::35fe:fb89:feab:10ae", ip_version: 6, classification: "link-local", is_private: false, is_link_local: true, last_seen: "2024-01-01T00:00:00Z" }),
+        ]),
+      );
+      renderPage();
+      const rows = await screen.findAllByTestId("network-address-row");
+      expect(rows.some((row) => within(row).queryByText("IPv4"))).toBe(true);
+      expect(rows.some((row) => within(row).queryByText("IPv6"))).toBe(true);
+      expect(screen.getByText("Link-local")).toBeInTheDocument();
+    });
+
+    it("classifies loopback distinctly from private, never showing it as the primary address type", async () => {
+      getCaseHostNetworkMock.mockResolvedValue(networkResponse([networkAddress({ ip: "127.0.0.1", classification: "loopback", is_private: false, is_loopback: true })]));
+      renderPage();
+      const row = await screen.findByTestId("network-address-row");
+      expect(row).toHaveAttribute("data-classification", "loopback");
+      expect(within(row).getByTestId("network-address-classification")).toHaveTextContent("Loopback");
+    });
+
+    it("expands provenance to show every contributing source with its own observation count and time range", async () => {
+      getCaseHostNetworkMock.mockResolvedValue(
+        networkResponse([
+          networkAddress({
+            ip: "192.168.20.41",
+            observation_count: 1611 + 79,
+            sources: [
+              networkSource({ source_kind: "sysmon_network_connection", source_label: "Sysmon network connection (Event ID 3)", observation_count: 1611 }),
+              networkSource({ source_kind: "memory_windows_netscan", source_label: "Memory analysis (Volatility3 windows.netscan)", observation_count: 79, evidence_id: "ev-mem-1" }),
+            ],
+          }),
+        ]),
+      );
+      renderPage();
+      await screen.findByTestId("network-address-row");
+      await userEvent.click(screen.getByText("Show sources"));
+      const sources = await screen.findAllByTestId("network-observation-source");
+      expect(sources).toHaveLength(2);
+      expect(sources[0]).toHaveTextContent("Sysmon network connection (Event ID 3)");
+      expect(sources[0]).toHaveTextContent("1611 observations");
+      expect(sources[1]).toHaveTextContent("Memory analysis (Volatility3 windows.netscan)");
+      expect(sources[1]).toHaveTextContent("79 observations");
+    });
+
+    it("pivots to the evidence a source came from", async () => {
+      getCaseHostNetworkMock.mockResolvedValue(networkResponse([networkAddress({ sources: [networkSource({ evidence_id: "ev-42" })] })]));
+      renderPage();
+      await screen.findByTestId("network-address-row");
+      await userEvent.click(screen.getByText("Show sources"));
+      const link = await screen.findByTestId("network-source-evidence-link");
+      expect(link).toHaveAttribute("href", "/evidences/ev-42");
+    });
+
+    it("fetches network observations scoped to the selected host, never merging across hosts", async () => {
+      useActiveCaseMock.mockReturnValue(activeCaseValue([host({ id: "host-1", display_name: "webserver-01" }), host({ id: "host-2", display_name: "db-02" })]));
+      getCaseHostNetworkMock.mockImplementation((_caseId: string, params: { host_id: string }) =>
+        Promise.resolve(networkResponse(params.host_id === "host-1" ? [networkAddress({ ip: "192.168.20.41" })] : [networkAddress({ ip: "10.0.0.5" })])),
+      );
+      renderPage("/cases/case-1/host-information?host_id=host-1");
+      expect(await screen.findByTestId("network-address-row")).toHaveTextContent("192.168.20.41");
+
+      await userEvent.selectOptions(screen.getByTestId("host-selector"), "host-2");
+      await waitFor(() => expect(screen.getByTestId("network-address-row")).toHaveTextContent("10.0.0.5"));
+      expect(screen.queryByText("192.168.20.41")).not.toBeInTheDocument();
+      expect(getCaseHostNetworkMock).toHaveBeenCalledWith("case-1", { host_id: "host-1" });
+      expect(getCaseHostNetworkMock).toHaveBeenCalledWith("case-1", { host_id: "host-2" });
     });
   });
 });
