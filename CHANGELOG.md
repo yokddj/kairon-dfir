@@ -6,7 +6,7 @@
 
 - Memory Analysis promoted from Experimental to Core DFIR Capability — Preview, with a real activation boundary.
 - Case navigation restructured around a Surface Registry, with Domain Tabs, Capability Cards, and capability-derived investigation breadcrumbs.
-- Host Information now includes a Windows Local Accounts inventory (SAM hive, corroborated by ProfileList) alongside the existing Linux Host Facts foundation. See `docs/host-information.md`.
+- Host Information now includes a Windows Local Accounts inventory (SAM hive, corroborated by ProfileList) alongside the existing Linux Host Facts foundation. See `docs/evidence/host-information.md`.
 - General evidence uploads now detect duplicates the same way Memory uploads already did.
 - Archive extraction failures are classified instead of surfacing raw tool errors.
 

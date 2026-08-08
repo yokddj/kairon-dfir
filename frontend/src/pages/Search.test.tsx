@@ -13,6 +13,7 @@ const searchRelatedToFindingMock = vi.fn();
 const getEventContextMock = vi.fn();
 const markEventMock = vi.fn();
 const deleteEventMarkingMock = vi.fn();
+const getCaseCapabilitiesMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -24,6 +25,7 @@ vi.mock("../api/client", () => ({
     getEventContext: (...args: unknown[]) => getEventContextMock(...args),
     markEvent: (...args: unknown[]) => markEventMock(...args),
     deleteEventMarking: (...args: unknown[]) => deleteEventMarkingMock(...args),
+    getCaseCapabilities: (...args: unknown[]) => getCaseCapabilitiesMock(...args),
   },
 }));
 
@@ -180,7 +182,27 @@ describe("Search page", () => {
     getEventContextMock.mockReset();
     markEventMock.mockReset();
     deleteEventMarkingMock.mockReset();
+    getCaseCapabilitiesMock.mockReset();
 
+    // Platform options in the Search UI are registry-driven (see
+    // registryFacetData.platform in Search.tsx), not derived from
+    // searchFacetsMock -- a case with both Windows and Linux evidence
+    // reports both here so the platform selector has a real "windows"
+    // option to select in tests, not just whatever value happens to be in
+    // the URL already (see withCurrentOption's URL-value fallback).
+    getCaseCapabilitiesMock.mockResolvedValue({
+      workbenches: [],
+      capabilities: [],
+      search: {
+        facets: {
+          platform: [
+            { id: "linux", label: "linux" },
+            { id: "windows", label: "windows" },
+          ],
+        },
+        presets: [],
+      },
+    });
     searchCaseMock.mockResolvedValue(baseResponse);
     markEventMock.mockResolvedValue({
       id: "mark-1",

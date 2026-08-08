@@ -17,7 +17,7 @@ delegate a download implicitly and never sends evidence to the fetcher.
 
 The fetcher DOES NOT make outbound HTTPS connections directly.  All requests
 go through the `symbol-egress-gateway` over an internal Docker network.  See
-`docs/symbol_egress_gateway.md` for the gateway trust boundary, the signed
+`docs/memory/symbol_egress_gateway.md` for the gateway trust boundary, the signed
 request protocol, and the source/redirect policy.
 
 Application-level URL allowlisting (initial host `msdl.microsoft.com`, redirect
@@ -44,14 +44,14 @@ flag is set true only after:
 4. The gateway's source and redirect policy tests pass.
 5. The runtime security checks pass.
 
-See `docs/memory_operations.md` and `docs/deployment_remote.md` for the
+See `docs/memory/memory_operations.md` and `docs/deployment/deployment-remote.md` for the
 runtime proof procedure.
 
 ## Administrator gate
 
 Kairon does not yet provide a mature authenticated administrator role.  The
 interim control is a server-side CLI that records explicit local-operator
-authorization.  See `docs/memory_symbol_operator_approval.md` for the
+authorization.  See `docs/memory/memory_symbol_operator_approval.md` for the
 lifecycle, the CLI commands, and the approval semantics.
 
 The acquisition API remains blocked with

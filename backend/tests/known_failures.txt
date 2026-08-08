@@ -13,7 +13,6 @@
 #
 # One line per node ID. Blank lines and lines starting with # are ignored.
 
-tests/test_beta_operations.py::test_env_example_uses_placeholders_and_no_default_beta_secrets
 tests/test_case_context.py::test_build_case_context_handles_unknown_host_without_filename_contamination
 tests/test_case_context.py::test_build_case_context_returns_hosts_and_evidence_summary
 tests/test_case_context.py::test_list_findings_can_filter_by_host
