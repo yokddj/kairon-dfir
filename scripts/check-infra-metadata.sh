@@ -74,7 +74,7 @@ report "hardcoded /root/... path outside test fixtures and reviewed defaults" \
   ':!scripts/deploy_remote.sh' \
   ':!scripts/backup.sh' \
   ':!scripts/restore.sh' \
-  ':!docs/deployment_remote.md' \
+  ':!docs/deployment/deployment-remote.md' \
   ':!docker/memory-worker/Dockerfile' \
   ':!docker/symbol-fetcher/Dockerfile' \
   ':!backend/app/core/evidence_platforms.py' \
