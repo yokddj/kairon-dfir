@@ -142,6 +142,7 @@ def _process_account_key(
 
 
 def _document(*, case_id: str, evidence_id: str, artifact_id: str, source_file: str, fact: dict) -> dict:
+    from app.ingest.identity_extraction import is_valid_username
     from app.ingest.normalizer import base_document
 
     username = fact.get("username") or "unknown"
@@ -166,6 +167,15 @@ def _document(*, case_id: str, evidence_id: str, artifact_id: str, source_file: 
         "message": f"SAM local account observed: {username} (RID {fact.get('attributes', {}).get('rid')})",
         "severity": "info",
     })
+    # base_document() derives the canonical user.name/user.sid fields (the
+    # same ones every other artifact type populates, and the ones Search and
+    # Artifact Views render in the User column) from the raw parser row --
+    # which is empty here, so they default to None/"-". The account name and
+    # SID are already decoded into fact/host_user_fact; propagate them into
+    # the canonical fields instead of leaving the row-derived ones empty.
+    resolved_username = fact.get("username")
+    doc["user"]["name"] = resolved_username if is_valid_username(resolved_username) else None
+    doc["user"]["sid"] = (fact.get("attributes") or {}).get("sid")
     doc["host_user_fact"] = fact
     return doc
 

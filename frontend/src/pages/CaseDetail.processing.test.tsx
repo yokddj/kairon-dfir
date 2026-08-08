@@ -159,6 +159,14 @@ describe("CaseDetail Processing Queue", () => {
     expect(within(failedRow).getByText("1")).toBeInTheDocument();
   });
 
+  it("regression: shows a generic 'Evidence collection' label in the Type column instead of the raw velociraptor_zip tool identifier", async () => {
+    renderPage();
+
+    await screen.findAllByText("complete.zip");
+    expect(screen.getAllByText("Evidence collection").length).toBeGreaterThan(0);
+    expect(screen.queryByText("velociraptor_zip")).not.toBeInTheDocument();
+  });
+
   it("uses the guided wizard as the primary evidences tab ingestion action", async () => {
     renderPage("/cases/case-1?tab=evidences");
 

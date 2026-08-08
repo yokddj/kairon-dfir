@@ -14,6 +14,7 @@ import { useActiveCase } from "../context/ActiveCaseContext";
 import { useHostContext } from "../hooks/useHostContext";
 import DeleteCaseDialog from "../components/DeleteCaseDialog";
 import { memoryEvidenceRoute } from "../lib/canonicalRoutes";
+import { evidenceTypeLabel } from "../lib/evidenceDetailFormatting";
 import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 
 const tabs = ["overview", "evidences", "processing", "artifacts", "artifact_explorer", "search", "process_tree", "investigation_timeline", "detections", "findings", "activity"] as const;
@@ -533,7 +534,7 @@ export default function CaseDetail() {
                 <Link key={item.id} to={`/evidences/${item.id}`} className="flex items-center justify-between rounded-2xl border border-line bg-abyss/70 px-4 py-3">
                   <div>
                     <p className="text-sm">{item.original_filename}</p>
-                    <p className="mt-1 font-mono text-xs text-muted">{item.evidence_type}</p>
+                    <p className="mt-1 font-mono text-xs text-muted">{evidenceTypeLabel(item.evidence_type)}</p>
                   </div>
                   <span className="rounded-full border border-line px-3 py-1 font-mono text-[11px] uppercase tracking-[0.16em] text-accent">{item.ingest_status}</span>
                 </Link>
@@ -568,7 +569,7 @@ export default function CaseDetail() {
                 </div>
               </div>
               <div className="text-right">
-                <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">{item.evidence_type}</p>
+                <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">{evidenceTypeLabel(item.evidence_type)}</p>
                 <p className="mt-2 text-sm text-muted">{item.ingest_status}</p>
               </div>
             </Link>
@@ -629,7 +630,7 @@ export default function CaseDetail() {
                             <button type="button" onClick={() => setSelectedProcessingId(item.evidence_id)} className="text-ink hover:text-accent hover:underline" data-testid={`select-processing-${item.evidence_id}`}>{item.filename}</button>
                           </td>
                           <td className="max-w-[160px] truncate px-4 py-3 text-muted" title={item.host || "-"}>{item.host || "-"}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-muted">{item.evidence_type}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-muted">{evidenceTypeLabel(item.evidence_type)}</td>
                           <td className="px-4 py-3 text-muted">{formatDateTime(item.last_run_finished_at || item.last_run_started_at)}</td>
                           <td className="px-4 py-3 text-muted">{formatDuration(item.duration)}</td>
                           <td className="px-4 py-3 text-mint">{item.successful_parser_count}</td>
@@ -648,7 +649,7 @@ export default function CaseDetail() {
                     <div>
                       <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Processing Detail</p>
                       <h3 className="mt-2 text-xl font-semibold">{selectedProcessing.filename}</h3>
-                      <p className="mt-1 text-sm text-muted">{selectedProcessing.host || "Host unknown"} · {selectedProcessing.evidence_type}</p>
+                      <p className="mt-1 text-sm text-muted">{selectedProcessing.host || "Host unknown"} · {evidenceTypeLabel(selectedProcessing.evidence_type)}</p>
                     </div>
                     <span className={`rounded-full border px-3 py-1 font-mono text-[11px] uppercase tracking-[0.12em] ${processingStatusClass(selectedProcessing.processing_status)}`}>{selectedProcessing.processing_status.replaceAll("_", " ")}</span>
                   </div>

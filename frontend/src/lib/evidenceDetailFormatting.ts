@@ -24,6 +24,27 @@ export function asLinuxInventory(value: unknown): LinuxInventory | null {
   return value as LinuxInventory;
 }
 
+// Evidence type ("velociraptor_zip", "kape_archive", ...) is a persisted,
+// API-facing identifier (EvidenceType enum, backend/app/models/evidence.py)
+// -- do not rename the values themselves. This only controls what analysts
+// see. velociraptor_zip is a raw evidence collection identified by which
+// collection tool produced it; the public label should describe what it is,
+// not which tool made it.
+const EVIDENCE_TYPE_LABEL_OVERRIDES: Record<string, string> = {
+  velociraptor_zip: "Evidence collection",
+};
+
+export function evidenceTypeLabel(value: string | null | undefined): string {
+  const key = String(value ?? "").trim();
+  if (!key) return "-";
+  if (EVIDENCE_TYPE_LABEL_OVERRIDES[key]) return EVIDENCE_TYPE_LABEL_OVERRIDES[key];
+  return key
+    .split(/[_\s]+/)
+    .filter(Boolean)
+    .map((token) => token.charAt(0).toUpperCase() + token.slice(1))
+    .join(" ");
+}
+
 export function matchesArtifactFilter(artifact: { status: string; artifact_type: string; parser: string; source_path: string }, filters: ArtifactFilters) {
   return (
     (!filters.status || artifact.status === filters.status) &&

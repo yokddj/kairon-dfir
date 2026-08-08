@@ -572,7 +572,17 @@ export default function ArtifactExplorer() {
   // lensLabel is only the fallback when no capability route matches; a
   // matching one produces the full Surface/Domain/Capability trail instead.
   const breadcrumbs = useInvestigationBreadcrumbs({ lensLabel: "Artifact Views" });
-  const [artifactType, setArtifactType] = useState(canonicalArtifactView(searchParams.get("artifact_type")));
+  // artifactTypeFilter is the raw value as reported by facets/Search (the
+  // literal indexed artifact.type, e.g. "windows_event" or "registry_event")
+  // and is what actually gets sent to the search backend and bound to the
+  // <select>. artifactType is its canonicalized form (e.g. "evtx",
+  // "registry"), used only for view routing (which specialized columns/
+  // panel to render, EZ rebuild backend, placeholder text) -- concepts the
+  // static artifactRegistry groups under one id via aliases. Sending the
+  // canonicalized id as the search filter previously matched zero documents
+  // whenever the canonical id differed from the literal indexed value.
+  const [artifactTypeFilter, setArtifactTypeFilter] = useState(searchParams.get("artifact_type") ?? "");
+  const artifactType = canonicalArtifactView(artifactTypeFilter);
   const [artifactName, setArtifactName] = useState("");
   const [query, setQuery] = useState(searchParams.get("q") ?? "");
   const [searchMode, setSearchMode] = useState<"smart" | "contains" | "ioc">("smart");
@@ -638,7 +648,7 @@ export default function ArtifactExplorer() {
       query: query || "*",
       search_mode: searchMode,
         filters: {
-          artifact_type: artifactType ? [artifactType] : [],
+          artifact_type: artifactTypeFilter ? [artifactTypeFilter] : [],
           artifact_name: artifactName ? [artifactName] : [],
           deleted_only: mftDeletedOnly || undefined,
           suspicious_paths_only: mftSuspiciousPathsOnly || undefined,
@@ -652,7 +662,7 @@ export default function ArtifactExplorer() {
       page,
       page_size: pageSize,
     }),
-    [artifactName, artifactType, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly],
+    [artifactName, artifactTypeFilter, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly],
   );
   const isStartupPersistenceView = artifactType === "startup_persistence";
   const isMotwView = artifactType === "motw" || artifactType === "zone_identifier";
@@ -790,11 +800,11 @@ export default function ArtifactExplorer() {
     },
   });
   const siemLinksQuery = useQuery({
-    queryKey: ["artifact-explorer-siem-links", caseId, artifactType, query],
+    queryKey: ["artifact-explorer-siem-links", caseId, artifactTypeFilter, query],
     queryFn: () =>
       api.siemExternalLinks({
         case_id: caseId || undefined,
-        artifact_type: artifactType || undefined,
+        artifact_type: artifactTypeFilter || undefined,
         query: query || undefined,
       }),
     staleTime: 15_000,
@@ -803,7 +813,7 @@ export default function ArtifactExplorer() {
 
   useEffect(() => {
     setPage(1);
-  }, [artifactName, artifactType, backendVariant, caseId, pageSize, query, searchMode, persistenceType, persistenceSource, persistenceSuspiciousOnly, persistenceRiskMin, motwZoneId, motwExtension, motwRiskMin, emailType, emailClient, emailInterestingOnly, emailRiskMin]);
+  }, [artifactName, artifactTypeFilter, backendVariant, caseId, pageSize, query, searchMode, persistenceType, persistenceSource, persistenceSuspiciousOnly, persistenceRiskMin, motwZoneId, motwExtension, motwRiskMin, emailType, emailClient, emailInterestingOnly, emailRiskMin]);
 
   const contextualPlaceholder =
     artifactType === "mft" || artifactType === "usn"
@@ -854,8 +864,8 @@ export default function ArtifactExplorer() {
       hostId: hostIdFilter || String(item.host_id ?? ""),
       sourceView: "artifact_explorer",
       sourceRoute: window.location.pathname + window.location.search,
-      artifactFamily: artifactType || String((item.artifact as Record<string, unknown> | undefined)?.type ?? ""),
-      artifactType: String((item.event as Record<string, unknown> | undefined)?.type ?? item.type ?? artifactType ?? ""),
+      artifactFamily: artifactTypeFilter || String((item.artifact as Record<string, unknown> | undefined)?.type ?? ""),
+      artifactType: String((item.event as Record<string, unknown> | undefined)?.type ?? item.type ?? artifactTypeFilter ?? ""),
       label,
     }));
     setFindingDialogOpen(true);
@@ -883,7 +893,7 @@ export default function ArtifactExplorer() {
         current="Artifact Views"
         breadcrumbs={breadcrumbs}
         actions={caseId ? [
-          { label: "Search", to: `/cases/${caseId}/search${artifactType ? `?artifact_type=${encodeURIComponent(artifactType)}` : ""}`, description: "Open matching documents in Search" },
+          { label: "Search", to: `/cases/${caseId}/search${artifactTypeFilter ? `?artifact_type=${encodeURIComponent(artifactTypeFilter)}` : ""}`, description: "Open matching documents in Search" },
           { label: "Timeline", to: `/cases/${caseId}/search?view=timeline&sort=@timestamp&order=asc`, description: "Timeline with this context" },
           { label: "Processing", to: `/cases/${caseId}?tab=processing`, description: "Review processing queue" },
           { label: "Evidence", to: `/cases/${caseId}/evidence`, description: "Return to evidence inventory" },
@@ -929,7 +939,7 @@ export default function ArtifactExplorer() {
             </div>
             <div className="mt-3 flex flex-wrap gap-2">
               {linuxShortcutOptions.map((viewName) => (
-                <button key={viewName} type="button" onClick={() => setArtifactType(viewName)} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted hover:border-mint/40 hover:text-mint">
+                <button key={viewName} type="button" onClick={() => setArtifactTypeFilter(viewName)} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted hover:border-mint/40 hover:text-mint">
                   {artifactViewLabel(viewName)}
                 </button>
               ))}
@@ -949,7 +959,7 @@ export default function ArtifactExplorer() {
             <option value="">All cases</option>
             {(casesQuery.data ?? []).map((item: DfirCase) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
-          <select aria-label="Artifact view" value={artifactType} onChange={(event) => setArtifactType(canonicalArtifactView(event.target.value))} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
+          <select aria-label="Artifact view" value={artifactTypeFilter} onChange={(event) => setArtifactTypeFilter(event.target.value)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
             <option value="">All artifact types</option>
             {artifactTypeSelectOptions.map((option) => <option key={option} value={option}>{artifactViewLabel(option)}</option>)}
           </select>
@@ -1043,7 +1053,7 @@ export default function ArtifactExplorer() {
                 <button
                   key={tab.value}
                   type="button"
-                  onClick={() => setArtifactType(tab.value)}
+                  onClick={() => setArtifactTypeFilter(tab.value)}
                   className={`rounded-xl border px-3 py-2 text-sm ${artifactType === tab.value ? "border-accent/50 bg-accent/15 text-accent" : "border-line bg-abyss/80 text-muted"}`}
                 >
                   {tab.label}
@@ -1051,7 +1061,7 @@ export default function ArtifactExplorer() {
               ))}
               {caseId ? (
                 <Link
-                  to={`/cases/${caseId}/search?artifact_type=${encodeURIComponent(artifactType === "user_activity" ? "shellbag" : artifactType)}${evidenceIdFilter ? `&evidence_id=${encodeURIComponent(evidenceIdFilter)}` : ""}${hostFilter ? `&host=${encodeURIComponent(hostFilter)}` : ""}${query ? `&q=${encodeURIComponent(query)}` : ""}`}
+                  to={`/cases/${caseId}/search?artifact_type=${encodeURIComponent(artifactTypeFilter === "user_activity" ? "shellbag" : artifactTypeFilter)}${evidenceIdFilter ? `&evidence_id=${encodeURIComponent(evidenceIdFilter)}` : ""}${hostFilter ? `&host=${encodeURIComponent(hostFilter)}` : ""}${query ? `&q=${encodeURIComponent(query)}` : ""}`}
                   className="rounded-xl border border-line bg-panel px-3 py-2 text-sm text-ink"
                 >
                   Open matching documents in Search

@@ -457,6 +457,38 @@ describe("ArtifactExplorer", () => {
     expect(screen.queryByRole("button", { name: "Linux Syslog" })).not.toBeInTheDocument();
   });
 
+  it("regression: selecting a facet-derived artifact type sends the literal indexed value, not its canonicalized display id", async () => {
+    // windows_event is the real artifact.type value indexed in OpenSearch;
+    // "evtx" is only the canonical UI id artifactRegistry groups it under
+    // (windows_event is registered as an alias). Filtering by the
+    // canonicalized id matches zero documents -- this is exactly the "host
+    // has real data, facets show it, but the table returns 0" bug.
+    searchFacetsMock.mockResolvedValue({
+      "artifact.type": { windows_event: 41954 },
+      "artifact.name": {},
+    });
+    searchMock.mockResolvedValue({
+      items: [{ id: "evt-1", "@timestamp": "2024-03-22T20:55:10Z", artifact_type: "windows_event" }],
+      total: 41954,
+      total_pages: 840,
+      total_relation: "eq",
+    });
+
+    renderPage("/cases/case-1/artifact-search?host_id=host-ws01&host=ws01&artifact_type=windows_event");
+
+    expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(searchMock).toHaveBeenCalledWith(
+        expect.objectContaining({ filters: expect.objectContaining({ artifact_type: ["windows_event"] }) }),
+      ),
+    );
+    // Never sends the canonicalized "evtx" id as the query filter.
+    expect(searchMock).not.toHaveBeenCalledWith(expect.objectContaining({ filters: expect.objectContaining({ artifact_type: ["evtx"] }) }));
+    expect(screen.queryByTestId("artifact-explorer-no-results")).not.toBeInTheDocument();
+    const artifactSelector = await screen.findByLabelText("Artifact view");
+    await waitFor(() => expect(artifactSelector).toHaveValue("windows_event"));
+  });
+
   it("passes the selected host_id through to searchFacets so the dropdown can be host-scoped", async () => {
     renderPage("/cases/case-1/artifact-search?host_id=host-ws01&host=ws01");
     await screen.findByRole("heading", { name: "Artifact Views" });
