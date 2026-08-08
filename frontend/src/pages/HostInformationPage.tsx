@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router-dom";
-import { Fingerprint, Users as UsersIcon } from "lucide-react";
+import { Fingerprint, Network as NetworkIcon, Users as UsersIcon } from "lucide-react";
 
-import { api, type HostFactObservation, type HostUserEntry, type HostUserFieldResolution, type HostUserObservation, type ResolvedHostFact } from "../api/client";
+import { api, type HostFactObservation, type HostNetworkAddress, type HostUserEntry, type HostUserFieldResolution, type HostUserObservation, type ResolvedHostFact } from "../api/client";
+import EmptyState from "../components/EmptyState";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
 type FactSlot = { factType: string; label: string };
@@ -186,6 +187,104 @@ function FactGroupCard({ caseId, hostId, group, factsByType }: { caseId: string;
           <FactRow key={slot.factType} caseId={caseId} hostId={hostId} label={slot.label} fact={factsByType.get(slot.factType) ?? null} />
         ))}
       </div>
+    </section>
+  );
+}
+
+const NETWORK_CLASSIFICATION_LABEL: Record<string, string> = {
+  private: "Private",
+  public: "Public",
+  loopback: "Loopback",
+  "link-local": "Link-local",
+  multicast: "Multicast",
+  unspecified: "Unspecified",
+};
+
+const NETWORK_CLASSIFICATION_STYLES: Record<string, string> = {
+  private: "border-mint/40 bg-mint/10 text-mint",
+  public: "border-amber/40 bg-amber/10 text-amber",
+  loopback: "border-line bg-abyss/60 text-muted",
+  "link-local": "border-sky-400/30 bg-sky-400/10 text-sky-200",
+  multicast: "border-line bg-abyss/60 text-muted",
+  unspecified: "border-line bg-abyss/40 text-muted",
+};
+
+function NetworkObservationSourceRow({ source }: { source: HostNetworkAddress["sources"][number] }) {
+  return (
+    <div className="rounded-xl border border-line/70 bg-abyss/40 px-3 py-2.5 text-xs text-muted" data-testid="network-observation-source">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-ink">{source.source_label}</span>
+        <span className="shrink-0 text-muted">
+          {source.observation_count} observation{source.observation_count === 1 ? "" : "s"}
+        </span>
+      </div>
+      <p className="mt-1">
+        first {fmtTime(source.first_seen)} &middot; last {fmtTime(source.last_seen)}
+      </p>
+      {source.evidence_id ? (
+        <div className="mt-2">
+          <Link to={`/evidences/${source.evidence_id}`} className="rounded-lg border border-line px-2 py-1 text-[11px] text-accent hover:bg-white/5" data-testid="network-source-evidence-link">
+            View evidence
+          </Link>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function NetworkAddressRow({ address }: { address: HostNetworkAddress }) {
+  return (
+    <details className="group rounded-2xl border border-line bg-abyss/70 open:bg-abyss/80" data-testid="network-address-row" data-ip={address.ip} data-classification={address.classification}>
+      <summary className="flex cursor-pointer list-none flex-wrap items-center gap-3 px-4 py-3 [&::-webkit-details-marker]:hidden">
+        <span className="min-w-0 flex-1 truncate font-mono text-base font-semibold text-ink" data-testid="network-address-value">
+          {address.ip}
+        </span>
+        <span className="shrink-0 rounded-full border border-line px-2 py-0.5 text-[10px] uppercase tracking-[0.1em] text-muted">IPv{address.ip_version}</span>
+        <span className={`shrink-0 rounded-full border px-2.5 py-1 text-[10px] font-semibold uppercase tracking-[0.12em] ${NETWORK_CLASSIFICATION_STYLES[address.classification] || "text-muted"}`} data-testid="network-address-classification">
+          {NETWORK_CLASSIFICATION_LABEL[address.classification] || address.classification}
+        </span>
+        <span className="shrink-0 text-xs text-muted">
+          {address.observation_count} observation{address.observation_count === 1 ? "" : "s"}
+        </span>
+        <span className="shrink-0 text-xs text-muted" data-testid="network-address-last-seen">
+          last seen {fmtTime(address.last_seen)}
+        </span>
+        <span className="shrink-0 text-xs text-accent group-open:hidden">Show sources</span>
+        <span className="hidden shrink-0 text-xs text-accent group-open:inline">Hide sources</span>
+      </summary>
+      <div className="space-y-2 border-t border-line/70 px-4 py-3" data-testid="network-address-provenance">
+        <p className="text-xs text-muted">
+          First seen {fmtTime(address.first_seen)} &middot; last seen {fmtTime(address.last_seen)}
+        </p>
+        {address.sources.map((source, index) => (
+          <NetworkObservationSourceRow key={`${source.source_kind}-${index}`} source={source} />
+        ))}
+      </div>
+    </details>
+  );
+}
+
+function NetworkSection({ addresses }: { addresses: HostNetworkAddress[] }) {
+  return (
+    <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel" data-testid="network-section">
+      <div className="flex items-center gap-2">
+        <NetworkIcon size={18} className="text-accent/60" aria-hidden="true" />
+        <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Network ({addresses.length})</p>
+      </div>
+      {addresses.length === 0 ? (
+        <EmptyState
+          className="mt-4"
+          testId="network-empty-state"
+          title="No observed network identities"
+          description="No reliable host network addresses were observed in the collected evidence."
+        />
+      ) : (
+        <div className="mt-4 space-y-2">
+          {addresses.map((address) => (
+            <NetworkAddressRow key={address.ip} address={address} />
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -566,6 +665,14 @@ export default function HostInformationPage() {
     staleTime: 60_000,
   });
 
+  const networkQuery = useQuery({
+    queryKey: ["case-host-network", caseId, selectedHostId],
+    queryFn: () => api.getCaseHostNetwork(caseId, { host_id: selectedHostId }),
+    enabled: Boolean(caseId && selectedHostId),
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
+
   const selectedHost = hosts.find((host) => host.id === selectedHostId) ?? null;
 
   if (!caseId) {
@@ -641,6 +748,10 @@ export default function HostInformationPage() {
               ))}
             </div>
           ) : null}
+
+          {networkQuery.isLoading ? <p className="text-sm text-muted">Loading network observations&hellip;</p> : null}
+          {networkQuery.isError ? <p className="text-sm text-danger">{String((networkQuery.error as Error)?.message || "Could not load network observations for this host.")}</p> : null}
+          {networkQuery.data ? <NetworkSection addresses={networkQuery.data.addresses} /> : null}
 
           {usersQuery.isLoading ? <p className="text-sm text-muted">Loading users&hellip;</p> : null}
           {usersQuery.isError ? <p className="text-sm text-danger">{String((usersQuery.error as Error)?.message || "Could not load Host User Inventory for this host.")}</p> : null}

@@ -2524,6 +2524,38 @@ export type CaseHostUsersResponse = {
   users: HostUserEntry[];
 };
 
+export type HostNetworkObservationSource = {
+  source_kind: string;
+  source_label: string;
+  observation_count: number;
+  first_seen: string | null;
+  last_seen: string | null;
+  evidence_id: string | null;
+  artifact_id: string | null;
+};
+
+export type HostNetworkAddress = {
+  ip: string;
+  ip_version: 4 | 6;
+  classification: "private" | "public" | "loopback" | "link-local" | "multicast" | "unspecified";
+  is_private: boolean;
+  is_public: boolean;
+  is_loopback: boolean;
+  is_link_local: boolean;
+  is_multicast: boolean;
+  is_unspecified: boolean;
+  first_seen: string | null;
+  last_seen: string | null;
+  observation_count: number;
+  sources: HostNetworkObservationSource[];
+};
+
+export type CaseHostNetworkResponse = {
+  case_id: string;
+  host_id: string;
+  addresses: HostNetworkAddress[];
+};
+
 export type CaseHostAuditResponse = {
   case_id: string;
   items: CaseHostAuditEntry[];
@@ -5655,6 +5687,8 @@ export const api = {
     }
     return request<CaseHostUsersResponse>(`/cases/${caseId}/host-users${query.size ? `?${query.toString()}` : ""}`);
   },
+  getCaseHostNetwork: (caseId: string, params: { host_id: string }) =>
+    request<CaseHostNetworkResponse>(`/cases/${caseId}/host-network?${new URLSearchParams(params).toString()}`),
   createCaseHost: (caseId: string, payload: { host_name: string; reason?: string | null; analyst?: string | null }) =>
     request<{ case_id: string; host: CaseContextHostSummary; created: boolean }>(`/cases/${caseId}/hosts`, { method: "POST", body: JSON.stringify(payload) }),
   mergeCaseHosts: (caseId: string, payload: { canonical_host_id: string; aliases: string[]; reason?: string | null; analyst?: string | null }) =>
