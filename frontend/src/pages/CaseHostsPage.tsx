@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { api, type CaseContextHostSummary } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
+import { evidenceTypeLabel } from "../lib/evidenceDetailFormatting";
 
 export default function CaseHostsPage() {
   const { caseId = "" } = useParams();
@@ -279,7 +280,7 @@ export default function CaseHostsPage() {
                     </p>
                     <ul className="mt-3 space-y-1 text-xs text-muted">
                       {deletionPreviewQuery.data.evidences.map((item) => (
-                        <li key={item.id}>{item.name || item.id} <span className="text-muted/70">({item.evidence_type || "unknown"})</span></li>
+                        <li key={item.id}>{item.name || item.id} <span className="text-muted/70">({item.evidence_type ? evidenceTypeLabel(item.evidence_type) : "unknown"})</span></li>
                       ))}
                     </ul>
                     {deletionPreviewQuery.data.eligible_target_hosts.length ? (

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatIndexingPhaseForDisplay } from "./evidenceDetailFormatting";
+import { evidenceTypeLabel, formatIndexingPhaseForDisplay } from "./evidenceDetailFormatting";
 
 describe("formatIndexingPhaseForDisplay", () => {
   it("maps every disk-image current_action to an analyst-facing label", () => {
@@ -25,5 +25,23 @@ describe("formatIndexingPhaseForDisplay", () => {
     expect(formatIndexingPhaseForDisplay(null)).toBe("Unknown");
     expect(formatIndexingPhaseForDisplay(undefined)).toBe("Unknown");
     expect(formatIndexingPhaseForDisplay("")).toBe("Unknown");
+  });
+});
+
+describe("evidenceTypeLabel", () => {
+  it("regression: hides the collection-tool-specific velociraptor_zip identifier behind a generic analyst-facing label", () => {
+    expect(evidenceTypeLabel("velociraptor_zip")).toBe("Evidence collection");
+  });
+
+  it("humanizes other persisted evidence_type values that have no override", () => {
+    expect(evidenceTypeLabel("kape_archive")).toBe("Kape Archive");
+    expect(evidenceTypeLabel("disk_image")).toBe("Disk Image");
+    expect(evidenceTypeLabel("pcap")).toBe("Pcap");
+  });
+
+  it("falls back to a dash for empty/missing values", () => {
+    expect(evidenceTypeLabel(null)).toBe("-");
+    expect(evidenceTypeLabel(undefined)).toBe("-");
+    expect(evidenceTypeLabel("")).toBe("-");
   });
 });

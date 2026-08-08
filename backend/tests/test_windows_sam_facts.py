@@ -214,6 +214,10 @@ def _facts_by_username(result) -> dict[str, dict]:
     return {doc["host_user_fact"]["username"]: doc["host_user_fact"] for doc in result.events}
 
 
+def _users_by_username(result) -> dict[str, dict]:
+    return {doc["host_user_fact"]["username"]: doc["user"] for doc in result.events}
+
+
 class TestSamExtraction:
     def test_real_shaped_hive_decodes_five_builtin_and_custom_accounts(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         # Mirrors the real ws01 SAM hive decoded during the sprint audit.
@@ -235,6 +239,29 @@ class TestSamExtraction:
         assert facts["bob"]["last_login_at"] is not None
         assert facts["bob"]["attributes"]["logon_count"] == "8"
         assert facts["bob"]["attributes"]["sid"] == f"{MACHINE_SID}-1001"
+
+    def test_account_username_and_sid_propagate_to_the_canonical_user_field(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        # Regression: base_document() derives user.name/user.sid from the raw
+        # parser row, which is empty for this parser, so every SAM account
+        # document rendered "-" in the User column (Search and Artifact
+        # Views both read doc["user"]["name"]) even though the decoded
+        # account name was already sitting in host_user_fact.username. The
+        # canonical user.name/user.sid fields must carry it, not a new field.
+        result = _parse_sam(monkeypatch, tmp_path, _sam_hive(users={
+            "Administrator": {"rid": 500, "flags": 0x0211},
+            "Guest": {"rid": 501, "flags": 0x0215},
+            "DefaultAccount": {"rid": 503, "flags": 0x0215},
+            "WDAGUtilityAccount": {"rid": 504, "flags": 0x0011},
+            "bob": {"rid": 1001, "flags": 0x0214},
+        }))
+        users = _users_by_username(result)
+        assert users["Administrator"]["name"] == "Administrator"
+        assert users["Administrator"]["sid"] == f"{MACHINE_SID}-500"
+        assert users["bob"]["name"] == "bob"
+        assert users["bob"]["sid"] == f"{MACHINE_SID}-1001"
+        for username in ("Guest", "DefaultAccount", "WDAGUtilityAccount"):
+            assert users[username]["name"] == username
+            assert users[username]["sid"], f"{username} missing sid"
 
     def test_locked_account_status(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         result = _parse_sam(monkeypatch, tmp_path, _sam_hive(users={"alice": {"rid": 1002, "flags": (1 << 10)}}))
