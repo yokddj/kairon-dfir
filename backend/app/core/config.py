@@ -13,8 +13,8 @@ class Settings(BaseSettings):
 
     app_version: str = "0.9.0-beta"
     app_vendor_id: str = "yokddj"
-    app_build_channel: str = "evaluation"
-    app_build_fingerprint: str = "kairon-dfir-evaluation"
+    app_build_channel: str = "public-beta"
+    app_build_fingerprint: str = "kairon-dfir-public-beta"
 
     postgres_db: str = "dfir"
     postgres_user: str = "dfir"
@@ -663,7 +663,7 @@ class Settings(BaseSettings):
 
     @property
     def build_notice(self) -> str:
-        return "Internal evaluation build. Redistribution not authorized without permission."
+        return "Kairon DFIR public beta. Licensed under AGPL-3.0; see LICENSE for terms."
 
     @property
     def build_identity(self) -> dict[str, str]:

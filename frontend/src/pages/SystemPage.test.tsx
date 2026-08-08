@@ -341,9 +341,9 @@ describe("SystemPage", () => {
     getSystemVersionMock.mockResolvedValue({
       app_version: "0.1.0",
       vendor_id: "yokddj",
-      build_channel: "evaluation",
-      build_fingerprint: "kairon-dfir-evaluation",
-      notice: "Internal evaluation build. Redistribution not authorized without permission.",
+      build_channel: "public-beta",
+      build_fingerprint: "kairon-dfir-public-beta",
+      notice: "Kairon DFIR public beta. Licensed under AGPL-3.0; see LICENSE for terms.",
     });
   });
 
@@ -405,11 +405,11 @@ describe("SystemPage", () => {
     renderPage();
     expect(await screen.findByText(/Build identity/i)).toBeInTheDocument();
     expect(screen.getByText(/Channel:/i)).toBeInTheDocument();
-    expect(screen.getByText(/^evaluation$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^public-beta$/i)).toBeInTheDocument();
     expect(screen.getByText(/Vendor:/i)).toBeInTheDocument();
     expect(screen.getByText(/^yokddj$/i)).toBeInTheDocument();
-    expect(screen.getByText(/kairon-dfir-evaluation/i)).toBeInTheDocument();
-    expect(screen.getByText(/Internal evaluation build/i)).toBeInTheDocument();
+    expect(screen.getByText(/kairon-dfir-public-beta/i)).toBeInTheDocument();
+    expect(screen.getByText(/Kairon DFIR public beta/i)).toBeInTheDocument();
   });
 
   it("defaults to overview and does not show advanced settings there", async () => {

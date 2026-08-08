@@ -16,7 +16,7 @@ jobs:
         run: |
           set -e
           if grep -rPi '(assigned cases only|read.only role)' \
-            README.md docs/first-run.md docs/roles-and-permissions.md 2>/dev/null; then
+            README.md docs/getting-started/first-run.md docs/getting-started/roles-and-permissions.md 2>/dev/null; then
             echo "ERROR: legacy role claims found in docs"
             exit 1
           fi
@@ -26,7 +26,7 @@ jobs:
         run: |
           set -e
           if grep -rPin 'default password|admin/admin|admin/password' \
-            README.md docs/first-run.md docs/roles-and-permissions.md 2>/dev/null; then
+            README.md docs/getting-started/first-run.md docs/getting-started/roles-and-permissions.md 2>/dev/null; then
             echo "ERROR: default password claim found"
             exit 1
           fi
@@ -36,7 +36,7 @@ jobs:
         run: |
           set -e
           if grep -rPi 'Native PowerShell deployment.*supported|native.*PowerShell.*supported|PowerShell.*fully supported' \
-            README.md docs/windows-wsl.md 2>/dev/null | grep -vi 'not supported' | grep -q .; then
+            README.md docs/getting-started/windows-wsl.md 2>/dev/null | grep -vi 'not supported' | grep -q .; then
             echo "ERROR: PowerShell listed as supported deployment path"
             exit 1
           fi
@@ -46,7 +46,7 @@ jobs:
         run: |
           set -e
           if grep -rPin 'create-admin.*first|first.*admin.*CLI|primary.*admin.*CLI' \
-            README.md docs/first-run.md docs/roles-and-permissions.md 2>/dev/null \
+            README.md docs/getting-started/first-run.md docs/getting-started/roles-and-permissions.md 2>/dev/null \
             | grep -vi 'no CLI' | grep -q .; then
             echo "ERROR: CLI first-admin presented as primary flow"
             exit 1
