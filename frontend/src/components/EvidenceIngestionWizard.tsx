@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 
 import { api, type Evidence, type EvidenceIntent, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type EvtxProfile, type IngestMode, type MemoryUploadStatus, type PreflightReport, type ResumableUploadSessionRead } from "../api/client";
 import { useNotifications } from "../context/NotificationsContext";
+import { MemoryEvidencePreparationCard } from "./memory/MemoryEvidencePreparationCard";
 import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
 import { memoryEvidenceRoute } from "../lib/canonicalRoutes";
 import { hashBlob } from "../lib/sha256";
@@ -260,6 +261,10 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [serverPath, setServerPath] = useState("");
   const [session, setSession] = useState<EvidenceUploadSessionRead | null>(null);
   const [preflight, setPreflight] = useState<PreflightReport | null>(null);
+  // Step 6 only: the just-registered memory evidence, shown in a
+  // read-only Memory Preparation screen before the wizard hands off to
+  // memoryEvidenceRoute (see handleContinueFromPreparation below).
+  const [preparationEvidence, setPreparationEvidence] = useState<Evidence | null>(null);
   const [batchItems, setBatchItems] = useState<BatchPreflightItem[]>([]);
   const [manualOverrideAccepted, setManualOverrideAccepted] = useState(false);
   const [forcedRoutes, setForcedRoutes] = useState<Record<string, ForcedRoute>>({});
@@ -415,11 +420,19 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
     setResumeFile(null);
     setResumeFileError(null);
     setResumeVerifying(false);
+    setPreparationEvidence(null);
   }
 
   function handleClose() {
     reset();
     onClose();
+  }
+
+  function handleContinueFromPreparation() {
+    const evidence = preparationEvidence;
+    if (!evidence) return;
+    handleClose();
+    navigate(memoryEvidenceRoute(caseId, evidence.id));
   }
 
   function selectEvidenceFiles(selectedFiles: File[], options: { folderUpload?: boolean } = {}) {
@@ -746,8 +759,8 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
         void queryClient.invalidateQueries({ queryKey: ["resumable-evidence-uploads", caseId] });
         if (evidence.evidence_type === "memory_dump") {
           notify({ title: "Memory evidence registered", description: `${evidence.original_filename} was uploaded and registered.`, tone: "success" });
-          handleClose();
-          navigate(memoryEvidenceRoute(caseId, evidence.id));
+          setPreparationEvidence(evidence);
+          setStep(6);
           return;
         }
         // Non-memory unified categories (currently disk_image) still need
@@ -1000,11 +1013,12 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       void queryClient.invalidateQueries({ queryKey: ["case-processing", caseId] });
       void queryClient.invalidateQueries({ queryKey: ["evidences", caseId] });
       void queryClient.invalidateQueries({ queryKey: ["evidence-indexing-plan", evidence.id] });
-      handleClose();
       if (evidence.evidence_type === "memory_dump") {
-        navigate(memoryEvidenceRoute(caseId, evidence.id));
+        setPreparationEvidence(evidence);
+        setStep(6);
         return;
       }
+      handleClose();
       navigate(`/cases/${caseId}?tab=processing&evidence_id=${evidence.id}`);
     },
     onError: (error) => {
@@ -1140,7 +1154,7 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
       <div className="w-full max-w-3xl max-h-[90vh] overflow-y-auto rounded-[28px] border border-line bg-panel p-6 shadow-panel">
         <div className="flex items-center justify-between gap-3">
           <div>
-            <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">{step === 5 ? "Confirm evidence" : "Add Evidence"}</p>
+            <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">{step === 5 ? "Confirm evidence" : step === 6 ? "Memory Preparation" : "Add Evidence"}</p>
             <p className={`mt-1 inline-flex items-center gap-2 text-xs ${healthStatus.tone}`} data-testid="ingestion-health-chip"><span className={`h-2 w-2 rounded-full ${healthStatus.dot}`} />{healthStatus.label}</p>
           </div>
           <button type="button" onClick={handleClose} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Close</button>
@@ -1753,6 +1767,29 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
               >
                 {startMutation.isPending ? "Starting..." : processingMode === "skip" && !hasMemoryEvidence ? "Save Evidence" : "Start Processing"}
+              </button>
+            </div>
+          </section>
+        ) : null}
+
+        {step === 6 && preparationEvidence ? (
+          <section className="mt-5" data-testid="memory-evidence-preparation-step">
+            <h2 className="text-xl font-semibold text-ink">Evidence registered</h2>
+            <p className="mt-1 text-sm text-muted">
+              {preparationEvidence.original_filename} was registered as memory evidence. Kairon's current preparation
+              status for this evidence is shown below.
+            </p>
+
+            <MemoryEvidencePreparationCard caseId={caseId} evidenceId={preparationEvidence.id} />
+
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={handleContinueFromPreparation}
+                className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss"
+                data-testid="memory-preparation-continue-button"
+              >
+                Continue
               </button>
             </div>
           </section>

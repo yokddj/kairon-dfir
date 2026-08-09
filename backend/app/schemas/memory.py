@@ -100,6 +100,22 @@ class MemorySymbolAcquireResponse(BaseModel):
     message: str
 
 
+class MemoryEvidencePreparationRead(BaseModel):
+    """Mirrors app.services.memory.preparation.MemoryEvidencePreparation
+    .to_dict() field-for-field. This schema adds no fields, computes
+    nothing, and carries no defaults that could silently mask a missing
+    field from that dataclass -- it exists only so FastAPI can validate
+    and document the response shape."""
+
+    evidence_id: str
+    platform: str
+    architecture: str
+    readiness: str
+    requires_symbols: bool
+    can_start_analysis: bool
+    human_message: str
+
+
 class MemorySymbolBlockedAcquireRequest(BaseModel):
     authorization_acknowledged: bool = False
 

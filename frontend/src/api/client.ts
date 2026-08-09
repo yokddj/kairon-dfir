@@ -1329,6 +1329,28 @@ export type MemorySymbolPreparation = {
   error_code?: string | null;
 };
 
+// Memory Evidence Preparation (backend: app.services.memory.preparation,
+// Phase 1/2). This is DELIBERATELY a different type from
+// MemorySymbolPreparation above: that one drives the async,
+// persisted Windows/Linux symbol-acquisition pipeline (queued ->
+// probing -> ... -> ready) rendered by MemoryPreparationCard.tsx.
+// MemoryEvidencePreparation is a read-only, platform-agnostic
+// snapshot ({@link api.getMemoryEvidencePreparation}) with no
+// retry/upload/acquisition actions -- see MemoryEvidencePreparationCard.tsx.
+// The similar naming is a known, documented risk (see the Phase 1/2
+// technical reports), not an accidental duplicate.
+export type MemoryPreparationReadiness = "inspecting" | "ready" | "symbols_required" | "awaiting_user" | "blocked" | "failed";
+
+export type MemoryEvidencePreparation = {
+  evidence_id: string;
+  platform: string;
+  architecture: string;
+  readiness: MemoryPreparationReadiness;
+  requires_symbols: boolean;
+  can_start_analysis: boolean;
+  human_message: string;
+};
+
 export type NativeProbeStatus = {
   probe_id: string | null;
   status: "never_run" | "queued" | "running" | "compatible" | "incompatible" | "failed" | "timeout";
@@ -5875,6 +5897,9 @@ export const api = {
     request<MemorySymbolReadiness>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbol-readiness`),
   getMemorySymbolPreparation: (caseId: string, evidenceId: string) =>
     request<MemorySymbolPreparation>(`/cases/${caseId}/memory/evidences/${evidenceId}/symbol-preparation`),
+  // Phase 1/2 read-only preparation snapshot -- see the MemoryEvidencePreparation type above.
+  getMemoryEvidencePreparation: (caseId: string, evidenceId: string) =>
+    request<MemoryEvidencePreparation>(`/cases/${caseId}/memory/evidences/${evidenceId}/preparation`),
   startNativeProbe: (caseId: string, evidenceId: string) =>
     request<{ probe_id: string; status: string; plugin: string; requirement_id: string }>(
       `/cases/${caseId}/memory/evidences/${evidenceId}/native-probe`,

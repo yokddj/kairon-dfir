@@ -22,6 +22,7 @@ const getMemoryUploadStatusMock = vi.fn();
 const uploadMemoryUploadChunkMock = vi.fn();
 const finalizeMemoryUploadMock = vi.fn();
 const getEvidenceMock = vi.fn();
+const getMemoryEvidencePreparationMock = vi.fn();
 const navigateMock = vi.fn();
 
 vi.mock("react-router-dom", async () => {
@@ -46,6 +47,7 @@ vi.mock("../api/client", () => ({
     uploadMemoryUploadChunk: (...args: unknown[]) => uploadMemoryUploadChunkMock(...args),
     finalizeMemoryUpload: (...args: unknown[]) => finalizeMemoryUploadMock(...args),
     getEvidence: (...args: unknown[]) => getEvidenceMock(...args),
+    getMemoryEvidencePreparation: (...args: unknown[]) => getMemoryEvidencePreparationMock(...args),
   },
 }));
 
@@ -189,6 +191,15 @@ describe("EvidenceIngestionWizard", () => {
     runEvidenceIndexingPlanMock.mockResolvedValue({ accepted: true, evidence_id: "evidence-1", profile: "recommended", run_id: "plan-1", status: "queued", queued_jobs: [{ step_id: "linux_artifacts", run_id: "job-1", status: "queued" }], plan: { run_id: "plan-1", profile: "recommended", status: "queued", steps: [], excluded: [], queued_jobs: [] } });
     cancelEvidenceUploadSessionMock.mockResolvedValue({ status: "cancelled", session_id: "session-1" });
     listResumableEvidenceUploadsMock.mockResolvedValue({ case_id: "case-1", sessions: [] });
+    getMemoryEvidencePreparationMock.mockResolvedValue({
+      evidence_id: "evidence-3",
+      platform: "windows",
+      architecture: "x64",
+      readiness: "ready",
+      requires_symbols: true,
+      can_start_analysis: true,
+      human_message: "This evidence is ready to analyze.",
+    });
   });
 
   it("shows a critical health interruption only when a critical dependency is down", async () => {
@@ -948,7 +959,68 @@ describe("EvidenceIngestionWizard", () => {
     await userEvent.click(startButton);
     await waitFor(() => expect(promoteEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", "session-1", expect.objectContaining({ provided_host: "web01", memory_authorization_acknowledged: true })));
     expect(runEvidenceIndexingPlanMock).not.toHaveBeenCalled();
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/memory/evidence-3"));
+
+    // Registering memory evidence no longer navigates away immediately --
+    // it shows a read-only Memory Preparation step first (Phase 2).
+    expect(navigateMock).not.toHaveBeenCalled();
+    await screen.findByRole("heading", { name: "Evidence registered" });
+    await waitFor(() => expect(getMemoryEvidencePreparationMock).toHaveBeenCalledWith("case-1", "evidence-3"));
+    expect(await screen.findByTestId("memory-evidence-preparation-card")).toHaveTextContent(/Ready for analysis/i);
+
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/m/evidence-3/overview"));
+  });
+
+  it("shows the SYMBOLS_REQUIRED preparation status when the backend reports it", async () => {
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-3", original_filename: "capture.mem", evidence_type: "memory_dump" });
+    getMemoryEvidencePreparationMock.mockResolvedValue({
+      evidence_id: "evidence-3",
+      platform: "linux",
+      architecture: "x64",
+      readiness: "symbols_required",
+      requires_symbols: true,
+      can_start_analysis: false,
+      human_message: "This Linux dump requires Volatility symbols (ISF) Kairon does not currently have.",
+    });
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+      preflight: readyReport({ original_filename: "capture.mem", classification: { ...readyReport().classification, category: "memory_dump" } }),
+    }));
+    renderWizard();
+    await goToFileStep(/Memory Dump/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "capture.mem"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("checkbox", { name: /authorized to handle this RAM evidence/i }));
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    const card = await screen.findByTestId("memory-evidence-preparation-card");
+    expect(card).toHaveAttribute("data-ui-state", "symbols_required");
+    expect(card).toHaveTextContent(/Additional resources are required/i);
+    expect(card).toHaveTextContent(/Volatility symbols/i);
+    // No action buttons on this read-only view.
+    expect(screen.queryByRole("button", { name: /upload/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /validate/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /start analysis/i })).not.toBeInTheDocument();
+  });
+
+  it("never shows the Memory Preparation step or card for non-memory evidence", async () => {
+    promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-disk-x", original_filename: "disk.E01", evidence_type: "disk_image" });
+    createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+      session: { ...sessionResponse().session, id: "session-disk-x", original_filename: "disk.E01" },
+      preflight: readyReport({ original_filename: "disk.E01", classification: { ...readyReport().classification, category: "disk_image", chain: ["Disk Image"], container: "EWF disk image" } }),
+    }));
+    renderWizard();
+    await goToFileStep(/Disk Image/);
+    await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], "disk.E01"));
+    await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+    await screen.findByTestId("preflight-report");
+    await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/cases/case-1?tab=processing&evidence_id=evidence-disk-x"));
+    expect(screen.queryByTestId("memory-evidence-preparation-card")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("memory-evidence-preparation-step")).not.toBeInTheDocument();
+    expect(getMemoryEvidencePreparationMock).not.toHaveBeenCalled();
   });
 
   it("shows a visible host requirement for memory evidence with no detected host", async () => {
@@ -1198,6 +1270,15 @@ describe("EvidenceIngestionWizard resumable upload discovery", () => {
     getCaseHostsMock.mockResolvedValue({ hosts: [{ id: "host-1", display_name: "WS-01" }] });
     getIngestionReadinessMock.mockResolvedValue(readyHealth({ unified_upload_evidence_memory_dump: true }));
     cancelEvidenceUploadSessionMock.mockResolvedValue({ status: "cancelled", session_id: "resume-session-1" });
+    getMemoryEvidencePreparationMock.mockResolvedValue({
+      evidence_id: "evidence-resumed",
+      platform: "windows",
+      architecture: "x64",
+      readiness: "ready",
+      requires_symbols: true,
+      can_start_analysis: true,
+      human_message: "This evidence is ready to analyze.",
+    });
   });
 
   it("surfaces an interrupted upload without needing a resume_session URL parameter and lets the analyst pick it up", async () => {
@@ -1305,7 +1386,12 @@ describe("EvidenceIngestionWizard resumable upload discovery", () => {
     // chunk 0 is never retransmitted.
     expect(uploadMemoryUploadChunkMock).not.toHaveBeenCalledWith("case-1", "memory-upload-1", 0, expect.anything(), expect.anything());
     await waitFor(() => expect(finalizeMemoryUploadMock).toHaveBeenCalledWith("case-1", "memory-upload-1"));
-    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/memory/evidence-resumed"));
+
+    // Same Phase 2 behavior as the legacy flow: memory evidence lands on
+    // the read-only Memory Preparation step before the wizard navigates.
+    await screen.findByRole("heading", { name: "Evidence registered" });
+    await userEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/m/evidence-resumed/overview"));
   });
 
   it("cancels an interrupted upload from the discovery panel", async () => {

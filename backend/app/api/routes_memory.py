@@ -67,7 +67,7 @@ from app.models.case import Case
 from app.models.case_host import CaseHost
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryArtifactSummary, MemoryNativeProbe, MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition, MemorySymbolRequirement
-from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolBlockedAcquireRequest, MemorySymbolBlockedAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadDirectResponse, MemoryUploadFinalizeRequest, MemoryUploadReadinessRead, MemoryUploadSessionCreateRequest, MemoryUploadSessionCreateResponse, MemoryUploadStatusRead
+from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidencePreparationRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolBlockedAcquireRequest, MemorySymbolBlockedAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadDirectResponse, MemoryUploadFinalizeRequest, MemoryUploadReadinessRead, MemoryUploadSessionCreateRequest, MemoryUploadSessionCreateResponse, MemoryUploadStatusRead
 from app.services.memory.artifact_indexing import (
     get_artifact_document,
     link_process_entities,
@@ -79,6 +79,7 @@ from app.services.memory.analysis_plan import build_memory_analysis_plan
 from app.services.memory.capability_registry import MemoryCapability, capabilities_for_platform, plugins_for_capability
 from app.services.memory.platform import PlatformFamily
 from app.services.memory.evidence_access import evidence_readiness
+from app.services.memory.preparation import MemoryPreparationError, get_preparation_status
 from app.services.memory.indexing import ensure_memory_index, get_memory_document, get_opensearch_client, search_memory_edges, search_memory_processes
 from app.services.memory.normalizers import normalize_windows_info
 from app.services.memory.storage import memory_run_dir
@@ -436,6 +437,28 @@ def get_memory_evidence_readiness(case_id: str, evidence_id: str, db: Session = 
     result["ineligible_capabilities"] = {c.value: r.value for c, r in analysis_plan.ineligible_capabilities}
     result["capability_readiness"] = _memory_capability_readiness(analysis_plan, backend, result)
     return result
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/preparation",
+    response_model=MemoryEvidencePreparationRead,
+)
+def get_memory_evidence_preparation(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    """Read-only exposure of Memory Preparation, Phase 1.
+
+    Pure passthrough to app.services.memory.preparation
+    .get_preparation_status() -- the case/evidence-scoping check below is
+    the only logic this handler adds (matching every other evidence-scoped
+    memory route in this file); no readiness, platform, or symbol state is
+    computed here.
+    """
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    try:
+        preparation = get_preparation_status(db, evidence_id)
+    except MemoryPreparationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return preparation.to_dict()
 
 
 def _memory_capability_readiness(analysis_plan, backend: dict, storage_readiness: dict) -> dict[str, dict]:
