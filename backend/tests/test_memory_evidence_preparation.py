@@ -495,3 +495,123 @@ class TestGetPreparationStatusEndToEnd:
         result = get_preparation_status(db, EVIDENCE_ID)
 
         assert result.evidence_id == EVIDENCE_ID
+
+
+# ---------------------------------------------------------------------------
+# 4. Endpoint tests (Phase 2) -- GET .../memory/evidences/{id}/preparation
+#
+# The route handler (app.api.routes_memory.get_memory_evidence_preparation)
+# is called directly as a plain function rather than through
+# fastapi.testclient.TestClient/httpx: FastAPI route handlers are ordinary
+# Python callables, and this container's Starlette build cannot import
+# starlette.testclient (missing the optional "httpx2" extra) -- a
+# pre-existing, environment-wide gap that also blocks every other
+# TestClient-based test file (test_activity_routes.py, etc.), not
+# something introduced by this phase. Calling the handler directly still
+# exercises the real case/evidence-scoping checks, the real
+# HTTPException/404 branches, and the real get_preparation_status() call
+# -- only the ASGI/HTTP transport layer is skipped.
+# ---------------------------------------------------------------------------
+
+
+class TestPreparationEndpoint:
+    def test_response_matches_get_preparation_status_exactly(self, tmp_path: Path):
+        from app.api.routes_memory import get_memory_evidence_preparation
+
+        db = _db()
+        _case(db)
+        path = _write(tmp_path, "windows.dmp", b"PAGEDU64" + b"\x00" * 4088)
+        _evidence(db, stored_path=str(path))
+
+        direct = get_preparation_status(db, EVIDENCE_ID)
+        response = get_memory_evidence_preparation(CASE_ID, EVIDENCE_ID, db=db)
+
+        assert response == direct.to_dict()
+        assert response["readiness"] == "ready"
+        assert response["platform"] == "windows"
+
+    def test_linux_symbols_required_via_endpoint(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        from app.api.routes_memory import get_memory_evidence_preparation
+        from app.services.memory import analysis_plan as analysis_plan_module
+
+        cache_root = tmp_path / "volatility-cache"
+        (cache_root / "symbols" / "windows").mkdir(parents=True)
+        monkeypatch.setattr(analysis_plan_module, "get_settings", lambda: SimpleNamespace(memory_native_probe_cache_path=cache_root))
+
+        db = _db()
+        _case(db)
+        path = _write(tmp_path, "linux.img", b"\x7fELF" + b"\x00" * 4092)
+        _evidence(db, stored_path=str(path), detected_format="elf_core")
+
+        response = get_memory_evidence_preparation(CASE_ID, EVIDENCE_ID, db=db)
+
+        assert response["platform"] == "linux"
+        assert response["readiness"] == "symbols_required"
+        assert response["can_start_analysis"] is False
+        assert response["requires_symbols"] is True
+
+    def test_case_not_found_is_404(self):
+        from fastapi import HTTPException
+
+        from app.api.routes_memory import get_memory_evidence_preparation
+
+        db = _db()
+        with pytest.raises(HTTPException) as exc_info:
+            get_memory_evidence_preparation("no-such-case", EVIDENCE_ID, db=db)
+        assert exc_info.value.status_code == 404
+
+    def test_evidence_not_found_is_404(self):
+        from fastapi import HTTPException
+
+        from app.api.routes_memory import get_memory_evidence_preparation
+
+        db = _db()
+        _case(db)
+        with pytest.raises(HTTPException) as exc_info:
+            get_memory_evidence_preparation(CASE_ID, "no-such-evidence", db=db)
+        assert exc_info.value.status_code == 404
+
+    def test_evidence_from_a_different_case_is_404(self, tmp_path: Path):
+        from fastapi import HTTPException
+
+        from app.api.routes_memory import get_memory_evidence_preparation
+
+        other_case_id = "cccccccc-3333-4333-8333-cccccccccccc"
+        db = _db()
+        _case(db)
+        _case(db, case_id=other_case_id)
+        path = _write(tmp_path, "windows.dmp", b"PAGEDU64" + b"\x00" * 4088)
+        _evidence(db, stored_path=str(path))
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_memory_evidence_preparation(other_case_id, EVIDENCE_ID, db=db)
+        assert exc_info.value.status_code == 404
+
+    def test_non_memory_evidence_is_404(self, tmp_path: Path):
+        from fastapi import HTTPException
+
+        from app.api.routes_memory import get_memory_evidence_preparation
+
+        db = _db()
+        _case(db)
+        path = _write(tmp_path, "disk.E01", b"\x00" * 64)
+        _evidence(db, stored_path=str(path), evidence_type=EvidenceType.disk_image)
+
+        with pytest.raises(HTTPException) as exc_info:
+            get_memory_evidence_preparation(CASE_ID, EVIDENCE_ID, db=db)
+        assert exc_info.value.status_code == 404
+
+    def test_probable_disk_returns_blocked_not_an_error(self, tmp_path: Path):
+        """A memory_dump evidence item that the confirmation gate blocks is
+        a normal 200 response with readiness=blocked -- not an HTTP error."""
+        from app.api.routes_memory import get_memory_evidence_preparation
+
+        db = _db()
+        _case(db)
+        path = _write(tmp_path, "maybe-disk.raw", b"\x00" * 64)
+        _evidence(db, stored_path=str(path), detection_status="probable_disk")
+
+        response = get_memory_evidence_preparation(CASE_ID, EVIDENCE_ID, db=db)
+
+        assert response["readiness"] == "blocked"
+        assert response["can_start_analysis"] is False
