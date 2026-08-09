@@ -53,8 +53,17 @@ RUN set -eux; \
 COPY backend/app /app/app
 COPY backend/tests /app/tests
 COPY backend/pyproject.toml /app/pyproject.toml
+COPY backend/requirements.lock /app/requirements.lock
 COPY docs /app/docs
 COPY tools/demo /app/tools/demo
-RUN pip install --no-cache-dir ".[dev]"
+# pyproject.toml's dependency bounds are loose (e.g. "fastapi>=0.115.0"), so
+# a plain install floats to whatever is newest on PyPI on build day -- not
+# reproducible, and a real regression (some routes registered via
+# app.include_router() silently failing to dispatch) was hit in the wild
+# with fastapi 0.141.1/starlette 1.5.0. requirements.lock pins the exact,
+# known-good version set; installing it second overrides anything the
+# first pass resolved differently.
+RUN pip install --no-cache-dir ".[dev]" \
+    && pip install --no-cache-dir -r requirements.lock
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

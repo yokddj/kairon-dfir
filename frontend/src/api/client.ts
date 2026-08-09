@@ -1351,6 +1351,42 @@ export type MemoryEvidencePreparation = {
   human_message: string;
 };
 
+// Memory Evidence Preparation, Phase 3 -- evidence-scoped Linux ISF
+// validation. Backed by app.services.memory.linux_symbol_evidence via
+// POST .../linux-symbols/validate and GET .../linux-symbols/requirement.
+// Deliberately separate from MemorySymbolRequirement/MemoryRecoveryResult
+// above -- those are the Windows PDB-requirement-scoped admin recovery
+// types; this is Linux-only and requires no admin role.
+export type LinuxSymbolIdentity = {
+  architecture: string | null;
+  kernel_release: string | null;
+  banner: string | null;
+  build_id: string | null;
+};
+
+// "queued"/"validating" are non-terminal -- keep polling. The other four
+// are terminal (see LinuxSymbolUploadPanel.tsx's refetchInterval).
+export type LinuxSymbolValidationStatus = "queued" | "validating" | "valid" | "invalid" | "unsupported" | "validation_failed";
+
+export type LinuxSymbolValidationEnqueueResult = {
+  validation_id: string;
+  status: LinuxSymbolValidationStatus;
+};
+
+export type LinuxSymbolValidationResult = {
+  status: LinuxSymbolValidationStatus;
+  expected_identity: LinuxSymbolIdentity | null;
+  detected_identity: LinuxSymbolIdentity | null;
+  compatible: boolean;
+  reason: string;
+  cached: boolean;
+  cache_key: string | null;
+};
+
+export type LinuxSymbolRequirement = {
+  expected_identity: LinuxSymbolIdentity | null;
+};
+
 export type NativeProbeStatus = {
   probe_id: string | null;
   status: "never_run" | "queued" | "running" | "compatible" | "incompatible" | "failed" | "timeout";
@@ -5900,6 +5936,30 @@ export const api = {
   // Phase 1/2 read-only preparation snapshot -- see the MemoryEvidencePreparation type above.
   getMemoryEvidencePreparation: (caseId: string, evidenceId: string) =>
     request<MemoryEvidencePreparation>(`/cases/${caseId}/memory/evidences/${evidenceId}/preparation`),
+  // Phase 3 -- evidence-scoped Linux ISF validation. Not an admin route.
+  // Validation runs asynchronously on the memory-worker (the backend API
+  // process cannot write /volatility-cache): this only enqueues a job.
+  getLinuxSymbolRequirement: (caseId: string, evidenceId: string) =>
+    request<LinuxSymbolRequirement>(`/cases/${caseId}/memory/evidences/${evidenceId}/linux-symbols/requirement`),
+  validateLinuxEvidenceSymbols: (caseId: string, evidenceId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return fetch(
+      `/api/cases/${encodeURIComponent(caseId)}/memory/evidences/${encodeURIComponent(evidenceId)}/linux-symbols/validate`,
+      { method: "POST", body: form },
+    ).then(async (res) => {
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        const message = body?.detail?.message || body?.detail || `Upload failed (${res.status})`;
+        throw new Error(typeof message === "string" ? message : "Upload failed");
+      }
+      return res.json() as Promise<LinuxSymbolValidationEnqueueResult>;
+    });
+  },
+  getLinuxSymbolValidationStatus: (caseId: string, evidenceId: string, validationId: string) =>
+    request<LinuxSymbolValidationResult>(
+      `/cases/${caseId}/memory/evidences/${evidenceId}/linux-symbols/validate/${validationId}`,
+    ),
   startNativeProbe: (caseId: string, evidenceId: string) =>
     request<{ probe_id: string; status: string; plugin: string; requirement_id: string }>(
       `/cases/${caseId}/memory/evidences/${evidenceId}/native-probe`,

@@ -172,6 +172,13 @@ services:
       - ./data/local-mounts/data-evidence:/data/evidence:ro
       - ./data/local-mounts/cases:/cases:ro
       - memory-symbol-cache:/volatility-cache
+      # Evidence-scoped Linux ISF uploads land here (backend, via its
+      # broad ./data:/app/data mount) while queued/validating, and are
+      # read + deleted here by this worker once the RQ job runs -- unlike
+      # /app/data/tmp (tmpfs below, process-local to this container),
+      # this must be an actual shared directory so the file backend wrote
+      # still exists when the job is picked up.
+      - ./data/linux-symbol-staging:/app/data/linux-symbol-staging
     command: ["python", "-m", "app.workers.memory_worker"]
     restart: unless-stopped
     init: true

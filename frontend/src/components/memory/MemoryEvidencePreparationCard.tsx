@@ -1,5 +1,6 @@
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type MemoryEvidencePreparation, type MemoryPreparationReadiness } from "../../api/client";
+import { LinuxSymbolUploadPanel } from "./LinuxSymbolUploadPanel";
 
 // Read-only Memory Evidence Preparation view (Phase 2). Backed entirely by
 // GET /cases/{caseId}/memory/evidences/{evidenceId}/preparation, which is a
@@ -56,8 +57,10 @@ type Props = {
 };
 
 export function MemoryEvidencePreparationCard({ caseId, evidenceId }: Props) {
+  const queryClient = useQueryClient();
+  const queryKey = ["memory-evidence-preparation", caseId, evidenceId];
   const query = useQuery({
-    queryKey: ["memory-evidence-preparation", caseId, evidenceId],
+    queryKey,
     queryFn: () => api.getMemoryEvidencePreparation(caseId, evidenceId),
     enabled: Boolean(caseId && evidenceId),
     refetchOnWindowFocus: false,
@@ -125,6 +128,14 @@ export function MemoryEvidencePreparationCard({ caseId, evidenceId }: Props) {
         <p className="mt-3 text-xs text-muted" data-testid="memory-evidence-preparation-message">
           {preparation.human_message}
         </p>
+      ) : null}
+      {preparation.platform === "linux" && preparation.readiness === "symbols_required" ? (
+        <LinuxSymbolUploadPanel
+          caseId={caseId}
+          evidenceId={evidenceId}
+          architecture={formatEnumValue(preparation.architecture)}
+          onValidated={() => void queryClient.invalidateQueries({ queryKey })}
+        />
       ) : null}
     </section>
   );

@@ -1,15 +1,22 @@
 /** @vitest-environment jsdom */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { api, type MemoryEvidencePreparation } from "../../api/client";
 import { MemoryEvidencePreparationCard } from "./MemoryEvidencePreparationCard";
 
 const getMemoryEvidencePreparationMock = vi.fn();
+const getLinuxSymbolRequirementMock = vi.fn();
+const validateLinuxEvidenceSymbolsMock = vi.fn();
+const getLinuxSymbolValidationStatusMock = vi.fn();
 
 vi.mock("../../api/client", () => ({
   api: {
     getMemoryEvidencePreparation: (...args: unknown[]) => getMemoryEvidencePreparationMock(...args),
+    getLinuxSymbolRequirement: (...args: unknown[]) => getLinuxSymbolRequirementMock(...args),
+    validateLinuxEvidenceSymbols: (...args: unknown[]) => validateLinuxEvidenceSymbolsMock(...args),
+    getLinuxSymbolValidationStatus: (...args: unknown[]) => getLinuxSymbolValidationStatusMock(...args),
   },
 }));
 
@@ -49,6 +56,7 @@ async function waitForState(state: string) {
 describe("MemoryEvidencePreparationCard (Phase 2, read-only)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    getLinuxSymbolRequirementMock.mockResolvedValue({ expected_identity: null });
   });
 
   it("fetches from the Phase 1/2 endpoint scoped to case and evidence", async () => {
@@ -155,5 +163,80 @@ describe("MemoryEvidencePreparationCard (Phase 2, read-only)", () => {
     const card = await waitForState("unavailable");
     expect(card).toHaveTextContent(/not available/i);
     expect(screen.queryAllByRole("button")).toHaveLength(0);
+  });
+});
+
+describe("MemoryEvidencePreparationCard + Linux symbol upload (Phase 3)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getLinuxSymbolRequirementMock.mockResolvedValue({ expected_identity: null });
+  });
+
+  it("shows the Linux symbol upload panel when platform is linux and readiness is symbols_required", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(
+      preparation({ platform: "linux", readiness: "symbols_required", can_start_analysis: false }),
+    );
+    renderCard();
+    await waitForState("symbols_required");
+    expect(await screen.findByTestId("linux-symbol-upload-panel")).toBeInTheDocument();
+  });
+
+  it("never shows the panel for Windows evidence, even when symbols_required", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(
+      preparation({ platform: "windows", readiness: "symbols_required", can_start_analysis: false }),
+    );
+    renderCard();
+    await waitForState("symbols_required");
+    expect(screen.queryByTestId("linux-symbol-upload-panel")).not.toBeInTheDocument();
+  });
+
+  it("never shows the panel for Linux evidence that is already READY (cached symbols) -- no uploader for available symbols", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(
+      preparation({ platform: "linux", readiness: "ready", can_start_analysis: true }),
+    );
+    renderCard();
+    await waitForState("ready");
+    expect(screen.queryByTestId("linux-symbol-upload-panel")).not.toBeInTheDocument();
+  });
+
+  it("never shows the panel for Linux evidence in any other non-symbols_required state", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(
+      preparation({ platform: "linux", readiness: "inspecting", can_start_analysis: false }),
+    );
+    renderCard();
+    await waitForState("inspecting");
+    expect(screen.queryByTestId("linux-symbol-upload-panel")).not.toBeInTheDocument();
+  });
+
+  it("a successful VALID validation refetches preparation and the card flips to READY without a manual reload", async () => {
+    getMemoryEvidencePreparationMock
+      .mockResolvedValueOnce(preparation({ platform: "linux", readiness: "symbols_required", can_start_analysis: false }))
+      .mockResolvedValueOnce(preparation({ platform: "linux", readiness: "ready", can_start_analysis: true, human_message: "Compatible Linux symbols are already available." }));
+    validateLinuxEvidenceSymbolsMock.mockResolvedValue({ validation_id: "val-1", status: "queued" });
+    getLinuxSymbolValidationStatusMock.mockResolvedValue({
+      status: "valid",
+      expected_identity: { kernel_release: "6.8.0-test", architecture: "x64", banner: null, build_id: "build-a" },
+      detected_identity: { kernel_release: "6.8.0-test", architecture: "x64", banner: null, build_id: "build-a" },
+      compatible: true,
+      reason: "",
+      cached: false,
+      cache_key: "abc123",
+    });
+
+    renderCard();
+    await waitForState("symbols_required");
+    const input = screen.getByTestId("linux-symbol-file-input");
+    await userEvent.upload(input, new File(["{}"], "kernel.json"));
+    await userEvent.click(screen.getByTestId("linux-symbol-validate-button"));
+
+    // The enqueue call succeeding starts polling; the terminal VALID status
+    // triggers onValidated -> invalidateQueries, which refetches preparation
+    // a second time (no manual reload) and the card settles on READY, with
+    // the Linux panel no longer shown.
+    await waitFor(() => expect(validateLinuxEvidenceSymbolsMock).toHaveBeenCalled());
+    await waitFor(() => expect(getLinuxSymbolValidationStatusMock).toHaveBeenCalled());
+    await waitFor(() => expect(getMemoryEvidencePreparationMock).toHaveBeenCalledTimes(2), { timeout: 5000 });
+    await waitForState("ready");
+    expect(screen.queryByTestId("linux-symbol-upload-panel")).not.toBeInTheDocument();
   });
 });

@@ -2790,3 +2790,62 @@ def _v37_host_user_facts_windows_identity_columns(connection: Connection) -> Non
         connection.execute(
             text(f"ALTER TABLE host_user_facts ADD COLUMN attributes {json_type} NOT NULL DEFAULT {json_default}")
         )
+
+
+@register(38, "memory_evidence_linux_symbol_links")
+def _v38_memory_evidence_linux_symbol_links(connection: Connection) -> None:
+    """Memory Preparation Phase 3: async Linux ISF validation job AND,
+    once VALID, the persistent evidence <-> ISF link.
+
+    Linux memory symbols are prebuilt Volatility ISF tables promoted into
+    a filesystem cache keyed by ``cache_key``
+    (app.services.memory.linux_symbols.LinuxSymbolIdentity.cache_key) --
+    there is no Windows-style DB "requirement" table for Linux to attach
+    a per-evidence link to (see memory_evidence_symbol_links, v8, for the
+    Windows equivalent). This table is that missing link.
+
+    Validation runs on the memory-worker (the only process with
+    read-write access to the shared cache; the backend API container's
+    mount is read-only), so this row also tracks the job lifecycle:
+    ``status`` moves queued -> validating -> one of
+    valid/invalid/unsupported/validation_failed. Only once
+    ``status == 'valid'`` do the cache_key/isf_path/sha256/identity_*
+    columns represent an active, promoted link -- hence they are
+    nullable. ``evidence_id`` is unique -- at most one row per evidence;
+    re-validating updates the existing row rather than creating a
+    duplicate. Several evidences may share the same ``cache_key``.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_evidence_linux_symbol_links" in inspector.get_table_names():
+        return
+    dialect = connection.dialect.name
+    json_type = "JSONB" if dialect == "postgresql" else "JSON"
+    id_type = "UUID" if dialect == "postgresql" else "VARCHAR(36)"
+    connection.execute(text(f"""
+        CREATE TABLE memory_evidence_linux_symbol_links (
+            id {id_type} PRIMARY KEY,
+            case_id {id_type} NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+            evidence_id {id_type} NOT NULL UNIQUE REFERENCES evidences(id) ON DELETE CASCADE,
+            status VARCHAR(32) NOT NULL DEFAULT 'queued',
+            staging_path VARCHAR(1024),
+            worker_task_id VARCHAR(128),
+            expected_identity_json {json_type},
+            detected_identity_json {json_type},
+            reason VARCHAR(512),
+            cached BOOLEAN NOT NULL DEFAULT FALSE,
+            cache_key VARCHAR(64),
+            isf_path VARCHAR(1024),
+            sha256 VARCHAR(64),
+            identity_display VARCHAR(512),
+            identity_json {json_type},
+            link_source VARCHAR(32) NOT NULL DEFAULT 'evidence_scoped_upload',
+            queued_at TIMESTAMP,
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL
+        )
+    """))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_evidence_linux_symbol_links_case_id ON memory_evidence_linux_symbol_links (case_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_evidence_linux_symbol_links_cache_key ON memory_evidence_linux_symbol_links (cache_key)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_evidence_linux_symbol_links_status ON memory_evidence_linux_symbol_links (status)"))
