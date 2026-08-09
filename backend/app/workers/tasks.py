@@ -773,6 +773,37 @@ def enqueue_memory_preparation(evidence_id: str) -> str:
     return job.id
 
 
+def enqueue_linux_symbol_validation(validation_job_id: str) -> str:
+    """Enqueue Memory Preparation Phase 3's Linux ISF validation task.
+
+    Dispatched on the same ``memory`` queue as the rest of memory-worker
+    work -- this is the process with read-write access to
+    /volatility-cache (see docker-compose.yml); the backend API process
+    enqueuing this call does not and must not write to that mount.
+
+    job_timeout here bounds the WHOLE task (DB round trips included) as
+    a defense-in-depth backstop; the actual ISF parsing work inside the
+    task has its own tighter, real (SIGKILL-enforced) timeout via
+    app.services.memory.subprocess_isolation -- see
+    app.services.memory.linux_symbol_evidence.execute_linux_symbol_validation.
+    """
+    inner_timeout = int(getattr(settings, "memory_linux_symbol_validation_timeout_seconds", 30))
+    grace = int(getattr(settings, "memory_linux_symbol_validation_termination_grace_seconds", 5))
+    job_timeout = max(60, inner_timeout + grace + 30)
+    job = memory_queue.enqueue(
+        "app.workers.tasks.run_linux_symbol_validation",
+        validation_job_id,
+        job_timeout=job_timeout,
+    )
+    return job.id
+
+
+def run_linux_symbol_validation(validation_job_id: str) -> None:
+    from app.services.memory.linux_symbol_evidence import execute_linux_symbol_validation
+
+    execute_linux_symbol_validation(validation_job_id)
+
+
 def enqueue_experimental_canary(experimental_run_id: str) -> str:
     """Enqueue the experimental canary task on the dedicated
     ``memory-experimental`` queue.

@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, date
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 
 logger = logging.getLogger(__name__)
@@ -67,7 +68,7 @@ from app.models.case import Case
 from app.models.case_host import CaseHost
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryArtifactSummary, MemoryNativeProbe, MemoryPluginRun, MemoryScanRun, MemorySymbolAcquisition, MemorySymbolRequirement
-from app.schemas.memory import MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidencePreparationRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolBlockedAcquireRequest, MemorySymbolBlockedAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadDirectResponse, MemoryUploadFinalizeRequest, MemoryUploadReadinessRead, MemoryUploadSessionCreateRequest, MemoryUploadSessionCreateResponse, MemoryUploadStatusRead
+from app.schemas.memory import LinuxSymbolRequirementRead, LinuxSymbolValidationEnqueueRead, LinuxSymbolValidationRead, MemoryArtifactDetailRead, MemoryArtifactListRead, MemoryArtifactOverviewRead, MemoryBackendOverviewRead, MemoryEvidencePreparationRead, MemoryEvidenceRead, MemoryEvidenceReadinessRead, MemoryOverviewRead, MemoryProcessEntityDetailRead, MemoryProcessEntityListRead, MemoryProcessListRead, MemoryProcessTreeEntityRead, MemoryProcessTreeRead, MemoryRenormalizeSummaryRead, MemoryRunDetailRead, MemoryRunOptionsRead, MemoryRunSelectorRead, MemoryScanRunRead, MemoryStartScanRequest, MemoryStartScanResponse, MemorySymbolAcquireRequest, MemorySymbolAcquireResponse, MemorySymbolBlockedAcquireRequest, MemorySymbolBlockedAcquireResponse, MemorySymbolCacheStatusRead, MemorySymbolRequestCreateRequest, MemorySymbolRequestCreateResponse, MemorySymbolRequestStatusRead, MemorySystemInfoRead, MemoryUploadDirectResponse, MemoryUploadFinalizeRequest, MemoryUploadReadinessRead, MemoryUploadSessionCreateRequest, MemoryUploadSessionCreateResponse, MemoryUploadStatusRead
 from app.services.memory.artifact_indexing import (
     get_artifact_document,
     link_process_entities,
@@ -80,6 +81,14 @@ from app.services.memory.capability_registry import MemoryCapability, capabiliti
 from app.services.memory.platform import PlatformFamily
 from app.services.memory.evidence_access import evidence_readiness
 from app.services.memory.preparation import MemoryPreparationError, get_preparation_status
+from app.services.memory.linux_symbol_evidence import (
+    DuplicateValidationJobError,
+    create_linux_symbol_validation_job,
+    get_linux_symbol_validation_status,
+    has_accepted_isf_extension,
+)
+from app.services.memory.linux_symbols import expected_linux_identity_from_evidence
+from app.services.memory.symbol_recovery import safe_original_filename
 from app.services.memory.indexing import ensure_memory_index, get_memory_document, get_opensearch_client, search_memory_edges, search_memory_processes
 from app.services.memory.normalizers import normalize_windows_info
 from app.services.memory.storage import memory_run_dir
@@ -142,7 +151,7 @@ from app.models.memory import MemorySymbolAcquisition, MemorySymbolAcquisitionRe
 from app.services.memory.upload_readiness import MAX_SELECTED_SIZE_BYTES, get_memory_upload_readiness
 from app.services.memory.upload_lifecycle import MemoryUploadRegistrationError, get_memory_upload, public_memory_upload_status, reconcile_memory_upload, retry_preserved_memory_upload_registration
 from app.services.memory.validation import MemoryExecutionValidationError, validate_memory_execution_request
-from app.workers.tasks import enqueue_memory_metadata_scan
+from app.workers.tasks import enqueue_linux_symbol_validation, enqueue_memory_metadata_scan
 
 
 router = APIRouter(prefix="/api", tags=["memory"])
@@ -459,6 +468,222 @@ def get_memory_evidence_preparation(case_id: str, evidence_id: str, db: Session 
     except MemoryPreparationError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return preparation.to_dict()
+
+
+async def _save_quarantined_isf_upload(file: UploadFile, *, original_filename: str, max_bytes: int) -> Path:
+    """Stream an uploaded Linux ISF into a staging file bounded by
+    ``max_bytes``, mirroring app.api.routes_memory_recovery
+    ._save_quarantined_upload's streaming/size-bound shape for the same
+    reason (refuse an oversize upload at the network boundary before any
+    parsing) without importing that admin-router-local helper into this
+    non-admin route.
+
+    Deliberately staged under settings.memory_linux_symbol_staging_path,
+    NOT the admin importer's quarantine_path() -- that directory is only
+    ever read by the backend process itself (the admin import runs
+    synchronously, in-process); this file must still exist when the
+    memory-worker container picks up the async validation job, which
+    quarantine_path()'s backend-local tmpfs-backed directory cannot
+    guarantee. See settings.memory_linux_symbol_staging_path's docstring.
+    """
+    settings = get_settings()
+    suffix = ".json.xz" if original_filename.lower().endswith(".xz") else ".json"
+    staging_root = settings.memory_linux_symbol_staging_path
+    staging_root.mkdir(parents=True, exist_ok=True, mode=0o750)
+    quarantine = staging_root / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}-{uuid4().hex}{suffix}"
+    quarantine.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
+    total = 0
+    chunk_size = 1024 * 1024
+    try:
+        with quarantine.open("wb") as dst:
+            while True:
+                chunk = await file.read(chunk_size)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > max_bytes:
+                    dst.close()
+                    quarantine.unlink(missing_ok=True)
+                    raise HTTPException(
+                        status_code=413,
+                        detail={"error_code": "SYMBOL_IMPORT_REJECTED", "message": f"upload exceeds {max_bytes} bytes"},
+                    )
+                dst.write(chunk)
+        return quarantine
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        quarantine.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=400,
+            detail={"error_code": "SYMBOL_IMPORT_REJECTED", "message": "Could not read the uploaded file."},
+        ) from exc
+
+
+def _linux_identity_dict(identity: Any) -> dict[str, Any] | None:
+    if identity is None:
+        return None
+    return {
+        "architecture": identity.architecture,
+        "kernel_release": identity.kernel_release,
+        "banner": identity.banner,
+        "build_id": identity.build_id,
+    }
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/linux-symbols/requirement",
+    response_model=LinuxSymbolRequirementRead,
+)
+def get_linux_evidence_symbol_requirement(case_id: str, evidence_id: str, db: Session = Depends(get_db)) -> dict:
+    """Read-only peek at the kernel identity a Linux ISF upload for this
+    evidence would be compared against (app.services.memory.linux_symbols
+    .expected_linux_identity_from_evidence, unchanged, no new logic) --
+    lets the wizard show "Expected kernel: ..." before an upload happens
+    instead of only after validating a file. Usually null today (see
+    Phase 3's technical report: nothing currently backfills this ahead of
+    a first successful evidence-scoped upload for that same identity).
+    """
+    _require_case(db, case_id)
+    evidence = _require_evidence_for_case(db, case_id, evidence_id)
+    try:
+        preparation = get_preparation_status(db, evidence_id)
+    except MemoryPreparationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if preparation.platform is not PlatformFamily.LINUX:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "MEMORY_LINUX_SYMBOLS_WRONG_PLATFORM",
+                "message": "This evidence is not Linux memory evidence.",
+            },
+        )
+    identity = expected_linux_identity_from_evidence(evidence)
+    return {"expected_identity": _linux_identity_dict(identity)}
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/linux-symbols/validate",
+    response_model=LinuxSymbolValidationEnqueueRead,
+    status_code=202,
+)
+async def validate_linux_evidence_symbols(
+    case_id: str,
+    evidence_id: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Evidence-scoped Linux ISF validation (Memory Preparation Phase 3) -- enqueue only.
+
+    Deliberately NOT under /api/admin/... and requires no admin role --
+    the same case/evidence access boundary as every other route in this
+    file applies, nothing stricter. This is a distinct entry point from
+    the admin-only POST /api/admin/memory/symbols/linux/import-isf
+    (app/api/routes_memory_recovery.py), which is untouched by this
+    phase.
+
+    This handler runs in the backend API process, whose
+    /volatility-cache mount is deliberately read-only (see
+    docker-compose.yml) -- it NEVER calls import_linux_isf() or writes
+    to the shared symbol cache. It only writes the upload to an
+    evidence-scoped quarantine file (a location the backend can write:
+    the existing admin-recovery quarantine root, reused here, not the
+    symbol cache) and a queued job row, then enqueues
+    app.workers.tasks.run_linux_symbol_validation on the memory queue --
+    the memory-worker is the only process with read-write cache access
+    and is where app.services.memory.linux_symbol_evidence
+    .execute_linux_symbol_validation actually validates and promotes.
+
+    Returns 202 with {validation_id, status: "queued"}; poll
+    GET .../linux-symbols/validate/{validation_id} for the result.
+    """
+    _require_case(db, case_id)
+    evidence = _require_evidence_for_case(db, case_id, evidence_id)
+
+    try:
+        preparation = get_preparation_status(db, evidence_id)
+    except MemoryPreparationError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if preparation.platform is not PlatformFamily.LINUX:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error_code": "MEMORY_LINUX_SYMBOLS_WRONG_PLATFORM",
+                "message": "This evidence is not Linux memory evidence.",
+            },
+        )
+
+    settings = get_settings()
+    if not bool(getattr(settings, "memory_linux_symbol_manual_import_enabled", False)):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "error_code": "SYMBOL_MANUAL_IMPORT_DISABLED",
+                "message": "Linux symbol manual import is disabled on this server.",
+            },
+        )
+
+    original_filename = safe_original_filename(file.filename or "upload.json")
+    if not has_accepted_isf_extension(file.filename or ""):
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error_code": "SYMBOL_UNSUPPORTED_FORMAT",
+                "message": "Only .json or .json.xz Volatility 3 ISF files are accepted.",
+            },
+        )
+
+    max_bytes = int(settings.memory_linux_symbol_isf_upload_max_bytes)
+    quarantine = await _save_quarantined_isf_upload(file, original_filename=original_filename, max_bytes=max_bytes)
+    try:
+        job = create_linux_symbol_validation_job(db, evidence, staging_path=quarantine)
+    except DuplicateValidationJobError as exc:
+        quarantine.unlink(missing_ok=True)
+        raise HTTPException(
+            status_code=409,
+            detail={"error_code": "SYMBOL_VALIDATION_ALREADY_IN_PROGRESS", "message": str(exc)},
+        ) from exc
+    except Exception:
+        quarantine.unlink(missing_ok=True)
+        raise
+
+    task_id = enqueue_linux_symbol_validation(job.id)
+    job.worker_task_id = task_id
+    db.commit()
+
+    return {"validation_id": job.id, "status": job.status}
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/linux-symbols/validate/{validation_id}",
+    response_model=LinuxSymbolValidationRead,
+)
+def get_linux_evidence_symbol_validation(
+    case_id: str,
+    evidence_id: str,
+    validation_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Poll the status of a Linux ISF validation job enqueued by the POST above.
+
+    Pure read: reuses app.services.memory.linux_symbol_evidence
+    .get_linux_symbol_validation_status (which also performs lazy
+    staleness reconciliation) -- no validation or promotion logic here.
+    """
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    outcome = get_linux_symbol_validation_status(db, evidence_id, validation_id)
+    if outcome is None:
+        raise HTTPException(status_code=404, detail="Validation job not found.")
+    return {
+        "status": outcome.status,
+        "expected_identity": outcome.expected_identity,
+        "detected_identity": outcome.detected_identity,
+        "compatible": outcome.compatible,
+        "reason": outcome.reason,
+        "cached": outcome.cached,
+        "cache_key": outcome.cache_key,
+    }
 
 
 def _memory_capability_readiness(analysis_plan, backend: dict, storage_readiness: dict) -> dict[str, dict]:

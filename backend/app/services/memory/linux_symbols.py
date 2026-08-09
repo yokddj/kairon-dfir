@@ -176,6 +176,39 @@ def resolve_linux_symbols(
     return LinuxSymbolStatus(found=False)
 
 
+def inspect_linux_isf(upload_path: Path, *, settings: Any | None = None) -> LinuxSymbolIdentity:
+    """Parse and validate a Linux ISF WITHOUT promoting it into the cache.
+
+    This is the single validation choke point shared by both
+    :func:`import_linux_isf` (admin, always promotes on success) and the
+    evidence-scoped validate-then-promote flow (which must be able to
+    reject an ISF -- e.g. because it does not match the evidence's
+    required kernel identity -- without ever writing it to the shared
+    cache). Bounded by the decompressed-size limit below.
+
+    This function has NO internal wall-clock timeout of its own. A
+    thread-based timeout here could only stop a *caller* from waiting --
+    the parsing work would keep running regardless, still holding the
+    GIL, until it happened to finish. Real, enforceable isolation
+    requires an OS process boundary: callers that need a hard timeout run
+    this function in a subprocess via
+    app.services.memory.linux_symbols_validate_subprocess (invoked
+    through app.services.memory.subprocess_isolation.run_isolated, which
+    SIGKILLs the whole process group on timeout) rather than calling it
+    in-process. See app.services.memory.linux_symbol_evidence
+    .execute_linux_symbol_validation for that caller.
+    """
+    settings = settings or get_settings()
+    _validate_upload_path(upload_path)
+    sha256 = _hash_file(upload_path)
+    payload = _load_isf(upload_path, settings=settings)
+    identity = _identity_from_isf(payload, sha256=sha256)
+    if not _has_kernel_identity(identity):
+        raise LinuxSymbolError("KERNEL_IDENTITY_UNKNOWN", "Linux ISF does not expose a kernel release, banner, or build id.")
+    _validate_isf_shape(payload)
+    return identity
+
+
 def import_linux_isf(
     upload_path: Path,
     *,
@@ -188,13 +221,8 @@ def import_linux_isf(
     settings = settings or get_settings()
     if not bool(getattr(settings, "memory_linux_symbol_manual_import_enabled", False)):
         raise LinuxSymbolError("SYMBOL_MANUAL_IMPORT_DISABLED", "Linux symbol manual import is disabled.")
-    _validate_upload_path(upload_path)
-    sha256 = _hash_file(upload_path)
-    payload = _load_isf(upload_path, settings=settings)
-    identity = _identity_from_isf(payload, sha256=sha256)
-    if not _has_kernel_identity(identity):
-        raise LinuxSymbolError("KERNEL_IDENTITY_UNKNOWN", "Linux ISF does not expose a kernel release, banner, or build id.")
-    _validate_isf_shape(payload)
+    identity = inspect_linux_isf(upload_path, settings=settings)
+    sha256 = identity.isf_sha256 or _hash_file(upload_path)
     cache_dir = linux_symbol_cache_dir(settings)
     cache_dir.mkdir(parents=True, exist_ok=True, mode=0o750)
     cache_key = identity.cache_key
@@ -320,7 +348,7 @@ def _identity_from_isf(payload: dict[str, Any], *, sha256: str) -> LinuxSymbolId
 def _identity_from_mapping(data: dict[str, Any], *, sha256: str | None) -> LinuxSymbolIdentity:
     platform = str(data.get("platform") or data.get("os") or "linux").strip().lower()
     if platform not in {"linux", ""}:
-        raise LinuxSymbolError("SYMBOLS_INVALID", "ISF metadata is not Linux.")
+        raise LinuxSymbolError("SYMBOL_UNSUPPORTED_PLATFORM", "ISF metadata is not Linux.")
     return LinuxSymbolIdentity(
         platform="linux",
         architecture=_clean(data.get("architecture") or data.get("arch") or data.get("machine")),
@@ -356,29 +384,75 @@ def _load_isf(path: Path, *, settings: Any) -> dict[str, Any]:
     max_bytes = int(getattr(settings, "memory_linux_symbol_isf_upload_max_bytes", 268435456))
     if size <= 0 or size > max_bytes:
         raise LinuxSymbolError("SYMBOL_IMPORT_REJECTED", "Linux ISF upload exceeds the configured size limit.")
-    try:
-        if path.name.lower().endswith(".xz") or _is_xz(path):
-            with lzma.open(path, "rt", encoding="utf-8") as handle:
-                payload = json.load(handle)
-        else:
+    is_xz = path.name.lower().endswith(".xz") or _is_xz(path)
+    if is_xz:
+        # The compressed-size check above bounds the bytes read from disk,
+        # not the bytes produced by decompression -- a small .xz can still
+        # expand far past max_bytes (a decompression bomb). Stream the
+        # decompressor in fixed chunks and abort the instant the running
+        # decompressed total exceeds the configured limit, so peak memory
+        # usage is bounded by the limit itself.
+        decompressed_max = int(getattr(settings, "memory_linux_symbol_isf_decompressed_max_bytes", 536870912))
+        raw = _read_xz_bounded(path, max_bytes=decompressed_max)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise LinuxSymbolError("SYMBOL_PARSE_FAILED", "Linux ISF could not be parsed.") from exc
+    else:
+        try:
             with path.open("r", encoding="utf-8") as handle:
                 payload = json.load(handle)
-    except (json.JSONDecodeError, OSError, lzma.LZMAError, UnicodeDecodeError) as exc:
-        raise LinuxSymbolError("SYMBOLS_INVALID", "Linux ISF could not be parsed.") from exc
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+            raise LinuxSymbolError("SYMBOL_PARSE_FAILED", "Linux ISF could not be parsed.") from exc
     if not isinstance(payload, dict):
-        raise LinuxSymbolError("SYMBOLS_INVALID", "Linux ISF payload is not a JSON object.")
+        raise LinuxSymbolError("SYMBOL_UNSUPPORTED_FORMAT", "Linux ISF payload is not a JSON object.")
     return payload
+
+
+def _read_xz_bounded(path: Path, *, max_bytes: int) -> bytes:
+    """Decompress an .xz file incrementally, aborting as soon as the
+    decompressed total would exceed ``max_bytes``.
+
+    Never materializes more than ``max_bytes`` (plus one chunk) of
+    decompressed data in memory, regardless of how large the compressed
+    input claims to decompress to.
+    """
+    decompressor = lzma.LZMADecompressor()
+    chunks: list[bytes] = []
+    total = 0
+    chunk_size = 1024 * 1024
+    try:
+        with path.open("rb") as handle:
+            while True:
+                compressed_chunk = handle.read(chunk_size)
+                if not compressed_chunk:
+                    break
+                data = decompressor.decompress(compressed_chunk)
+                total += len(data)
+                if total > max_bytes:
+                    raise LinuxSymbolError(
+                        "SYMBOL_IMPORT_REJECTED",
+                        "Linux ISF exceeds the configured decompressed size limit.",
+                    )
+                chunks.append(data)
+                if decompressor.eof:
+                    break
+    except lzma.LZMAError as exc:
+        raise LinuxSymbolError("SYMBOL_PARSE_FAILED", "Linux ISF could not be parsed.") from exc
+    except OSError as exc:
+        raise LinuxSymbolError("SYMBOL_IMPORT_REJECTED", "Uploaded ISF was not found.") from exc
+    return b"".join(chunks)
 
 
 def _validate_isf_shape(payload: dict[str, Any]) -> None:
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
-        raise LinuxSymbolError("SYMBOLS_INVALID", "Linux ISF payload has no metadata object.")
+        raise LinuxSymbolError("SYMBOL_UNSUPPORTED_FORMAT", "Linux ISF payload has no metadata object.")
     linux = metadata.get("linux")
     if not isinstance(linux, dict):
-        raise LinuxSymbolError("SYMBOLS_INVALID", "Linux ISF payload has no Linux metadata block.")
+        raise LinuxSymbolError("SYMBOL_UNSUPPORTED_FORMAT", "Linux ISF payload has no Linux metadata block.")
     if not any(isinstance(payload.get(key), dict) for key in ("symbols", "types", "user_types", "base_types", "enums")):
-        raise LinuxSymbolError("SYMBOLS_INVALID", "Linux ISF payload has no symbol or type tables.")
+        raise LinuxSymbolError("SYMBOL_UNSUPPORTED_FORMAT", "Linux ISF payload has no symbol or type tables.")
 
 
 def _safe_child(parent: Path, name: str) -> Path:

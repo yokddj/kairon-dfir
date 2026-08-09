@@ -116,6 +116,41 @@ class MemoryEvidencePreparationRead(BaseModel):
     human_message: str
 
 
+class LinuxSymbolIdentityRead(BaseModel):
+    architecture: str | None = None
+    kernel_release: str | None = None
+    banner: str | None = None
+    build_id: str | None = None
+
+
+class LinuxSymbolRequirementRead(BaseModel):
+    expected_identity: LinuxSymbolIdentityRead | None = None
+
+
+class LinuxSymbolValidationEnqueueRead(BaseModel):
+    """Response to POST .../linux-symbols/validate: enqueue acknowledgement
+    only. Poll GET .../linux-symbols/validate/{validation_id} for the
+    result -- see LinuxSymbolValidationRead."""
+
+    validation_id: str
+    status: str
+
+
+class LinuxSymbolValidationRead(BaseModel):
+    """Mirrors app.services.memory.linux_symbol_evidence
+    .LinuxSymbolValidationOutcome field-for-field. status is one of
+    "queued" | "validating" | "valid" | "invalid" | "unsupported" |
+    "validation_failed"."""
+
+    status: str
+    expected_identity: LinuxSymbolIdentityRead | None = None
+    detected_identity: LinuxSymbolIdentityRead | None = None
+    compatible: bool
+    reason: str
+    cached: bool
+    cache_key: str | None = None
+
+
 class MemorySymbolBlockedAcquireRequest(BaseModel):
     authorization_acknowledged: bool = False
 

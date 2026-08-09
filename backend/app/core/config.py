@@ -337,6 +337,36 @@ class Settings(BaseSettings):
     memory_linux_symbol_manual_import_enabled: bool = False
     memory_linux_symbol_external_download_enabled: bool = False
     memory_linux_symbol_isf_upload_max_bytes: int = 268435456
+    # Bounds the DECOMPRESSED size of a .json.xz ISF upload separately from
+    # the compressed upload size above -- a small compressed file can still
+    # expand to an unbounded size (decompression bomb). Enforced by
+    # streaming the decompressor in fixed-size chunks and aborting as soon
+    # as the running total exceeds this limit, so memory usage is bounded
+    # by the limit itself, not by the (attacker-controlled) claimed size.
+    memory_linux_symbol_isf_decompressed_max_bytes: int = 536870912
+    # Wall-clock bound on parsing + validating one Linux ISF (read, decompress,
+    # JSON-decode, derive identity, shape-check). Enforced by running the
+    # validation in its own OS process (see
+    # app.services.memory.subprocess_isolation) and SIGKILLing it if this
+    # elapses -- a real, enforceable timeout, not a thread-based one that
+    # only stops the caller from waiting while the work keeps running.
+    memory_linux_symbol_validation_timeout_seconds: int = 30
+    # Grace period between SIGTERM and SIGKILL when the isolated validation
+    # subprocess is terminated for exceeding the timeout above. Mirrors
+    # memory_plugin_termination_grace_seconds' role for Volatility plugins.
+    memory_linux_symbol_validation_termination_grace_seconds: int = 5
+    # Staging directory for an evidence-scoped Linux ISF upload awaiting
+    # validation. Deliberately NOT memory_symbol_import_quarantine_path
+    # (the admin importer's quarantine dir): that one only ever needs to
+    # be read by the backend process itself (the admin import runs
+    # synchronously, in-process). This one must be readable AND writable
+    # from the memory-worker container too, since validation and cleanup
+    # run there -- backend_temp_dir is process-local tmpfs on the worker
+    # (see docker-compose.yml's memory-worker tmpfs mounts) and is never
+    # shared, so a dedicated bind-mounted directory is required. See the
+    # "linux-symbol-staging" volume mounted into both the backend and
+    # memory-worker services.
+    memory_linux_symbol_staging_root: str = ""
 
     @property
     def memory_native_probe_cache_path(self) -> Path:
@@ -687,6 +717,11 @@ class Settings(BaseSettings):
     def memory_symbol_import_quarantine_path(self) -> Path:
         value = str(self.memory_symbol_import_quarantine_root or "").strip()
         return Path(value) if value else self.backend_temp_dir / "symbol-import-quarantine"
+
+    @property
+    def memory_linux_symbol_staging_path(self) -> Path:
+        value = str(self.memory_linux_symbol_staging_root or "").strip()
+        return Path(value) if value else Path("/app/data/linux-symbol-staging")
 
 
     @model_validator(mode="after")

@@ -267,6 +267,72 @@ class MemoryEvidenceSymbolLink(UUIDMixin, Base):
     )
 
 
+class MemoryEvidenceLinuxSymbolLink(UUIDMixin, Base):
+    """Per-evidence Linux ISF validation job AND, once VALID, the
+    persistent link to that ISF in the offline symbol cache.
+
+    Linux has no DB-backed "requirement" table the way Windows does (see
+    MemoryEvidenceSymbolLink above) -- the Linux ISF cache is a
+    filesystem sidecar cache keyed by ``cache_key``
+    (app.services.memory.linux_symbols.LinuxSymbolIdentity.cache_key).
+
+    Phase 3 validation runs asynchronously on the memory-worker (the only
+    process with read-write access to the shared cache -- the backend API
+    container's mount is deliberately read-only). This ONE row tracks
+    both the job lifecycle (``status``: queued -> validating -> a
+    terminal state) and, only once ``status == "valid"``, doubles as the
+    persistent evidence<->ISF link the rest of the system reads
+    (cache_key/isf_path/sha256/identity_*). There is no separate "job"
+    table: reusing this row for both concerns is what "evidence_id is
+    unique, re-validating updates the same row" already required, and
+    avoids a second table with the same identity fields.
+
+    One evidence has at most one row (``evidence_id`` is unique) --
+    re-validating updates the existing row rather than creating a
+    duplicate. Several evidences may point at the same ``cache_key`` (the
+    whole point of the shared cache: re-use, don't re-upload).
+    """
+
+    __tablename__ = "memory_evidence_linux_symbol_links"
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    # Job lifecycle: "queued" | "validating" | "valid" | "invalid" |
+    # "unsupported" | "validation_failed". Only "valid" rows represent an
+    # active, promoted link -- every other state is a snapshot of the
+    # most recent (or in-flight) validation attempt for this evidence.
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    # Evidence-scoped quarantine path the memory-worker reads from. Set
+    # at enqueue time, cleared once the job reaches a terminal state
+    # (the file itself is always deleted; this column just stops
+    # pointing at it so a stale path is never mistaken for a live one).
+    staging_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    worker_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    expected_identity_json: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
+    detected_identity_json: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
+    reason: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # True when the promoted ISF was already present in the shared cache
+    # (dedup by content) rather than newly written. Only meaningful once
+    # status == "valid".
+    cached: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Populated only once status == "valid".
+    cache_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    isf_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    identity_display: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    identity_json: Mapped[dict | None] = mapped_column(JSONVariant, nullable=True)
+    # How the link was established: "evidence_scoped_upload" (Phase 3) is
+    # the only source today; kept as a string (not an enum) so a future
+    # source (e.g. automatic reuse-by-identity) does not require a schema
+    # change.
+    link_source: Mapped[str] = mapped_column(String(32), nullable=False, default="evidence_scoped_upload")
+    queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive, onupdate=utc_now_naive)
+
+
 class MemorySymbolPreparation(UUIDMixin, Base):
     """Per-evidence preparation task (probe / cache check / acquisition).
 

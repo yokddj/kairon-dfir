@@ -114,7 +114,7 @@ def test_linux_isf_rejects_invalid_json(tmp_path: Path) -> None:
     with pytest.raises(LinuxSymbolError) as excinfo:
         import_linux_isf(isf, original_filename="bad.json", settings=_settings(tmp_path))
 
-    assert excinfo.value.code == "SYMBOLS_INVALID"
+    assert excinfo.value.code == "SYMBOL_PARSE_FAILED"
 
 
 def test_linux_isf_rejects_invalid_structure(tmp_path: Path) -> None:
@@ -124,7 +124,7 @@ def test_linux_isf_rejects_invalid_structure(tmp_path: Path) -> None:
     with pytest.raises(LinuxSymbolError) as excinfo:
         import_linux_isf(isf, original_filename="bad.json", settings=_settings(tmp_path))
 
-    assert excinfo.value.code == "SYMBOLS_INVALID"
+    assert excinfo.value.code == "SYMBOL_UNSUPPORTED_FORMAT"
 
 
 def test_linux_isf_duplicate_returns_existing_without_overwrite(tmp_path: Path) -> None:
@@ -249,4 +249,4 @@ def test_linux_import_endpoint_returns_typed_error_for_invalid_upload(tmp_path: 
     response = client.post("/api/admin/memory/symbols/linux/import-isf", files={"file": ("bad.json", b"not-json", "application/json")})
 
     assert response.status_code == 400
-    assert response.json()["detail"]["error_code"] == "SYMBOLS_INVALID"
+    assert response.json()["detail"]["error_code"] == "SYMBOL_PARSE_FAILED"
