@@ -1783,6 +1783,111 @@ def test_memory_scan_worker_unavailable_still_blocks(db_session, monkeypatch: py
     assert db_session.query(MemoryScanRun).count() == 0
 
 
+def test_memory_scan_dispatches_platform_probe_when_platform_unknown(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: a headerless/raw dump (e.g. a VMware .vmem) that static
+    detection cannot classify must trigger a real worker-side platform probe
+    as a side effect of this explicit "Analyze memory" call, so the retry
+    the 409 asks for has something to actually resolve platform-unknown.
+    Before this fix, ``resolve_profile_plugins`` failing on an unknown
+    platform just raised the 409 and nothing was ever dispatched -- retrying
+    forever returned the same unknown-platform error.
+    """
+    from app.services.memory.execution import MemoryExecutionValidationError
+    from app.services.memory.platform import PlatformFamily
+
+    case = _case(db_session)
+    evidence = _evidence(db_session, case_id=case.id)
+    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
+    monkeypatch.setattr(routes_memory, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True}]})
+    monkeypatch.setattr(routes_memory, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(path=None))
+    monkeypatch.setattr(
+        routes_memory,
+        "build_memory_analysis_plan",
+        lambda _evidence, canonical_path=None: SimpleNamespace(
+            detected_platform=PlatformFamily.UNKNOWN,
+            readiness=SimpleNamespace(value="not_ready"),
+            readiness_reason="platform unknown",
+        ),
+    )
+
+    def _resolve(_profile, plan=None):
+        # The route calls resolve_profile_plugins twice: a syntactic-only
+        # check (no `plan`) that must still succeed, then the real,
+        # plan-aware call that fails once a platform is involved.
+        if plan is None:
+            return ["linux.pslist", "linux.pstree"]
+        raise MemoryExecutionValidationError("PLATFORM_UNKNOWN", "Could not determine the evidence platform.")
+
+    monkeypatch.setattr(routes_memory, "resolve_profile_plugins", _resolve)
+
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        "app.services.memory.preparation_runtime.dispatch_memory_preparation",
+        lambda _db, evidence: dispatched.append(evidence.id),
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        routes_memory.start_memory_scan(
+            evidence.id,
+            MemoryStartScanRequest(profile="processes_basic", authorization_acknowledged=True),
+            case_id=evidence.case_id,
+            db=db_session,
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 409
+    detail = getattr(exc_info.value, "detail", {})
+    assert detail.get("error_code") == "PLATFORM_UNKNOWN"
+    assert "dispatched a background platform probe" in detail.get("message", "")
+    assert dispatched == [evidence.id]
+
+
+def test_memory_scan_does_not_dispatch_probe_when_platform_already_known(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A resolve_profile_plugins failure for a KNOWN platform (e.g. an
+    unsupported capability request) must NOT dispatch a redundant probe --
+    the dispatch is scoped strictly to the platform-unknown case."""
+    from app.services.memory.execution import MemoryExecutionValidationError
+    from app.services.memory.platform import PlatformFamily
+
+    case = _case(db_session)
+    evidence = _evidence(db_session, case_id=case.id)
+    monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
+    monkeypatch.setattr(routes_memory, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True}]})
+    monkeypatch.setattr(routes_memory, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(path=None))
+    monkeypatch.setattr(
+        routes_memory,
+        "build_memory_analysis_plan",
+        lambda _evidence, canonical_path=None: SimpleNamespace(
+            detected_platform=PlatformFamily.LINUX,
+            readiness=SimpleNamespace(value="not_ready"),
+            readiness_reason="capability unsupported",
+        ),
+    )
+
+    def _resolve(_profile, plan=None):
+        if plan is None:
+            return ["linux.pslist", "linux.pstree"]
+        raise MemoryExecutionValidationError("PROFILE_CAPABILITY_UNAVAILABLE", "Capability unavailable for this platform.")
+
+    monkeypatch.setattr(routes_memory, "resolve_profile_plugins", _resolve)
+
+    dispatched: list[str] = []
+    monkeypatch.setattr(
+        "app.services.memory.preparation_runtime.dispatch_memory_preparation",
+        lambda _db, evidence: dispatched.append(evidence.id),
+    )
+
+    with pytest.raises(Exception) as exc_info:
+        routes_memory.start_memory_scan(
+            evidence.id,
+            MemoryStartScanRequest(profile="metadata_only", authorization_acknowledged=True),
+            case_id=evidence.case_id,
+            db=db_session,
+        )
+
+    assert getattr(exc_info.value, "status_code", None) == 409
+    assert dispatched == []
+
+
 def test_catalogue_does_not_block_on_platform_or_symbol_preparation(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
     case = _case(db_session)
     ev = _evidence(db_session, case_id=case.id)

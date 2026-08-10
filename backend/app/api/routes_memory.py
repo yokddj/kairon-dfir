@@ -2324,11 +2324,32 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
     try:
         resolved_plugins = resolve_profile_plugins(profile, plan=analysis_plan)
     except MemoryExecutionValidationError as exc:
+        # Static header/format detection could not determine the
+        # platform (e.g. a raw/headerless dump such as a VMware .vmem):
+        # the ONLY thing that can still identify it is a real Volatility
+        # banner probe, which requires the memory-worker process (the
+        # backend has no Volatility install -- see
+        # app.services.memory.platform._bounded_volatility_fallback's own
+        # docstring). Dispatch that probe now, as a side effect of this
+        # explicit, user-initiated "Analyze memory" call -- never
+        # automatically on upload/registration -- so the retry this error
+        # message asks for has something to actually resolve the
+        # platform-unknown state. Reuses the existing preparation
+        # dispatcher; does not invent a second probe mechanism.
+        if analysis_plan.detected_platform == PlatformFamily.UNKNOWN:
+            from app.services.memory.preparation_runtime import dispatch_memory_preparation
+
+            dispatch_memory_preparation(db, evidence=evidence)
         raise HTTPException(
             status_code=409,
             detail={
                 "error_code": exc.code,
-                "message": exc.message,
+                "message": exc.message
+                + (
+                    " Kairon has dispatched a background platform probe for this evidence; retry in a few seconds."
+                    if analysis_plan.detected_platform == PlatformFamily.UNKNOWN
+                    else ""
+                ),
                 "detected_platform": analysis_plan.detected_platform.value,
                 "readiness": analysis_plan.readiness.value,
                 "readiness_reason": analysis_plan.readiness_reason,

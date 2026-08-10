@@ -40,6 +40,7 @@ import enum
 import logging
 import re
 import struct
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Protocol, runtime_checkable
@@ -392,10 +393,74 @@ def _bounded_volatility_fallback(canonical_path: Path) -> MemoryProbeResult | No
         if linux_result is not None:
             return linux_result
 
-        return None
+        # linux.pslist requires Kairon to already have compatible ISF
+        # symbols cached to walk kernel structures at all -- for a
+        # never-before-seen kernel (no symbols cached yet) it always
+        # fails, regardless of whether the image really is Linux. That
+        # is a real circular dependency (need symbols to identify the
+        # kernel, need to identify the kernel to know which symbols to
+        # ask the analyst for) with no symbol-independent Volatility
+        # plugin to break it. Fall back to a direct, bounded scan of the
+        # image for the embedded kernel banner string ("Linux version
+        # ..." -- every Linux kernel maps this into physical memory
+        # verbatim as part of `linux_banner`) -- the same technique real
+        # forensic tools use to identify a kernel with zero symbols.
+        return _bounded_linux_banner_scan(canonical_path)
     finally:
         import shutil
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+_LINUX_BANNER_PATTERN = re.compile(rb"Linux version (\S+)[^\x00-\x08\x0e-\x1f\x7f]{0,220}")
+_LINUX_BANNER_SCAN_CHUNK_BYTES = 64 * 1024 * 1024
+_LINUX_BANNER_SCAN_OVERLAP_BYTES = 256
+_LINUX_BANNER_SCAN_MAX_SECONDS = 20.0
+
+
+def _bounded_linux_banner_scan(canonical_path: Path) -> MemoryProbeResult | None:
+    """Scan the image for an embedded Linux kernel banner, with no symbols.
+
+    Every Linux kernel stores its `init/version.c` banner string
+    ("Linux version X.Y.Z-... (...) #N ... " -- the exact text `uname -a`
+    prints) in a data section that gets mapped into physical memory
+    verbatim, at whatever physical address the kernel happened to load
+    at. Volatility's own Linux plugins cannot locate it without symbols
+    (see the docstring above), so this reads the raw image in bounded
+    chunks and searches for the string directly -- the same
+    zero-symbols technique real forensic tooling (e.g. `strings | grep
+    "Linux version"`) uses to identify an unknown Linux kernel.
+
+    Bounded by wall-clock time, not by how far into the image the
+    banner is found -- Real-world dumps put the kernel's data section
+    at essentially any physical offset. Returns ``None`` (never raises)
+    on any I/O error, on timeout, or when no banner is found.
+    """
+    started = time.monotonic()
+    try:
+        with canonical_path.open("rb") as handle:
+            tail = b""
+            while True:
+                if time.monotonic() - started > _LINUX_BANNER_SCAN_MAX_SECONDS:
+                    return None
+                chunk = handle.read(_LINUX_BANNER_SCAN_CHUNK_BYTES)
+                if not chunk:
+                    return None
+                haystack = tail + chunk
+                match = _LINUX_BANNER_PATTERN.search(haystack)
+                if match is not None:
+                    banner_text = match.group(0).decode("ascii", errors="replace").strip()
+                    kernel_release = match.group(1).decode("ascii", errors="replace")
+                    architecture = Architecture.X64 if "x86_64" in banner_text else Architecture.UNKNOWN
+                    return MemoryProbeResult(
+                        platform=PlatformFamily.LINUX,
+                        format="linux_banner_scan",
+                        architecture=architecture,
+                        confidence=ProbeConfidence.MEDIUM,
+                        reason=f"linux_banner_scan:{kernel_release}",
+                    )
+                tail = chunk[-_LINUX_BANNER_SCAN_OVERLAP_BYTES:]
+    except OSError:
+        return None
 
 
 def _run_volatility_plugin_bounded(
@@ -552,6 +617,15 @@ def probe_memory_platform(
             reason = f"detected_format:{fmt_lower}"
         elif fmt_lower in ("vmware_vmem",):
             family, arch, confidence = PlatformFamily.WINDOWS, Architecture.UNKNOWN, ProbeConfidence.MEDIUM
+            reason = f"detected_format:{fmt_lower}"
+        elif fmt_lower in ("linux_banner_scan",):
+            # Persisted by a prior worker-side _bounded_linux_banner_scan
+            # success (see execute_memory_preparation) -- reuse it here so
+            # a later call to this function, even one made from the
+            # backend process (no Volatility installed, stage 4 below is
+            # a no-op there), still resolves to Linux without re-scanning
+            # the image.
+            family, arch, confidence = PlatformFamily.LINUX, Architecture.UNKNOWN, ProbeConfidence.MEDIUM
             reason = f"detected_format:{fmt_lower}"
 
     # Stage 3: Historical SHA match (prior successful preparation).
