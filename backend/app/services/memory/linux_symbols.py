@@ -342,7 +342,59 @@ class _SidecarSettings:
 def _identity_from_isf(payload: dict[str, Any], *, sha256: str) -> LinuxSymbolIdentity:
     metadata = payload.get("metadata") if isinstance(payload.get("metadata"), dict) else {}
     linux = metadata.get("linux") if isinstance(metadata.get("linux"), dict) else {}
-    return _identity_from_mapping({**metadata, **linux}, sha256=sha256)
+    identity = _identity_from_mapping({**metadata, **linux}, sha256=sha256)
+    if not _has_kernel_identity(identity):
+        # A genuine, official Volatility 3 ISF (as produced by dwarf2json,
+        # the tool the framework itself ships) does NOT carry a flat
+        # kernel_release/banner/build_id string in metadata.linux -- it
+        # carries a metadata.linux.symbols/types array of source-artifact
+        # descriptors ({kind, name, hash_type, hash_value}), where `name`
+        # looks like "vmlinux-6.5.0-41-generic" or
+        # "System.map-6.5.0-41-generic". Without this fallback, every
+        # real-world Linux ISF is rejected as KERNEL_IDENTITY_UNKNOWN --
+        # verified against a real dwarf2json 0.7.0 output during this
+        # sprint's diagnosis.
+        kernel_release = _kernel_release_from_isf_symbols(linux)
+        if kernel_release:
+            identity = LinuxSymbolIdentity(
+                platform=identity.platform,
+                architecture=identity.architecture,
+                kernel_release=kernel_release,
+                banner=identity.banner,
+                build_id=identity.build_id,
+                framework=identity.framework,
+                framework_version=identity.framework_version,
+                isf_sha256=identity.isf_sha256,
+            )
+    return identity
+
+
+_ISF_SYMBOL_ARTIFACT_KERNEL_PREFIXES = ("vmlinux-", "system.map-", "vmlinuz-")
+
+
+def _kernel_release_from_isf_symbols(linux_meta: dict[str, Any]) -> str | None:
+    """Recover a kernel release string from metadata.linux.symbols[].name.
+
+    Returns the first plausible match, or ``None`` if the array is
+    absent or no entry's name carries a recognized kernel-artifact
+    prefix.
+    """
+    entries = linux_meta.get("symbols") if isinstance(linux_meta, dict) else None
+    if not isinstance(entries, list):
+        return None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name") or "").strip()
+        if not name:
+            continue
+        lowered = name.lower()
+        for prefix in _ISF_SYMBOL_ARTIFACT_KERNEL_PREFIXES:
+            if lowered.startswith(prefix):
+                release = name[len(prefix):].strip()
+                if release:
+                    return release
+    return None
 
 
 def _identity_from_mapping(data: dict[str, Any], *, sha256: str | None) -> LinuxSymbolIdentity:

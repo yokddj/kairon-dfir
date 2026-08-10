@@ -97,6 +97,53 @@ def test_linux_isf_manual_import_rejects_non_linux_identity(tmp_path: Path) -> N
     assert excinfo.value.code == "KERNEL_IDENTITY_UNKNOWN"
 
 
+def test_linux_isf_manual_import_accepts_real_dwarf2json_symbols_array(tmp_path: Path) -> None:
+    """Regression: a genuine Volatility 3 ISF, as produced by dwarf2json (the
+    tool the framework itself ships), does NOT carry a flat
+    metadata.linux.kernel_release/banner/build_id string -- it carries a
+    metadata.linux.symbols[]/types[] array of source-artifact descriptors
+    ({kind, name, hash_type, hash_value}), where `name` looks like
+    "vmlinux-6.5.0-41-generic" or "System.map-6.5.0-41-generic". Before the
+    fix, every real-world Linux ISF (not just this one) was rejected as
+    KERNEL_IDENTITY_UNKNOWN because only the flat fields were ever read.
+    """
+    isf = tmp_path / "real-dwarf2json.json"
+    isf.write_text(json.dumps({
+        "metadata": {
+            "linux": {
+                "symbols": [
+                    {"kind": "kernel-image", "name": "vmlinux-6.5.0-41-generic", "hash_type": "sha256", "hash_value": "a" * 64},
+                    {"kind": "map-file", "name": "System.map-6.5.0-41-generic", "hash_type": "sha256", "hash_value": "b" * 64},
+                ],
+                "types": [
+                    {"kind": "kernel-image", "name": "vmlinux-6.5.0-41-generic", "hash_type": "sha256", "hash_value": "a" * 64},
+                ],
+            },
+            "producer": {"name": "dwarf2json", "version": "0.7.0"},
+            "format": "6.2.0",
+        },
+        "symbols": {},
+        "types": {},
+    }))
+
+    status = import_linux_isf(isf, original_filename="real-dwarf2json.json", settings=_settings(tmp_path))
+
+    assert status.found is True
+    assert "6.5.0-41-generic" in status.identity
+
+    # The evidence-derived required identity carries only what a real,
+    # symbol-independent probe can know up front (kernel release) --
+    # architecture/build_id are unknown until symbols resolve, matching
+    # production's expected_identity_from_evidence() output.
+    resolved = resolve_linux_symbols(
+        _settings(tmp_path),
+        required_identity=LinuxSymbolIdentity(kernel_release="6.5.0-41-generic"),
+    )
+    assert resolved.found is True
+    assert resolved.valid is True
+    assert resolved.compatible is True
+
+
 def test_linux_isf_manual_import_obeys_feature_gate(tmp_path: Path) -> None:
     isf = tmp_path / "kernel.json"
     _write_isf(isf)

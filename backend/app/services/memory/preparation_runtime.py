@@ -653,6 +653,23 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
         # 2. Run the bounded probe.
         probe_summary = _probe_evidence(evidence)
 
+        # Persist a successful platform identification back onto the
+        # evidence row. Without this, the result of this worker-only
+        # probe (Volatility / the banner scan, both unavailable in the
+        # backend API process) is lost the moment this task ends: the
+        # next static-only probe_memory_platform() call anywhere else
+        # (e.g. the backend re-checking readiness for GET /preparation
+        # or POST .../memory/scan) would see the same "unknown" platform
+        # again and never progress. evidence.detected_format is stage 2
+        # of probe_memory_platform's own detection order, so persisting
+        # it here is enough for every future caller to resolve the
+        # platform without re-running Volatility.
+        if not evidence.detected_format and probe_summary.get("platform") not in (None, "unknown"):
+            evidence.detected_format = probe_summary.get("format") or None
+            evidence.detection_confidence = probe_summary.get("confidence") or None
+            evidence.detection_reason = probe_summary.get("reason") or None
+            db.commit()
+
         # 3. Build the adapter and evaluate readiness.
         from app.services.memory.platform import (
             PlatformFamily,
