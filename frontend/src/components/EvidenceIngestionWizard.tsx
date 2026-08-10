@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { api, type Evidence, type EvidenceIntent, type EvidencePlatform, type EvidenceUploadSessionCreateResponse, type EvidenceUploadSessionRead, type EvtxProfile, type IngestMode, type MemoryUploadStatus, type PreflightReport, type ResumableUploadSessionRead } from "../api/client";
 import { useNotifications } from "../context/NotificationsContext";
 import { MemoryEvidencePreparationCard } from "./memory/MemoryEvidencePreparationCard";
+import { MemoryInitialAnalysisAction } from "./memory/MemoryInitialAnalysisAction";
 import { DEFAULT_CHUNK_SIZE, runResumableUpload } from "../features/memory/runResumableUpload";
 import { memoryEvidenceRoute } from "../lib/canonicalRoutes";
 import { hashBlob } from "../lib/sha256";
@@ -315,6 +316,21 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
   const caseHostsQuery = useQuery({ queryKey: ["case-hosts", caseId], queryFn: () => api.getCaseHosts(caseId), enabled: open && Boolean(caseId), staleTime: 15_000 });
   const caseHosts = caseHostsQuery.data?.hosts ?? [];
+
+  // Same query keys MemoryEvidencePreparationCard / MemoryInitialAnalysisAction
+  // already fetch (see their own module docstrings) -- reused here, not
+  // refetched separately, only to decide whether the step 6 Continue
+  // button should still be the primary action or a secondary escape
+  // hatch. Never a second source of readiness/run truth.
+  const stepSixPreparationQuery = useQuery({
+    queryKey: ["memory-evidence-preparation", caseId, preparationEvidence?.id ?? ""],
+    queryFn: () => api.getMemoryEvidencePreparation(caseId, preparationEvidence!.id),
+    enabled: Boolean(caseId && preparationEvidence?.id),
+    refetchOnWindowFocus: false,
+  });
+  const readyForInitialAnalysis = Boolean(
+    stepSixPreparationQuery.data?.readiness === "ready" && stepSixPreparationQuery.data?.can_start_analysis,
+  );
 
   const healthQuery = useQuery({
     queryKey: ["ingestion-readiness", caseId],
@@ -1782,11 +1798,22 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
 
             <MemoryEvidencePreparationCard caseId={caseId} evidenceId={preparationEvidence.id} />
 
+            {/* Phase 3A golden path: once Memory Preparation is ready, this
+                is the primary action -- Continue below drops to a secondary
+                escape hatch (still functional, never removed) rather than
+                letting the wizard hand off to MemoryEvidencePage without
+                ever having offered to start the initial analysis. */}
+            <MemoryInitialAnalysisAction caseId={caseId} evidenceId={preparationEvidence.id} onBeforeNavigateToResults={handleClose} />
+
             <div className="mt-5 flex justify-end">
               <button
                 type="button"
                 onClick={handleContinueFromPreparation}
-                className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss"
+                className={
+                  readyForInitialAnalysis
+                    ? "rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-muted"
+                    : "rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss"
+                }
                 data-testid="memory-preparation-continue-button"
               >
                 Continue
