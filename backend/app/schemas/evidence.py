@@ -7,6 +7,23 @@ from app.models.evidence import EvidenceStorageMode, EvidenceType, IngestStatus,
 from app.schemas.disk_image import DiskImageRead
 
 
+class EvidenceCompanionRead(BaseModel):
+    id: str
+    case_id: str
+    evidence_id: str
+    companion_type: str
+    original_filename: str
+    internal_filename: str
+    sha256: str
+    size_bytes: int
+    source_method: str
+    uploaded_by_user_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class EvidenceRead(BaseModel):
     id: str
     case_id: str

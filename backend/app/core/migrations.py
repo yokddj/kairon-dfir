@@ -2849,3 +2849,65 @@ def _v38_memory_evidence_linux_symbol_links(connection: Connection) -> None:
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_evidence_linux_symbol_links_case_id ON memory_evidence_linux_symbol_links (case_id)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_evidence_linux_symbol_links_cache_key ON memory_evidence_linux_symbol_links (cache_key)"))
     connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_evidence_linux_symbol_links_status ON memory_evidence_linux_symbol_links (status)"))
+
+
+@register(39, "evidence_companion_files")
+def _v39_evidence_companion_files(connection: Connection) -> None:
+    """VMware Companion Files Phase 1: ``evidence_companion_files``.
+
+    Persists a secondary acquisition-format file (a VMware ``.vmsn``/
+    ``.vmss`` snapshot metadata file today) materialized alongside a
+    primary Evidence file. See ``app.models.evidence.EvidenceCompanionFile``
+    for the full rationale -- in particular why ``evidence_id`` is unique
+    (at most one active companion per evidence in this phase).
+
+    Deliberately format-agnostic in shape: ``companion_type`` is a plain
+    string, not a native enum, so a future companion format needs no
+    schema migration of its own.
+    """
+    inspector = _inspector_for(connection)
+    if "evidence_companion_files" in inspector.get_table_names():
+        return
+    dialect = connection.dialect.name
+    id_type = "UUID" if dialect == "postgresql" else "VARCHAR(36)"
+    connection.execute(text(f"""
+        CREATE TABLE evidence_companion_files (
+            id {id_type} PRIMARY KEY,
+            case_id {id_type} NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+            evidence_id {id_type} NOT NULL UNIQUE REFERENCES evidences(id) ON DELETE CASCADE,
+            companion_type VARCHAR(32) NOT NULL,
+            original_filename VARCHAR(512) NOT NULL,
+            internal_filename VARCHAR(255) NOT NULL,
+            relative_path VARCHAR(2048) NOT NULL,
+            sha256 VARCHAR(64) NOT NULL,
+            size_bytes BIGINT NOT NULL,
+            source_method VARCHAR(32) NOT NULL DEFAULT 'manual_upload',
+            uploaded_by_user_id VARCHAR REFERENCES users(id) ON DELETE SET NULL,
+            created_at TIMESTAMP NOT NULL,
+            updated_at TIMESTAMP NOT NULL
+        )
+    """))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_companion_files_case_id ON evidence_companion_files (case_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_companion_files_companion_type ON evidence_companion_files (companion_type)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_companion_files_sha256 ON evidence_companion_files (sha256)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_evidence_companion_files_uploaded_by_user_id ON evidence_companion_files (uploaded_by_user_id)"))
+
+
+@register(40, "evidence_custody_companion_event_types")
+def _v40_evidence_custody_companion_event_types(connection: Connection) -> None:
+    """Add the two new EvidenceCustodyEventType values companion
+    attach/remove events use. Mirrors v24's handling of the host-assignment
+    event types: only relevant when SQLAlchemy's ``create_all()`` created a
+    native Postgres enum type for this column (fresh installs) -- the
+    versioned-migration fallback path (v23) uses a plain VARCHAR column, so
+    this is a no-op there.
+    """
+    if connection.dialect.name != "postgresql":
+        return
+    enum_exists = connection.execute(
+        text("SELECT 1 FROM pg_type WHERE typname = 'evidencecustodyeventtype'")
+    ).fetchone()
+    if not enum_exists:
+        return
+    for value in ("companion_attached", "companion_removed"):
+        connection.execute(text(f"ALTER TYPE evidencecustodyeventtype ADD VALUE IF NOT EXISTS '{value}'"))
