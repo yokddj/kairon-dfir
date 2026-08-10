@@ -30,7 +30,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.database import Base
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
-from app.models.memory import MemoryArtifactSummary, MemoryScanRun
+from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
 from app.services.memory.active_result import FAMILY_RESOLUTION, list_families, resolve_active_memory_result
 from app.services.memory.catalogue import build_analysis_catalogue
 from app.services.memory.overview import get_evidence_landing
@@ -174,6 +174,51 @@ def test_resolve_active_result_prefers_extended_over_basic_for_processes(db: Ses
     result = resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family="processes")
     assert result["active_run"] is not None
     assert result["active_run"]["id"] == r_ext.id
+
+
+def test_resolve_active_result_surfaces_plugin_warning_code_on_the_run(db: Session) -> None:
+    """Phase 2: the zero-result VMware companion warning
+    (execution.VMWARE_METADATA_WARNING_CODE, set on a MemoryPluginRun by
+    app.services.memory.execution) is visible on the family-level
+    active_run the UI already renders, for families where an empty
+    result CAN become "active" (see _is_canonical_usable -- "processes"
+    specifically excludes zero-canonical-entity runs from ever becoming
+    active, which is exactly why Phase 2's primary UI surface for this
+    warning is Memory Preparation instead, not this endpoint; this test
+    covers the _serialize_run wiring itself using an unaffected family)."""
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "capture.vmem")
+    run = _make_run(db, case.id, ev.id, "modules_basic", "completed", _utc(2026, 6, 16), _utc(2026, 6, 16, 0, 2))
+    db.add(MemoryPluginRun(
+        memory_scan_run_id=run.id, case_id=case.id, evidence_id=ev.id, plugin="windows.dlllist",
+        status="completed", row_count=0,
+        warning_code="VMWARE_METADATA_MAY_BE_REQUIRED",
+        warning_message="Volatility reported that VMware snapshot metadata (.vmsn/.vmss) may be required to fully process this memory image.",
+    ))
+    db.commit()
+
+    result = resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family="modules")
+
+    assert result["active_run"] is not None
+    assert result["active_run"]["warning_code"] == "VMWARE_METADATA_MAY_BE_REQUIRED"
+    assert result["active_run"]["warning_message"]
+
+
+def test_resolve_active_result_warning_code_is_none_for_a_clean_run(db: Session) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    run = _make_run(db, case.id, ev.id, "modules_basic", "completed", _utc(2026, 6, 16), _utc(2026, 6, 16, 0, 2))
+    db.add(MemoryPluginRun(
+        memory_scan_run_id=run.id, case_id=case.id, evidence_id=ev.id, plugin="windows.dlllist",
+        status="completed", row_count=42,
+    ))
+    db.commit()
+
+    result = resolve_active_memory_result(db, case_id=case.id, evidence_id=ev.id, family="modules")
+    assert result["active_run"] is not None
+
+    assert result["active_run"]["warning_code"] is None
+    assert result["active_run"]["warning_message"] is None
 
 
 def test_resolve_active_result_falls_back_to_processes_basic_when_no_extended(db: Session) -> None:

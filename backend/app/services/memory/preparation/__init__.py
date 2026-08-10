@@ -11,8 +11,9 @@ it's missing (see app.services.memory.preparation.models for why that
 split matters and how this relates to the other, pre-existing
 "preparation"-named things in this codebase).
 
-Not yet wired into any route, worker task, or frontend code -- this
-package is infrastructure for a future phase.
+Wired into ``GET /cases/{case_id}/memory/evidences/{evidence_id}/preparation``
+(app/api/routes_memory.py) and consumed by the frontend's Memory
+Preparation surfaces.
 """
 from __future__ import annotations
 

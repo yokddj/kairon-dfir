@@ -1,6 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type MemoryEvidencePreparation, type MemoryPreparationReadiness } from "../../api/client";
 import { LinuxSymbolUploadPanel } from "./LinuxSymbolUploadPanel";
+import { VmwareCompanionSection } from "./VmwareCompanionSection";
+import { ZeroResultWarningBanner } from "./ZeroResultWarningBanner";
 
 // Read-only Memory Evidence Preparation view (Phase 2). Backed entirely by
 // GET /cases/{caseId}/memory/evidences/{evidenceId}/preparation, which is a
@@ -137,6 +139,30 @@ export function MemoryEvidencePreparationCard({ caseId, evidenceId }: Props) {
           onValidated={() => void queryClient.invalidateQueries({ queryKey })}
         />
       ) : null}
+      <ZeroResultWarningBanner
+        warningCode={preparation.zero_result_warning_code}
+        warningMessage={preparation.zero_result_warning_message}
+        pluginName={preparation.zero_result_warning_plugin}
+        onOpenCompanionSection={() =>
+          document.getElementById("vmware-companion-section")?.scrollIntoView({ behavior: "smooth", block: "center" })
+        }
+      />
+      {/* Platform-agnostic by design -- not gated on preparation.platform,
+          unlike the Linux symbol panel above. VmwareCompanionSection
+          hides itself when neither applicable nor already attached. */}
+      <VmwareCompanionSection
+        caseId={caseId}
+        evidenceId={evidenceId}
+        hasCompanion={preparation.has_vmware_companion}
+        companionId={preparation.vmware_companion_id}
+        companionType={preparation.vmware_companion_type}
+        companionFilename={preparation.vmware_companion_filename}
+        companionSha256={preparation.vmware_companion_sha256}
+        companionSizeBytes={preparation.vmware_companion_size_bytes}
+        recommended={preparation.vmware_companion_recommended}
+        warningText={preparation.vmware_companion_warning}
+        onChanged={() => void queryClient.invalidateQueries({ queryKey })}
+      />
     </section>
   );
 }
