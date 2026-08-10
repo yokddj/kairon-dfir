@@ -23,6 +23,8 @@ const uploadMemoryUploadChunkMock = vi.fn();
 const finalizeMemoryUploadMock = vi.fn();
 const getEvidenceMock = vi.fn();
 const getMemoryEvidencePreparationMock = vi.fn();
+const listMemoryRunsMock = vi.fn();
+const startMemoryScanMock = vi.fn();
 const navigateMock = vi.fn();
 
 vi.mock("react-router-dom", async () => {
@@ -48,6 +50,8 @@ vi.mock("../api/client", () => ({
     finalizeMemoryUpload: (...args: unknown[]) => finalizeMemoryUploadMock(...args),
     getEvidence: (...args: unknown[]) => getEvidenceMock(...args),
     getMemoryEvidencePreparation: (...args: unknown[]) => getMemoryEvidencePreparationMock(...args),
+    listMemoryRuns: (...args: unknown[]) => listMemoryRunsMock(...args),
+    startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
   },
 }));
 
@@ -180,6 +184,21 @@ async function openEvidenceAdvancedOptions() {
   return screen.findByTestId("host-assignment-panel");
 }
 
+async function reachMemoryPreparationStep(evidence: { id: string; original_filename: string }) {
+  promoteEvidenceUploadSessionMock.mockResolvedValue({ id: evidence.id, original_filename: evidence.original_filename, evidence_type: "memory_dump" });
+  createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
+    preflight: readyReport({ original_filename: evidence.original_filename, classification: { ...readyReport().classification, category: "memory_dump" } }),
+  }));
+  renderWizard();
+  await goToFileStep(/Memory Dump/);
+  await userEvent.upload(document.querySelector('input[type="file"]') as HTMLInputElement, new File(["x"], evidence.original_filename));
+  await userEvent.click(screen.getByRole("button", { name: "Inspect evidence" }));
+  await screen.findByTestId("preflight-report");
+  await userEvent.click(screen.getByRole("checkbox", { name: /authorized to handle this RAM evidence/i }));
+  await userEvent.click(screen.getByRole("button", { name: "Start Processing" }));
+  await screen.findByRole("heading", { name: "Evidence registered" });
+}
+
 describe("EvidenceIngestionWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -200,6 +219,7 @@ describe("EvidenceIngestionWizard", () => {
       can_start_analysis: true,
       human_message: "This evidence is ready to analyze.",
     });
+    listMemoryRunsMock.mockResolvedValue([]);
   });
 
   it("shows a critical health interruption only when a critical dependency is down", async () => {
@@ -1004,6 +1024,66 @@ describe("EvidenceIngestionWizard", () => {
     expect(screen.queryByRole("button", { name: /start analysis/i })).not.toBeInTheDocument();
   });
 
+  // ---------------------------------------------------------------------
+  // Phase 3A: Start memory analysis golden path from step 6
+  // ---------------------------------------------------------------------
+
+  it("shows Start memory analysis as the primary action once preparation is ready, with Continue demoted to secondary", async () => {
+    await reachMemoryPreparationStep({ id: "evidence-3", original_filename: "capture.mem" });
+
+    const startButton = await screen.findByTestId("memory-initial-analysis-start-button");
+    expect(startButton).toBeInTheDocument();
+
+    const continueButton = screen.getByTestId("memory-preparation-continue-button");
+    expect(continueButton).toBeInTheDocument();
+    expect(continueButton.className).not.toContain("bg-accent");
+  });
+
+  it("does not show Start memory analysis, and keeps Continue as the primary action, when preparation is not ready", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue({
+      evidence_id: "evidence-3",
+      platform: "linux",
+      architecture: "x64",
+      readiness: "symbols_required",
+      requires_symbols: true,
+      can_start_analysis: false,
+      human_message: "This Linux dump requires Volatility symbols (ISF) Kairon does not currently have.",
+    });
+    await reachMemoryPreparationStep({ id: "evidence-3", original_filename: "capture.mem" });
+
+    expect(screen.queryByTestId("memory-initial-analysis-start-button")).not.toBeInTheDocument();
+    const continueButton = await screen.findByTestId("memory-preparation-continue-button");
+    expect(continueButton.className).toContain("bg-accent");
+  });
+
+  it("clicking Start memory analysis calls startMemoryScan with processes_basic, never metadata_only", async () => {
+    startMemoryScanMock.mockResolvedValue({
+      accepted: true, evidence_id: "evidence-3", run_id: "run-1", status: "queued", message: "queued",
+      run: { id: "run-1", case_id: "case-1", evidence_id: "evidence-3", backend: "volatility3", profile: "processes_basic", status: "queued", requested_plugin_count: 2, plugin_count: 2, plugins_completed: 0, plugins_failed: 0, plugins_skipped: 0, started_at: null, completed_at: null, duration_ms: null, output_dir: null, metadata_json: {}, error_log: {}, backend_version: null, worker_task_id: null, cancellation_requested: false, created_at: new Date().toISOString() },
+    });
+    await reachMemoryPreparationStep({ id: "evidence-3", original_filename: "capture.mem" });
+
+    await userEvent.click(await screen.findByTestId("memory-initial-analysis-start-button"));
+
+    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("case-1", "evidence-3", "processes_basic", true));
+    expect(startMemoryScanMock).not.toHaveBeenCalledWith("case-1", "evidence-3", "metadata_only", expect.anything());
+  });
+
+  it("refresh/reopen with an already-completed initial analysis shows View memory results, not Start", async () => {
+    listMemoryRunsMock.mockResolvedValue([
+      { id: "run-1", case_id: "case-1", evidence_id: "evidence-3", backend: "volatility3", profile: "processes_basic", status: "completed", requested_plugin_count: 2, plugin_count: 2, plugins_completed: 2, plugins_failed: 0, plugins_skipped: 0, started_at: new Date().toISOString(), completed_at: new Date().toISOString(), duration_ms: 900, output_dir: null, metadata_json: {}, error_log: {}, backend_version: null, worker_task_id: null, cancellation_requested: false, created_at: new Date().toISOString() },
+    ]);
+    await reachMemoryPreparationStep({ id: "evidence-3", original_filename: "capture.mem" });
+
+    expect(await screen.findByTestId("memory-initial-analysis-completed")).toBeInTheDocument();
+    expect(screen.queryByTestId("memory-initial-analysis-start-button")).not.toBeInTheDocument();
+    expect(startMemoryScanMock).not.toHaveBeenCalled();
+
+    expect(navigateMock).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByTestId("memory-initial-analysis-view-results-button"));
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith("/cases/case-1/m/evidence-3/overview"));
+  });
+
   it("never shows the Memory Preparation step or card for non-memory evidence", async () => {
     promoteEvidenceUploadSessionMock.mockResolvedValue({ id: "evidence-disk-x", original_filename: "disk.E01", evidence_type: "disk_image" });
     createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse({
@@ -1279,6 +1359,7 @@ describe("EvidenceIngestionWizard resumable upload discovery", () => {
       can_start_analysis: true,
       human_message: "This evidence is ready to analyze.",
     });
+    listMemoryRunsMock.mockResolvedValue([]);
   });
 
   it("surfaces an interrupted upload without needing a resume_session URL parameter and lets the analyst pick it up", async () => {
