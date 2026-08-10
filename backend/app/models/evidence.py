@@ -66,6 +66,8 @@ class EvidenceCustodyEventType(str, enum.Enum):
     host_unassigned = "host_unassigned"
     host_created = "host_created"
     host_assignment_changed = "host_assignment_changed"
+    companion_attached = "companion_attached"
+    companion_removed = "companion_removed"
 
 
 class Evidence(UUIDMixin, Base):
@@ -135,6 +137,7 @@ class Evidence(UUIDMixin, Base):
     host = relationship("CaseHost", back_populates="evidences")
     uploaded_by = relationship("User")
     custody_events = relationship("EvidenceCustodyEvent", back_populates="evidence", cascade="all, delete-orphan")
+    companion_files = relationship("EvidenceCompanionFile", back_populates="evidence", cascade="all, delete-orphan")
 
 
 class EvidenceCustodyEvent(UUIDMixin, Base):
@@ -149,6 +152,67 @@ class EvidenceCustodyEvent(UUIDMixin, Base):
 
     evidence = relationship("Evidence", back_populates="custody_events")
     actor = relationship("User")
+
+
+class EvidenceCompanionFile(UUIDMixin, Base):
+    """A secondary acquisition-format file materialized alongside a primary
+    Evidence file -- e.g. a VMware ``.vmsn``/``.vmss`` snapshot metadata
+    file next to a ``.vmem`` memory dump.
+
+    Named generically (not ``LinuxVmwareCompanion`` or similar) because a
+    companion belongs to the *acquisition format*, not the guest OS --
+    Volatility 3's VMware layer stacker discovers ``.vmss``/``.vmsn`` the
+    same way regardless of whether the guest is Linux or Windows. Only
+    ``companion_type`` values ``vmware_vmsn``/``vmware_vmss`` are produced
+    today; the table shape does not assume VMware or any single format.
+
+    Phase 1 policy: at most ONE active companion per evidence
+    (``evidence_id`` unique). Uploading a new companion -- of the same or a
+    different type -- replaces whatever was previously attached, including
+    removing the old file from disk. This sidesteps the ambiguity of
+    tracking two simultaneous companions when Volatility itself only ever
+    consults one (it always prefers a ``.vmss`` over a ``.vmsn`` when both
+    are physically present -- see ``VmwareStacker.stack()`` in
+    ``volatility3/framework/layers/vmware.py``): if a stale file of the
+    higher-precedence type were left on disk after a "replace", Volatility
+    would keep silently using the old one. A single active row makes that
+    scenario structurally impossible instead of relying on cleanup
+    discipline.
+    """
+
+    __tablename__ = "evidence_companion_files"
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, unique=True, index=True)
+    # "vmware_vmsn" | "vmware_vmss" today. Stored as a plain string (not a
+    # SQLAlchemy Enum) so a future companion format never requires a
+    # native-enum schema migration -- same convention as every other
+    # small-fixed-vocabulary column in the memory subsystem
+    # (e.g. MemoryEvidenceLinuxSymbolLink.link_source).
+    companion_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    # Client-supplied filename, sanitized for display only -- never used to
+    # derive an on-disk path. See ``internal_filename`` for the path Kairon
+    # actually writes and Volatility actually reads.
+    original_filename: Mapped[str] = mapped_column(String(512), nullable=False)
+    # The canonical on-disk basename Volatility's VmwareStacker expects:
+    # the primary evidence's own canonical basename with its extension
+    # swapped (``memory-image.vmem`` -> ``memory-image.vmss``), never the
+    # original uploaded filename.
+    internal_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Path relative to ``settings.backend_data_dir``, mirroring
+    # ``MemoryUpload.canonical_relative_path``.
+    relative_path: Mapped[str] = mapped_column(String(2048), nullable=False)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # "manual_upload" today; kept as a free string (not an enum) for the
+    # same forward-compatibility reason as companion_type.
+    source_method: Mapped[str] = mapped_column(String(32), nullable=False, default="manual_upload")
+    uploaded_by_user_id: Mapped[str | None] = mapped_column(String, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(default=utc_now_naive, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(default=utc_now_naive, onupdate=utc_now_naive, nullable=False)
+
+    evidence = relationship("Evidence", back_populates="companion_files")
+    uploaded_by = relationship("User")
 
 
 def resolve_public_evidence_type(
