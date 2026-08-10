@@ -15,6 +15,8 @@ import { MemoryTypeConfirmationModal } from "../components/memory/MemoryTypeConf
 import { MemorySymbolResolutionPanel } from "../components/memory/MemorySymbolResolutionPanel";
 import { MemoryExperimentalResultsPanel } from "../components/memory/MemoryExperimentalResultsPanel";
 import { MemoryPreparationCard } from "../components/memory/MemoryPreparationCard";
+import { VmwareCompanionSection } from "../components/memory/VmwareCompanionSection";
+import { ZeroResultWarningBanner } from "../components/memory/ZeroResultWarningBanner";
 import { assignedHostMatchesDetected, normalizeEvidenceHostName } from "../lib/evidenceDetailFormatting";
 import { capabilityEnabled } from "../lib/platformRegistry";
 import { MEMORY_TABS, isMemoryTab, tabFromRouteSegment, routeSegmentFromTab, type MemoryTab } from "../lib/memoryWorkspaceState";
@@ -372,6 +374,25 @@ export default function MemoryEvidencePage() {
   });
   const symbolPreparation = symbolPreparationQuery.data ?? null;
 
+  // Memory Evidence Preparation (Phase 1/2, app.services.memory.preparation)
+  // -- a separate, platform-agnostic read-only snapshot from the
+  // MemorySymbolPreparation pipeline above (see MemoryEvidencePreparationCard.tsx's
+  // module docstring for the distinction). Only fetched here for its
+  // vmware_companion_* fields, which VmwareCompanionSection needs -- this
+  // page intentionally does not also render the rest of that card
+  // (platform/architecture/readiness), which MemoryPreparationCard and
+  // MemorySymbolResolutionPanel below already cover for this page.
+  // Same query key as MemoryEvidencePreparationCard.tsx so the two never
+  // disagree if ever mounted together.
+  const evidencePreparationQueryKey = ["memory-evidence-preparation", caseId, evidenceId];
+  const evidencePreparationQuery = useQuery({
+    queryKey: evidencePreparationQueryKey,
+    queryFn: () => api.getMemoryEvidencePreparation(caseId, evidenceId),
+    enabled: Boolean(caseId && evidenceId),
+    refetchOnWindowFocus: false,
+  });
+  const evidencePreparation = evidencePreparationQuery.data ?? null;
+
   const prepEffectiveState = symbolPreparation?.effective_state || symbolPreparation?.ui_state;
   const isBlockedSymbols = prepEffectiveState === "blocked_symbols";
   const isReadyState = prepEffectiveState === "ready";
@@ -587,6 +608,33 @@ export default function MemoryEvidencePage() {
           evidenceId={evidenceId}
           preparation={symbolPreparation}
           nativeProbeStatus={nativeProbeQuery.data ?? null}
+        />
+      ) : null}
+
+      {evidence && evidencePreparation ? (
+        <ZeroResultWarningBanner
+          warningCode={evidencePreparation.zero_result_warning_code}
+          warningMessage={evidencePreparation.zero_result_warning_message}
+          pluginName={evidencePreparation.zero_result_warning_plugin}
+          onOpenCompanionSection={() =>
+            document.getElementById("vmware-companion-section")?.scrollIntoView({ behavior: "smooth", block: "center" })
+          }
+        />
+      ) : null}
+
+      {evidence && evidencePreparation ? (
+        <VmwareCompanionSection
+          caseId={caseId}
+          evidenceId={evidenceId}
+          hasCompanion={evidencePreparation.has_vmware_companion}
+          companionId={evidencePreparation.vmware_companion_id}
+          companionType={evidencePreparation.vmware_companion_type}
+          companionFilename={evidencePreparation.vmware_companion_filename}
+          companionSha256={evidencePreparation.vmware_companion_sha256}
+          companionSizeBytes={evidencePreparation.vmware_companion_size_bytes}
+          recommended={evidencePreparation.vmware_companion_recommended}
+          warningText={evidencePreparation.vmware_companion_warning}
+          onChanged={() => void queryClient.invalidateQueries({ queryKey: evidencePreparationQueryKey })}
         />
       ) : null}
 

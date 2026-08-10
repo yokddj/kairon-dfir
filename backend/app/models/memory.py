@@ -162,6 +162,14 @@ class MemoryPluginRun(UUIDMixin, Base):
     output_size: Mapped[int | None] = mapped_column(nullable=True)
     error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
     error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # Distinct from error_code/error_message: a warning never changes
+    # ``status`` away from "completed" -- the plugin genuinely ran to
+    # completion, this just flags something about the result worth the
+    # operator's attention (e.g. VMWARE_METADATA_MAY_BE_REQUIRED, set
+    # when Volatility's own stderr reports it could not stack VMware
+    # snapshot metadata). NULL on every run where nothing was flagged.
+    warning_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    warning_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSONVariant, default=dict, nullable=False)
     # Trust fields (mirror ``MemoryScanRun``).  All validated
     # MemoryPluginRun rows default to ``validated`` trust; the

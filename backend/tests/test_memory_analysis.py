@@ -2956,6 +2956,132 @@ def test_execution_indexing_failure_retains_raw_output(db_session, tmp_path: Pat
     assert "/secret" not in run.error_log["message"]
 
 
+# ---------------------------------------------------------------------------
+# VMware companion (Phase 2): zero-result warning detection
+# ---------------------------------------------------------------------------
+
+
+_REAL_VMWARE_STDERR = (
+    "Volatility 3 Framework 2.28.0\n"
+    "WARNING  volatility3.framework.layers.vmware: No metadata file found alongside VMEM file. "
+    "A VMSS or VMSN file may be required to correctly process a VMEM file. These should be placed "
+    "in the same directory with the same file name, e.g. memory.vmem and memory.vmss.\n"
+    "Progress:    0.00\t\tScanning FileLayer using BytesScannerProgress:  100.00\t\tStacking attempts finished\n"
+).encode("utf-8")
+
+
+def test_contains_vmware_metadata_warning_detects_real_marker() -> None:
+    assert memory_execution._contains_vmware_metadata_warning(_REAL_VMWARE_STDERR) is True
+
+
+def test_contains_vmware_metadata_warning_false_for_unrelated_stderr() -> None:
+    unrelated = b"Volatility 3 Framework 2.28.0\nWARNING  volatility3.framework.symbols: Symbol table not found.\n"
+    assert memory_execution._contains_vmware_metadata_warning(unrelated) is False
+
+
+def test_contains_vmware_metadata_warning_false_for_empty_or_none() -> None:
+    assert memory_execution._contains_vmware_metadata_warning(b"") is False
+    assert memory_execution._contains_vmware_metadata_warning(None) is False
+
+
+def _run_metadata_scan_with_mocked_plugin(
+    db_session,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    plugin: str,
+    stdout: bytes,
+    stderr: bytes,
+) -> MemoryPluginRun:
+    """Shared harness for the zero-result-warning tests below, mirroring
+    test_execution_indexing_failure_retains_raw_output's mocking shape
+    exactly (same mocked seams: SessionLocal, validate_memory_execution_
+    request, backend readiness, run_plugin, output-path plumbing)."""
+    _case(db_session)
+    evidence_file = tmp_path / "data" / "evidence" / CASE_ID / MEMORY_EVIDENCE_ID / "original" / "memory.vmem"
+    evidence_file.parent.mkdir(parents=True)
+    evidence_file.write_bytes(b"synthetic")
+    evidence = _evidence(db_session, stored_path=str(evidence_file))
+    run = MemoryScanRun(
+        case_id=CASE_ID, evidence_id=evidence.id, backend="volatility3", profile="processes_basic",
+        status="queued", requested_plugin_count=1, plugin_count=1, metadata_json={"plugins": [plugin]},
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    class SessionContext:
+        def __enter__(self):
+            return db_session
+
+        def __exit__(self, *_args):
+            return False
+
+    monkeypatch.setattr(memory_execution, "SessionLocal", lambda: SessionContext())
+    monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=evidence, path=evidence_file, size_bytes=evidence_file.stat().st_size))
+    monkeypatch.setattr(memory_execution.backend_readiness, "check_volatility3_backend", lambda: {"ready": True, "version": "Volatility 3 Framework 2.28.0"})
+    monkeypatch.setattr(memory_execution, "run_plugin", lambda _plugin, _path, _work_dir: SimpleNamespace(argv_display=["vol", "-f", "[evidence]", "-r", "json", plugin], stdout=stdout, stderr=stderr, duration_ms=42))
+    monkeypatch.setattr(memory_execution, "memory_run_dir", lambda _case_id, _evidence_id, run_id: tmp_path / "data" / "evidence" / CASE_ID / MEMORY_EVIDENCE_ID / "memory" / "runs" / run_id)
+    monkeypatch.setattr(memory_execution, "relative_to_data_dir", lambda path: str(path.relative_to(tmp_path / "data")))
+    monkeypatch.setattr(memory_execution, "write_atomic_bytes", lambda path, data, **_kwargs: {"path": str(path.relative_to(tmp_path / "data")), "sha256": "a" * 64, "size": len(data)})
+    monkeypatch.setattr(memory_execution, "write_atomic_json", lambda path, payload, **_kwargs: {"path": str(path.relative_to(tmp_path / "data")), "sha256": "b" * 64, "size": 12})
+
+    memory_execution.run_memory_metadata_scan(run.id)
+
+    return db_session.query(MemoryPluginRun).filter(MemoryPluginRun.memory_scan_run_id == run.id, MemoryPluginRun.plugin == plugin).one()
+
+
+def test_zero_rows_with_vmware_marker_sets_warning_but_stays_completed(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plugin_run = _run_metadata_scan_with_mocked_plugin(
+        db_session, tmp_path, monkeypatch, plugin="linux.pslist", stdout=b"[]", stderr=_REAL_VMWARE_STDERR,
+    )
+
+    assert plugin_run.status == "completed"
+    assert plugin_run.row_count == 0
+    assert plugin_run.warning_code == memory_execution.VMWARE_METADATA_WARNING_CODE
+    assert plugin_run.warning_message == memory_execution.VMWARE_METADATA_WARNING_MESSAGE
+    assert plugin_run.error_code is None
+
+
+def test_zero_rows_without_marker_sets_no_warning(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A legitimately empty result unrelated to VMware must not be
+    mislabeled -- the marker match is the only trigger, never bare
+    row_count == 0 on its own."""
+    plugin_run = _run_metadata_scan_with_mocked_plugin(
+        db_session, tmp_path, monkeypatch, plugin="linux.pslist", stdout=b"[]", stderr=b"Volatility 3 Framework 2.28.0\n",
+    )
+
+    assert plugin_run.status == "completed"
+    assert plugin_run.row_count == 0
+    assert plugin_run.warning_code is None
+    assert plugin_run.warning_message is None
+
+
+def test_nonzero_rows_with_marker_present_sets_no_warning(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Defensive gate test: even if the marker text were somehow present
+    alongside real rows (not a real Volatility scenario, but the code's
+    row_count == 0 gate must hold regardless)."""
+    rows = [{"PID": 1, "COMM": "systemd", "PPID": 0, "TID": 1, "__children": []}]
+    plugin_run = _run_metadata_scan_with_mocked_plugin(
+        db_session, tmp_path, monkeypatch, plugin="linux.pslist", stdout=json.dumps(rows).encode("utf-8"), stderr=_REAL_VMWARE_STDERR,
+    )
+
+    assert plugin_run.status == "completed"
+    assert plugin_run.row_count == 1
+    assert plugin_run.warning_code is None
+
+
+def test_warning_persists_across_a_fresh_query(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    plugin_run = _run_metadata_scan_with_mocked_plugin(
+        db_session, tmp_path, monkeypatch, plugin="linux.pslist", stdout=b"[]", stderr=_REAL_VMWARE_STDERR,
+    )
+    plugin_run_id = plugin_run.id
+
+    db_session.expire_all()
+    reloaded = db_session.get(MemoryPluginRun, plugin_run_id)
+
+    assert reloaded.warning_code == memory_execution.VMWARE_METADATA_WARNING_CODE
+
+
 def test_output_permission_failure_stops_before_plugin_execution(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _case(db_session)
     evidence_file = tmp_path / "data" / "evidence" / CASE_ID / MEMORY_EVIDENCE_ID / "original" / "memory.mem"

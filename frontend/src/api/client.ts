@@ -1341,6 +1341,9 @@ export type MemorySymbolPreparation = {
 // technical reports), not an accidental duplicate.
 export type MemoryPreparationReadiness = "inspecting" | "ready" | "symbols_required" | "awaiting_user" | "blocked" | "failed";
 
+// vmware_companion_* fields (Phase 2) are purely informational -- see the
+// backend dataclass's docstring (app/services/memory/preparation/models.py):
+// nothing here can ever change can_start_analysis from true to false.
 export type MemoryEvidencePreparation = {
   evidence_id: string;
   platform: string;
@@ -1349,6 +1352,45 @@ export type MemoryEvidencePreparation = {
   requires_symbols: boolean;
   can_start_analysis: boolean;
   human_message: string;
+  has_vmware_companion: boolean;
+  vmware_companion_id: string | null;
+  vmware_companion_type: string | null;
+  vmware_companion_filename: string | null;
+  vmware_companion_sha256: string | null;
+  vmware_companion_size_bytes: number | null;
+  vmware_companion_recommended: boolean;
+  vmware_companion_warning: string | null;
+  // Zero-result warning (Phase 2): the most recent plugin run's
+  // VMWARE_METADATA_MAY_BE_REQUIRED warning, if any. Surfaces "Completed
+  // with warning" without waiting for a family-results endpoint that, for
+  // the "processes" family specifically, cannot represent a genuinely
+  // empty result today (see the backend's _zero_result_warning_fields
+  // docstring).
+  zero_result_warning_code: string | null;
+  zero_result_warning_message: string | null;
+  zero_result_warning_plugin: string | null;
+};
+
+// VMware companion files (backend: app.api.routes_evidence_companions /
+// app.services.memory.companion_files, Phase 1). At most one active
+// companion per evidence -- uploading another (of the same or a
+// different type) replaces it; the backend guarantees this, the
+// frontend never deletes-then-creates.
+export type VmwareCompanionType = "vmware_vmsn" | "vmware_vmss";
+
+export type EvidenceCompanionFile = {
+  id: string;
+  case_id: string;
+  evidence_id: string;
+  companion_type: VmwareCompanionType;
+  original_filename: string;
+  internal_filename: string;
+  sha256: string;
+  size_bytes: number;
+  source_method: string;
+  uploaded_by_user_id: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 // Memory Evidence Preparation, Phase 3 -- evidence-scoped Linux ISF
@@ -5960,6 +6002,28 @@ export const api = {
     request<LinuxSymbolValidationResult>(
       `/cases/${caseId}/memory/evidences/${evidenceId}/linux-symbols/validate/${validationId}`,
     ),
+  // VMware companion files (Phase 1 backend, Phase 2 frontend). Note the
+  // path has no /memory/ segment -- these are evidence-generic routes
+  // (app.api.routes_evidence_companions), not memory-prefixed ones.
+  listVmwareCompanions: (caseId: string, evidenceId: string) =>
+    request<EvidenceCompanionFile[]>(`/cases/${caseId}/evidences/${evidenceId}/companions`),
+  attachVmwareCompanion: (caseId: string, evidenceId: string, file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return fetch(
+      `/api/cases/${encodeURIComponent(caseId)}/evidences/${encodeURIComponent(evidenceId)}/companions/vmware`,
+      { method: "POST", body: form },
+    ).then(async (res) => {
+      if (!res.ok) {
+        const body = await res.json().catch(() => null);
+        const message = body?.detail?.message || body?.detail || `Upload failed (${res.status})`;
+        throw new Error(typeof message === "string" ? message : "Upload failed");
+      }
+      return res.json() as Promise<EvidenceCompanionFile>;
+    });
+  },
+  deleteVmwareCompanion: (caseId: string, evidenceId: string, companionId: string) =>
+    request<void>(`/cases/${caseId}/evidences/${evidenceId}/companions/${companionId}`, { method: "DELETE" }),
   startNativeProbe: (caseId: string, evidenceId: string) =>
     request<{ probe_id: string; status: string; plugin: string; requirement_id: string }>(
       `/cases/${caseId}/memory/evidences/${evidenceId}/native-probe`,

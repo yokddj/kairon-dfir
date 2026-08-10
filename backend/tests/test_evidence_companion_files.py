@@ -121,13 +121,14 @@ def test_migration_creates_table_on_existing_db() -> None:
     create the new table from the current model shape and prove nothing
     about the migration function itself.
 
-    Migrations 1-38 are pre-marked as applied (matching a real existing
-    deployment) rather than replayed from a blank database: several older
-    migrations contain raw Postgres-only DDL (e.g. ``'{}'::jsonb``) that
-    was always meant to run only against a database already at that
-    schema version, on Postgres -- replaying them against a bare SQLite
-    engine is not a scenario that occurs in production and is not what
-    this test is exercising.
+    Every migration EXCEPT 39/40 is pre-marked as applied (matching a real
+    existing deployment already at every other schema version, including
+    ones added after this phase) rather than replayed from a blank
+    database: several older migrations contain raw Postgres-only DDL
+    (e.g. ``'{}'::jsonb``) that was always meant to run only against a
+    database already at that schema version, on Postgres -- replaying
+    them against a bare SQLite engine is not a scenario that occurs in
+    production and is not what this test is exercising.
     """
     from app.core.migrations import MIGRATIONS, ensure_migrations_table
 
@@ -137,7 +138,7 @@ def test_migration_creates_table_on_existing_db() -> None:
         connection.execute(text("DROP TABLE evidence_companion_files"))
         ensure_migrations_table(connection)
         for migration in MIGRATIONS:
-            if migration.version < 39:
+            if migration.version not in (39, 40):
                 connection.execute(
                     text("INSERT INTO schema_migrations (version, name) VALUES (:v, :n)"),
                     {"v": migration.version, "n": migration.name},
@@ -546,6 +547,7 @@ def test_status_reports_no_companion_by_default(db_session, tmp_path: Path) -> N
     status = get_evidence_companion_status(db_session, EVIDENCE_ID)
     assert status == {
         "has_vmware_companion": False,
+        "companion_id": None,
         "companion_type": None,
         "original_filename": None,
         "sha256": None,
@@ -560,6 +562,7 @@ def test_status_reports_attached_companion(db_session, tmp_path: Path) -> None:
 
     status = get_evidence_companion_status(db_session, EVIDENCE_ID)
     assert status["has_vmware_companion"] is True
+    assert status["companion_id"]
     assert status["companion_type"] == "vmware_vmsn"
     assert status["sha256"] == hashlib.sha256(b"content").hexdigest()
     assert status["size_bytes"] == len(b"content")

@@ -2911,3 +2911,25 @@ def _v40_evidence_custody_companion_event_types(connection: Connection) -> None:
         return
     for value in ("companion_attached", "companion_removed"):
         connection.execute(text(f"ALTER TYPE evidencecustodyeventtype ADD VALUE IF NOT EXISTS '{value}'"))
+
+
+@register(41, "memory_plugin_run_warning_columns")
+def _v41_memory_plugin_run_warning_columns(connection: Connection) -> None:
+    """VMware Companion Files Phase 2: ``warning_code``/``warning_message``
+    on ``memory_plugin_runs``.
+
+    Additive and nullable, mirroring the existing ``error_code``/
+    ``error_message`` columns' shape exactly. A warning is orthogonal to
+    ``status`` -- it never turns a "completed" run into anything else --
+    so this is intentionally two new columns rather than a new status
+    value (see app.services.memory.execution's classification for the
+    one warning code populated today, VMWARE_METADATA_MAY_BE_REQUIRED).
+    """
+    inspector = _inspector_for(connection)
+    if "memory_plugin_runs" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("memory_plugin_runs")}
+    if "warning_code" not in existing:
+        connection.execute(text("ALTER TABLE memory_plugin_runs ADD COLUMN warning_code VARCHAR(128)"))
+    if "warning_message" not in existing:
+        connection.execute(text("ALTER TABLE memory_plugin_runs ADD COLUMN warning_message VARCHAR(512)"))

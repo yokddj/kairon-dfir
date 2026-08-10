@@ -126,6 +126,7 @@ def get_evidence_companion_status(db: Session, evidence_id: str) -> dict[str, An
     if row is None:
         return {
             "has_vmware_companion": False,
+            "companion_id": None,
             "companion_type": None,
             "original_filename": None,
             "sha256": None,
@@ -133,6 +134,7 @@ def get_evidence_companion_status(db: Session, evidence_id: str) -> dict[str, An
         }
     return {
         "has_vmware_companion": True,
+        "companion_id": row.id,
         "companion_type": row.companion_type,
         "original_filename": row.original_filename,
         "sha256": row.sha256,

@@ -595,7 +595,23 @@ def _summary_items(
     return [], "summary_fallback"
 
 
+def _run_warning(run: MemoryScanRun) -> tuple[str | None, str | None]:
+    """First plugin-level warning found on this run, if any (Phase 2:
+    VMware companion zero-result warning). Uses the already-mapped
+    ``MemoryScanRun.plugin_runs`` relationship -- no extra query -- since
+    ``_serialize_run`` is not otherwise passed a ``db`` session. A run
+    normally has at most one relevant plugin (e.g. linux.pslist for
+    processes_basic), so "first match" is not a real aggregation
+    decision in practice today.
+    """
+    for plugin_run in run.plugin_runs or []:
+        if plugin_run.warning_code:
+            return plugin_run.warning_code, plugin_run.warning_message
+    return None, None
+
+
 def _serialize_run(run: MemoryScanRun) -> dict[str, Any]:
+    warning_code, warning_message = _run_warning(run)
     return {
         "id": run.id,
         "profile": run.profile,
@@ -608,6 +624,8 @@ def _serialize_run(run: MemoryScanRun) -> dict[str, Any]:
         "plugins_failed": run.plugins_failed,
         "evidence_id": run.evidence_id,
         "case_id": run.case_id,
+        "warning_code": warning_code,
+        "warning_message": warning_message,
         "canonical_materialization_status": getattr(
             run, "canonical_materialization_status", "not_required"
         ),

@@ -82,6 +82,17 @@ class MemoryEvidencePreparation:
     can_start_analysis) -- see app.services.memory.preparation.adapters
     for exactly which existing calls produce each field. This dataclass
     itself contains no detection, readiness, or validation logic.
+
+    The ``vmware_companion_*`` fields (Phase 2) are the one exception to
+    "adapters produce every field": they are computed once, uniformly,
+    by ``get_preparation_status`` itself -- deliberately outside both the
+    Windows and Linux adapters -- because a VMware companion (.vmsn/
+    .vmss) is a property of the *acquisition format*, not the guest OS.
+    They all default to "no signal" so every existing adapter/early-return
+    call site that does not pass them keeps working unchanged. They are
+    purely informational: nothing here may ever flip ``can_start_analysis``
+    from true to false -- a missing companion is a recommendation, never a
+    gate.
     """
 
     evidence_id: str
@@ -91,6 +102,27 @@ class MemoryEvidencePreparation:
     requires_symbols: bool
     can_start_analysis: bool
     human_message: str
+    has_vmware_companion: bool = False
+    # Not part of the original 7-field request, but required for the
+    # frontend's Replace/Remove actions to call
+    # DELETE .../companions/{companion_id} without a second round trip to
+    # GET companions to look the id up (the thing this phase's frontend
+    # spec explicitly says not to do). Purely an identifier -- carries no
+    # additional signal beyond what has_vmware_companion already exposes.
+    vmware_companion_id: str | None = None
+    vmware_companion_type: str | None = None
+    vmware_companion_filename: str | None = None
+    vmware_companion_sha256: str | None = None
+    vmware_companion_size_bytes: int | None = None
+    vmware_companion_recommended: bool = False
+    vmware_companion_warning: str | None = None
+    # Zero-result warning (Phase 2): the most recent plugin run's
+    # VMWARE_METADATA_MAY_BE_REQUIRED warning, if any -- see
+    # service._zero_result_warning_fields for why this rides on
+    # Preparation rather than the family-results endpoints.
+    zero_result_warning_code: str | None = None
+    zero_result_warning_message: str | None = None
+    zero_result_warning_plugin: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -100,5 +132,16 @@ class MemoryEvidencePreparation:
             "readiness": self.readiness.value,
             "requires_symbols": self.requires_symbols,
             "can_start_analysis": self.can_start_analysis,
+            "has_vmware_companion": self.has_vmware_companion,
+            "vmware_companion_id": self.vmware_companion_id,
+            "vmware_companion_type": self.vmware_companion_type,
+            "vmware_companion_filename": self.vmware_companion_filename,
+            "vmware_companion_sha256": self.vmware_companion_sha256,
+            "vmware_companion_size_bytes": self.vmware_companion_size_bytes,
+            "vmware_companion_recommended": self.vmware_companion_recommended,
+            "vmware_companion_warning": self.vmware_companion_warning,
+            "zero_result_warning_code": self.zero_result_warning_code,
+            "zero_result_warning_message": self.zero_result_warning_message,
+            "zero_result_warning_plugin": self.zero_result_warning_plugin,
             "human_message": self.human_message,
         }

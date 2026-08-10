@@ -212,6 +212,31 @@ def _sanitize_message(value: object) -> str:
     return backend_readiness.sanitize_backend_error(value)
 
 
+# VMware companion (Phase 2) zero-result warning. A completed plugin run
+# (exit 0) against a VMware .vmem without a matching .vmsn/.vmss
+# consistently produces 0 rows with this exact stderr line from
+# Volatility's own VmwareStacker (volatility3/framework/layers/vmware.py)
+# -- verified against the real installed volatility3 source and against a
+# real Ubuntu 22.04 capture during Phase 1's runtime validation. The
+# trailing part of Volatility's real sentence interpolates the evidence's
+# own filename ("...e.g. memory.vmem and memory.vmss."), so matching on
+# that dynamic tail would be fragile; this marker is the longest prefix
+# that contains no interpolated content and is unique enough that it
+# cannot plausibly appear in an unrelated warning.
+VMWARE_METADATA_WARNING_CODE = "VMWARE_METADATA_MAY_BE_REQUIRED"
+VMWARE_METADATA_WARNING_MESSAGE = (
+    "Volatility reported that VMware snapshot metadata (.vmsn/.vmss) may be "
+    "required to fully process this memory image."
+)
+_VMWARE_METADATA_WARNING_MARKER = "No metadata file found alongside VMEM file"
+
+
+def _contains_vmware_metadata_warning(stderr: bytes | None) -> bool:
+    if not stderr:
+        return False
+    return _VMWARE_METADATA_WARNING_MARKER in stderr.decode("utf-8", errors="replace")
+
+
 def active_run_for_evidence(db: Session, evidence_id: str, profile: str = "metadata_only") -> MemoryScanRun | None:
     return (
         db.query(MemoryScanRun)
@@ -491,6 +516,15 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                         "stderr_preview": raw_info.get("stderr_preview"),
                         "capability_state": "available",
                     }
+                    # Completed successfully means completed successfully
+                    # -- this never touches plugin_run.status. It only
+                    # flags, for a genuinely empty result, that Volatility
+                    # itself reported a specific, known-recoverable reason
+                    # (missing VMware snapshot metadata) rather than
+                    # leaving "0 rows" unexplained.
+                    if plugin_run.row_count == 0 and raw_info.get("vmware_metadata_warning_detected"):
+                        plugin_run.warning_code = VMWARE_METADATA_WARNING_CODE
+                        plugin_run.warning_message = VMWARE_METADATA_WARNING_MESSAGE
                     run.plugins_completed += 1
                     db.commit()
                 except VolatilityRunnerError as exc:
@@ -895,6 +929,12 @@ def _execute_plugin(db: Session, run: MemoryScanRun, plugin_run: MemoryPluginRun
     try:
         raw_info = write_atomic_bytes(output_dir / _plugin_filename(plugin), result.stdout, max_bytes=max_output_bytes)
         raw_info["stderr_preview"] = _sanitize_message(result.stderr.decode("utf-8", errors="replace"))[:4096] if result.stderr else None
+        # Checked against the full captured stderr (up to 65536 bytes,
+        # volatility_runner.run_plugin's own cap), not the 160-char
+        # sanitized preview above -- the marker reliably appears within
+        # the first few hundred bytes in practice, comfortably inside
+        # that cap, but well past what the display preview keeps.
+        raw_info["vmware_metadata_warning_detected"] = _contains_vmware_metadata_warning(result.stderr)
     except ValueError as exc:
         if str(exc) == "output_too_large":
             raise VolatilityRunnerError("OUTPUT_TOO_LARGE", f"Volatility {plugin} output exceeded the configured size limit.", stdout=result.stdout[:max_output_bytes or 0], stderr=result.stderr[:4096]) from exc

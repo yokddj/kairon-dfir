@@ -105,7 +105,11 @@ class MemoryEvidencePreparationRead(BaseModel):
     .to_dict() field-for-field. This schema adds no fields, computes
     nothing, and carries no defaults that could silently mask a missing
     field from that dataclass -- it exists only so FastAPI can validate
-    and document the response shape."""
+    and document the response shape.
+
+    The ``vmware_companion_*`` fields are purely informational (Phase 2)
+    -- see that dataclass's docstring for why they can never affect
+    ``can_start_analysis``."""
 
     evidence_id: str
     platform: str
@@ -114,6 +118,17 @@ class MemoryEvidencePreparationRead(BaseModel):
     requires_symbols: bool
     can_start_analysis: bool
     human_message: str
+    has_vmware_companion: bool = False
+    vmware_companion_id: str | None = None
+    vmware_companion_type: str | None = None
+    vmware_companion_filename: str | None = None
+    vmware_companion_sha256: str | None = None
+    vmware_companion_size_bytes: int | None = None
+    vmware_companion_recommended: bool = False
+    vmware_companion_warning: str | None = None
+    zero_result_warning_code: str | None = None
+    zero_result_warning_message: str | None = None
+    zero_result_warning_plugin: str | None = None
 
 
 class LinuxSymbolIdentityRead(BaseModel):
@@ -283,6 +298,8 @@ class MemoryPluginRunRead(BaseModel):
     output_size: int | None = None
     error_code: str | None = None
     error_message: str | None = None
+    warning_code: str | None = None
+    warning_message: str | None = None
     metadata_json: dict = {}
     created_at: datetime
 

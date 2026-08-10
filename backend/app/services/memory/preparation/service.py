@@ -19,12 +19,13 @@ delegate the final translation step to (app.services.memory.preparation
 different internal logic despite sharing this same public entry point
 and output shape.
 
-This module is currently unused by any route, worker task, or frontend
-code. It exists as infrastructure for a future phase; calling it has no
-visible effect on the product today.
+Wired into ``GET /cases/{case_id}/memory/evidences/{evidence_id}/preparation``
+(app/api/routes_memory.py) as a pure passthrough, and consumed by the
+frontend's Memory Preparation surfaces.
 """
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -74,12 +75,17 @@ def _resolve_canonical_path(evidence: Evidence) -> Path:
         return Path(fallback) if fallback else Path("/nonexistent-evidence-path")
 
 
-def get_preparation_status(db: Session, evidence_id: str) -> MemoryEvidencePreparation:
+def _compute_base_preparation(db: Session, evidence_id: str) -> MemoryEvidencePreparation:
     """Compute the current, read-only preparation status for one memory evidence item.
 
     Never persists anything, never enqueues work, never mutates the
     evidence row. Safe to call repeatedly; always recomputed from current
     state.
+
+    This is the pre-Phase-2 body of what used to be ``get_preparation_status``,
+    unchanged, renamed only so the public function below can wrap it with
+    the platform-agnostic VMware companion fields without touching a
+    single line of this platform-adapter-driven logic.
     """
     evidence = db.get(Evidence, evidence_id)
     if evidence is None:
@@ -160,3 +166,127 @@ def get_preparation_status(db: Session, evidence_id: str) -> MemoryEvidencePrepa
         can_start_analysis=False,
         human_message=plan.readiness_reason,
     )
+
+
+# VMware companion (Phase 2) -- deliberately platform-agnostic: this
+# section never imports anything Linux- or Windows-specific, and it runs
+# for every memory_dump evidence regardless of which adapter (or no
+# adapter at all) produced the base preparation above.
+
+VMWARE_COMPANION_WARNING_TEXT = (
+    "VMware memory can sometimes be analyzed without snapshot metadata. "
+    "A matching .vmsn or .vmss file may be required for reliable analysis."
+)
+
+
+def _vmware_companion_applicable(evidence: Evidence, canonical_path: Path) -> bool:
+    """Conservative signal for "this evidence might benefit from a VMware
+    companion" -- never treated as proof the evidence definitely is a
+    VMware capture, only as a reason to *offer* the option.
+
+    Two real signals, combined rather than used alone:
+
+    1. ``Evidence.detected_format == "vmware_vmem"`` -- the upload-time
+       magic-byte probe (app.services.memory.probe) positively identified
+       the VMware sparse-memory header. High confidence when present, but
+       real VMware .vmem captures do not always carry that exact
+       signature within the probe's read window (verified against real
+       evidence during this phase's runtime validation, where a genuine
+       VMware capture probed as ``ambiguous_raw``/``raw_candidate``) -- so
+       its absence must not be treated as "not VMware".
+    2. The primary file's own canonical/resolved basename ends in
+       ``.vmem``. This is not "extension alone" standing in for content
+       inspection: it is the literal, verified condition Volatility 3's
+       own VmwareStacker uses to decide whether to even attempt companion
+       discovery (``location.endswith(".vmem")`` in
+       volatility3/framework/layers/vmware.py) -- so it is the one signal
+       guaranteed to correlate with whether attaching a companion could
+       ever matter for this file, independent of Kairon's own narrower
+       probe. By the time this function runs, the evidence has already
+       passed every earlier "this probably isn't memory at all" gate in
+       ``_compute_base_preparation`` (probable_disk / unconfirmed
+       ambiguous_raw both return before this point is ever reached).
+    """
+    detected_format = str(evidence.detected_format or "").strip().lower()
+    if detected_format == "vmware_vmem":
+        return True
+    try:
+        return canonical_path.suffix.lower() == ".vmem"
+    except (TypeError, ValueError):
+        return False
+
+
+def _vmware_companion_fields(db: Session, evidence: Evidence, canonical_path: Path) -> dict[str, object]:
+    from app.services.memory.companion_files import get_evidence_companion_status
+
+    status = get_evidence_companion_status(db, evidence.id)
+    has_companion = bool(status["has_vmware_companion"])
+    applicable = _vmware_companion_applicable(evidence, canonical_path)
+    recommended = applicable and not has_companion
+    return {
+        "has_vmware_companion": has_companion,
+        "vmware_companion_id": status["companion_id"],
+        "vmware_companion_type": status["companion_type"],
+        "vmware_companion_filename": status["original_filename"],
+        "vmware_companion_sha256": status["sha256"],
+        "vmware_companion_size_bytes": status["size_bytes"],
+        "vmware_companion_recommended": recommended,
+        "vmware_companion_warning": VMWARE_COMPANION_WARNING_TEXT if recommended else None,
+    }
+
+
+def _zero_result_warning_fields(db: Session, evidence_id: str) -> dict[str, object]:
+    """Surfaces app.services.memory.execution's VMWARE_METADATA_MAY_BE_
+    REQUIRED plugin-run warning (Phase 2) right next to the companion
+    section that resolves it, rather than through the family-results
+    tables (app.services.memory.active_result): the "processes" family's
+    existing active-run resolution requires a non-zero canonical entity
+    count to promote a run to "active" at all (see
+    active_result._is_canonical_usable), which means a genuinely empty
+    linux.pslist/windows.pslist result -- exactly this warning's own
+    trigger condition -- would never reach that surface. This reads the
+    single most recent MemoryPluginRun for the evidence (any plugin): if
+    it is the same run that would show anywhere else, its warning_code is
+    already stale the moment a newer run (e.g. after attaching a
+    companion) completes without it -- no companion-presence check
+    needed here, this already self-corrects.
+    """
+    from app.models.memory import MemoryPluginRun
+
+    latest = (
+        db.query(MemoryPluginRun)
+        .filter(MemoryPluginRun.evidence_id == evidence_id)
+        .order_by(MemoryPluginRun.created_at.desc())
+        .first()
+    )
+    if latest is None or not latest.warning_code:
+        return {
+            "zero_result_warning_code": None,
+            "zero_result_warning_message": None,
+            "zero_result_warning_plugin": None,
+        }
+    return {
+        "zero_result_warning_code": latest.warning_code,
+        "zero_result_warning_message": latest.warning_message,
+        "zero_result_warning_plugin": latest.plugin,
+    }
+
+
+def get_preparation_status(db: Session, evidence_id: str) -> MemoryEvidencePreparation:
+    """Public entry point (see the package docstring). Computes the base,
+    platform-specific preparation exactly as before, then augments it with
+    the platform-agnostic VMware companion fields (Phase 2) -- purely
+    informational, never able to change ``can_start_analysis``.
+    """
+    base = _compute_base_preparation(db, evidence_id)
+    evidence = db.get(Evidence, evidence_id)
+    if evidence is None:
+        # _compute_base_preparation would already have raised
+        # MemoryPreparationError for this -- unreachable in practice, but
+        # falling back to the base result (no companion fields) rather
+        # than risking a second, differently-worded error is strictly
+        # safer for a read-only status endpoint.
+        return base
+    companion_fields = _vmware_companion_fields(db, evidence, _resolve_canonical_path(evidence))
+    warning_fields = _zero_result_warning_fields(db, evidence_id)
+    return replace(base, **companion_fields, **warning_fields)

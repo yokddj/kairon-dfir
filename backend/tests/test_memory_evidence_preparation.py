@@ -20,6 +20,7 @@ this package is not wired into anything yet.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -176,6 +177,17 @@ class TestModel:
             "readiness": "ready",
             "requires_symbols": True,
             "can_start_analysis": True,
+            "has_vmware_companion": False,
+            "vmware_companion_id": None,
+            "vmware_companion_type": None,
+            "vmware_companion_filename": None,
+            "vmware_companion_sha256": None,
+            "vmware_companion_size_bytes": None,
+            "vmware_companion_recommended": False,
+            "vmware_companion_warning": None,
+            "zero_result_warning_code": None,
+            "zero_result_warning_message": None,
+            "zero_result_warning_plugin": None,
             "human_message": "ok",
         }
 
@@ -615,3 +627,231 @@ class TestPreparationEndpoint:
 
         assert response["readiness"] == "blocked"
         assert response["can_start_analysis"] is False
+
+
+# ---------------------------------------------------------------------------
+# 5. VMware companion fields (Phase 2)
+# ---------------------------------------------------------------------------
+
+
+class TestVmwareCompanionSignal:
+    """Unit tests for the conservative applicability signal in isolation
+    (app.services.memory.preparation.service._vmware_companion_applicable)
+    -- no DB, no probe, no adapter involved."""
+
+    def test_vmware_vmem_detected_format_is_applicable_regardless_of_extension(self):
+        from app.services.memory.preparation.service import _vmware_companion_applicable
+
+        evidence = SimpleNamespace(detected_format="vmware_vmem")
+        assert _vmware_companion_applicable(evidence, Path("/data/evidence/case/ev/original/dump.raw")) is True
+
+    def test_vmem_extension_alone_is_applicable(self):
+        """Real-world necessity, not a hypothetical: during this phase's
+        runtime validation, a genuine VMware capture probed as
+        ambiguous_raw/raw_candidate because its magic bytes fell outside
+        Kairon's own probe window -- detected_format alone would have
+        missed it entirely. The canonical .vmem extension is the one
+        signal Volatility's own VmwareStacker itself keys off, so it is
+        combined in, not used as a lone absolute proof."""
+        from app.services.memory.preparation.service import _vmware_companion_applicable
+
+        evidence = SimpleNamespace(detected_format="raw_candidate")
+        assert _vmware_companion_applicable(evidence, Path("/data/evidence/case/ev/original/memory-image.vmem")) is True
+
+    def test_non_vmem_non_vmware_format_is_not_applicable(self):
+        from app.services.memory.preparation.service import _vmware_companion_applicable
+
+        evidence = SimpleNamespace(detected_format="windows_crash_dump")
+        assert _vmware_companion_applicable(evidence, Path("/data/evidence/case/ev/original/memory-image.dmp")) is False
+
+    def test_unset_detected_format_and_non_vmem_extension_is_not_applicable(self):
+        from app.services.memory.preparation.service import _vmware_companion_applicable
+
+        evidence = SimpleNamespace(detected_format=None)
+        assert _vmware_companion_applicable(evidence, Path("/data/evidence/case/ev/original/memory-image.raw")) is False
+
+
+class TestVmwareCompanionFieldsIntegration:
+    """End-to-end get_preparation_status() tests covering the Phase 2
+    fields, reusing the exact same fixtures as section 3 above."""
+
+    def test_no_companion_reports_absent_and_no_recommendation_for_non_vmem(self, tmp_path: Path):
+        db = _db()
+        _case(db)
+        path = _write(tmp_path, "windows.dmp", b"PAGEDU64" + b"\x00" * 4088)
+        _evidence(db, stored_path=str(path))
+
+        result = get_preparation_status(db, EVIDENCE_ID)
+
+        assert result.has_vmware_companion is False
+        assert result.vmware_companion_recommended is False
+        assert result.vmware_companion_warning is None
+        assert result.can_start_analysis is True
+
+    def test_vmem_without_companion_recommends_with_conservative_message(self, tmp_path: Path):
+        db = _db()
+        _case(db)
+        path = _write(tmp_path, "capture.vmem", b"\x00" * 4096)
+        _evidence(db, stored_path=str(path), detection_status="confirmed_memory")
+
+        result = get_preparation_status(db, EVIDENCE_ID)
+
+        assert result.vmware_companion_recommended is True
+        assert result.has_vmware_companion is False
+        assert result.vmware_companion_warning is not None
+        assert "may be required" in result.vmware_companion_warning
+        assert "is required" not in result.vmware_companion_warning
+        assert "must" not in result.vmware_companion_warning.lower()
+
+    def test_attached_companion_is_reflected_and_no_longer_recommended(self, tmp_path: Path):
+        from app.services.memory.companion_files import StagedCompanionUpload, attach_vmware_companion
+
+        db = _db()
+        _case(db)
+        evidence_root = tmp_path / "data" / "evidence" / CASE_ID / EVIDENCE_ID / "original"
+        evidence_root.mkdir(parents=True)
+        vmem_path = evidence_root / "memory-image.vmem"
+        vmem_path.write_bytes(b"\x00" * 4096)
+        evidence = _evidence(db, stored_path=str(vmem_path), detection_status="confirmed_memory")
+
+        settings = SimpleNamespace(
+            backend_data_dir=tmp_path / "data",
+            memory_upload_max_bytes=10 * 1024 * 1024,
+            memory_upload_min_free_space_bytes=0,
+            memory_evidence_shared_gid=os.getgid(),
+        )
+        staged = tmp_path / "staged.vmsn"
+        staged.write_bytes(b"vmsn-content")
+        attach_vmware_companion(
+            db, evidence,
+            StagedCompanionUpload(path=staged, original_filename="Ubuntu.vmsn"),
+            settings=settings,
+        )
+
+        result = get_preparation_status(db, EVIDENCE_ID)
+
+        assert result.has_vmware_companion is True
+        assert result.vmware_companion_id
+        assert result.vmware_companion_type == "vmware_vmsn"
+        assert result.vmware_companion_filename == "Ubuntu.vmsn"
+        assert result.vmware_companion_sha256 is not None
+        assert result.vmware_companion_size_bytes == len(b"vmsn-content")
+        assert result.vmware_companion_recommended is False
+        assert result.vmware_companion_warning is None
+
+    def test_companion_presence_never_changes_readiness_or_can_start_analysis(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        """The load-bearing guarantee: a missing/present VMware companion
+        is informational only. This evidence is a genuine SYMBOLS_REQUIRED
+        case (ELF core, no ISF cached) -- the companion signal must appear
+        alongside that state, never override it, in either direction."""
+        from app.services.memory import analysis_plan as analysis_plan_module
+
+        cache_root = tmp_path / "volatility-cache"
+        (cache_root / "symbols" / "windows").mkdir(parents=True)
+        monkeypatch.setattr(analysis_plan_module, "get_settings", lambda: SimpleNamespace(memory_native_probe_cache_path=cache_root))
+
+        db = _db()
+        _case(db)
+        path = _write(tmp_path, "linux-capture.vmem", b"\x7fELF" + b"\x00" * 4092)
+        _evidence(db, stored_path=str(path), detected_format="elf_core")
+
+        result = get_preparation_status(db, EVIDENCE_ID)
+
+        assert result.readiness is PreparationState.SYMBOLS_REQUIRED
+        assert result.can_start_analysis is False
+        assert result.vmware_companion_recommended is True
+
+    def test_endpoint_response_includes_companion_fields(self, tmp_path: Path):
+        from app.api.routes_memory import get_memory_evidence_preparation
+
+        db = _db()
+        _case(db)
+        path = _write(tmp_path, "capture.vmem", b"\x00" * 4096)
+        _evidence(db, stored_path=str(path), detection_status="confirmed_memory")
+
+        response = get_memory_evidence_preparation(CASE_ID, EVIDENCE_ID, db=db)
+
+        assert response["has_vmware_companion"] is False
+        assert response["vmware_companion_recommended"] is True
+        assert response["vmware_companion_warning"]
+
+
+class TestZeroResultWarning:
+    """The preparation payload's zero_result_warning_* fields (Phase 2),
+    fed from the most recent MemoryPluginRun for this evidence -- see
+    app.services.memory.preparation.service._zero_result_warning_fields
+    for why this rides on Preparation instead of the family-results
+    endpoints."""
+
+    def test_no_plugin_runs_yet_reports_no_warning(self, tmp_path: Path):
+        db = _db()
+        _case(db)
+        path = _write(tmp_path, "windows.dmp", b"PAGEDU64" + b"\x00" * 4088)
+        _evidence(db, stored_path=str(path))
+
+        result = get_preparation_status(db, EVIDENCE_ID)
+
+        assert result.zero_result_warning_code is None
+        assert result.zero_result_warning_message is None
+        assert result.zero_result_warning_plugin is None
+
+    def test_most_recent_plugin_run_warning_is_surfaced(self, tmp_path: Path):
+        from app.models.memory import MemoryPluginRun, MemoryScanRun
+
+        db = _db()
+        _case(db)
+        path = _write(tmp_path, "capture.vmem", b"\x00" * 4096)
+        _evidence(db, stored_path=str(path), detection_status="confirmed_memory")
+        run = MemoryScanRun(case_id=CASE_ID, evidence_id=EVIDENCE_ID, backend="volatility3", profile="processes_basic", status="completed")
+        db.add(run)
+        db.commit()
+        db.add(MemoryPluginRun(
+            memory_scan_run_id=run.id, case_id=CASE_ID, evidence_id=EVIDENCE_ID, plugin="linux.pslist",
+            status="completed", row_count=0,
+            warning_code="VMWARE_METADATA_MAY_BE_REQUIRED",
+            warning_message="Volatility reported that VMware snapshot metadata (.vmsn/.vmss) may be required to fully process this memory image.",
+        ))
+        db.commit()
+
+        result = get_preparation_status(db, EVIDENCE_ID)
+
+        assert result.zero_result_warning_code == "VMWARE_METADATA_MAY_BE_REQUIRED"
+        assert result.zero_result_warning_message
+        assert result.zero_result_warning_plugin == "linux.pslist"
+
+    def test_a_newer_clean_run_clears_a_stale_warning(self, tmp_path: Path):
+        """After attaching a companion and re-running, the newest plugin
+        run has no warning -- the stale one from before must not still be
+        shown."""
+        from app.models.memory import MemoryPluginRun, MemoryScanRun
+
+        db = _db()
+        _case(db)
+        path = _write(tmp_path, "capture.vmem", b"\x00" * 4096)
+        _evidence(db, stored_path=str(path), detection_status="confirmed_memory")
+        from datetime import datetime, timedelta
+
+        earlier = datetime(2026, 1, 1, 12, 0, 0)
+        later = earlier + timedelta(minutes=10)
+        old_run = MemoryScanRun(case_id=CASE_ID, evidence_id=EVIDENCE_ID, backend="volatility3", profile="processes_basic", status="completed")
+        db.add(old_run)
+        db.commit()
+        db.add(MemoryPluginRun(
+            memory_scan_run_id=old_run.id, case_id=CASE_ID, evidence_id=EVIDENCE_ID, plugin="linux.pslist",
+            status="completed", row_count=0, warning_code="VMWARE_METADATA_MAY_BE_REQUIRED", warning_message="stale",
+            created_at=earlier,
+        ))
+        db.commit()
+
+        new_run = MemoryScanRun(case_id=CASE_ID, evidence_id=EVIDENCE_ID, backend="volatility3", profile="processes_basic", status="completed")
+        db.add(new_run)
+        db.commit()
+        db.add(MemoryPluginRun(
+            memory_scan_run_id=new_run.id, case_id=CASE_ID, evidence_id=EVIDENCE_ID, plugin="linux.pslist",
+            status="completed", row_count=344, created_at=later,
+        ))
+        db.commit()
+
+        result = get_preparation_status(db, EVIDENCE_ID)
+
+        assert result.zero_result_warning_code is None

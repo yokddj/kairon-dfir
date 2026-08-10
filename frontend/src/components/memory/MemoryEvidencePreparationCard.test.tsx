@@ -10,6 +10,8 @@ const getMemoryEvidencePreparationMock = vi.fn();
 const getLinuxSymbolRequirementMock = vi.fn();
 const validateLinuxEvidenceSymbolsMock = vi.fn();
 const getLinuxSymbolValidationStatusMock = vi.fn();
+const attachVmwareCompanionMock = vi.fn();
+const deleteVmwareCompanionMock = vi.fn();
 
 vi.mock("../../api/client", () => ({
   api: {
@@ -17,6 +19,8 @@ vi.mock("../../api/client", () => ({
     getLinuxSymbolRequirement: (...args: unknown[]) => getLinuxSymbolRequirementMock(...args),
     validateLinuxEvidenceSymbols: (...args: unknown[]) => validateLinuxEvidenceSymbolsMock(...args),
     getLinuxSymbolValidationStatus: (...args: unknown[]) => getLinuxSymbolValidationStatusMock(...args),
+    attachVmwareCompanion: (...args: unknown[]) => attachVmwareCompanionMock(...args),
+    deleteVmwareCompanion: (...args: unknown[]) => deleteVmwareCompanionMock(...args),
   },
 }));
 
@@ -32,6 +36,17 @@ function preparation(overrides: Partial<MemoryEvidencePreparation> = {}): Memory
     requires_symbols: true,
     can_start_analysis: true,
     human_message: "This evidence is ready to analyze.",
+    has_vmware_companion: false,
+    vmware_companion_id: null,
+    vmware_companion_type: null,
+    vmware_companion_filename: null,
+    vmware_companion_sha256: null,
+    vmware_companion_size_bytes: null,
+    vmware_companion_recommended: false,
+    vmware_companion_warning: null,
+    zero_result_warning_code: null,
+    zero_result_warning_message: null,
+    zero_result_warning_plugin: null,
     ...overrides,
   };
 }
@@ -238,5 +253,133 @@ describe("MemoryEvidencePreparationCard + Linux symbol upload (Phase 3)", () => 
     await waitFor(() => expect(getMemoryEvidencePreparationMock).toHaveBeenCalledTimes(2), { timeout: 5000 });
     await waitForState("ready");
     expect(screen.queryByTestId("linux-symbol-upload-panel")).not.toBeInTheDocument();
+  });
+});
+
+describe("MemoryEvidencePreparationCard + VMware companion (Phase 2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getLinuxSymbolRequirementMock.mockResolvedValue({ expected_identity: null });
+  });
+
+  it("does not render the VMware section for evidence with no VMware signal", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(preparation());
+    renderCard();
+    await waitForState("ready");
+    expect(screen.queryByTestId("vmware-companion-section")).not.toBeInTheDocument();
+  });
+
+  it("shows the VMware section, not-provided, when recommended -- platform-agnostic, unlike the Linux symbol panel", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(
+      preparation({ platform: "windows", vmware_companion_recommended: true, vmware_companion_warning: "A matching .vmsn or .vmss file may be required for reliable analysis." }),
+    );
+    renderCard();
+    await waitForState("ready");
+    expect(await screen.findByTestId("vmware-companion-not-provided")).toBeInTheDocument();
+  });
+
+  it("shows Associated when a companion is already attached", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(
+      preparation({
+        has_vmware_companion: true,
+        vmware_companion_id: "companion-1",
+        vmware_companion_type: "vmware_vmsn",
+        vmware_companion_filename: "memory.vmsn",
+        vmware_companion_sha256: "a".repeat(64),
+        vmware_companion_size_bytes: 1024,
+      }),
+    );
+    renderCard();
+    await waitForState("ready");
+    expect(await screen.findByTestId("vmware-companion-associated")).toHaveTextContent("Associated");
+  });
+
+  it("a successful attach refetches preparation and the section flips to Associated without a manual reload", async () => {
+    getMemoryEvidencePreparationMock
+      .mockResolvedValueOnce(preparation({ vmware_companion_recommended: true }))
+      .mockResolvedValueOnce(
+        preparation({
+          has_vmware_companion: true,
+          vmware_companion_id: "companion-1",
+          vmware_companion_type: "vmware_vmsn",
+          vmware_companion_filename: "memory.vmsn",
+          vmware_companion_sha256: "a".repeat(64),
+          vmware_companion_size_bytes: 2048,
+        }),
+      );
+    attachVmwareCompanionMock.mockResolvedValue({ id: "companion-1", companion_type: "vmware_vmsn" });
+
+    renderCard();
+    await waitForState("ready");
+    await userEvent.click(await screen.findByTestId("vmware-companion-add-button"));
+    await userEvent.upload(screen.getByTestId("vmware-companion-file-input"), new File(["x"], "memory.vmsn"));
+    await userEvent.click(screen.getByTestId("vmware-companion-attach-button"));
+
+    await waitFor(() => expect(getMemoryEvidencePreparationMock).toHaveBeenCalledTimes(2), { timeout: 5000 });
+    expect(await screen.findByTestId("vmware-companion-associated")).toBeInTheDocument();
+  });
+
+  it("does not block the READY/can_start_analysis state shown alongside it", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(
+      preparation({ readiness: "ready", can_start_analysis: true, vmware_companion_recommended: true }),
+    );
+    renderCard();
+    const card = await waitForState("ready");
+    expect(card).toHaveTextContent("Ready to analyze");
+    expect(screen.getByTestId("memory-evidence-preparation-status")).toHaveTextContent("✓ Ready for analysis");
+  });
+});
+
+describe("MemoryEvidencePreparationCard + zero-result warning (Phase 2)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getLinuxSymbolRequirementMock.mockResolvedValue({ expected_identity: null });
+  });
+
+  it("shows nothing when there is no zero-result warning", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(preparation());
+    renderCard();
+    await waitForState("ready");
+    expect(screen.queryByTestId("zero-result-warning-banner")).not.toBeInTheDocument();
+  });
+
+  it("shows 'Completed with warning' with the plugin and message, never as a failure", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(
+      preparation({
+        zero_result_warning_code: "VMWARE_METADATA_MAY_BE_REQUIRED",
+        zero_result_warning_message: "Volatility reported that VMware snapshot metadata (.vmsn/.vmss) may be required to fully process this memory image.",
+        zero_result_warning_plugin: "linux.pslist",
+      }),
+    );
+    renderCard();
+    await waitForState("ready");
+
+    const banner = await screen.findByTestId("zero-result-warning-banner");
+    expect(banner).toHaveTextContent("Completed with warning");
+    expect(banner).toHaveTextContent("0 results recovered");
+    expect(banner).toHaveTextContent("linux.pslist");
+    expect(banner).toHaveTextContent("may be required to fully process this memory image");
+    expect(screen.getByTestId("zero-result-warning-cta")).toHaveTextContent("Add VMware metadata");
+  });
+
+  it("the CTA scrolls to the VmwareCompanionSection rather than opening a second flow", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(
+      preparation({
+        vmware_companion_recommended: true,
+        vmware_companion_warning: "A matching .vmsn or .vmss file may be required for reliable analysis.",
+        zero_result_warning_code: "VMWARE_METADATA_MAY_BE_REQUIRED",
+        zero_result_warning_message: "Volatility reported that VMware snapshot metadata may be required.",
+        zero_result_warning_plugin: "linux.pslist",
+      }),
+    );
+    renderCard();
+    await waitForState("ready");
+    const section = await screen.findByTestId("vmware-companion-section");
+    const scrollSpy = vi.fn();
+    section.scrollIntoView = scrollSpy;
+
+    await userEvent.click(screen.getByTestId("zero-result-warning-cta"));
+
+    expect(scrollSpy).toHaveBeenCalledTimes(1);
   });
 });
