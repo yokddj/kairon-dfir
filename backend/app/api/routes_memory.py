@@ -2274,11 +2274,6 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
         )
     if not settings.memory_allow_external_tool_execution and settings.memory_execution_mode != "dedicated_worker":
         raise HTTPException(status_code=403, detail="External memory-tool execution is disabled by server configuration.")
-    if not payload or not payload.authorization_acknowledged:
-        raise HTTPException(
-            status_code=400,
-            detail="Authorization acknowledgement is required before analyzing RAM evidence.",
-        )
     # Block analysis when the evidence probe verdict is "probable_disk"
     # or the file is "ambiguous_raw" without operator override.  The
     # operator must explicitly confirm the file is memory via
@@ -2378,8 +2373,6 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
     timeout_plan = derive_memory_timeout_plan(profile, resolved_plugins, plugin_states=plugin_states)
     run.metadata_json = {
         **(run.metadata_json or {}),
-        "authorization_acknowledged": True,
-        "authorization_acknowledged_at": datetime.now(UTC).isoformat(),
         "timeout_policy": timeout_plan,
     }
     db.commit()

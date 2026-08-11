@@ -636,7 +636,7 @@ export function MemoryAnalysisCatalogueModal({
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const startMutation = useMutation<MemoryStartScanResponse, Error, { profile: string }>({
-    mutationFn: (vars) => api.startMemoryScan(caseId, evidenceId, vars.profile as never, true),
+    mutationFn: (vars) => api.startMemoryScan(caseId, evidenceId, vars.profile as never),
     onSuccess: (result) => {
       setFeedback(result.message);
       setError(null);

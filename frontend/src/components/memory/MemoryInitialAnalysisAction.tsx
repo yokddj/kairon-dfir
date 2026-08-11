@@ -90,7 +90,7 @@ export function MemoryInitialAnalysisAction({ caseId, evidenceId, onBeforeNaviga
   }, [runsQuery.data]);
 
   const startMutation = useMutation({
-    mutationFn: () => api.startMemoryScan(caseId, evidenceId, INITIAL_ANALYSIS_PROFILE, true),
+    mutationFn: () => api.startMemoryScan(caseId, evidenceId, INITIAL_ANALYSIS_PROFILE),
     onSuccess: () => {
       const keys = memoryQueryKeys.invalidateAfterMutation(caseId, evidenceId);
       for (const key of keys) void queryClient.invalidateQueries({ queryKey: key });

@@ -6372,8 +6372,8 @@ export const api = {
     request<MemoryAnalysisBatch>(`/cases/${caseId}/memory/evidences/${evidenceId}/analysis-batches/${batchId}/cancel`, {
       method: "POST",
     }),
-  startMemoryScan: (caseId: string, evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only", authorizationAcknowledged = false) =>
-    request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan?case_id=${encodeURIComponent(caseId)}`, { method: "POST", body: JSON.stringify({ profile, authorization_acknowledged: authorizationAcknowledged }) }),
+  startMemoryScan: (caseId: string, evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only") =>
+    request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan?case_id=${encodeURIComponent(caseId)}`, { method: "POST", body: JSON.stringify({ profile }) }),
   getMemoryRun: (runId: string) => request<MemoryRunDetail>(`/memory/runs/${runId}`),
   getMemoryRunSystemInfo: (runId: string) => request<MemorySystemInfo>(`/memory/runs/${runId}/system-info`),
   getCaseMemorySystemInfo: (caseId: string) => request<MemorySystemInfo[]>(`/cases/${caseId}/memory/system-info`),
