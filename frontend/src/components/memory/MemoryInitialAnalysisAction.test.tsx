@@ -123,7 +123,7 @@ describe("MemoryInitialAnalysisAction", () => {
     startMemoryScanMock.mockResolvedValue(startResponse());
     renderAction();
     await userEvent.click(await screen.findByTestId("memory-initial-analysis-start-button"));
-    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith(CASE, EVIDENCE, "processes_basic", true));
+    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith(CASE, EVIDENCE, "processes_basic"));
     for (const call of startMemoryScanMock.mock.calls) {
       expect(call[2]).toBe("processes_basic");
     }
@@ -219,7 +219,7 @@ describe("MemoryInitialAnalysisAction", () => {
     startMemoryScanMock.mockResolvedValue(startResponse({ id: "run-2" }));
     renderAction();
     await userEvent.click(await screen.findByTestId("memory-initial-analysis-retry-button"));
-    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith(CASE, EVIDENCE, "processes_basic", true));
+    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith(CASE, EVIDENCE, "processes_basic"));
   });
 
   it("refresh/reopen with a running run shows the running state, never Start, and never re-submits", async () => {
@@ -244,7 +244,7 @@ describe("MemoryInitialAnalysisAction", () => {
     startMemoryScanMock.mockResolvedValue(startResponse());
     renderAction();
     await userEvent.click(await screen.findByTestId("memory-initial-analysis-start-button"));
-    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith(CASE, EVIDENCE, "processes_basic", true));
+    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith(CASE, EVIDENCE, "processes_basic"));
   });
 
   it("an absent VMware companion does not block Start when preparation is already ready", async () => {

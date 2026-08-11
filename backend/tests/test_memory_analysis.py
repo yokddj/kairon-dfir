@@ -1656,17 +1656,32 @@ def test_memory_upload_disabled_rejects_memory_extension(db_session, tmp_path: P
     assert db_session.query(Evidence).count() == 0
 
 
-def test_memory_scan_requires_authorization_acknowledgement_when_enabled(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_memory_scan_succeeds_without_authorization_acknowledged_field(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Phase 3B: MemoryStartScanRequest.authorization_acknowledged was a
+    ceremonial boolean -- the client only ever had to send `true` for the
+    gate to pass, and the backend then persisted a hardcoded `True` into
+    run.metadata_json regardless of what was actually sent (never the real
+    payload value). Removed from the schema entirely; this pins that a
+    profile-only request is sufficient to reach every other real gate
+    (memory_analysis_enabled, external-tool-execution, evidence type,
+    platform/plugin resolution) unchanged."""
     _case(db_session)
     evidence = _evidence(db_session)
+    evidence.detected_format = "windows_crash_dump"
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=True))
+    monkeypatch.setattr(memory_execution.backend_readiness, "get_settings", lambda: _backend_settings(memory_process_profile_enabled=True))
+    monkeypatch.setattr(routes_memory, "get_memory_backend_overview", lambda: {"backends": [{"backend": "volatility3", "ready": True}]})
+    monkeypatch.setattr(routes_memory, "validate_memory_execution_request", lambda _db, _evidence_id: object())
+    monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=evidence))
+    monkeypatch.setattr(routes_memory, "enqueue_memory_metadata_scan", lambda _run_id: "job-1")
 
-    with pytest.raises(Exception) as exc_info:
-        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(profile="metadata_only"), case_id=evidence.case_id, db=db_session)
+    response = routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(profile="metadata_only"), case_id=evidence.case_id, db=db_session)
 
-    assert getattr(exc_info.value, "status_code", None) == 400
-    assert "Authorization acknowledgement" in str(getattr(exc_info.value, "detail", ""))
-    assert db_session.query(MemoryScanRun).count() == 0
+    assert response.accepted is True
+    assert response.status == "queued"
+    run = db_session.query(MemoryScanRun).one()
+    assert run.id == response.run_id
+    assert "authorization_acknowledged" not in (run.metadata_json or {})
 
 
 def test_memory_scan_disabled_by_default(db_session, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1674,7 +1689,7 @@ def test_memory_scan_disabled_by_default(db_session, monkeypatch: pytest.MonkeyP
     evidence = _evidence(db_session)
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=False))
 
-    response = routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), case_id=evidence.case_id, db=db_session)
+    response = routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(), case_id=evidence.case_id, db=db_session)
 
     assert response.status == "disabled"
     assert response.accepted is False
@@ -1687,7 +1702,7 @@ def test_memory_scan_rejects_non_memory_evidence(db_session, monkeypatch: pytest
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True))
 
     with pytest.raises(Exception) as exc_info:
-        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), case_id=evidence.case_id, db=db_session)
+        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(), case_id=evidence.case_id, db=db_session)
 
     assert getattr(exc_info.value, "status_code", None) == 400
 
@@ -1698,7 +1713,7 @@ def test_memory_scan_external_execution_disabled_rejects_without_run(db_session,
     monkeypatch.setattr(routes_memory, "settings", SimpleNamespace(memory_analysis_enabled=True, memory_allow_external_tool_execution=False))
 
     with pytest.raises(Exception) as exc_info:
-        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), case_id=evidence.case_id, db=db_session)
+        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(), case_id=evidence.case_id, db=db_session)
 
     assert getattr(exc_info.value, "status_code", None) == 403
     assert db_session.query(MemoryScanRun).count() == 0
@@ -1715,7 +1730,7 @@ def test_memory_scan_queues_metadata_only_when_enabled(db_session, monkeypatch: 
     monkeypatch.setattr(memory_execution, "validate_memory_execution_request", lambda _db, _evidence_id: SimpleNamespace(evidence=evidence))
     monkeypatch.setattr(routes_memory, "enqueue_memory_metadata_scan", lambda _run_id: "job-1")
 
-    response = routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), case_id=evidence.case_id, db=db_session)
+    response = routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(), case_id=evidence.case_id, db=db_session)
     run = db_session.query(MemoryScanRun).one()
     plugin_run = db_session.query(MemoryPluginRun).one()
 
@@ -1751,7 +1766,7 @@ def test_memory_scan_allows_direct_volatility_when_preparation_not_ready(db_sess
 
     response = routes_memory.start_memory_scan(
         evidence.id,
-        MemoryStartScanRequest(profile="processes_basic", authorization_acknowledged=True),
+        MemoryStartScanRequest(profile="processes_basic"),
         case_id=evidence.case_id,
         db=db_session,
     )
@@ -1774,7 +1789,7 @@ def test_memory_scan_worker_unavailable_still_blocks(db_session, monkeypatch: py
     with pytest.raises(Exception) as exc_info:
         routes_memory.start_memory_scan(
             evidence.id,
-            MemoryStartScanRequest(authorization_acknowledged=True),
+            MemoryStartScanRequest(),
             case_id=evidence.case_id,
             db=db_session,
         )
@@ -1829,7 +1844,7 @@ def test_memory_scan_dispatches_platform_probe_when_platform_unknown(db_session,
     with pytest.raises(Exception) as exc_info:
         routes_memory.start_memory_scan(
             evidence.id,
-            MemoryStartScanRequest(profile="processes_basic", authorization_acknowledged=True),
+            MemoryStartScanRequest(profile="processes_basic"),
             case_id=evidence.case_id,
             db=db_session,
         )
@@ -1879,7 +1894,7 @@ def test_memory_scan_does_not_dispatch_probe_when_platform_already_known(db_sess
     with pytest.raises(Exception) as exc_info:
         routes_memory.start_memory_scan(
             evidence.id,
-            MemoryStartScanRequest(profile="metadata_only", authorization_acknowledged=True),
+            MemoryStartScanRequest(profile="metadata_only"),
             case_id=evidence.case_id,
             db=db_session,
         )
@@ -2461,7 +2476,7 @@ def test_memory_scan_prevents_duplicate_active_run(db_session, monkeypatch: pyte
     )
 
     with pytest.raises(Exception) as exc_info:
-        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(authorization_acknowledged=True), case_id=evidence.case_id, db=db_session)
+        routes_memory.start_memory_scan(evidence.id, MemoryStartScanRequest(), case_id=evidence.case_id, db=db_session)
 
     assert getattr(exc_info.value, "status_code", None) == 409
 

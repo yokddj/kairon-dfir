@@ -100,7 +100,7 @@ def test_direct_network_basic_succeeds_when_api_process_lacks_volatility_and_cap
 
     response = start_memory_scan(
         ev.id,
-        MemoryStartScanRequest(profile="network_basic", authorization_acknowledged=True),
+        MemoryStartScanRequest(profile="network_basic"),
         case_id=ev.case_id,
         db=session,
     )
@@ -124,7 +124,7 @@ def test_direct_network_basic_succeeds_with_fresh_worker_capability_available(db
 
     response = start_memory_scan(
         ev.id,
-        MemoryStartScanRequest(profile="network_basic", authorization_acknowledged=True),
+        MemoryStartScanRequest(profile="network_basic"),
         case_id=ev.case_id,
         db=session,
     )
@@ -144,7 +144,7 @@ def test_direct_scan_all_plugins_disabled_returns_no_enabled_plugins(db, monkeyp
     with pytest.raises(HTTPException) as exc:
         start_memory_scan(
             ev.id,
-            MemoryStartScanRequest(profile="network_basic", authorization_acknowledged=True),
+            MemoryStartScanRequest(profile="network_basic"),
             case_id=ev.case_id,
             db=session,
         )
@@ -163,7 +163,7 @@ def test_worker_unavailable_still_blocks_direct_scan(db, monkeypatch: pytest.Mon
     with pytest.raises(HTTPException) as exc:
         start_memory_scan(
             ev.id,
-            MemoryStartScanRequest(profile="network_basic", authorization_acknowledged=True),
+            MemoryStartScanRequest(profile="network_basic"),
             case_id=ev.case_id,
             db=session,
         )

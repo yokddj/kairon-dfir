@@ -65,7 +65,7 @@ export function MemoryAnalyzeAction({
 
   const startMutation = useMutation({
     mutationFn: (vars: { evidenceId: string; profile: Profile }) =>
-      api.startMemoryScan(caseId, vars.evidenceId, vars.profile, true),
+      api.startMemoryScan(caseId, vars.evidenceId, vars.profile),
     onSuccess: (result) => {
       setFeedback(result.message);
       queryClient.invalidateQueries({ queryKey: ["memory-overview", caseId] });

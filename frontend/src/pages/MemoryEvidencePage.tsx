@@ -293,7 +293,7 @@ export default function MemoryEvidencePage() {
 
   const startScanMutation = useMutation({
     mutationFn: async () =>
-      api.startMemoryScan(caseId, evidenceId, "metadata_only", true),
+      api.startMemoryScan(caseId, evidenceId, "metadata_only"),
     onSuccess: () => {
       const keys = memoryQueryKeys.invalidateAfterMutation(caseId, evidenceId);
       for (const key of keys) {

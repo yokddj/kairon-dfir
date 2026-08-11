@@ -1065,8 +1065,8 @@ describe("EvidenceIngestionWizard", () => {
 
     await userEvent.click(await screen.findByTestId("memory-initial-analysis-start-button"));
 
-    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("case-1", "evidence-3", "processes_basic", true));
-    expect(startMemoryScanMock).not.toHaveBeenCalledWith("case-1", "evidence-3", "metadata_only", expect.anything());
+    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("case-1", "evidence-3", "processes_basic"));
+    expect(startMemoryScanMock).not.toHaveBeenCalledWith("case-1", "evidence-3", "metadata_only");
   });
 
   it("refresh/reopen with an already-completed initial analysis shows View memory results, not Start", async () => {

@@ -482,7 +482,7 @@ describe("Memory overview, profile catalogue and run-all", () => {
     expect(run).not.toBeDisabled();
     expect(screen.getByTestId("catalogue-plugin-availability-network_basic").textContent).toContain("2/2 plugins available");
     fireEvent.click(run);
-    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("case-1", "ev-A", "network_basic", true));
+    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("case-1", "ev-A", "network_basic"));
   });
 
   // 5. Overview muestra familias
@@ -544,7 +544,7 @@ describe("Memory overview, profile catalogue and run-all", () => {
       await waitFor(() => {
         expect(startMemoryScanMock).toHaveBeenCalledTimes(1);
         expect(startMemoryScanMock).toHaveBeenCalledWith(
-          "case-1", "ev-A", "metadata_only", true,
+          "case-1", "ev-A", "metadata_only",
         );
       });
     } finally {
@@ -603,7 +603,7 @@ describe("Memory overview, profile catalogue and run-all", () => {
       await waitFor(() => {
         expect(startMemoryScanMock).toHaveBeenCalledTimes(1);
         expect(startMemoryScanMock).toHaveBeenCalledWith(
-          "case-1", "ev-A", "metadata_only", true,
+          "case-1", "ev-A", "metadata_only",
         );
       });
     } finally {

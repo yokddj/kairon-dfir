@@ -258,7 +258,7 @@ describe("Memory evidence auto-refresh", () => {
 
       await waitFor(() => {
         expect(startMemoryScanMock).toHaveBeenCalledTimes(1);
-        expect(startMemoryScanMock).toHaveBeenCalledWith("case-1", "ev-A", "metadata_only", true);
+        expect(startMemoryScanMock).toHaveBeenCalledWith("case-1", "ev-A", "metadata_only");
       });
 
     } finally {
