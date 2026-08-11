@@ -24,6 +24,7 @@ from app.services.memory.artifact_normalizers import (
     NORMALIZATION_VERSION,
     merge_module_documents,
     normalize_linux_bash,
+    normalize_linux_sockstat,
     normalize_windows_dlllist,
     normalize_windows_driverscan,
     normalize_windows_envars,
@@ -88,6 +89,7 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "windows.getsids": "memory_sid",
     "windows.privileges": "memory_privilege",
     "linux.bash": "memory_shell_history",
+    "linux.sockstat": "memory_network_connection",
 }
 ARTIFACT_PLUGIN_LIMITS = {
     # Per-plugin guard-rails to keep offline execution bounded.
@@ -108,6 +110,15 @@ ARTIFACT_PLUGIN_LIMITS = {
     # history entries; bounded the same as the other full-heap/VAD scan
     # plugins (malfind/vadinfo) rather than left on the global default.
     "linux.bash": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    # linux.sockstat walks every thread's FD table (Volatility's
+    # linux.lsof re-enumerates the same shared FD table once per thread
+    # of a multi-threaded process), so its cost is dominated by whichever
+    # single process has the most threads, not by total process count.
+    # Benchmarked at 638-656s (two full runs, deterministic output) on
+    # real evidence; 900s gives headroom over the observed 600s default
+    # without masking a genuine hang. Output was 11.5MiB, above the
+    # global 10MB default, hence the explicit max_output_bytes override.
+    "linux.sockstat": {"timeout_seconds": 900, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
 }
 
 # Each existing profile name already encodes one capability's intent.
@@ -768,6 +779,8 @@ def _normalize_artifact_payload(
         return normalize_windows_privileges(payload, source_plugin=plugin, **common)
     if plugin == "linux.bash":
         return normalize_linux_bash(payload, source_plugin=plugin, **common)
+    if plugin == "linux.sockstat":
+        return normalize_linux_sockstat(payload, source_plugin=plugin, **common)
     return {
         "items": [],
         "warnings": [f"unsupported_artifact_plugin:{plugin}"],

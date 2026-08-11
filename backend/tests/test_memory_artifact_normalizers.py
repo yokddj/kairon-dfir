@@ -1025,3 +1025,295 @@ def test_bash_mapping_includes_command_and_command_time() -> None:
     assert mapping["command"]["fields"]["keyword"]["type"] == "keyword"
     assert mapping["command_time"]["type"] == "date"
     assert mapping["command_time"]["ignore_malformed"] is True
+
+
+# ---------------------------------------------------------------------------
+# 28. linux.sockstat -> memory_network_connection
+#
+# Rows modeled on the real installed Volatility 3 linux.sockstat TreeGrid
+# (NetNS, Process Name, PID, TID, FD, Sock Offset, Family, Type, Proto,
+# Source Addr, Source Port, Destination Addr, Destination Port, State,
+# Filter), as observed against real Linux challenge evidence: AF_UNIX rows
+# routinely have Proto=None, AF_NETLINK/AF_INET rows have Proto populated,
+# and Sock Offset is a plain JSON int (not a pre-formatted hex string).
+# ---------------------------------------------------------------------------
+
+
+def _sockstat_payload() -> list[dict[str, Any]]:
+    return [
+        {
+            "NetNS": 4026531840, "Process Name": "systemd", "PID": 1, "TID": 1, "FD": 12,
+            "Sock Offset": 174683891092672, "Family": "AF_UNIX", "Type": "STREAM", "Proto": None,
+            "Source Addr": "/run/systemd/journal/stdout", "Source Port": "24386",
+            "Destination Addr": None, "Destination Port": "24728", "State": "ESTABLISHED", "Filter": None,
+        },
+        {
+            "NetNS": 4026531840, "Process Name": "systemd-resolve", "PID": 611, "TID": 611, "FD": 13,
+            "Sock Offset": 174688269785856, "Family": "AF_INET", "Type": "DGRAM", "Proto": "UDP",
+            "Source Addr": "127.0.0.53", "Source Port": "53",
+            "Destination Addr": "0.0.0.0", "Destination Port": "0", "State": "UNCONNECTED", "Filter": None,
+        },
+    ]
+
+
+def test_sockstat_normalizes_realistic_rows() -> None:
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    result = normalize_linux_sockstat(
+        _sockstat_payload(),
+        case_id=CASE,
+        evidence_id=EVIDENCE,
+        scan_run_id=RUN,
+        plugin_run_id=f"{RUN}:linux.sockstat",
+    )
+    assert result["raw_count"] == 2
+    assert result["accepted_count"] == 2
+    assert result["dropped_count"] == 0
+    first, second = result["items"]
+    assert first["document_type"] == "memory_network_connection"
+    assert first["platform"] == "linux"
+    assert first["pid"] == 1
+    assert first["tid"] == 1
+    assert first["process_name"] == "systemd"
+    assert first["local_address"] == "/run/systemd/journal/stdout"
+    assert first["state"] == "ESTABLISHED"
+    assert first["source_plugin"] == "linux.sockstat"
+    assert second["protocol"] == "UDP"
+    assert second["remote_address"] == "0.0.0.0"
+    assert second["remote_port"] == 0
+    for item in result["items"]:
+        assert item["case_id"] == CASE
+        assert item["evidence_id"] == EVIDENCE
+        assert item["scan_run_id"] == RUN
+        assert item["provenance"]["source_plugin"] == "linux.sockstat"
+
+
+def test_sockstat_zero_rows_is_legitimate_empty_not_an_error() -> None:
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    result = normalize_linux_sockstat([], case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    assert result["raw_count"] == 0
+    assert result["accepted_count"] == 0
+    assert result["dropped_count"] == 0
+    assert result["items"] == []
+    assert result["warnings"] == []
+
+
+def test_sockstat_row_missing_both_endpoints_is_dropped_with_warning() -> None:
+    """A row is only dropped when it has neither an address NOR a port
+    on either side -- confirmed against real evidence, this happens for
+    a handful of AF_VSOCK rows only (5 out of 29332 on the real Linux
+    challenge evidence).
+    """
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    payload = [{
+        "PID": 1, "TID": 1, "Process Name": "systemd", "Family": "AF_UNIX", "Type": "STREAM",
+        "Proto": None, "Source Addr": None, "Source Port": None, "Destination Addr": None,
+        "Destination Port": None, "State": "UNCONNECTED", "Sock Offset": 1, "Filter": None,
+    }]
+    result = normalize_linux_sockstat(payload, case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    assert result["accepted_count"] == 0
+    assert result["dropped_count"] == 1
+    assert "sockstat_row_missing_endpoints" in result["warnings"]
+
+
+def test_sockstat_anonymous_unix_socketpair_is_kept_via_port_identity() -> None:
+    """Regression guard for a real bug found during Sprint 1 validation:
+    most AF_UNIX rows have NO filesystem path (anonymous socketpair()s
+    such as systemd's internal IPC) -- their only identity is the paired
+    inode numbers in Source/Destination Port. A first version of this
+    normalizer checked address only and silently dropped 76% of all real
+    rows (22326/29332) on the Linux challenge evidence.
+    """
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    payload = [{
+        "PID": 1, "TID": 1, "FD": 17, "Process Name": "systemd", "Family": "AF_UNIX", "Type": "DGRAM",
+        "Proto": None, "Source Addr": None, "Source Port": "17453", "Destination Addr": None,
+        "Destination Port": "17454", "State": "CONNECTED", "Sock Offset": 174688147526976, "Filter": None,
+    }]
+    result = normalize_linux_sockstat(payload, case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    assert result["accepted_count"] == 1
+    assert result["dropped_count"] == 0
+    item = result["items"][0]
+    assert item["local_address"] is None
+    assert item["local_port"] == 17453
+    assert item["remote_port"] == 17454
+    assert item["state"] == "CONNECTED"
+
+
+def test_sockstat_large_af_unix_inode_port_is_preserved_not_dropped() -> None:
+    """Regression guard for a third bug found during Sprint 1 real-evidence
+    validation: linux.sockstat reuses the Source/Destination Port columns
+    for the socket's raw inode number on AF_UNIX (and similar
+    non-AF_INET families), which routinely exceeds 65535. Clamping it to
+    the real TCP/UDP port range silently nulled ~14.5k real identifiers
+    on the Linux challenge evidence, which then made otherwise-
+    identifiable anonymous sockets look endpoint-less and get dropped.
+    """
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    payload = [{
+        "PID": 1, "TID": 1, "FD": 12, "Process Name": "systemd", "Family": "AF_UNIX", "Type": "DGRAM",
+        "Proto": None, "Source Addr": None, "Source Port": "174688",
+        "Destination Addr": None, "Destination Port": "174689",
+        "State": "CONNECTED", "Sock Offset": 1, "Filter": None,
+    }]
+    result = normalize_linux_sockstat(payload, case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    assert result["accepted_count"] == 1
+    assert result["dropped_count"] == 0
+    item = result["items"][0]
+    assert item["local_port"] == 174688
+    assert item["remote_port"] == 174689
+
+
+def test_sockstat_af_inet_port_still_bounded_to_real_port_range() -> None:
+    """The inode-port fallback above must not weaken real port validation
+    for AF_INET/AF_INET6 rows -- an out-of-range value there is genuinely
+    invalid and must still be rejected, matching normalize_windows_netscan.
+    """
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    payload = [{
+        "PID": 611, "TID": 611, "FD": 13, "Process Name": "systemd-resolve", "Family": "AF_INET", "Type": "DGRAM",
+        "Proto": "UDP", "Source Addr": "127.0.0.53", "Source Port": "70000",
+        "Destination Addr": "0.0.0.0", "Destination Port": "0",
+        "State": "UNCONNECTED", "Sock Offset": 1, "Filter": None,
+    }]
+    result = normalize_linux_sockstat(payload, case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    item = result["items"][0]
+    assert item["local_port"] is None
+    assert item["remote_port"] == 0
+
+
+def test_sockstat_same_thread_two_fds_on_same_socket_produce_distinct_documents() -> None:
+    """Regression guard for a second bug found during validation: FD was
+    missing from the identity hash, so two different file descriptors
+    (e.g. dup()) referencing the same socket from the same thread
+    silently collapsed into one document via a colliding document_id.
+    """
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    payload = [
+        {
+            "PID": 100, "TID": 100, "FD": fd, "Process Name": "proc", "Family": "AF_UNIX", "Type": "STREAM",
+            "Proto": None, "Source Addr": "/run/shared", "Source Port": "1", "Destination Addr": None,
+            "Destination Port": None, "State": "ESTABLISHED", "Sock Offset": 555, "Filter": None,
+        }
+        for fd in (3, 4)
+    ]
+    result = normalize_linux_sockstat(payload, case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    assert result["accepted_count"] == 2
+    assert len({item["document_id"] for item in result["items"]}) == 2
+    assert {item["fd"] for item in result["items"]} == {3, 4}
+
+
+def test_sockstat_missing_pid_is_kept_and_flagged_unresolved() -> None:
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    payload = [{
+        "PID": None, "TID": None, "Process Name": None, "Family": "AF_UNIX", "Type": "STREAM",
+        "Proto": None, "Source Addr": "/run/foo", "Source Port": "1", "Destination Addr": None,
+        "Destination Port": None, "State": "UNCONNECTED", "Sock Offset": 1, "Filter": None,
+    }]
+    result = normalize_linux_sockstat(payload, case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    assert result["accepted_count"] == 1
+    item = result["items"][0]
+    assert item["pid"] is None
+    assert item["unresolved_process_reference"] is True
+    assert "sockstat_row_missing_pid" in result["warnings"]
+
+
+def test_sockstat_falls_back_to_family_and_type_when_proto_is_empty() -> None:
+    """Real AF_UNIX rows routinely have Proto=None; the plugin's own
+    Family/Type must not be discarded in favour of a bare "unknown".
+    """
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    result = normalize_linux_sockstat(_sockstat_payload(), case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    assert result["items"][0]["protocol"] == "AF_UNIX/STREAM"
+
+
+def test_sockstat_offset_rendered_as_hex_string_not_raw_int() -> None:
+    """Volatility's JSON renderer emits Sock Offset as a plain int, unlike
+    the pre-formatted hex strings some Windows plugins provide; the
+    normalizer must convert it, not pass the raw int through untouched.
+    """
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    result = normalize_linux_sockstat(_sockstat_payload(), case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    offset = result["items"][0]["offset"]
+    assert isinstance(offset, str)
+    assert offset.startswith("0x")
+    assert int(offset, 16) == 174683891092672
+
+
+def test_sockstat_idempotent_document_ids() -> None:
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    first = normalize_linux_sockstat(_sockstat_payload(), case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    second = normalize_linux_sockstat(_sockstat_payload(), case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    assert [item["document_id"] for item in first["items"]] == [item["document_id"] for item in second["items"]]
+
+
+def test_sockstat_run_isolation_in_document_ids() -> None:
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    a = normalize_linux_sockstat(_sockstat_payload(), case_id=CASE, evidence_id=EVIDENCE, scan_run_id="run-A", plugin_run_id="run-A:linux.sockstat")
+    b = normalize_linux_sockstat(_sockstat_payload(), case_id=CASE, evidence_id=EVIDENCE, scan_run_id="run-B", plugin_run_id="run-B:linux.sockstat")
+    a_ids = {item["document_id"] for item in a["items"]}
+    b_ids = {item["document_id"] for item in b["items"]}
+    assert a_ids.isdisjoint(b_ids)
+
+
+def test_sockstat_distinct_threads_reporting_same_socket_produce_distinct_documents() -> None:
+    """linux.sockstat re-walks a multi-threaded process's shared FD table
+    once per thread (confirmed against real evidence: one browser-class
+    process's 165 distinct sockets were reported by 125 threads each).
+    Kairon must pass this through as-is -- one document per (thread,
+    socket) pair, exactly as Volatility reported it -- rather than
+    silently collapsing it, which would hide which thread held the FD.
+    """
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    payload = [
+        {
+            "PID": 3000, "TID": tid, "Process Name": f"thread-{tid}", "Family": "AF_UNIX", "Type": "STREAM",
+            "Proto": None, "Source Addr": "/run/shared-socket", "Source Port": "1",
+            "Destination Addr": None, "Destination Port": None, "State": "ESTABLISHED",
+            "Sock Offset": 999, "Filter": None,
+        }
+        for tid in (3000, 3001, 3002)
+    ]
+    result = normalize_linux_sockstat(payload, case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    assert result["accepted_count"] == 3
+    assert len({item["document_id"] for item in result["items"]}) == 3
+    assert {item["tid"] for item in result["items"]} == {3000, 3001, 3002}
+    assert all(item["pid"] == 3000 for item in result["items"])
+
+
+def test_sockstat_registered_in_normalizer_and_limits() -> None:
+    assert ARTIFACT_PLUGIN_NORMALIZER["linux.sockstat"] == "memory_network_connection"
+    assert ARTIFACT_PLUGIN_LIMITS["linux.sockstat"]["timeout_seconds"] >= 900
+    assert ARTIFACT_PLUGIN_LIMITS["linux.sockstat"]["max_output_bytes"] >= 16 * 1024 * 1024
+
+
+def test_sockstat_matches_windows_network_connection_schema() -> None:
+    """network_basic's family view must not care which platform produced
+    a memory_network_connection document -- same core field names as
+    normalize_windows_netscan, no Linux-only field replacing a shared one.
+    """
+    from app.services.memory.artifact_normalizers import normalize_linux_sockstat
+
+    result = normalize_linux_sockstat(_sockstat_payload(), case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.sockstat")
+    item = result["items"][0]
+    shared_windows_fields = {
+        "document_type", "case_id", "evidence_id", "scan_run_id", "plugin_run_id",
+        "protocol", "local_address", "local_port", "remote_address", "remote_port",
+        "state", "pid", "process_entity_id", "process_name", "create_time", "offset",
+        "source_plugin", "confidence", "provenance", "normalization_version",
+        "unresolved_process_reference",
+    }
+    assert shared_windows_fields.issubset(item.keys())
+    assert item["document_type"] == "memory_network_connection"
