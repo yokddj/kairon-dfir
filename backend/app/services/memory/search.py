@@ -45,6 +45,7 @@ FAMILY_SPECS: dict[str, FamilySpec] = {
     "suspicious": FamilySpec("suspicious", "memory_suspicious_region", "suspicious_regions", ("process_name", "protection"), ("disassembly_preview_bounded", "hexdump_preview_bounded"), ("process_name.text", "protection", "tag", "disassembly_preview_bounded", "hexdump_preview_bounded"), ("protection", "tag", "review_status", "source_plugin", "process_entity_id"), ("pid",), ("create_time",)),
     "vads": FamilySpec("vads", "memory_vad", "suspicious_regions", ("process_name", "protection"), ("file_object", "tag"), ("process_name.text", "protection", "tag", "file_object"), ("protection", "tag", "source_plugin", "process_entity_id"), ("pid",)),
     "system": FamilySpec("system", "memory_system_info", "system_info", ("kernel_base",), ("os", "build"), ("os", "build", "kernel"), ("source_plugin",), (), ()),
+    "shell_history": FamilySpec("shell_history", "memory_shell_history", "shell_history", ("process_name",), ("command",), ("command", "process_name.text"), ("pid", "source_plugin", "process_entity_id"), ("pid",), ("command_time",)),
 }
 
 DOC_TYPE_TO_FAMILY: dict[str, str] = {}
@@ -297,7 +298,7 @@ def _result_from_hit(hit: dict[str, Any], *, evidence_name: str, families: list[
     ppid = process.get("ppid", observed.get("ppid"))
     process_name = src.get("process_name") or process.get("name") or observed.get("name")
     entity_id = src.get("process_entity_id")
-    timestamp = src.get("create_time") or process.get("create_time") or observed.get("create_time")
+    timestamp = src.get("create_time") or process.get("create_time") or observed.get("create_time") or src.get("command_time")
     title = _title(family, src, process, observed)
     summary = _summary(family, src, process, observed)
     matched_fields = list((hit.get("highlight") or {}).keys())
@@ -317,7 +318,7 @@ def _result_from_hit(hit: dict[str, Any], *, evidence_name: str, families: list[
         "ppid": ppid,
         "process_name": process_name,
         "timestamp": timestamp,
-        "timestamp_source": "create_time" if timestamp else None,
+        "timestamp_source": ("command_time" if not (src.get("create_time") or process.get("create_time") or observed.get("create_time")) and src.get("command_time") else "create_time") if timestamp else None,
         "title": title,
         "summary": summary,
         "matched_fields": matched_fields,
@@ -335,6 +336,8 @@ def _title(family: str, src: dict[str, Any], process: dict[str, Any], observed: 
         return f"{src.get('protocol') or 'network'} {src.get('local_address')}:{src.get('local_port')} -> {src.get('remote_address')}:{src.get('remote_port')}"
     if family == "command_lines":
         return f"Command line: {process.get('name') or observed.get('name') or src.get('process_name') or 'process'}"
+    if family == "shell_history":
+        return str(src.get("command") or "Shell command")[:160]
     for key in ("module_name", "object_name", "driver_name", "privilege", "sid", "variable", "process_name"):
         if src.get(key):
             return str(src[key])[:160]
@@ -345,7 +348,7 @@ def _title(family: str, src: dict[str, Any], process: dict[str, Any], observed: 
 
 def _summary(family: str, src: dict[str, Any], process: dict[str, Any], observed: dict[str, Any]) -> str:
     parts = []
-    for value in (process.get("command_line"), observed.get("command_line"), src.get("value"), src.get("path"), src.get("object_name"), src.get("description"), src.get("file_object"), src.get("disassembly_preview_bounded"), src.get("hexdump_preview_bounded")):
+    for value in (process.get("command_line"), observed.get("command_line"), src.get("command"), src.get("value"), src.get("path"), src.get("object_name"), src.get("description"), src.get("file_object"), src.get("disassembly_preview_bounded"), src.get("hexdump_preview_bounded")):
         if value:
             parts.append(str(value))
     if not parts and family == "network":
@@ -369,6 +372,7 @@ def _navigation(family: str, src: dict[str, Any], entity_id: str | None, pid: in
         "sids": "processes",
         "privileges": "processes",
         "system": "system",
+        "shell_history": "artifacts",
     }.get(family, "artifacts")
     return {"tab": tab, "target_tab": tab, "artifact_family": family, "artifact_type": src.get("document_type"), "artifact_id": src.get("document_id"), "run_id": src.get("scan_run_id"), "evidence_id": src.get("evidence_id"), "process_entity_id": entity_id, "pid": pid}
 

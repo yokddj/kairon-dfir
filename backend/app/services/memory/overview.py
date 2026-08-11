@@ -7,6 +7,7 @@ from app.core.opensearch import count_documents, get_events_index
 from app.models.evidence import Evidence, EvidenceType
 from app.models.memory import MemoryArtifactSummary, MemoryScanRun
 from app.services.memory.active_result import FAMILY_RESOLUTION, list_families, resolve_active_memory_result
+from app.services.memory.counts import FAMILY_ORDER
 from app.services.memory.catalogue import build_analysis_catalogue
 from app.services.memory.volatility_runner import network_basic_available
 
@@ -130,6 +131,12 @@ def get_evidence_landing(db: Session, case_id: str, *, host_id: str | None = Non
     for evidence in evidences:
         families: list[dict] = []
         for family in list_families():
+            if family not in FAMILY_ORDER:
+                # Registered in FAMILY_RESOLUTION so active-result/search
+                # can resolve it, but not yet surfaced on the case
+                # landing page (e.g. shell_history: linux.bash is not
+                # exposed in the catalogue yet).
+                continue
             rules = FAMILY_RESOLUTION[family]
             if family == "network" and network_unavailable:
                 families.append(

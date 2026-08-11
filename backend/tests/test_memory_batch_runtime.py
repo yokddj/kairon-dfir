@@ -39,7 +39,7 @@ from app.services.memory.batch import (
 )
 from app.services.memory.catalogue import build_analysis_catalogue
 from app.services.memory.counts import (
-    FAMILY_TO_DOCUMENT_TYPE,
+    FAMILY_ORDER,
     get_memory_family_count,
     list_family_counts,
     resolve_active_run_ids,
@@ -370,7 +370,13 @@ def test_list_family_counts_returns_all_families(db: Session) -> None:
         case_id=case.id, evidence_id=ev.id, active_run_ids={"system_info": run.id},
     )
     families = {row["family"] for row in payload}
-    assert families == set(FAMILY_TO_DOCUMENT_TYPE.keys())
+    # list_family_counts is the Overview/catalogue-facing listing and is
+    # driven by FAMILY_ORDER, not the broader FAMILY_TO_DOCUMENT_TYPE
+    # mapping -- shell_history is registered in the latter (so counts,
+    # active-result and search can resolve it) but intentionally absent
+    # from FAMILY_ORDER, since linux.bash is not exposed in the
+    # catalogue yet (Linux Shell History Phase 1 is backend-only).
+    assert families == set(FAMILY_ORDER)
 
 
 # ---------------------------------------------------------------------------
