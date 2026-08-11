@@ -42,13 +42,14 @@ const PROFILE_SECTION: Record<string, Section> = {
   handles_basic: "artifacts",
   kernel_basic: "artifacts",
   suspicious_memory: "artifacts",
+  shell_history_basic: "artifacts",
 };
 
 function familyHref(caseId: string, evidenceId: string, item: MemoryAnalysisCatalogueItem): string {
   if (item.family === "processes") return memoryEvidenceRoute(caseId, evidenceId, "processes");
   if (item.family === "system_info") return memoryEvidenceRoute(caseId, evidenceId, "system");
   if (item.family === "raw_observations") return memoryEvidenceRoute(caseId, evidenceId);
-  const map: Record<string, string> = { network: "network", modules: "modules", handles: "handles", drivers: "modules", kernel_modules: "modules", suspicious_regions: "suspicious" };
+  const map: Record<string, string> = { network: "network", modules: "modules", handles: "handles", drivers: "modules", kernel_modules: "modules", suspicious_regions: "suspicious", shell_history: "shell_history" };
   return memoryEvidenceRoute(caseId, evidenceId, map[item.family] || "network");
 }
 

@@ -334,7 +334,9 @@ def test_catalogue_returns_eight_profiles_with_network_plugin_availability(db: S
     _make_run(db, case.id, ev.id, "metadata_only", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
     with patch("app.services.memory.counts.get_memory_family_count", return_value={"total": 0}):
         catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
-    assert len(catalogue) == 8
+    # 8 original Windows-shaped profiles + shell_history_basic (Linux
+    # Memory Shell History Phase 2, resolved via capability_registry).
+    assert len(catalogue) == 9
     profiles = [item["profile"] for item in catalogue]
     assert "metadata_only" in profiles
     assert "processes_extended" in profiles

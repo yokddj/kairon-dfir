@@ -69,8 +69,8 @@ describe("Memory tab <-> route contract", () => {
     }
   });
 
-  it("resolves every contractually-required route segment back to a real tab (overview, processes, process-graph, network, modules, handles, suspicious, vads, system, runs, raw)", () => {
-    const required = ["overview", "processes", "process-graph", "network", "modules", "handles", "suspicious", "vads", "system", "runs", "raw"];
+  it("resolves every contractually-required route segment back to a real tab (overview, processes, process-graph, shell_history, network, modules, handles, suspicious, vads, system, runs, raw)", () => {
+    const required = ["overview", "processes", "process-graph", "shell_history", "network", "modules", "handles", "suspicious", "vads", "system", "runs", "raw"];
     for (const segment of required) {
       expect(tabFromRouteSegment(segment), `route segment "${segment}" does not resolve to any MemoryTab`).not.toBeNull();
     }

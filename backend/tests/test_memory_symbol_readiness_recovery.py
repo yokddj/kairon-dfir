@@ -522,6 +522,13 @@ def test_catalogue_uses_blocked_not_unavailable_for_symbol_probe_required(db_ses
         evidence_id=FRESH_EVIDENCE_ID,
     )
     for item in items:
+        if item["profile"] == "shell_history_basic":
+            # Orthogonal to this test's symbol-probe gate: this fixture's
+            # evidence is detected_format="windows_crash_dump" (Windows),
+            # and shell_history_basic has no Windows producer today (only
+            # linux.bash exists) -- correctly unavailable regardless of
+            # symbol state, per Linux Memory Shell History Phase 2.
+            continue
         assert item["gate_type"] != GATE_TYPE_UNAVAILABLE, f"profile {item['profile']} got unavailable"
 
 
@@ -997,6 +1004,12 @@ def test_windows_11_build_22621_evidence_is_x64_cached(db_session, monkeypatch) 
         evidence_id="dddddddd-0000-4000-8000-000000000040",
     )
     for item in items:
+        if item["profile"] == "shell_history_basic":
+            # This fixture's evidence is detected_format="windows_crash_dump"
+            # (Windows); shell_history_basic has no Windows producer today
+            # (only linux.bash exists) -- correctly unavailable regardless
+            # of symbol state, per Linux Memory Shell History Phase 2.
+            continue
         assert item["gate_type"] == GATE_TYPE_AVAILABLE, item
 
 

@@ -22,6 +22,7 @@ export type MemoryTab =
   | "overview"
   | "processes"
   | "graph"
+  | "shell_history"
   | "network"
   | "modules"
   | "handles"
@@ -36,6 +37,7 @@ export const MEMORY_TABS: ReadonlyArray<{ key: MemoryTab; label: string; testId:
   { key: "overview", label: "Overview", testId: "memory-tab-overview", routeSegment: "overview" },
   { key: "processes", label: "Processes", testId: "memory-tab-processes", routeSegment: "processes" },
   { key: "graph", label: "Graph", testId: "memory-tab-graph", routeSegment: "process-graph" },
+  { key: "shell_history", label: "Shell History", testId: "memory-tab-shell-history", routeSegment: "shell_history" },
   { key: "network", label: "Network", testId: "memory-tab-network", routeSegment: "network" },
   { key: "modules", label: "Modules & DLLs", testId: "memory-tab-modules", routeSegment: "modules" },
   { key: "handles", label: "Handles", testId: "memory-tab-handles", routeSegment: "handles" },

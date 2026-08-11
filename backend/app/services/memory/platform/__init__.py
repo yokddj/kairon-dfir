@@ -303,7 +303,14 @@ def _historical_platform_by_sha(sha256: str) -> tuple[PlatformFamily, Architectu
     from app.models.evidence import Evidence
     from app.models.memory import MemoryScanRun
 
-    db = SessionLocal()
+    try:
+        db = SessionLocal()
+    except Exception:  # noqa: BLE001
+        # A convenience lookup ("was this exact content already
+        # classified?") must never crash platform detection when the
+        # database is unreachable -- fall through to the next stage
+        # (Volatility fallback) or PlatformFamily.UNKNOWN instead.
+        return None
     try:
         prior = (
             db.query(Evidence)
@@ -331,6 +338,8 @@ def _historical_platform_by_sha(sha256: str) -> tuple[PlatformFamily, Architectu
         )
         if metadata_run is not None:
             return (PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.HIGH, "historical_sha")
+        return None
+    except Exception:  # noqa: BLE001
         return None
     finally:
         db.close()
