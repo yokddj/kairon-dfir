@@ -217,6 +217,123 @@ def normalize_windows_netscan(
     }
 
 
+def normalize_linux_sockstat(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "linux.sockstat",
+    process_name_resolver: Any | None = None,
+    max_records: int = 200000,
+) -> dict[str, Any]:
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    raw_count = len(rows)
+    dropped = 0
+    accepted = 0
+    for index, row in enumerate(rows):
+        if accepted >= max_records:
+            warnings.append("sockstat_max_records_reached")
+            dropped += len(rows) - index
+            break
+        family = _str_or_none(_lookup(row, "Family"), 32)
+        sock_type = _str_or_none(_lookup(row, "Type"), 32)
+        proto_field = _str_or_none(_lookup(row, "Proto"), 32)
+        # linux.sockstat leaves Proto empty for most AF_UNIX sockets; fall
+        # back to Family/Type so the connection isn't reduced to "unknown"
+        # when the plugin itself reported a real socket family and type.
+        protocol = proto_field or (f"{family}/{sock_type}" if family or sock_type else None)
+        local_address = _str_or_none(_lookup(row, "Source Addr"), 128)
+        remote_address = _str_or_none(_lookup(row, "Destination Addr"), 128)
+        # Only AF_INET/AF_INET6 rows carry a real 0-65535 TCP/UDP port in
+        # Source/Destination Port. linux.sockstat reuses those same two
+        # columns for AF_UNIX (the socket's inode number), AF_NETLINK
+        # (a multicast group mask) and similar -- values that routinely
+        # exceed 65535. Clamping those to the port range with
+        # _port_or_none silently nulled out ~14.5k real identifiers,
+        # which then made otherwise-identifiable anonymous sockets look
+        # endpoint-less and drop. Only apply the port-range check where
+        # the field is actually a port.
+        if family in ("AF_INET", "AF_INET6"):
+            local_port = _port_or_none(_lookup(row, "Source Port"))
+            remote_port = _port_or_none(_lookup(row, "Destination Port"))
+        else:
+            local_port = _int_or_none(_lookup(row, "Source Port"))
+            remote_port = _int_or_none(_lookup(row, "Destination Port"))
+        state = _str_or_none(_lookup(row, "State"), 32)
+        pid = _int_or_none(_lookup(row, "PID"))
+        tid = _int_or_none(_lookup(row, "TID"))
+        owner = _str_or_none(_lookup(row, "Process Name"), MAX_NAME_LENGTH)
+        fd = _int_or_none(_lookup(row, "FD"))
+        offset_raw = _lookup(row, "Sock Offset")
+        offset = hex(offset_raw) if isinstance(offset_raw, int) else _str_or_none(offset_raw, 64)
+        # Unlike Windows netscan, most AF_UNIX rows have no filesystem
+        # path (anonymous socketpair()s -- confirmed against real
+        # evidence: systemd's internal IPC, browser-process channels).
+        # Their only identity is the paired inode numbers in
+        # Source/Destination Port. Checking address alone silently
+        # dropped 76% of all real rows; only drop when there is
+        # nothing at all to identify the socket by.
+        if not local_address and not remote_address and local_port is None and remote_port is None:
+            dropped += 1
+            warnings.append("sockstat_row_missing_endpoints")
+            continue
+        if pid is None:
+            warnings.append("sockstat_row_missing_pid")
+        # FD is part of the identity because a single thread can hold
+        # more than one file descriptor open on the same underlying
+        # socket (e.g. dup()); omitting it would silently collapse two
+        # real, distinct Volatility rows into one document.
+        identity = _identity_pid_offset(pid, tid, fd, local_address, local_port, remote_address, remote_port, state, protocol, offset or "nooffset")
+        doc = {
+            "document_id": _document_id(prefix="memory_network_connection", case_id=case_id, run_id=scan_run_id, identity=identity),
+            "document_type": "memory_network_connection",
+            "case_id": case_id,
+            "evidence_id": evidence_id,
+            "scan_run_id": scan_run_id,
+            "plugin_run_id": plugin_run_id,
+            "platform": "linux",
+            "protocol": protocol or "unknown",
+            "local_address": local_address,
+            "local_port": local_port,
+            "remote_address": remote_address,
+            "remote_port": remote_port,
+            "state": state,
+            "pid": pid,
+            "tid": tid,
+            "fd": fd,
+            "process_entity_id": None,
+            "process_name": owner or _resolve_process_name(process_name_resolver, pid),
+            "create_time": None,
+            "offset": offset,
+            "source_plugin": source_plugin,
+            "confidence": "reported_by_plugin",
+            "provenance": _provenance(
+                case_id=case_id,
+                evidence_id=evidence_id,
+                scan_run_id=scan_run_id,
+                plugin_run_id=plugin_run_id,
+                source_plugin=source_plugin,
+            ),
+            "normalization_version": NORMALIZATION_VERSION,
+            "unresolved_process_reference": pid is None,
+        }
+        items.append(doc)
+        accepted += 1
+    return {
+        "items": items,
+        "warnings": warnings,
+        "raw_count": raw_count,
+        "accepted_count": accepted,
+        "dropped_count": dropped,
+        "conflicts": 0,
+        "normalization_version": NORMALIZATION_VERSION,
+    }
+
+
 def _resolve_process_name(resolver: Any, pid: int) -> str | None:
     if resolver is None or pid is None:
         return None
