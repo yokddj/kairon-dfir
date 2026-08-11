@@ -48,6 +48,10 @@ FAMILY_TO_DOCUMENT_TYPE: dict[str, str] = {
     "suspicious_regions": "memory_suspicious_region",
     "network": "memory_network_connection",
     "raw_observations": "memory_process_observation",
+    # Not in FAMILY_ORDER: linux.bash is not exposed in the catalogue
+    # yet (Linux Shell History Phase 1 is backend-only).  Present here
+    # so counts/active-result/search can resolve the family generically.
+    "shell_history": "memory_shell_history",
 }
 
 
@@ -75,6 +79,7 @@ FAMILY_TITLE: dict[str, str] = {
     "suspicious_regions": "Suspicious memory regions",
     "network": "Network connections",
     "raw_observations": "Raw observations",
+    "shell_history": "Shell history",
 }
 
 

@@ -23,6 +23,7 @@ from app.services.memory.artifact_indexing import (
 from app.services.memory.artifact_normalizers import (
     NORMALIZATION_VERSION,
     merge_module_documents,
+    normalize_linux_bash,
     normalize_windows_dlllist,
     normalize_windows_driverscan,
     normalize_windows_envars,
@@ -86,6 +87,7 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "windows.envars": "memory_environment_variable",
     "windows.getsids": "memory_sid",
     "windows.privileges": "memory_privilege",
+    "linux.bash": "memory_shell_history",
 }
 ARTIFACT_PLUGIN_LIMITS = {
     # Per-plugin guard-rails to keep offline execution bounded.
@@ -102,6 +104,10 @@ ARTIFACT_PLUGIN_LIMITS = {
     "windows.driverscan": {"timeout_seconds": 300, "max_output_bytes": 16 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
     "windows.malfind": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 50000, "max_preview_bytes": 256},
     "windows.vadinfo": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 50000, "max_preview_bytes": 256},
+    # linux.bash scans every bash/sh/dash process's heap for resident
+    # history entries; bounded the same as the other full-heap/VAD scan
+    # plugins (malfind/vadinfo) rather than left on the global default.
+    "linux.bash": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
 }
 
 # Each existing profile name already encodes one capability's intent.
@@ -744,6 +750,8 @@ def _normalize_artifact_payload(
         return normalize_windows_getsids(payload, source_plugin=plugin, **common)
     if plugin == "windows.privileges":
         return normalize_windows_privileges(payload, source_plugin=plugin, **common)
+    if plugin == "linux.bash":
+        return normalize_linux_bash(payload, source_plugin=plugin, **common)
     return {
         "items": [],
         "warnings": [f"unsupported_artifact_plugin:{plugin}"],

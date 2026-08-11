@@ -871,3 +871,157 @@ def test_systemroot_and_windows_paths_collapse() -> None:
     from app.services.memory.artifact_normalizers import _normalize_path
     assert _normalize_path("\\SystemRoot\\System32\\smss.exe") == _normalize_path("\\Windows\\System32\\smss.exe")
     assert _normalize_path("SystemRoot\\System32\\foo.dll") == _normalize_path("windows/System32/foo.dll")
+
+
+# ---------------------------------------------------------------------------
+# 27. linux.bash -> memory_shell_history
+#
+# Rows modeled on the real Volatility 3 linux.bash TreeGrid
+# (PID: int, Process: str, CommandTime: datetime|null, Command: str),
+# as rendered by the JSON CLIRenderer: CommandTime is either
+# ``x.isoformat()`` or JSON ``null`` -- never a sentinel string.
+# ---------------------------------------------------------------------------
+
+
+def _bash_payload() -> list[dict[str, Any]]:
+    return [
+        {"PID": 1234, "Process": "bash", "CommandTime": "2024-03-22T10:53:00", "Command": "sudo apt update"},
+        {"PID": 1234, "Process": "bash", "CommandTime": None, "Command": "ls -la /tmp"},
+    ]
+
+
+def test_bash_normalizes_realistic_rows() -> None:
+    from app.services.memory.artifact_normalizers import normalize_linux_bash
+
+    result = normalize_linux_bash(
+        _bash_payload(),
+        case_id=CASE,
+        evidence_id=EVIDENCE,
+        scan_run_id=RUN,
+        plugin_run_id=f"{RUN}:linux.bash",
+    )
+    assert result["raw_count"] == 2
+    assert result["accepted_count"] == 2
+    assert result["dropped_count"] == 0
+    first, second = result["items"]
+    assert first["document_type"] == "memory_shell_history"
+    assert first["pid"] == 1234
+    assert first["process_name"] == "bash"
+    assert first["command"] == "sudo apt update"
+    assert first["command_time"] == "2024-03-22T10:53:00"
+    assert first["source_plugin"] == "linux.bash"
+    assert first["case_id"] == CASE
+    assert first["evidence_id"] == EVIDENCE
+    assert first["scan_run_id"] == RUN
+    assert first["plugin_run_id"] == f"{RUN}:linux.bash"
+    assert first["normalization_version"] == NORMALIZATION_VERSION
+    assert first["provenance"]["source_plugin"] == "linux.bash"
+    assert first["provenance"]["scan_run_id"] == RUN
+    # None must never invent a value: this row genuinely has no
+    # recovered CommandTime.
+    assert second["command_time"] is None
+    assert second["command"] == "ls -la /tmp"
+
+
+def test_bash_zero_rows_is_legitimate_empty_not_an_error() -> None:
+    from app.services.memory.artifact_normalizers import normalize_linux_bash
+
+    result = normalize_linux_bash([], case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.bash")
+    assert result["raw_count"] == 0
+    assert result["accepted_count"] == 0
+    assert result["dropped_count"] == 0
+    assert result["items"] == []
+    assert result["warnings"] == []
+
+
+def test_bash_empty_command_is_dropped_with_warning() -> None:
+    from app.services.memory.artifact_normalizers import normalize_linux_bash
+
+    payload = [
+        {"PID": 1234, "Process": "bash", "CommandTime": "2024-03-22T10:53:00", "Command": "sudo apt update"},
+        {"PID": 1234, "Process": "bash", "CommandTime": "2024-03-22T10:54:00", "Command": ""},
+    ]
+    result = normalize_linux_bash(payload, case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.bash")
+    assert result["raw_count"] == 2
+    assert result["accepted_count"] == 1
+    assert result["dropped_count"] == 1
+    assert "bash_row_missing_command" in result["warnings"]
+
+
+def test_bash_missing_pid_is_kept_and_flagged_unresolved() -> None:
+    from app.services.memory.artifact_normalizers import normalize_linux_bash
+
+    payload = [{"PID": None, "Process": "sh", "CommandTime": None, "Command": "whoami"}]
+    result = normalize_linux_bash(payload, case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.bash")
+    assert result["accepted_count"] == 1
+    item = result["items"][0]
+    assert item["pid"] is None
+    assert item["unresolved_process_reference"] is True
+    assert "bash_row_missing_pid" in result["warnings"]
+
+
+def test_bash_preserves_unicode_command() -> None:
+    from app.services.memory.artifact_normalizers import normalize_linux_bash
+
+    payload = [{"PID": 1, "Process": "bash", "CommandTime": None, "Command": "echo 'héllo wörld 日本語'"}]
+    result = normalize_linux_bash(payload, case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.bash")
+    assert result["items"][0]["command"] == "echo 'héllo wörld 日本語'"
+
+
+def test_bash_long_command_bounded_by_existing_central_limit() -> None:
+    from app.services.memory.artifact_normalizers import MAX_OBJECT_NAME_LENGTH, normalize_linux_bash
+
+    long_command = "echo " + ("A" * 5000)
+    payload = [{"PID": 1, "Process": "bash", "CommandTime": None, "Command": long_command}]
+    result = normalize_linux_bash(payload, case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.bash")
+    assert len(result["items"][0]["command"]) == MAX_OBJECT_NAME_LENGTH
+
+
+def test_bash_idempotent_document_ids() -> None:
+    from app.services.memory.artifact_normalizers import normalize_linux_bash
+
+    first = normalize_linux_bash(_bash_payload(), case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.bash")
+    second = normalize_linux_bash(_bash_payload(), case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.bash")
+    assert [item["document_id"] for item in first["items"]] == [item["document_id"] for item in second["items"]]
+
+
+def test_bash_run_isolation_in_document_ids() -> None:
+    from app.services.memory.artifact_normalizers import normalize_linux_bash
+
+    a = normalize_linux_bash(_bash_payload(), case_id=CASE, evidence_id=EVIDENCE, scan_run_id="run-A", plugin_run_id="run-A:linux.bash")
+    b = normalize_linux_bash(_bash_payload(), case_id=CASE, evidence_id=EVIDENCE, scan_run_id="run-B", plugin_run_id="run-B:linux.bash")
+    a_ids = {item["document_id"] for item in a["items"]}
+    b_ids = {item["document_id"] for item in b["items"]}
+    assert a_ids.isdisjoint(b_ids)
+
+
+def test_bash_registered_in_normalizer_and_limits() -> None:
+    assert ARTIFACT_PLUGIN_NORMALIZER["linux.bash"] == "memory_shell_history"
+    assert ARTIFACT_PLUGIN_LIMITS["linux.bash"]["timeout_seconds"] >= 60
+    assert ARTIFACT_PLUGIN_LIMITS["linux.bash"]["max_output_bytes"] >= 1024 * 1024
+
+
+def test_bash_does_not_reuse_process_observation_or_powershell_schema() -> None:
+    """The user's Phase 1 spec explicitly forbids reusing the
+    process-observation schema (envars/getsids/privileges style, which
+    is missing case/run scoping) or mapping shell history as
+    PowerShell.  Assert the canonical document is self-scoped.
+    """
+    from app.services.memory.artifact_normalizers import normalize_linux_bash
+
+    result = normalize_linux_bash(_bash_payload(), case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.bash")
+    item = result["items"][0]
+    assert item["document_type"] == "memory_shell_history"
+    assert "variable" not in item
+    assert "value" not in item
+    assert "powershell" not in item["document_type"].lower()
+    for field in ("case_id", "evidence_id", "scan_run_id", "plugin_run_id"):
+        assert item[field]
+
+
+def test_bash_mapping_includes_command_and_command_time() -> None:
+    mapping = ARTIFACT_MAPPING["mappings"]["properties"]
+    assert mapping["command"]["type"] == "text"
+    assert mapping["command"]["fields"]["keyword"]["type"] == "keyword"
+    assert mapping["command_time"]["type"] == "date"
+    assert mapping["command_time"]["ignore_malformed"] is True

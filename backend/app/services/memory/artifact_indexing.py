@@ -117,6 +117,10 @@ ARTIFACT_MAPPING = {
             "hexdump_preview_bounded": {"type": "text", "index": False},
             "disassembly_preview_bounded": {"type": "text", "index": False},
             "review_status": {"type": "keyword"},
+            # Shell history
+            "platform": {"type": "keyword"},
+            "command": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 1024}}},
+            "command_time": {"type": "date", "ignore_malformed": True},
         },
     }
 }

@@ -42,6 +42,7 @@ MEMORY_TIMESTAMP_MATRIX: dict[str, dict[str, Any]] = {
     "memory_driver": {"source_plugin": "windows.driverscan", "fields": {}, "timezone": "unknown", "precision": "unknown", "nullable": True, "occurrence": False, "historical": "undated unless source adds a real timestamp"},
     "memory_kernel_module": {"source_plugin": "windows.modules", "fields": {}, "timezone": "unknown", "precision": "unknown", "nullable": True, "occurrence": False, "historical": "undated unless source adds a real timestamp"},
     "memory_system_info": {"source_plugin": "windows.info", "fields": {"memory.system_time": "system_clock_observation"}, "timezone": "UTC/source", "precision": "second", "nullable": True, "occurrence": False, "historical": "operational context; not process occurrence timeline"},
+    "memory_shell_history": {"source_plugin": "linux.bash", "fields": {"command_time": "command_executed"}, "timezone": "source/UTC-normalized when parseable", "precision": "second", "nullable": True, "occurrence": True, "historical": "linux.bash recovers resident bash history entries from process heap memory; CommandTime reflects the shell's own recorded time and is absent for entries without a resident timestamp -- never fabricated"},
 }
 
 DISK_TIMESTAMP_MATRIX: dict[str, dict[str, Any]] = {
@@ -232,6 +233,9 @@ def _memory_events(case_id: str, evidence_id: str, run_id: str | None, docs: lis
             event = _base_memory_event(case_id, evidence_id, run_id, doc, artifact_family="network", event_kind="network_connection", timestamp=doc.get("create_time"), timestamp_source="create_time", timestamp_semantics="network connection creation time reported by plugin")
         elif doc_type == "memory_suspicious_region":
             event = _base_memory_event(case_id, evidence_id, run_id, doc, artifact_family="suspicious", event_kind="suspicious_memory", timestamp=doc.get("create_time"), timestamp_source="create_time", timestamp_semantics="suspicious memory observation timestamp when reported by source")
+        elif doc_type == "memory_shell_history":
+            command_time = doc.get("command_time")
+            event = _base_memory_event(case_id, evidence_id, run_id, doc, artifact_family="shell_history", event_kind="shell_command" if command_time else "undated_shell_command", timestamp=command_time, timestamp_source="command_time" if command_time else None, timestamp_semantics="shell history command execution time recovered from process memory" if command_time else "shell history command recovered without a resident timestamp")
         else:
             event = _base_memory_event(case_id, evidence_id, run_id, doc, artifact_family=_memory_family(doc_type), event_kind=_undated_kind(doc_type), timestamp=None, timestamp_source=None, timestamp_semantics="memory artifact has no reliable occurrence timestamp")
         (undated if event["is_undated"] else events).append(event)
@@ -527,11 +531,11 @@ def _coverage(memory_docs: list[dict[str, Any]], disk_docs: list[dict[str, Any]]
 
 
 def _memory_family(doc_type: str | None) -> str:
-    return {"memory_process_entity": "processes", "memory_process_observation": "raw_observations", "memory_network_connection": "network", "memory_process_module": "modules", "memory_handle": "handles", "memory_suspicious_region": "suspicious", "memory_vad": "vads", "memory_driver": "drivers", "memory_kernel_module": "kernel", "memory_system_info": "system"}.get(doc_type or "", "memory")
+    return {"memory_process_entity": "processes", "memory_process_observation": "raw_observations", "memory_network_connection": "network", "memory_process_module": "modules", "memory_handle": "handles", "memory_suspicious_region": "suspicious", "memory_vad": "vads", "memory_driver": "drivers", "memory_kernel_module": "kernel", "memory_system_info": "system", "memory_shell_history": "shell_history"}.get(doc_type or "", "memory")
 
 
 def _undated_kind(doc_type: str | None) -> str:
-    return {"memory_process_module": "module_load", "memory_handle": "undated_observation", "memory_vad": "vad_observation", "memory_driver": "driver_observation", "memory_kernel_module": "kernel_module_observation"}.get(doc_type or "", "undated_observation")
+    return {"memory_process_module": "module_load", "memory_handle": "undated_observation", "memory_vad": "vad_observation", "memory_driver": "driver_observation", "memory_kernel_module": "kernel_module_observation", "memory_shell_history": "undated_shell_command"}.get(doc_type or "", "undated_observation")
 
 
 def _disk_family_kind(doc: dict[str, Any]) -> tuple[str, str, str]:
@@ -606,11 +610,13 @@ def _memory_title(kind: str, doc: dict[str, Any], process: dict[str, Any], obser
         return f"{doc.get('protocol') or 'network'} connection"
     if kind == "command_line":
         return f"Command line observed: {name}"
+    if kind in ("shell_command", "undated_shell_command"):
+        return str(doc.get("command") or f"Shell command: {name}")[:160]
     return str(doc.get("document_type") or "Memory artifact")
 
 
 def _memory_summary(doc: dict[str, Any], process: dict[str, Any], observed: dict[str, Any]) -> str:
-    parts = [process.get("command_line"), observed.get("command_line"), doc.get("path"), doc.get("object_name"), doc.get("description"), doc.get("connection_state") or doc.get("state")]
+    parts = [process.get("command_line"), observed.get("command_line"), doc.get("command"), doc.get("path"), doc.get("object_name"), doc.get("description"), doc.get("connection_state") or doc.get("state")]
     return _clip(" | ".join(str(p) for p in parts if p)) or ""
 
 
@@ -635,7 +641,7 @@ def _clip(value: Any, limit: int = 512) -> str | None:
 
 
 def _nav_tab(family: str) -> str:
-    return {"processes": "processes", "raw_observations": "raw", "network": "artifacts", "modules": "artifacts", "handles": "artifacts", "suspicious": "artifacts", "vads": "artifacts", "drivers": "artifacts", "kernel": "artifacts", "system": "system"}.get(family, "artifacts")
+    return {"processes": "processes", "raw_observations": "raw", "network": "artifacts", "modules": "artifacts", "handles": "artifacts", "suspicious": "artifacts", "vads": "artifacts", "drivers": "artifacts", "kernel": "artifacts", "system": "system", "shell_history": "artifacts"}.get(family, "artifacts")
 
 
 def _norm_name(value: Any) -> str | None:

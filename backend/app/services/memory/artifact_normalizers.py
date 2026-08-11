@@ -1078,3 +1078,92 @@ def normalize_windows_privileges(
         "conflicts": 0,
         "normalization_version": NORMALIZATION_VERSION,
     }
+
+
+# ---------------------------------------------------------------------------
+# shell_history -> memory_shell_history
+#   linux.bash recovers resident bash history entries scanned out of a
+#   process's heap.  PID/Process/CommandTime/Command are the only fields
+#   the plugin reports; CommandTime is either a real timestamp or absent
+#   (Volatility never emits a sentinel string for it), so it is stored
+#   raw and never fabricated.  The schema intentionally has no user,
+#   cwd, tty, session, or parent-pid fields: linux.bash does not report
+#   them, and none of the other Linux plugins provide a validated way to
+#   derive them.  Kept platform-agnostic (a future windows.cmdscan /
+#   windows.consoles producer would emit the same document_type with
+#   command_time left null).
+# ---------------------------------------------------------------------------
+
+
+def normalize_linux_bash(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "linux.bash",
+    process_name_resolver: Any | None = None,
+    max_records: int = 200000,
+) -> dict[str, Any]:
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    raw_count = len(rows)
+    dropped = 0
+    accepted = 0
+    for index, row in enumerate(rows):
+        if accepted >= max_records:
+            warnings.append("bash_max_records_reached")
+            dropped += len(rows) - index
+            break
+        pid = _int_or_none(_lookup(row, "PID", "Pid", "pid"))
+        process_name = _str_or_none(_lookup(row, "Process", "process_name"), MAX_NAME_LENGTH) or _resolve_process_name(process_name_resolver, pid)
+        command = _str_or_none(_lookup(row, "Command", "command"), MAX_OBJECT_NAME_LENGTH)
+        if command:
+            command = _scrub_paths(command)
+        command_time = _str_or_none(_lookup(row, "CommandTime", "Command Time", "command_time"), 64)
+        if not command:
+            dropped += 1
+            warnings.append("bash_row_missing_command")
+            continue
+        if pid is None:
+            warnings.append("bash_row_missing_pid")
+        identity = _identity_pid_offset(pid, process_name, command, command_time, index)
+        doc = {
+            "document_id": _document_id(prefix="memory_shell_history", case_id=case_id, run_id=scan_run_id, identity=identity),
+            "document_type": "memory_shell_history",
+            "case_id": case_id,
+            "evidence_id": evidence_id,
+            "scan_run_id": scan_run_id,
+            "plugin_run_id": plugin_run_id,
+            "platform": "linux",
+            "pid": pid,
+            "process_entity_id": None,
+            "process_name": process_name,
+            "command": command,
+            "command_time": command_time,
+            "source_plugin": source_plugin,
+            "source_record_index": index,
+            "confidence": "reported_by_plugin",
+            "provenance": _provenance(
+                case_id=case_id,
+                evidence_id=evidence_id,
+                scan_run_id=scan_run_id,
+                plugin_run_id=plugin_run_id,
+                source_plugin=source_plugin,
+            ),
+            "normalization_version": NORMALIZATION_VERSION,
+            "unresolved_process_reference": pid is None,
+        }
+        items.append(doc)
+        accepted += 1
+    return {
+        "items": items,
+        "warnings": warnings,
+        "raw_count": raw_count,
+        "accepted_count": accepted,
+        "dropped_count": dropped,
+        "conflicts": 0,
+        "normalization_version": NORMALIZATION_VERSION,
+    }

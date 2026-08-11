@@ -125,6 +125,19 @@ FAMILY_RESOLUTION = {
         "fallback_doc_types": ["memory_process", "memory_system_info"],
         "evidence_id_required": True,
     },
+    # No profile selects "shell_history_basic" yet -- linux.bash is not
+    # wired into any catalogue profile in this phase (Linux Shell
+    # History Phase 1: normalizer + family only).  The name is a
+    # forward reference so the family is genuinely resolvable/testable
+    # end-to-end; PROFILE_CAPABILITY, PROFILE_CATALOGUE and
+    # allowed_memory_profiles remain untouched, so nothing can actually
+    # produce a run with this profile outside of a direct DB/test
+    # construction or the controlled dev-validation path.
+    "shell_history": {
+        "preferred_profiles": ["shell_history_basic"],
+        "fallback_doc_types": ["memory_shell_history"],
+        "evidence_id_required": True,
+    },
 }
 
 
