@@ -26,6 +26,7 @@ import type { CaseContextHostSummary, MemoryEvidenceLanding, MemoryEvidenceLandi
 
 const ARTIFACT_FAMILY_FROM_TAB: Record<string, string> = {
   processes: "processes",
+  shell_history: "shell_history",
   system: "system_info",
   network: "network",
   modules: "modules",

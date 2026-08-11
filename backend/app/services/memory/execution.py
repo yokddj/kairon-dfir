@@ -125,6 +125,16 @@ PROFILE_CAPABILITY = {
     "handles_basic": MemoryCapability.HANDLES,
     "kernel_basic": MemoryCapability.KERNEL_MODULES,
     "suspicious_memory": MemoryCapability.SUSPICIOUS_REGIONS,
+    # Deliberately no PROFILE_PLUGINS["shell_history_basic"] entry: unlike
+    # the profiles above (Windows-shaped flat plugin lists), this one
+    # resolves exclusively through capability_registry -- see
+    # resolve_profile_plugins, which falls back to the capability-registry
+    # path for any profile absent from PROFILE_PLUGINS. On Linux this
+    # resolves to linux.bash; on Windows it resolves to nothing (no
+    # CapabilityPluginSpec registered for MemoryCapability.SHELL_HISTORY on
+    # PlatformFamily.WINDOWS), which is the correct, honest "unavailable"
+    # outcome rather than a fabricated windows.cmdscan/consoles binding.
+    "shell_history_basic": MemoryCapability.SHELL_HISTORY,
 }
 
 TIMEOUT_POLICY_VERSION = "memory_timeout_hierarchy_v1"
@@ -266,13 +276,19 @@ def resolve_profile_plugins(profile: str, *, plan: MemoryAnalysisPlan | None = N
     """
     settings = backend_readiness.get_settings()
     profile = str(profile or settings.default_memory_profile).strip()
-    if profile not in settings.allowed_memory_profiles or profile not in PROFILE_PLUGINS:
+    # A profile is "known" when it has either a legacy flat plugin list
+    # (PROFILE_PLUGINS) or a capability-registry binding (PROFILE_CAPABILITY,
+    # e.g. shell_history_basic) -- the two are not required to overlap.
+    if profile not in settings.allowed_memory_profiles or (profile not in PROFILE_PLUGINS and profile not in PROFILE_CAPABILITY):
         raise MemoryExecutionValidationError("UNKNOWN_PROFILE", "Unknown memory analysis profile.")
     if profile != "metadata_only" and not settings.memory_process_profile_enabled:
         raise MemoryExecutionValidationError("PROCESS_PROFILE_DISABLED", "Memory process profiles are disabled by server configuration.")
 
     if plan is None:
-        return PROFILE_PLUGINS[profile]
+        # A capability-registry-only profile (no PROFILE_PLUGINS entry) has
+        # no platform-blind answer -- see the docstring above: plan=None is
+        # a backward-compatible fallback never relied on for real routing.
+        return list(PROFILE_PLUGINS.get(profile, []))
 
     capability = PROFILE_CAPABILITY.get(profile)
     if capability is None or capability not in plan.eligible_capabilities:

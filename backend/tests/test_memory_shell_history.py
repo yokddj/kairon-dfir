@@ -376,9 +376,13 @@ def test_shell_history_failed_latest_attempt_keeps_last_success(db: Session) -> 
 # ---------------------------------------------------------------------------
 
 
-def test_shell_history_counts_mapping_present_but_not_in_family_order() -> None:
+def test_shell_history_counts_mapping_present_and_in_family_order() -> None:
+    # Phase 1 kept shell_history out of FAMILY_ORDER deliberately (backend
+    # only, not yet exposed). Phase 2 (profile + catalogue + frontend view)
+    # activates it -- see counts.FAMILY_ORDER's own comment for the chosen
+    # position (right after "processes").
     assert FAMILY_TO_DOCUMENT_TYPE["shell_history"] == "memory_shell_history"
-    assert "shell_history" not in FAMILY_ORDER
+    assert "shell_history" in FAMILY_ORDER
 
 
 # ---------------------------------------------------------------------------
@@ -509,7 +513,12 @@ def test_no_profile_references_linux_bash() -> None:
         assert "linux.bash" not in plugins, f"{profile} unexpectedly selects linux.bash"
 
 
-def test_profile_capability_is_untouched_by_shell_history() -> None:
+def test_profile_capability_now_includes_shell_history_basic() -> None:
+    """Phase 1 kept SHELL_HISTORY out of PROFILE_CAPABILITY deliberately
+    (no real profile existed yet). Phase 2 adds shell_history_basic ->
+    MemoryCapability.SHELL_HISTORY -- see test_memory_shell_history_phase2.py
+    for the full profile/catalogue/platform-availability coverage.
+    """
     from app.services.memory.capability_registry import MemoryCapability
 
     assert set(PROFILE_CAPABILITY.values()) == {
@@ -521,14 +530,17 @@ def test_profile_capability_is_untouched_by_shell_history() -> None:
         MemoryCapability.HANDLES,
         MemoryCapability.KERNEL_MODULES,
         MemoryCapability.SUSPICIOUS_REGIONS,
+        MemoryCapability.SHELL_HISTORY,
     }
-    assert MemoryCapability.SHELL_HISTORY not in PROFILE_CAPABILITY.values()
+    assert PROFILE_CAPABILITY["shell_history_basic"] == MemoryCapability.SHELL_HISTORY
 
 
-def test_linux_bash_still_not_selectable_via_resolve_profile_plugins() -> None:
-    """No catalogue profile maps to linux.bash, so resolving any known
-    profile for Linux evidence must never surface it -- Phase 1 is
-    backend-only; UI/catalogue selectability is explicit Phase 2 scope.
+def test_resolve_profile_plugins_plan_none_never_selects_real_plugins_for_any_profile() -> None:
+    """plan=None is documented as a backward-compatible fallback never
+    relied on for real routing (see resolve_profile_plugins's docstring):
+    it returns the flat PROFILE_PLUGINS entry when one exists, or an
+    empty list otherwise -- never linux.bash, regardless of profile,
+    since platform routing requires a real MemoryAnalysisPlan.
     """
     from app.services.memory.execution import resolve_profile_plugins
 
@@ -540,12 +552,12 @@ def test_linux_bash_still_not_selectable_via_resolve_profile_plugins() -> None:
         assert "linux.bash" not in plugins
 
 
-def test_shell_history_does_not_leak_into_the_case_landing_page(db: Session) -> None:
-    """FAMILY_RESOLUTION registers shell_history so active-result/search
-    can resolve it generically, but the evidence landing page (the
-    backend for the case Overview) must keep rendering only the
-    catalogued families -- shell_history must not appear as a card
-    until Phase 2 explicitly exposes it.
+def test_shell_history_now_appears_in_the_case_landing_page(db: Session) -> None:
+    """Phase 1 deliberately excluded shell_history from the landing page
+    (FAMILY_ORDER-gated, backend only). Phase 2 activates it in
+    FAMILY_ORDER (counts.py) specifically so it appears here, alongside
+    every other catalogued family -- see
+    test_memory_shell_history_phase2.py for the full assertion.
     """
     from app.services.memory.overview import get_evidence_landing
 
@@ -555,5 +567,5 @@ def test_shell_history_does_not_leak_into_the_case_landing_page(db: Session) -> 
     matching = [item for item in landing if item["evidence_id"] == ev.id]
     assert matching, "expected the seeded evidence to appear in the landing page"
     families_shown = {family["family"] for family in matching[0]["families"]}
-    assert "shell_history" not in families_shown
+    assert "shell_history" in families_shown
     assert families_shown == set(FAMILY_ORDER)

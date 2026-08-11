@@ -1,6 +1,6 @@
 """Analysis catalogue for memory images.
 
-Returns the list of all 8 analysis profiles the analyst can run on
+Returns the list of all analysis profiles the analyst can run on
 an evidence, with availability, est. duration, last status, count,
 cost label, and per-plugin capability details. Profiles with partial
 plugin availability stay runnable; unavailable plugins are skipped at
@@ -8,6 +8,27 @@ execution time with explicit reasons.
 
 This is the single source of truth used by the "Run analysis"
 catalogue modal in the UI.
+
+Two families of profiles feed this catalogue, with two different
+availability mechanisms:
+
+* The original 8 profiles resolve their plugin list from
+  ``execution.PROFILE_PLUGINS`` (a flat, Windows-plugin-named list per
+  profile) via ``plan_profile_capability`` -- this path has always been
+  platform-blind: it checks whether the named plugins are enabled/
+  importable, never whether the evidence's actual detected platform can
+  run them.
+* A capability-registry-only profile (no ``PROFILE_PLUGINS`` entry, e.g.
+  ``shell_history_basic``) has no fixed plugin list to check -- its real
+  plugin depends on the evidence's detected platform. For these,
+  ``_plan_capability_registry_profile`` below builds this evidence's
+  ``MemoryAnalysisPlan`` and resolves the plugin list through
+  ``execution.resolve_profile_plugins`` (the same capability_registry
+  path used at execution time), so a Linux evidence correctly sees
+  ``linux.bash`` as available while a Windows evidence correctly sees
+  no plugin at all (no CapabilityPluginSpec registered for
+  ``MemoryCapability.SHELL_HISTORY`` on Windows) and is gated
+  "unavailable" -- never a fabricated windows.cmdscan/consoles binding.
 """
 from __future__ import annotations
 
@@ -16,13 +37,16 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
+from app.models.evidence import Evidence
 from app.models.memory import MemoryScanRun
-from app.services.memory.execution import PROFILE_PLUGINS
-from app.services.memory.profile_planning import plan_profile_capability
+from app.services.memory.analysis_plan import build_memory_analysis_plan
+from app.services.memory.execution import PROFILE_CAPABILITY, PROFILE_PLUGINS, resolve_profile_plugins
+from app.services.memory.profile_planning import PLUGIN_AVAILABLE, PLUGIN_DISABLED, PLUGIN_UNKNOWN, _plugin_worker_state, plan_profile_capability
 from app.services.memory import profile_planning
+from app.services.memory.validation import MemoryExecutionValidationError
 
 
-# 8 profiles in stable order.  ``family`` maps to the active-result
+# Profiles in stable order.  ``family`` maps to the active-result
 # resolver family.  ``plugins`` mirrors the runtime plugin list.
 PROFILE_CATALOGUE: list[dict[str, Any]] = [
     {
@@ -113,6 +137,26 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "can_run_without_symbols": True,
         "supported_os_families": ["windows"],
     },
+    {
+        "profile": "shell_history_basic",
+        "family": "shell_history",
+        "title": "Shell History",
+        "description": "Recover interactive shell command history from memory when supported by the target platform.",
+        # linux.bash scans every bash/sh/dash process's heap for resident
+        # history entries -- it carries the same explicit 1800s timeout as
+        # the other full-heap/VAD scan profiles (ARTIFACT_PLUGIN_LIMITS in
+        # execution.py). "Slow" reflects that real bound, not a benchmark;
+        # never label this profile "Fast".
+        "cost_label": "Slow",
+        "est_duration_seconds": 1800,
+        "requires_windows_symbols": False,
+        "can_run_without_symbols": True,
+        # Only Linux has a real producer today (linux.bash). The
+        # capability itself is platform-agnostic -- see PROFILE_CAPABILITY
+        # in execution.py and MemoryCapability.SHELL_HISTORY -- but this
+        # list must state what's actually implemented, not the aspiration.
+        "supported_os_families": ["linux"],
+    },
 ]
 
 
@@ -159,13 +203,70 @@ def _probe_plugins_via_worker(plugins: list[str]) -> dict[str, bool] | None:
     return result if result else None
 
 
+def _plan_capability_registry_profile(
+    profile: str,
+    evidence: Any,
+    *,
+    worker_capability: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """``plan_profile_capability()``-shaped result for a profile that has
+    no ``PROFILE_PLUGINS`` entry (resolved via capability_registry only).
+
+    Builds this evidence's real ``MemoryAnalysisPlan`` (the same bounded,
+    read-only platform probe used at execution time) and resolves the
+    profile's plugin list through ``execution.resolve_profile_plugins``,
+    so the result reflects the evidence's ACTUAL detected platform instead
+    of a fixed Windows plugin list. When the evidence's platform has no
+    registered producer for the profile's capability (e.g. Windows for
+    shell_history_basic today), ``resolve_profile_plugins`` raises
+    ``PROFILE_CAPABILITY_UNAVAILABLE`` -- caught here and turned into an
+    empty, ``platform_ineligible`` plugin list rather than propagating,
+    so one profile's platform mismatch never breaks the whole catalogue
+    listing.
+    """
+    settings = get_settings()
+    plan = build_memory_analysis_plan(evidence)
+    try:
+        plugin_names = resolve_profile_plugins(profile, plan=plan)
+    except MemoryExecutionValidationError:
+        plugin_names = []
+
+    allowed = set(settings.allowed_memory_plugins)
+    plugins: list[dict[str, str]] = []
+    for plugin in plugin_names:
+        if plugin not in allowed:
+            plugins.append({"plugin": plugin, "state": PLUGIN_DISABLED, "reason": f"{plugin} is disabled by memory plugin configuration."})
+            continue
+        state, reason = _plugin_worker_state(plugin, worker_capability)
+        plugins.append({"plugin": plugin, "state": state, "reason": reason})
+    enabled_plugins = [item["plugin"] for item in plugins if item["state"] != PLUGIN_DISABLED]
+    available_plugins = [item for item in plugins if item["state"] == PLUGIN_AVAILABLE]
+    unknown_plugins = [item for item in plugins if item["state"] == PLUGIN_UNKNOWN]
+    return {
+        "profile": profile,
+        "plugins": plugins,
+        "plugin_names": plugin_names,
+        "enabled_plugins": enabled_plugins,
+        "disabled_plugins": [item for item in plugins if item["state"] == PLUGIN_DISABLED],
+        "available_plugins": available_plugins,
+        "runnable_plugins": [item for item in plugins if item["state"] in {PLUGIN_AVAILABLE, PLUGIN_UNKNOWN}],
+        "has_enabled_plugins": bool(enabled_plugins),
+        "available_plugin_count": len(available_plugins) + len(unknown_plugins),
+        # Distinct from "no plugins for this profile at all" (which never
+        # happens for a real profile) -- this specifically means the
+        # evidence's detected platform has no registered producer.
+        "platform_ineligible": not plugin_names,
+        "detected_platform": plan.detected_platform.value,
+    }
+
+
 def build_analysis_catalogue(
     db: Session,
     *,
     case_id: str,
     evidence_id: str,
 ) -> list[dict[str, Any]]:
-    """Return the 8-profile catalogue with availability, last status
+    """Return the analysis-profile catalogue with availability, last status
     and per-profile count for an evidence.
 
     The function reads ``MemoryScanRun`` for this evidence + profile
@@ -190,7 +291,11 @@ def build_analysis_catalogue(
         )
         runs_by_profile[profile_def["profile"]] = run
 
-    all_plugins = sorted({plugin for plugins in PROFILE_PLUGINS.values() for plugin in plugins})
+    # linux.bash has no PROFILE_PLUGINS entry (shell_history_basic resolves
+    # through capability_registry only -- see module docstring), but its
+    # real state still belongs in the worker probe, or it would always
+    # report PLUGIN_UNKNOWN even when the worker heartbeat already knows.
+    all_plugins = sorted({plugin for plugins in PROFILE_PLUGINS.values() for plugin in plugins} | {"linux.bash"})
     worker_probe = _probe_plugins_via_worker(all_plugins)
     worker_capability = None
     if worker_probe is not None:
@@ -204,6 +309,7 @@ def build_analysis_catalogue(
     from app.services.memory.symbol_state import GATE_TYPE_AVAILABLE, GATE_TYPE_UNAVAILABLE
 
     items: list[dict[str, Any]] = []
+    evidence: Evidence | None = None
     for profile_def in PROFILE_CATALOGUE:
         profile = profile_def["profile"]
         family = profile_def["family"]
@@ -228,12 +334,26 @@ def build_analysis_catalogue(
         gate_type = GATE_TYPE_AVAILABLE
         available = True
         availability_reason: str | None = None
-        plugin_names = list(PROFILE_PLUGINS.get(profile, []))
-        plan = plan_profile_capability(profile, worker_capability=worker_capability)
+        legacy_plugin_names = list(PROFILE_PLUGINS.get(profile, []))
+        if not legacy_plugin_names and profile in PROFILE_CAPABILITY:
+            # No PROFILE_PLUGINS entry -- resolve through the real,
+            # platform-aware capability_registry path instead of the
+            # platform-blind Windows plugin-name check every other
+            # profile uses (see module docstring).
+            if evidence is None:
+                evidence = db.get(Evidence, evidence_id)
+            plan = _plan_capability_registry_profile(profile, evidence, worker_capability=worker_capability) if evidence is not None else {"plugin_names": [], "platform_ineligible": True, "detected_platform": "unknown", "available_plugin_count": 0}
+        else:
+            plan = plan_profile_capability(profile, worker_capability=worker_capability)
+        plugin_names = list(plan["plugin_names"])
         plugin_capabilities = _profile_plugin_capabilities(plugin_names, plan)
         available_plugin_count = int(plan["available_plugin_count"])
         unavailable_plugins = [item for item in plugin_capabilities if item["state"] in {"disabled", "unavailable"}]
-        if plugin_names and available_plugin_count == 0:
+        if plan.get("platform_ineligible"):
+            gate_type = GATE_TYPE_UNAVAILABLE
+            available = False
+            availability_reason = f"{profile_def['title']} has no plugin producer for this evidence's detected platform ('{plan.get('detected_platform', 'unknown')}') in this runtime."
+        elif plugin_names and available_plugin_count == 0:
             gate_type = GATE_TYPE_UNAVAILABLE
             available = False
             availability_reason = "; ".join(item["reason"] for item in unavailable_plugins[:3]) or "No profile plugins are available."

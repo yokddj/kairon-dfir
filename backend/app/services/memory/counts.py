@@ -48,17 +48,18 @@ FAMILY_TO_DOCUMENT_TYPE: dict[str, str] = {
     "suspicious_regions": "memory_suspicious_region",
     "network": "memory_network_connection",
     "raw_observations": "memory_process_observation",
-    # Not in FAMILY_ORDER: linux.bash is not exposed in the catalogue
-    # yet (Linux Shell History Phase 1 is backend-only).  Present here
-    # so counts/active-result/search can resolve the family generically.
     "shell_history": "memory_shell_history",
 }
 
 
-# Ordered list used by the Overview and the catalogue.
+# Ordered list used by the Overview and the catalogue.  shell_history sits
+# right after processes: it is user/process-activity evidence (what an
+# interactive session ran), the same taxonomy neighborhood as Processes,
+# not a network/module/kernel artifact.
 FAMILY_ORDER: tuple[str, ...] = (
     "system_info",
     "processes",
+    "shell_history",
     "modules",
     "handles",
     "kernel_modules",

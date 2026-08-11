@@ -658,6 +658,7 @@ class MemoryArtifactOverviewRead(BaseModel):
     drivers: dict = {}
     handles: dict = {}
     suspicious_regions: dict = {}
+    shell_history: dict = {}
     normalization_version: str = "memory_artifact_canonical_v1"
 
 

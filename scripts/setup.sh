@@ -260,7 +260,7 @@ MEMORY_UPLOAD_MIN_FREE_SPACE_BYTES=5368709120
 MEMORY_WORKER_MODE=dedicated_worker
 MEMORY_EVIDENCE_SHARED_GID=${memory_shared_gid}
 MEMORY_PROCESS_PROFILE_ENABLED=${ENABLE_MEMORY}
-MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory
+MEMORY_ALLOWED_PROFILES=metadata_only,processes_basic,processes_extended,network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,shell_history_basic
 MEMORY_ALLOWED_PLUGINS=windows.info,windows.pslist,windows.pstree,windows.psscan,windows.cmdline,windows.envars,windows.getsids,windows.privileges,windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,linux.pslist,linux.pstree,linux.sockstat,linux.bash
 
 # ---- Advanced overrides (see config/defaults.env for all defaults) ----

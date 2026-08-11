@@ -874,7 +874,7 @@ def get_memory_evidence_catalogue(
     evidence_id: str,
     db: Session = Depends(get_db),
 ) -> dict:
-    """Return the 8-profile analysis catalogue for an evidence.
+    """Return the analysis-profile catalogue for an evidence.
 
     The catalogue is the single source of truth for the "Run
     analysis" modal in the UI.  The network profile is always
@@ -3411,6 +3411,7 @@ def _artifact_overview(
             "drivers": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
             "handles": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
             "suspicious_regions": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
+            "shell_history": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
             "facets": {},
             "normalization_version": "memory_artifact_canonical_v1",
         }
@@ -3492,6 +3493,11 @@ def _artifact_overview(
             "count": counts["suspicious_regions"],
             "active_run": family_states.get("suspicious_regions", {}).get("active_run"),
             "analysis_state": family_states.get("suspicious_regions", {}).get("analysis_state", "not_analyzed"),
+        },
+        "shell_history": {
+            "count": counts["shell_history"],
+            "active_run": family_states.get("shell_history", {}).get("active_run"),
+            "analysis_state": family_states.get("shell_history", {}).get("analysis_state", "not_analyzed"),
         },
         "facets": facets,
         "normalization_version": "memory_artifact_canonical_v1",

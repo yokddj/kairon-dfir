@@ -123,7 +123,8 @@ class Settings(BaseSettings):
     )
     memory_allowed_profiles: str = (
         "metadata_only,processes_basic,processes_extended,"
-        "network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory"
+        "network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,"
+        "shell_history_basic"
     )
     memory_default_profile: str = "metadata_only"
     memory_process_profile_enabled: bool = False
@@ -542,6 +543,7 @@ class Settings(BaseSettings):
             "handles_basic",
             "kernel_basic",
             "suspicious_memory",
+            "shell_history_basic",
         }
         profiles = [item.strip() for item in str(self.memory_allowed_profiles or "").split(",") if item.strip()]
         return [profile for profile in profiles if profile in allowed] or ["metadata_only"]

@@ -382,10 +382,25 @@ def test_resolved_plugins_for_capability_reproduces_legacy_profile_plugins_exact
     reconstruct every existing profile's plugin list and order -- the
     registry replaces execution.PROFILE_PLUGINS as the source of truth,
     it must not silently change behavior for the platform that already
-    worked."""
+    worked.
+
+    shell_history_basic is deliberately excluded: it has no
+    PROFILE_PLUGINS entry at all (Linux Memory Shell History Phase 2) --
+    it resolves exclusively through capability_registry, and Windows has
+    no CapabilityPluginSpec for MemoryCapability.SHELL_HISTORY, so the
+    correct Windows answer is an empty list, not a PROFILE_PLUGINS
+    lookup."""
     for profile, capability in PROFILE_CAPABILITY.items():
+        if profile not in PROFILE_PLUGINS:
+            continue
         resolved = resolved_plugins_for_capability(PlatformFamily.WINDOWS, capability)
         assert resolved == PROFILE_PLUGINS[profile], profile
+
+
+def test_shell_history_basic_has_no_windows_producer() -> None:
+    from app.services.memory.capability_registry import MemoryCapability
+
+    assert resolved_plugins_for_capability(PlatformFamily.WINDOWS, MemoryCapability.SHELL_HISTORY) == []
 
 
 # ---------------------------------------------------------------------------
