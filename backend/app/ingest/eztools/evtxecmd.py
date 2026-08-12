@@ -426,6 +426,7 @@ def _document_base(case_id: str, evidence_id: str, artifact_id: str, source_file
             "provider": None,
             "channel": None,
             "computer": None,
+            "computer_field": None,
             "record_number": None,
             "process_id": None,
             "thread_id": None,
@@ -1052,6 +1053,12 @@ def _normalize_evtx_row(case_id: str, evidence_id: str, artifact_id: str, raw_ro
             "provider": provider,
             "channel": channel,
             "computer": host_name,
+            # Unlike "computer" above (which follows host_classification's
+            # accept/reject logic upstream via document["host"]), this is
+            # the raw System/Computer element this specific EVTX record
+            # carries, with no fallback -- see app.ingest.windows.host_facts,
+            # the only reader of this field.
+            "computer_field": host_name,
             "record_number": _normalize_windows_value(_get(lowered, "EventRecordId", "RecordNumber", "RecordId")),
             "process_id": _normalize_windows_value(_get(lowered, "ProcessId", "ExecutionProcessID")),
             "thread_id": _normalize_windows_value(_get(lowered, "ThreadId", "ExecutionThreadID")),
@@ -1196,6 +1203,7 @@ def _normalize_evtx_row(case_id: str, evidence_id: str, artifact_id: str, raw_ro
                 "provider": provider,
                 "channel": channel,
                 "computer": host_name,
+                "computer_field": host_name,
                 "record_number": _normalize_windows_value(_get(lowered, "EventRecordId", "RecordNumber", "RecordId")),
                 "process_id": _normalize_windows_value(_get(lowered, "ProcessId", "ExecutionProcessID")),
                 "thread_id": _normalize_windows_value(_get(lowered, "ThreadId", "ExecutionThreadID")),
@@ -1247,6 +1255,7 @@ def _normalize_evtx_row(case_id: str, evidence_id: str, artifact_id: str, raw_ro
                 "provider": provider,
                 "channel": channel,
                 "computer": host_name,
+                "computer_field": host_name,
                 "record_number": _normalize_windows_value(_get(lowered, "EventRecordId", "RecordNumber", "RecordId")),
                 "process_id": _normalize_windows_value(_get(lowered, "ProcessId", "ExecutionProcessID")),
                 "thread_id": _normalize_windows_value(_get(lowered, "ThreadId", "ExecutionThreadID")),

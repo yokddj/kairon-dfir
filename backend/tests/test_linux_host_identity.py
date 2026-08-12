@@ -347,6 +347,44 @@ class TestHostFactsAggregation:
         conflicting_values = {obs["normalized_value"] for obs in resolved[0]["conflicting"]}
         assert conflicting_values == {"server01"}
 
+    def test_hostname_casing_variants_resolve_as_one_identity(self):
+        # Same case-insensitive contract as Windows (app.services.host_facts
+        # .normalize_host_fact_value) -- the resolver is shared, so this
+        # must hold for Linux hostnames too, not just EVTX-derived ones.
+        db = _db()
+        _case(db)
+        _evidence(db)
+        create_host_fact_observations(
+            db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None,
+            documents=_doc("VulnOSv2\n", "etc/hostname"),
+        )
+        create_host_fact_observations(
+            db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART2_ID, host_id=None, observed_at=None,
+            documents=_doc("Static hostname: vulnosv2\n", "hostnamectl.txt"),
+        )
+        resolved = resolve_host_facts(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, fact_type="host.hostname")
+        assert resolved[0]["status"] == "confirmed"
+        assert resolved[0]["conflicting"] == []
+        assert len(resolved[0]["supporting"]) == 2
+        observed_values = {row["normalized_value"] for row in resolved[0]["observations"]}
+        assert observed_values == {"VulnOSv2", "vulnosv2"}
+
+    def test_fqdn_casing_variants_resolve_as_one_identity(self):
+        db = _db()
+        _case(db)
+        _evidence(db)
+        create_host_fact_observations(
+            db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None,
+            documents=_doc("server01.example.com\n", "etc/hostname"),
+        )
+        create_host_fact_observations(
+            db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART2_ID, host_id=None, observed_at=None,
+            documents=_doc("Static hostname: SERVER01.EXAMPLE.COM\n", "hostnamectl.txt"),
+        )
+        resolved = resolve_host_facts(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, fact_type="host.fqdn")
+        assert resolved[0]["status"] == "confirmed"
+        assert resolved[0]["conflicting"] == []
+
     def test_provenance_preserved_for_debian_version_inference(self):
         db = _db()
         _case(db)

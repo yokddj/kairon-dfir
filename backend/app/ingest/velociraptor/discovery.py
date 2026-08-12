@@ -1579,6 +1579,31 @@ def _detect_priority_registry_raw_candidate(
         shimcache_candidate = _detect_raw_candidate(entry, entry_map, container_path=container_path, container_type=container_type)
         if shimcache_candidate:
             candidates.append(shimcache_candidate)
+        hive_facts_native = describe_raw_candidate(entry.path, "windows_system_hive_facts")
+        if hive_facts_native:
+            candidates.append(
+                VelociraptorEvidenceCandidate(
+                    id=_candidate_id("windows_system_hive_facts", entry.path),
+                    category="windows_system_hive_facts",
+                    artifact_type="windows_system_hive_facts",
+                    parser_status=str(hive_facts_native["parser_status"]),
+                    display_name=f"Windows Host Facts raw - {Path(entry.path).name}",
+                    original_path=entry.path,
+                    local_path=entry.local_path or "",
+                    normalized_windows_path=normalize_velociraptor_path(entry.path),
+                    filename=Path(entry.path).name,
+                    parser=str(hive_facts_native["parser"]),
+                    size=entry.size,
+                    mtime=entry.mtime,
+                    confidence="medium",
+                    supported=bool(hive_facts_native["supported"]),
+                    reason=str(hive_facts_native["reason"]),
+                    warnings=[],
+                    companion_files=_find_system_companion_files(entry, entry_map),
+                    container_type=container_type,
+                    container_path=container_path,
+                )
+            )
         return candidates
     if lower_name == "sam" and normalized_lower.endswith("windows\\system32\\config\\sam"):
         sam_native = describe_raw_candidate(entry.path, "windows_sam_identity")
@@ -2323,6 +2348,17 @@ def list_velociraptor_artifacts(root: Path, selected_candidates: list[dict] | No
                         "source_tool": "native_windows_service",
                         "source_format": "registry_hive",
                         "service_artifact_type": candidate.get("artifact_type") or "service",
+                    }
+                )
+            elif candidate.get("category") == "windows_system_hive_facts":
+                artifacts.append(
+                    {
+                        **common,
+                        "artifact_type": "windows_system_hive_facts",
+                        "parser": "windows_system_hive_facts",
+                        "profile": "host_identity",
+                        "source_tool": "native_registry",
+                        "source_format": "registry_hive",
                     }
                 )
             elif candidate.get("category") == "windows_sam_identity":

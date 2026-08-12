@@ -22,6 +22,7 @@ from app.core.database import Base, get_db
 from app.models.artifact import Artifact
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceType, IngestStatus
+from app.models.host_fact import HostFact
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun, MemorySymbolPreparation, MemoryUpload
 from app.services.memory import backend_readiness
 from app.services.memory import execution as memory_execution
@@ -3181,6 +3182,200 @@ def test_windows_info_failure_marks_one_failed_and_later_plugins_skipped(db_sess
     assert plugin_runs["windows.info"].metadata_json["return_code"] == 1
     assert {plugin_runs[name].status for name in ("windows.pslist", "windows.pstree", "windows.cmdline")} == {"skipped_dependency"}
     assert run.plugins_skipped == 3
+
+
+HOST_ID = "dddddddd-4444-4444-8444-dddddddddddd"
+OTHER_HOST_ID = "eeeeeeee-5555-4555-8555-eeeeeeeeeeee"
+
+
+class _SessionProxy:
+    """SessionLocal test double supporting both usages in
+    app.services.memory.execution: `with SessionLocal() as db:` (the outer
+    scan session) and direct `isolated_db = SessionLocal()` + .close() (the
+    isolated inner Host Facts session, mirroring
+    app.workers.tasks._safe_create_host_facts_isolated). Both must resolve
+    to the SAME underlying db_session fixture so assertions after the call
+    can see what was committed, and close() is a deliberate no-op so the
+    shared fixture is never actually torn down by either path."""
+
+    def __init__(self, db):
+        self._db = db
+
+    def __enter__(self):
+        return self._db
+
+    def __exit__(self, *_args):
+        return False
+
+    def close(self):
+        return None
+
+    def __getattr__(self, name):
+        return getattr(self._db, name)
+
+
+def _windows_info_system_info(*, run_id: str = "run-1", plugin_run_id: str = "plugin-run-1") -> dict:
+    return memory_normalizers.normalize_windows_info(
+        [
+            {"Variable": "Kernel Base", "Value": "0xf8077da00000", "__children": []},
+            {"Variable": "Major/Minor", "Value": "15.22621", "__children": []},
+            {"Variable": "MachineType", "Value": "34404", "__children": []},
+            {"Variable": "NtMajorVersion", "Value": "10", "__children": []},
+            {"Variable": "NtMinorVersion", "Value": "0", "__children": []},
+        ],
+        case_id=CASE_ID,
+        evidence_id=MEMORY_EVIDENCE_ID,
+        memory_run_id=run_id,
+        memory_plugin_run_id=plugin_run_id,
+        backend_version="2.28.0",
+    )
+
+
+class TestMemoryWindowsHostFacts:
+    def test_memory_evidence_with_host_id_produces_host_facts(self, db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+        _case(db_session)
+        evidence = _evidence(db_session)
+        evidence.host_id = HOST_ID
+        db_session.commit()
+
+        monkeypatch.setattr(memory_execution, "SessionLocal", lambda: _SessionProxy(db_session))
+
+        memory_execution._create_memory_windows_host_facts(_windows_info_system_info(), evidence=evidence)
+
+        rows = db_session.query(HostFact).filter(HostFact.host_id == HOST_ID).all()
+        fact_types = {row.fact_type for row in rows}
+        assert fact_types == {"host.distribution", "host.distribution_version", "host.architecture"}
+        for row in rows:
+            assert row.source_kind == "memory_windows_info"
+            assert row.provenance["memory_run_id"] == "run-1"
+            assert row.provenance["memory_plugin_run_id"] == "plugin-run-1"
+            assert row.provenance["plugin"] == "windows.info"
+            assert row.artifact_id is None
+
+    def test_memory_evidence_without_host_id_produces_no_host_facts(self, db_session, monkeypatch: pytest.MonkeyPatch, caplog) -> None:
+        _case(db_session)
+        evidence = _evidence(db_session)
+        assert evidence.host_id is None
+
+        monkeypatch.setattr(memory_execution, "SessionLocal", lambda: _SessionProxy(db_session))
+
+        with caplog.at_level("INFO", logger=memory_execution.logger.name):
+            memory_execution._create_memory_windows_host_facts(_windows_info_system_info(), evidence=evidence)
+
+        assert db_session.query(HostFact).count() == 0
+        assert any("no assigned host" in record.message for record in caplog.records)
+
+    def test_two_hosts_never_mix_memory_host_facts(self, db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+        second_evidence_id = "fafafafa-6666-4666-8666-fafafafafafa"
+        _case(db_session)
+        evidence_a = _evidence(db_session, evidence_id=MEMORY_EVIDENCE_ID)
+        evidence_a.host_id = HOST_ID
+        evidence_b = _evidence(db_session, evidence_id=second_evidence_id)
+        evidence_b.host_id = OTHER_HOST_ID
+        db_session.commit()
+
+        monkeypatch.setattr(memory_execution, "SessionLocal", lambda: _SessionProxy(db_session))
+
+        memory_execution._create_memory_windows_host_facts(_windows_info_system_info(), evidence=evidence_a)
+        memory_execution._create_memory_windows_host_facts(_windows_info_system_info(run_id="run-2", plugin_run_id="plugin-run-2"), evidence=evidence_b)
+
+        host_a_hosts = {row.host_id for row in db_session.query(HostFact).filter(HostFact.evidence_id == MEMORY_EVIDENCE_ID).all()}
+        host_b_hosts = {row.host_id for row in db_session.query(HostFact).filter(HostFact.evidence_id == second_evidence_id).all()}
+        assert host_a_hosts == {HOST_ID}
+        assert host_b_hosts == {OTHER_HOST_ID}
+
+    def test_idempotent_across_repeated_scans(self, db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+        _case(db_session)
+        evidence = _evidence(db_session)
+        evidence.host_id = HOST_ID
+        db_session.commit()
+
+        monkeypatch.setattr(memory_execution, "SessionLocal", lambda: _SessionProxy(db_session))
+
+        # Re-running windows.info with the SAME memory_run_id/memory_plugin_run_id
+        # (re-running the same completed scan's normalization step) must not
+        # duplicate rows -- fingerprint dedup already covers this generically,
+        # this just confirms the memory producer participates in it correctly.
+        system_info = _windows_info_system_info()
+        memory_execution._create_memory_windows_host_facts(system_info, evidence=evidence)
+        first_count = db_session.query(HostFact).count()
+        memory_execution._create_memory_windows_host_facts(system_info, evidence=evidence)
+        second_count = db_session.query(HostFact).count()
+        assert second_count == first_count
+
+    def test_evtx_and_memory_agree_without_conflict(self, db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.ingest.artifact_normalizers import normalize_evtx_row
+        from app.ingest.host_facts_extraction import extract_host_fact_documents
+        from app.ingest.normalizer import base_document
+        from app.services.host_facts import create_host_fact_observations, resolve_host_facts
+
+        _case(db_session)
+        evidence = _evidence(db_session)
+        evidence.host_id = HOST_ID
+        db_session.commit()
+
+        monkeypatch.setattr(memory_execution, "SessionLocal", lambda: _SessionProxy(db_session))
+        memory_execution._create_memory_windows_host_facts(_windows_info_system_info(), evidence=evidence)
+
+        row = {
+            "EventID": "1", "Channel": "Microsoft-Windows-Sysmon/Operational", "Provider": "Microsoft-Windows-Sysmon",
+            "Computer": "WS01.megacorp.local", "ProcessId": "1234", "NewProcessName": "C:\\Windows\\System32\\cmd.exe",
+            "UtcTime": "2024-03-22 12:21:24.171",
+        }
+        artifact_meta = {"artifact_type": "windows_event", "parser": "evtxecmd_csv", "source_tool": "evtxecmd", "source_format": "evtx_csv", "source_path": "C/Windows/System32/winevt/Logs/Sysmon.evtx", "ingest_run_id": "run-1"}
+        document = base_document(CASE_ID, MEMORY_EVIDENCE_ID, "9d9d9d9d-6666-4666-8666-9d9d9d9d9d9d", row, artifact_meta)
+        evtx_doc = normalize_evtx_row(document, row, artifact_meta)
+        create_host_fact_observations(
+            db_session, case_id=CASE_ID, evidence_id=MEMORY_EVIDENCE_ID, artifact_id="9d9d9d9d-6666-4666-8666-9d9d9d9d9d9d", host_id=HOST_ID,
+            observed_at=None, documents=extract_host_fact_documents([evtx_doc]),
+        )
+
+        # architecture only came from memory (EVTX carries no architecture
+        # signal), and must resolve cleanly with a single supporting source.
+        resolved = resolve_host_facts(db_session, case_id=CASE_ID, host_id=HOST_ID, fact_type="host.architecture")[0]
+        assert resolved["status"] == "observed"
+        assert resolved["conflicting"] == []
+
+    def test_memory_conflicts_with_registry_are_visible(self, db_session, monkeypatch: pytest.MonkeyPatch) -> None:
+        from app.services.host_facts import create_host_fact_observations, resolve_host_facts
+
+        _case(db_session)
+        evidence = _evidence(db_session)
+        evidence.host_id = HOST_ID
+        db_session.commit()
+
+        monkeypatch.setattr(memory_execution, "SessionLocal", lambda: _SessionProxy(db_session))
+        # Memory reports x64 (real windows.info machine_type decoding).
+        memory_execution._create_memory_windows_host_facts(_windows_info_system_info(), evidence=evidence)
+
+        # A registry SYSTEM hive observation disagreeing with memory must
+        # surface as a real conflict, not be silently dropped or averaged.
+        registry_doc = {
+            "host_fact": {
+                "fact_type": "host.architecture",
+                "artifact_family": "windows_system_hive_facts",
+                "artifact_type": "system_hive_buildlab",
+                "source_file": "C:\\Windows\\System32\\config\\SYSTEM",
+                "raw_value": "x86",
+                "normalized_value": "x86",
+                "confidence": "high",
+                "parse_status": "valid",
+                "reason": "",
+            },
+            "event_id": None,
+        }
+        create_host_fact_observations(
+            db_session, case_id=CASE_ID, evidence_id=MEMORY_EVIDENCE_ID,
+            artifact_id="7b7b7b7b-4444-4444-8444-7b7b7b7b7b7b", host_id=HOST_ID,
+            observed_at=None, documents=[registry_doc],
+        )
+
+        resolved = resolve_host_facts(db_session, case_id=CASE_ID, host_id=HOST_ID, fact_type="host.architecture")[0]
+        assert resolved["status"] == "conflicting"
+        source_kinds = {obs["source_kind"] for obs in resolved["conflicting"]} | {obs["source_kind"] for obs in resolved["supporting"]}
+        assert source_kinds == {"memory_windows_info", "system_hive_buildlab"}
+        # Registry outranks memory in _SOURCE_PRIORITY, so it must win as preferred.
+        assert resolved["preferred_value"] == "x86"
 
 
 def test_invalid_volatility_json_is_classified_before_normalization(db_session, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,6 +1,8 @@
 """Tests for the fixed windows.info normalizer."""
 from __future__ import annotations
 
+from app.ingest.host_facts_extraction import extract_host_fact_documents
+from app.ingest.windows.memory_host_facts import extract_memory_windows_host_facts
 from app.services.memory import normalizers as norm
 
 
@@ -80,6 +82,60 @@ def test_normalize_extracts_memory_fields() -> None:
     # The symbol table should show the GUID without the file:// path noise.
     assert memory["kernel_symbols"] is not None
     assert "9DC3FC69B1CA4B34707EBC57FD1D6126-1" in memory["kernel_symbols"]
+
+
+class TestExtractMemoryWindowsHostFacts:
+    def _system_info(self) -> dict:
+        return norm.normalize_windows_info(
+            _payload(),
+            case_id="c",
+            evidence_id="e",
+            memory_run_id="run-1",
+            memory_plugin_run_id="plugin-run-1",
+            backend_version="2.28.0",
+        )
+
+    def test_distribution_version_and_architecture_extracted(self) -> None:
+        facts = {doc["host_fact"]["fact_type"]: doc["host_fact"] for doc in extract_memory_windows_host_facts(self._system_info())}
+        assert facts["host.distribution"]["normalized_value"] == "Windows"
+        assert facts["host.distribution_version"]["normalized_value"] == "10.0.22621"
+        assert facts["host.architecture"]["normalized_value"] == "x64"
+
+    def test_hostname_and_fqdn_are_never_produced(self) -> None:
+        # windows.info's own "host.name" field is fed by a fallback chain
+        # whose only real-world value is NtProductType (a product-type
+        # enum, not a computer name) -- this producer must not treat it as
+        # an identity fact. See app.ingest.windows.memory_host_facts.
+        facts = {doc["host_fact"]["fact_type"] for doc in extract_memory_windows_host_facts(self._system_info())}
+        assert "host.hostname" not in facts
+        assert "host.fqdn" not in facts
+
+    def test_kernel_and_timezone_are_never_produced(self) -> None:
+        # host.kernel would just duplicate distribution_version for Windows
+        # (the NT kernel version and the OS version are the same number);
+        # windows.info exposes no genuine timezone field at all (system_time
+        # is the acquisition instant, not the machine's configured zone).
+        facts = {doc["host_fact"]["fact_type"] for doc in extract_memory_windows_host_facts(self._system_info())}
+        assert "host.kernel" not in facts
+        assert "host.timezone" not in facts
+
+    def test_provenance_carries_run_and_plugin_identifiers(self) -> None:
+        documents = extract_memory_windows_host_facts(self._system_info())
+        fact = documents[0]["host_fact"]
+        assert fact["extra_provenance"]["memory_run_id"] == "run-1"
+        assert fact["extra_provenance"]["memory_plugin_run_id"] == "plugin-run-1"
+        assert fact["extra_provenance"]["plugin"] == "windows.info"
+
+    def test_non_windows_family_produces_no_distribution_fact(self) -> None:
+        system_info = self._system_info()
+        system_info["os"]["family"] = "unknown"
+        facts = {doc["host_fact"]["fact_type"] for doc in extract_memory_windows_host_facts(system_info)}
+        assert "host.distribution" not in facts
+
+    def test_documents_flow_through_the_generic_dispatcher(self) -> None:
+        documents = extract_memory_windows_host_facts(self._system_info())
+        dispatched = extract_host_fact_documents(documents)
+        assert {doc["host_fact"]["fact_type"] for doc in dispatched} == {"host.distribution", "host.distribution_version", "host.architecture"}
 
 
 def test_normalize_handles_empty_payload() -> None:

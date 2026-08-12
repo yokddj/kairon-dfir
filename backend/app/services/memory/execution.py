@@ -10,9 +10,13 @@ from typing import Any
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.core.database import SessionLocal, utc_now_naive
+from app.core.database import SessionLocal, utc_now, utc_now_naive
 from app.core.config import get_settings
+from app.ingest.host_facts_extraction import extract_host_fact_documents
+from app.ingest.windows.memory_host_facts import extract_memory_windows_host_facts
+from app.models.evidence import Evidence
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
+from app.services.host_facts import create_host_fact_observations
 from app.services.memory import backend_readiness
 from app.services.memory.evidence_access import MemoryStorageAccessError, validate_current_process_output_access
 from app.services.memory.artifact_indexing import (
@@ -264,6 +268,57 @@ def _contains_vmware_metadata_warning(stderr: bytes | None) -> bool:
     return _VMWARE_METADATA_WARNING_MARKER in stderr.decode("utf-8", errors="replace")
 
 
+def _create_memory_windows_host_facts(system_info: dict, *, evidence: Evidence) -> None:
+    """Best-effort Host Facts side-effect for one windows.info result.
+
+    Memory analysis runs outside app.workers.tasks.ingest_evidence() (it is
+    triggered on demand, per plugin, from the Memory UI, and can be re-run
+    many times for the same evidence) -- there is no artifact batch here to
+    hand to app.ingest.host_facts_extraction.extract_host_fact_documents()
+    the way disk-evidence ingest does, so this is the call site for the
+    memory producer instead. Isolated on its own session, mirroring
+    app.workers.tasks._safe_create_host_facts_isolated: a failure here must
+    never fail the memory scan itself, and must never poison the caller's
+    own transaction (run_memory_metadata_scan keeps committing on the same
+    session for the rest of the plugin loop after this returns).
+
+    evidence.host_id is the same persisted, explicit Evidence->CaseHost
+    association disk evidence already uses -- never a name lookup, never
+    "last selected", never "first host in the case". A memory evidence
+    item with no assigned host produces no Host Facts at all; this is
+    logged, not silently skipped, so a reviewer can see why Host
+    Information stayed empty for that evidence.
+    """
+    if not evidence.host_id:
+        logger.info(
+            "memory windows.info host facts skipped: evidence has no assigned host",
+            extra={"case_id": evidence.case_id, "evidence_id": evidence.id},
+        )
+        return
+    host_fact_documents = extract_host_fact_documents(extract_memory_windows_host_facts(system_info))
+    if not host_fact_documents:
+        return
+    isolated_db: Session = SessionLocal()
+    try:
+        create_host_fact_observations(
+            isolated_db,
+            case_id=evidence.case_id,
+            evidence_id=evidence.id,
+            artifact_id=None,
+            host_id=evidence.host_id,
+            observed_at=utc_now(),
+            documents=host_fact_documents,
+        )
+    except Exception as exc:  # noqa: BLE001
+        isolated_db.rollback()
+        logger.warning(
+            "memory windows.info host facts creation failed",
+            extra={"case_id": evidence.case_id, "evidence_id": evidence.id, "error": _sanitize_message(exc)},
+        )
+    finally:
+        isolated_db.close()
+
+
 def active_run_for_evidence(db: Session, evidence_id: str, profile: str = "metadata_only") -> MemoryScanRun | None:
     return (
         db.query(MemoryScanRun)
@@ -485,6 +540,7 @@ def run_memory_metadata_scan(memory_scan_run_id: str) -> None:
                         if plugin == "windows.info":
                             system_info = _json_safe(normalize_windows_info(payload, case_id=run.case_id, evidence_id=run.evidence_id, memory_run_id=run.id, memory_plugin_run_id=plugin_run.id, backend_version=run.backend_version))
                             plugin_run.metadata_json = {"normalized_type": "memory_system_info", "raw_output_retained": True}
+                            _create_memory_windows_host_facts(system_info, evidence=validated.evidence)
                         elif plugin in PROCESS_PLUGINS:
                             process_results.append(_normalize_process_payload(plugin, payload))
                             plugin_run.metadata_json = {"normalized_type": "memory_process", "raw_output_retained": True}
