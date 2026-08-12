@@ -24,6 +24,7 @@ from app.services.host_facts import (
     build_host_fact_fingerprint,
     create_host_fact_observations,
     delete_host_facts_for_evidence,
+    normalize_host_fact_value,
     resolve_host_facts,
 )
 
@@ -101,6 +102,35 @@ class TestFingerprint:
         a = build_host_fact_fingerprint("case", "ev", "art", "host.timezone", "etc_timezone", "Europe/Madrid")
         b = build_host_fact_fingerprint("case", "ev", "art", "host.timezone", "etc_timezone", "UTC")
         assert a != b
+
+
+class TestNormalizeHostFactValue:
+    """Direct contract tests for the comparison key used by both
+    _recompute_group_status (write-time, persisted row.status) and
+    _resolve_group (read-time, resolve_host_facts' response) -- the only
+    two places host fact observations are grouped/deduplicated."""
+
+    def test_hostname_is_case_insensitive(self):
+        assert normalize_host_fact_value("host.hostname", "WS01") == normalize_host_fact_value("host.hostname", "ws01")
+
+    def test_fqdn_is_case_insensitive(self):
+        assert normalize_host_fact_value("host.fqdn", "WS01.megacorp.local") == normalize_host_fact_value("host.fqdn", "ws01.megacorp.local")
+
+    def test_whitespace_is_trimmed(self):
+        assert normalize_host_fact_value("host.hostname", "  WS01  ") == normalize_host_fact_value("host.hostname", "ws01")
+
+    def test_genuinely_different_hostnames_stay_distinct(self):
+        assert normalize_host_fact_value("host.hostname", "WS01") != normalize_host_fact_value("host.hostname", "WS02")
+
+    def test_other_fact_types_stay_case_sensitive(self):
+        # The case-insensitive contract is scoped to host.hostname/host.fqdn
+        # only -- every other fact_type compares by exact (trimmed) value,
+        # so a real casing difference there is never silently folded away.
+        for fact_type in ("host.timezone", "host.distribution", "host.distribution_version", "host.kernel", "host.architecture"):
+            assert normalize_host_fact_value(fact_type, "Europe/Madrid") != normalize_host_fact_value(fact_type, "europe/madrid")
+
+    def test_other_fact_types_still_trim_whitespace(self):
+        assert normalize_host_fact_value("host.timezone", "  Europe/Madrid  ") == normalize_host_fact_value("host.timezone", "Europe/Madrid")
 
 
 class TestSingleObservation:

@@ -1,30 +1,35 @@
 """Host Facts: a generic layer that aggregates normalized observations into
 small, connected records of what Kairon has learned about a host.
 
-Architecture (see the Linux Host Facts Foundation sprint):
+Architecture:
 
-    Evidence -> Artifacts -> Normalized observations -> Host Facts
-        -> (future) Host Info UI -> Timeline -> Correlation -> AI
+    Evidence -> Artifacts -> Normalized documents -> host_fact extraction
+        (app.ingest.host_facts_extraction, platform-agnostic)
+        -> Host Facts (this module) -> Host Info UI -> Timeline
+        -> Correlation -> AI
 
-A HostFact row never duplicates evidence. The raw file lives on disk under
-the evidence's own storage, and the full normalized record is already
-searchable as an indexed event under the source artifact's own family (for
-timezone: ``linux_timezone``). This layer stores only the small, structured
-fact each observation asserts, plus enough foreign keys (case, evidence,
-artifact, host) to stay connected to that chain, and an ``event_id`` to
-pivot straight back to the underlying searchable record.
+A HostFact row never duplicates evidence. The raw file/record lives on disk
+or in the search index under the evidence's own storage. This layer stores
+only the small, structured fact each observation asserts, plus enough
+foreign keys (case, evidence, artifact, host) to stay connected to that
+chain, and (when the source document was itself indexed, as Linux's
+dedicated os_info/timezone observations are) an ``event_id`` to pivot
+straight back to it.
 
 Conflict resolution is deliberately not silent: ``resolve_host_facts``
 always returns every supporting and conflicting observation alongside the
 preferred value, so an analyst sees a disagreement rather than a single
 number that hides it.
 
-Timezone (``host.timezone``) was the first fact_type this module supported;
-host.hostname, host.fqdn, host.distribution, host.distribution_version,
-host.kernel and host.architecture followed in the Host Facts: Identity &
-Operating System sprint without any change to this module at all -- every
-function here was already generic over fact_type, which is exactly what
-that sprint set out to validate.
+Platform coverage: every function in this module is generic over fact_type
+and reads only the platform-agnostic ``document["host_fact"]`` shape (see
+app.ingest.host_facts_extraction) -- it has no platform-specific logic of
+its own. Linux was the first producer (host.timezone, then host.hostname,
+host.fqdn, host.distribution, host.distribution_version, host.kernel,
+host.architecture -- see app.ingest.linux.os_info / .timezone). Windows
+followed (host.hostname, host.fqdn from the EVTX Computer field -- see
+app.ingest.windows.host_facts) without any change to this module at all.
+Adding a new platform's producer never requires touching this file.
 """
 from __future__ import annotations
 
@@ -73,6 +78,11 @@ _SOURCE_PRIORITY: dict[tuple[str, str], int] = {
     (FACT_HOSTNAME, "hostnamectl"): 90,
     (FACT_FQDN, "hostname"): 100,
     (FACT_FQDN, "hostnamectl"): 90,
+    # Windows has no equivalent of a persisted /etc/hostname file today
+    # (see app.ingest.windows.host_facts) -- the EVTX Computer field is
+    # currently its only source, so it has no sibling to rank against.
+    (FACT_HOSTNAME, "evtx_computer_field"): 80,
+    (FACT_FQDN, "evtx_computer_field"): 80,
     # host.distribution / host.distribution_version -- os-release is the
     # current standard, machine-readable spec; lsb-release is its legacy
     # predecessor (still shipped alongside it on Debian/Ubuntu, usually
@@ -98,7 +108,52 @@ _SOURCE_PRIORITY: dict[tuple[str, str], int] = {
     (FACT_ARCHITECTURE, "uname"): 100,
     (FACT_ARCHITECTURE, "kernel_version"): 90,
     (FACT_ARCHITECTURE, "hostnamectl"): 70,
+    # Windows -- the SYSTEM hive's own persisted configuration (a genuine
+    # on-disk record, the same tier of reliability as Linux's /etc/hostname)
+    # outranks the EVTX Computer field (a per-record echo, present on every
+    # log entry but not the canonical source of truth for the value), which
+    # in turn outranks a memory snapshot (windows.info -- reflects the
+    # single instant the image was acquired, and Volatility's own value
+    # extraction is a best-effort read of kernel structures rather than a
+    # persisted configuration file). See app.ingest.windows.host_facts,
+    # app.ingest.raw_parsers.system_hive_identity_parser,
+    # app.ingest.windows.memory_host_facts.
+    (FACT_HOSTNAME, "system_hive_computername"): 90,
+    (FACT_TYPE_TIMEZONE, "system_hive_timezone_key_name"): 80,
+    (FACT_DISTRIBUTION, "system_hive_buildlab"): 90,
+    (FACT_DISTRIBUTION, "memory_windows_info"): 70,
+    (FACT_DISTRIBUTION_VERSION, "system_hive_buildlab"): 90,
+    (FACT_DISTRIBUTION_VERSION, "memory_windows_info"): 70,
+    (FACT_ARCHITECTURE, "system_hive_buildlab"): 90,
+    (FACT_ARCHITECTURE, "memory_windows_info"): 70,
 }
+
+
+# Fact types whose *comparison* is case-insensitive: DNS/NetBIOS names
+# carry no intentional distinction between two observations that differ
+# only in casing ("WS01.megacorp.local" and "ws01.megacorp.local" name the
+# same machine), so treating them as a real conflict would be noise, not
+# signal. No other fact_type gets this treatment -- a distribution or
+# version string that differs by casing is either already normalized by
+# its own producer (see app.ingest.linux.os_info's own .lower() calls on
+# distribution/architecture) or is a genuine difference this resolver must
+# keep visible, never paper over.
+_CASE_INSENSITIVE_FACT_TYPES = {FACT_HOSTNAME, FACT_FQDN}
+
+
+def normalize_host_fact_value(fact_type: str, value: str) -> str:
+    """Comparison key for grouping observations of one fact_type.
+
+    Used only to decide whether two observations agree -- it never
+    replaces or mutates what is stored or shown. HostFact.normalized_value
+    (and raw_value, provenance) always keep the exact casing/whitespace
+    each source observed; this function is called at comparison time only,
+    on values already read from the database or freshly extracted.
+    """
+    stripped = value.strip()
+    if fact_type in _CASE_INSENSITIVE_FACT_TYPES:
+        return stripped.lower()
+    return stripped
 
 
 def build_host_fact_fingerprint(
@@ -125,13 +180,13 @@ def _group_query(db: Session, *, case_id: str, host_id: str | None, evidence_id:
     return query.filter(HostFact.host_id.is_(None), HostFact.evidence_id == evidence_id)
 
 
-def _recompute_group_status(rows: list[HostFact]) -> None:
+def _recompute_group_status(fact_type: str, rows: list[HostFact]) -> None:
     valid_rows = [row for row in rows if row.normalized_value]
-    distinct_values = {row.normalized_value for row in valid_rows}
+    distinct_keys = {normalize_host_fact_value(fact_type, row.normalized_value) for row in valid_rows}
     for row in rows:
         if not row.normalized_value:
             row.status = "invalid"
-        elif len(distinct_values) == 1:
+        elif len(distinct_keys) == 1:
             row.status = "confirmed" if len(valid_rows) > 1 else "observed"
         else:
             row.status = "conflicting"
@@ -149,26 +204,30 @@ def create_host_fact_observations(
 ) -> list[HostFact]:
     """Create one HostFact row per already-normalized observation document.
 
-    ``documents`` are the same normalized documents already headed to the
-    search index for this artifact (see app.ingest.linux.timezone and
-    app.ingest.artifact_normalizers.normalize_linux_row) -- this function
-    reads the small set of ``linux.timezone_*``/``linux.fact_type`` fields
-    they already carry rather than re-parsing anything. Duplicate
+    ``documents`` are the output of app.ingest.host_facts_extraction
+    .extract_host_fact_documents() for one artifact -- every document
+    carries a platform-agnostic ``host_fact`` dict (fact_type,
+    artifact_family, artifact_type, source_file, raw_value,
+    normalized_value, confidence, parse_status, reason), regardless of
+    which platform's normalizer/extractor produced it (see
+    app.ingest.linux.os_info / app.ingest.linux.timezone for the Linux
+    producers, app.ingest.windows.host_facts for the Windows one) -- this
+    function itself has no platform-specific logic at all. Duplicate
     observations (matched by fingerprint) are skipped, so calling this
     twice for the same evidence/artifact is a no-op the second time.
     """
     created: list[HostFact] = []
     touched_groups: set[str] = set()
     for doc in documents:
-        linux = doc.get("linux") or {}
-        fact_type = str(linux.get("fact_type") or "").strip()
+        fact = doc.get("host_fact") or {}
+        fact_type = str(fact.get("fact_type") or "").strip()
         if not fact_type:
             continue
-        source_kind = str(linux.get("artifact_type") or "")
-        raw_value = str(linux.get("timezone_raw_value") or "")
-        normalized_value = str(linux.get("timezone_name") or "").strip() or None
-        confidence = str(linux.get("timezone_confidence") or "medium")
-        parse_status = str(linux.get("timezone_parse_status") or "")
+        source_kind = str(fact.get("artifact_type") or "")
+        raw_value = str(fact.get("raw_value") or "")
+        normalized_value = str(fact.get("normalized_value") or "").strip() or None
+        confidence = str(fact.get("confidence") or "medium")
+        parse_status = str(fact.get("parse_status") or "")
         fingerprint = build_host_fact_fingerprint(case_id, evidence_id, artifact_id, fact_type, source_kind, raw_value)
         if db.query(HostFact.id).filter(HostFact.fingerprint == fingerprint).first() is not None:
             continue
@@ -180,7 +239,7 @@ def create_host_fact_observations(
             fact_type=fact_type,
             source_kind=source_kind,
             parser=str((doc.get("artifact") or {}).get("parser") or ""),
-            source_path=linux.get("source_file") or doc.get("source_file"),
+            source_path=fact.get("source_file") or doc.get("source_file"),
             raw_value=raw_value or None,
             normalized_value=normalized_value,
             confidence=confidence,
@@ -189,9 +248,15 @@ def create_host_fact_observations(
             event_id=doc.get("event_id"),
             fingerprint=fingerprint,
             provenance={
-                "reason": linux.get("timezone_parse_reason") or "",
-                "tzif_meta": linux.get("timezone_tzif_meta") or {},
+                "reason": fact.get("reason") or "",
+                "tzif_meta": fact.get("tzif_meta") or {},
                 "parse_status": parse_status,
+                # Purely additive, optional passthrough for producers whose
+                # provenance doesn't fit case_id/evidence_id/artifact_id/
+                # event_id alone -- e.g. app.ingest.windows.memory_host_facts
+                # has no artifacts-table row to point artifact_id at, so it
+                # carries memory_run_id/memory_plugin_run_id/plugin here.
+                **(fact.get("extra_provenance") or {}),
             },
         )
         db.add(row)
@@ -202,7 +267,7 @@ def create_host_fact_observations(
     db.flush()
     for fact_type in touched_groups:
         group_rows = _group_query(db, case_id=case_id, host_id=host_id, evidence_id=evidence_id, fact_type=fact_type).all()
-        _recompute_group_status(group_rows)
+        _recompute_group_status(fact_type, group_rows)
     db.commit()
     return created
 
@@ -242,7 +307,6 @@ def _resolve_group(fact_type: str, rows: list[HostFact]) -> dict:
     if not rows:
         return {"fact_type": fact_type, "status": "missing", "preferred_value": None, "supporting": [], "conflicting": [], "invalid": [], "observations": []}
     valid_rows = [row for row in rows if row.normalized_value]
-    distinct_values = sorted({row.normalized_value for row in valid_rows})
     invalid_rows = [row for row in rows if not row.normalized_value]
     if not valid_rows:
         return {
@@ -254,18 +318,30 @@ def _resolve_group(fact_type: str, rows: list[HostFact]) -> dict:
             "invalid": [_serialize(row) for row in invalid_rows],
             "observations": [_serialize(row) for row in rows],
         }
-    if len(distinct_values) == 1:
-        preferred = distinct_values[0]
-        status = "confirmed" if len(valid_rows) > 1 else "observed"
-    else:
-        preferred = max(valid_rows, key=lambda row: _SOURCE_PRIORITY.get((fact_type, row.source_kind), 0)).normalized_value
-        status = "conflicting"
+    # Grouping key: case-insensitive for host.hostname/host.fqdn, exact
+    # match for everything else (see normalize_host_fact_value). Two
+    # observations that share a key never surface as a conflict, however
+    # many distinct raw strings back that key -- but the exact original
+    # casing each source reported still stays intact in raw_value,
+    # normalized_value and provenance, and a genuinely different key (a
+    # different hostname, not just a different casing of the same one) is
+    # never folded into that group.
+    distinct_keys = {normalize_host_fact_value(fact_type, row.normalized_value) for row in valid_rows}
+    # Same tie-break already used for genuine conflicts (highest-priority
+    # source; ties broken by the stable created_at ordering rows already
+    # arrive in) now also picks the displayed representation when several
+    # observations agree but differ only in casing -- deterministic and
+    # stable across reprocesses without a new heuristic.
+    preferred_row = max(valid_rows, key=lambda row: _SOURCE_PRIORITY.get((fact_type, row.source_kind), 0))
+    preferred = preferred_row.normalized_value
+    preferred_key = normalize_host_fact_value(fact_type, preferred)
+    status = ("confirmed" if len(valid_rows) > 1 else "observed") if len(distinct_keys) == 1 else "conflicting"
     return {
         "fact_type": fact_type,
         "status": status,
         "preferred_value": preferred,
-        "supporting": [_serialize(row) for row in valid_rows if row.normalized_value == preferred],
-        "conflicting": [_serialize(row) for row in valid_rows if row.normalized_value != preferred],
+        "supporting": [_serialize(row) for row in valid_rows if normalize_host_fact_value(fact_type, row.normalized_value) == preferred_key],
+        "conflicting": [_serialize(row) for row in valid_rows if normalize_host_fact_value(fact_type, row.normalized_value) != preferred_key],
         "invalid": [_serialize(row) for row in invalid_rows],
         "observations": [_serialize(row) for row in rows],
     }

@@ -1384,6 +1384,7 @@ def normalize_evtx_row(document: dict, row: dict, artifact_meta: dict) -> dict:
                 "level": level,
                 "keywords": keywords,
                 "event_data_summary": event_data_summary,
+                "computer_field": first_value(row, ["Computer"]),
             }
         )
         document["wmi"].update(
@@ -1499,6 +1500,14 @@ def normalize_evtx_row(document: dict, row: dict, artifact_meta: dict) -> dict:
             "keywords": keywords,
             "event_data_summary": event_data_summary,
             "computer": host_name,
+            # Unlike "computer" above (extract_host(), which falls back to
+            # artifact_meta["detected_host"] -- evidence-level metadata, not
+            # a per-record observation), this is the raw System/Computer
+            # element this specific EVTX record carries, with no fallback.
+            # Host Facts extraction (app.ingest.windows.host_facts) reads
+            # only this field -- it must never derive a fact from anything
+            # other than a genuine per-artifact assertion.
+            "computer_field": first_value(row, ["Computer"]),
             "process_id": first_value(row, ["ProcessId"]),
             "thread_id": first_value(row, ["ThreadId"]),
             "event_data": row.get("Payload") if isinstance(row.get("Payload"), dict) else None,
@@ -1636,6 +1645,7 @@ def normalize_evtx_row(document: dict, row: dict, artifact_meta: dict) -> dict:
                 "keywords": keywords,
                 "event_data_summary": event_data_summary,
                 "computer": host_name,
+                "computer_field": first_value(row, ["Computer"]),
                 "process_id": first_value(row, ["ProcessId"]),
                 "thread_id": first_value(row, ["ThreadId"]),
                 "event_data": row.get("Payload") if isinstance(row.get("Payload"), dict) else None,
@@ -3858,6 +3868,28 @@ def normalize_linux_row(doc: dict, row: dict, *, source_path: str = "", artifact
     doc["message"] = row.get("message", row.get("raw_excerpt", ""))
     doc["search_text"] = " ".join(str(v) for v in linux_data.values() if v)
     doc["linux"] = linux_data
+
+    # Platform-agnostic Host Facts contract (see app.services.host_facts /
+    # app.ingest.host_facts_extraction): any normalizer, on any platform,
+    # that wants a row to become a Host Fact observation sets this one
+    # top-level key. It never replaces the linux.* fields above (those stay
+    # exactly as before, still fully searchable under their own artifact
+    # family) -- this is purely additive, read only by the generic Host
+    # Facts aggregator so it never has to know this document came from a
+    # Linux-specific normalizer.
+    if row.get("fact_type"):
+        doc["host_fact"] = {
+            "fact_type": row.get("fact_type", ""),
+            "artifact_family": row.get("artifact_family", artifact_type or ""),
+            "artifact_type": row.get("artifact_type", ""),
+            "source_file": row.get("source_file", source_path),
+            "raw_value": row.get("raw_value", ""),
+            "normalized_value": row.get("normalized_value") or "",
+            "confidence": row.get("confidence", ""),
+            "parse_status": row.get("parse_status", ""),
+            "reason": row.get("reason", ""),
+            "tzif_meta": row.get("tzif_meta") or {},
+        }
 
     return doc
 

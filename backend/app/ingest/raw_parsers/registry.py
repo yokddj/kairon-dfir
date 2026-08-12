@@ -6,6 +6,7 @@ from app.ingest.raw_parsers.profile_list_parser import WindowsProfileListRawPars
 from app.ingest.raw_parsers.sam_identity_parser import WindowsSamIdentityRawParser
 from app.ingest.raw_parsers.service_parser import WindowsServiceRawParser
 from app.ingest.raw_parsers.shimcache_parser import ShimcacheRawParser
+from app.ingest.raw_parsers.system_hive_identity_parser import WindowsSystemHiveIdentityRawParser
 
 
 def get_raw_parsers() -> list:
@@ -16,6 +17,7 @@ def get_raw_parsers() -> list:
         AmcacheRawParser(),
         WindowsServiceRawParser(),
         ShimcacheRawParser(),
+        WindowsSystemHiveIdentityRawParser(),
         WindowsSamIdentityRawParser(),
         WindowsProfileListRawParser(),
     ]
