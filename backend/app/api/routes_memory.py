@@ -125,7 +125,6 @@ from app.services.memory.symbol_preparation import (
     record_pending_analysis,
     cancel_pending,
     consume_pending_for_evidence,
-    mark_pending_materialized,
     find_requirement_by_content_identity,
     link_evidence_to_requirement,
     mark_preparation,
@@ -1663,9 +1662,16 @@ def post_memory_run_when_ready(
     preparation pipeline reaches ``ready``.
 
     The endpoint never creates a ``MemoryScanRun`` or a
-    ``MemoryAnalysisBatch``.  It only records the intent.  When
-    the preparation reaches ready, the worker materialises the
-    intent into a real run / batch.
+    ``MemoryAnalysisBatch``.  It only records the intent, which is
+    read back via ``consume_pending_for_evidence`` (surfaced today as
+    ``pending_intent_kind`` in the readiness payload) and can be
+    cancelled via ``.../run-when-ready/cancel``.  Materialization --
+    automatically starting the recorded analysis once preparation
+    reaches ready -- is not implemented anywhere in this codebase
+    (confirmed by the Sprint 3 Memory Technical Debt Cleanup audit:
+    no worker, no scheduled task, nothing consumes a pending row's
+    intent).  A pending row stays ``pending`` until explicitly
+    cancelled or the case is deleted.
     """
     _require_case(db, case_id)
     evidence = _require_evidence_for_case(db, case_id, evidence_id)

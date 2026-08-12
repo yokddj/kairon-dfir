@@ -15,6 +15,7 @@ import { MemoryTypeConfirmationModal } from "../components/memory/MemoryTypeConf
 import { MemorySymbolResolutionPanel } from "../components/memory/MemorySymbolResolutionPanel";
 import { MemoryExperimentalResultsPanel } from "../components/memory/MemoryExperimentalResultsPanel";
 import { MemoryPreparationCard } from "../components/memory/MemoryPreparationCard";
+import { INITIAL_ANALYSIS_PROFILE } from "../components/memory/MemoryInitialAnalysisAction";
 import { VmwareCompanionSection } from "../components/memory/VmwareCompanionSection";
 import { ZeroResultWarningBanner } from "../components/memory/ZeroResultWarningBanner";
 import { assignedHostMatchesDetected, normalizeEvidenceHostName } from "../lib/evidenceDetailFormatting";
@@ -294,7 +295,12 @@ export default function MemoryEvidencePage() {
 
   const startScanMutation = useMutation({
     mutationFn: async () =>
-      api.startMemoryScan(caseId, evidenceId, "metadata_only"),
+      // First-analysis direct entry point (MemoryEvidenceHeader's
+      // Analyze memory button, shown when isFirstAnalysis). Must use
+      // the same profile as MemoryInitialAnalysisAction's golden path
+      // -- never the metadata-only scan, unconditionally ineligible
+      // for Linux evidence (see app.services.memory.capability_registry).
+      api.startMemoryScan(caseId, evidenceId, INITIAL_ANALYSIS_PROFILE),
     onSuccess: () => {
       const keys = memoryQueryKeys.invalidateAfterMutation(caseId, evidenceId);
       for (const key of keys) {

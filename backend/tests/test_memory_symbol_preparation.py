@@ -59,7 +59,6 @@ from app.services.memory.symbol_preparation import (
     find_requirement_by_content_identity,
     link_evidence_to_requirement,
     mark_preparation,
-    mark_pending_materialized,
     negative_cache_active,
     normalize_sha256,
     progress_for_state,
@@ -884,28 +883,13 @@ def test_one_scan_run_created_during_in_progress_run_all(db_session, monkeypatch
 
 
 # ---------------------------------------------------------------------------
-# 25. pending analysis resumes when ready
+# 25. (removed) pending analysis materialization -- Sprint 3 Memory
+# Technical Debt Cleanup confirmed mark_pending_materialized() has zero
+# real callers anywhere (no worker, no scheduled task); the function
+# and this isolated test of it were removed. record_pending_analysis
+# and cancel_pending remain covered below -- those two operations are
+# genuinely live (MemoryPreparationCard.tsx).
 # ---------------------------------------------------------------------------
-
-
-def test_pending_analysis_resume_marks_materialized(db_session) -> None:
-    _case(db_session)
-    _evidence(db_session, EVIDENCE_A)
-    pending = record_pending_analysis(
-        db_session,
-        case_id=CASE_ID,
-        evidence_id=EVIDENCE_A,
-        kind="run_all",
-    )
-    db_session.commit()
-    mark_pending_materialized(
-        db_session, pending, batch_id="batch-1", run_id="run-1"
-    )
-    db_session.commit()
-    refreshed = db_session.get(MemorySymbolPendingAnalysis, pending.id)
-    assert refreshed.status == "materialized"
-    assert refreshed.materialized_batch_id == "batch-1"
-    assert refreshed.materialized_run_id == "run-1"
 
 
 # ---------------------------------------------------------------------------

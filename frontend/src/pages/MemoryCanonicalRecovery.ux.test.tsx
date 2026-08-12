@@ -3,7 +3,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import MemoryAnalysisPage from "./MemoryAnalysisPage";
 import MemoryEvidencePage from "./MemoryEvidencePage";
 
 // ---------------------------------------------------------------------------
@@ -315,7 +314,6 @@ const renderPage = (path: string) => {
     <QueryClientProvider client={qc}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
-          <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
           <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
           <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
         </Routes>

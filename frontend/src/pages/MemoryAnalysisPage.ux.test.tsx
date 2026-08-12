@@ -2,7 +2,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import MemoryAnalysisPage from "./MemoryAnalysisPage";
 import MemoryEvidencePage from "./MemoryEvidencePage";
 
 const getMemoryOverviewMock = vi.fn();
@@ -100,7 +99,6 @@ function renderPage(initialPath = "/cases/case-1/memory/ev-memory") {
     <MemoryRouter initialEntries={[initialPath]}>
       <QueryClientProvider client={queryClient}>
         <Routes>
-          <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
           <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
           <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
         </Routes>
