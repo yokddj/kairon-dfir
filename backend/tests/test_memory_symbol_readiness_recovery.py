@@ -34,6 +34,9 @@ from app.models.memory import (
 )
 from app.services.memory import batch as memory_batch
 from app.services.memory import catalogue as memory_catalogue
+from app.services.memory.analysis_plan import MemoryAnalysisPlan
+from app.services.memory.capability_registry import MemoryCapability
+from app.services.memory.platform import PlatformFamily, ProbeConfidence, ReadinessState
 from app.services.memory import symbol_backfill
 from app.services.memory import symbol_resolver
 from app.services.memory import symbol_state as symbol_state_module
@@ -516,6 +519,27 @@ def test_catalogue_uses_blocked_not_unavailable_for_symbol_probe_required(db_ses
         "_probe_network_via_worker",
         lambda: (True, "importable"),
     )
+    # network_basic resolves through the platform-aware capability_registry
+    # path since Sprint 3 (Memory Technical Debt Cleanup) -- see
+    # catalogue._CAPABILITY_AWARE_DESPITE_LEGACY_PLUGINS. This fixture's
+    # evidence file does not exist on disk (fresh.dmp), so the real
+    # platform probe would fail; mock a confident Windows plan matching
+    # this fixture's own detected_format="windows_crash_dump" intent.
+    windows_plan = MemoryAnalysisPlan(
+        evidence_id=FRESH_EVIDENCE_ID,
+        detected_platform=PlatformFamily.WINDOWS,
+        platform_confidence=ProbeConfidence.HIGH,
+        platform_signals="test",
+        framework="volatility3",
+        readiness=ReadinessState.READY,
+        readiness_reason="test",
+        eligible_capabilities=(MemoryCapability.NETWORK,),
+        selected_plugins=("windows.netscan", "windows.netstat"),
+    )
+    monkeypatch.setattr(memory_catalogue, "build_memory_analysis_plan", lambda evidence: windows_plan)
+    settings_with_process_profiles = core_config.get_settings()
+    object.__setattr__(settings_with_process_profiles, "memory_process_profile_enabled", True)
+    monkeypatch.setattr(memory_catalogue, "get_settings", lambda: settings_with_process_profiles)
     items = memory_catalogue.build_analysis_catalogue(
         db_session,
         case_id=CASE_ID,

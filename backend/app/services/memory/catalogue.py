@@ -40,11 +40,52 @@ from app.core.config import get_settings
 from app.models.evidence import Evidence
 from app.models.memory import MemoryScanRun
 from app.services.memory.analysis_plan import build_memory_analysis_plan
+from app.services.memory.capability_registry import resolved_plugins_for_capability
 from app.services.memory.execution import PROFILE_CAPABILITY, PROFILE_PLUGINS, resolve_profile_plugins
+from app.services.memory.platform import PlatformFamily
 from app.services.memory.profile_planning import PLUGIN_AVAILABLE, PLUGIN_DISABLED, PLUGIN_UNKNOWN, _plugin_worker_state, plan_profile_capability
 from app.services.memory import profile_planning
 from app.services.memory.validation import MemoryExecutionValidationError
 
+
+# Sprint 3 (Memory Technical Debt Cleanup) audit: network_basic keeps a
+# legacy PROFILE_PLUGINS entry (predates Linux support) alongside its
+# real capability_registry mapping, so it always took the platform-blind
+# branch below and could show Windows plugin names for Linux evidence
+# even though real execution (resolve_profile_plugins, unaffected by
+# this) already resolves linux.sockstat correctly. Verified this profile
+# is safe to force onto the platform-aware path: its Windows-resolved
+# plugin set is byte-identical either way (["windows.netscan",
+# "windows.netstat"]), so switching changes nothing for Windows evidence
+# and only fixes the Linux catalogue display. NOT extended to every
+# profile with a capability mapping -- five of the other seven legacy
+# profiles (metadata_only, processes_basic, modules_basic, handles_basic,
+# kernel_basic) resolve to a DIFFERENT Windows plugin set through
+# capability_registry (it additionally includes windows.info), so forcing
+# them onto this path would change already-validated Windows catalogue
+# behavior for no demonstrated benefit -- exactly what this cleanup must
+# not do.
+_CAPABILITY_AWARE_DESPITE_LEGACY_PLUGINS = {"network_basic"}
+
+
+def _supported_os_families(profile: str) -> list[str]:
+    """Which platforms genuinely have a registered plugin producer for
+    this profile's capability, derived from capability_registry.
+
+    Not hardcoded per profile: PROFILE_CATALOGUE's own static
+    "supported_os_families" literal is what drifted stale for
+    network_basic (still said Windows-only after Sprint 1 added real
+    Linux support) -- this is the actual value returned by the API,
+    computed fresh so it can't silently drift again.
+    """
+    capability = PROFILE_CAPABILITY.get(profile)
+    if capability is None:
+        return []
+    return [
+        platform.value
+        for platform in (PlatformFamily.WINDOWS, PlatformFamily.LINUX, PlatformFamily.MACOS)
+        if resolved_plugins_for_capability(platform, capability)
+    ]
 
 # Profiles in stable order.  ``family`` maps to the active-result
 # resolver family.  ``plugins`` mirrors the runtime plugin list.
@@ -335,11 +376,16 @@ def build_analysis_catalogue(
         available = True
         availability_reason: str | None = None
         legacy_plugin_names = list(PROFILE_PLUGINS.get(profile, []))
-        if not legacy_plugin_names and profile in PROFILE_CAPABILITY:
-            # No PROFILE_PLUGINS entry -- resolve through the real,
-            # platform-aware capability_registry path instead of the
-            # platform-blind Windows plugin-name check every other
-            # profile uses (see module docstring).
+        use_capability_aware_path = (
+            (not legacy_plugin_names and profile in PROFILE_CAPABILITY)
+            or profile in _CAPABILITY_AWARE_DESPITE_LEGACY_PLUGINS
+        )
+        if use_capability_aware_path:
+            # No PROFILE_PLUGINS entry (or a demonstrated-safe override,
+            # see _CAPABILITY_AWARE_DESPITE_LEGACY_PLUGINS above) --
+            # resolve through the real, platform-aware capability_registry
+            # path instead of the platform-blind Windows plugin-name
+            # check every other profile uses (see module docstring).
             if evidence is None:
                 evidence = db.get(Evidence, evidence_id)
             plan = _plan_capability_registry_profile(profile, evidence, worker_capability=worker_capability) if evidence is not None else {"plugin_names": [], "platform_ineligible": True, "detected_platform": "unknown", "available_plugin_count": 0}
@@ -379,7 +425,7 @@ def build_analysis_catalogue(
                 "last_count": last_count,
                 "requires_windows_symbols": bool(profile_def.get("requires_windows_symbols", False)),
                 "can_run_without_symbols": bool(profile_def.get("can_run_without_symbols", False)),
-                "supported_os_families": list(profile_def.get("supported_os_families", [])),
+                "supported_os_families": _supported_os_families(profile),
                 "plugins": plugin_names,
                 "plugin_count": len(plugin_names),
                 "available_plugin_count": available_plugin_count,

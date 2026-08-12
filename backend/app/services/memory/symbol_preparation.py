@@ -553,7 +553,16 @@ def exact_cache_match_for_requirement(
 
 
 # -----------------------------------------------------------------------------
-# Pending analysis
+# Pending analysis ("run when ready")
+#
+# Sprint 3 (Memory Technical Debt Cleanup) audit: this records an
+# operator's intent only. There is no worker, scheduled task, or any
+# other mechanism anywhere in this codebase that consumes a "pending"
+# row and turns it into a real MemoryScanRun -- despite the API route's
+# name and the promise implied by "run when ready". A pending row stays
+# "pending" until it is explicitly cancelled (cancel_pending) or the
+# case is deleted. Materialization is unimplemented, not merely
+# incomplete; do not assume it happens.
 # -----------------------------------------------------------------------------
 
 
@@ -594,19 +603,6 @@ def consume_pending_for_evidence(
         )
         .all()
     )
-
-
-def mark_pending_materialized(
-    db: Session,
-    pending: MemorySymbolPendingAnalysis,
-    *,
-    batch_id: str | None = None,
-    run_id: str | None = None,
-) -> None:
-    pending.status = "materialized"
-    pending.materialized_batch_id = batch_id
-    pending.materialized_run_id = run_id
-    db.flush()
 
 
 def cancel_pending(
@@ -1464,7 +1460,6 @@ __all__ = [
     "exact_cache_match_for_requirement",
     "find_requirement_by_content_identity",
     "link_evidence_to_requirement",
-    "mark_pending_materialized",
     "mark_preparation",
     "negative_cache_active",
     "normalize_sha256",

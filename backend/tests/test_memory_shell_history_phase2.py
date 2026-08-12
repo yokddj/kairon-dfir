@@ -239,12 +239,18 @@ def test_catalogue_marks_shell_history_unavailable_for_windows_evidence(db: Sess
 
 
 def test_catalogue_other_profiles_unaffected_by_shell_history_addition(db: Session) -> None:
-    """The 8 original profiles must keep using their platform-blind
-    PROFILE_PLUGINS path unchanged -- only a profile absent from
-    PROFILE_PLUGINS takes the new capability-registry branch."""
+    """Seven of the eight original profiles must keep using their
+    platform-blind PROFILE_PLUGINS path unchanged. network_basic is a
+    deliberate, verified exception since Sprint 3 (Memory Technical Debt
+    Cleanup) -- see catalogue._CAPABILITY_AWARE_DESPITE_LEGACY_PLUGINS --
+    its capability_registry-resolved Windows plugin set is byte-identical
+    to the legacy list, so this asserts that Windows behavior is
+    unchanged, not that the code path is unchanged."""
     case = _make_case(db)
     ev = _make_evidence(db, case.id)
-    with patch("app.services.memory.counts.get_memory_family_count", return_value={"total": 0}):
+    windows_plan = _plan(PlatformFamily.WINDOWS, eligible=(MemoryCapability.NETWORK,), selected=("windows.netscan", "windows.netstat"))
+    with patch("app.services.memory.counts.get_memory_family_count", return_value={"total": 0}), \
+         patch("app.services.memory.catalogue.build_memory_analysis_plan", return_value=windows_plan):
         catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
     assert len(catalogue) == len(PROFILE_CATALOGUE) == 9
     network = next(i for i in catalogue if i["profile"] == "network_basic")

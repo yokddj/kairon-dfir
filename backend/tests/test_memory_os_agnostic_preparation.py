@@ -55,7 +55,6 @@ from app.services.memory.platform import (
     MemoryProbeResult,
     PlatformFamily,
     ProbeConfidence,
-    ProfileDefinition,
     UnsupportedMemoryAdapter,
     WindowsMemoryAdapter,
     get_adapter_for_probe,

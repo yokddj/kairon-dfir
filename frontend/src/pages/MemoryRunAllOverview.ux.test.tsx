@@ -3,9 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import MemoryAnalysisPage from "./MemoryAnalysisPage";
 import MemoryEvidencePage from "./MemoryEvidencePage";
-import CaseMemoryLanding from "./CaseMemoryLanding";
 import { MemoryRunAllModal } from "../components/memory/MemoryRunAllModal";
 import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysisCatalogueModal";
 
@@ -193,8 +191,6 @@ function renderWorkspaceAt(initialPath: string) {
     <MemoryRouter initialEntries={[initialPath]}>
       <QueryClientProvider client={queryClient}>
         <Routes>
-          <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
-          <Route path="/cases/:caseId/memory/landing" element={<CaseMemoryLanding />} />
           <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
           <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
         </Routes>
@@ -514,7 +510,7 @@ describe("Memory overview, profile catalogue and run-all", () => {
   });
 
   // 8. Network Run disabled
-  it("first analysis click dispatches single metadata_only scan", async () => {
+  it("first analysis click dispatches single processes_basic scan, never metadata_only", async () => {
     const originalConfirm = window.confirm;
     window.confirm = vi.fn(() => true);
     try {
@@ -544,7 +540,7 @@ describe("Memory overview, profile catalogue and run-all", () => {
       await waitFor(() => {
         expect(startMemoryScanMock).toHaveBeenCalledTimes(1);
         expect(startMemoryScanMock).toHaveBeenCalledWith(
-          "case-1", "ev-A", "metadata_only",
+          "case-1", "ev-A", "processes_basic",
         );
       });
     } finally {
@@ -581,7 +577,7 @@ describe("Memory overview, profile catalogue and run-all", () => {
     }
   });
 
-  it("first analysis click enqueues exactly one metadata_only run", async () => {
+  it("first analysis click enqueues exactly one processes_basic run, never metadata_only", async () => {
     const originalConfirm = window.confirm;
     window.confirm = vi.fn(() => true);
     try {
@@ -603,7 +599,7 @@ describe("Memory overview, profile catalogue and run-all", () => {
       await waitFor(() => {
         expect(startMemoryScanMock).toHaveBeenCalledTimes(1);
         expect(startMemoryScanMock).toHaveBeenCalledWith(
-          "case-1", "ev-A", "metadata_only",
+          "case-1", "ev-A", "processes_basic",
         );
       });
     } finally {

@@ -171,19 +171,6 @@ class ReadinessResult:
         }
 
 
-@dataclass
-class ProfileDefinition:
-    """A platform-specific profile in the catalogue."""
-
-    profile: str
-    family: str
-    title: str
-    cost_label: str
-    available: bool
-    availability_reason: str | None = None
-    est_duration_seconds: int = 60
-
-
 # ---------------------------------------------------------------------------
 # Adapter interface
 # ---------------------------------------------------------------------------
@@ -209,8 +196,6 @@ class MemoryPlatformAdapter(Protocol):
         probe: MemoryProbeResult,
         cache_state: dict[str, Any] | None = None,
     ) -> ReadinessResult: ...
-
-    def available_profiles(self, probe: MemoryProbeResult) -> list[ProfileDefinition]: ...
 
 
 # ---------------------------------------------------------------------------
@@ -696,65 +681,6 @@ class WindowsMemoryAdapter:
 
     platform = PlatformFamily.WINDOWS
 
-    _PROFILES: tuple[ProfileDefinition, ...] = (
-        ProfileDefinition(
-            profile="metadata_only",
-            family="system_info",
-            title="Windows metadata",
-            cost_label="Fast",
-            available=True,
-            est_duration_seconds=20,
-        ),
-        ProfileDefinition(
-            profile="processes_basic",
-            family="processes",
-            title="Process listing (windows.pslist)",
-            cost_label="Medium",
-            available=True,
-            est_duration_seconds=90,
-        ),
-        ProfileDefinition(
-            profile="processes_extended",
-            family="processes",
-            title="Extended process listing",
-            cost_label="Medium",
-            available=True,
-            est_duration_seconds=240,
-        ),
-        ProfileDefinition(
-            profile="modules_basic",
-            family="modules",
-            title="Loaded modules",
-            cost_label="Medium",
-            available=True,
-            est_duration_seconds=120,
-        ),
-        ProfileDefinition(
-            profile="handles_basic",
-            family="handles",
-            title="Process handles",
-            cost_label="Medium",
-            available=True,
-            est_duration_seconds=120,
-        ),
-        ProfileDefinition(
-            profile="kernel_basic",
-            family="kernel_modules",
-            title="Kernel modules",
-            cost_label="Medium",
-            available=True,
-            est_duration_seconds=120,
-        ),
-        ProfileDefinition(
-            profile="suspicious_memory",
-            family="suspicious_regions",
-            title="Suspicious memory regions",
-            cost_label="Medium",
-            available=True,
-            est_duration_seconds=180,
-        ),
-    )
-
     def probe(self, *, canonical_path: Path, detected_format: str | None) -> MemoryProbeResult:
         return probe_memory_platform(
             canonical_path=canonical_path,
@@ -799,9 +725,6 @@ class WindowsMemoryAdapter:
             requires_discovery=True,
         )
 
-    def available_profiles(self, probe: MemoryProbeResult) -> list[ProfileDefinition]:
-        return list(self._PROFILES)
-
 
 # ---------------------------------------------------------------------------
 # Linux adapter
@@ -818,42 +741,6 @@ class LinuxMemoryAdapter:
     """
 
     platform = PlatformFamily.LINUX
-
-    _PROFILES: tuple[ProfileDefinition, ...] = (
-        ProfileDefinition(
-            profile="metadata_only",
-            family="system_info",
-            title="Linux metadata (linux.banners)",
-            cost_label="Fast",
-            available=True,
-            est_duration_seconds=20,
-        ),
-        ProfileDefinition(
-            profile="processes_basic",
-            family="processes",
-            title="Process listing (linux.pslist)",
-            cost_label="Medium",
-            available=True,
-            est_duration_seconds=90,
-        ),
-        ProfileDefinition(
-            profile="modules_basic",
-            family="modules",
-            title="Loaded kernel modules",
-            cost_label="Medium",
-            available=True,
-            est_duration_seconds=120,
-        ),
-        ProfileDefinition(
-            profile="network_basic",
-            family="network",
-            title="Network connections (linux.sockstat)",
-            cost_label="Medium",
-            available=False,
-            availability_reason="linux_network_profile_not_yet_supported",
-            est_duration_seconds=120,
-        ),
-    )
 
     def probe(self, *, canonical_path: Path, detected_format: str | None) -> MemoryProbeResult:
         return probe_memory_platform(
@@ -892,9 +779,6 @@ class LinuxMemoryAdapter:
             error_code="LINUX_ISF_REQUIRED",
         )
 
-    def available_profiles(self, probe: MemoryProbeResult) -> list[ProfileDefinition]:
-        return list(self._PROFILES)
-
 
 # ---------------------------------------------------------------------------
 # macOS adapter
@@ -912,18 +796,6 @@ class MacOSMemoryAdapter:
     """
 
     platform = PlatformFamily.MACOS
-
-    _PROFILES: tuple[ProfileDefinition, ...] = (
-        ProfileDefinition(
-            profile="metadata_only",
-            family="system_info",
-            title="macOS metadata (mac.banners)",
-            cost_label="Fast",
-            available=False,
-            availability_reason="macos_metadata_profile_not_supported",
-            est_duration_seconds=20,
-        ),
-    )
 
     def probe(self, *, canonical_path: Path, detected_format: str | None) -> MemoryProbeResult:
         return probe_memory_platform(
@@ -950,9 +822,6 @@ class MacOSMemoryAdapter:
             error_code="PLATFORM_NOT_SUPPORTED",
         )
 
-    def available_profiles(self, probe: MemoryProbeResult) -> list[ProfileDefinition]:
-        return list(self._PROFILES)
-
 
 # ---------------------------------------------------------------------------
 # Unsupported adapter
@@ -969,8 +838,6 @@ class UnsupportedMemoryAdapter:
     """
 
     platform = PlatformFamily.UNSUPPORTED
-
-    _PROFILES: tuple[ProfileDefinition, ...] = ()
 
     def probe(self, *, canonical_path: Path, detected_format: str | None) -> MemoryProbeResult:
         return MemoryProbeResult(
@@ -991,9 +858,6 @@ class UnsupportedMemoryAdapter:
             error_code="PLATFORM_NOT_IDENTIFIED",
         )
 
-    def available_profiles(self, probe: MemoryProbeResult) -> list[ProfileDefinition]:
-        return list(self._PROFILES)
-
 
 # ---------------------------------------------------------------------------
 # Re-exports
@@ -1007,7 +871,6 @@ __all__ = [
     "MemoryProbeResult",
     "PlatformFamily",
     "ProbeConfidence",
-    "ProfileDefinition",
     "ReadinessResult",
     "ReadinessState",
     "UnsupportedMemoryAdapter",

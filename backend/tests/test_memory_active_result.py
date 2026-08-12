@@ -27,13 +27,17 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.core.config import get_settings
 from app.core.database import Base
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
 from app.models.memory import MemoryArtifactSummary, MemoryPluginRun, MemoryScanRun
 from app.services.memory.active_result import FAMILY_RESOLUTION, list_families, resolve_active_memory_result
+from app.services.memory.analysis_plan import MemoryAnalysisPlan
+from app.services.memory.capability_registry import MemoryCapability
 from app.services.memory.catalogue import build_analysis_catalogue
 from app.services.memory.overview import get_evidence_landing
+from app.services.memory.platform import PlatformFamily, ProbeConfidence, ReadinessState
 
 
 @pytest.fixture()
@@ -332,7 +336,28 @@ def test_catalogue_returns_eight_profiles_with_network_plugin_availability(db: S
     case = _make_case(db)
     ev = _make_evidence(db, case.id, "a.dmp")
     _make_run(db, case.id, ev.id, "metadata_only", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
-    with patch("app.services.memory.counts.get_memory_family_count", return_value={"total": 0}):
+    # network_basic resolves through the platform-aware capability_registry
+    # path since Sprint 3 (Memory Technical Debt Cleanup) -- see
+    # catalogue._CAPABILITY_AWARE_DESPITE_LEGACY_PLUGINS. This fixture's
+    # evidence file does not exist on disk, so the real platform probe
+    # would fail; mock a confident Windows plan the same way the
+    # shell_history_basic tests already do (test_memory_shell_history_phase2.py).
+    windows_plan = MemoryAnalysisPlan(
+        evidence_id=ev.id,
+        detected_platform=PlatformFamily.WINDOWS,
+        platform_confidence=ProbeConfidence.HIGH,
+        platform_signals="test",
+        framework="volatility3",
+        readiness=ReadinessState.READY,
+        readiness_reason="test",
+        eligible_capabilities=(MemoryCapability.NETWORK,),
+        selected_plugins=("windows.netscan", "windows.netstat"),
+    )
+    settings_with_process_profiles = get_settings()
+    object.__setattr__(settings_with_process_profiles, "memory_process_profile_enabled", True)
+    with patch("app.services.memory.counts.get_memory_family_count", return_value={"total": 0}), \
+         patch("app.services.memory.catalogue.build_memory_analysis_plan", return_value=windows_plan), \
+         patch("app.services.memory.catalogue.get_settings", return_value=settings_with_process_profiles):
         catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
     # 8 original Windows-shaped profiles + shell_history_basic (Linux
     # Memory Shell History Phase 2, resolved via capability_registry).

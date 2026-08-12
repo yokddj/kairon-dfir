@@ -3,9 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import MemoryAnalysisPage from "./MemoryAnalysisPage";
 import MemoryEvidencePage from "./MemoryEvidencePage";
-import CaseMemoryLanding from "./CaseMemoryLanding";
 
 const getMemoryOverviewMock = vi.fn();
 const getMemoryBackendOverviewMock = vi.fn();
@@ -129,8 +127,6 @@ function renderWorkspaceAt(initialPath: string) {
     <MemoryRouter initialEntries={[initialPath]}>
       <QueryClientProvider client={queryClient}>
         <Routes>
-          <Route path="/cases/:caseId/memory" element={<MemoryAnalysisPage />} />
-          <Route path="/cases/:caseId/memory/landing" element={<CaseMemoryLanding />} />
           <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
           <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
         </Routes>
@@ -352,61 +348,17 @@ beforeEach(() => {
 });
 
 describe("Memory evidence scoping v1", () => {
-  it("renders the evidence landing page when a case has multiple memory evidence", async () => {
-    renderWorkspaceAt("/cases/case-1/memory");
-    expect(await screen.findByTestId("memory-landing")).toBeInTheDocument();
-    const cards = await screen.findAllByTestId("memory-evidence-card");
-    expect(cards).toHaveLength(2);
-    expect(cards[0].getAttribute("data-evidence-id")).toBe("ev-A");
-    expect(cards[1].getAttribute("data-evidence-id")).toBe("ev-B");
-  });
-
-  it("renders one evidence card per host with filename and host label", async () => {
-    renderWorkspaceAt("/cases/case-1/memory/landing");
-    const cards = await screen.findAllByTestId("memory-evidence-card");
-    expect(cards[0].textContent).toContain("ws01.dmp");
-    expect(cards[0].textContent).toContain("WS01");
-    expect(cards[0].textContent).toContain("Assigned host");
-    expect(cards[0].textContent).toContain("Assigned");
-    expect(cards[1].textContent).toContain("fs01.dmp");
-    expect(cards[1].textContent).toContain("FS01");
-    expect(cards[1].textContent).toContain("Unassigned");
-    expect(cards[1].textContent).toContain("Open evidence details");
-    expect(cards[1].textContent).toContain("Assign host");
-  });
-
-  it("shows mismatch status when assigned host differs from detected host", async () => {
-    const landing = multiEvidenceLanding();
-    landing.items[1].host_id = "host-fs02";
-    getMemoryEvidenceLandingMock.mockImplementation(() => landing);
-    renderWorkspaceAt("/cases/case-1/memory/landing");
-    const cards = await screen.findAllByTestId("memory-evidence-card");
-    expect(cards[1].textContent).toContain("Assigned host");
-    expect(cards[1].textContent).toContain("FS02");
-    expect(cards[1].textContent).toContain("Mismatch");
-  });
-
-  it("landing keeps assigned memory visible when filtered by assigned host", async () => {
-    getMemoryEvidenceLandingMock.mockImplementation((_caseId: string, params?: { host_id?: string }) => {
-      const landing = multiEvidenceLanding();
-      return params?.host_id === "host-ws01" ? { ...landing, items: landing.items.filter((item) => item.host_id === "host-ws01") } : landing;
-    });
-    renderWorkspaceAt("/cases/case-1/memory/landing?host_id=host-ws01&host=WS01");
-    const cards = await screen.findAllByTestId("memory-evidence-card");
-    expect(cards).toHaveLength(1);
-    expect(cards[0].getAttribute("data-evidence-id")).toBe("ev-A");
-    await waitFor(() => expect(getMemoryEvidenceLandingMock).toHaveBeenCalledWith("case-1", expect.objectContaining({ host_id: "host-ws01" })));
-  });
-
-  it("shows per-family status on every evidence card", async () => {
-    renderWorkspaceAt("/cases/case-1/memory/landing");
-    const modulesMatches = await screen.findAllByTestId("memory-evidence-family-modules");
-    expect(modulesMatches.length).toBeGreaterThanOrEqual(1);
-    expect(modulesMatches[0].getAttribute("data-family-state")).toBe("completed");
-    const networkMatches = await screen.findAllByTestId("memory-evidence-family-network");
-    expect(networkMatches.length).toBeGreaterThanOrEqual(1);
-    expect(networkMatches[0].getAttribute("data-family-state")).toBe("unavailable");
-  });
+  // Sprint 3 (Memory Technical Debt Cleanup) removed the dedicated
+  // multi-evidence "landing" grid tests that used to live here
+  // (per-family status badges, host mismatch cards, host-filtered
+  // landing). That whole UX pattern -- and the CaseMemoryLanding /
+  // MemoryAnalysisPage components it rendered -- has zero real route
+  // in App.tsx today: /cases/:caseId/memory and .../landing both
+  // redirect via LegacyMemoryRootRedirect to either the single
+  // evidence-scoped page or the generic WorkbenchOverviewPage
+  // (workbenchId="memory"), which replaced the memory-specific
+  // landing grid entirely. WorkbenchOverviewPage is shared across
+  // workbench types and outside this sprint's scope to test.
 
   it("renders the evidence workspace with header at /cases/:caseId/memory/:evidenceId", async () => {
     renderWorkspaceAt("/cases/case-1/memory/ev-A");
@@ -457,7 +409,7 @@ describe("Memory evidence scoping v1", () => {
     expect(screen.queryByTestId("memory-artifacts-run-picker")).not.toBeInTheDocument();
   });
 
-  it("first analysis view shows Analyze memory and calls scan API directly", async () => {
+  it("first analysis view shows Analyze memory and calls scan API directly with processes_basic, never metadata_only", async () => {
     const originalConfirm = window.confirm;
     window.confirm = vi.fn(() => true);
     try {
@@ -492,7 +444,7 @@ describe("Memory evidence scoping v1", () => {
       await waitFor(() => {
         expect(startMemoryScanMock).toHaveBeenCalledTimes(1);
         expect(startMemoryScanMock).toHaveBeenCalledWith(
-          "case-1", "ev-A", "metadata_only",
+          "case-1", "ev-A", "processes_basic",
         );
       });
     } finally {
@@ -560,7 +512,10 @@ describe("Memory evidence scoping v1", () => {
   it("shows the evidence back link and routes to the case memory landing", async () => {
     renderWorkspaceAt("/cases/case-1/memory/ev-A");
     const back = await screen.findByTestId("memory-evidence-back");
-    expect(back.getAttribute("href")).toBe("/cases/case-1/memory");
+    // Real canonical route today (WorkbenchOverviewPage), not the
+    // retired /cases/:caseId/memory landing grid this test asserted
+    // before Sprint 3 (Memory Technical Debt Cleanup).
+    expect(back.getAttribute("href")).toBe("/cases/case-1/m");
   });
 
   it("shows a Not analyzed family card on the Overview tab for unrun evidence", async () => {
@@ -614,12 +569,6 @@ describe("Memory evidence scoping v1", () => {
     expect(styles.overflowX).not.toBe("scroll");
   });
 
-  it("renders the responsive grid of evidence cards in the landing page", async () => {
-    renderWorkspaceAt("/cases/case-1/memory/landing");
-    const cards = await screen.findAllByTestId("memory-evidence-card");
-    expect(cards).toHaveLength(2);
-  });
-
   it("does not render private server paths in the evidence header", async () => {
     renderWorkspaceAt("/cases/case-1/memory/ev-A");
     const header = await screen.findByTestId("memory-evidence-header");
@@ -670,16 +619,6 @@ describe("Memory evidence scoping v1", () => {
     }
   });
 
-  it("the landing page only shows memory evidence and excludes disk-only evidence", async () => {
-    const landing = multiEvidenceLanding();
-    landing.items = landing.items.slice(0, 1);
-    getMemoryEvidenceLandingMock.mockImplementation(() => landing);
-    renderWorkspaceAt("/cases/case-1/memory/landing");
-    const cards = await screen.findAllByTestId("memory-evidence-card");
-    expect(cards).toHaveLength(1);
-    expect(cards[0].getAttribute("data-evidence-id")).toBe("ev-A");
-  });
-
   it("the Runs tab in the evidence-scoped workspace only lists runs for that evidence", async () => {
     listMemoryRunsMock.mockImplementation((_caseId: string, evidenceId?: string) =>
       evidenceId === "ev-A" ? historyRuns() : [],
@@ -702,72 +641,10 @@ describe("Memory evidence scoping v1", () => {
     expect(screen.queryByTestId("memory-historical-banner")).not.toBeInTheDocument();
   });
 
-  it("redirects to the evidence-scoped route when a case has exactly one memory evidence", async () => {
-    const singleOverview = {
-      case_id: "case-1",
-      memory_analysis_enabled: true,
-      has_memory_evidence: true,
-      has_memory_results: true,
-      has_disk_events: false,
-      mode: "memory_only",
-      evidences: [
-        { id: "ev-sole", case_id: "case-1", original_filename: "sole.dmp", evidence_type: "memory_dump", size_bytes: 4255346688, ingest_status: "completed", created_at: "2026-06-15T00:00:00Z" },
-      ],
-      runs: [],
-      message: "Memory analysis is available.",
-    };
-    getMemoryOverviewMock.mockImplementation(() => singleOverview);
-    const singleLanding = {
-      case_id: "case-1",
-      items: [
-        {
-          evidence_id: "ev-sole", case_id: "case-1", filename: "sole.dmp",
-          detected_host: "WS-SOLE", size_bytes: 4255346688, created_at: "2026-06-15T00:00:00Z",
-          processed_at: "2026-06-15T00:01:00Z", ingest_status: "completed",
-          metadata: {}, run_count: 1, latest_run_id: "r-sole-1", latest_run_status: "completed",
-          families: [
-            { family: "system_info", title: "System metadata", state: "completed", active_run: { id: "r-sole-1" }, latest_attempt: { id: "r-sole-1" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
-            { family: "processes", title: "Processes", state: "completed", active_run: { id: "r-sole-1" }, latest_attempt: { id: "r-sole-1" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
-            { family: "network", title: "Network connections", state: "unavailable", active_run: null, latest_attempt: null, selection_reason: "runtime_plugin_missing", using_fallback: false, historical_override: false, availability_reason: "No compatible Windows network plugin is available." },
-            { family: "modules", title: "Process modules", state: "completed", active_run: { id: "r-sole-1" }, latest_attempt: { id: "r-sole-1" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
-            { family: "handles", title: "Process handles", state: "completed", active_run: { id: "r-sole-1" }, latest_attempt: { id: "r-sole-1" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
-            { family: "kernel_modules", title: "Kernel modules", state: "completed", active_run: { id: "r-sole-1" }, latest_attempt: { id: "r-sole-1" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
-            { family: "drivers", title: "Drivers", state: "completed", active_run: { id: "r-sole-1" }, latest_attempt: { id: "r-sole-1" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
-            { family: "suspicious_regions", title: "Suspicious memory regions", state: "completed", active_run: { id: "r-sole-1" }, latest_attempt: { id: "r-sole-1" }, selection_reason: "latest_successful", using_fallback: false, historical_override: false, availability_reason: null },
-          ],
-        },
-      ],
-    };
-    getMemoryEvidenceLandingMock.mockImplementation(() => singleLanding);
-    renderWorkspaceAt("/cases/case-1/memory");
-    const header = await screen.findByTestId("memory-evidence-header");
-    expect(header).toBeInTheDocument();
-    expect(header.getAttribute("data-evidence-id")).toBe("ev-sole");
-    expect(screen.getByTestId("memory-evidence-filename")).toHaveTextContent("sole.dmp");
-    expect(screen.queryByTestId("memory-analyze-action")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("analyze-profile-select")).not.toBeInTheDocument();
-  });
-
   it("the legacy 3-option Analyze memory selector is not rendered in any evidence-scoped view", async () => {
     renderWorkspaceAt("/cases/case-1/memory/ev-A?tab=overview");
     expect(screen.queryByTestId("memory-analyze-action")).not.toBeInTheDocument();
     expect(screen.queryByTestId("analyze-profile-select")).not.toBeInTheDocument();
     expect(screen.queryByTestId("analyze-run-button")).not.toBeInTheDocument();
-  });
-
-  it("does not crash and shows the empty-state copy when a case has zero memory evidence", async () => {
-    getMemoryOverviewMock.mockImplementation(() => ({
-      case_id: "case-empty",
-      memory_analysis_enabled: true,
-      has_memory_evidence: false,
-      has_memory_results: false,
-      has_disk_events: false,
-      mode: "empty_case",
-      evidences: [],
-      runs: [],
-      message: "No memory evidence registered.",
-    }));
-    renderWorkspaceAt("/cases/case-empty/memory");
-    expect(await screen.findByText(/Select a case first|Loading memory evidence|No memory evidence|Authorized RAM evidence|Opening evidence workspace/i)).toBeInTheDocument();
   });
 });
