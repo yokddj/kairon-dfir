@@ -77,4 +77,24 @@ if [[ "$DRY_RUN" -eq 1 ]]; then
   exit 0
 fi
 
-ssh "$REMOTE_HOST" "cd '$REMOTE_DIR' && git rev-parse HEAD && docker compose build $SERVICES && docker compose up -d $SERVICES && docker compose ps && curl -fsS http://127.0.0.1:8000/docs >/dev/null && curl -I -fsS http://127.0.0.1:5173/ | head -n 1"
+# KAIRON_COMMIT/BUILD_DATE are exported so docker-compose.yml's
+# ${KAIRON_COMMIT:-unknown} build args actually carry the real commit,
+# instead of silently defaulting to "unknown" -- and the final curl
+# verifies the deployed backend actually reports that same commit, so a
+# build step that fails without aborting the script (e.g. a manually
+# re-run command outside this one, or a masked failure upstream) is
+# caught here rather than left to look like a successful deploy.
+ssh "$REMOTE_HOST" "cd '$REMOTE_DIR' && \
+  export KAIRON_COMMIT='$commit' BUILD_DATE=\"\$(date -u +%Y-%m-%dT%H:%M:%SZ)\" && \
+  git rev-parse HEAD && \
+  docker compose build $SERVICES && \
+  docker compose up -d $SERVICES && \
+  docker compose ps && \
+  curl -fsS http://127.0.0.1:8000/docs >/dev/null && \
+  curl -I -fsS http://127.0.0.1:5173/ | head -n 1 && \
+  deployed_commit=\$(curl -fsS http://127.0.0.1:8000/api/system/version | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"git_commit\"])') && \
+  echo \"Deployed backend reports commit: \$deployed_commit\" && \
+  if [ \"\$deployed_commit\" != '$commit' ]; then \
+    echo \"ERROR: deployed commit (\$deployed_commit) does not match expected commit ($commit)\" >&2; \
+    exit 1; \
+  fi"

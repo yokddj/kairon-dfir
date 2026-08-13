@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
-import sys
 import zipfile
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DEMO = REPO_ROOT / "tools" / "demo"
-if str(TOOLS_DEMO) not in sys.path:
-    sys.path.insert(0, str(TOOLS_DEMO))
 
-from generate_demo_evidence import generate_demo_evidence  # noqa: E402
+# Imported by file path rather than via sys.path.insert() so this module
+# doesn't leave a global sys.path entry for the rest of the pytest session
+# to trip over.
+_spec = importlib.util.spec_from_file_location("generate_demo_evidence", TOOLS_DEMO / "generate_demo_evidence.py")
+_module = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_module)
+generate_demo_evidence = _module.generate_demo_evidence
 
 
 def test_demo_generator_creates_zip_with_expected_artifacts(tmp_path: Path) -> None:

@@ -25,7 +25,7 @@ from app.models.evidence_operation import EvidenceOperation, EvidenceOperationJo
 from app.models.evidence_upload_session import EvidenceUploadSession
 from app.models.user import User
 from app.schemas.evidence import EvidenceRead
-from app.services.auth_dependencies import get_optional_user, require_case_access
+from app.services.auth_dependencies import get_current_user, get_optional_user
 from app.schemas.evidence_preflight import PreflightReport
 from app.schemas.evidence_upload_session import (
     ActivityCenterResponse,
@@ -328,7 +328,7 @@ def list_resumable_evidence_uploads(
     upload becoming invisible: the Wizard and the case Evidence page both
     call this on open instead of requiring a resume_session URL parameter.
     """
-    require_case_access(case_id)(request, db)
+    get_current_user(request, db)
     sessions = list_resumable_upload_sessions(db, case_id=case_id)
     return ResumableUploadSessionsResponse(case_id=case_id, sessions=[_resumable_entry(session, db) for session in sessions])
 

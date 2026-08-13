@@ -26,15 +26,19 @@ Rules, reports, parser rebuilds and SRUM Windows-worker parsing are not part of 
 
 ## First-Time Setup
 
-1. Copy the environment template:
+1. Run the setup script, which generates `.env` with real random secrets
+   (session/CSRF/Postgres/OpenSearch passwords) instead of placeholder
+   values you'd otherwise have to fill in by hand:
 
 ```bash
-cp .env.example .env
+bash scripts/setup.sh
 ```
 
-2. Replace all `CHANGE_ME` values in `.env`.
+   `.env.example` is a reference of every available key, not a template to
+   copy and hand-edit — `scripts/setup.sh` is the supported way to produce
+   a working `.env`.
 
-3. Keep these defaults unless you have a reason to change them:
+2. Keep these defaults unless you have a reason to change them:
 
 ```bash
 DFIR_ALLOW_HOST_PATH_IMPORT=false
@@ -43,13 +47,14 @@ MAX_PARALLEL_RULE_RUNS=1
 OPENSEARCH_JAVA_HEAP=2g
 ```
 
-4. Start the stack:
+3. `scripts/setup.sh` builds and starts the stack by default. If you ran it
+   with `--no-start`, start it now:
 
 ```bash
 docker compose up -d --build
 ```
 
-5. Verify health:
+4. Verify health:
 
 ```bash
 ./scripts/dfir-healthcheck.sh

@@ -284,11 +284,6 @@ def system_task_health() -> dict:
     return build_task_health_snapshot()
 
 
-@router.get("/api/system/version")
-def system_version() -> dict:
-    return settings.build_identity
-
-
 @router.get("/api/system/settings")
 def system_settings(db: Session = Depends(get_db)) -> dict:
     effective = get_effective_settings(db)

@@ -678,20 +678,21 @@ def _client(db_session) -> TestClient:
     return TestClient(app)
 
 
-def test_api_requires_case_access(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_api_requires_authentication(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Companion routes require login, matching every other route in the
+    app -- Kairon has no per-case access control yet (see docs/roadmap.md),
+    so a logged-in user is not additionally scoped to specific cases here."""
     db_session = _api_session()
     _memory_evidence(db_session, tmp_path)
 
-    def _deny(case_id):
-        def _check(request, db):
-            from fastapi import HTTPException
-            raise HTTPException(status_code=403, detail="Access denied to this case")
-        return _check
+    def _deny(request, db):
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail="Not authenticated")
 
-    monkeypatch.setattr(routes_evidence_companions, "require_case_access", _deny)
+    monkeypatch.setattr(routes_evidence_companions, "get_current_user", _deny)
     with _client(db_session) as client:
         response = client.get(f"/api/cases/{CASE_ID}/evidences/{EVIDENCE_ID}/companions")
-    assert response.status_code == 403
+    assert response.status_code == 401
 
 
 def test_api_upload_and_list_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -700,14 +701,12 @@ def test_api_upload_and_list_round_trip(tmp_path: Path, monkeypatch: pytest.Monk
     _memory_evidence(db_session, tmp_path)
     settings = _settings(tmp_path)
 
-    def _allow(case_id):
-        def _check(request, db):
-            return _User("user-1")
-        return _check
+    def _allow(request, db):
+        return _User("user-1")
 
     route_staging = tmp_path / "route-staging"
     route_staging.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(routes_evidence_companions, "require_case_access", _allow)
+    monkeypatch.setattr(routes_evidence_companions, "get_current_user", _allow)
     monkeypatch.setattr(routes_evidence_companions, "settings", settings)
     monkeypatch.setattr(routes_evidence_companions, "evidence_staging_dir", lambda case_id, evidence_id: route_staging)
     from app.services.memory import companion_files as companion_module
@@ -737,12 +736,10 @@ def test_api_rejects_unsupported_extension_before_touching_service(tmp_path: Pat
     _case(db_session)
     _memory_evidence(db_session, tmp_path)
 
-    def _allow(case_id):
-        def _check(request, db):
-            return _User("user-1")
-        return _check
+    def _allow(request, db):
+        return _User("user-1")
 
-    monkeypatch.setattr(routes_evidence_companions, "require_case_access", _allow)
+    monkeypatch.setattr(routes_evidence_companions, "get_current_user", _allow)
     with _client(db_session) as client:
         response = client.post(
             f"/api/cases/{CASE_ID}/evidences/{EVIDENCE_ID}/companions/vmware",
@@ -757,12 +754,10 @@ def test_api_evidence_not_found_for_wrong_case(tmp_path: Path, monkeypatch: pyte
     _case(db_session, case_id=OTHER_CASE_ID)
     _memory_evidence(db_session, tmp_path, case_id=CASE_ID, evidence_id=EVIDENCE_ID)
 
-    def _allow(case_id):
-        def _check(request, db):
-            return _User("user-1")
-        return _check
+    def _allow(request, db):
+        return _User("user-1")
 
-    monkeypatch.setattr(routes_evidence_companions, "require_case_access", _allow)
+    monkeypatch.setattr(routes_evidence_companions, "get_current_user", _allow)
     with _client(db_session) as client:
         response = client.get(f"/api/cases/{OTHER_CASE_ID}/evidences/{EVIDENCE_ID}/companions")
     assert response.status_code == 404

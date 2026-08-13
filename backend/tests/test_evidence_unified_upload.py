@@ -472,17 +472,20 @@ def test_resumable_discovery_requires_authentication(tmp_path, monkeypatch):
     assert response.status_code == 401
 
 
-def test_resumable_discovery_denies_user_without_case_access(tmp_path, monkeypatch):
+def test_resumable_discovery_allows_logged_in_user_without_case_access_row(tmp_path, monkeypatch):
+    """Kairon has no per-case access control yet (see docs/roadmap.md) --
+    any authenticated user can see any case's sessions, same as every
+    other route in the app. A CaseAccess row is not required."""
     _configure(monkeypatch, tmp_path)
     db = _db()
     _case(db)
     client = _client(db)
     _login(db, client, grant_case_access=False)
     response = client.get(f"/api/cases/{CASE_ID}/evidence-uploads")
-    assert response.status_code == 403
+    assert response.status_code == 200
 
 
-def test_resumable_discovery_isolated_across_cases(tmp_path, monkeypatch):
+def test_resumable_discovery_visible_to_user_logged_in_via_a_different_case(tmp_path, monkeypatch):
     _configure(monkeypatch, tmp_path)
     db = _db()
     other_case_id = "eeeeeeee-1111-4111-8111-eeeeeeeeeeee"
@@ -493,10 +496,11 @@ def test_resumable_discovery_isolated_across_cases(tmp_path, monkeypatch):
         host_id=None, provided_host="WIN-A", memory_authorization_acknowledged=True, notes=None, current_user=None,
     )
     client = _client(db)
-    # A user with access to a DIFFERENT case must not see this case's sessions.
+    # No per-case access control yet -- a user with access to a DIFFERENT
+    # case still sees this case's sessions, same as every other route.
     _login(db, client, case_id=other_case_id)
     response = client.get(f"/api/cases/{CASE_ID}/evidence-uploads")
-    assert response.status_code == 403
+    assert response.status_code == 200
 
 
 def test_resumable_discovery_lists_unified_session_with_chunk_bitmap(tmp_path, monkeypatch):

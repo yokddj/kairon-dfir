@@ -1,0 +1,3 @@
+ThreatName: Trojan:Win32/Test
+Action: Quarantine
+Resource: file:_C:\Users\alex\Downloads\invoice.pdf.exe

@@ -1,0 +1,8 @@
+**********************
+PowerShell transcript start
+Start time: 20260510083000
+Username: DESKTOP-K6F8D3D\alex
+Machine: DESKTOP-K6F8D3D
+Host Application: powershell.exe
+**********************
+PS C:\Users\alex> whoami

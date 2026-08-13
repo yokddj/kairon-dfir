@@ -1,0 +1,3 @@
+Provider=GoogleDrive
+AccountEmail=alex@example.com
+SyncRoot=G:\My Drive

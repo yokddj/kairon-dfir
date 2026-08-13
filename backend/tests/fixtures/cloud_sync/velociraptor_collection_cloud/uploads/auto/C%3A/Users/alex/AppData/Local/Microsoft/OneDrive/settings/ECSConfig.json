@@ -1,0 +1,6 @@
+{
+  "AccountEmail": "dfir@example.com",
+  "Provider": "OneDrive",
+  "ConfigID": "should_not_be_indexed",
+  "Profile": "Business1"
+}

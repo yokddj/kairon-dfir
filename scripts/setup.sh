@@ -305,7 +305,7 @@ build_and_start() {
   if [[ "$FORCE_RECREATE" == true ]] || [[ "$DO_UPGRADE" == true ]]; then
     build_args=(--no-cache --pull)
   fi
-  docker compose "${compose_args[@]}" build "${build_args[@]}"
+  docker compose ${compose_args[@]+"${compose_args[@]}"} build "${build_args[@]}"
   echo "Build complete."
 
   if [[ "$DO_START" != true ]]; then
@@ -319,7 +319,7 @@ build_and_start() {
   if [[ "$FORCE_RECREATE" == true ]] || [[ "$DO_UPGRADE" == true ]]; then
     up_args+=(--force-recreate)
   fi
-  docker compose "${compose_args[@]}" up "${up_args[@]}"
+  docker compose ${compose_args[@]+"${compose_args[@]}"} up "${up_args[@]}"
 
   wait_for_health
 }
