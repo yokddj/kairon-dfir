@@ -1,0 +1,2 @@
+Name,RecordType,Data,IPAddress,TTL,Status,Server,Interface,Timestamp
+drive.google.com,A,142.250.74.14,142.250.74.14,3600,Resolved,8.8.8.8,Wi-Fi,2026-05-11T10:00:00Z

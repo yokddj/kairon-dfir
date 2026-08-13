@@ -19,7 +19,7 @@ from app.core.storage import evidence_staging_dir, safe_remove
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceCompanionFile, EvidenceType
 from app.schemas.evidence import EvidenceCompanionRead
-from app.services.auth_dependencies import require_case_access
+from app.services.auth_dependencies import get_current_user
 from app.services.memory.companion_files import (
     EvidenceCompanionError,
     StagedCompanionUpload,
@@ -84,7 +84,7 @@ def list_companions(
     request: Request,
     db: Session = Depends(get_db),
 ) -> list[EvidenceCompanionFile]:
-    require_case_access(case_id)(request, db)
+    get_current_user(request, db)
     _require_case(db, case_id)
     _require_memory_evidence(db, case_id, evidence_id)
     return list_evidence_companions(db, evidence_id)
@@ -102,7 +102,7 @@ def upload_vmware_companion(
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> EvidenceCompanionFile:
-    user = require_case_access(case_id)(request, db)
+    user = get_current_user(request, db)
     _require_case(db, case_id)
     evidence = _require_memory_evidence(db, case_id, evidence_id)
 
@@ -158,7 +158,7 @@ def delete_companion(
     request: Request,
     db: Session = Depends(get_db),
 ) -> None:
-    user = require_case_access(case_id)(request, db)
+    user = get_current_user(request, db)
     _require_case(db, case_id)
     evidence = _require_memory_evidence(db, case_id, evidence_id)
     try:

@@ -1,0 +1,2 @@
+Time,Entry Location,Entry,Enabled,Category,Image Path,Launch String
+2026-05-10T07:05:00+00:00,HKCU\Software\Microsoft\Windows\CurrentVersion\Run,Updater,True,Logon,C:\Users\alex\AppData\Roaming\updater.exe,"C:\Users\alex\AppData\Roaming\updater.exe --silent"

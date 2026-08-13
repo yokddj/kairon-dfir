@@ -39,6 +39,17 @@ Kairon DFIR is intended for trusted labs and controlled, self-hosted deployments
 - A Preview Memory Analysis capability for authorized RAM evidence, isolated from global Search/Timeline/Detections/Findings/Reports/SIEM; actual Volatility/MemProcFS analysis execution is opt-in per deployment. See [docs/memory/memory_analysis.md](docs/memory/memory_analysis.md).
 - Evidence SHA-256, integrity checks, and custody events. See [docs/evidence/evidence-integrity.md](docs/evidence/evidence-integrity.md).
 
+## Linux Support
+
+Kairon ingests Linux triage collections (manual ZIP/TAR or Velociraptor)
+and normalizes auth logs, syslog, audit logs, shell history, cron,
+systemd unit files, SSH artifacts, sudoers, package logs, network config,
+and OS identity into Search and Timeline. Linux memory images are
+accepted and analyzed for process listing, network connections, and
+shell history recovered from memory via Volatility 3 — but Kairon does not provide full advanced Linux memory analysis yet. See
+[docs/linux-support.md](docs/linux-support.md) for exact coverage and
+known gaps.
+
 ## Architecture
 
 Kairon DFIR is organized around a **Core Platform** (case/evidence/host substrate, artifact and platform registries, generic ingestion pipeline, Search/Timeline, Findings/Reports) that every capability builds on without shaping it, plus **Core DFIR Capabilities** (Windows, Linux, Rules Engine) and **Preview capabilities** (Memory Analysis today) that depend on the Core Platform but never the other way around.

@@ -43,7 +43,12 @@ tar \
   -czf "${OUT_DIR}/app-data.tgz" \
   ./data
 
-curl -fsS "http://127.0.0.1:9200/_cat/indices?format=json" > "${OUT_DIR}/opensearch-indices.json" 2>/dev/null || printf '[]\n' > "${OUT_DIR}/opensearch-indices.json"
+# OpenSearch's port is intentionally not published to the host in the
+# default deployment (see docs/deployment/deployment.md) -- curl it through
+# the container network instead of 127.0.0.1, and let a real failure abort
+# the backup (set -e) rather than silently writing an empty inventory that
+# manifest.json would otherwise claim as complete.
+${COMPOSE} exec -T opensearch curl -fsS "http://localhost:9200/_cat/indices?format=json" > "${OUT_DIR}/opensearch-indices.json"
 
 cat > "${OUT_DIR}/manifest.json" <<EOF
 {

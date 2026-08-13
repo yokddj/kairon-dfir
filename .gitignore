@@ -49,10 +49,15 @@ data/evidence/*
 !data/tmp/
 data/tmp/*
 !data/tmp/.gitkeep
-uploads/
-evidence/
-evidences/
-cases/
+# Anchored to the repo root -- unanchored versions of these patterns also
+# matched nested directories with the same name inside committed test
+# fixtures (e.g. backend/tests/fixtures/velociraptor_collection_*/uploads/,
+# which mirrors real Velociraptor collection layout), silently excluding
+# small, legitimate fixture content from every `git add`.
+/uploads/
+/evidence/
+/evidences/
+/cases/
 backups/
 logs/
 reports/generated/
