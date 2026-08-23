@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from dateutil import parser as date_parser
 
 from app.analysis.suspicious import detect_suspicious_path, is_suspicious_double_extension
-from app.ingest.identity_extraction import extract_user_from_path
+from app.ingest.identity_extraction import extract_user_from_path, is_valid_username
 
 
 SEARCH_ENGINES = {
@@ -180,7 +180,10 @@ def _derive_profile(row: dict, source_path: str | None, profile_path: str | None
 
 
 def _infer_user(row: dict, source_path: str | None, profile_path: str | None, file_path: str | None) -> str | None:
-    for candidate in [_first(row, ["User", "Username"]), source_path, profile_path, file_path]:
+    direct_candidate = _first(row, ["User", "Username"])
+    if direct_candidate and is_valid_username(direct_candidate):
+        return direct_candidate
+    for candidate in [direct_candidate, source_path, profile_path, file_path]:
         normalized_candidate = _normalize_windows_path(candidate) if candidate else None
         user = extract_user_from_path(normalized_candidate or candidate) if candidate else None
         if user:

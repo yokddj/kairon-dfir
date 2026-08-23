@@ -72,6 +72,20 @@ def test_mft_ads_path_normalizes_to_base_file(monkeypatch):
     assert item["zone_identifier_path"].endswith(":Zone.Identifier")
 
 
+def test_motw_item_exposes_downloading_user(monkeypatch):
+    def fake_search(_case_id, params, **_kwargs):
+        if "mft" in (params.get("artifact_type") or []):
+            return 1, [_row(raw_extra={"user": {"name": "mshunter"}})], [], {}
+        return 0, [], [], {}
+
+    monkeypatch.setattr(motw, "search_events_v2", fake_search)
+
+    result = motw.list_motw_items(_Db(), "case-1", {"page_size": 50})
+    item = result["items"][0]
+
+    assert item["user"] == "mshunter"
+
+
 def test_sysmon_event_15_motw_like_event_normalized(monkeypatch):
     def fake_search(_case_id, params, **_kwargs):
         if "windows_event" in (params.get("artifact_type") or []):
