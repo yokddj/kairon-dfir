@@ -284,6 +284,55 @@ describe("MemoryProcessGraph", () => {
     expect(await screen.findByText(/The full process graph contains 500 canonical processes/)).toBeInTheDocument();
   });
 
+  // 12b. Expanding a truncated node merges its children in place
+  it("expands a truncated node in place without replacing the rest of the tree", async () => {
+    getCanonicalProcessTreeMock.mockResolvedValueOnce(
+      systemTree({
+        nodes: [
+          {
+            process_entity_id: "ent-root",
+            pid: 4, ppid: 0, name: "System", command_line: null, sources: ["windows.pslist"],
+            visibility: { listed: true }, findings: [], child_count: 2, confidence: "high",
+            tree: { is_root: true }, truncated: false, omitted_children: 0,
+            children: [
+              { process_entity_id: "ent-sibling", pid: 500, ppid: 4, name: "sibling.exe", command_line: null, sources: ["windows.pslist"], visibility: { listed: true }, findings: [], child_count: 0, confidence: "high", tree: {}, truncated: false, omitted_children: 0, children: [] },
+              { process_entity_id: "ent-truncated", pid: 9999, ppid: 4, name: "", command_line: null, sources: [], visibility: {}, findings: [], child_count: 5, confidence: "low", tree: {}, truncated: true, omitted_children: 5, children: [] },
+            ],
+          },
+        ],
+      }),
+    );
+    getCanonicalProcessTreeMock.mockResolvedValueOnce(
+      systemTree({
+        nodes: [
+          {
+            process_entity_id: "ent-truncated", pid: 9999, ppid: 4, name: "svchost.exe", command_line: "C:\\svchost.exe", sources: ["windows.pslist"], visibility: { listed: true }, findings: [], child_count: 1, confidence: "high", tree: {}, truncated: false, omitted_children: 0,
+            children: [
+              { process_entity_id: "ent-grandchild", pid: 6000, ppid: 9999, name: "child.exe", command_line: null, sources: ["windows.pslist"], visibility: { listed: true }, findings: [], child_count: 0, confidence: "high", tree: {}, truncated: false, omitted_children: 0, children: [] },
+            ],
+          },
+        ],
+      }),
+    );
+
+    renderGraph();
+    const truncatedNode = await screen.findByLabelText(/PID 9999/);
+    fireEvent.click(truncatedNode);
+
+    await waitFor(() => expect(getCanonicalProcessTreeMock).toHaveBeenCalledTimes(2));
+    expect(getCanonicalProcessTreeMock.mock.calls[1][1]).toMatchObject({ root_entity_id: "ent-truncated" });
+    // Selecting/focusing (and the lineage-query full-tree replace it drives)
+    // must never fire for an expand click -- that's the bug being fixed.
+    expect(getCanonicalProcessLineageMock).not.toHaveBeenCalled();
+
+    // The sibling stays visible: expansion merges in place, it doesn't
+    // replace the tree the way selecting a node used to.
+    expect(await screen.findByLabelText(/sibling\.exe/)).toBeInTheDocument();
+    // The truncated node resolves to its real name/pid, and its new child appears.
+    expect(await screen.findByLabelText(/PID 9999 svchost\.exe/)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/child\.exe/)).toBeInTheDocument();
+  });
+
   // 13. Table view toggle
   it("toggles to a Table view without losing filters", async () => {
     renderGraph();

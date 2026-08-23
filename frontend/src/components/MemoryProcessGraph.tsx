@@ -130,6 +130,13 @@ export function MemoryProcessGraph({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [internalSelectedEntityId, setInternalSelectedEntityId] = useState<string | null>(null);
   const [focusedEntityId, setFocusedEntityId] = useState<string | null>(null);
+  // Children fetched in-place for a truncated node, keyed by its
+  // process_entity_id. Merged into `shape` below instead of replacing the
+  // whole tree the way selecting a node (-> lineageQuery) does, so
+  // expanding one branch never loses the siblings/other branches already
+  // visible.
+  const [expansions, setExpansions] = useState<Record<string, NodeShape>>({});
+  const [expandingId, setExpandingId] = useState<string | null>(null);
   const selectedEntityId =
     externalSelectedEntityId !== undefined ? externalSelectedEntityId : internalSelectedEntityId;
   const setSelectedEntityId = externalOnSelectEntityId ?? setInternalSelectedEntityId;
@@ -187,7 +194,50 @@ export function MemoryProcessGraph({
   });
 
   const tree = lineageQuery.data ?? treeQuery.data;
-  const shape: NodeShape[] = useMemo(() => (tree?.nodes ?? []).map(toNodeShape), [tree?.nodes]);
+  // Expansions are keyed by process_entity_id from whichever tree produced
+  // them -- once the base tree itself changes (filters, run, selection),
+  // stale expansions could merge onto a node id that means something
+  // different (or nothing) in the new tree, so drop them.
+  useEffect(() => {
+    setExpansions({});
+  }, [tree]);
+
+  async function expandNode(entityId: string) {
+    if (expansions[entityId] || expandingId) return;
+    setExpandingId(entityId);
+    try {
+      const data = await api.getCanonicalProcessTree(caseId, { run_id: runId || undefined, root_entity_id: entityId, depth: 3, max_nodes: 200 });
+      const expandedRoot = (data?.nodes ?? []).map(toNodeShape)[0];
+      if (expandedRoot) {
+        setExpansions((prev) => ({ ...prev, [entityId]: expandedRoot }));
+      } else {
+        setMessage("No additional data found for this branch.");
+        window.setTimeout(() => setMessage(null), 2000);
+      }
+    } catch {
+      setMessage("Could not expand this branch.");
+      window.setTimeout(() => setMessage(null), 2000);
+    } finally {
+      setExpandingId(null);
+    }
+  }
+
+  const shape: NodeShape[] = useMemo(() => {
+    const base = (tree?.nodes ?? []).map(toNodeShape);
+    // A node fetched via expandNode() carries its own real name/pid/command
+    // line (it was queried directly as root_entity_id, not budget-truncated),
+    // so the whole node is replaced, not just its children -- a stub node
+    // (truncated:true, no name yet) becomes fully resolved once expanded.
+    const applyExpansions = (nodes: NodeShape[]): NodeShape[] =>
+      nodes.map((node) => {
+        const expanded = expansions[node.process_entity_id];
+        if (expanded) {
+          return { ...expanded, children: applyExpansions(expanded.children) };
+        }
+        return node.children.length ? { ...node, children: applyExpansions(node.children) } : node;
+      });
+    return applyExpansions(base);
+  }, [tree?.nodes, expansions]);
 
   // Layout
   const layout = useMemo(() => {
@@ -567,11 +617,17 @@ export function MemoryProcessGraph({
                     : isContext
                       ? "border-line bg-abyss/40 opacity-80"
                       : `border-line ${TONE[tone]}`;
+              const canExpand = node.truncated || (node.omitted_children ?? 0) > 0;
+              const isExpanding = expandingId === node.process_entity_id;
               return (
                 <button
                   key={`node-${node.process_entity_id}`}
                   type="button"
                   onClick={() => {
+                    if (canExpand) {
+                      void expandNode(node.process_entity_id);
+                      return;
+                    }
                     setSelectedEntityId(node.process_entity_id);
                     setFocusedEntityId(node.process_entity_id);
                   }}
@@ -617,8 +673,14 @@ export function MemoryProcessGraph({
                     <span>PID {node.pid}</span>
                     {node.ppid !== null ? <span>PPID {node.ppid}</span> : null}
                     {node.child_count > 0 ? <span>{node.child_count} children</span> : null}
-                    {(node.omitted_children ?? 0) > 0 ? <span className="text-amber-300">+{node.omitted_children} hidden</span> : null}
-                    {node.truncated ? <span className="text-amber-300">truncated</span> : null}
+                    {isExpanding ? (
+                      <span className="text-amber-300">expanding…</span>
+                    ) : (
+                      <>
+                        {(node.omitted_children ?? 0) > 0 ? <span className="text-amber-300" title="Click this node to load the hidden children in place">+{node.omitted_children} hidden</span> : null}
+                        {node.truncated ? <span className="text-amber-300" title="Click this node to load its data">truncated</span> : null}
+                      </>
+                    )}
                   </div>
                 </button>
               );
