@@ -171,6 +171,33 @@ def test_field_extraction_reads_the_real_search_events_v2_row_shape(monkeypatch)
     assert item["evidence_id"] == "ev-1"
 
 
+def test_windows_event_with_no_structured_service_object_falls_back_to_event_data_summary(monkeypatch):
+    # Service Control Manager 7040 ("start type changed") and similar EVTX
+    # entries matched only by free text have no structured service/task/
+    # persistence object at all -- their only real content is provider-
+    # specific windows.event_data. The parser already normalizes one
+    # human-readable sentence into event_data.payload_columns.PayloadData1
+    # regardless of provider; command_or_target must fall back to it instead
+    # of staying "-".
+    def fake_search(_case_id, params, **_kwargs):
+        if "service" in (params.get("artifact_type") or []):
+            return 1, [_realistic_row(
+                "windows_event",
+                service={"service_type": None, "image_path": None, "name": None, "display_name": None, "start_type": None, "account": None},
+                event={"type": "service_start_type_changed", "action": "service_start_type_changed", "message": "Start type of a service has changed"},
+                windows={"event_data": {"payload_columns": {"PayloadData1": "The start type of the Background Intelligent Transfer Service was changed from demand start to auto start"}}},
+            )], [], {}
+        return 0, [], [], {}
+
+    monkeypatch.setattr(startup_persistence, "search_events_v2", fake_search)
+    monkeypatch.setattr(startup_persistence, "get_command_history", lambda *_args, **_kwargs: {"items": []})
+
+    result = startup_persistence.list_startup_persistence_items(_Db(), "case-1", {"source": ["services"], "page_size": 50})
+
+    item = result["items"][0]
+    assert item["command_or_target"] == "The start type of the Background Intelligent Transfer Service was changed from demand start to auto start"
+
+
 def test_host_filter_is_passed_as_a_single_string_not_a_list(monkeypatch):
     # search_events_v2's "host" param (EVENT_EXACT_FILTERS) is str(value).strip()
     # against a single value -- passing the whole list made str(['ws01']) become

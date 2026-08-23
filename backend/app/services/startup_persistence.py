@@ -200,6 +200,19 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
     windows = _pick("windows")
     registry = _pick("registry")
     artifact_type = str(artifact.get("type") or raw.get("artifact_type") or row.get("artifact_type") or "").lower()
+    # Free-text-matched Windows Event Log entries (e.g. Service Control
+    # Manager 7040 "start type changed", Winlogon notification events) have
+    # no structured task/service/persistence/registry object at all -- their
+    # only real content is provider-specific windows.event_data. Every EVTX
+    # provider names its payload fields differently, but the parser already
+    # normalizes one human-readable sentence into event_data.payload_columns
+    # .PayloadData1 (falling back to the raw payload) regardless of provider,
+    # so it's a safe generic fallback rather than a per-event-ID special case.
+    event_data = _obj(windows.get("event_data"))
+    event_data_summary = _first(
+        _obj(event_data.get("payload_columns")).get("PayloadData1"),
+        _obj(windows.get("payload")).get("PayloadData1"),
+    )
     text = " ".join(
         str(value or "")
         for value in (
@@ -220,6 +233,7 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
             process.get("command_line"),
             file.get("path"),
             event.get("message"),
+            event_data_summary,
             row.get("summary"),
         )
     )
@@ -254,6 +268,7 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
         defender.get("path"),
         process.get("command_line"),
         file.get("path"),
+        event_data_summary,
     )
     path = _first(persistence.get("path"), registry.get("value_data"), autoruns.get("image_path"), task.get("path"), service.get("image_path"), service.get("path"), file.get("path"))
     enabled = _bool_or_none(_first(task.get("enabled"), autoruns.get("enabled"), persistence.get("enabled")))
