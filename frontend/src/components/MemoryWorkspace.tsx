@@ -64,7 +64,7 @@ function modeLabel(mode: MemoryOverview["mode"]): string {
 }
 
 export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab, onTabChange: onTabChangeProp }: MemoryWorkspaceProps) {
-  const { setActiveCaseId } = useActiveCase();
+  const { setActiveCaseId, caseContext } = useActiveCase();
   const [searchParams] = useSearchParams();
   const [urlTab, setUrlTab] = useMemoryTab();
   const tab = activeTab ?? urlTab;
@@ -310,7 +310,7 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             onPidFilter={setPidFilter}
             selectedEntityId={selectedEntityId}
             onSelectEntityId={setSelectedEntityId}
-            onCreateFinding={(entity) => setFindingPrefill(buildFindingPrefillFromArtifact({ ...entity, ...entity.process, plugin: (entity.sources || []).join(", ") }, { caseId, evidenceId: effectiveEvidenceId, sourceView: "memory", sourceRoute: window.location.pathname + window.location.search, artifactFamily: "memory", artifactType: "process", label: "Memory process" }))}
+            onCreateFinding={(entity) => setFindingPrefill(buildFindingPrefillFromArtifact({ ...entity, ...entity.process, plugin: (entity.sources || []).join(", ") }, { caseId, evidenceId: effectiveEvidenceId, hosts: caseContext?.hosts ?? [], sourceView: "memory", sourceRoute: window.location.pathname + window.location.search, artifactFamily: "memory", artifactType: "process", label: "Memory process" }))}
           />
         ) : null}
 

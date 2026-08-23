@@ -570,7 +570,7 @@ function EmailArtifactsView({
 export default function ArtifactExplorer() {
   const { caseId: routeCaseId } = useParams();
   const [searchParams] = useSearchParams();
-  const { activeCaseId, selectedEvidenceId, selectedHost, setActiveCaseId } = useActiveCase();
+  const { activeCaseId, selectedEvidenceId, selectedHost, setActiveCaseId, caseContext } = useActiveCase();
   const { activeHost, activeHostId, hasHostFilter, clearHostFilter } = useHostContext();
   const { effectiveTimezone } = useTimezonePreference();
   const queryClient = useQueryClient();
@@ -878,6 +878,7 @@ export default function ArtifactExplorer() {
       caseId,
       evidenceId: evidenceIdFilter || String(item.evidence_id ?? ""),
       hostId: hostIdFilter || String(item.host_id ?? ""),
+      hosts: caseContext?.hosts ?? [],
       sourceView: "artifact_explorer",
       sourceRoute: window.location.pathname + window.location.search,
       artifactFamily: artifactTypeFilter || String((item.artifact as Record<string, unknown> | undefined)?.type ?? ""),
