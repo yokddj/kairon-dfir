@@ -556,7 +556,7 @@ describe("ArtifactExplorer", () => {
     await waitFor(() => expect(within(artifactSelector).getAllByRole("option").length).toBeGreaterThan(1));
   });
 
-  it("host with no data at all: 'All artifact types' is the only valid option", async () => {
+  it("host with no data at all: 'All artifact types' and 'DNS' are the only valid options", async () => {
     searchFacetsMock.mockResolvedValueOnce({ "artifact.type": {}, "artifact.name": {} });
     getStartupPersistenceMock.mockResolvedValueOnce({
       case_id: "case-1",
@@ -575,8 +575,11 @@ describe("ArtifactExplorer", () => {
     expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
     const artifactSelector = await screen.findByLabelText("Artifact view");
     await waitFor(() => expect(getStartupPersistenceMock).toHaveBeenCalled());
-    expect(within(artifactSelector).getAllByRole("option")).toHaveLength(1);
+    // DNS is always selectable (it's matched by event.type, not a facet --
+    // see DNS_EVENT_TYPES), so it's present even with zero indexed data.
+    expect(within(artifactSelector).getAllByRole("option")).toHaveLength(2);
     expect(within(artifactSelector).getByRole("option", { name: "All artifact types" })).toBeInTheDocument();
+    expect(within(artifactSelector).getByRole("option", { name: "DNS" })).toBeInTheDocument();
   });
 
   it("renders user activity tabs for RECmd artifacts", async () => {
@@ -625,6 +628,21 @@ describe("ArtifactExplorer", () => {
       "case-1",
       expect.objectContaining({ source: undefined, type: undefined }),
     );
+  });
+
+  it("filters by DNS event types instead of artifact_type, catching both the dedicated DNS parser and Sysmon 22", async () => {
+    renderPage("/cases/case-1/artifact-search?artifact_type=dns");
+    await waitFor(() => expect(searchMock).toHaveBeenCalled());
+    const lastCall = searchMock.mock.calls[searchMock.mock.calls.length - 1][0];
+    expect(lastCall.filters.artifact_type).toEqual([]);
+    expect(lastCall.filters.event_type).toEqual(["dns_query", "dns_query_failed", "dns_cache_entry", "dns_config", "sysmon_dns_query"]);
+  });
+
+  it("offers DNS as a selectable artifact view even with no other data present", async () => {
+    searchFacetsMock.mockResolvedValueOnce({ "artifact.type": {}, "artifact.name": {} });
+    renderPage("/cases/case-1/artifact-search");
+    const artifactSelector = await screen.findByLabelText("Artifact view");
+    expect(within(artifactSelector).getByRole("option", { name: "DNS" })).toBeInTheDocument();
   });
 
   it("renders MOTW downloaded file details and pivots", async () => {

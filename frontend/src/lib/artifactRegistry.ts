@@ -42,6 +42,14 @@ const ARTIFACT_REGISTRY: UiArtifactDefinition[] = [
   { id: "runmru", label: "RunMRU", platforms: ["windows"], view: "auto" },
   { id: "opensavemru", label: "OpenSaveMRU", platforms: ["windows"], view: "auto" },
   { id: "network", label: "Network", aliases: ["linux_network", "linux_ssh"], platforms: ["windows", "linux", "memory"], view: "network" },
+  // DNS activity rarely has its own artifact.type facet -- most of it lives
+  // inside Windows Events (Sysmon 22 "sysmon_dns_query") or a dedicated
+  // network export (event.type dns_query/dns_query_failed/dns_cache_entry/
+  // dns_config). This entry is matched by event type, not artifact type --
+  // see DNS_EVENT_TYPES in ArtifactExplorer.tsx -- so it always appears as
+  // its own selectable view instead of only when a standalone "dns"
+  // artifact.type facet happens to exist.
+  { id: "dns", label: "DNS", platforms: ["windows", "linux"], view: "network" },
   { id: "linux_journal", label: "Linux Journal", platforms: ["linux"], view: "evtx", platformShortcut: true },
   { id: "linux_auth", label: "Linux Auth", platforms: ["linux"], view: "network", platformShortcut: true },
   { id: "linux_lastlog", label: "Lastlog", platforms: ["linux"], view: "network", platformShortcut: true },

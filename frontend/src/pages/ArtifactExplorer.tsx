@@ -27,6 +27,12 @@ const USER_ACTIVITY_TABS = [
 ];
 const USER_ACTIVITY_TYPES = new Set(USER_ACTIVITY_TABS.map((item) => item.value));
 const INTERNAL_ARTIFACT_TYPES_HIDDEN_FROM_MAIN = new Set(["registry_persistence"]);
+// DNS activity is spread across sources with no shared artifact.type: the
+// dedicated network/DNS parser (event.type dns_query/dns_query_failed/
+// dns_cache_entry/dns_config) and Sysmon Event 22 (sysmon_dns_query, kept
+// under artifact.type "windows_event"). Filtering by event.type instead of
+// artifact.type is what lets the "DNS" view catch both.
+const DNS_EVENT_TYPES = ["dns_query", "dns_query_failed", "dns_cache_entry", "dns_config", "sysmon_dns_query"];
 const EZ_BACKENDS: Record<string, { tool: string; backend: string; note: string }> = {
   lnk: { tool: "LECmd", backend: "lecmd_csv", note: "Lower coverage on HOSTA benchmark, richer target and argument fields." },
   jumplist: { tool: "JLECmd", backend: "jlecmd_csv", note: "Lower coverage on HOSTA benchmark, richer AppId, MRU and target fields." },
@@ -684,7 +690,7 @@ export default function ArtifactExplorer() {
   });
   const artifactTypeOptions = Object.keys(facetsQuery.data?.["artifact.type"] ?? {});
   const artifactTypeSelectOptions = useMemo(() => {
-    const derivedExtras = (startupPersistencePresenceQuery.data?.total ?? 0) > 0 ? ["startup_persistence"] : [];
+    const derivedExtras = (startupPersistencePresenceQuery.data?.total ?? 0) > 0 ? ["startup_persistence", "dns"] : ["dns"];
     return artifactOptions(
       artifactTypeOptions.filter((option) => !INTERNAL_ARTIFACT_TYPES_HIDDEN_FROM_MAIN.has(option)),
       derivedExtras,
@@ -702,7 +708,8 @@ export default function ArtifactExplorer() {
       query: query || "*",
       search_mode: searchMode,
         filters: {
-          artifact_type: artifactTypeFilter ? [artifactTypeFilter] : [],
+          artifact_type: artifactTypeFilter && artifactTypeFilter !== "dns" ? [artifactTypeFilter] : [],
+          event_type: artifactTypeFilter === "dns" ? DNS_EVENT_TYPES : [],
           artifact_name: artifactName ? [artifactName] : [],
           deleted_only: mftDeletedOnly || undefined,
           suspicious_paths_only: mftSuspiciousPathsOnly || undefined,
