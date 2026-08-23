@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { useParams, useSearchParams } from "react-router-dom";
@@ -166,67 +166,67 @@ function StartupPersistenceView({
                 </tr>
               </thead>
               <tbody className="divide-y divide-line">
-                {items.map((item) => (
-                  <tr key={item.id} className={selectedItem?.id === item.id ? "bg-accent/10" : "bg-panel/20"}>
-                    <td className="px-4 py-3">{item.host || "-"}</td>
-                    <td className="px-4 py-3">{item.type}</td>
-                    <td className="px-4 py-3 font-medium text-ink">{item.name || "-"}</td>
-                    <td className="max-w-[28rem] truncate px-4 py-3 text-muted" title={item.command_or_target || item.path || ""}>{item.command_or_target || item.path || "-"}</td>
-                    <td className="px-4 py-3">
-                      <span className={`rounded-full border px-2 py-1 text-xs ${item.risk_score >= 70 ? "border-red-300/40 bg-red-500/10 text-red-200" : item.risk_score >= 40 ? "border-amber-300/40 bg-amber-500/10 text-amber-100" : "border-line bg-abyss/80 text-muted"}`}>
-                        {riskLabel(item.risk_score)} {item.risk_score}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">{item.source_artifact || "-"}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex flex-wrap gap-2">
-                        <button type="button" onClick={() => onSelectItem(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Details</button>
-                        {item.search_url ? <Link to={item.search_url} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Open source evidence</Link> : null}
-                        <button type="button" onClick={() => onCreateFinding(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Create finding from this</button>
-                        <button type="button" disabled={!item.source_event_id || timelinePending} onClick={() => onAddTimeline(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink disabled:opacity-40">Add to Incident Timeline</button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {items.map((item) => {
+                  const isOpen = selectedItem?.id === item.id;
+                  return (
+                    <Fragment key={item.id}>
+                      <tr className={isOpen ? "bg-accent/10" : "bg-panel/20"}>
+                        <td className="px-4 py-3">{item.host || "-"}</td>
+                        <td className="px-4 py-3">{item.type}</td>
+                        <td className="px-4 py-3 font-medium text-ink">{item.name || "-"}</td>
+                        <td className="max-w-[28rem] truncate px-4 py-3 text-muted" title={item.command_or_target || item.path || ""}>{item.command_or_target || item.path || "-"}</td>
+                        <td className="px-4 py-3">
+                          <span className={`rounded-full border px-2 py-1 text-xs ${item.risk_score >= 70 ? "border-red-300/40 bg-red-500/10 text-red-200" : item.risk_score >= 40 ? "border-amber-300/40 bg-amber-500/10 text-amber-100" : "border-line bg-abyss/80 text-muted"}`}>
+                            {riskLabel(item.risk_score)} {item.risk_score}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3">{item.source_artifact || "-"}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex flex-wrap gap-2">
+                            <button type="button" onClick={() => onSelectItem(isOpen ? null : item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">{isOpen ? "Close" : "Details"}</button>
+                            {item.search_url ? <Link to={item.search_url} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Open source evidence</Link> : null}
+                            <button type="button" onClick={() => onCreateFinding(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink">Create finding from this</button>
+                            <button type="button" disabled={!item.source_event_id || timelinePending} onClick={() => onAddTimeline(item)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:text-ink disabled:opacity-40">Add to Incident Timeline</button>
+                          </div>
+                        </td>
+                      </tr>
+                      {isOpen ? (
+                        <tr>
+                          <td colSpan={7} className="px-4 py-4">
+                            <div className="space-y-4 rounded-2xl border border-line bg-abyss/70 p-4">
+                              <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Persistence detail</p>
+                              <div className="grid gap-3 md:grid-cols-3">
+                                <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">Enabled/start:</span> {String(item.enabled ?? item.start_type ?? "-")}</div>
+                                <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">User:</span> {item.user || "-"}</div>
+                                <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">First seen:</span> {item.first_seen ? formatTimestamp(item.first_seen, effectiveTimezone) : "-"}</div>
+                              </div>
+                              <div>
+                                <p className="text-sm font-medium">Risk reasons</p>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  {item.risk_reasons.map((reason) => <span key={reason} className="rounded-full border border-line bg-abyss/70 px-3 py-1 text-xs text-muted">{reason}</span>)}
+                                </div>
+                              </div>
+                              <div className="flex flex-wrap gap-2">
+                                {item.search_url ? <Link to={item.search_url} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Open source evidence</Link> : null}
+                                {item.timeline_url ? <Link to={item.timeline_url} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Open Search around</Link> : null}
+                                <button type="button" onClick={() => onCreateFinding(item)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Create finding from this</button>
+                                <button type="button" disabled={!item.source_event_id || timelinePending} onClick={() => onAddTimeline(item)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted disabled:opacity-40">Add to Incident Timeline</button>
+                              </div>
+                              {timelineSuccess ? <p className="text-sm text-emerald-300">Added as a key persistence event for timeline/report review.</p> : null}
+                              {timelineError ? <p className="text-sm text-red-300">{timelineError}</p> : null}
+                              <IndicatorResolutionPanel data={indicatorData} />
+                            </div>
+                          </td>
+                        </tr>
+                      ) : null}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         ) : null}
       </section>
-      {selectedItem ? (
-        <section className="rounded-[28px] border border-line bg-panel/70 p-5">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Persistence detail</p>
-              <h3 className="mt-1 text-xl font-semibold">{selectedItem.name}</h3>
-              <p className="mt-2 text-sm text-muted">{selectedItem.command_or_target || selectedItem.path || "No command or target path captured."}</p>
-            </div>
-            <button type="button" onClick={() => onSelectItem(null)} className="rounded-lg border border-line px-3 py-2 text-sm text-muted">Close</button>
-          </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-3">
-            <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">Enabled/start:</span> {String(selectedItem.enabled ?? selectedItem.start_type ?? "-")}</div>
-            <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">User:</span> {selectedItem.user || "-"}</div>
-            <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">First seen:</span> {selectedItem.first_seen ? formatTimestamp(selectedItem.first_seen, effectiveTimezone) : "-"}</div>
-          </div>
-          <div className="mt-4">
-            <p className="text-sm font-medium">Risk reasons</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {selectedItem.risk_reasons.map((reason) => <span key={reason} className="rounded-full border border-line bg-abyss/70 px-3 py-1 text-xs text-muted">{reason}</span>)}
-            </div>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {selectedItem.search_url ? <Link to={selectedItem.search_url} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Open source evidence</Link> : null}
-            {selectedItem.timeline_url ? <Link to={selectedItem.timeline_url} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Open Search around</Link> : null}
-            <button type="button" onClick={() => onCreateFinding(selectedItem)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted">Create finding from this</button>
-            <button type="button" disabled={!selectedItem.source_event_id || timelinePending} onClick={() => onAddTimeline(selectedItem)} className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm text-muted disabled:opacity-40">Add to Incident Timeline</button>
-          </div>
-          {timelineSuccess ? <p className="mt-3 text-sm text-emerald-300">Added as a key persistence event for timeline/report review.</p> : null}
-          {timelineError ? <p className="mt-3 text-sm text-red-300">{timelineError}</p> : null}
-          <div className="mt-5">
-            <IndicatorResolutionPanel data={indicatorData} />
-          </div>
-        </section>
-      ) : null}
     </div>
   );
 }
