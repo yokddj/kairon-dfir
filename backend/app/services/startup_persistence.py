@@ -87,7 +87,12 @@ def list_startup_persistence_items(db: Session, case_id: str, params: dict[str, 
                     {
                         "q": query,
                         "artifact_type": source["artifact_types"],
-                        "host": host_filter,
+                        # search_events_v2's "host" filter (EVENT_EXACT_FILTERS)
+                        # takes a single string, not a list -- passing the list
+                        # directly made str(['ws01']) == "['ws01']", which never
+                        # matches host.name, so any host-scoped call silently
+                        # returned zero results regardless of source or host.
+                        "host": host_filter[0] if len(host_filter) == 1 else None,
                         "page_size": per_query_limit,
                         "sort": "risk_desc",
                         "include_facets": False,
