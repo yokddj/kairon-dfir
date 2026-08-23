@@ -258,6 +258,7 @@ function MotwArtifactView({
               <thead className="bg-abyss/70 text-left text-xs uppercase tracking-[0.14em] text-muted">
                 <tr>
                   <th className="px-4 py-3">Host</th>
+                  <th className="px-4 py-3">User</th>
                   <th className="px-4 py-3">File</th>
                   <th className="px-4 py-3">Zone</th>
                   <th className="px-4 py-3">HostUrl</th>
@@ -271,6 +272,7 @@ function MotwArtifactView({
                 {items.map((item) => (
                   <tr key={item.id} className={selectedItem?.id === item.id ? "bg-accent/10" : "bg-panel/20"}>
                     <td className="px-4 py-3">{item.host || "-"}</td>
+                    <td className="px-4 py-3">{item.user || "-"}</td>
                     <td className="max-w-[24rem] truncate px-4 py-3 font-medium text-ink" title={item.file_path}>{item.file_name || item.file_path || "-"}</td>
                     <td className="px-4 py-3">{item.zone_id ?? "-"} {item.zone_name}</td>
                     <td className="max-w-[18rem] truncate px-4 py-3 text-muted" title={item.host_url || ""}>{item.host_url || "-"}</td>
@@ -313,6 +315,7 @@ function MotwArtifactView({
             <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">Source:</span> {selectedItem.source_artifact}</div>
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">User:</span> {selectedItem.user || "-"}</div>
             <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">HostUrl:</span> {selectedItem.host_url || "Not available in indexed evidence"}</div>
             <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">ReferrerUrl:</span> {selectedItem.referrer_url || "Not available in indexed evidence"}</div>
           </div>

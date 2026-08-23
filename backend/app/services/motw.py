@@ -169,6 +169,7 @@ def _normalize_row(case_id: str, row: dict[str, Any], source: str) -> dict[str, 
     windows = _obj(raw.get("windows") or row.get("windows"))
     sysmon = _obj(raw.get("sysmon") or row.get("sysmon"))
     host = normalize_host_alias(str(_obj(raw.get("host") or row.get("host")).get("name") or row.get("host") or ""))
+    user = str(_obj(raw.get("user")).get("name") or raw.get("user") or "")
     message = " ".join(str(value or "") for value in (event.get("message"), raw.get("raw_summary"), row.get("summary"), raw.get("search_text")))
     event_data = _obj(windows.get("event_data") or raw.get("event_data") or event.get("data"))
     target = _first(
@@ -201,6 +202,7 @@ def _normalize_row(case_id: str, row: dict[str, Any], source: str) -> dict[str, 
         "case_id": case_id,
         "evidence_id": raw.get("evidence_id") or row.get("evidence_id"),
         "host": host,
+        "user": user,
         "artifact_type": "motw",
         "file_path": base_path,
         "file_name": file_name,

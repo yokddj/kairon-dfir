@@ -3330,6 +3330,7 @@ export type MotwItem = {
   case_id: string;
   evidence_id?: string | null;
   host?: string | null;
+  user?: string | null;
   artifact_type: "motw" | string;
   file_path: string;
   file_name: string;
