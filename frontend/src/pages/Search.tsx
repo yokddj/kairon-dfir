@@ -1364,6 +1364,12 @@ export default function Search() {
   const [findingPrefill, setFindingPrefill] = useState<FindingPrefill | null>(null);
   const [selectedId, setSelectedId] = useState(state.selected);
   const [density, setDensity] = useState<TableDensity>("compact");
+  // "auto" keeps the existing heuristic (deduceArtifactView); any other
+  // value pins the Artifact view's column layout explicitly so it no
+  // longer flips depending on filter order or which result happens to be
+  // first on the current page -- most useful for "dns", since that mode
+  // was previously only reachable by accident.
+  const [manualArtifactView, setManualArtifactView] = useState<ArtifactViewMode | "auto">("auto");
   const [draftCondition, setDraftCondition] = useState<BuilderCondition>({ field: "artifact.type", operator: "is", value: "", negate: false });
   const [filterBuilderError, setFilterBuilderError] = useState("");
   const debouncedQuery = useDebouncedValue(queryInput, 300);
@@ -1661,7 +1667,10 @@ export default function Search() {
       void queryClient.invalidateQueries({ queryKey: ["event-markings"] });
     },
   });
-  const activeView = useMemo(() => deduceArtifactView(eventResults, state.artifact_type), [eventResults, state.artifact_type]);
+  const activeView = useMemo(
+    () => (manualArtifactView === "auto" ? deduceArtifactView(eventResults, state.artifact_type) : manualArtifactView),
+    [manualArtifactView, eventResults, state.artifact_type],
+  );
   const artifactColumns = useMemo(() => specializedColumns(activeView, effectiveTimezone), [activeView, effectiveTimezone]);
   const genericResultColumns = useMemo(() => genericColumns(effectiveTimezone), [effectiveTimezone]);
   const activeFilterChips = useMemo(() => {
@@ -2689,8 +2698,29 @@ export default function Search() {
               {state.tab === "artifact_views" ? (
                 <div className="space-y-3">
                 <div className="min-w-0 rounded-[24px] border border-line bg-panel/70 p-4 shadow-panel">
-                    <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact view</p>
-                    <p className="mt-2 text-sm text-muted">Using <span className="font-medium text-slate-200">{activeView}</span> columns for the current result set.</p>
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact view</p>
+                      <label className="flex items-center gap-2 text-xs text-muted">
+                        View
+                        <select
+                          aria-label="Artifact view mode"
+                          value={manualArtifactView}
+                          onChange={(event) => setManualArtifactView(event.target.value as ArtifactViewMode | "auto")}
+                          className="rounded-xl border border-line bg-abyss/80 px-2 py-1 text-xs text-ink"
+                        >
+                          <option value="auto">Auto</option>
+                          <option value="process">Process</option>
+                          <option value="dns">DNS</option>
+                          <option value="downloads">Downloads</option>
+                          <option value="defender">Defender</option>
+                          <option value="persistence">Persistence</option>
+                          <option value="files">Files</option>
+                          <option value="cloud_usb">Cloud / USB</option>
+                          <option value="generic">Generic</option>
+                        </select>
+                      </label>
+                    </div>
+                    <p className="mt-2 text-sm text-muted">Using <span className="font-medium text-slate-200">{activeView}</span> columns for the current result set.{manualArtifactView !== "auto" ? " (pinned manually)" : ""}</p>
                   </div>
                   <SearchTable results={eventResults} columns={artifactColumns} selectedId={selectedId} onSelect={handleSelect} actionBuilder={buildActions} pivotRenderer={renderPivotValue} testId="artifact-view-table" density={density} sort={state.sort} onSortChange={updateBackendSort} />
                 </div>
