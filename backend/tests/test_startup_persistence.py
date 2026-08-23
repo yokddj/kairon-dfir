@@ -125,6 +125,52 @@ def test_filters_by_host_type_and_risk(monkeypatch):
     assert result["summary"]["suspicious"] == 1
 
 
+def _realistic_row(artifact_type: str, *, host: str = "HOSTA", evidence_id: str = "ev-1", **doc_fields) -> dict:
+    """search_events_v2's actual row shape: a display-summary envelope
+    (id/host/timestamp/artifact_type/...) with the real normalized document
+    -- task/service/registry/persistence/event/evidence_id/... -- nested one
+    level down under "raw". Mirrors real production data, unlike _event()
+    above which puts fields at the top level (the shape _normalize_event_row
+    used to -- incorrectly -- assume).
+    """
+    return {
+        "id": doc_fields.pop("id", f"{artifact_type}-1"),
+        "host": host,
+        "artifact_type": artifact_type,
+        "timestamp": doc_fields.pop("timestamp", "2024-03-22T11:00:00Z"),
+        "raw": {
+            "evidence_id": evidence_id,
+            "artifact": {"type": artifact_type},
+            "event": {"message": doc_fields.pop("message", "")},
+            **doc_fields,
+        },
+    }
+
+
+def test_field_extraction_reads_the_real_search_events_v2_row_shape(monkeypatch):
+    # Regression test: _normalize_event_row used to read task/service/
+    # persistence/registry/etc. from the row's top level, but
+    # search_events_v2 actually nests the real document one level down
+    # under row["raw"] -- so every field but artifact_type/host/timestamp
+    # (which happen to also exist at the top level) came back "-" against
+    # real data, no matter which source produced the item.
+    def fake_search(_case_id, params, **_kwargs):
+        if "service" in (params.get("artifact_type") or []):
+            return 1, [_realistic_row("service", service={"name": "PSEXESVC", "image_path": r"C:\Windows\PSEXESVC.exe", "start_type": "auto"}, user={"name": "SYSTEM"})], [], {}
+        return 0, [], [], {}
+
+    monkeypatch.setattr(startup_persistence, "search_events_v2", fake_search)
+    monkeypatch.setattr(startup_persistence, "get_command_history", lambda *_args, **_kwargs: {"items": []})
+
+    result = startup_persistence.list_startup_persistence_items(_Db(), "case-1", {"source": ["services"], "page_size": 50})
+
+    item = result["items"][0]
+    assert item["name"] == "PSEXESVC"
+    assert item["command_or_target"] == r"C:\Windows\PSEXESVC.exe"
+    assert item["user"] == "SYSTEM"
+    assert item["evidence_id"] == "ev-1"
+
+
 def test_host_filter_is_passed_as_a_single_string_not_a_list(monkeypatch):
     # search_events_v2's "host" param (EVENT_EXACT_FILTERS) is str(value).strip()
     # against a single value -- passing the whole list made str(['ws01']) become
