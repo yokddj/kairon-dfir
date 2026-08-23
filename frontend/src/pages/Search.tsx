@@ -12,6 +12,7 @@ import CreateFindingDialog from "../components/CreateFindingDialog";
 import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 import { useHostContext } from "../hooks/useHostContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
+import { useTimezonePreference } from "../context/TimezoneContext";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 import { artifactLabel } from "../lib/artifactRegistry";
 import EmptyState from "../components/EmptyState";
@@ -765,9 +766,9 @@ function TruncatedCell({ value, density }: { value: unknown; density: TableDensi
   );
 }
 
-function genericColumns(): ColumnDef[] {
+function genericColumns(timezone: string): ColumnDef[] {
   return [
-    { key: "timestamp", label: "Timestamp", defaultWidth: 180, minWidth: 140, render: (result, _summary, _pivot, density) => <TruncatedCell value={formatTimestamp(result.timestamp, "UTC")} density={density} /> },
+    { key: "timestamp", label: "Timestamp", defaultWidth: 180, minWidth: 140, render: (result, _summary, _pivot, density) => <TruncatedCell value={formatTimestamp(result.timestamp, timezone)} density={density} /> },
     { key: "artifact", label: "Artifact", defaultWidth: 135, minWidth: 110, render: (result, _summary, pivot, density) => pivot({ label: "artifact type", field: "artifact.type", value: result.artifact_type, display: artifactLabel(result.artifact_type), className: cellTextClass(density) }) },
     { key: "source", label: "Source", defaultWidth: 190, minWidth: 130, render: (result) => <SourceBadge result={result} /> },
     { key: "parser", label: "Parser", defaultWidth: 170, minWidth: 120, render: (result, _summary, pivot, density) => pivot({ label: "parser", field: "artifact.parser", value: applyCellFallbacks(result.parser, asString(asRecord(result.raw).artifact && asRecord(asRecord(result.raw).artifact).parser)), className: cellTextClass(density) }) },
@@ -782,8 +783,8 @@ function genericColumns(): ColumnDef[] {
   ];
 }
 
-function specializedColumns(view: ArtifactViewMode): ColumnDef[] {
-  const timestamp = { key: "timestamp", label: "Timestamp", render: (result: SearchV2Result, _summary: EntitySummary, _pivot: PivotRenderer, density: TableDensity) => <TruncatedCell value={formatTimestamp(result.timestamp, "UTC")} density={density} /> };
+function specializedColumns(view: ArtifactViewMode, timezone: string): ColumnDef[] {
+  const timestamp = { key: "timestamp", label: "Timestamp", render: (result: SearchV2Result, _summary: EntitySummary, _pivot: PivotRenderer, density: TableDensity) => <TruncatedCell value={formatTimestamp(result.timestamp, timezone)} density={density} /> };
   switch (view) {
     case "process":
       return [
@@ -856,7 +857,7 @@ function specializedColumns(view: ArtifactViewMode): ColumnDef[] {
         { key: "risk", label: "Risk", render: (result) => <ResultBadge tone={riskTone(result.risk_score)}>{String(result.risk_score ?? 0)}</ResultBadge> },
       ];
     default:
-      return genericColumns();
+      return genericColumns(timezone);
   }
 }
 
@@ -1036,6 +1037,8 @@ function DetailPanel({
   mode?: "drawer";
   showCloseButton?: boolean;
 }) {
+  const { effectiveTimezone } = useTimezonePreference();
+
   if (!result) {
     return null;
   }
@@ -1098,7 +1101,7 @@ function DetailPanel({
             </div>
           </div>
           <div className="min-w-0 w-full space-y-2 md:w-[280px]">
-            <InfoCard label="Timestamp" value={formatTimestamp(result.timestamp, "UTC")} />
+            <InfoCard label="Timestamp" value={formatTimestamp(result.timestamp, effectiveTimezone)} />
             <InfoCard label="Host / User">
               <div className="flex min-w-0 flex-wrap gap-1">
                 {pivotRenderer({ label: "host", field: "host.name", value: summary.primaryHost, className: cellTextClass("expanded") })}
@@ -1250,7 +1253,7 @@ function DetailPanel({
           <div className="rounded-2xl border border-line bg-abyss/60 p-4">
             <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Key fields</p>
             <div className="mt-3 grid gap-2 text-sm text-muted">
-              <div className="break-words">Timestamp: <span className="text-white">{formatTimestamp(result.timestamp, "UTC")}</span></div>
+              <div className="break-words">Timestamp: <span className="text-white">{formatTimestamp(result.timestamp, effectiveTimezone)}</span></div>
               <div className="break-words">Host: <span className="text-white">{applyCellFallbacks(summary.primaryHost)}</span></div>
               {observedHost && observedHost !== summary.primaryHost ? (
                 <div className="break-words">Observed as: <span className="text-white">{observedHost}</span></div>
@@ -1287,7 +1290,7 @@ function DetailPanel({
             <div className="mt-3 space-y-3">
               {timeline.slice(0, 8).map((item, index) => (
                 <div key={`${asString(item.event_id)}-${index}`} className="border-l border-line pl-3 text-xs text-muted">
-                  <div className="font-medium text-slate-200">{formatTimestamp(asString(item.timestamp), "UTC")}</div>
+                  <div className="font-medium text-slate-200">{formatTimestamp(asString(item.timestamp), effectiveTimezone)}</div>
                   <div>{applyCellFallbacks(item.artifact_type, item.event_type)}</div>
                   <div className="mt-1">{applyCellFallbacks(item.summary)}</div>
                 </div>
@@ -1375,6 +1378,7 @@ export default function Search() {
   const { caseId: routeCaseId } = useParams();
   const { activeCaseId, selectedEvidenceId, selectedHost, setActiveCaseId } = useActiveCase();
   const { activeHost, activeHostId, clearHostFilter } = useHostContext();
+  const { effectiveTimezone } = useTimezonePreference();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const state = useMemo(() => buildState(searchParams), [searchParams]);
@@ -1687,8 +1691,8 @@ export default function Search() {
     },
   });
   const activeView = useMemo(() => deduceArtifactView(eventResults, state.artifact_type), [eventResults, state.artifact_type]);
-  const artifactColumns = useMemo(() => specializedColumns(activeView), [activeView]);
-  const genericResultColumns = useMemo(() => genericColumns(), []);
+  const artifactColumns = useMemo(() => specializedColumns(activeView, effectiveTimezone), [activeView, effectiveTimezone]);
+  const genericResultColumns = useMemo(() => genericColumns(effectiveTimezone), [effectiveTimezone]);
   const activeFilterChips = useMemo(() => {
     const chips: Array<{ key: string; label: string; clear: Record<string, string | null> }> = [];
     if (state.q) chips.push({ key: "q", label: `query: ${state.q}`, clear: { q: null } });
@@ -2009,9 +2013,9 @@ export default function Search() {
     const parentProcess = asRecord(process.parent);
     const hasTimestamp = resultTimestampMs(result) !== null;
     const actions: Array<RowAction | null> = [
-      { label: "Around this event · ±30s", onClick: () => void handleAroundEvent(result, 30 * 1000), disabled: !hasTimestamp, value: hasTimestamp ? formatTimestamp(result.timestamp, "UTC") : "No valid forensic timestamp" },
-      { label: "Around this event · ±5m", onClick: () => void handleAroundEvent(result, 5 * 60 * 1000), disabled: !hasTimestamp, value: hasTimestamp ? formatTimestamp(result.timestamp, "UTC") : "No valid forensic timestamp" },
-      { label: "Around this event · ±30m", onClick: () => void handleAroundEvent(result, 30 * 60 * 1000), disabled: !hasTimestamp, value: hasTimestamp ? formatTimestamp(result.timestamp, "UTC") : "No valid forensic timestamp" },
+      { label: "Around this event · ±30s", onClick: () => void handleAroundEvent(result, 30 * 1000), disabled: !hasTimestamp, value: hasTimestamp ? formatTimestamp(result.timestamp, effectiveTimezone) : "No valid forensic timestamp" },
+      { label: "Around this event · ±5m", onClick: () => void handleAroundEvent(result, 5 * 60 * 1000), disabled: !hasTimestamp, value: hasTimestamp ? formatTimestamp(result.timestamp, effectiveTimezone) : "No valid forensic timestamp" },
+      { label: "Around this event · ±30m", onClick: () => void handleAroundEvent(result, 30 * 60 * 1000), disabled: !hasTimestamp, value: hasTimestamp ? formatTimestamp(result.timestamp, effectiveTimezone) : "No valid forensic timestamp" },
       makeRelatedFilterAction("Same host", "host.name", summary.primaryHost),
       makeRelatedFilterAction("Same user", "user.name", summary.primaryUser),
       makeRelatedFilterAction("Same process", "process.name", process.name || summary.primaryProcess),
@@ -2733,7 +2737,7 @@ export default function Search() {
                         const summary = summarizeResult(result);
                         return (
                           <button key={`${result.kind}-${result.id}`} type="button" onClick={() => handleSelect(result)} className="flex w-full items-start gap-4 rounded-2xl border border-line bg-abyss/50 p-4 text-left hover:bg-white/5">
-                            <div className="w-40 shrink-0 text-xs text-muted">{formatTimestamp(result.timestamp, "UTC")}</div>
+                            <div className="w-40 shrink-0 text-xs text-muted">{formatTimestamp(result.timestamp, effectiveTimezone)}</div>
                             <div className="mt-1 h-3 w-3 shrink-0 rounded-full bg-accent" />
                             <div className="min-w-0 flex-1">
                               <div className="flex flex-wrap gap-2">
