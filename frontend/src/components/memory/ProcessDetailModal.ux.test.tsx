@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MemoryArtifactList, MemoryProcessEntityDetail } from "../../api/client";
-import { ProcessDetailModal } from "./ProcessDetailModal";
+import { ProcessDetailModal, type TabKey } from "./ProcessDetailModal";
 
 const getMemoryEnvVariablesMock = vi.fn();
 const getMemorySidsMock = vi.fn();
@@ -92,7 +92,7 @@ function artifactListFixture(items: Array<Record<string, unknown> & { document_i
 function renderModal(
   overrides: Partial<{
     open: boolean; detail: MemoryProcessEntityDetail | null; isLoading: boolean; error: Error | null;
-    caseId: string; evidenceId: string; runId: string | null;
+    caseId: string; evidenceId: string; runId: string | null; initialTab: TabKey;
   }> = {},
 ) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -107,6 +107,7 @@ function renderModal(
           caseId={overrides.caseId ?? "case-1"}
           evidenceId={overrides.evidenceId ?? "ev-memory"}
           runId={overrides.runId ?? "run-basic"}
+          initialTab={overrides.initialTab}
           onClose={vi.fn()}
         />
       </MemoryRouter>
@@ -208,6 +209,13 @@ describe("ProcessDetailModal", () => {
       await screen.findByTestId("process-detail-modal");
       fireEvent.click(screen.getByTestId("process-detail-modal-tab-command_line"));
       await screen.findByTestId("process-detail-modal-tabpanel-command-line");
+    });
+
+    it("opens directly on the requested initialTab (e.g. from the memory graph's View network button)", async () => {
+      renderModal({ initialTab: "network" });
+      await screen.findByTestId("process-detail-modal");
+      await screen.findByTestId("process-detail-modal-tabpanel-network");
+      expect(screen.queryByTestId("process-detail-modal-tabpanel-overview")).not.toBeInTheDocument();
     });
   });
 

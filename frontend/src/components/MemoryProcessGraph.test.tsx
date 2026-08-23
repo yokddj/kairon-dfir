@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryProcessGraph } from "./MemoryProcessGraph";
@@ -16,12 +16,12 @@ vi.mock("../api/client", () => ({
   },
 }));
 
-function renderGraph(caseId = "case-1", runId = "run-extended") {
+function renderGraph(caseId = "case-1", runId = "run-extended", onOpenDetail = vi.fn()) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <MemoryRouter>
       <QueryClientProvider client={queryClient}>
-        <MemoryProcessGraph caseId={caseId} runId={runId} onOpenDetail={vi.fn()} />
+        <MemoryProcessGraph caseId={caseId} runId={runId} onOpenDetail={onOpenDetail} />
       </QueryClientProvider>
     </MemoryRouter>,
   );
@@ -188,6 +188,17 @@ describe("MemoryProcessGraph", () => {
     const nodes = await screen.findAllByTestId("memory-graph-node");
     fireEvent.click(nodes[0]);
     expect(await screen.findByTestId("memory-graph-detail")).toBeInTheDocument();
+  });
+
+  // 6b. "View network" jumps straight to the Network tab of the process detail modal
+  it("calls onOpenDetail with the network tab when View network is clicked", async () => {
+    const onOpenDetail = vi.fn();
+    renderGraph("case-1", "run-extended", onOpenDetail);
+    const nodes = await screen.findAllByTestId("memory-graph-node");
+    fireEvent.click(nodes[0]);
+    const selectedActions = await screen.findByTestId("selected-actions");
+    fireEvent.click(within(selectedActions).getByText("View network"));
+    expect(onOpenDetail).toHaveBeenCalledWith(expect.any(String), "network");
   });
 
   // 7. PID 4 not duplicated across nodes

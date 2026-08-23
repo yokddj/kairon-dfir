@@ -4,7 +4,7 @@ import { type MemoryRunSelector, api } from "../../api/client";
 import { MemoryProcessGraph } from "../MemoryProcessGraph";
 import { IndentedTreeView } from "./IndentedTreeView";
 import { MetricsStrip } from "./MetricsStrip";
-import { ProcessDetailModal } from "./ProcessDetailModal";
+import { ProcessDetailModal, type TabKey } from "./ProcessDetailModal";
 import { useMemoryTreeMetrics } from "../../lib/useMemoryTreeMetrics";
 
 type Props = {
@@ -32,6 +32,7 @@ export function MemoryGraphTab({
 }: Props) {
   const [subView, setSubView] = useState<SubView>("graph");
   const [inspectEntityId, setInspectEntityId] = useState<string | null>(null);
+  const [inspectInitialTab, setInspectInitialTab] = useState<TabKey | undefined>(undefined);
 
   const topologyRunId = runOptions?.runs.find(
     (run) => run.profile === "processes_basic" && (run.status === "completed" || run.status === "completed_with_errors"),
@@ -104,7 +105,10 @@ export function MemoryGraphTab({
             <MemoryProcessGraph
               caseId={caseId}
               runId={effectiveRunId}
-              onOpenDetail={(entityId) => setInspectEntityId(entityId)}
+              onOpenDetail={(entityId, tab) => {
+                setInspectEntityId(entityId);
+                setInspectInitialTab((tab as TabKey | undefined) ?? undefined);
+              }}
               selectedEntityId={selectedEntityId}
               onSelectEntityId={onSelectEntityId}
             />
@@ -119,7 +123,10 @@ export function MemoryGraphTab({
               onSelectRunId={onSelectRunId}
               selectedEntityId={selectedEntityId}
               onSelectEntityId={onSelectEntityId}
-              onOpenProcessDetails={(entityId) => setInspectEntityId(entityId)}
+              onOpenProcessDetails={(entityId) => {
+                setInspectEntityId(entityId);
+                setInspectInitialTab(undefined);
+              }}
             />
           </div>
         )}
@@ -132,6 +139,7 @@ export function MemoryGraphTab({
         caseId={caseId}
         evidenceId={"mem"}
         runId={effectiveRunId}
+        initialTab={inspectInitialTab}
         onClose={() => setInspectEntityId(null)}
         onSelectEntityId={(next) => {
           setInspectEntityId(next);

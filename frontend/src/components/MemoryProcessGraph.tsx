@@ -109,7 +109,7 @@ function toNodeShape(node: any): NodeShape {
 type MemoryProcessGraphProps = {
   caseId: string;
   runId: string | null;
-  onOpenDetail: (entityId: string) => void;
+  onOpenDetail: (entityId: string, tab?: string) => void;
   selectedEntityId?: string | null;
   onSelectEntityId?: (next: string | null) => void;
 };
@@ -834,7 +834,7 @@ function DetailPanel({
   detail: MemoryProcessEntityDetail | null;
   onClose: () => void;
   onCopyPid: (pid: number) => void;
-  onOpenDetail: (entityId: string) => void;
+  onOpenDetail: (entityId: string, tab?: string) => void;
 }) {
   if (!detail) return null;
   const entity = detail.entity;
@@ -855,6 +855,9 @@ function DetailPanel({
           </button>
           <button type="button" onClick={() => onOpenDetail(entity.process_entity_id)} className="rounded-xl border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent">
             Open details
+          </button>
+          <button type="button" onClick={() => onOpenDetail(entity.process_entity_id, "network")} className="rounded-xl border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent">
+            View network
           </button>
           <button type="button" onClick={onClose} className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs">
             Close
@@ -912,7 +915,7 @@ function SelectedActions({
 }: {
   selectedNode: NodeShape | null;
   onCopyPid: (pid: number) => void;
-  onOpenDetail: (id: string) => void;
+  onOpenDetail: (id: string, tab?: string) => void;
 }) {
   if (!selectedNode) return null;
   return (
@@ -923,6 +926,9 @@ function SelectedActions({
       </button>
       <button type="button" onClick={() => onOpenDetail(selectedNode.process_entity_id)} className="rounded-xl border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent">
         Open process details
+      </button>
+      <button type="button" onClick={() => onOpenDetail(selectedNode.process_entity_id, "network")} className="rounded-xl border border-accent/40 bg-accent/10 px-2 py-1 text-xs text-accent">
+        View network
       </button>
     </div>
   );

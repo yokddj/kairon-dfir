@@ -50,9 +50,10 @@ type Props = {
   onSelectEntityId?: (entityId: string) => void;
   onOpenInGraph?: (entityId: string) => void;
   onShowInTree?: (entityId: string) => void;
+  initialTab?: TabKey;
 };
 
-type TabKey = "overview" | "relationships" | "observations" | "raw" | "command_line" | "environment" | "sids" | "privileges" | "network" | "modules" | "handles" | "suspicious" | "vads";
+export type TabKey = "overview" | "relationships" | "observations" | "raw" | "command_line" | "environment" | "sids" | "privileges" | "network" | "modules" | "handles" | "suspicious" | "vads";
 
 const TABS: { key: TabKey; label: string; icon?: React.ReactNode }[] = [
   { key: "overview", label: "Overview" },
@@ -417,6 +418,7 @@ export function ProcessDetailModal({
   onSelectEntityId,
   onOpenInGraph,
   onShowInTree,
+  initialTab,
 }: Props) {
   const [tab, setTab] = useState<TabKey>("overview");
   const [copyMessage, setCopyMessage] = useState<string | null>(null);
@@ -430,9 +432,9 @@ export function ProcessDetailModal({
       // on close.  document.activeElement is the most reliable source
       // because callers do not need to pass a ref.
       triggerRef.current = (document.activeElement as HTMLElement | null) ?? null;
-      setTab("overview");
+      setTab(initialTab ?? "overview");
     }
-  }, [open]);
+  }, [open, initialTab]);
 
   useFocusTrap(open, onClose, containerRef);
 
