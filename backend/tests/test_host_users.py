@@ -419,3 +419,21 @@ class TestApi:
         assert body["scope"] == "host"
         usernames = {u["username"] for u in body["users"]}
         assert usernames == {"alice", "bob"}
+
+    def test_unverified_profiles_endpoint_returns_orphan_sids_separately(self):
+        db = _db()
+        _case(db)
+        _host(db)
+        _evidence(db, host_id=HOST_ID)
+        docs = [{"host_user_fact": {
+            "source_kind": "profile_list", "username": None, "home": r"C:\Users\mshunter",
+            "attributes": {"sid": "S-1-5-21-9999999999-8888888888-7777777777-1105"},
+            "parser": "windows_profile_list", "source_file": "SOFTWARE",
+        }}]
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=HOST_ID, observed_at=None, documents=docs)
+        client = _client(db)
+        response = client.get(f"/api/cases/{CASE_ID}/host-users/unverified-profiles", params={"host_id": HOST_ID})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["scope"] == "host"
+        assert [item["label"] for item in body["profiles"]] == ["mshunter"]

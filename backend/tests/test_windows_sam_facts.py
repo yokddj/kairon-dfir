@@ -26,7 +26,7 @@ from app.ingest.raw_parsers.sam_identity_parser import WindowsSamIdentityRawPars
 from app.models.case import Case
 from app.models.evidence import Evidence, EvidenceStorageMode, EvidenceType, IngestStatus
 from app.models.host_user_fact import HostUserFact
-from app.services.host_users import create_host_user_fact_observations, resolve_host_users
+from app.services.host_users import create_host_user_fact_observations, resolve_host_users, resolve_unverified_host_profiles
 
 CASE_ID = "7a7a7a7a-1111-4111-8111-7a7a7a7a7a7a"
 HOST_ID = "8b8b8b8b-1111-4111-8111-8b8b8b8b8b8b"
@@ -607,3 +607,62 @@ class TestEndToEndPersistenceAndResolution:
         entries_b = {e["username"] for e in resolve_host_users(db, case_id=CASE_ID, host_id=other_host_id)}
         assert entries_a == {"bob"}
         assert entries_b == {"carol"}
+
+
+class TestUnverifiedHostProfiles:
+    """resolve_unverified_host_profiles() -- deliberately separate from
+    resolve_host_users()/"Users": exposes ProfileList SIDs with no matching
+    SAM account (e.g. a domain account's cached profile from an
+    interactive logon) without ever implying local-account membership.
+    """
+
+    def test_orphan_profile_surfaces_here_but_never_in_host_users(self) -> None:
+        db = _db()
+        _case(db)
+        _evidence(db)
+        domain_profile_doc = {"host_user_fact": {
+            "source_kind": "profile_list", "username": None, "home": r"C:\Users\mshunter",
+            "attributes": {"sid": "S-1-5-21-9999999999-8888888888-7777777777-1105"},
+            "parser": "windows_profile_list", "source_file": "SOFTWARE",
+        }}
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id="bbbbbbbb-5555-4555-8555-bbbbbbbbbbbb", host_id=HOST_ID, observed_at=None, documents=[domain_profile_doc])
+
+        profiles = resolve_unverified_host_profiles(db, case_id=CASE_ID, host_id=HOST_ID)
+        assert len(profiles) == 1
+        assert profiles[0]["label"] == "mshunter"
+        assert profiles[0]["sid"] == "S-1-5-21-9999999999-8888888888-7777777777-1105"
+        assert profiles[0]["home"]["preferred_value"] == r"C:\Users\mshunter"
+
+        # Same fixtures, the audited-contract endpoint: must stay untouched.
+        assert resolve_host_users(db, case_id=CASE_ID, host_id=HOST_ID) == []
+
+    def test_profile_matching_a_sam_account_is_excluded_here(self) -> None:
+        db = _db()
+        _case(db)
+        _evidence(db)
+        sam_doc = {"host_user_fact": {
+            "source_kind": "sam_account", "username": "bob", "uid": "1001", "id_kind": "rid",
+            "account_status": "active", "attributes": {"rid": "1001", "sid": f"{MACHINE_SID}-1001"},
+            "parser": "windows_sam_identity", "source_file": "SAM",
+        }}
+        matching_profile_doc = {"host_user_fact": {
+            "source_kind": "profile_list", "username": None, "home": r"C:\Users\bob",
+            "attributes": {"sid": f"{MACHINE_SID}-1001"}, "parser": "windows_profile_list", "source_file": "SOFTWARE",
+        }}
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id="aaaaaaaa-4444-4444-8444-aaaaaaaaaaaa", host_id=HOST_ID, observed_at=None, documents=[sam_doc])
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id="bbbbbbbb-5555-4555-8555-bbbbbbbbbbbb", host_id=HOST_ID, observed_at=None, documents=[matching_profile_doc])
+
+        assert resolve_unverified_host_profiles(db, case_id=CASE_ID, host_id=HOST_ID) == []
+
+    def test_two_unclaimed_sids_produce_two_distinct_entries(self) -> None:
+        db = _db()
+        _case(db)
+        _evidence(db)
+        docs = [
+            {"host_user_fact": {"source_kind": "profile_list", "username": None, "home": r"C:\Users\mshunter", "attributes": {"sid": "S-1-5-21-1-1-1-1105"}, "parser": "windows_profile_list", "source_file": "SOFTWARE"}},
+            {"host_user_fact": {"source_kind": "profile_list", "username": None, "home": r"C:\Users\jdoe", "attributes": {"sid": "S-1-5-21-1-1-1-1106"}, "parser": "windows_profile_list", "source_file": "SOFTWARE"}},
+        ]
+        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id="bbbbbbbb-5555-4555-8555-bbbbbbbbbbbb", host_id=HOST_ID, observed_at=None, documents=docs)
+
+        labels = {item["label"] for item in resolve_unverified_host_profiles(db, case_id=CASE_ID, host_id=HOST_ID)}
+        assert labels == {"mshunter", "jdoe"}

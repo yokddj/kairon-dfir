@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Fingerprint, Network as NetworkIcon, Users as UsersIcon } from "lucide-react";
 
-import { api, type HostFactObservation, type HostNetworkAddress, type HostUserEntry, type HostUserFieldResolution, type HostUserObservation, type ResolvedHostFact } from "../api/client";
+import { api, type HostFactObservation, type HostNetworkAddress, type HostUserEntry, type HostUserFieldResolution, type HostUserObservation, type ResolvedHostFact, type UnverifiedHostProfile } from "../api/client";
 import EmptyState from "../components/EmptyState";
 import { useActiveCase } from "../context/ActiveCaseContext";
 
@@ -616,6 +616,38 @@ function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostI
   );
 }
 
+function UnverifiedProfilesSection({ profiles }: { profiles: UnverifiedHostProfile[] }) {
+  if (!profiles.length) return null;
+  return (
+    <section className="rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4" data-testid="unverified-profiles-section">
+      <h3 className="text-sm font-semibold text-amber-100">Other observed profiles (no matching local account)</h3>
+      <p className="mt-1 text-xs text-amber-200/90">
+        Windows cached a profile for these SIDs on this host, but none matches a local SAM account here &mdash; typically a domain account that logged on interactively (e.g. via RDP). Not verified as local accounts, so they&apos;re listed separately rather than mixed into Users above.
+      </p>
+      <div className="mt-3 overflow-x-auto">
+        <table className="min-w-full divide-y divide-line/60 text-sm">
+          <thead className="text-left text-xs uppercase tracking-[0.14em] text-amber-200/70">
+            <tr>
+              <th className="px-3 py-2">Profile</th>
+              <th className="px-3 py-2">Home path</th>
+              <th className="px-3 py-2">SID</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line/40">
+            {profiles.map((profile) => (
+              <tr key={profile.sid} data-testid="unverified-profile-row">
+                <td className="px-3 py-2 font-mono italic text-amber-100" title="No passwd/SAM entry matched this SID">{profile.label}</td>
+                <td className="px-3 py-2 font-mono text-xs text-amber-200/80">{profile.home.preferred_value || "-"}</td>
+                <td className="px-3 py-2 font-mono text-xs text-amber-200/80">{profile.sid}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
 export default function HostInformationPage() {
   const { caseId = "" } = useParams();
   const { setActiveCaseId, caseContext, isCaseContextLoading } = useActiveCase();
@@ -660,6 +692,14 @@ export default function HostInformationPage() {
   const usersQuery = useQuery({
     queryKey: ["case-host-users", caseId, selectedHostId],
     queryFn: () => api.getCaseHostUsers(caseId, { host_id: selectedHostId }),
+    enabled: Boolean(caseId && selectedHostId),
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
+
+  const unverifiedProfilesQuery = useQuery({
+    queryKey: ["case-host-unverified-profiles", caseId, selectedHostId],
+    queryFn: () => api.getCaseHostUnverifiedProfiles(caseId, { host_id: selectedHostId }),
     enabled: Boolean(caseId && selectedHostId),
     refetchOnWindowFocus: false,
     staleTime: 60_000,
@@ -756,6 +796,7 @@ export default function HostInformationPage() {
           {usersQuery.isLoading ? <p className="text-sm text-muted">Loading users&hellip;</p> : null}
           {usersQuery.isError ? <p className="text-sm text-danger">{String((usersQuery.error as Error)?.message || "Could not load Host User Inventory for this host.")}</p> : null}
           {usersQuery.data ? <UserInventorySection caseId={caseId} hostId={selectedHostId} users={usersQuery.data.users} /> : null}
+          {unverifiedProfilesQuery.data ? <UnverifiedProfilesSection profiles={unverifiedProfilesQuery.data.profiles} /> : null}
         </>
       ) : null}
     </div>

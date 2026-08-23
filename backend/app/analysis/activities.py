@@ -162,6 +162,31 @@ def _cloud_context_for_values(*values: object, command_line: str | None = None) 
     return None
 
 
+# app.ingest.raw_parsers.registry_persistence_summary tags each value with a
+# free-text registry.category ("autorun", "winlogon", "ifeo", ...), not the
+# canonical mechanism tokens ("run_key", "winlogon_shell", ...) that
+# section_activities() dispatches "autorun_entry" activities on -- those
+# tokens are Autoruns'/RECmd's own vocabulary. This translates one into the
+# other so registry-hive-sourced entries land in the same Run Keys/Winlogon/
+# IFEO/AppInit sections as Autoruns-sourced ones, instead of only reaching
+# the generic "autoruns_persistence" bucket.
+_REGISTRY_CATEGORY_TO_MECHANISM = {
+    "appinit": "appinit_dll",
+    "ifeo": "ifeo_debugger",
+    "task_cache": "scheduled_task",
+    "service": "service",
+}
+
+
+def _registry_persistence_mechanism(registry: dict) -> str | None:
+    category = str(registry.get("category") or "")
+    if category == "autorun":
+        return "runonce_key" if "runonce" in str(registry.get("key_path") or "").lower() else "run_key"
+    if category == "winlogon":
+        return "winlogon_userinit" if str(registry.get("value_name") or "").lower() == "userinit" else "winlogon_shell"
+    return _REGISTRY_CATEGORY_TO_MECHANISM.get(category)
+
+
 def event_to_activity(event: dict) -> list[ForensicActivity]:
     meta = event.get("event", {}) or {}
     event_type = str(meta.get("type") or "unknown")
@@ -676,13 +701,22 @@ def event_to_activity(event: dict) -> list[ForensicActivity]:
         "print_monitor_persistence",
         "shell_extension_persistence",
         "office_addin_persistence",
+        # Emitted by the internal registry hive parser
+        # (app.ingest.raw_parsers.registry_persistence_summary), not
+        # Autoruns/RECmd -- its persistence.mechanism/registry.key_path
+        # already carry everything this branch needs, so it belongs here
+        # rather than falling through to the generic "suspicious_event"
+        # catch-all below and losing its structure (mechanism, key path,
+        # category) once it reaches the semi-auto persistence sections.
+        "registry_persistence_value_observed",
     }:
         autoruns = event.get("autoruns", {}) or {}
         persistence = event.get("persistence", {}) or {}
+        registry_mechanism = _registry_persistence_mechanism(registry) if event_type == "registry_persistence_value_observed" else None
         key_fields = {
             "type": persistence.get("mechanism") or autoruns.get("artifact_type"),
-            "mechanism": persistence.get("mechanism"),
-            "location": persistence.get("location") or autoruns.get("entry_location"),
+            "mechanism": registry_mechanism or persistence.get("mechanism"),
+            "location": persistence.get("location") or autoruns.get("entry_location") or registry.get("key_path"),
             "name": persistence.get("name") or autoruns.get("entry"),
             "enabled": persistence.get("enabled") if persistence.get("enabled") is not None else autoruns.get("enabled"),
             "command": persistence.get("command") or autoruns.get("command_line") or process.get("command_line"),
