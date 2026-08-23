@@ -9,6 +9,7 @@ import type { CaseHostFactsResponse, CaseHostNetworkResponse, CaseHostUsersRespo
 
 const getCaseHostFactsMock = vi.fn();
 const getCaseHostUsersMock = vi.fn();
+const getCaseHostUnverifiedProfilesMock = vi.fn();
 const getCaseHostNetworkMock = vi.fn();
 const useActiveCaseMock = vi.fn();
 
@@ -16,6 +17,7 @@ vi.mock("../api/client", () => ({
   api: {
     getCaseHostFacts: (...args: unknown[]) => getCaseHostFactsMock(...args),
     getCaseHostUsers: (...args: unknown[]) => getCaseHostUsersMock(...args),
+    getCaseHostUnverifiedProfiles: (...args: unknown[]) => getCaseHostUnverifiedProfilesMock(...args),
     getCaseHostNetwork: (...args: unknown[]) => getCaseHostNetworkMock(...args),
   },
 }));
@@ -164,6 +166,7 @@ describe("HostInformationPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getCaseHostUsersMock.mockResolvedValue(usersResponse([]));
+    getCaseHostUnverifiedProfilesMock.mockResolvedValue({ case_id: "case-1", scope: "host", host_id: "host-1", profiles: [] });
     getCaseHostNetworkMock.mockResolvedValue(networkResponse([]));
   });
 
@@ -497,6 +500,41 @@ describe("HostInformationPage", () => {
       await userEvent.selectOptions(screen.getByTestId("host-selector"), "host-2");
       await waitFor(() => expect(screen.getByTestId("user-row")).toHaveTextContent("carol"));
       expect(screen.queryByText("alice")).not.toBeInTheDocument();
+    });
+  });
+
+  describe("Unverified Profiles", () => {
+    beforeEach(() => {
+      useActiveCaseMock.mockReturnValue(activeCaseValue([host()]));
+      getCaseHostFactsMock.mockResolvedValue(factsResponse([]));
+    });
+
+    it("does not render the section when there are no unverified profiles", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([]));
+      getCaseHostUnverifiedProfilesMock.mockResolvedValue({ case_id: "case-1", scope: "host", host_id: "host-1", profiles: [] });
+      renderPage();
+      await screen.findByTestId("user-inventory-empty");
+      expect(screen.queryByTestId("unverified-profiles-section")).not.toBeInTheDocument();
+    });
+
+    it("shows a domain account's cached profile separately from Users, never mixed in", async () => {
+      getCaseHostUsersMock.mockResolvedValue(usersResponse([userEntry({ username: "alice" })]));
+      getCaseHostUnverifiedProfilesMock.mockResolvedValue({
+        case_id: "case-1",
+        scope: "host",
+        host_id: "host-1",
+        profiles: [{
+          sid: "S-1-5-21-9999999999-8888888888-7777777777-1105",
+          label: "mshunter",
+          home: { field: "home", status: "observed", preferred_value: "C:\\Users\\mshunter", supporting: [], conflicting: [], observations: [] },
+          observations: [],
+        }],
+      });
+      renderPage();
+      const section = await screen.findByTestId("unverified-profiles-section");
+      expect(within(section).getByText("mshunter")).toBeInTheDocument();
+      expect(within(section).getByText("S-1-5-21-9999999999-8888888888-7777777777-1105")).toBeInTheDocument();
+      expect(screen.queryByText("mshunter", { selector: '[data-testid="user-row"] *' })).not.toBeInTheDocument();
     });
   });
 

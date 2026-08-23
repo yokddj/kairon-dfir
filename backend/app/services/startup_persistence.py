@@ -32,7 +32,7 @@ SOURCE_QUERIES: list[dict[str, Any]] = [
     {"source": "wmi", "artifact_types": ["wmi", "windows_event"], "queries": ["EventConsumer", "EventFilter", "CommandLineEventConsumer", "__EventFilter"], "limit": 35},
     {"source": "defender_config", "artifact_types": ["defender", "windows_event"], "queries": ["DisableRealtimeMonitoring", "Exclusion", "SpyNetReporting", "Tamper Defender"], "limit": 35},
 ]
-DEFAULT_SOURCE_NAMES = {"scheduled_tasks", "services", "registry_autoruns"}
+DEFAULT_SOURCE_NAMES = {"scheduled_tasks", "services", "registry_autoruns", "startup_folders"}
 TYPE_SOURCE_HINTS = {
     "scheduled_task": {"scheduled_tasks"},
     "service": {"services"},

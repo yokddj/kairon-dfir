@@ -2624,6 +2624,26 @@ export type CaseHostUsersResponse = {
   users: HostUserEntry[];
 };
 
+// A ProfileList SID with no matching local SAM account -- most often a
+// domain account's cached profile from an interactive logon. Deliberately
+// not a HostUserEntry: it's never a verified local account, so it's kept
+// out of the "Users" contract entirely (see resolve_unverified_host_profiles
+// in the backend for the audited rationale).
+export type UnverifiedHostProfile = {
+  sid: string;
+  label: string;
+  home: HostUserFieldResolution;
+  observations: HostUserObservation[];
+};
+
+export type CaseHostUnverifiedProfilesResponse = {
+  case_id: string;
+  scope: "host" | "evidence";
+  host_id?: string;
+  evidence_id?: string;
+  profiles: UnverifiedHostProfile[];
+};
+
 export type HostNetworkObservationSource = {
   source_kind: string;
   source_label: string;
@@ -5792,6 +5812,13 @@ export const api = {
       if (value) query.set(key, value);
     }
     return request<CaseHostUsersResponse>(`/cases/${caseId}/host-users${query.size ? `?${query.toString()}` : ""}`);
+  },
+  getCaseHostUnverifiedProfiles: (caseId: string, params: { host_id?: string; evidence_id?: string }) => {
+    const query = new URLSearchParams();
+    for (const [key, value] of Object.entries(params)) {
+      if (value) query.set(key, value);
+    }
+    return request<CaseHostUnverifiedProfilesResponse>(`/cases/${caseId}/host-users/unverified-profiles${query.size ? `?${query.toString()}` : ""}`);
   },
   getCaseHostNetwork: (caseId: string, params: { host_id: string }) =>
     request<CaseHostNetworkResponse>(`/cases/${caseId}/host-network?${new URLSearchParams(params).toString()}`),

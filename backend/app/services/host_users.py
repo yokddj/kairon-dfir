@@ -424,3 +424,69 @@ def resolve_host_users(
 
     entries.sort(key=lambda entry: (entry["is_synthetic_username"], entry["username"].lower()))
     return entries
+
+
+def _profile_path_label(home: str | None) -> str | None:
+    if not home:
+        return None
+    normalized = str(home).strip().rstrip("\\/")
+    if not normalized:
+        return None
+    return normalized.replace("/", "\\").rsplit("\\", 1)[-1] or None
+
+
+def resolve_unverified_host_profiles(
+    db: Session,
+    *,
+    case_id: str,
+    host_id: str | None = None,
+    evidence_id: str | None = None,
+) -> list[dict]:
+    """ProfileList SIDs that never matched a local SAM account's own SID --
+    most often a domain account's cached profile from an interactive logon
+    (e.g. via RDP), whose SID authority can't be verified as this
+    machine's own (see app.ingest.raw_parsers.profile_list_parser).
+
+    Deliberately separate from resolve_host_users()/"Users": that
+    inventory's contract is "verified local accounts only" and must never
+    surface an unverified SID, synthetic or otherwise -- see
+    tests/test_windows_sam_facts.py::TestEndToEndPersistenceAndResolution
+    for the audited rationale a prior attempt to fold these in broke. This
+    is a distinct view of the same underlying ProfileList observations for
+    when an analyst needs to know "who else has a cached profile on this
+    box" even without SAM corroboration -- never implying local-account
+    membership.
+    """
+    query = db.query(HostUserFact).filter(
+        HostUserFact.case_id == case_id,
+        HostUserFact.source_kind.in_(("passwd", "sam_account", "profile_list")),
+    )
+    if host_id:
+        query = query.filter(HostUserFact.host_id == host_id)
+    elif evidence_id:
+        query = query.filter(HostUserFact.evidence_id == evidence_id)
+    rows = query.order_by(HostUserFact.created_at).all()
+
+    claimed_sids = {
+        sid for row in rows if row.source_kind in ("passwd", "sam_account")
+        if (sid := (row.attributes or {}).get("sid"))
+    }
+    unclaimed_by_sid: dict[str, list[HostUserFact]] = defaultdict(list)
+    for row in rows:
+        if row.source_kind != "profile_list":
+            continue
+        sid = (row.attributes or {}).get("sid")
+        if sid and sid not in claimed_sids:
+            unclaimed_by_sid[sid].append(row)
+
+    profiles = []
+    for sid, sid_rows in unclaimed_by_sid.items():
+        home = _resolve_field("home", sid_rows)
+        profiles.append({
+            "sid": sid,
+            "label": _profile_path_label(home["preferred_value"]) or sid,
+            "home": home,
+            "observations": [_serialize(row) for row in sid_rows],
+        })
+    profiles.sort(key=lambda item: item["label"].lower())
+    return profiles

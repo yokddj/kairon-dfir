@@ -42,6 +42,7 @@ function riskLabel(score: number): string {
 }
 
 function StartupPersistenceView({
+  caseId,
   data,
   loading,
   page,
@@ -57,6 +58,7 @@ function StartupPersistenceView({
   timelineError,
   timelineSuccess,
 }: {
+  caseId: string;
   data?: Awaited<ReturnType<typeof api.getStartupPersistence>>;
   loading: boolean;
   page: number;
@@ -74,8 +76,50 @@ function StartupPersistenceView({
 }) {
   const { effectiveTimezone } = useTimezonePreference();
   const items = data?.items ?? [];
+  const queryClient = useQueryClient();
+  // The registry hive parser (registry_persistence_summary) that feeds this
+  // view's "registry_autoruns" source is opt-in per evidence -- an analyst
+  // has to know it exists and trigger it manually from Evidence Detail.
+  // Surface the gap here instead, where the missing coverage is actually felt.
+  const evidencesQuery = useQuery({
+    queryKey: ["artifact-explorer-persistence-evidences", caseId],
+    queryFn: () => api.listEvidences(caseId),
+    enabled: Boolean(caseId),
+  });
+  const registryDiagnosticsQuery = useQuery({
+    queryKey: ["artifact-explorer-registry-diagnostics", caseId, (evidencesQuery.data ?? []).map((item) => item.id).join(",")],
+    queryFn: () => Promise.all((evidencesQuery.data ?? []).map((item) => api.getEvidenceRegistryDiagnostic(item.id))),
+    enabled: Boolean(caseId) && (evidencesQuery.data?.length ?? 0) > 0,
+    staleTime: 60_000,
+  });
+  const unindexedRegistryEvidence = (registryDiagnosticsQuery.data ?? []).filter((diagnostic) => diagnostic.coverage_gaps.includes("registry_persistence_summary_not_indexed"));
+  const indexRegistryMutation = useMutation({
+    mutationFn: (evidenceId: string) => api.indexEvidenceRegistryPersistenceSummary(evidenceId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["artifact-explorer-registry-diagnostics"] });
+    },
+  });
   return (
     <div className="space-y-4">
+      {unindexedRegistryEvidence.length ? (
+        <section className="rounded-2xl border border-amber-400/30 bg-amber-500/10 p-4 text-sm text-amber-100" data-testid="registry-persistence-coverage-banner">
+          <p className="font-semibold">Registry-based persistence (Run keys, Winlogon, IFEO, AppInit) not indexed for {unindexedRegistryEvidence.length} evidence item(s) in this case.</p>
+          <p className="mt-1 text-amber-200/90">Only scheduled tasks and services are guaranteed to be covered until these hives are indexed.</p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {unindexedRegistryEvidence.map((diagnostic) => (
+              <button
+                key={diagnostic.evidence_id}
+                type="button"
+                disabled={indexRegistryMutation.isPending}
+                onClick={() => indexRegistryMutation.mutate(diagnostic.evidence_id)}
+                className="rounded-xl border border-amber-300/40 px-3 py-2 text-xs text-amber-100 hover:bg-amber-500/10 disabled:opacity-50"
+              >
+                Index registry persistence for {diagnostic.evidence_id.slice(0, 8)}
+              </button>
+            ))}
+          </div>
+        </section>
+      ) : null}
       <section className="grid gap-3 md:grid-cols-4">
         <div className="rounded-2xl border border-line bg-panel/60 p-4">
           <p className="text-xs uppercase tracking-[0.16em] text-muted">Items</p>
@@ -1263,6 +1307,7 @@ export default function ArtifactExplorer() {
       ) : null}
       {isStartupPersistenceView ? (
         <StartupPersistenceView
+          caseId={caseId}
           data={persistenceQuery.data}
           loading={persistenceQuery.isPending}
           page={page}
