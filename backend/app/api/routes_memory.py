@@ -3325,6 +3325,52 @@ def _resolve_run(db: Session, case_id: str, run_id: str | None, profile: str | N
     )
 
 
+def _resolve_dns_domains(case_id: str, remote_ips: list[str]) -> dict[str, str]:
+    """Best-effort IP -> domain lookup by cross-referencing already-indexed
+    DNS query documents (document.dns.ip/dns.domain) for the same case.
+
+    Memory connections only ever carry a remote IP; this lets the Network
+    tab show the domain a process actually talked to when a DNS query for
+    that IP was also captured (browser history, Sysmon 22, resolver cache
+    exports, ...), without requiring a live/reverse DNS lookup.
+    """
+    if not remote_ips:
+        return {}
+    from app.core.opensearch import get_events_index, is_index_queryable
+
+    client = get_opensearch_client()
+    index = get_events_index(case_id)
+    if not is_index_queryable(client, index):
+        return {}
+    try:
+        response = client.search(
+            index=index,
+            body={
+                "size": 500,
+                "_source": ["dns.ip", "dns.domain"],
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"term": {"case_id": case_id}},
+                            {"term": {"artifact.type": "dns"}},
+                            {"terms": {"dns.ip": remote_ips}},
+                        ],
+                    },
+                },
+            },
+        )
+    except Exception:  # noqa: BLE001
+        return {}
+    resolved: dict[str, str] = {}
+    for hit in ((response.get("hits") or {}).get("hits") or []):
+        dns = (hit.get("_source") or {}).get("dns") or {}
+        ip = str(dns.get("ip") or "").strip()
+        domain = str(dns.get("domain") or "").strip()
+        if ip and domain and ip not in resolved:
+            resolved[ip] = domain
+    return resolved
+
+
 def _artifact_list(
     case_id: str,
     *,
@@ -3599,7 +3645,7 @@ def list_memory_network_connections(
         "pid": pid,
         "process_name": process_name,
     }
-    return _artifact_list(
+    result = _artifact_list(
         case_id,
         document_type="memory_network_connection",
         run_id=run_id,
@@ -3608,6 +3654,13 @@ def list_memory_network_connections(
         page_size=page_size,
         filters=filters,
     )
+    remote_ips = sorted({str(item.get("remote_address") or "").strip() for item in result["items"] if item.get("remote_address")})
+    resolved_domains = _resolve_dns_domains(case_id, remote_ips)
+    for item in result["items"]:
+        ip = str(item.get("remote_address") or "").strip()
+        if ip in resolved_domains:
+            item["resolved_domain"] = resolved_domains[ip]
+    return result
 
 
 @router.get("/cases/{case_id}/memory/modules", response_model=MemoryArtifactListRead)
