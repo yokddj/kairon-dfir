@@ -174,28 +174,32 @@ def render_startup_persistence_markdown(items: list[dict[str, Any]]) -> str:
 
 
 def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict[str, Any]:
-    artifact = _obj(row.get("artifact"))
-    event = _obj(row.get("event"))
-    task = _obj(row.get("task"))
-    service = _obj(row.get("service"))
-    persistence = _obj(row.get("persistence"))
-    autoruns = _obj(row.get("autoruns"))
-    wmi = _obj(row.get("wmi"))
-    defender = _obj(row.get("defender") or row.get("detection"))
-    file = _obj(row.get("file"))
-    process = _obj(row.get("process"))
-    user = _obj(row.get("user"))
-    windows = _obj(row.get("windows"))
-    registry = _obj(row.get("registry"))
+    # search_events_v2's row is a display-summary shape (id/title/summary/
+    # raw/...) -- the actual normalized document, with task/service/
+    # registry/persistence/etc., lives one level down at row["raw"], not at
+    # the top level. Reading row.get(x) directly always returned an empty
+    # dict here, which is why almost every Persistence item showed "-" for
+    # name/command/path regardless of source.
     raw = _obj(row.get("raw"))
     source_doc = _obj(raw.get("raw"))
-    if not registry:
-        registry = _obj(source_doc.get("registry"))
-    if not persistence:
-        persistence = _obj(source_doc.get("persistence"))
-    if not user:
-        user = _obj(source_doc.get("user"))
-    artifact_type = str(artifact.get("type") or row.get("artifact_type") or "").lower()
+
+    def _pick(key: str) -> dict[str, Any]:
+        return _obj(raw.get(key) or row.get(key) or source_doc.get(key))
+
+    artifact = _pick("artifact")
+    event = _pick("event")
+    task = _pick("task")
+    service = _pick("service")
+    persistence = _pick("persistence")
+    autoruns = _pick("autoruns")
+    wmi = _pick("wmi")
+    defender = _obj(raw.get("defender") or raw.get("detection") or row.get("defender") or row.get("detection"))
+    file = _pick("file")
+    process = _pick("process")
+    user = _pick("user")
+    windows = _pick("windows")
+    registry = _pick("registry")
+    artifact_type = str(artifact.get("type") or raw.get("artifact_type") or row.get("artifact_type") or "").lower()
     text = " ".join(
         str(value or "")
         for value in (
@@ -260,7 +264,7 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
     return {
         "id": _stable_id(case_id, source, source_event_id or name or command or path),
         "case_id": case_id,
-        "evidence_id": row.get("evidence_id") or source_doc.get("evidence_id"),
+        "evidence_id": raw.get("evidence_id") or row.get("evidence_id") or source_doc.get("evidence_id"),
         "host": host,
         "type": item_type,
         "name": name or "-",
