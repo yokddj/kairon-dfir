@@ -43,7 +43,8 @@ vi.mock("../context/ActiveCaseContext", () => ({
   }),
 }));
 
-vi.mock("../lib/time", () => ({
+vi.mock("../lib/time", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/time")>()),
   copyToClipboard: vi.fn(),
   formatTimestamp: (value: string | null | undefined) => value || "No timestamp",
 }));

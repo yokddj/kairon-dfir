@@ -9,6 +9,7 @@ import EventTable, { type EventView } from "../components/EventTable";
 import IndicatorResolutionPanel from "../components/IndicatorResolutionPanel";
 import InvestigationContext from "../components/InvestigationContext";
 import PaginationControls from "../components/PaginationControls";
+import TimeField from "../components/TimeField";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { useHostContext } from "../hooks/useHostContext";
@@ -98,7 +99,7 @@ function StartupPersistenceView({
           {data.warnings.slice(0, 3).map((warning) => <p key={warning}>{warning}</p>)}
         </section>
       ) : null}
-      <PaginationControls page={page} totalPages={data?.total_pages ?? 0} total={data?.total ?? 0} pageSize={pageSize} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} />
+      <PaginationControls page={page} totalPages={data?.total_pages ?? 0} total={data?.total ?? 0} pageSize={pageSize} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} pageSizeOptions={[25, 50, 100, 200]} />
       <section className="overflow-hidden rounded-[28px] border border-line bg-panel/60">
         <div className="border-b border-line px-5 py-4">
           <h3 className="text-lg font-semibold">Startup &amp; Persistence Items</h3>
@@ -244,7 +245,7 @@ function MotwArtifactView({
           {data.warnings.slice(0, 3).map((warning) => <p key={warning}>{warning}</p>)}
         </section>
       ) : null}
-      <PaginationControls page={page} totalPages={data?.total_pages ?? 0} total={data?.total ?? 0} pageSize={pageSize} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} />
+      <PaginationControls page={page} totalPages={data?.total_pages ?? 0} total={data?.total ?? 0} pageSize={pageSize} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} pageSizeOptions={[25, 50, 100, 200]} />
       <section className="overflow-hidden rounded-[28px] border border-line bg-panel/60">
         <div className="border-b border-line px-5 py-4">
           <h3 className="text-lg font-semibold">MOTW / Downloaded Files</h3>
@@ -422,7 +423,7 @@ function EmailArtifactsView({
           {data.warnings.slice(0, 3).map((warning) => <p key={warning}>{warning}</p>)}
         </section>
       ) : null}
-      <PaginationControls page={page} totalPages={data?.total_pages ?? 0} total={data?.total ?? 0} pageSize={pageSize} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} />
+      <PaginationControls page={page} totalPages={data?.total_pages ?? 0} total={data?.total ?? 0} pageSize={pageSize} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} pageSizeOptions={[25, 50, 100, 200]} />
       <section className="overflow-hidden rounded-[28px] border border-line bg-panel/60">
         <div className="border-b border-line px-5 py-4">
           <h3 className="text-lg font-semibold">Email Artifacts</h3>
@@ -593,6 +594,8 @@ export default function ArtifactExplorer() {
   const [artifactName, setArtifactName] = useState("");
   const [query, setQuery] = useState(searchParams.get("q") ?? "");
   const [searchMode, setSearchMode] = useState<"smart" | "contains" | "ioc">("smart");
+  const [timeFrom, setTimeFrom] = useState(searchParams.get("time_from") ?? "");
+  const [timeTo, setTimeTo] = useState(searchParams.get("time_to") ?? "");
   const [mftDeletedOnly, setMftDeletedOnly] = useState(false);
   const [mftSuspiciousPathsOnly, setMftSuspiciousPathsOnly] = useState(false);
   const [mftExtension, setMftExtension] = useState("");
@@ -664,17 +667,19 @@ export default function ArtifactExplorer() {
         evidence_id: evidenceIdFilter ? [evidenceIdFilter] : [],
         host: hostFilter ? [hostFilter] : [],
         host_id: hostIdFilter ? [hostIdFilter] : [],
+        time_from: timeFrom || undefined,
+        time_to: timeTo || undefined,
       },
       timezone: effectiveTimezone,
       page,
       page_size: pageSize,
     }),
-    [artifactName, artifactTypeFilter, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly],
+    [artifactName, artifactTypeFilter, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly, timeFrom, timeTo],
   );
   const isStartupPersistenceView = artifactType === "startup_persistence";
   const isMotwView = artifactType === "motw" || artifactType === "zone_identifier";
   const isEmailView = artifactType === "email" || artifactType === "email_store" || artifactType === "webmail_activity";
-  const result = useQuery({ queryKey: ["artifact-explorer", payload], queryFn: () => api.search(payload), enabled: !isStartupPersistenceView && !isMotwView && !isEmailView });
+  const result = useQuery({ queryKey: ["artifact-explorer", payload], queryFn: () => api.search(payload), enabled: !isStartupPersistenceView && !isMotwView && !isEmailView, retry: false });
   const persistenceQuery = useQuery({
     queryKey: ["startup-persistence", caseId, hostFilter, hostIdFilter, query, persistenceType, persistenceSource, persistenceSuspiciousOnly, persistenceRiskMin, page, pageSize],
     queryFn: () =>
@@ -689,6 +694,7 @@ export default function ArtifactExplorer() {
         page_size: pageSize,
       }),
     enabled: Boolean(caseId && isStartupPersistenceView),
+    retry: false,
   });
   const persistenceIndicatorQuery = useQuery({
     queryKey: ["startup-persistence-indicators", caseId, selectedPersistenceItem?.id],
@@ -716,6 +722,7 @@ export default function ArtifactExplorer() {
         page_size: pageSize,
       }),
     enabled: Boolean(caseId && isMotwView),
+    retry: false,
   });
   const motwIndicatorQuery = useQuery({
     queryKey: ["motw-indicators", caseId, selectedMotwItem?.id],
@@ -744,7 +751,9 @@ export default function ArtifactExplorer() {
         page_size: pageSize,
       }),
     enabled: Boolean(caseId && isEmailView),
+    retry: false,
   });
+  const activeArtifactQuery = isStartupPersistenceView ? persistenceQuery : isMotwView ? motwQuery : isEmailView ? emailQuery : result;
   const emailIndicatorQuery = useQuery({
     queryKey: ["email-artifact-indicators", caseId, selectedEmailItem?.id],
     queryFn: () =>
@@ -992,6 +1001,19 @@ export default function ArtifactExplorer() {
             Create Finding from selected events
           </button>
         </div>
+        {!isStartupPersistenceView && !isMotwView && !isEmailView ? (
+          <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <TimeField label="Time from" value={timeFrom} onChange={setTimeFrom} />
+            <TimeField label="Time to" value={timeTo} onChange={setTimeTo} />
+            {timeFrom || timeTo ? (
+              <button type="button" onClick={() => { setTimeFrom(""); setTimeTo(""); }} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-muted hover:text-accent">
+                Clear time filter
+              </button>
+            ) : null}
+          </div>
+        ) : (timeFrom || timeTo) ? (
+          <p className="mt-3 text-xs text-amber-300">Time filter isn&apos;t supported by this specialized view yet — switch to a general artifact type or use Search.</p>
+        ) : null}
         {artifactType === "mft" ? (
           <div className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4">
             <div className="flex flex-wrap items-center gap-3">
@@ -1207,7 +1229,16 @@ export default function ArtifactExplorer() {
           description="Artifact Views opens focused, per-family views (Windows Events, Prefetch, Registry, Linux logs, and more) over evidence that has already been parsed for a case. Choose a case above to search processed artifacts."
         />
       ) : null}
-      {caseId && !isStartupPersistenceView && !isMotwView && !isEmailView && !(result.data?.total ?? 0) && !result.isPending ? (
+      {caseId && activeArtifactQuery.isError ? (
+        <div className="rounded-2xl border border-red-400/30 bg-red-500/10 p-4 text-sm text-red-100" data-testid="artifact-explorer-error">
+          <p className="font-semibold">Couldn&apos;t load results.</p>
+          <p className="mt-1 text-red-200/90">{activeArtifactQuery.error instanceof Error ? activeArtifactQuery.error.message : "The request failed. Try a smaller page size or adjust your filters."}</p>
+          <button type="button" onClick={() => void activeArtifactQuery.refetch()} className="mt-3 rounded-xl border border-red-300/40 px-3 py-2 text-xs text-red-100 hover:bg-red-500/10">
+            Retry
+          </button>
+        </div>
+      ) : null}
+      {caseId && !activeArtifactQuery.isError && !isStartupPersistenceView && !isMotwView && !isEmailView && !(result.data?.total ?? 0) && !result.isPending ? (
         <EmptyState
           testId="artifact-explorer-no-results"
           title={hasHostFilter ? `No artifacts for ${hostFilter} with current filters` : "No processed artifacts yet"}
@@ -1288,7 +1319,7 @@ export default function ArtifactExplorer() {
         />
       ) : (
         <>
-          <PaginationControls page={page} totalPages={result.data?.total_pages ?? 0} total={result.data?.total ?? 0} totalRelation={result.data?.total_relation ?? "eq"} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} />
+          <PaginationControls page={page} totalPages={result.data?.total_pages ?? 0} total={result.data?.total ?? 0} totalRelation={result.data?.total_relation ?? "eq"} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} pageSizeOptions={[25, 50, 100, 200]} />
           <EventTable items={result.data?.items ?? []} view={view} selectedIds={selectedEventIds} onToggleSelect={(eventId) => setSelectedEventIds((current) => (current.includes(eventId) ? current.filter((item) => item !== eventId) : [...current, eventId]))} onCreateFinding={(item) => openFindingFromArtifact(item, "Artifact Explorer row")} />
         </>
       )}
