@@ -13,6 +13,7 @@ import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs"
 import { useHostContext } from "../hooks/useHostContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { useTimezonePreference } from "../context/TimezoneContext";
+import TimeField from "../components/TimeField";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 import { artifactLabel } from "../lib/artifactRegistry";
 import EmptyState from "../components/EmptyState";
@@ -318,36 +319,6 @@ function NumberField({ label, value, onChange, min = 0, max = 100 }: { label: st
     <label className="block">
       <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{label}</span>
       <input aria-label={label} type="number" min={min} max={max} value={value} onChange={(event) => onChange(event.target.value)} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" />
-    </label>
-  );
-}
-
-function toDateTimeLocalValue(value: string) {
-  if (!value) return "";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return "";
-  const local = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000);
-  return local.toISOString().slice(0, 16);
-}
-
-function fromDateTimeLocalValue(value: string) {
-  if (!value) return "";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toISOString();
-}
-
-function TimeField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return (
-    <label className="block">
-      <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{label}</span>
-      <input
-        aria-label={label}
-        type="datetime-local"
-        value={toDateTimeLocalValue(value)}
-        onChange={(event) => onChange(fromDateTimeLocalValue(event.target.value))}
-        className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50"
-      />
     </label>
   );
 }

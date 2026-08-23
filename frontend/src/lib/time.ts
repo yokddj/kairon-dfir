@@ -35,6 +35,21 @@ export function toUtcForApi(localValue: string, timezone: string) {
   return Number.isNaN(localAsDate.getTime()) ? null : localAsDate.toISOString();
 }
 
+export function toDateTimeLocalValue(value: string) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "";
+  const local = new Date(parsed.getTime() - parsed.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+export function fromDateTimeLocalValue(value: string) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toISOString();
+}
+
 export async function copyToClipboard(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard?.writeText) {
