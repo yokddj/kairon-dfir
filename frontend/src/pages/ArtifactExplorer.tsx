@@ -12,6 +12,7 @@ import PaginationControls from "../components/PaginationControls";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { useHostContext } from "../hooks/useHostContext";
+import { formatTimestamp } from "../lib/time";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 import { artifactEventView, artifactLabel as artifactViewLabel, artifactOptions, artifactOptionsForPlatforms, canonicalArtifactView } from "../lib/artifactRegistry";
@@ -70,6 +71,7 @@ function StartupPersistenceView({
   timelineError: string;
   timelineSuccess: boolean;
 }) {
+  const { effectiveTimezone } = useTimezonePreference();
   const items = data?.items ?? [];
   return (
     <div className="space-y-4">
@@ -159,7 +161,7 @@ function StartupPersistenceView({
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">Enabled/start:</span> {String(selectedItem.enabled ?? selectedItem.start_type ?? "-")}</div>
             <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">User:</span> {selectedItem.user || "-"}</div>
-            <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">First seen:</span> {selectedItem.first_seen || "-"}</div>
+            <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">First seen:</span> {selectedItem.first_seen ? formatTimestamp(selectedItem.first_seen, effectiveTimezone) : "-"}</div>
           </div>
           <div className="mt-4">
             <p className="text-sm font-medium">Risk reasons</p>
@@ -215,6 +217,7 @@ function MotwArtifactView({
   timelineError: string;
   timelineSuccess: boolean;
 }) {
+  const { effectiveTimezone } = useTimezonePreference();
   const items = data?.items ?? [];
   return (
     <div className="space-y-4">
@@ -306,7 +309,7 @@ function MotwArtifactView({
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-3">
             <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">Zone:</span> {selectedItem.zone_id ?? "-"} {selectedItem.zone_name}</div>
-            <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">Timestamp:</span> {selectedItem.timestamp || "-"}</div>
+            <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">Timestamp:</span> {selectedItem.timestamp ? formatTimestamp(selectedItem.timestamp, effectiveTimezone) : "-"}</div>
             <div className="rounded-2xl border border-line bg-abyss/60 p-3 text-sm"><span className="text-muted">Source:</span> {selectedItem.source_artifact}</div>
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -369,6 +372,7 @@ function EmailArtifactsView({
   timelineError: string;
   timelineSuccess: boolean;
 }) {
+  const { effectiveTimezone } = useTimezonePreference();
   const items = data?.items ?? [];
   const directEmailItems = items.filter((item) => ["store", "message_file", "profile", "attachment_cache"].includes(String(item.email_artifact_type)));
   const webmailItems = items.filter((item) => item.email_artifact_type === "webmail_activity");

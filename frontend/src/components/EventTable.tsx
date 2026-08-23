@@ -4,7 +4,7 @@ import TagPill from "./TagPill";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { compareValues, getNestedValue, nextSortDirection } from "../lib/sorting";
-import { presentationProfileForItems, renderPresentationValue, type PresentationProfile } from "../lib/eventPresentationProfiles";
+import { isPresent, presentationProfileForItems, renderPresentationValue, type PresentationProfile } from "../lib/eventPresentationProfiles";
 
 export type SortField =
   | "timestamp"
@@ -107,11 +107,16 @@ function columnsFromProfile(profile: PresentationProfile): Column[] {
   }));
 }
 
-function semanticDetailSections(profile: PresentationProfile, item: Record<string, unknown>) {
+function semanticDetailSections(profile: PresentationProfile, item: Record<string, unknown>, timezone: string) {
   return profile.details.map((section) => ({
     ...section,
     rows: section.fields
-      .map((field) => ({ label: field.label, value: renderPresentationValue(item, field) }))
+      .map((field) => ({
+        label: field.label,
+        value: field.paths.includes("@timestamp") && isPresent(item["@timestamp"])
+          ? formatTimestamp(item["@timestamp"], timezone)
+          : renderPresentationValue(item, field),
+      }))
       .filter((row) => row.value !== "-"),
   })).filter((section) => section.rows.length > 0);
 }
@@ -856,7 +861,7 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                           </div>
                           {presentationProfile ? (
                             <div className="grid gap-3 lg:grid-cols-2">
-                              {semanticDetailSections(presentationProfile, item).map((section) => (
+                              {semanticDetailSections(presentationProfile, item, effectiveTimezone).map((section) => (
                                 <section key={`${id}-${section.title}`} className="rounded-2xl border border-line bg-panel/40 p-3">
                                   <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">{section.title}</p>
                                   <dl className="mt-3 space-y-2 text-sm">

@@ -48,6 +48,12 @@ vi.mock("../lib/time", () => ({
   formatTimestamp: (value: string | null | undefined) => value || "No timestamp",
 }));
 
+vi.mock("../context/TimezoneContext", () => ({
+  useTimezonePreference: () => ({
+    effectiveTimezone: "UTC",
+  }),
+}));
+
 function renderPage(initialEntries = ["/search"]) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
