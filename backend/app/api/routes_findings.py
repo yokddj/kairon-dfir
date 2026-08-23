@@ -135,10 +135,17 @@ def _normalize_finding_create(case_id: str, payload: FindingCreate, db: Session)
         if not evidence or evidence.case_id != case_id:
             raise HTTPException(status_code=400, detail="Linked evidence must belong to the selected case.")
     linked_host_id = payload.linked_host_id
+    linked_host: CaseHost | None = None
     if linked_host_id:
-        host = db.get(CaseHost, linked_host_id)
-        if not host or host.case_id != case_id:
+        linked_host = db.get(CaseHost, linked_host_id)
+        if not linked_host or linked_host.case_id != case_id:
             raise HTTPException(status_code=400, detail="Linked host must belong to the selected case.")
+    # Callers that set linked_host_id but forget related_hosts (any caller
+    # other than the correlation engine, historically) would otherwise make
+    # this finding invisible to the host filter -- derive it here as a
+    # fallback so a resolved link always keeps the finding host-filterable.
+    fallback_host_name = (linked_host.canonical_name or linked_host.display_name) if linked_host else None
+    related_hosts = _dedupe(payload.related_hosts) if payload.related_hosts else _dedupe([fallback_host_name] if fallback_host_name else [])
     linked_artifact_id = payload.linked_artifact_id
     if linked_artifact_id:
         artifact = db.get(Artifact, linked_artifact_id)
@@ -192,7 +199,7 @@ def _normalize_finding_create(case_id: str, payload: FindingCreate, db: Session)
         "related_domains": payload.related_domains,
         "related_ips": payload.related_ips,
         "related_users": payload.related_users,
-        "related_hosts": payload.related_hosts,
+        "related_hosts": related_hosts,
         "reasons": payload.reasons,
         "tags": payload.tags,
         "mitre": payload.mitre,

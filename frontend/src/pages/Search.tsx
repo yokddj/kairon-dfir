@@ -1347,7 +1347,7 @@ function DetailPanel({
 export default function Search() {
   const navigate = useNavigate();
   const { caseId: routeCaseId } = useParams();
-  const { activeCaseId, selectedEvidenceId, selectedHost, setActiveCaseId } = useActiveCase();
+  const { activeCaseId, selectedEvidenceId, selectedHost, setActiveCaseId, caseContext } = useActiveCase();
   const { activeHost, activeHostId, clearHostFilter } = useHostContext();
   const { effectiveTimezone } = useTimezonePreference();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -2029,7 +2029,7 @@ export default function Search() {
       actions.push({ label: "Search related", onClick: () => void handleRelatedFinding(result), ariaLabel: "Search related finding events" });
     } else {
       const hasTimestamp = resultTimestampMs(result) !== null;
-      actions.push({ label: "Create finding from this", onClick: () => setFindingPrefill(buildFindingPrefillFromArtifact({ ...raw, ...result }, { caseId: resolvedCaseId, evidenceId: evidenceId || searchRequestState.evidence_id, hostId: searchRequestState.host_id, sourceView: "search", sourceRoute: window.location.pathname + window.location.search, artifactFamily: result.artifact_type, artifactType: result.event_type, label: "Search result" })), ariaLabel: "Create finding from this search result" });
+      actions.push({ label: "Create finding from this", onClick: () => setFindingPrefill(buildFindingPrefillFromArtifact({ ...raw, ...result }, { caseId: resolvedCaseId, evidenceId: evidenceId || searchRequestState.evidence_id, hostId: searchRequestState.host_id, hosts: caseContext?.hosts ?? [], sourceView: "search", sourceRoute: window.location.pathname + window.location.search, artifactFamily: result.artifact_type, artifactType: result.event_type, label: "Search result" })), ariaLabel: "Create finding from this search result" });
       actions.push({ label: "Show ±30 sec", onClick: () => void handleAroundEvent(result, 30 * 1000), ariaLabel: "Show ±30 seconds around this event", disabled: !hasTimestamp });
       actions.push({ label: "Show ±5 min", onClick: () => void handleAroundEvent(result, 5 * 60 * 1000), ariaLabel: "Show ±5 minutes around this event", disabled: !hasTimestamp });
       actions.push({ label: "Show ±30 min", onClick: () => void handleAroundEvent(result, 30 * 60 * 1000), ariaLabel: "Show ±30 minutes around this event", disabled: !hasTimestamp });

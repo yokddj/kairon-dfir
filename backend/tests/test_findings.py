@@ -176,6 +176,23 @@ def test_create_finding_with_case_evidence_host_and_normalized_tags():
     assert payload["tags"] == ["memory", "needs-review"]
     assert payload["linked_evidence_id"] == EVIDENCE_ID
     assert payload["linked_host_id"] == HOST_ID
+    # No related_hosts sent explicitly -- must be derived from linked_host_id
+    # so the host filter on the Findings page can still find this finding.
+    assert payload["related_hosts"] == ["ws01"]
+
+
+def test_create_finding_related_hosts_explicit_value_is_kept_as_is():
+    db = _db_session()
+    _seed_case_graph(db)
+    client = _client(db)
+
+    response = client.post(
+        f"/api/cases/{CASE_ID}/findings",
+        json={"title": "Manual finding", "linked_host_id": HOST_ID, "related_hosts": ["some-other-host"]},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["related_hosts"] == ["some-other-host"]
 
 
 def test_create_finding_with_source_artifact_snapshot_fields():

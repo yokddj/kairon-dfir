@@ -1,5 +1,6 @@
-import type { Finding, FindingSeverity, FindingStatus } from "../api/client";
+import type { CaseContextHostSummary, Finding, FindingSeverity, FindingStatus } from "../api/client";
 import { artifactLabel as registryArtifactLabel } from "./artifactRegistry";
+import { resolveHost } from "../hooks/useHostContext";
 
 export type FindingPrefill = Partial<Finding> & {
   title: string;
@@ -13,6 +14,7 @@ type PrefillContext = {
   caseId?: string;
   evidenceId?: string | null;
   hostId?: string | null;
+  hosts?: CaseContextHostSummary[];
   sourceView: string;
   sourceRoute?: string;
   artifactFamily?: string | null;
@@ -86,10 +88,15 @@ export function buildFindingPrefillFromArtifact(rowInput: unknown, context: Pref
   const type = asString(context.artifactType || artifact.type || row.artifact_type || row.type);
   const timestamp = firstString(row, ["@timestamp", "timestamp", "time", "created_at", "create_time", "first_seen"]);
   const evidenceId = asString(context.evidenceId || row.evidence_id || asRecord(row.evidence).id);
-  const hostId = asString(context.hostId || row.host_id || host.id);
   const eventId = firstString(row, ["event_id", "source_event_id", "search_doc_id", "id"]);
   const artifactId = firstString(row, ["artifact_id", "document_id"]);
   const hostName = firstString(row, ["host.name", "host.hostname", "hostname", "detected_host"]);
+  // context.hostId only reflects a filter the analyst happens to have active
+  // right now (e.g. Artifact Explorer scoped to "all hosts") -- when it's
+  // missing, resolve the item's own host name against the case's host list
+  // so the finding still links to the right host instead of silently
+  // dropping the association and becoming unfindable by host filter later.
+  const hostId = asString(context.hostId || row.host_id || host.id) || (context.hosts ? resolveHost(context.hosts, null, hostName)?.id ?? "" : "");
   const evidenceName = firstString(row, ["evidence.filename", "evidence_name", "source_file"]);
   const summary = firstString(row, ["summary", "display_summary", "message", "event.message", "title", "command_or_target", "path", "process.command_line", "url.full", "browser.url"]);
   const title = inferTitle(row, family, type, summary);
@@ -110,6 +117,7 @@ export function buildFindingPrefillFromArtifact(rowInput: unknown, context: Pref
     severity: "medium",
     status: "draft",
     tags,
+    related_hosts: hostName ? [hostName] : [],
     linked_evidence_id: evidenceId || null,
     linked_host_id: hostId || null,
     linked_artifact_id: artifactId || null,
