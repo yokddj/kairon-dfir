@@ -125,6 +125,29 @@ def test_filters_by_host_type_and_risk(monkeypatch):
     assert result["summary"]["suspicious"] == 1
 
 
+def test_host_filter_is_passed_as_a_single_string_not_a_list(monkeypatch):
+    # search_events_v2's "host" param (EVENT_EXACT_FILTERS) is str(value).strip()
+    # against a single value -- passing the whole list made str(['ws01']) become
+    # the literal text "['ws01']", which matched nothing, so any host-scoped
+    # Persistence view call silently returned zero results regardless of host
+    # or which source actually had data for that host.
+    seen_host_params = []
+
+    def fake_search(_case_id, params, **_kwargs):
+        seen_host_params.append(params.get("host"))
+        return 0, [], [], {}
+
+    monkeypatch.setattr(startup_persistence, "search_events_v2", fake_search)
+    monkeypatch.setattr(startup_persistence, "get_command_history", lambda *_args, **_kwargs: {"items": []})
+
+    startup_persistence.list_startup_persistence_items(_Db(), "case-1", {"host": ["ws01"], "page_size": 50})
+
+    assert seen_host_params
+    for value in seen_host_params:
+        assert value == "ws01"
+        assert not isinstance(value, list)
+
+
 def test_report_markdown_includes_suspicious_items():
     markdown = startup_persistence.render_startup_persistence_markdown(
         [
