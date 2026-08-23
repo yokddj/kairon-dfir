@@ -241,15 +241,6 @@ def _build_sid_profile_map(profile_list_rows: list[HostUserFact]) -> dict[str, l
     return mapping
 
 
-def _profile_path_label(home: str | None) -> str | None:
-    if not home:
-        return None
-    normalized = str(home).strip().rstrip("\\/")
-    if not normalized:
-        return None
-    return normalized.replace("/", "\\").rsplit("\\", 1)[-1] or None
-
-
 def _secondary_groups(membership_rows: list[HostUserFact]) -> list[dict]:
     by_group: dict[tuple[str, str | None], list[HostUserFact]] = defaultdict(list)
     for row in membership_rows:
@@ -397,21 +388,6 @@ def resolve_host_users(
             # either; it becomes its own synthetic-key entry.
             lastlog_orphans_by_uid[row.uid].append(row)
 
-    # SIDs a SAM account's own attributes.sid actually claimed -- any
-    # ProfileList SID left over never matched a local account (most often a
-    # domain account's cached profile from an interactive logon, or an
-    # account whose SAM entry was never ingested). Never dropped: still
-    # surfaced below as its own synthetic entry, never folded into a local
-    # account, since the SID's authority is unverified.
-    claimed_profile_sids = {
-        sid for row in identity_rows
-        if (sid := (row.attributes or {}).get("sid"))
-    }
-    orphan_profile_rows_by_sid: dict[str, list[HostUserFact]] = defaultdict(list)
-    for sid, rows_for_sid in sid_to_profile_rows.items():
-        if sid not in claimed_profile_sids:
-            orphan_profile_rows_by_sid[sid].extend(rows_for_sid)
-
     entries = []
     for username in usernames:
         user_identity_rows = [r for r in identity_rows if r.username == username]
@@ -442,25 +418,6 @@ def resolve_host_users(
             shadow_rows=[],
             membership_rows=[],
             lastlog_rows=uid_rows,
-            sudoers_rows=sudoers_rows,
-            gid_group_name_map=gid_group_name_map,
-        ))
-    used_orphan_labels: set[str] = set()
-    for sid, rows_for_sid in orphan_profile_rows_by_sid.items():
-        home = _resolve_field("home", rows_for_sid)["preferred_value"]
-        label = _profile_path_label(home) or sid
-        if label.lower() in {u.lower() for u in usernames} or label.lower() in used_orphan_labels:
-            label = f"{label} ({sid})"
-        used_orphan_labels.add(label.lower())
-        entries.append(_resolve_user_entry(
-            label,
-            is_synthetic=True,
-            identity_rows=[],
-            home_rows=rows_for_sid,
-            status_rows=[],
-            shadow_rows=[],
-            membership_rows=[],
-            lastlog_rows=[],
             sudoers_rows=sudoers_rows,
             gid_group_name_map=gid_group_name_map,
         ))

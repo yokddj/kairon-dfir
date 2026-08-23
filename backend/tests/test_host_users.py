@@ -342,69 +342,6 @@ class TestLastLogin:
         assert entries[0]["last_login"]["source_ip"] == "203.0.113.5"
 
 
-def _sam_account_doc(username: str, *, rid: int, machine_sid: str) -> dict:
-    return {"host_user_fact": {
-        "source_kind": "sam_account",
-        "username": username,
-        "uid": str(rid),
-        "id_kind": "rid",
-        "attributes": {"sid": f"{machine_sid}-{rid}"},
-        "parser": "windows_sam_identity",
-        "source_file": "SAM",
-    }}
-
-
-def _profile_list_doc(sid: str, *, profile_path: str) -> dict:
-    return {"host_user_fact": {
-        "source_kind": "profile_list",
-        "username": None,
-        "home": profile_path,
-        "attributes": {"sid": sid},
-        "parser": "windows_profile_list",
-        "source_file": "SOFTWARE",
-    }}
-
-
-class TestWindowsProfileListCorrelation:
-    MACHINE_SID = "S-1-5-21-1111111111-2222222222-3333333333"
-
-    def test_profile_matching_sam_sid_attaches_as_home(self):
-        db = _db()
-        _case(db)
-        _evidence(db)
-        docs = [
-            _sam_account_doc("Administrator", rid=500, machine_sid=self.MACHINE_SID),
-            _profile_list_doc(f"{self.MACHINE_SID}-500", profile_path=r"C:\Users\Administrator"),
-        ]
-        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None, documents=docs)
-        entries = {e["username"]: e for e in resolve_host_users(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID)}
-        assert entries["Administrator"]["identity"]["home"]["preferred_value"] == r"C:\Users\Administrator"
-        assert entries["Administrator"]["is_synthetic_username"] is False
-
-    def test_domain_account_profile_with_no_local_sam_match_still_surfaces(self):
-        # mshunter logged onto this host interactively (e.g. via RDP) but is
-        # a domain account -- Windows still caches a ProfileList entry for
-        # it, under the domain's SID authority, which never matches this
-        # machine's own SAM SID. Regression coverage for the Host
-        # Information "Users" section silently omitting exactly the account
-        # that downloaded malware, while local SAM accounts kept appearing.
-        db = _db()
-        _case(db)
-        _evidence(db)
-        domain_sid = "S-1-5-21-9999999999-8888888888-7777777777-1105"
-        docs = [
-            _sam_account_doc("Administrator", rid=500, machine_sid=self.MACHINE_SID),
-            _profile_list_doc(f"{self.MACHINE_SID}-500", profile_path=r"C:\Users\Administrator"),
-            _profile_list_doc(domain_sid, profile_path=r"C:\Users\mshunter"),
-        ]
-        create_host_user_fact_observations(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID, artifact_id=ART1_ID, host_id=None, observed_at=None, documents=docs)
-        entries = {e["username"]: e for e in resolve_host_users(db, case_id=CASE_ID, evidence_id=EVIDENCE_ID)}
-        assert "Administrator" in entries
-        assert "mshunter" in entries
-        assert entries["mshunter"]["is_synthetic_username"] is True
-        assert entries["mshunter"]["identity"]["home"]["preferred_value"] == r"C:\Users\mshunter"
-
-
 class TestDuplicatePrevention:
     def test_calling_twice_does_not_duplicate(self):
         db = _db()
