@@ -4,7 +4,9 @@ import { api, type CommandHistoryItem } from "../api/client";
 import { HostFilter } from "../components/HostFilter";
 import { InvestigationBreadcrumbs } from "../components/InvestigationContext";
 import TimeField from "../components/TimeField";
+import { useTimezonePreference } from "../context/TimezoneContext";
 import { memoryEvidenceRoute, memoryWorkbenchRoute, windowsExecutionStoriesRoute } from "../lib/canonicalRoutes";
+import { formatTimestamp } from "../lib/time";
 import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 
 const PAGE_SIZE = 100;
@@ -13,12 +15,6 @@ const SOURCE_OPTIONS = ["", "Memory", "Disk", "Event Log", "Registry", "Browser"
 function valueOrDash(value: unknown): string {
   const text = String(value ?? "").trim();
   return text || "-";
-}
-
-function formatTimestamp(value?: string | null): string {
-  if (!value) return "No timestamp";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
 }
 
 function aroundEventWindow(item: CommandHistoryItem, windowMs: number): { time_from: string; time_to: string } | null {
@@ -145,6 +141,7 @@ async function copyText(text: string) {
 export default function CommandHistoryPage() {
   const { caseId = "" } = useParams();
   const breadcrumbs = useInvestigationBreadcrumbs();
+  const { effectiveTimezone } = useTimezonePreference();
   const [searchParams, setSearchParams] = useSearchParams();
   const params = useMemo(() => buildParams(searchParams), [searchParams]);
   const [qDraft, setQDraft] = useState(params.q ?? "");
@@ -405,7 +402,7 @@ export default function CommandHistoryPage() {
                 <Fragment key={item.id}>
                   <tr className="align-top hover:bg-zinc-900/50">
                     <td className="whitespace-normal px-3 py-3 text-zinc-300" title={item.timestamp ?? ""}>
-                      {formatTimestamp(item.timestamp)}
+                      {formatTimestamp(item.timestamp, effectiveTimezone)}
                     </td>
                     <td className="px-3 py-3 text-zinc-300" title={`Confidence: ${item.classification_confidence || item.confidence}`}>
                       <div className="truncate">{familyLabel(item)}</div>
@@ -498,6 +495,7 @@ export default function CommandHistoryPage() {
                             ) : null}
                           </div>
                           <div className="space-y-3 text-sm text-zinc-300">
+                            <div><span className="text-zinc-500">Timestamp:</span> {formatTimestamp(item.timestamp, effectiveTimezone)}</div>
                             <div><span className="text-zinc-500">User:</span> {valueOrDash(item.user)}</div>
                             <div><span className="text-zinc-500">Host:</span> {valueOrDash(item.host)}</div>
                             <div><span className="text-zinc-500">Source:</span> <SourceBadge item={item} /> <span className="ml-1">{sourceLabel(item)} · {item.supporting_events.length} event(s)</span></div>
