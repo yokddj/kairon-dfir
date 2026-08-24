@@ -504,6 +504,18 @@ def _build_process_graph(events: list[dict], case_id: str, evidence_id: str | No
     for node_id, node in nodes_by_id.items():
         parent_id = str(node.get("parent_entity_id") or "")
         if parent_id and parent_id in nodes_by_id and parent_id != node_id:
+            child_ts = _safe_parse_dt(node.get("first_seen"))
+            parent_ts = _safe_parse_dt(nodes_by_id[parent_id].get("first_seen"))
+            if child_ts and parent_ts and child_ts < parent_ts:
+                _set_parent_status(
+                    node,
+                    "parent_link_temporal_conflict",
+                    "ParentProcessGuid matched exactly, but this process was observed before the claimed parent started; likely PID/GUID reuse.",
+                    confidence="low",
+                )
+                node["data_quality"] = sorted(set(node.get("data_quality") or []) | {"parent_before_child_conflict", "process_graph_orphan"})
+                _record_warning("parent_before_child_conflict", f"Node {node_id} observed before claimed parent {parent_id}; edge omitted.")
+                continue
             _set_parent_status(node, "linked", "Linked exactly by Sysmon ProcessGuid / ParentProcessGuid.", confidence="high")
             edges.append(
                 {
