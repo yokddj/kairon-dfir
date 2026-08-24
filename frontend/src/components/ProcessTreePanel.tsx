@@ -550,6 +550,7 @@ function groupGraphWarnings(summary: Record<string, unknown> | undefined) {
 function buildGraphLayout(nodes: ProcessTreeNode[], edges: ProcessTreeEdge[]) {
   const incoming = new Map<string, number>();
   const childrenByParent = new Map<string, string[]>();
+  const nodeById = new Map(nodes.map((node) => [node.id, node]));
   for (const node of nodes) incoming.set(node.id, 0);
   for (const edge of edges) {
     if (!incoming.has(edge.source) || !incoming.has(edge.target) || edge.source === edge.target) continue;
@@ -579,23 +580,57 @@ function buildGraphLayout(nodes: ProcessTreeNode[], edges: ProcessTreeEdge[]) {
     if (!depthById.has(node.id)) depthById.set(node.id, 0);
   }
 
-  const columns = new Map<number, ProcessTreeNode[]>();
+  // Order nodes with the same rank of risk_score/label within each parent so
+  // sibling ordering stays deterministic once we walk the tree below.
+  for (const childIds of childrenByParent.values()) {
+    childIds.sort((left, right) => {
+      const leftNode = nodeById.get(left);
+      const rightNode = nodeById.get(right);
+      return (
+        (rightNode?.risk_score || 0) - (leftNode?.risk_score || 0) ||
+        (leftNode ? toNodeLabel(leftNode) : left).localeCompare(rightNode ? toNodeLabel(rightNode) : right)
+      );
+    });
+  }
+
+  // Build each column by walking the tree from the previous column's row
+  // order, so a node's children land contiguously right after it instead of
+  // being scattered by a flat risk-score sort across the whole column. That
+  // flat sort is what produced the heavily-crossing "spaghetti" edges.
+  const columns: string[][] = [];
+  const placed = new Set<string>();
+  columns[0] = roots.map((node) => node.id);
+  roots.forEach((node) => placed.add(node.id));
+  for (let depth = 0; columns[depth]?.length; depth += 1) {
+    const next: string[] = [];
+    for (const parentId of columns[depth]) {
+      for (const childId of childrenByParent.get(parentId) ?? []) {
+        if (placed.has(childId) || depthById.get(childId) !== depth + 1) continue;
+        placed.add(childId);
+        next.push(childId);
+      }
+    }
+    if (next.length) columns[depth + 1] = [...(columns[depth + 1] ?? []), ...next];
+  }
+  // Anything not reached above (disconnected nodes, or a child whose only
+  // remaining edges point from a parent placed later) still needs a slot.
   for (const node of nodeOrder) {
+    if (placed.has(node.id)) continue;
     const depth = depthById.get(node.id) ?? 0;
-    const current = columns.get(depth) ?? [];
-    current.push(node);
-    columns.set(depth, current);
+    columns[depth] = [...(columns[depth] ?? []), node.id];
+    placed.add(node.id);
   }
 
   const layoutNodes: GraphLayoutNode[] = [];
   let maxDepth = 0;
   let maxRows = 0;
-  for (const [depth, columnNodes] of [...columns.entries()].sort((a, b) => a[0] - b[0])) {
+  columns.forEach((columnIds, depth) => {
+    if (!columnIds?.length) return;
     maxDepth = Math.max(maxDepth, depth);
-    maxRows = Math.max(maxRows, columnNodes.length);
-    columnNodes.forEach((node, index) => {
+    maxRows = Math.max(maxRows, columnIds.length);
+    columnIds.forEach((id, index) => {
       layoutNodes.push({
-        id: node.id,
+        id,
         depth,
         x: GRAPH_PADDING + depth * (GRAPH_CARD_WIDTH + GRAPH_COLUMN_GAP),
         y: GRAPH_PADDING + index * (GRAPH_CARD_HEIGHT + GRAPH_ROW_GAP),
@@ -603,7 +638,7 @@ function buildGraphLayout(nodes: ProcessTreeNode[], edges: ProcessTreeEdge[]) {
         height: GRAPH_CARD_HEIGHT,
       });
     });
-  }
+  });
 
   return {
     width: Math.max(420, GRAPH_PADDING * 2 + (maxDepth + 1) * GRAPH_CARD_WIDTH + maxDepth * GRAPH_COLUMN_GAP),
