@@ -1211,6 +1211,18 @@ export default function ProcessTreePanel({
   const storyTarget = executionStory?.quality?.response_mode === "lightweight" && !executionStory?.target
     ? null
     : executionStory?.target ?? selectedNode ?? null;
+  const commandChainNodes = useMemo(() => {
+    if (!storyTarget) return [];
+    const chainIds = collectChainIds(storyTarget.id, displayedGraphEdges);
+    return displayedGraphNodes
+      .filter((node) => chainIds.has(node.id))
+      .slice()
+      .sort((a, b) => {
+        const left = a.first_seen ? new Date(a.first_seen).getTime() : Number.POSITIVE_INFINITY;
+        const right = b.first_seen ? new Date(b.first_seen).getTime() : Number.POSITIVE_INFINITY;
+        return left - right;
+      });
+  }, [displayedGraphEdges, displayedGraphNodes, storyTarget]);
   const storySubtitle = storyTarget
     ? `Investigating ${storyTarget.name || storyTarget.path || "process"}${storyTarget.pid !== null && storyTarget.pid !== undefined ? ` PID ${storyTarget.pid}` : ""}${storyTarget.host ? ` on ${storyTarget.host}` : selectedHost ? ` on ${selectedHost}` : ""}`
     : "Select a process to build a story";
@@ -1679,11 +1691,44 @@ export default function ProcessTreePanel({
         ) : null}
 
         {storyTab === "commands" ? (
-          <div className="rounded-2xl border border-line bg-abyss/70 p-4">
-            <p className="text-sm text-muted">Command History shows deduplicated commands and supporting events for this process.</p>
-            {storyTarget ? (
-              <button type="button" onClick={() => openCommandHistory(storyTarget)} className="mt-3 rounded-xl border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs text-accent">Command History</button>
-            ) : null}
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-line bg-abyss/70 p-4">
+              <p className="text-sm text-muted">
+                {commandChainNodes.length} process{commandChainNodes.length === 1 ? "" : "es"} in this chain, oldest first — everything {storyTarget ? toNodeLabel(storyTarget) : "this process"} launched, directly or indirectly.
+              </p>
+              {storyTarget ? (
+                <button type="button" onClick={() => openCommandHistory(storyTarget)} className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-1.5 text-xs text-accent">Open in Command History</button>
+              ) : null}
+            </div>
+            <div className="overflow-auto rounded-2xl border border-line">
+              <table className="min-w-full divide-y divide-line text-sm">
+                <thead className="bg-abyss/70 text-left font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+                  <tr><th className="px-3 py-2">Time</th><th className="px-3 py-2">Process</th><th className="px-3 py-2">PID</th><th className="px-3 py-2">User</th><th className="px-3 py-2">Command line</th><th className="px-3 py-2">Risk</th><th className="px-3 py-2">Actions</th></tr>
+                </thead>
+                <tbody className="divide-y divide-line/70">
+                  {commandChainNodes.length ? commandChainNodes.map((node) => (
+                    <tr key={`chain-${node.id}`} className={`align-top ${storyTarget?.id === node.id ? "bg-accent/5" : ""}`}>
+                      <td className="whitespace-nowrap px-3 py-2 text-muted">{formatTimestamp(node.first_seen, effectiveTimezone)}</td>
+                      <td className="px-3 py-2 font-semibold">
+                        {toNodeLabel(node)}
+                        {storyTarget?.id === node.id ? <Pill className="ml-2 border-accent/40 bg-accent/10 text-accent">target</Pill> : null}
+                      </td>
+                      <td className="px-3 py-2 text-muted">{node.pid ?? "—"}</td>
+                      <td className="px-3 py-2 text-muted">{normalizeValue(node.user)}</td>
+                      <td className="max-w-[34rem] break-words px-3 py-2 text-muted">{node.command_line || node.path || "No command line"}</td>
+                      <td className="px-3 py-2"><Pill className={riskTone(node.risk_score || 0)}>risk {node.risk_score || 0}</Pill></td>
+                      <td className="px-3 py-2">
+                        {storyTarget?.id !== node.id ? (
+                          <button type="button" onClick={() => openFocusedTree(node)} className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-1 text-xs text-accent">Make target</button>
+                        ) : null}
+                      </td>
+                    </tr>
+                  )) : (
+                    <tr><td colSpan={7} className="px-3 py-4 text-sm text-muted">No descendant processes were observed for this process.</td></tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
         ) : null}
 

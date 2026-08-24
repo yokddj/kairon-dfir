@@ -29,6 +29,12 @@ vi.mock("../context/ActiveCaseContext", () => ({
   }),
 }));
 
+vi.mock("../context/TimezoneContext", () => ({
+  useTimezonePreference: () => ({
+    effectiveTimezone: "UTC",
+  }),
+}));
+
 function LocationProbe() {
   const location = useLocation();
   return <div data-testid="location">{`${location.pathname}${location.search}`}</div>;
