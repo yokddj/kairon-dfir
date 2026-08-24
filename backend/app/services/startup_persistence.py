@@ -291,7 +291,7 @@ def _normalize_event_row(case_id: str, row: dict[str, Any], source: str) -> dict
         "trigger": _first(task.get("trigger_summary"), task.get("trigger"), persistence.get("trigger")) or "",
         "source_artifact": "registry_hive" if artifact_type == "registry_persistence" else source,
         "source_event_id": source_event_id,
-        "first_seen": row.get("@timestamp") or row.get("timestamp"),
+        "first_seen": _first(file.get("created"), registry.get("first_write"), task.get("created"), persistence.get("first_seen"), row.get("@timestamp"), row.get("timestamp")),
         "last_modified": _first(registry.get("last_write"), file.get("modified"), task.get("modified"), persistence.get("last_modified"), row.get("@timestamp")),
         "risk_score": risk_score,
         "risk_reasons": risk_reasons,
