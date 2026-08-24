@@ -186,6 +186,11 @@ function toNodeLabel(node: ProcessTreeNode) {
   return node.name || node.path || node.command_line || node.id;
 }
 
+function nodeTimeMs(node: ProcessTreeNode): number {
+  const parsed = node.first_seen ? new Date(node.first_seen).getTime() : NaN;
+  return Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed;
+}
+
 function riskTone(score: number) {
   if (score >= 90) return "border-rose-400/50 bg-rose-500/15 text-rose-200";
   if (score >= 70) return "border-orange-400/50 bg-orange-500/15 text-orange-100";
@@ -276,12 +281,12 @@ function buildForest(nodes: ProcessTreeNode[], edges: ProcessTreeEdge[]) {
     if (visited.has(key)) return { node, edge, depth, children: [] };
     visited.add(key);
     const children = (childrenByParent.get(node.id) ?? [])
-      .sort((a, b) => (b.child.risk_score || 0) - (a.child.risk_score || 0))
+      .sort((a, b) => nodeTimeMs(a.child) - nodeTimeMs(b.child))
       .map(({ child, edge: childEdge }) => descend(child, depth + 1, childEdge));
     return { node, edge, depth, children };
   };
 
-  return roots.sort((a, b) => (b.risk_score || 0) - (a.risk_score || 0)).map((root) => descend(root, 0));
+  return roots.sort((a, b) => nodeTimeMs(a) - nodeTimeMs(b)).map((root) => descend(root, 0));
 }
 
 function flattenForest(branches: TreeBranch[], expandedNodeIds: Set<string>) {
