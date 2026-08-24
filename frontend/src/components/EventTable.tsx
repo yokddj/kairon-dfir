@@ -58,6 +58,7 @@ type Props = {
   onToggleSelect?: (eventId: string) => void;
   onViewProcessTree?: (item: Record<string, unknown>) => void;
   onCreateFinding?: (item: Record<string, unknown>) => void;
+  onAroundEvent?: (item: Record<string, unknown>, windowMs: number) => void;
 };
 
 type Column = { key: string; label: string; render: (item: Record<string, unknown>) => string; defaultVisible?: boolean; sortField?: SortField };
@@ -713,7 +714,7 @@ function hasProcessTreeContext(item: Record<string, unknown>): boolean {
   return Boolean(relatedProcessNodeIds.length || process.pid || process.name || process.entity_id || process.command_line);
 }
 
-export default function EventTable({ items, view = "generic", sortBy, sortOrder, onSortChange, selectedIds = [], onToggleSelect, onViewProcessTree, onCreateFinding }: Props) {
+export default function EventTable({ items, view = "generic", sortBy, sortOrder, onSortChange, selectedIds = [], onToggleSelect, onViewProcessTree, onCreateFinding, onAroundEvent }: Props) {
   const { effectiveTimezone } = useTimezonePreference();
   const [openId, setOpenId] = useState<string | null>(null);
   const [showColumnChooser, setShowColumnChooser] = useState(false);
@@ -857,6 +858,13 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                             {item.event_id ? <button type="button" onClick={() => void copyToClipboard(String(item.event_id))} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy event id</button> : null}
                             {onCreateFinding ? <button type="button" onClick={() => onCreateFinding(item)} className="rounded-xl border border-accent/40 bg-accent/10 px-3 py-2 text-xs text-accent">Create finding from this</button> : null}
                             {onViewProcessTree && hasProcessTreeContext(item) ? <button type="button" onClick={() => onViewProcessTree(item)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">View process tree</button> : null}
+                            {onAroundEvent && item["@timestamp"] ? (
+                              <>
+                                <button type="button" onClick={() => onAroundEvent(item, 30 * 1000)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Around this event · ±30s</button>
+                                <button type="button" onClick={() => onAroundEvent(item, 5 * 60 * 1000)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Around this event · ±5m</button>
+                                <button type="button" onClick={() => onAroundEvent(item, 30 * 60 * 1000)} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Around this event · ±30m</button>
+                              </>
+                            ) : null}
                             <button type="button" onClick={() => void copyToClipboard(JSON.stringify(item, null, 2))} className="rounded-xl border border-line px-3 py-2 text-xs text-muted">Copy raw JSON</button>
                           </div>
                           {presentationProfile ? (

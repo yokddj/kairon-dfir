@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type CommandHistoryItem } from "../api/client";
 import { HostFilter } from "../components/HostFilter";
 import { InvestigationBreadcrumbs } from "../components/InvestigationContext";
+import TimeField from "../components/TimeField";
 import { memoryEvidenceRoute, memoryWorkbenchRoute, windowsExecutionStoriesRoute } from "../lib/canonicalRoutes";
 import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 
@@ -18,6 +19,13 @@ function formatTimestamp(value?: string | null): string {
   if (!value) return "No timestamp";
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function aroundEventWindow(item: CommandHistoryItem, windowMs: number): { time_from: string; time_to: string } | null {
+  if (!item.timestamp) return null;
+  const parsed = new Date(item.timestamp).getTime();
+  if (Number.isNaN(parsed)) return null;
+  return { time_from: new Date(parsed - windowMs).toISOString(), time_to: new Date(parsed + windowMs).toISOString() };
 }
 
 function riskLabel(score: number): string {
@@ -94,6 +102,8 @@ function buildParams(searchParams: URLSearchParams) {
     host: searchParams.get("host") || undefined,
     host_id: searchParams.get("host_id") || undefined,
     user: searchParams.get("user") || undefined,
+    time_from: searchParams.get("time_from") || undefined,
+    time_to: searchParams.get("time_to") || undefined,
     family: searchParams.get("family") || searchParams.get("shell") || undefined,
     launcher: searchParams.get("launcher") || undefined,
     source_type: searchParams.get("source_type") || undefined,
@@ -326,6 +336,17 @@ export default function CommandHistoryPage() {
             </button>
           </div>
         </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+          <TimeField label="Time from" value={params.time_from ?? ""} onChange={(value) => update({ time_from: value })} />
+          <TimeField label="Time to" value={params.time_to ?? ""} onChange={(value) => update({ time_to: value })} />
+          {params.time_from || params.time_to ? (
+            <div className="flex items-end">
+              <button type="button" className="rounded-md border border-zinc-700 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900" onClick={() => update({ time_from: undefined, time_to: undefined })}>
+                Clear time filter
+              </button>
+            </div>
+          ) : null}
+        </div>
         <label className="mt-3 flex items-center gap-2 text-sm text-zinc-300">
           <input type="checkbox" checked={Boolean(params.only_suspicious)} onChange={(event) => update({ only_suspicious: event.target.checked })} />
           Only suspicious commands
@@ -363,7 +384,7 @@ export default function CommandHistoryPage() {
               <th className="w-[130px] px-3 py-2">Host</th>
               <th className="w-[170px] px-3 py-2">Source</th>
               <th className="w-[96px] px-3 py-2">Risk</th>
-              <th className="w-[210px] px-3 py-2">Actions</th>
+              <th className="w-[260px] px-3 py-2">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-900">
@@ -441,6 +462,19 @@ export default function CommandHistoryPage() {
                         >
                           Open process tree
                         </Link>
+                        {item.timestamp ? (
+                          <>
+                            <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => update(aroundEventWindow(item, 30 * 1000) ?? {})}>
+                              ±30s
+                            </button>
+                            <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => update(aroundEventWindow(item, 5 * 60 * 1000) ?? {})}>
+                              ±5m
+                            </button>
+                            <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => update(aroundEventWindow(item, 30 * 60 * 1000) ?? {})}>
+                              ±30m
+                            </button>
+                          </>
+                        ) : null}
                       </div>
                     </td>
                   </tr>

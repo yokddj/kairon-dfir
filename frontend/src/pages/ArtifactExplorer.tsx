@@ -1373,7 +1373,20 @@ export default function ArtifactExplorer() {
       ) : (
         <>
           <PaginationControls page={page} totalPages={result.data?.total_pages ?? 0} total={result.data?.total ?? 0} totalRelation={result.data?.total_relation ?? "eq"} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} pageSizeOptions={[25, 50, 100, 200]} />
-          <EventTable items={result.data?.items ?? []} view={view} selectedIds={selectedEventIds} onToggleSelect={(eventId) => setSelectedEventIds((current) => (current.includes(eventId) ? current.filter((item) => item !== eventId) : [...current, eventId]))} onCreateFinding={(item) => openFindingFromArtifact(item, "Artifact Explorer row")} />
+          <EventTable
+            items={result.data?.items ?? []}
+            view={view}
+            selectedIds={selectedEventIds}
+            onToggleSelect={(eventId) => setSelectedEventIds((current) => (current.includes(eventId) ? current.filter((item) => item !== eventId) : [...current, eventId]))}
+            onCreateFinding={(item) => openFindingFromArtifact(item, "Artifact Explorer row")}
+            onAroundEvent={(item, windowMs) => {
+              const parsed = new Date(String(item["@timestamp"] ?? "")).getTime();
+              if (Number.isNaN(parsed)) return;
+              setTimeFrom(new Date(parsed - windowMs).toISOString());
+              setTimeTo(new Date(parsed + windowMs).toISOString());
+              setPage(1);
+            }}
+          />
         </>
       )}
       <CreateFindingDialog
