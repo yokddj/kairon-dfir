@@ -2933,3 +2933,40 @@ def _v41_memory_plugin_run_warning_columns(connection: Connection) -> None:
         connection.execute(text("ALTER TABLE memory_plugin_runs ADD COLUMN warning_code VARCHAR(128)"))
     if "warning_message" not in existing:
         connection.execute(text("ALTER TABLE memory_plugin_runs ADD COLUMN warning_message VARCHAR(512)"))
+
+
+@register(42, "memory_file_extractions")
+def _v42_memory_file_extractions(connection: Connection) -> None:
+    """On-demand "recover a file from a memory image" jobs (windows.filescan
+    + windows.dumpfiles). See app.models.memory.MemoryFileExtraction for the
+    full rationale -- one row is both the job lifecycle and, once completed,
+    the durable record of what was recovered.
+    """
+    inspector = _inspector_for(connection)
+    if "memory_file_extractions" in inspector.get_table_names():
+        return
+    dialect = connection.dialect.name
+    json_type = "JSONB" if dialect == "postgresql" else "JSON"
+    id_type = "UUID" if dialect == "postgresql" else "VARCHAR(36)"
+    connection.execute(text(f"""
+        CREATE TABLE memory_file_extractions (
+            id {id_type} PRIMARY KEY,
+            case_id {id_type} NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+            evidence_id {id_type} NOT NULL REFERENCES evidences(id) ON DELETE CASCADE,
+            requested_path VARCHAR(2048) NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'queued',
+            worker_task_id VARCHAR(128),
+            filescan_matches {json_type} NOT NULL DEFAULT '[]',
+            results_json {json_type} NOT NULL DEFAULT '[]',
+            error_code VARCHAR(128),
+            error_message VARCHAR(512),
+            started_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            duration_ms INTEGER,
+            created_at TIMESTAMP NOT NULL
+        )
+    """))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_file_extractions_case_id ON memory_file_extractions (case_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_file_extractions_evidence_id ON memory_file_extractions (evidence_id)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_file_extractions_status ON memory_file_extractions (status)"))
+    connection.execute(text("CREATE INDEX IF NOT EXISTS ix_memory_file_extractions_case_evidence ON memory_file_extractions (case_id, evidence_id)"))
