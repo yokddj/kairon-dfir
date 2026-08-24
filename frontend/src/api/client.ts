@@ -1636,6 +1636,32 @@ export type MemoryRunDetail = MemoryScanRun & {
   plugin_runs: MemoryPluginRun[];
 };
 
+export type MemoryFileExtractionResult = {
+  offset: number | null;
+  cache_type: string | null;
+  original_filename: string | null;
+  output_filename: string;
+  output_relative_path: string;
+  sha256: string;
+  size_bytes: number;
+};
+
+export type MemoryFileExtraction = {
+  id: string;
+  case_id: string;
+  evidence_id: string;
+  requested_path: string;
+  status: "queued" | "running" | "completed" | "failed" | "not_found" | "cancelled";
+  filescan_matches: Array<{ offset: number | null; name: string | null }>;
+  results: MemoryFileExtractionResult[];
+  error_code: string | null;
+  error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_ms: number | null;
+  created_at: string | null;
+};
+
 export type MemorySystemInfo = {
   case_id: string;
   evidence_id: string;
@@ -6407,6 +6433,23 @@ export const api = {
     }),
   startMemoryScan: (caseId: string, evidenceId: string, profile: "metadata_only" | "processes_basic" | "processes_extended" = "metadata_only") =>
     request<MemoryStartScanResponse>(`/evidences/${evidenceId}/memory/scan?case_id=${encodeURIComponent(caseId)}`, { method: "POST", body: JSON.stringify({ profile }) }),
+  extractMemoryFile: (caseId: string, evidenceId: string, path: string) =>
+    request<MemoryFileExtraction>(`/cases/${caseId}/memory/evidences/${evidenceId}/files/extract`, { method: "POST", body: JSON.stringify({ path }) }),
+  getMemoryFileExtraction: (caseId: string, evidenceId: string, extractionId: string) =>
+    request<MemoryFileExtraction>(`/cases/${caseId}/memory/evidences/${evidenceId}/files/extract/${extractionId}`),
+  listMemoryFileExtractions: (caseId: string, evidenceId: string) =>
+    request<{ items: MemoryFileExtraction[] }>(`/cases/${caseId}/memory/evidences/${evidenceId}/files`),
+  downloadMemoryFileExtractionResult: async (caseId: string, evidenceId: string, extractionId: string, resultIndex: number, fallbackFilename: string) => {
+    const response = await apiFetch(`/cases/${caseId}/memory/evidences/${evidenceId}/files/extract/${extractionId}/download/${resultIndex}`);
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(body || `HTTP ${response.status}`);
+    }
+    return {
+      blob: await response.blob(),
+      filename: extractDownloadFilename(response.headers.get("content-disposition"), fallbackFilename),
+    };
+  },
   getMemoryRun: (runId: string) => request<MemoryRunDetail>(`/memory/runs/${runId}`),
   getMemoryRunSystemInfo: (runId: string) => request<MemorySystemInfo>(`/memory/runs/${runId}/system-info`),
   getCaseMemorySystemInfo: (caseId: string) => request<MemorySystemInfo[]>(`/cases/${caseId}/memory/system-info`),

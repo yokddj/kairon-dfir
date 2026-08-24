@@ -1214,4 +1214,52 @@ class MemoryNativeProbe(UUIDMixin, Base):
 
     case = relationship("Case")
     evidence = relationship("Evidence")
-    requirement = relationship("MemorySymbolRequirement")
+
+
+MEMORY_FILE_EXTRACTION_STATUSES = {"queued", "running", "completed", "failed", "not_found", "cancelled"}
+
+
+class MemoryFileExtraction(UUIDMixin, Base):
+    """On-demand "recover this file from a memory image" job.
+
+    Operator supplies a Windows path (e.g. ``C:\\Schtask\\check-updates.ps1``)
+    seen elsewhere in the case (a Sysmon FileCreate event, a JumpList entry,
+    a persistence hit, ...) that has no content hash because the source
+    artifact never captured file bytes. This runs ``windows.filescan`` to
+    locate matching ``_FILE_OBJECT``s in the memory image, then
+    ``windows.dumpfiles --virtaddr <offsets>`` to recover whatever cached
+    pages Windows still had for them at capture time -- recovery is best
+    effort (the OS may no longer hold the pages), hence the ``not_found``
+    terminal status distinct from ``failed``.
+
+    One row is both the job lifecycle (queued -> running -> a terminal
+    status) and, once completed, the durable record of what was found --
+    same shape as MemoryEvidenceLinuxSymbolLink. ``results_json`` holds a
+    list of ``{offset, output_relative_path, sha256, size_bytes}`` for
+    every distinct file Volatility wrote (a single path can recover more
+    than one cached copy, e.g. a ``.dat`` data-stream version and a
+    memory-mapped ``.img`` version -- both are kept, not collapsed to one).
+    """
+
+    __tablename__ = "memory_file_extractions"
+
+    case_id: Mapped[str] = mapped_column(ForeignKey("cases.id", ondelete="CASCADE"), nullable=False, index=True)
+    evidence_id: Mapped[str] = mapped_column(ForeignKey("evidences.id", ondelete="CASCADE"), nullable=False, index=True)
+    requested_path: Mapped[str] = mapped_column(String(2048), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
+    worker_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    filescan_matches: Mapped[list] = mapped_column(JSONVariant, default=list, nullable=False)
+    results_json: Mapped[list] = mapped_column(JSONVariant, default=list, nullable=False)
+    error_code: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=False), nullable=True)
+    duration_ms: Mapped[int | None] = mapped_column(nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=False), nullable=False, default=utc_now_naive)
+
+    __table_args__ = (
+        Index("ix_memory_file_extractions_case_evidence", "case_id", "evidence_id"),
+    )
+
+    case = relationship("Case")
+    evidence = relationship("Evidence")

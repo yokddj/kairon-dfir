@@ -611,16 +611,28 @@ def test_profiles_use_allowlisted_plugins() -> None:
 def test_arbitrary_plugin_rejected() -> None:
     """The execution layer must reject plugins that are not in
     ``ALLOWED_VOLATILITY_PLUGINS``.
+
+    windows.dumpfiles/windows.filescan are deliberately real Volatility
+    plugins that ARE now in ALLOWED_VOLATILITY_PLUGINS (the on-demand
+    "recover a file from memory" feature, app.services.memory
+    .file_extraction, calls them directly via run_plugin -- they were never
+    added to ARTIFACT_PLUGIN_NORMALIZER because that feature is deliberately
+    isolated from the bulk-profile normalization pipeline this dict serves),
+    so an unmistakably fake plugin name is used here instead to keep this
+    test about "unlisted plugins are rejected" rather than any one plugin's
+    allowlist status.
     """
     from app.services.memory.volatility_runner import (
         ALLOWED_VOLATILITY_PLUGINS,
         VolatilityRunnerError,
         build_plugin_argv,
     )
-    assert "windows.dumpfiles" not in ALLOWED_VOLATILITY_PLUGINS
+    assert "windows.dumpfiles" in ALLOWED_VOLATILITY_PLUGINS
     assert "windows.dumpfiles" not in ARTIFACT_PLUGIN_NORMALIZER
+    fake_plugin = "windows.definitely_not_a_real_plugin"
+    assert fake_plugin not in ALLOWED_VOLATILITY_PLUGINS
     with pytest.raises(VolatilityRunnerError) as exc_info:
-        build_plugin_argv("/usr/bin/vol", "/tmp/mem.dmp", "windows.dumpfiles")
+        build_plugin_argv("/usr/bin/vol", "/tmp/mem.dmp", fake_plugin)
     assert exc_info.value.code == "PLUGIN_NOT_ALLOWED"
 
 

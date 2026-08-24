@@ -804,6 +804,29 @@ def run_linux_symbol_validation(validation_job_id: str) -> None:
     execute_linux_symbol_validation(validation_job_id)
 
 
+def enqueue_memory_file_extraction(extraction_id: str) -> str:
+    """Enqueue an on-demand "recover this file from memory" job on the same
+    ``memory`` queue as the rest of memory-worker work -- Volatility needs
+    the worker's writable evidence/output mount, not the backend API
+    process's read-only one. See app.services.memory.file_extraction for the
+    filescan+dumpfiles work this dispatches."""
+    from app.services.memory.file_extraction import DUMPFILES_TIMEOUT_SECONDS, FILESCAN_TIMEOUT_SECONDS
+
+    job_timeout = max(60, FILESCAN_TIMEOUT_SECONDS + DUMPFILES_TIMEOUT_SECONDS + 60)
+    job = memory_queue.enqueue(
+        "app.workers.tasks.run_memory_file_extraction",
+        extraction_id,
+        job_timeout=job_timeout,
+    )
+    return job.id
+
+
+def run_memory_file_extraction(extraction_id: str) -> None:
+    from app.services.memory.file_extraction import execute_memory_file_extraction
+
+    execute_memory_file_extraction(extraction_id)
+
+
 def enqueue_experimental_canary(experimental_run_id: str) -> str:
     """Enqueue the experimental canary task on the dedicated
     ``memory-experimental`` queue.

@@ -16,6 +16,7 @@ import { MemoryArtifactsTab } from "./memory/MemoryArtifactsTab";
 import { MemorySystemTab } from "./memory/MemorySystemTab";
 import { MemoryRunsTab } from "./memory/MemoryRunsTab";
 import { MemoryRawTab } from "./memory/MemoryRawTab";
+import { MemoryFilesTab } from "./memory/MemoryFilesTab";
 import { MemoryAnalyzeAction } from "./memory/MemoryAnalyzeAction";
 import CreateFindingDialog from "./CreateFindingDialog";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
@@ -424,6 +425,10 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             evidenceId={effectiveEvidenceId}
             initialSubView="network"
           />
+        ) : null}
+
+        {tab === "files" ? (
+          <MemoryFilesTab caseId={caseId} evidenceId={effectiveEvidenceId} />
         ) : null}
 
         {tab === "system" ? (

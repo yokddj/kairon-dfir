@@ -124,6 +124,8 @@ ALLOWED_VOLATILITY_PLUGINS = {
     "windows.driverscan",
     "windows.malfind",
     "windows.vadinfo",
+    "windows.filescan",
+    "windows.dumpfiles",
     "linux.pslist",
     "linux.pstree",
     "linux.sockstat",
@@ -131,7 +133,7 @@ ALLOWED_VOLATILITY_PLUGINS = {
 }
 
 
-def build_plugin_argv(executable: str | list[str], evidence_path: Path, plugin: str, *, offline: bool = False, cache_path: Path | None = None, symbol_path: Path | None = None) -> list[str]:
+def build_plugin_argv(executable: str | list[str], evidence_path: Path, plugin: str, *, offline: bool = False, cache_path: Path | None = None, symbol_path: Path | None = None, extra_args: list[str] | None = None) -> list[str]:
     if plugin not in ALLOWED_VOLATILITY_PLUGINS:
         raise VolatilityRunnerError("PLUGIN_NOT_ALLOWED", "Memory plugin is not allowed.")
     argv = [*executable] if isinstance(executable, list) else [executable]
@@ -141,7 +143,7 @@ def build_plugin_argv(executable: str | list[str], evidence_path: Path, plugin: 
         argv.extend(["--cache-path", str(cache_path)])
     if symbol_path is not None:
         argv.extend(["--symbol-dirs", str(symbol_path)])
-    return [*argv, "-f", str(evidence_path), "-r", "json", plugin]
+    return [*argv, "-f", str(evidence_path), "-r", "json", plugin, *(extra_args or [])]
 
 
 def build_windows_info_argv(executable: str, evidence_path: Path) -> list[str]:
@@ -177,6 +179,7 @@ def run_plugin(
     offline: bool | None = None,
     cache_path: Path | None = None,
     symbol_path: Path | None = None,
+    extra_args: list[str] | None = None,
     cancellation_check: Callable[[], bool] | None = None,
 ) -> VolatilityRunResult:
     settings = get_settings()
@@ -197,7 +200,7 @@ def run_plugin(
             probe.unlink(missing_ok=True)
         except OSError as exc:
             raise VolatilityRunnerError("MEMORY_SYMBOL_CACHE_NOT_WRITABLE", "Volatility symbol cache is not writable by the memory worker.") from exc
-    argv = build_plugin_argv(argv_prefix, evidence_path, plugin, offline=offline, cache_path=effective_cache_path, symbol_path=effective_symbol_path)
+    argv = build_plugin_argv(argv_prefix, evidence_path, plugin, offline=offline, cache_path=effective_cache_path, symbol_path=effective_symbol_path, extra_args=extra_args)
     timeout = max(1, int(timeout_seconds or settings.memory_plugin_timeout_seconds))
     max_bytes = max(1, int(max_output_bytes or settings.memory_plugin_output_max_bytes))
     termination_grace = max(1, int(getattr(settings, "memory_plugin_termination_grace_seconds", 15)))
@@ -263,7 +266,7 @@ def run_plugin(
         display_argv.append("--offline")
     if cache_path is not None:
         display_argv.extend(["--cache-path", "[cache]", "--symbol-dirs", "[symbols]"])
-    return VolatilityRunResult(argv_display=[*display_argv, "-f", "[evidence]", "-r", "json", plugin], stdout=stdout or b"", stderr=stderr or b"", duration_ms=duration_ms)
+    return VolatilityRunResult(argv_display=[*display_argv, "-f", "[evidence]", "-r", "json", plugin, *(extra_args or [])], stdout=stdout or b"", stderr=stderr or b"", duration_ms=duration_ms)
 
 
 def _terminate_process_group(process: subprocess.Popen[bytes], *, timeout: int) -> tuple[bytes, bytes]:

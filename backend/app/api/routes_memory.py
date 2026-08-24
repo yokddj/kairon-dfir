@@ -4241,6 +4241,133 @@ def get_native_probe_status(
             result["compatibility_details"] = compat
     return result
 
+
+# ---------------------------------------------------------------------------
+# On-demand file recovery from a memory image (windows.filescan + dumpfiles)
+# ---------------------------------------------------------------------------
+
+
+from pydantic import BaseModel as _FileExtractionBaseModel
+
+
+class MemoryFileExtractionRequest(_FileExtractionBaseModel):
+    path: str
+
+
+def _memory_file_extraction_dict(extraction) -> dict:
+    return {
+        "id": extraction.id,
+        "case_id": extraction.case_id,
+        "evidence_id": extraction.evidence_id,
+        "requested_path": extraction.requested_path,
+        "status": extraction.status,
+        "filescan_matches": extraction.filescan_matches or [],
+        "results": extraction.results_json or [],
+        "error_code": extraction.error_code,
+        "error_message": extraction.error_message,
+        "started_at": extraction.started_at.isoformat() if extraction.started_at else None,
+        "completed_at": extraction.completed_at.isoformat() if extraction.completed_at else None,
+        "duration_ms": extraction.duration_ms,
+        "created_at": extraction.created_at.isoformat() if extraction.created_at else None,
+    }
+
+
+@router.post(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/files/extract",
+    response_model=None,
+    status_code=202,
+)
+def start_memory_file_extraction(
+    case_id: str,
+    evidence_id: str,
+    payload: MemoryFileExtractionRequest,
+    db: Session = Depends(get_db),
+):
+    from app.services.memory.file_extraction import create_memory_file_extraction
+    from app.workers.tasks import enqueue_memory_file_extraction
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    try:
+        extraction = create_memory_file_extraction(db, evidence_id, payload.path)
+    except MemoryExecutionValidationError as exc:
+        raise HTTPException(status_code=422, detail={"error_code": exc.code, "message": exc.message}) from exc
+    task_id = enqueue_memory_file_extraction(extraction.id)
+    extraction.worker_task_id = task_id
+    db.commit()
+    return _memory_file_extraction_dict(extraction)
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/files",
+    response_model=None,
+)
+def list_memory_file_extractions_endpoint(
+    case_id: str,
+    evidence_id: str,
+    db: Session = Depends(get_db),
+):
+    from app.services.memory.file_extraction import list_memory_file_extractions
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    extractions = list_memory_file_extractions(db, evidence_id)
+    return {"items": [_memory_file_extraction_dict(item) for item in extractions]}
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/files/extract/{extraction_id}",
+    response_model=None,
+)
+def get_memory_file_extraction_endpoint(
+    case_id: str,
+    evidence_id: str,
+    extraction_id: str,
+    db: Session = Depends(get_db),
+):
+    from app.services.memory.file_extraction import get_memory_file_extraction
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    extraction = get_memory_file_extraction(db, extraction_id)
+    if extraction is None or extraction.evidence_id != evidence_id:
+        raise HTTPException(status_code=404, detail="Extraction job not found.")
+    return _memory_file_extraction_dict(extraction)
+
+
+@router.get(
+    "/cases/{case_id}/memory/evidences/{evidence_id}/files/extract/{extraction_id}/download/{result_index}",
+)
+def download_memory_file_extraction_result(
+    case_id: str,
+    evidence_id: str,
+    extraction_id: str,
+    result_index: int,
+    db: Session = Depends(get_db),
+) -> Response:
+    from app.services.memory.file_extraction import get_memory_file_extraction, resolve_extraction_result_file
+
+    _require_case(db, case_id)
+    _require_evidence_for_case(db, case_id, evidence_id)
+    extraction = get_memory_file_extraction(db, extraction_id)
+    if extraction is None or extraction.evidence_id != evidence_id:
+        raise HTTPException(status_code=404, detail="Extraction job not found.")
+    try:
+        file_path = resolve_extraction_result_file(extraction, result_index)
+    except MemoryExecutionValidationError as exc:
+        raise HTTPException(status_code=404, detail={"error_code": exc.code, "message": exc.message}) from exc
+    result = (extraction.results_json or [])[result_index]
+    filename = str(result.get("original_filename") or result.get("output_filename") or "recovered-file")
+    return Response(
+        content=file_path.read_bytes(),
+        media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Access-Control-Expose-Headers": "Content-Disposition",
+        },
+    )
+
+
 @router.get("/cases/{case_id}/memory/command-line-history", response_model=None)
 def get_command_line_history(
     case_id: str,

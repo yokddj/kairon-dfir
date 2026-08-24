@@ -28,6 +28,7 @@ export type MemoryTab =
   | "handles"
   | "suspicious"
   | "vads"
+  | "files"
   | "system"
   | "runs"
   | "raw"
@@ -43,6 +44,7 @@ export const MEMORY_TABS: ReadonlyArray<{ key: MemoryTab; label: string; testId:
   { key: "handles", label: "Handles", testId: "memory-tab-handles", routeSegment: "handles" },
   { key: "suspicious", label: "Suspicious Memory", testId: "memory-tab-suspicious", routeSegment: "suspicious" },
   { key: "vads", label: "VADs", testId: "memory-tab-vads", routeSegment: "vads" },
+  { key: "files", label: "Files", testId: "memory-tab-files", routeSegment: "files" },
   { key: "system", label: "System", testId: "memory-tab-system", routeSegment: "system" },
   { key: "runs", label: "Runs", testId: "memory-tab-runs", routeSegment: "runs" },
   { key: "raw", label: "Raw Observations", testId: "memory-tab-raw", routeSegment: "raw" },
