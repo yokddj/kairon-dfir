@@ -5,7 +5,7 @@ import { useParams, useSearchParams } from "react-router-dom";
 import { api, type DfirCase, type EmailArtifactItem, type MotwItem, type StartupPersistenceItem } from "../api/client";
 import CreateFindingDialog from "../components/CreateFindingDialog";
 import EmptyState from "../components/EmptyState";
-import EventTable, { type EventView } from "../components/EventTable";
+import EventTable, { type EventView, type SortField, type SortOrder } from "../components/EventTable";
 import IndicatorResolutionPanel from "../components/IndicatorResolutionPanel";
 import InvestigationContext from "../components/InvestigationContext";
 import PaginationControls from "../components/PaginationControls";
@@ -16,6 +16,7 @@ import { useHostContext } from "../hooks/useHostContext";
 import { formatTimestamp } from "../lib/time";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
+import { nextSortDirection } from "../lib/sorting";
 import { artifactEventView, artifactLabel as artifactViewLabel, artifactOptions, artifactOptionsForPlatforms, canonicalArtifactView } from "../lib/artifactRegistry";
 
 const USER_ACTIVITY_TABS = [
@@ -27,6 +28,21 @@ const USER_ACTIVITY_TABS = [
 ];
 const USER_ACTIVITY_TYPES = new Set(USER_ACTIVITY_TABS.map((item) => item.value));
 const INTERNAL_ARTIFACT_TYPES_HIDDEN_FROM_MAIN = new Set(["registry_persistence"]);
+// Mirrors backend/app/api/routes_search.py's SORT_FIELD_MAP keys. Clicking a
+// column header only re-sorts the current page client-side (EventTable's own
+// behavior) unless we also ask the backend to sort the *whole* result set
+// before paginating -- otherwise "sort by timestamp" on e.g. MFT silently
+// only reorders the ~50-200 rows already on screen out of a result set that
+// can be in the hundreds of thousands. Fields outside this set keep the old
+// current-page-only behavior (POST /search rejects an unknown sort_by with a
+// 400), which is no worse than before.
+const SERVER_SORTABLE_FIELDS = new Set<string>([
+  "@timestamp", "timestamp", "event.severity", "severity", "host.name", "host",
+  "user.name", "user", "event.category", "category", "event.type", "artifact.type",
+  "artifact.name", "artifact", "windows.event_id", "file.created", "file.modified",
+  "file.accessed", "file.changed", "file.size", "mft.entry_number", "process.name",
+  "network.source_ip", "network.destination_ip", "risk_score",
+]);
 // DNS activity is spread across sources with no shared artifact.type: the
 // dedicated network/DNS parser (event.type dns_query/dns_query_failed/
 // dns_cache_entry/dns_config) and Sysmon Event 22 (sysmon_dns_query, kept
@@ -652,6 +668,8 @@ export default function ArtifactExplorer() {
   const [backendVariant, setBackendVariant] = useState<"default" | "advanced" | "all">((searchParams.get("backend_variant") as "default" | "advanced" | "all") || "default");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
+  const [sortBy, setSortBy] = useState<SortField | null>(null);
+  const [sortOrder, setSortOrder] = useState<SortOrder>("desc");
   const [selectedEventIds, setSelectedEventIds] = useState<string[]>([]);
   const [findingDialogOpen, setFindingDialogOpen] = useState(false);
   const [persistenceFindingEventIds, setPersistenceFindingEventIds] = useState<string[]>([]);
@@ -724,8 +742,10 @@ export default function ArtifactExplorer() {
       timezone: effectiveTimezone,
       page,
       page_size: pageSize,
+      sort_by: sortBy && SERVER_SORTABLE_FIELDS.has(sortBy) ? sortBy : undefined,
+      sort_order: sortBy && SERVER_SORTABLE_FIELDS.has(sortBy) ? sortOrder : undefined,
     }),
-    [artifactName, artifactTypeFilter, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly, timeFrom, timeTo],
+    [artifactName, artifactTypeFilter, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly, timeFrom, timeTo, sortBy, sortOrder],
   );
   const isStartupPersistenceView = artifactType === "startup_persistence";
   const isMotwView = artifactType === "motw" || artifactType === "zone_identifier";
@@ -1376,6 +1396,13 @@ export default function ArtifactExplorer() {
           <EventTable
             items={result.data?.items ?? []}
             view={view}
+            sortBy={sortBy ?? undefined}
+            sortOrder={sortOrder}
+            onSortChange={(field) => {
+              setSortOrder((current) => nextSortDirection(sortBy, current, field));
+              setSortBy(field);
+              setPage(1);
+            }}
             selectedIds={selectedEventIds}
             onToggleSelect={(eventId) => setSelectedEventIds((current) => (current.includes(eventId) ? current.filter((item) => item !== eventId) : [...current, eventId]))}
             onCreateFinding={(item) => openFindingFromArtifact(item, "Artifact Explorer row")}
