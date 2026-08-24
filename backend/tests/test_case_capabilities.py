@@ -163,8 +163,14 @@ def test_registry_static_architecture_consistency():
     capability_ids = [item["id"] for item in CAPABILITY_REGISTRY]
     assert len(capability_ids) == len(set(capability_ids))
 
-    canonical_routes = [_route_path(item["route"]) for item in CAPABILITY_REGISTRY]
-    assert len(canonical_routes) == len(set(canonical_routes))
+    # Full routes (path + query) must be unique -- two capabilities are never
+    # literally indistinguishable. The canonical *path* alone may repeat
+    # when capabilities legitimately share one query-param-driven page (e.g.
+    # ArtifactExplorer at /cases/:caseId/artifacts, selected via
+    # ?artifact_type=...), same as linux.software.packages and
+    # windows.persistence.overview both do.
+    full_routes = [item["route"] for item in CAPABILITY_REGISTRY]
+    assert len(full_routes) == len(set(full_routes))
 
     for capability in CAPABILITY_REGISTRY:
         assert capability["platform"]

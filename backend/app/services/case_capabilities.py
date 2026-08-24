@@ -57,7 +57,7 @@ CAPABILITY_REGISTRY: list[dict[str, Any]] = [
         "evidence_domain": "filesystem",
         "domain": "persistence",
         "title": "Persistence",
-        "route": "/cases/:caseId/findings?preset=persistence",
+        "route": "/cases/:caseId/artifacts?artifact_type=startup_persistence",
         "artifact_families": ["scheduled_task", "service", "registry_run_key", "autoruns"],
         "nav": {"parent": "windows/persistence", "order": 10},
         "overview": {"priority": 30, "featured": True, "quick_action": "Review Persistence"},
