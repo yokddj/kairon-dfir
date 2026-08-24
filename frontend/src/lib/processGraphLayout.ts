@@ -51,8 +51,11 @@ export type GraphLayout = {
 };
 
 export const GRAPH_PADDING = 24;
-export const GRAPH_CARD_WIDTH = 220;
-export const GRAPH_CARD_HEIGHT = 88;
+// Wide/tall enough that a typical process name never truncates to one or
+// two characters, and the optional Search-match/Context badge row (see
+// MemoryProcessGraph's node card) has room without clipping.
+export const GRAPH_CARD_WIDTH = 260;
+export const GRAPH_CARD_HEIGHT = 104;
 export const GRAPH_COLUMN_GAP = 36;
 export const GRAPH_ROW_GAP = 12;
 

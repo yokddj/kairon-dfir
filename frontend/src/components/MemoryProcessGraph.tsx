@@ -640,32 +640,44 @@ export function MemoryProcessGraph({
                   aria-label={`PID ${node.pid} ${node.name || ""}${isTarget ? " (search match)" : ""}`}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-1.5">
                         <NodeIcon node={node} />
-                        <span className="block truncate text-sm font-semibold">{nodeLabel(node)}</span>
-                        {isTarget ? (
-                          <span
-                            className="rounded-md border border-mint/40 bg-mint/20 px-1.5 py-0.5 text-[10px] font-semibold text-mint"
-                            data-testid="memory-graph-search-match-badge"
-                          >
-                            Search match
-                          </span>
-                        ) : null}
-                        {isContext ? (
-                          <span
-                            className="rounded-md border border-line bg-abyss/70 px-1.5 py-0.5 text-[10px] text-muted"
-                            data-testid="memory-graph-context-badge"
-                          >
-                            Context
-                          </span>
-                        ) : null}
+                        {/* flex-1 + min-w-0 so the name claims all space this
+                            row has left after the icon -- the Search
+                            match/Context badges used to sit inline here too
+                            and, having their own intrinsic width, squeezed
+                            the name down to one or two characters whenever
+                            they were present (e.g. lineage mode's ancestor
+                            chain, where every node is "Context"). They now
+                            render on their own row below instead. */}
+                        <span className="block flex-1 min-w-0 truncate text-sm font-semibold" title={node.name || `PID ${node.pid}`}>{nodeLabel(node)}</span>
                       </div>
+                      {isTarget || isContext ? (
+                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                          {isTarget ? (
+                            <span
+                              className="rounded-md border border-mint/40 bg-mint/20 px-1.5 py-0.5 text-[10px] font-semibold text-mint"
+                              data-testid="memory-graph-search-match-badge"
+                            >
+                              Search match
+                            </span>
+                          ) : null}
+                          {isContext ? (
+                            <span
+                              className="rounded-md border border-line bg-abyss/70 px-1.5 py-0.5 text-[10px] text-muted"
+                              data-testid="memory-graph-context-badge"
+                            >
+                              Context
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <p className="mt-1 truncate text-[11px] text-muted" title={node.command_line || ""}>
                         {node.command_line || "—"}
                       </p>
                     </div>
-                    <span className={`rounded-md border px-1.5 py-0.5 text-[10px] ${TONE[tone]}`}>
+                    <span className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] ${TONE[tone]}`}>
                       {visibilityLabel(node)}
                     </span>
                   </div>
