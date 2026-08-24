@@ -25,11 +25,12 @@ import {
   ZoomOut,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { useTimezonePreference } from "../context/TimezoneContext";
 
 import { api, type Evidence, type ExecutionStory, type Finding, type ProcessTreeBundle, type ProcessTreeEdge, type ProcessTreeNode } from "../api/client";
 import ResponsiveDetailPanel, { useMinWidthQuery } from "./ResponsiveDetailPanel";
 import { linuxCommandHistoryRoute, windowsExecutionStoriesRoute } from "../lib/canonicalRoutes";
-import { copyToClipboard } from "../lib/time";
+import { copyToClipboard, formatTimestamp } from "../lib/time";
 
 type Props = {
   caseId: string;
@@ -183,11 +184,6 @@ const GRAPH_PADDING = 28;
 
 function toNodeLabel(node: ProcessTreeNode) {
   return node.name || node.path || node.command_line || node.id;
-}
-
-function compactTimestamp(value: string | null) {
-  if (!value) return "—";
-  return value.replace("T", " ").replace(".000000+00:00", "Z");
 }
 
 function riskTone(score: number) {
@@ -715,6 +711,7 @@ export default function ProcessTreePanel({
   debugThrowRenderError = false,
 }: Props) {
   const navigate = useNavigate();
+  const { effectiveTimezone } = useTimezonePreference();
   const isDesktopLayout = useMinWidthQuery(1280);
   const graphViewportRef = useRef<HTMLDivElement | null>(null);
   const treeViewportRef = useRef<HTMLDivElement | null>(null);
@@ -1344,8 +1341,8 @@ export default function ProcessTreePanel({
               <div className="grid gap-2">
                 <p className="break-all"><span className="text-white/90">ProcessGuid:</span> {normalizeValue(selectedNode.id)}</p>
                 <p className="break-words"><span className="text-white/90">Source:</span> {normalizeValue(selectedNode.source_type)} · event {normalizeValue(selectedNode.source_event_id || selectedNode.source_events?.[0])}</p>
-                <p><span className="text-white/90">First seen:</span> {compactTimestamp(selectedNode.first_seen)}</p>
-                <p><span className="text-white/90">Last seen:</span> {compactTimestamp(selectedNode.last_seen)}</p>
+                <p><span className="text-white/90">First seen:</span> {formatTimestamp(selectedNode.first_seen, effectiveTimezone)}</p>
+                <p><span className="text-white/90">Last seen:</span> {formatTimestamp(selectedNode.last_seen, effectiveTimezone)}</p>
                 <p className="break-words"><span className="text-white/90">Parent status:</span> {normalizeValue(selectedNode.parent_link_status || "unknown")} · {normalizeValue(selectedNode.parent_link_confidence || "none")}</p>
                 <p className="break-words"><span className="text-white/90">Parent reason:</span> {normalizeValue(selectedNode.parent_link_reason)}</p>
                 {selectedNode.parent_fields ? (
@@ -1532,7 +1529,7 @@ export default function ProcessTreePanel({
             <div className="mt-4 grid gap-3 rounded-xl border border-line bg-abyss/70 p-3 text-sm text-muted md:grid-cols-2">
               <p><span className="text-white/90">Source:</span> {normalizeValue(String(executionStory.event_summary.source || ""))}</p>
               <p><span className="text-white/90">Host:</span> {normalizeValue(String(executionStory.event_summary.host || ""))}</p>
-              <p><span className="text-white/90">Timestamp:</span> {compactTimestamp(String(executionStory.event_summary.timestamp || ""))}</p>
+              <p><span className="text-white/90">Timestamp:</span> {formatTimestamp(executionStory.event_summary.timestamp, effectiveTimezone)}</p>
               <p className="break-words"><span className="text-white/90">Event:</span> {normalizeValue(String(executionStory.event_summary.title || executionStory.event_summary.summary || ""))}</p>
             </div>
           ) : null}
@@ -1548,7 +1545,7 @@ export default function ProcessTreePanel({
                   title="Build exact story from this process"
                 >
                   <span className="font-semibold">{toNodeLabel(candidate)}</span>
-                  <span className="ml-2 text-xs text-muted">{compactTimestamp(candidate.first_seen)} · {normalizeValue(candidate.host)}</span>
+                  <span className="ml-2 text-xs text-muted">{formatTimestamp(candidate.first_seen, effectiveTimezone)} · {normalizeValue(candidate.host)}</span>
                   <span className="mt-1 block break-words text-xs text-muted">{normalizeValue(candidate.command_line || candidate.path)}</span>
                 </button>
               )) : (
@@ -1569,7 +1566,7 @@ export default function ProcessTreePanel({
               <p><span className="text-white/90">Process:</span> {normalizeValue(storyTarget.name)}</p>
               <p><span className="text-white/90">PID:</span> {storyTarget.pid ?? "—"}</p>
               <p className="break-words"><span className="text-white/90">Host/User:</span> {normalizeValue(storyTarget.host)} · {normalizeValue(storyTarget.user)}</p>
-              <p><span className="text-white/90">Timestamp:</span> {compactTimestamp(storyTarget.first_seen)}</p>
+              <p><span className="text-white/90">Timestamp:</span> {formatTimestamp(storyTarget.first_seen, effectiveTimezone)}</p>
               <p className="break-words"><span className="text-white/90">Command:</span> {normalizeValue(storyTarget.command_line || storyTarget.path)}</p>
             </div>
           </div>
@@ -1632,7 +1629,7 @@ export default function ProcessTreePanel({
             {(executionStory?.parents ?? []).length ? (executionStory?.parents ?? []).map((node) => (
               <button key={`parent-${node.id}`} type="button" onClick={() => setSelectedNodeId(node.id)} className="rounded-2xl border border-line bg-abyss/70 p-3 text-left text-sm">
                 <span className="font-semibold">{toNodeLabel(node)}</span>
-                <span className="ml-2 text-muted">{nodePidLabel(node)} · {compactTimestamp(node.first_seen)}</span>
+                <span className="ml-2 text-muted">{nodePidLabel(node)} · {formatTimestamp(node.first_seen, effectiveTimezone)}</span>
                 <span className="mt-1 block break-words text-xs text-muted">{node.command_line || node.path || "No command line"}</span>
               </button>
             )) : <p className="text-sm text-muted">Parent process could not be linked from available events.</p>}
@@ -1648,7 +1645,7 @@ export default function ProcessTreePanel({
               <tbody className="divide-y divide-line/70">
                 {((executionStory?.children ?? selectedChildNodes)).length ? (executionStory?.children ?? selectedChildNodes).map((node) => (
                   <tr key={`child-${node.id}`} className="align-top">
-                    <td className="whitespace-nowrap px-3 py-2 text-muted">{compactTimestamp(node.first_seen)}</td>
+                    <td className="whitespace-nowrap px-3 py-2 text-muted">{formatTimestamp(node.first_seen, effectiveTimezone)}</td>
                     <td className="px-3 py-2 font-semibold">{toNodeLabel(node)}</td>
                     <td className="px-3 py-2 text-muted">{node.pid ?? "—"}</td>
                     <td className="max-w-[34rem] break-words px-3 py-2 text-muted">{node.command_line || node.path || "No command line"}</td>
@@ -2428,7 +2425,7 @@ export default function ProcessTreePanel({
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="font-semibold text-amber-50">{String(item.process_name || "Unknown process")}</span>
                     <span>pid {String(item.pid ?? "—")}</span>
-                    <span>{compactTimestamp(String(item.timestamp || ""))}</span>
+                    <span>{formatTimestamp(item.timestamp, effectiveTimezone)}</span>
                   </div>
                   <p className="mt-1 break-words text-amber-50/90">{String(item.parent_link_status || "parent_not_found")} · {String(item.parent_link_reason || "Parent was not linked.")}</p>
                   <p className="mt-1 break-words text-amber-50/80">
@@ -2803,7 +2800,7 @@ export default function ProcessTreePanel({
                                 <span>PID {branch.node.pid ?? "—"}</span>
                                 <span>host {normalizeValue(branch.node.host)}</span>
                                 <span>user {normalizeValue(branch.node.user)}</span>
-                                <span>seen {compactTimestamp(branch.node.first_seen)}</span>
+                                <span>seen {formatTimestamp(branch.node.first_seen, effectiveTimezone)}</span>
                               </div>
                               {branch.edge ? (
                                 <p className="mt-2 text-[11px] text-muted">
