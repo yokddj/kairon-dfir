@@ -9,6 +9,7 @@ import {
   Copy,
   ExternalLink,
   Eye,
+  EyeOff,
   FileText,
   Filter,
   Globe,
@@ -647,6 +648,28 @@ function buildGraphLayout(nodes: ProcessTreeNode[], edges: ProcessTreeEdge[]) {
   } satisfies GraphLayout;
 }
 
+function collectChainIds(startId: string, edges: ProcessTreeEdge[]): Set<string> {
+  const childrenByParent = new Map<string, string[]>();
+  for (const edge of edges) {
+    if (edge.source === edge.target) continue;
+    const current = childrenByParent.get(edge.source) ?? [];
+    current.push(edge.target);
+    childrenByParent.set(edge.source, current);
+  }
+  const chainIds = new Set<string>([startId]);
+  const queue = [startId];
+  while (queue.length) {
+    const currentId = queue.shift()!;
+    for (const childId of childrenByParent.get(currentId) ?? []) {
+      if (!chainIds.has(childId)) {
+        chainIds.add(childId);
+        queue.push(childId);
+      }
+    }
+  }
+  return chainIds;
+}
+
 function SummaryBadge({ label, value }: { label: string; value: number | string }) {
   return (
     <div className="rounded-2xl border border-line bg-panel/60 px-4 py-3">
@@ -710,6 +733,7 @@ export default function ProcessTreePanel({
   const [showFilters, setShowFilters] = useState(false);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(initialHighlightedNodeIds[0] || null);
   const [selectedChainId, setSelectedChainId] = useState<string | null>(null);
+  const [hiddenNodeIds, setHiddenNodeIds] = useState<Set<string>>(new Set());
   const [detailDismissed, setDetailDismissed] = useState(false);
   const [contextDepthParents, setContextDepthParents] = useState<number>(initialMode === "focused" ? 1 : 0);
   const [contextDepthChildren, setContextDepthChildren] = useState<number>(initialMode === "focused" ? 1 : 0);
@@ -1020,6 +1044,21 @@ export default function ProcessTreePanel({
     [graphNodeIds, isExactStoryActive, limitedEdges, storyVisualEdges],
   );
   const exactStoryTargetMissing = Boolean(isExactStoryActive && storyVisualTargetId && !graphNodeIds.has(storyVisualTargetId));
+  const displayedGraphNodes = useMemo(() => graphNodes.filter((node) => !hiddenNodeIds.has(node.id)), [graphNodes, hiddenNodeIds]);
+  const displayedGraphEdges = useMemo(
+    () => graphEdges.filter((edge) => !hiddenNodeIds.has(edge.source) && !hiddenNodeIds.has(edge.target)),
+    [graphEdges, hiddenNodeIds],
+  );
+  const manuallyHiddenCount = graphNodes.length - displayedGraphNodes.length;
+  function hideChain(node: ProcessTreeNode) {
+    const chainIds = collectChainIds(node.id, graphEdges);
+    if (storyVisualTargetId) chainIds.delete(storyVisualTargetId);
+    setHiddenNodeIds((current) => new Set([...current, ...chainIds]));
+    if (selectedNodeId && chainIds.has(selectedNodeId)) setSelectedNodeId(null);
+  }
+  function unhideAllChains() {
+    setHiddenNodeIds(new Set());
+  }
   const visibleChains = useMemo(() => {
     if (mode !== "full") return suspiciousChains;
     const chainList = suspiciousChains.filter((chain) => chain.nodes.every((node) => limitedNodeIds.has(node.id)));
@@ -1042,10 +1081,10 @@ export default function ProcessTreePanel({
     const raw = (query.data?.graph.summary as Record<string, unknown> | undefined)?.orphan_diagnostics;
     return Array.isArray(raw) ? (raw as Array<Record<string, unknown>>) : [];
   }, [query.data?.graph.summary]);
-  const graphLayout = useMemo(() => buildGraphLayout(graphNodes, graphEdges), [graphEdges, graphNodes]);
+  const graphLayout = useMemo(() => buildGraphLayout(displayedGraphNodes, displayedGraphEdges), [displayedGraphEdges, displayedGraphNodes]);
   const graphLayoutMap = useMemo(() => new Map(graphLayout.nodes.map((node) => [node.id, node])), [graphLayout.nodes]);
 
-  const forest = useMemo(() => buildForest(graphNodes, graphEdges), [graphEdges, graphNodes]);
+  const forest = useMemo(() => buildForest(displayedGraphNodes, displayedGraphEdges), [displayedGraphEdges, displayedGraphNodes]);
   const lineageIds = useMemo(() => lineageForNode(selectedNodeId, graphEdges), [graphEdges, selectedNodeId]);
 
   useEffect(() => {
@@ -1249,6 +1288,11 @@ export default function ProcessTreePanel({
               <button type="button" onClick={() => openCommandHistory(selectedNode)} className="rounded-xl border border-line bg-panel/40 px-3 py-1.5 text-xs text-muted">
                 Command History
               </button>
+              {storyVisualTargetId !== selectedNode.id ? (
+                <button type="button" onClick={() => hideChain(selectedNode)} title="Remove this process and everything it launched from the canvas." className="rounded-xl border border-line bg-panel/40 px-3 py-1.5 text-xs text-muted hover:border-rose-400/40 hover:text-rose-200">
+                  Hide chain
+                </button>
+              ) : null}
             </div>
           </div>
 
@@ -1712,6 +1756,7 @@ export default function ProcessTreePanel({
     setQuickFilters(new Set(["suspicious"]));
     setSelectedChainId(null);
     setSelectedNodeId(initialHighlightedNodeIds[0] || null);
+    setHiddenNodeIds(new Set());
     setDetailDismissed(false);
     setContextDepthParents(initialMode === "focused" ? 1 : 0);
     setContextDepthChildren(initialMode === "focused" ? 1 : 0);
@@ -2490,8 +2535,15 @@ export default function ProcessTreePanel({
                 </div>
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="text-xs text-muted">
-                    Showing {graphNodes.length} of {isExactStoryActive ? graphNodes.length : visibleNodes.length || graphNodes.length} visible nodes · hidden {Math.max(summary.totalGraphNodes - graphNodes.length, 0)}
+                    Showing {displayedGraphNodes.length} of {isExactStoryActive ? graphNodes.length : visibleNodes.length || graphNodes.length} visible nodes · hidden {Math.max(summary.totalGraphNodes - graphNodes.length, 0)}
+                    {manuallyHiddenCount ? ` · ${manuallyHiddenCount} hidden manually` : ""}
                   </div>
+                  {manuallyHiddenCount ? (
+                    <button type="button" onClick={unhideAllChains} className="rounded-xl border border-line bg-abyss/70 px-2 py-1 text-xs text-muted hover:text-accent" data-testid="execution-story-graph-unhide-all">
+                      <Eye className="mr-1 inline h-3.5 w-3.5" />
+                      Unhide {manuallyHiddenCount}
+                    </button>
+                  ) : null}
                   <div className="flex items-center gap-1.5">
                     <button
                       type="button"
@@ -2570,14 +2622,22 @@ export default function ProcessTreePanel({
                       const isLineage = lineageIds.has(node.id);
                       const isChainNode = !isExactStoryActive && (activeChain?.nodes.some((item) => item.id === node.id) ?? false);
                       return (
-                        <button
+                        <div
                           key={`canvas-${node.id}`}
-                          type="button"
+                          role="button"
+                          tabIndex={0}
                           onClick={() => {
                             setDetailDismissed(false);
                             setSelectedNodeId(node.id);
                           }}
-                          className={`absolute rounded-2xl border p-3 text-left shadow-panel transition ${isSelected ? "border-accent/60 bg-accent/12" : isStoryTarget ? "border-emerald-400/60 bg-emerald-500/10" : isChainNode ? "border-cyan-400/40 bg-cyan-500/10" : isLineage ? "border-amber-300/40 bg-amber-300/8" : "border-line bg-panel/85"}`}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter" || event.key === " ") {
+                              event.preventDefault();
+                              setDetailDismissed(false);
+                              setSelectedNodeId(node.id);
+                            }
+                          }}
+                          className={`absolute cursor-pointer rounded-2xl border p-3 text-left shadow-panel transition ${isSelected ? "border-accent/60 bg-accent/12" : isStoryTarget ? "border-emerald-400/60 bg-emerald-500/10" : isChainNode ? "border-cyan-400/40 bg-cyan-500/10" : isLineage ? "border-amber-300/40 bg-amber-300/8" : "border-line bg-panel/85"}`}
                           style={{ left: layoutNode.x, top: layoutNode.y, width: layoutNode.width, height: layoutNode.height }}
                         >
                           <div className="flex items-start justify-between gap-2">
@@ -2588,13 +2648,29 @@ export default function ProcessTreePanel({
                               </div>
                               <p className="mt-2 truncate text-xs text-muted">{node.command_line || node.path || "No command line"}</p>
                             </div>
-                            <Pill className={riskTone(node.risk_score || 0)}>risk {node.risk_score || 0}</Pill>
+                            <div className="flex shrink-0 items-center gap-1">
+                              <Pill className={riskTone(node.risk_score || 0)}>risk {node.risk_score || 0}</Pill>
+                              {!isStoryTarget ? (
+                                <button
+                                  type="button"
+                                  title="Hide this process and its chain"
+                                  aria-label="Hide this process and its chain"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    hideChain(node);
+                                  }}
+                                  className="rounded-lg border border-line bg-abyss/70 p-1 text-muted hover:border-rose-400/40 hover:text-rose-200"
+                                >
+                                  <EyeOff className="h-3 w-3" />
+                                </button>
+                              ) : null}
+                            </div>
                           </div>
                           <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted">
                             <span>PID {node.pid ?? "—"}</span>
                             {relatedFindingCount ? <span>{relatedFindingCount} findings</span> : null}
                           </div>
-                        </button>
+                        </div>
                       );
                     })}
                   </div>
