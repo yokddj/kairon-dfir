@@ -953,6 +953,23 @@ def _host_id_filter(host_id: str, db: Session | None = None, *, include_unlinked
     if expanded:
         should.append({"terms": {"host.canonical": expanded}})
         should.append({"terms": {"host.name": expanded}})
+        # Exact `terms` matches above only help artifact types whose ingest
+        # enrichment populated host.evidence_host_id/host.identity_id (every
+        # type except the highest-volume ones, e.g. MFT, which only ever get
+        # a bare host.name -- no identity linking, no canonical casing).
+        # expand_host_filter's canonical_name is lowercase by convention
+        # (host.canonical_name storage), but raw documents keep whatever
+        # case the ingest source used ("WS01"), so a bare `terms` match
+        # against host.name silently drops every unlinked MFT/high-volume
+        # record for that host. _host_filter (the host=<name> sibling of
+        # this host_id=<id> filter) already guards against this with a
+        # case-insensitive wildcard fallback; mirror it here so filtering
+        # by host id and by host name behave the same way.
+        should.extend(
+            {"wildcard": {field: {"value": alias, "case_insensitive": True}}}
+            for field in ("host.name", "host.canonical")
+            for alias in expanded
+        )
     if include_unlinked_evidence:
         evidence_ids = [e.id for e in (db.query(Evidence).filter(Evidence.host_id == host_id, Evidence.case_id == host.case_id).all() if db else [])]
         if evidence_ids:

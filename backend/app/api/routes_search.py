@@ -1274,6 +1274,15 @@ def search_facets(
         host = db.get(CaseHost, host_id) if db else None
         if host and host.canonical_name:
             expanded = list(expand_host_filter(db, host.case_id, host.canonical_name))
+            # Exact `terms` matches below only help artifact types whose
+            # ingest enrichment populated host.evidence_host_id/identity_id
+            # -- high-volume types like MFT only ever get a bare host.name,
+            # and its casing ("WS01") does not necessarily match
+            # canonical_name's lowercase storage convention. Add a
+            # case-insensitive wildcard fallback (mirroring
+            # search_service._host_id_filter) so those types still show up
+            # in a host-scoped artifact-type facet instead of silently
+            # vanishing from the Artifact Views dropdown for that host.
             scope_filters.append({
                 "bool": {
                     "should": [
@@ -1281,6 +1290,11 @@ def search_facets(
                         {"term": {"host.identity_id": host_id}},
                         {"terms": {"host.canonical": expanded}},
                         {"terms": {"host.name": expanded}},
+                        *[
+                            {"wildcard": {field: {"value": alias, "case_insensitive": True}}}
+                            for field in ("host.name", "host.canonical")
+                            for alias in expanded
+                        ],
                     ],
                     "minimum_should_match": 1,
                 }
