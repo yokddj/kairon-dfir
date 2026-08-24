@@ -1776,6 +1776,13 @@ def _node_identity_matches(node: dict, *, process_guid: str | None, pid: int | N
     return False
 
 
+def _focus_candidate_rank(node: dict) -> tuple[bool, bool]:
+    node_id = str(node.get("id") or "")
+    is_synthetic = node_id.startswith("security:")
+    has_command_line = bool(str(node.get("command_line") or "").strip())
+    return (is_synthetic, not has_command_line)
+
+
 def _parent_explanation_for_node(node: dict | None) -> str:
     if not node:
         return "Focused process could not be resolved."
@@ -1861,14 +1868,20 @@ def build_process_tree_focused(
     base_graph = base_bundle.get("graph") or {}
     base_nodes = list(base_graph.get("nodes") or [])
     exact_identity_requested = bool(source_event_id or process_guid)
-    focus_node = next(
-        (
-            node
-            for node in base_nodes
-            if _node_identity_matches(node, process_guid=resolved_guid, pid=resolved_pid, source_event_id=source_event_id, process_name=resolved_name)
-        ),
-        None if exact_identity_requested else base_nodes[0] if base_nodes else None,
-    )
+    matching_candidates = [
+        node
+        for node in base_nodes
+        if _node_identity_matches(node, process_guid=resolved_guid, pid=resolved_pid, source_event_id=source_event_id, process_name=resolved_name)
+    ]
+    if matching_candidates:
+        # Multiple candidates can match a bare PID lookup when the same process
+        # was also ingested from a non-Sysmon source (e.g. Security 4688) that
+        # only has a synthetic per-event entity_id and no real parent/child
+        # edges. Prefer a candidate with a genuine ProcessGuid and a captured
+        # command line over a synthetic, edge-less duplicate.
+        focus_node = min(matching_candidates, key=_focus_candidate_rank)
+    else:
+        focus_node = base_nodes[0] if (not exact_identity_requested and base_nodes) else None
     if focus_node:
         resolved_guid = resolved_guid or str(focus_node.get("id") or "").strip() or None
         resolved_pid = resolved_pid if resolved_pid is not None else _safe_intish(focus_node.get("pid"))
