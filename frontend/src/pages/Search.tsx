@@ -6,9 +6,7 @@ import { useFindingIndicators } from "../lib/useFindingIndicators";
 import ResponsiveDetailPanel, { useMinWidthQuery } from "../components/ResponsiveDetailPanel";
 import SearchBar from "../components/SearchBar";
 import { useActiveCase } from "../context/ActiveCaseContext";
-import InvestigationContext from "../components/InvestigationContext";
 import CreateFindingDialog from "../components/CreateFindingDialog";
-import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 import { useHostContext } from "../hooks/useHostContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { useTimezonePreference } from "../context/TimezoneContext";
@@ -1393,11 +1391,6 @@ export default function Search() {
   const debouncedQuery = useDebouncedValue(queryInput, 300);
   const isUltraWideLayout = useMinWidthQuery(1600);
   const resolvedCaseId = routeCaseId || activeCaseId;
-  // Search is a Tier 1 lens with no query-declared capability route of its
-  // own, so lensLabel is effectively always the result here today -- kept
-  // as lensLabel (not currentLabel) for consistency with the other lenses
-  // and in case a future capability route ever lands on /search.
-  const breadcrumbs = useInvestigationBreadcrumbs({ lensLabel: state.tab === "timeline" ? "Timeline" : "Search" });
   const capabilitiesQuery = useQuery({
     queryKey: ["case-capabilities", resolvedCaseId, "search"],
     queryFn: () => api.getCaseCapabilities(resolvedCaseId || ""),
@@ -2215,29 +2208,29 @@ export default function Search() {
     );
   }
 
+  const hasMoreFiltersActive = Boolean(
+    (state.scope && state.scope !== "all") ||
+    (state.sort && state.sort !== "timestamp_desc") ||
+    state.artifact_type.length ||
+    searchRequestState.evidence_id ||
+    hasHostFilter ||
+    state.workbench || state.domain_scope || state.capability || state.platform ||
+    state.parser.length || state.source_category || state.source_file || state.user ||
+    state.risk_min || state.risk_max ||
+    state.marked_only || state.marked_has_note || state.marked_in_finding || state.marking_status ||
+    state.filters.length || advancedOpen ||
+    state.severity.length || state.status.length || state.process_name || state.domain || state.ip || state.file_path || state.file_name || state.hash || state.backend_variant.length || state.parser_backend[0] ||
+    state.exclude_q || state.exclude_artifact_type.length || state.exclude_parser.length || state.exclude_source_file || state.exclude_host || state.exclude_user,
+  );
+
   return (
     <div className="min-w-0 w-full max-w-none space-y-6 overflow-x-hidden">
-      <InvestigationContext
-        caseId={resolvedCaseId}
-        host={searchRequestState.host}
-        hostId={searchRequestState.host_id}
-        evidenceId={searchRequestState.evidence_id}
-        current={state.tab === "timeline" ? "Timeline" : "Search"}
-        breadcrumbs={breadcrumbs}
-        actions={resolvedCaseId ? [
-          { label: "Artifact Views", to: `/cases/${resolvedCaseId}/artifacts`, description: "Focused artifact-family views" },
-          { label: "Processing", to: `/cases/${resolvedCaseId}?tab=processing`, description: "Review queue and evidence runs" },
-          { label: "Evidence", to: `/cases/${resolvedCaseId}/evidence`, description: "Open evidence inventory" },
-          { label: "Findings", to: `/cases/${resolvedCaseId}/findings`, description: "Promote events into findings" },
-          { label: "Parser Coverage", to: "/parser-coverage", description: "Check parser coverage and limitations" },
-        ] : []}
-      />
       <section className="min-w-0 rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Search UI v2</p>
         <h2 className="mt-2 text-2xl font-semibold">Investigation Search</h2>
         <p className="mt-2 text-sm text-muted">Compact investigation workspace with tables, pivots and artifact-specific views.</p>
 
-        <div className="mt-5 grid gap-3 lg:grid-cols-[1fr,180px,180px,auto,auto]">
+        <div className="mt-5 grid gap-3 lg:grid-cols-[1fr,auto,auto]">
           <div className="min-w-0">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search query</span>
             <SearchBar ariaLabel="Search query" value={queryInput} onChange={setQueryInput} placeholder="Search commands, paths, hashes, domains or text" />
@@ -2277,8 +2270,6 @@ export default function Search() {
               </div>
             ) : null}
           </div>
-          <SelectField label="Scope" value={state.scope} options={scopeOptions} onChange={(value) => updateParams({ scope: value })} />
-          <SelectField label="Sort" value={state.sort} options={sortOptions} onChange={(value) => updateBackendSort(value as SortValue)} />
           <button type="button" onClick={applySearchNow} className="self-end rounded-2xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-accent">
             Search
           </button>
@@ -2287,7 +2278,44 @@ export default function Search() {
           </button>
         </div>
 
-        <div className="mt-4 grid gap-4 md:grid-cols-2">
+        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <TimeField label="Time from" value={state.time_from} onChange={(value) => updateParams({ time_from: value })} />
+          <TimeField label="Time to" value={state.time_to} onChange={(value) => updateParams({ time_to: value })} />
+          <div className="xl:col-span-2">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Time presets</span>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={() => applyTimePreset("24h")} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">Last 24h</button>
+              <button type="button" onClick={() => applyTimePreset("7d")} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">Last 7d</button>
+              <button type="button" onClick={() => applyTimePreset("30d")} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">Last 30d</button>
+              <button type="button" onClick={() => applyTimePreset("clear")} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">Clear time</button>
+            </div>
+            <details className="mt-3 text-xs text-muted">
+              <summary className="cursor-pointer">Advanced ISO input</summary>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                <TextField label="Time from ISO" value={state.time_from} onChange={(value) => updateParams({ time_from: value })} placeholder="2026-05-15T10:00:00Z" />
+                <TextField label="Time to ISO" value={state.time_to} onChange={(value) => updateParams({ time_to: value })} placeholder="2026-05-15T12:00:00Z" />
+              </div>
+            </details>
+          </div>
+        </div>
+        {(state.time_from || state.time_to) ? (
+          <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${timeRangeInvalid ? "border-danger/40 bg-danger/10 text-danger" : "border-line bg-abyss/60 text-muted"}`}>
+            {timeRangeInvalid ? "Invalid time range: start time must be before end time." : "Some documents do not have a valid forensic timestamp and are excluded from time filters."}
+          </div>
+        ) : null}
+
+        <details className="mt-4 rounded-2xl border border-line bg-abyss/60" open={hasMoreFiltersActive} data-testid="search-more-filters">
+          <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-sm text-ink">
+            <span>More filters</span>
+            <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">Scope &middot; Artifact type &middot; Host &middot; Capability &middot; Risk &middot; Markings &middot; Advanced</span>
+          </summary>
+          <div className="space-y-4 px-4 pb-4">
+        <div className="grid gap-4 md:grid-cols-2">
+          <SelectField label="Scope" value={state.scope} options={scopeOptions} onChange={(value) => updateParams({ scope: value })} />
+          <SelectField label="Sort" value={state.sort} options={sortOptions} onChange={(value) => updateBackendSort(value as SortValue)} />
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
           <label className="block">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact type</span>
             <select aria-label="Artifact type" value={state.artifact_type[0] ?? ""} onChange={(event) => updateParams({ artifact_type: event.target.value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50">
@@ -2300,7 +2328,7 @@ export default function Search() {
           </label>
           <TextField label="Evidence" value={searchRequestState.evidence_id} onChange={(value) => updateParams({ evidence_id: value })} placeholder="evidence id" />
         </div>
-        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted">
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
           <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{activeHost ? `Host filter: ${activeHost}` : "Host filter: All hosts"}</span>
           {hasHostFilter ? (
             <button type="button" onClick={clearHostFilter} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-accent">
@@ -2311,7 +2339,7 @@ export default function Search() {
           )}
         </div>
 
-        <details className="mt-4 rounded-2xl border border-line bg-abyss/60" open={Boolean(state.workbench || state.domain_scope || state.capability || state.platform)} data-testid="search-capability-filters">
+        <details className="rounded-2xl border border-line bg-abyss/60" open={Boolean(state.workbench || state.domain_scope || state.capability || state.platform)} data-testid="search-capability-filters">
           <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-sm text-ink">
             <span>Search by capability</span>
             <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">Workbench &middot; Domain &middot; Capability &middot; Platform</span>
@@ -2355,7 +2383,7 @@ export default function Search() {
           </div>
         </details>
 
-        <details className="mt-4 rounded-2xl border border-line bg-abyss/60" open={Boolean(state.parser[0] || state.source_category || state.source_file || state.user)} data-testid="search-refine-filters">
+        <details className="rounded-2xl border border-line bg-abyss/60" open={Boolean(state.parser[0] || state.source_category || state.source_file || state.user)} data-testid="search-refine-filters">
           <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-sm text-ink">
             <span>Refine</span>
             <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">Parser &middot; Source &middot; User &middot; Source file</span>
@@ -2385,33 +2413,8 @@ export default function Search() {
             <TextField label="User" value={state.user} onChange={(value) => updateParams({ user: value })} placeholder="user01" />
           </div>
         </details>
-        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <TimeField label="Time from" value={state.time_from} onChange={(value) => updateParams({ time_from: value })} />
-          <TimeField label="Time to" value={state.time_to} onChange={(value) => updateParams({ time_to: value })} />
-          <div className="xl:col-span-2">
-            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Time presets</span>
-            <div className="flex flex-wrap gap-2">
-              <button type="button" onClick={() => applyTimePreset("24h")} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">Last 24h</button>
-              <button type="button" onClick={() => applyTimePreset("7d")} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">Last 7d</button>
-              <button type="button" onClick={() => applyTimePreset("30d")} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">Last 30d</button>
-              <button type="button" onClick={() => applyTimePreset("clear")} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">Clear time</button>
-            </div>
-            <details className="mt-3 text-xs text-muted">
-              <summary className="cursor-pointer">Advanced ISO input</summary>
-              <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                <TextField label="Time from ISO" value={state.time_from} onChange={(value) => updateParams({ time_from: value })} placeholder="2026-05-15T10:00:00Z" />
-                <TextField label="Time to ISO" value={state.time_to} onChange={(value) => updateParams({ time_to: value })} placeholder="2026-05-15T12:00:00Z" />
-              </div>
-            </details>
-          </div>
-        </div>
-        {(state.time_from || state.time_to) ? (
-          <div className={`mt-4 rounded-2xl border px-4 py-3 text-sm ${timeRangeInvalid ? "border-danger/40 bg-danger/10 text-danger" : "border-line bg-abyss/60 text-muted"}`}>
-            {timeRangeInvalid ? "Invalid time range: start time must be before end time." : "Some documents do not have a valid forensic timestamp and are excluded from time filters."}
-          </div>
-        ) : null}
 
-        <div data-testid="risk-filter-panel" className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4">
+        <div data-testid="risk-filter-panel" className="rounded-2xl border border-line bg-abyss/60 p-4">
           <div className="flex flex-wrap items-end gap-3">
             <div className="min-w-[180px] flex-1">
               <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Risk range</span>
@@ -2433,7 +2436,7 @@ export default function Search() {
           </div>
         </div>
 
-        <div data-testid="event-marking-filter-panel" className="mt-4 rounded-2xl border border-line bg-abyss/60 p-4">
+        <div data-testid="event-marking-filter-panel" className="rounded-2xl border border-line bg-abyss/60 p-4">
           <div className="flex flex-wrap items-end gap-3">
             <div className="min-w-[220px] flex-1">
               <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Analyst markings</span>
@@ -2464,7 +2467,7 @@ export default function Search() {
           </div>
         </div>
 
-        <div className="mt-4 flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2">
           <button type="button" aria-label="Advanced filters" onClick={() => setAdvancedOpen((current) => !current)} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">
             {advancedOpen ? "Hide advanced filters" : "Advanced filters"}
           </button>
@@ -2491,34 +2494,8 @@ export default function Search() {
           ))}
         </div>
 
-        {pageSizeClampNotice ? (
-          <div className="mt-4 rounded-2xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
-            Requested page size exceeded the backend maximum. Using {SEARCH_UI_MAX_PAGE_SIZE}.
-          </div>
-        ) : null}
-
-        {activeFilterChips.length ? (
-          <div data-testid="active-filter-chips" className="mt-4 flex flex-wrap gap-2">
-            {activeFilterChips.map((chip) => (
-              <button key={chip.key} type="button" onClick={() => updateParams(chip.clear)} className="rounded-full border border-accent/30 bg-accent/8 px-3 py-1.5 text-xs text-slate-200">
-                {chip.label} ×
-              </button>
-            ))}
-          </div>
-        ) : null}
-
-        {querySyntaxChips.length ? (
-          <div data-testid="query-syntax-chips" className="mt-4 flex flex-wrap gap-2">
-            {querySyntaxChips.map((chip) => (
-              <span key={chip.id} className="rounded-full border border-line bg-white/5 px-3 py-1.5 text-xs text-slate-200">
-                {chip.label}
-              </span>
-            ))}
-          </div>
-        ) : null}
-
         {advancedOpen ? (
-          <div data-testid="advanced-filters-panel" className="mt-5 space-y-5">
+          <div data-testid="advanced-filters-panel" className="space-y-5">
             <div className="rounded-2xl border border-line bg-abyss/60 p-4">
               <div className="flex flex-wrap items-end gap-3">
                 <label className="min-w-[180px] flex-1">
@@ -2576,6 +2553,34 @@ export default function Search() {
               <SelectField label="Backend variant" value={state.backend_variant[0] ?? ""} options={["default", "advanced", "all"]} onChange={(value) => updateParams({ backend_variant: value })} />
               <TextField label="Parser backend" value={state.parser_backend[0] ?? ""} onChange={(value) => updateParams({ parser_backend: value })} placeholder="amcacheparser_csv" />
             </div>
+          </div>
+        ) : null}
+          </div>
+        </details>
+
+        {pageSizeClampNotice ? (
+          <div className="mt-4 rounded-2xl border border-warning/40 bg-warning/10 px-4 py-3 text-sm text-warning">
+            Requested page size exceeded the backend maximum. Using {SEARCH_UI_MAX_PAGE_SIZE}.
+          </div>
+        ) : null}
+
+        {activeFilterChips.length ? (
+          <div data-testid="active-filter-chips" className="mt-4 flex flex-wrap gap-2">
+            {activeFilterChips.map((chip) => (
+              <button key={chip.key} type="button" onClick={() => updateParams(chip.clear)} className="rounded-full border border-accent/30 bg-accent/8 px-3 py-1.5 text-xs text-slate-200">
+                {chip.label} ×
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        {querySyntaxChips.length ? (
+          <div data-testid="query-syntax-chips" className="mt-4 flex flex-wrap gap-2">
+            {querySyntaxChips.map((chip) => (
+              <span key={chip.id} className="rounded-full border border-line bg-white/5 px-3 py-1.5 text-xs text-slate-200">
+                {chip.label}
+              </span>
+            ))}
           </div>
         ) : null}
       </section>
