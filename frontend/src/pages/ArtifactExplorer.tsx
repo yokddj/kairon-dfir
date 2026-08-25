@@ -12,7 +12,7 @@ import PaginationControls from "../components/PaginationControls";
 import TimeField from "../components/TimeField";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { useTimezonePreference } from "../context/TimezoneContext";
-import { useHostContext } from "../hooks/useHostContext";
+import { resolveHost, useHostContext } from "../hooks/useHostContext";
 import { formatTimestamp } from "../lib/time";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 import { nextSortDirection } from "../lib/sorting";
@@ -636,7 +636,7 @@ export default function ArtifactExplorer() {
   const { caseId: routeCaseId } = useParams();
   const [searchParams] = useSearchParams();
   const { activeCaseId, selectedEvidenceId, selectedHost, setActiveCaseId, caseContext } = useActiveCase();
-  const { activeHost, activeHostId, hasHostFilter, clearHostFilter } = useHostContext();
+  const { activeHost, activeHostId, hasHostFilter, clearHostFilter, setHostFilter } = useHostContext();
   const { effectiveTimezone } = useTimezonePreference();
   const queryClient = useQueryClient();
   const caseId = routeCaseId || activeCaseId;
@@ -660,6 +660,9 @@ export default function ArtifactExplorer() {
   const [mftSuspiciousPathsOnly, setMftSuspiciousPathsOnly] = useState(false);
   const [mftExtension, setMftExtension] = useState("");
   const [backendVariant, setBackendVariant] = useState<"default" | "advanced" | "all">((searchParams.get("backend_variant") as "default" | "advanced" | "all") || "default");
+  const [userFilterValue, setUserFilterValue] = useState("");
+  const [excludeHostValue, setExcludeHostValue] = useState("");
+  const [excludeUserValue, setExcludeUserValue] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [sortBy, setSortBy] = useState<SortField | null>(null);
@@ -729,6 +732,9 @@ export default function ArtifactExplorer() {
         evidence_id: evidenceIdFilter ? [evidenceIdFilter] : [],
         host: hostFilter ? [hostFilter] : [],
         host_id: hostIdFilter ? [hostIdFilter] : [],
+        exclude_host: excludeHostValue ? [excludeHostValue] : [],
+        user: userFilterValue ? [userFilterValue] : [],
+        exclude_user: excludeUserValue ? [excludeUserValue] : [],
         time_from: timeFrom || undefined,
         time_to: timeTo || undefined,
       },
@@ -738,8 +744,29 @@ export default function ArtifactExplorer() {
       sort_by: sortBy && SERVER_SORTABLE_FIELDS.has(sortBy) ? sortBy : undefined,
       sort_order: sortBy && SERVER_SORTABLE_FIELDS.has(sortBy) ? sortOrder : undefined,
     }),
-    [artifactName, artifactTypeFilter, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly, timeFrom, timeTo, sortBy, sortOrder],
+    [artifactName, artifactTypeFilter, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, excludeHostValue, userFilterValue, excludeUserValue, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly, timeFrom, timeTo, sortBy, sortOrder],
   );
+  function handleFilterField(field: string, value: string) {
+    if (field === "host") {
+      const match = resolveHost(caseContext?.hosts ?? [], undefined, value);
+      if (match) setHostFilter(match.id);
+    } else if (field === "user") {
+      setUserFilterValue(value);
+      setExcludeUserValue("");
+    }
+    setPage(1);
+  }
+
+  function handleExcludeField(field: string, value: string) {
+    if (field === "host") {
+      setExcludeHostValue(value);
+    } else if (field === "user") {
+      setExcludeUserValue(value);
+      setUserFilterValue("");
+    }
+    setPage(1);
+  }
+
   const isStartupPersistenceView = artifactType === "startup_persistence";
   const isMotwView = artifactType === "motw" || artifactType === "zone_identifier";
   const isEmailView = artifactType === "email" || artifactType === "email_store" || artifactType === "webmail_activity";
@@ -1005,11 +1032,20 @@ export default function ArtifactExplorer() {
           </div>
         ) : null}
         {!caseId ? <p className="mt-2 text-sm text-amber-300">Artifact Views are available after selecting a case.</p> : null}
-          {hostFilter || evidenceIdFilter ? (
+          {hostFilter || evidenceIdFilter || excludeHostValue || userFilterValue || excludeUserValue ? (
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted">
             <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{hostFilter ? `Host filter: ${hostFilter}` : "Host filter: All hosts"}</span>
             <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{evidenceIdFilter ? `Evidence filter: ${evidenceIdFilter.slice(0, 8)}` : "Evidence filter: All evidence"}</span>
             {hasHostFilter ? <button type="button" onClick={clearHostFilter} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-accent">Clear host filter</button> : null}
+            {excludeHostValue ? (
+              <button type="button" onClick={() => setExcludeHostValue("")} className="rounded-full border border-warning/40 bg-warning/10 px-3 py-1.5 text-warning">Excluding host: {excludeHostValue} &times;</button>
+            ) : null}
+            {userFilterValue ? (
+              <button type="button" onClick={() => setUserFilterValue("")} className="rounded-full border border-accent/30 bg-accent/8 px-3 py-1.5 text-accent">User: {userFilterValue} &times;</button>
+            ) : null}
+            {excludeUserValue ? (
+              <button type="button" onClick={() => setExcludeUserValue("")} className="rounded-full border border-warning/40 bg-warning/10 px-3 py-1.5 text-warning">Excluding user: {excludeUserValue} &times;</button>
+            ) : null}
           </div>
         ) : null}
         <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -1387,6 +1423,8 @@ export default function ArtifactExplorer() {
               setTimeTo(new Date(parsed + windowMs).toISOString());
               setPage(1);
             }}
+            onFilterField={handleFilterField}
+            onExcludeField={handleExcludeField}
           />
         </>
       )}
