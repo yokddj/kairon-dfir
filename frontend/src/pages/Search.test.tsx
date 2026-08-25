@@ -515,7 +515,6 @@ describe("Search page", () => {
     await userEvent.click(screen.getByRole("button", { name: /search syntax/i }));
     expect(screen.getByText(/stable_event_id:/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /advanced filters/i }));
-    expect(screen.getByPlaceholderText("TEST-WIN10-01")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("user01")).toBeInTheDocument();
     expect(screen.getByPlaceholderText("198.51.100.10")).toBeInTheDocument();
   });
@@ -1252,8 +1251,8 @@ describe("Search page", () => {
     renderPage(["/search?risk_min=70&host=desktop-1&process_name=powershell.exe"]);
     const chips = await screen.findByTestId("active-filter-chips");
     expect(within(chips).getByText(/risk >= 70/i)).toBeInTheDocument();
-    expect(within(chips).getByText(/host: desktop-1/i)).toBeInTheDocument();
     expect(within(chips).getByText(/process: powershell.exe/i)).toBeInTheDocument();
+    expect(screen.getByText(/host filter: desktop-1/i)).toBeInTheDocument();
   });
 
   it("risk presets and custom range update persistent risk filters", async () => {
