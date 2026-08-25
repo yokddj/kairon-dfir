@@ -761,6 +761,7 @@ def finding_to_dict(item: Finding) -> dict[str, Any]:
         "confidence": item.confidence,
         "status": item.status.value if hasattr(item.status, "value") else item.status,
         "evidence_id": item.evidence_id,
+        "related_hosts": item.related_hosts or [],
         "linked_evidence_id": getattr(item, "linked_evidence_id", None),
         "linked_host_id": getattr(item, "linked_host_id", None),
         "linked_artifact_id": getattr(item, "linked_artifact_id", None),
