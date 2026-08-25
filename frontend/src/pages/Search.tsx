@@ -921,9 +921,20 @@ function SearchTable({
             {results.map((result) => {
               const summary = summarizeResult(result);
               const selected = selectedId === result.id;
-              const isDismissed = result.kind === "finding" && asString(asRecord(result.raw).status) === "dismissed";
+              const marking = getResultMarking(result);
+              const isDismissed = (result.kind === "finding" && asString(asRecord(result.raw).status) === "dismissed") || marking?.status === "false_positive";
+              const toneClass =
+                result.severity === "critical"
+                  ? "bg-danger/8 "
+                  : result.severity === "high" || (result.risk_score ?? 0) >= 70 || marking?.status === "suspicious"
+                    ? "bg-warning/6 "
+                    : marking?.status === "important"
+                      ? "bg-amber-400/8 "
+                      : result.kind === "finding" || marking?.status === "reviewed"
+                        ? "bg-emerald-400/6 "
+                        : "";
               const rowClass =
-                (result.severity === "critical" ? "bg-danger/6 " : result.severity === "high" || (result.risk_score ?? 0) >= 70 ? "bg-warning/6 " : "") +
+                toneClass +
                 (selected ? "ring-1 ring-accent/50 " : "") +
                 (isDismissed ? "opacity-55 " : "");
               return (
@@ -2175,6 +2186,7 @@ export default function Search() {
 
         <div className="mt-5 grid gap-3 lg:grid-cols-[1fr,180px,180px,auto,auto]">
           <div className="min-w-0">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search query</span>
             <SearchBar ariaLabel="Search query" value={queryInput} onChange={setQueryInput} placeholder="Search commands, paths, hashes, domains or text" />
             <div className="mt-2 flex flex-wrap items-center gap-3 text-xs text-muted">
               <button type="button" onClick={() => setSyntaxHelpOpen((current) => !current)} className="rounded-full border border-line px-3 py-1.5 text-xs text-muted">
@@ -2727,8 +2739,19 @@ export default function Search() {
                       .sort((left, right) => asString(left.timestamp).localeCompare(asString(right.timestamp)))
                       .map((result) => {
                         const summary = summarizeResult(result);
+                        const marking = getResultMarking(result);
+                        const cardTone =
+                          result.severity === "critical"
+                            ? "bg-danger/8"
+                            : result.severity === "high" || (result.risk_score ?? 0) >= 70 || marking?.status === "suspicious"
+                              ? "bg-warning/6"
+                              : marking?.status === "important"
+                                ? "bg-amber-400/8"
+                                : result.kind === "finding" || marking?.status === "reviewed"
+                                  ? "bg-emerald-400/6"
+                                  : "bg-abyss/50";
                         return (
-                          <button key={`${result.kind}-${result.id}`} type="button" onClick={() => handleSelect(result)} className="flex w-full items-start gap-4 rounded-2xl border border-line bg-abyss/50 p-4 text-left hover:bg-white/5">
+                          <button key={`${result.kind}-${result.id}`} type="button" onClick={() => handleSelect(result)} className={`flex w-full items-start gap-4 rounded-2xl border border-line ${cardTone} p-4 text-left hover:bg-white/5`}>
                             <div className="w-40 shrink-0 text-xs text-muted">{formatTimestamp(result.timestamp, effectiveTimezone)}</div>
                             <div className="mt-1 h-3 w-3 shrink-0 rounded-full bg-accent" />
                             <div className="min-w-0 flex-1">
