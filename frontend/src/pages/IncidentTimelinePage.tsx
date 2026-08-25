@@ -138,7 +138,6 @@ export default function IncidentTimelinePage() {
   const [phaseFilter, setPhaseFilter] = useState<string[]>([]);
   const [groupBy, setGroupBy] = useState("phase");
   const [includeLowSignal, setIncludeLowSignal] = useState(false);
-  const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
   const [phaseOverrides, setPhaseOverrides] = useState<Record<string, string>>({});
   const [statusOverrides, setStatusOverrides] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -174,14 +173,13 @@ export default function IncidentTimelinePage() {
 
   const items = useMemo(() => {
     return (draftQuery.data?.items || [])
-      .filter((item) => !removedIds.has(item.id))
       .map((item) => ({
         ...item,
         phase: phaseOverrides[item.id] || item.phase,
         status: statusOverrides[item.id] || item.status || "candidate",
         notes: notes[item.id] ?? item.notes,
       }));
-  }, [draftQuery.data?.items, notes, phaseOverrides, removedIds, statusOverrides]);
+  }, [draftQuery.data?.items, notes, phaseOverrides, statusOverrides]);
 
   const hostOptions = draftQuery.data?.hosts || [];
   const phaseOptions = draftQuery.data?.phase_options || Object.keys(PHASE_LABELS);
@@ -235,9 +233,12 @@ export default function IncidentTimelinePage() {
   }
 
   async function updateItemStatus(item: IncidentTimelineItem, status: string) {
-    setStatusOverrides((current) => ({ ...current, [item.id]: status }));
     const timelineId = draftQuery.data?.timeline_id || draftQuery.data?.cache?.timeline_id || draftQuery.data?.cache?.draft_id;
-    if (!caseId || !timelineId) return;
+    if (!caseId || !timelineId) {
+      setRegenerateStatus("The timeline draft isn't ready yet -- wait for it to finish loading, then try again.");
+      return;
+    }
+    setStatusOverrides((current) => ({ ...current, [item.id]: status }));
     try {
       await api.updateIncidentTimelineItemStatus(caseId, timelineId, item.id, {
         status,
