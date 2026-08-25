@@ -250,7 +250,7 @@ function ResultBadge({ children, tone = "default" }: { children: string; tone?: 
       : tone === "high"
         ? "border-warning/60 bg-warning/15 text-warning"
         : tone === "medium"
-          ? "border-amber-400/50 bg-amber-400/10 text-amber-200"
+          ? "border-amber/50 bg-amber/10 text-amber"
           : tone === "muted"
             ? "border-line bg-white/5 text-muted"
             : tone === "success"
@@ -809,6 +809,9 @@ function SearchTable({
   density,
   sort,
   onSortChange,
+  checkedIds,
+  onToggleChecked,
+  onToggleAllChecked,
 }: {
   results: SearchV2Result[];
   columns: ColumnDef[];
@@ -820,6 +823,9 @@ function SearchTable({
   density: TableDensity;
   sort: SortValue;
   onSortChange: (sort: SortValue) => void;
+  checkedIds: string[];
+  onToggleChecked: (id: string) => void;
+  onToggleAllChecked: (ids: string[]) => void;
 }) {
   const storageKey = `dfir.search.columnWidths.${testId}`;
   const defaultWidths = useMemo(() => Object.fromEntries(columns.map((column) => [column.key, column.defaultWidth ?? 160])), [columns]);
@@ -877,7 +883,14 @@ function SearchTable({
   }
 
   const actionWidth = 120;
-  const totalTableWidth = columns.reduce((total, column) => total + (columnWidths[column.key] ?? column.defaultWidth ?? 160), actionWidth);
+  const checkboxWidth = 44;
+  const totalTableWidth = columns.reduce((total, column) => total + (columnWidths[column.key] ?? column.defaultWidth ?? 160), actionWidth + checkboxWidth);
+  // Only event-kind rows are selectable -- findings have their own status
+  // lifecycle (draft/open/dismissed) and aren't valid targets for the
+  // event-marking endpoint or for "create a finding from these events".
+  const visibleIds = useMemo(() => results.filter((result) => result.kind === "event").map((result) => result.id), [results]);
+  const allVisibleChecked = visibleIds.length > 0 && visibleIds.every((id) => checkedIds.includes(id));
+  const someVisibleChecked = !allVisibleChecked && visibleIds.some((id) => checkedIds.includes(id));
 
   return (
     <div data-testid={testId} className="min-w-0 overflow-hidden rounded-[28px] border border-line bg-panel/70 shadow-panel">
@@ -889,6 +902,7 @@ function SearchTable({
       <div className="max-h-[68vh] overflow-auto">
         <table className="table-fixed text-sm" style={{ minWidth: `${Math.max(totalTableWidth, 1180)}px`, width: `${Math.max(totalTableWidth, 1180)}px` }}>
           <colgroup>
+            <col style={{ width: `${checkboxWidth}px` }} />
             {columns.map((column) => (
               <col key={column.key} style={{ width: `${columnWidths[column.key] ?? column.defaultWidth ?? 160}px` }} />
             ))}
@@ -896,6 +910,17 @@ function SearchTable({
           </colgroup>
           <thead className="sticky top-0 z-10 border-b border-line bg-abyss/95 backdrop-blur">
             <tr className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">
+              <th className={headClass}>
+                <input
+                  aria-label="Select all visible"
+                  type="checkbox"
+                  checked={allVisibleChecked}
+                  ref={(el) => {
+                    if (el) el.indeterminate = someVisibleChecked;
+                  }}
+                  onChange={() => onToggleAllChecked(visibleIds)}
+                />
+              </th>
               {columns.map((column) => (
                 <th key={column.key} className={headClass}>
                   <button type="button" onClick={() => handleSort(column.key)} className="inline-flex items-center gap-2">
@@ -925,17 +950,19 @@ function SearchTable({
               const isDismissed = (result.kind === "finding" && asString(asRecord(result.raw).status) === "dismissed") || marking?.status === "false_positive";
               const toneClass =
                 result.severity === "critical"
-                  ? "border-l-4 border-l-danger bg-danger/14 "
+                  ? "border-l-4 !border-l-danger bg-danger/25 "
                   : result.severity === "high" || (result.risk_score ?? 0) >= 70 || marking?.status === "suspicious"
-                    ? "border-l-4 border-l-warning bg-warning/12 "
+                    ? "border-l-4 !border-l-warning bg-warning/20 "
                     : marking?.status === "important"
-                      ? "border-l-4 border-l-amber-400 bg-amber-400/14 "
+                      ? "border-l-4 !border-l-amber bg-amber/25 "
                       : result.kind === "finding" || marking?.status === "reviewed"
-                        ? "border-l-4 border-l-emerald-400 bg-emerald-400/12 "
-                        : "border-l-4 border-l-transparent ";
+                        ? "border-l-4 !border-l-emerald-400 bg-emerald-400/20 "
+                        : "border-l-4 !border-l-transparent ";
+              const checked = checkedIds.includes(result.id);
               const rowClass =
                 toneClass +
                 (selected ? "ring-1 ring-accent/50 " : "") +
+                (checked ? "bg-accent/10 " : "") +
                 (isDismissed ? "opacity-55 " : "");
               return (
                 <tr
@@ -944,6 +971,11 @@ function SearchTable({
                   className={`cursor-pointer hover:bg-white/5 ${rowClass}`}
                   onClick={() => onSelect(result)}
                 >
+                  <td className={cellClass} onClick={(event) => event.stopPropagation()}>
+                    {result.kind === "event" ? (
+                      <input aria-label={`Select row ${result.id}`} type="checkbox" checked={checked} onChange={() => onToggleChecked(result.id)} />
+                    ) : null}
+                  </td>
                   {columns.map((column) => (
                     <td key={`${result.id}-${column.key}`} className={cellClass}>
                       <div role="button" tabIndex={0} onClick={() => onSelect(result)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onSelect(result); }} className="block w-full text-left">
@@ -1341,6 +1373,15 @@ export default function Search() {
   const [findingPrefill, setFindingPrefill] = useState<FindingPrefill | null>(null);
   const [selectedId, setSelectedId] = useState(state.selected);
   const [density, setDensity] = useState<TableDensity>("compact");
+  const [checkedResultIds, setCheckedResultIds] = useState<string[]>([]);
+  const [bulkFindingOpen, setBulkFindingOpen] = useState(false);
+  const toggleChecked = (id: string) => setCheckedResultIds((current) => (current.includes(id) ? current.filter((existing) => existing !== id) : [...current, id]));
+  const toggleAllChecked = (ids: string[]) =>
+    setCheckedResultIds((current) => {
+      const allChecked = ids.length > 0 && ids.every((id) => current.includes(id));
+      if (allChecked) return current.filter((id) => !ids.includes(id));
+      return Array.from(new Set([...current, ...ids]));
+    });
   // "auto" keeps the existing heuristic (deduceArtifactView); any other
   // value pins the Artifact view's column layout explicitly so it no
   // longer flips depending on filter order or which result happens to be
@@ -1644,6 +1685,18 @@ export default function Search() {
       void queryClient.invalidateQueries({ queryKey: ["event-markings"] });
     },
   });
+  const [bulkMarking, setBulkMarking] = useState(false);
+  async function bulkMarkChecked(status: EventMarkingStatus) {
+    const targets = enrichedResults.filter((item) => item.kind === "event" && checkedResultIds.includes(item.id));
+    if (!targets.length) return;
+    setBulkMarking(true);
+    try {
+      await Promise.all(targets.map((result) => markEventMutation.mutateAsync({ result, status })));
+      setCheckedResultIds([]);
+    } finally {
+      setBulkMarking(false);
+    }
+  }
   const activeView = useMemo(
     () => (manualArtifactView === "auto" ? deduceArtifactView(eventResults, state.artifact_type) : manualArtifactView),
     [manualArtifactView, eventResults, state.artifact_type],
@@ -2688,14 +2741,38 @@ export default function Search() {
             </div>
           ) : null}
 
+          {checkedResultIds.length ? (
+            <div data-testid="bulk-actions-bar" className="flex flex-wrap items-center gap-2 rounded-2xl border border-accent/40 bg-accent/10 p-4 text-sm">
+              <span className="font-mono text-xs uppercase tracking-[0.14em] text-accent">{checkedResultIds.length} selected</span>
+              <button type="button" disabled={bulkMarking} onClick={() => setBulkFindingOpen(true)} className="rounded-full border border-line bg-abyss/80 px-3 py-1.5 text-xs text-ink hover:bg-white/5 disabled:opacity-50">
+                Create finding
+              </button>
+              <button type="button" disabled={bulkMarking} onClick={() => bulkMarkChecked("suspicious")} className="rounded-full border border-line bg-abyss/80 px-3 py-1.5 text-xs text-ink hover:bg-white/5 disabled:opacity-50">
+                Mark suspicious
+              </button>
+              <button type="button" disabled={bulkMarking} onClick={() => bulkMarkChecked("important")} className="rounded-full border border-line bg-abyss/80 px-3 py-1.5 text-xs text-ink hover:bg-white/5 disabled:opacity-50">
+                Mark important
+              </button>
+              <button type="button" disabled={bulkMarking} onClick={() => bulkMarkChecked("reviewed")} className="rounded-full border border-line bg-abyss/80 px-3 py-1.5 text-xs text-ink hover:bg-white/5 disabled:opacity-50">
+                Mark reviewed
+              </button>
+              <button type="button" disabled={bulkMarking} onClick={() => bulkMarkChecked("false_positive")} className="rounded-full border border-line bg-abyss/80 px-3 py-1.5 text-xs text-ink hover:bg-white/5 disabled:opacity-50">
+                False positive
+              </button>
+              <button type="button" onClick={() => setCheckedResultIds([])} className="ml-auto rounded-full border border-line px-3 py-1.5 text-xs text-muted hover:bg-white/5">
+                Clear selection
+              </button>
+            </div>
+          ) : null}
+
           {!searchQuery.isError && results.length ? (
             <>
               {state.tab === "results" ? (
-                <SearchTable results={enrichedResults} columns={genericResultColumns} selectedId={selectedId} onSelect={handleSelect} actionBuilder={buildActions} pivotRenderer={renderPivotValue} testId="results-table" density={density} sort={state.sort} onSortChange={updateBackendSort} />
+                <SearchTable results={enrichedResults} columns={genericResultColumns} selectedId={selectedId} onSelect={handleSelect} actionBuilder={buildActions} pivotRenderer={renderPivotValue} testId="results-table" density={density} sort={state.sort} onSortChange={updateBackendSort} checkedIds={checkedResultIds} onToggleChecked={toggleChecked} onToggleAllChecked={toggleAllChecked} />
               ) : null}
 
               {state.tab === "findings" ? (
-                <SearchTable results={findingResults} columns={genericResultColumns} selectedId={selectedId} onSelect={handleSelect} actionBuilder={buildActions} pivotRenderer={renderPivotValue} testId="findings-table" density={density} sort={state.sort} onSortChange={updateBackendSort} />
+                <SearchTable results={findingResults} columns={genericResultColumns} selectedId={selectedId} onSelect={handleSelect} actionBuilder={buildActions} pivotRenderer={renderPivotValue} testId="findings-table" density={density} sort={state.sort} onSortChange={updateBackendSort} checkedIds={checkedResultIds} onToggleChecked={toggleChecked} onToggleAllChecked={toggleAllChecked} />
               ) : null}
 
               {state.tab === "artifact_views" ? (
@@ -2725,7 +2802,7 @@ export default function Search() {
                     </div>
                     <p className="mt-2 text-sm text-muted">Using <span className="font-medium text-slate-200">{activeView}</span> columns for the current result set.{manualArtifactView !== "auto" ? " (pinned manually)" : ""}</p>
                   </div>
-                  <SearchTable results={eventResults} columns={artifactColumns} selectedId={selectedId} onSelect={handleSelect} actionBuilder={buildActions} pivotRenderer={renderPivotValue} testId="artifact-view-table" density={density} sort={state.sort} onSortChange={updateBackendSort} />
+                  <SearchTable results={eventResults} columns={artifactColumns} selectedId={selectedId} onSelect={handleSelect} actionBuilder={buildActions} pivotRenderer={renderPivotValue} testId="artifact-view-table" density={density} sort={state.sort} onSortChange={updateBackendSort} checkedIds={checkedResultIds} onToggleChecked={toggleChecked} onToggleAllChecked={toggleAllChecked} />
                 </div>
               ) : null}
 
@@ -2742,14 +2819,14 @@ export default function Search() {
                         const marking = getResultMarking(result);
                         const cardTone =
                           result.severity === "critical"
-                            ? "border-l-4 border-l-danger bg-danger/14"
+                            ? "border-l-4 !border-l-danger bg-danger/25"
                             : result.severity === "high" || (result.risk_score ?? 0) >= 70 || marking?.status === "suspicious"
-                              ? "border-l-4 border-l-warning bg-warning/12"
+                              ? "border-l-4 !border-l-warning bg-warning/20"
                               : marking?.status === "important"
-                                ? "border-l-4 border-l-amber-400 bg-amber-400/14"
+                                ? "border-l-4 !border-l-amber bg-amber/25"
                                 : result.kind === "finding" || marking?.status === "reviewed"
-                                  ? "border-l-4 border-l-emerald-400 bg-emerald-400/12"
-                                  : "border-l-4 border-l-transparent bg-abyss/50";
+                                  ? "border-l-4 !border-l-emerald-400 bg-emerald-400/20"
+                                  : "border-l-4 !border-l-transparent bg-abyss/50";
                         return (
                           <button key={`${result.kind}-${result.id}`} type="button" onClick={() => handleSelect(result)} className={`flex w-full items-start gap-4 rounded-2xl border border-line ${cardTone} p-4 text-left hover:bg-white/5`}>
                             <div className="w-40 shrink-0 text-xs text-muted">{formatTimestamp(result.timestamp, effectiveTimezone)}</div>
@@ -2801,12 +2878,20 @@ export default function Search() {
         </ResponsiveDetailPanel>
       ) : null}
       <CreateFindingDialog
-        open={Boolean(findingPrefill)}
-        onClose={() => setFindingPrefill(null)}
+        open={Boolean(findingPrefill) || bulkFindingOpen}
+        onClose={() => {
+          setFindingPrefill(null);
+          setBulkFindingOpen(false);
+        }}
         caseId={resolvedCaseId}
         prefill={findingPrefill}
+        eventIds={bulkFindingOpen ? checkedResultIds : undefined}
+        defaultTitle={bulkFindingOpen ? "Search investigative lead" : undefined}
+        defaultDescription={bulkFindingOpen ? `Created from ${checkedResultIds.length} selected Search result(s).` : undefined}
         onCreated={() => {
           setFindingPrefill(null);
+          setBulkFindingOpen(false);
+          setCheckedResultIds([]);
           void queryClient.invalidateQueries({ queryKey: ["findings", resolvedCaseId] });
         }}
       />

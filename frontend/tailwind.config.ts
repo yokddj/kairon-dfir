@@ -11,6 +11,7 @@ export default {
         accent: "#4fd1c5",
         mint: "#7ee7c5",
         amber: "#fbbf24",
+        warning: "#fb923c",
         danger: "#f87171",
         ink: "#d6e7ef",
         muted: "#83a1ae",
