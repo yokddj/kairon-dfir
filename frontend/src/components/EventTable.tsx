@@ -18,6 +18,21 @@ const PIVOT_FIELD_BY_SORT_FIELD: Record<string, string> = {
   "user.name": "user",
 };
 
+// Same idea as PIVOT_FIELD_BY_SORT_FIELD, but keyed by column.key instead --
+// for columns that carry an unambiguous field meaning across every view that
+// defines them (see the repeated "file_name"/"path"/"domain"/"program"
+// Column objects in getColumns) but aren't in SortField/sortFieldForColumn
+// today. "path" intentionally maps to "file_path": it mixes file.path,
+// process.path, shellbag.path etc. depending on the view, which is exactly
+// the same cross-source ambiguity the backend's file_path filter already
+// resolves by matching several path fields at once (see PATH_FIELDS).
+const PIVOT_FIELD_BY_COLUMN_KEY: Record<string, string> = {
+  file_name: "file_name",
+  path: "file_path",
+  domain: "domain",
+  program: "process_name",
+};
+
 export type SortField =
   | "timestamp"
   | "@timestamp"
@@ -851,7 +866,7 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                     ) : null}
                     {columns.map((column) => {
                       const resolvedSortField = column.sortField ?? sortFieldForColumn(column.key);
-                      const pivotField = resolvedSortField ? PIVOT_FIELD_BY_SORT_FIELD[resolvedSortField] : undefined;
+                      const pivotField = (resolvedSortField ? PIVOT_FIELD_BY_SORT_FIELD[resolvedSortField] : undefined) ?? PIVOT_FIELD_BY_COLUMN_KEY[column.key];
                       const cellClassName = `block whitespace-pre-wrap break-words text-ink ${column.key === "key_entity" || column.key === "command_preview" ? "max-h-12 overflow-hidden font-mono text-xs leading-4" : ""}`;
                       const renderedValue = column.key === "timestamp" ? formatTimestamp(item["@timestamp"], effectiveTimezone) : column.render(item);
                       return (

@@ -660,9 +660,11 @@ export default function ArtifactExplorer() {
   const [mftSuspiciousPathsOnly, setMftSuspiciousPathsOnly] = useState(false);
   const [mftExtension, setMftExtension] = useState("");
   const [backendVariant, setBackendVariant] = useState<"default" | "advanced" | "all">((searchParams.get("backend_variant") as "default" | "advanced" | "all") || "default");
-  const [userFilterValue, setUserFilterValue] = useState("");
-  const [excludeHostValue, setExcludeHostValue] = useState("");
-  const [excludeUserValue, setExcludeUserValue] = useState("");
+  // Keyed by the simple filter-dimension name EventTable's onFilterField/
+  // onExcludeField callbacks use ("user", "domain", "ip", ...) -- "host" is
+  // handled separately below since its *include* side routes through the
+  // shared host context/chip every page uses, not this page-local state.
+  const [fieldFilters, setFieldFilters] = useState<Record<string, { include?: string; exclude?: string }>>({});
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [sortBy, setSortBy] = useState<SortField | null>(null);
@@ -732,9 +734,21 @@ export default function ArtifactExplorer() {
         evidence_id: evidenceIdFilter ? [evidenceIdFilter] : [],
         host: hostFilter ? [hostFilter] : [],
         host_id: hostIdFilter ? [hostIdFilter] : [],
-        exclude_host: excludeHostValue ? [excludeHostValue] : [],
-        user: userFilterValue ? [userFilterValue] : [],
-        exclude_user: excludeUserValue ? [excludeUserValue] : [],
+        exclude_host: fieldFilters.host?.exclude ? [fieldFilters.host.exclude] : [],
+        user: fieldFilters.user?.include ? [fieldFilters.user.include] : [],
+        exclude_user: fieldFilters.user?.exclude ? [fieldFilters.user.exclude] : [],
+        domain: fieldFilters.domain?.include ? [fieldFilters.domain.include] : [],
+        exclude_domain: fieldFilters.domain?.exclude ? [fieldFilters.domain.exclude] : [],
+        ip: fieldFilters.ip?.include ? [fieldFilters.ip.include] : [],
+        exclude_ip: fieldFilters.ip?.exclude ? [fieldFilters.ip.exclude] : [],
+        hash: fieldFilters.hash?.include ? [fieldFilters.hash.include] : [],
+        exclude_hash: fieldFilters.hash?.exclude ? [fieldFilters.hash.exclude] : [],
+        file_name: fieldFilters.file_name?.include ? [fieldFilters.file_name.include] : [],
+        exclude_file_name: fieldFilters.file_name?.exclude ? [fieldFilters.file_name.exclude] : [],
+        file_path: fieldFilters.file_path?.include ? [fieldFilters.file_path.include] : [],
+        exclude_file_path: fieldFilters.file_path?.exclude ? [fieldFilters.file_path.exclude] : [],
+        process_name: fieldFilters.process_name?.include ? [fieldFilters.process_name.include] : [],
+        exclude_process_name: fieldFilters.process_name?.exclude ? [fieldFilters.process_name.exclude] : [],
         time_from: timeFrom || undefined,
         time_to: timeTo || undefined,
       },
@@ -744,26 +758,29 @@ export default function ArtifactExplorer() {
       sort_by: sortBy && SERVER_SORTABLE_FIELDS.has(sortBy) ? sortBy : undefined,
       sort_order: sortBy && SERVER_SORTABLE_FIELDS.has(sortBy) ? sortOrder : undefined,
     }),
-    [artifactName, artifactTypeFilter, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, excludeHostValue, userFilterValue, excludeUserValue, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly, timeFrom, timeTo, sortBy, sortOrder],
+    [artifactName, artifactTypeFilter, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, fieldFilters, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly, timeFrom, timeTo, sortBy, sortOrder],
   );
   function handleFilterField(field: string, value: string) {
     if (field === "host") {
       const match = resolveHost(caseContext?.hosts ?? [], undefined, value);
       if (match) setHostFilter(match.id);
-    } else if (field === "user") {
-      setUserFilterValue(value);
-      setExcludeUserValue("");
+    } else {
+      setFieldFilters((current) => ({ ...current, [field]: { include: value } }));
     }
     setPage(1);
   }
 
   function handleExcludeField(field: string, value: string) {
-    if (field === "host") {
-      setExcludeHostValue(value);
-    } else if (field === "user") {
-      setExcludeUserValue(value);
-      setUserFilterValue("");
-    }
+    setFieldFilters((current) => ({ ...current, [field]: { exclude: value } }));
+    setPage(1);
+  }
+
+  function clearFieldFilter(field: string) {
+    setFieldFilters((current) => {
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
     setPage(1);
   }
 
@@ -1032,20 +1049,21 @@ export default function ArtifactExplorer() {
           </div>
         ) : null}
         {!caseId ? <p className="mt-2 text-sm text-amber-300">Artifact Views are available after selecting a case.</p> : null}
-          {hostFilter || evidenceIdFilter || excludeHostValue || userFilterValue || excludeUserValue ? (
+          {hostFilter || evidenceIdFilter || Object.keys(fieldFilters).length ? (
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted">
             <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{hostFilter ? `Host filter: ${hostFilter}` : "Host filter: All hosts"}</span>
             <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{evidenceIdFilter ? `Evidence filter: ${evidenceIdFilter.slice(0, 8)}` : "Evidence filter: All evidence"}</span>
             {hasHostFilter ? <button type="button" onClick={clearHostFilter} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-accent">Clear host filter</button> : null}
-            {excludeHostValue ? (
-              <button type="button" onClick={() => setExcludeHostValue("")} className="rounded-full border border-warning/40 bg-warning/10 px-3 py-1.5 text-warning">Excluding host: {excludeHostValue} &times;</button>
-            ) : null}
-            {userFilterValue ? (
-              <button type="button" onClick={() => setUserFilterValue("")} className="rounded-full border border-accent/30 bg-accent/8 px-3 py-1.5 text-accent">User: {userFilterValue} &times;</button>
-            ) : null}
-            {excludeUserValue ? (
-              <button type="button" onClick={() => setExcludeUserValue("")} className="rounded-full border border-warning/40 bg-warning/10 px-3 py-1.5 text-warning">Excluding user: {excludeUserValue} &times;</button>
-            ) : null}
+            {Object.entries(fieldFilters).map(([field, { include, exclude }]) => (
+              <Fragment key={field}>
+                {include ? (
+                  <button type="button" onClick={() => clearFieldFilter(field)} className="rounded-full border border-accent/30 bg-accent/8 px-3 py-1.5 text-accent">{field}: {include} &times;</button>
+                ) : null}
+                {exclude ? (
+                  <button type="button" onClick={() => clearFieldFilter(field)} className="rounded-full border border-warning/40 bg-warning/10 px-3 py-1.5 text-warning">Excluding {field}: {exclude} &times;</button>
+                ) : null}
+              </Fragment>
+            ))}
           </div>
         ) : null}
         <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
