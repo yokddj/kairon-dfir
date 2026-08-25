@@ -1,10 +1,22 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import EventSummary from "./EventSummary";
+import PivotValue from "./PivotValue";
 import TagPill from "./TagPill";
 import { useTimezonePreference } from "../context/TimezoneContext";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { compareValues, getNestedValue, nextSortDirection } from "../lib/sorting";
 import { isPresent, presentationProfileForItems, renderPresentationValue, type PresentationProfile } from "../lib/eventPresentationProfiles";
+
+// Maps a column's resolved sort field to the simple filter-dimension name
+// the parent's onFilterField/onExcludeField callbacks expect. Only fields
+// with a reliable, universally-defined column (see the shared `host`/`user`
+// Column objects in getColumns) are included -- deliberately conservative
+// so a cell only offers "Filter by this"/"Exclude this" when clicking it
+// unambiguously means one thing.
+const PIVOT_FIELD_BY_SORT_FIELD: Record<string, string> = {
+  "host.name": "host",
+  "user.name": "user",
+};
 
 export type SortField =
   | "timestamp"
@@ -59,6 +71,8 @@ type Props = {
   onViewProcessTree?: (item: Record<string, unknown>) => void;
   onCreateFinding?: (item: Record<string, unknown>) => void;
   onAroundEvent?: (item: Record<string, unknown>, windowMs: number) => void;
+  onFilterField?: (field: string, value: string) => void;
+  onExcludeField?: (field: string, value: string) => void;
 };
 
 type Column = { key: string; label: string; render: (item: Record<string, unknown>) => string; defaultVisible?: boolean; sortField?: SortField };
@@ -714,7 +728,7 @@ function hasProcessTreeContext(item: Record<string, unknown>): boolean {
   return Boolean(relatedProcessNodeIds.length || process.pid || process.name || process.entity_id || process.command_line);
 }
 
-export default function EventTable({ items, view = "generic", sortBy, sortOrder, onSortChange, selectedIds = [], onToggleSelect, onViewProcessTree, onCreateFinding, onAroundEvent }: Props) {
+export default function EventTable({ items, view = "generic", sortBy, sortOrder, onSortChange, selectedIds = [], onToggleSelect, onViewProcessTree, onCreateFinding, onAroundEvent, onFilterField, onExcludeField }: Props) {
   const { effectiveTimezone } = useTimezonePreference();
   const [openId, setOpenId] = useState<string | null>(null);
   const [showColumnChooser, setShowColumnChooser] = useState(false);
@@ -835,15 +849,32 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                         <input type="checkbox" checked={selectedIds.includes(id)} onChange={() => onToggleSelect(id)} />
                       </td>
                     ) : null}
-                    {columns.map((column) => (
-                      <td key={`${id}-${column.key}`} className="max-w-[320px] px-4 py-3 align-top">
-                        <button type="button" onClick={() => setOpenId(openId === id ? null : id)} className="w-full text-left">
-                          <span className={`block whitespace-pre-wrap break-words text-ink ${column.key === "key_entity" || column.key === "command_preview" ? "max-h-12 overflow-hidden font-mono text-xs leading-4" : ""}`} title={column.key === "timestamp" ? String(item["@timestamp"] ?? "") : column.render(item)}>
-                            {column.key === "timestamp" ? formatTimestamp(item["@timestamp"], effectiveTimezone) : column.render(item)}
-                          </span>
-                        </button>
-                      </td>
-                    ))}
+                    {columns.map((column) => {
+                      const resolvedSortField = column.sortField ?? sortFieldForColumn(column.key);
+                      const pivotField = resolvedSortField ? PIVOT_FIELD_BY_SORT_FIELD[resolvedSortField] : undefined;
+                      const cellClassName = `block whitespace-pre-wrap break-words text-ink ${column.key === "key_entity" || column.key === "command_preview" ? "max-h-12 overflow-hidden font-mono text-xs leading-4" : ""}`;
+                      const renderedValue = column.key === "timestamp" ? formatTimestamp(item["@timestamp"], effectiveTimezone) : column.render(item);
+                      return (
+                        <td key={`${id}-${column.key}`} className="max-w-[320px] px-4 py-3 align-top">
+                          <div role="button" tabIndex={0} onClick={() => setOpenId(openId === id ? null : id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setOpenId(openId === id ? null : id); }} className="w-full text-left">
+                            {pivotField && (onFilterField || onExcludeField) ? (
+                              <PivotValue
+                                label={column.label}
+                                value={column.render(item)}
+                                display={renderedValue}
+                                className={cellClassName}
+                                onFilter={onFilterField ? (value) => onFilterField(pivotField, value) : undefined}
+                                onExclude={onExcludeField ? (value) => onExcludeField(pivotField, value) : undefined}
+                              />
+                            ) : (
+                              <span className={cellClassName} title={column.key === "timestamp" ? String(item["@timestamp"] ?? "") : column.render(item)}>
+                                {renderedValue}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      );
+                    })}
                   </tr>
                   {openId === id ? (
                     <tr>
