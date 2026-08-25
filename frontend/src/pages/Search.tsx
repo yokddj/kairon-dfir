@@ -6,7 +6,6 @@ import { useFindingIndicators } from "../lib/useFindingIndicators";
 import ResponsiveDetailPanel, { useMinWidthQuery } from "../components/ResponsiveDetailPanel";
 import SearchBar from "../components/SearchBar";
 import { useActiveCase } from "../context/ActiveCaseContext";
-import { HostFilter } from "../components/HostFilter";
 import InvestigationContext from "../components/InvestigationContext";
 import CreateFindingDialog from "../components/CreateFindingDialog";
 import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
@@ -1348,7 +1347,7 @@ export default function Search() {
   const navigate = useNavigate();
   const { caseId: routeCaseId } = useParams();
   const { activeCaseId, selectedEvidenceId, selectedHost, setActiveCaseId, caseContext } = useActiveCase();
-  const { activeHost, activeHostId, clearHostFilter } = useHostContext();
+  const { activeHost, activeHostId, hasHostFilter, clearHostFilter } = useHostContext();
   const { effectiveTimezone } = useTimezonePreference();
   const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
@@ -1696,8 +1695,6 @@ export default function Search() {
     if (state.marking_status) chips.push({ key: "marking_status", label: `marking: ${state.marking_status}`, clear: { marking_status: null } });
     if (state.marked_has_note) chips.push({ key: "marked_has_note", label: "has analyst note", clear: { marked_has_note: null } });
     if (state.marked_in_finding) chips.push({ key: "marked_in_finding", label: "in finding", clear: { marked_in_finding: null } });
-    if (searchRequestState.host) chips.push({ key: "host", label: `host: ${searchRequestState.host}`, clear: { host: null, host_id: null } });
-    if (searchRequestState.host_id) chips.push({ key: "host_id", label: `host ID: ${searchRequestState.host_id}`, clear: { host_id: null, host: null } });
     if (state.user) chips.push({ key: "user", label: `user: ${state.user}`, clear: { user: null } });
     if (state.parser.length) chips.push({ key: "parser", label: `parser: ${state.parser.join(", ")}`, clear: { parser: null } });
     if (state.backend_variant.length) chips.push({ key: "backend_variant", label: `backend: ${state.backend_variant.join(", ")}`, clear: { backend_variant: null } });
@@ -1724,7 +1721,7 @@ export default function Search() {
     if (state.status.length) chips.push({ key: "status", label: `status: ${state.status.join(", ")}`, clear: { status: null } });
     if (state.time_from || state.time_to) chips.push({ key: "time", label: `time: ${state.time_from || "…"} → ${state.time_to || "…"}`, clear: { time_from: null, time_to: null } });
     return chips;
-  }, [searchRequestState.evidence_id, searchRequestState.host, searchRequestState.host_id, state]);
+  }, [searchRequestState.evidence_id, state]);
   const querySyntaxChips = useMemo(
     () =>
       (response?.query_syntax?.applied_filters ?? []).map((item, index) => ({
@@ -2321,13 +2318,18 @@ export default function Search() {
             </select>
           </label>
           <TextField label="Source file" value={state.source_file} onChange={(value) => updateParams({ source_file: value })} placeholder="Security.evtx" />
-          <label className="block">
-            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Host ID</span>
-            <HostFilter hostId={state.host_id || null} onChange={(value) => updateParams({ host_id: value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" />
-          </label>
-          <TextField label="Host" value={state.host} onChange={(value) => updateParams({ host: value })} placeholder="TEST-WIN10-01" />
           <TextField label="User" value={state.user} onChange={(value) => updateParams({ user: value })} placeholder="user01" />
           <TextField label="Evidence" value={searchRequestState.evidence_id} onChange={(value) => updateParams({ evidence_id: value })} placeholder="evidence id" />
+        </div>
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted">
+          <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{activeHost ? `Host filter: ${activeHost}` : "Host filter: All hosts"}</span>
+          {hasHostFilter ? (
+            <button type="button" onClick={clearHostFilter} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-accent">
+              Clear host filter
+            </button>
+          ) : (
+            <span>Change the host filter from the top bar.</span>
+          )}
         </div>
         <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <TimeField label="Time from" value={state.time_from} onChange={(value) => updateParams({ time_from: value })} />
