@@ -454,6 +454,32 @@ describe("Search page", () => {
     expect(within(artifactSelect).getByRole("option", { name: /scheduled_task \(1\)/i })).toBeInTheDocument();
   });
 
+  it("does not clear artifact type when a capability filter (workbench) changes", async () => {
+    getCaseCapabilitiesMock.mockResolvedValue({
+      workbenches: [],
+      capabilities: [],
+      search: {
+        facets: {
+          platform: [
+            { id: "linux", label: "linux" },
+            { id: "windows", label: "windows" },
+          ],
+          workbench: [{ id: "windows-workbench", label: "Windows" }],
+        },
+        presets: [],
+      },
+    });
+    renderPage(["/search?artifact_type=browser"]);
+    await screen.findByTestId("results-table");
+    expect((screen.getByRole("combobox", { name: /^Artifact type$/i }) as HTMLSelectElement).value).toBe("browser");
+
+    await userEvent.click(screen.getByText(/search by capability/i));
+    const workbenchSelect = screen.getByRole("combobox", { name: /^Workbench$/i }) as HTMLSelectElement;
+    await userEvent.selectOptions(workbenchSelect, "windows-workbench");
+
+    expect((screen.getByRole("combobox", { name: /^Artifact type$/i }) as HTMLSelectElement).value).toBe("browser");
+  });
+
   it("does not expose technical exclude text fields in the primary UI", async () => {
     renderPage();
     await screen.findByTestId("results-table");
