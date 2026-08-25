@@ -925,14 +925,14 @@ function SearchTable({
               const isDismissed = (result.kind === "finding" && asString(asRecord(result.raw).status) === "dismissed") || marking?.status === "false_positive";
               const toneClass =
                 result.severity === "critical"
-                  ? "bg-danger/8 "
+                  ? "border-l-4 border-l-danger bg-danger/14 "
                   : result.severity === "high" || (result.risk_score ?? 0) >= 70 || marking?.status === "suspicious"
-                    ? "bg-warning/6 "
+                    ? "border-l-4 border-l-warning bg-warning/12 "
                     : marking?.status === "important"
-                      ? "bg-amber-400/8 "
+                      ? "border-l-4 border-l-amber-400 bg-amber-400/14 "
                       : result.kind === "finding" || marking?.status === "reviewed"
-                        ? "bg-emerald-400/6 "
-                        : "";
+                        ? "border-l-4 border-l-emerald-400 bg-emerald-400/12 "
+                        : "border-l-4 border-l-transparent ";
               const rowClass =
                 toneClass +
                 (selected ? "ring-1 ring-accent/50 " : "") +
@@ -2742,14 +2742,14 @@ export default function Search() {
                         const marking = getResultMarking(result);
                         const cardTone =
                           result.severity === "critical"
-                            ? "bg-danger/8"
+                            ? "border-l-4 border-l-danger bg-danger/14"
                             : result.severity === "high" || (result.risk_score ?? 0) >= 70 || marking?.status === "suspicious"
-                              ? "bg-warning/6"
+                              ? "border-l-4 border-l-warning bg-warning/12"
                               : marking?.status === "important"
-                                ? "bg-amber-400/8"
+                                ? "border-l-4 border-l-amber-400 bg-amber-400/14"
                                 : result.kind === "finding" || marking?.status === "reviewed"
-                                  ? "bg-emerald-400/6"
-                                  : "bg-abyss/50";
+                                  ? "border-l-4 border-l-emerald-400 bg-emerald-400/12"
+                                  : "border-l-4 border-l-transparent bg-abyss/50";
                         return (
                           <button key={`${result.kind}-${result.id}`} type="button" onClick={() => handleSelect(result)} className={`flex w-full items-start gap-4 rounded-2xl border border-line ${cardTone} p-4 text-left hover:bg-white/5`}>
                             <div className="w-40 shrink-0 text-xs text-muted">{formatTimestamp(result.timestamp, effectiveTimezone)}</div>
