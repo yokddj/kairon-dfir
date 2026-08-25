@@ -36,6 +36,18 @@ class SearchFilters(BaseModel):
     has_path: bool | None = None
     suspicious_paths_only: bool | None = None
     extension: list[str] = Field(default_factory=list)
+    domain: list[str] = Field(default_factory=list)
+    ip: list[str] = Field(default_factory=list)
+    hash: list[str] = Field(default_factory=list)
+    file_name: list[str] = Field(default_factory=list)
+    file_path: list[str] = Field(default_factory=list)
+    process_name: list[str] = Field(default_factory=list)
+    exclude_domain: list[str] = Field(default_factory=list)
+    exclude_ip: list[str] = Field(default_factory=list)
+    exclude_hash: list[str] = Field(default_factory=list)
+    exclude_file_name: list[str] = Field(default_factory=list)
+    exclude_file_path: list[str] = Field(default_factory=list)
+    exclude_process_name: list[str] = Field(default_factory=list)
 
 
 class SearchRequest(BaseModel):

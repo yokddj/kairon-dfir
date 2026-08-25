@@ -27,7 +27,7 @@ from app.ingest.normalization.registry_modifications import enrich_registry_comm
 from app.ingest.powershell.entity_normalization import normalize_powershell_entities
 from app.ingest.powershell.semantic_evtx import normalize_powershell_evtx_semantics
 from app.services.host_identity import expand_host_filter, normalize_host_alias, resolve_canonical_host
-from app.services.search_service import build_search_v2_params, event_context as event_context_v2, quick_filters as search_quick_filters, search_around_event as search_around_event_v2, search_case_v2, search_related_to_finding as search_related_to_finding_v2
+from app.services.search_service import DOMAIN_FIELDS, FILENAME_FIELDS, HASH_FIELDS, IP_FIELDS, PATH_FIELDS, build_search_v2_params, event_context as event_context_v2, quick_filters as search_quick_filters, search_around_event as search_around_event_v2, search_case_v2, search_related_to_finding as search_related_to_finding_v2
 
 
 router = APIRouter(tags=["search"])
@@ -590,6 +590,17 @@ def _escape_wildcard_term(value: str) -> str:
     return re.sub(r"([*?\\\\])", r"\\\1", value)
 
 
+def _multi_field_should(fields: list[str], values: list[str], *, wildcard: bool) -> dict:
+    """Same shape as search_service.py's v2 domain/ip/hash/file_name/file_path
+    filters (kept in lockstep with those field lists so both search
+    endpoints match the same documents for the same value)."""
+    if wildcard:
+        clauses = [{"wildcard": {field: {"value": f"*{_escape_wildcard_term(value)}*", "case_insensitive": True}}} for field in fields for value in values]
+    else:
+        clauses = [{"term": {field: value}} for field in fields for value in values]
+    return {"bool": {"should": clauses, "minimum_should_match": 1}}
+
+
 def _query_looks_like_ip(value: str) -> bool:
     return bool(re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", value.strip()))
 
@@ -1015,6 +1026,18 @@ def build_search_query(payload: SearchRequest, timeline: bool = False, db: Sessi
         filters.append({"term": {"tags": "suspicious_path"}})
     if payload.filters.extension:
         filters.append({"terms": {"file.extension": payload.filters.extension}})
+    if payload.filters.domain:
+        filters.append(_multi_field_should(DOMAIN_FIELDS, payload.filters.domain, wildcard=True))
+    if payload.filters.ip:
+        filters.append(_multi_field_should(IP_FIELDS, payload.filters.ip, wildcard=False))
+    if payload.filters.hash:
+        filters.append(_multi_field_should(HASH_FIELDS, payload.filters.hash, wildcard=False))
+    if payload.filters.file_name:
+        filters.append(_multi_field_should(FILENAME_FIELDS, payload.filters.file_name, wildcard=True))
+    if payload.filters.file_path:
+        filters.append(_multi_field_should(PATH_FIELDS, payload.filters.file_path, wildcard=True))
+    if payload.filters.process_name:
+        filters.append({"terms": {"process.name": payload.filters.process_name}})
     if payload.filters.has_timestamp is True:
         filters.append({"exists": {"field": "@timestamp"}})
     if payload.filters.has_timestamp is False:
@@ -1074,6 +1097,18 @@ def build_search_query(payload: SearchRequest, timeline: bool = False, db: Sessi
         )
     if payload.filters.exclude_query.strip():
         must_not.append(_build_text_query(payload.model_copy(update={"query": payload.filters.exclude_query})))
+    if payload.filters.exclude_domain:
+        must_not.append(_multi_field_should(DOMAIN_FIELDS, payload.filters.exclude_domain, wildcard=True))
+    if payload.filters.exclude_ip:
+        must_not.append(_multi_field_should(IP_FIELDS, payload.filters.exclude_ip, wildcard=False))
+    if payload.filters.exclude_hash:
+        must_not.append(_multi_field_should(HASH_FIELDS, payload.filters.exclude_hash, wildcard=False))
+    if payload.filters.exclude_file_name:
+        must_not.append(_multi_field_should(FILENAME_FIELDS, payload.filters.exclude_file_name, wildcard=True))
+    if payload.filters.exclude_file_path:
+        must_not.append(_multi_field_should(PATH_FIELDS, payload.filters.exclude_file_path, wildcard=True))
+    if payload.filters.exclude_process_name:
+        must_not.append({"terms": {"process.name": payload.filters.exclude_process_name}})
     sort_field = SORT_FIELD_MAP.get(payload.sort_by)
     if not sort_field:
         raise HTTPException(status_code=400, detail=f"Unsupported sort field: {payload.sort_by}")
