@@ -2255,47 +2255,7 @@ export default function Search() {
           </button>
         </div>
 
-        <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-          <label className="block">
-            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Workbench</span>
-            <select aria-label="Workbench" value={state.workbench} onChange={(event) => updateParams({ workbench: event.target.value, domain_scope: null, capability: null, platform: null, source_category: null, artifact_type: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-workbench-filter">
-              {workbenchOptions.map((option) => (
-                <option key={option.value || "all-workbenches"} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Domain</span>
-            <select aria-label="Capability domain" value={state.domain_scope} onChange={(event) => updateParams({ domain_scope: event.target.value, capability: null, artifact_type: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-domain-filter">
-              {domainOptions.map((option) => (
-                <option key={option.value || "all-domains"} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Capability</span>
-            <select aria-label="Capability" value={state.capability} onChange={(event) => updateParams({ capability: event.target.value, artifact_type: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-capability-filter">
-              {capabilityOptions.map((option) => (
-                <option key={option.value || "all-capabilities"} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Platform</span>
-            <select aria-label="Platform" value={state.platform} onChange={(event) => updateParams({ platform: event.target.value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-platform-filter">
-              {platformOptions.map((option) => (
-                <option key={option.value || "all-platforms"} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-          <label className="block">
-            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source</span>
-            <select aria-label="Source category" value={state.source_category} onChange={(event) => updateParams({ source_category: event.target.value, source: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-source-category-filter">
-              {sourceCategoryOptions.map((option) => (
-                <option key={option.value || "all-sources"} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
           <label className="block">
             <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact type</span>
             <select aria-label="Artifact type" value={state.artifact_type[0] ?? ""} onChange={(event) => updateParams({ artifact_type: event.target.value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50">
@@ -2306,19 +2266,6 @@ export default function Search() {
               ))}
             </select>
           </label>
-          <label className="block">
-            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Parser</span>
-            <select aria-label="Parser" value={state.parser[0] ?? ""} onChange={(event) => updateParams({ parser: event.target.value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50">
-              <option value="">Any</option>
-              {Object.keys(globalFacets.parser ?? response?.facets?.parser ?? {}).map((option) => (
-                <option key={option} value={option}>
-                  {formatFacetOption(option, globalFacets.parser)}
-                </option>
-              ))}
-            </select>
-          </label>
-          <TextField label="Source file" value={state.source_file} onChange={(value) => updateParams({ source_file: value })} placeholder="Security.evtx" />
-          <TextField label="User" value={state.user} onChange={(value) => updateParams({ user: value })} placeholder="user01" />
           <TextField label="Evidence" value={searchRequestState.evidence_id} onChange={(value) => updateParams({ evidence_id: value })} placeholder="evidence id" />
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-muted">
@@ -2331,6 +2278,81 @@ export default function Search() {
             <span>Change the host filter from the top bar.</span>
           )}
         </div>
+
+        <details className="mt-4 rounded-2xl border border-line bg-abyss/60" open={Boolean(state.workbench || state.domain_scope || state.capability || state.platform)} data-testid="search-capability-filters">
+          <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-sm text-ink">
+            <span>Search by capability</span>
+            <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">Workbench &middot; Domain &middot; Capability &middot; Platform</span>
+          </summary>
+          <div className="px-4 pb-4">
+            <p className="mb-3 text-xs text-muted">Jump to a curated view (e.g. Persistence, Execution Stories). Optional -- not required to search directly.</p>
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              <label className="block">
+                <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Workbench</span>
+                <select aria-label="Workbench" value={state.workbench} onChange={(event) => updateParams({ workbench: event.target.value, domain_scope: null, capability: null, platform: null, source_category: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-workbench-filter">
+                  {workbenchOptions.map((option) => (
+                    <option key={option.value || "all-workbenches"} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Domain</span>
+                <select aria-label="Capability domain" value={state.domain_scope} onChange={(event) => updateParams({ domain_scope: event.target.value, capability: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-domain-filter">
+                  {domainOptions.map((option) => (
+                    <option key={option.value || "all-domains"} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Capability</span>
+                <select aria-label="Capability" value={state.capability} onChange={(event) => updateParams({ capability: event.target.value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-capability-filter">
+                  {capabilityOptions.map((option) => (
+                    <option key={option.value || "all-capabilities"} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Platform</span>
+                <select aria-label="Platform" value={state.platform} onChange={(event) => updateParams({ platform: event.target.value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-platform-filter">
+                  {platformOptions.map((option) => (
+                    <option key={option.value || "all-platforms"} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          </div>
+        </details>
+
+        <details className="mt-4 rounded-2xl border border-line bg-abyss/60" open={Boolean(state.parser[0] || state.source_category || state.source_file || state.user)} data-testid="search-refine-filters">
+          <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-sm text-ink">
+            <span>Refine</span>
+            <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">Parser &middot; Source &middot; User &middot; Source file</span>
+          </summary>
+          <div className="grid gap-4 px-4 pb-4 md:grid-cols-2 xl:grid-cols-4">
+            <label className="block">
+              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Parser</span>
+              <select aria-label="Parser" value={state.parser[0] ?? ""} onChange={(event) => updateParams({ parser: event.target.value })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50">
+                <option value="">Any</option>
+                {Object.keys(globalFacets.parser ?? response?.facets?.parser ?? {}).map((option) => (
+                  <option key={option} value={option}>
+                    {formatFacetOption(option, globalFacets.parser)}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1.5 block text-[11px] text-accent">&#8618; related to Artifact type</span>
+            </label>
+            <label className="block">
+              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source</span>
+              <select aria-label="Source category" value={state.source_category} onChange={(event) => updateParams({ source_category: event.target.value, source: null })} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50" data-testid="search-source-category-filter">
+                {sourceCategoryOptions.map((option) => (
+                  <option key={option.value || "all-sources"} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <TextField label="Source file" value={state.source_file} onChange={(value) => updateParams({ source_file: value })} placeholder="Security.evtx" />
+            <TextField label="User" value={state.user} onChange={(value) => updateParams({ user: value })} placeholder="user01" />
+          </div>
+        </details>
         <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <TimeField label="Time from" value={state.time_from} onChange={(value) => updateParams({ time_from: value })} />
           <TimeField label="Time to" value={state.time_to} onChange={(value) => updateParams({ time_to: value })} />
