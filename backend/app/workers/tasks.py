@@ -4076,6 +4076,7 @@ def _create_builtin_detections_for_ids(
             target_type="event",
             target_path=(document.get("file", {}) or {}).get("path"),
             message=message,
+            host_name=(document.get("host", {}) or {}).get("name") or None,
             matched_stable_event_id=stable_event_id or None,
             dedup_fingerprint=_dedup_fingerprint(case_id, "builtin", rule_key, stable_event_id or document.get("event_id"), target_path),
             raw={

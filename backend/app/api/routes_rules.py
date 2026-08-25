@@ -41,7 +41,7 @@ from app.rules_engine.sigma import (
 )
 from app.rules_engine.yara_import import classify_yara_import, detect_yara_rules, split_yara_rules
 from app.rules_engine.yara_engine import detect_rule_names_from_content, validate_yara_content, yara_available
-from app.services.host_identity import is_invalid_host_value
+from app.services.host_identity import is_invalid_host_value, resolve_canonical_host
 from app.schemas.finding import FindingRead
 from app.schemas.rule import (
     DetectionRead,
@@ -4339,6 +4339,7 @@ def promote_detection_to_finding(detection_id: str, db: Session = Depends(get_db
     detection = db.get(DetectionResult, detection_id)
     if not detection:
         raise HTTPException(status_code=404, detail="Detection not found")
+    resolved_host = resolve_canonical_host(db, detection.case_id, detection.host_name) if detection.host_name else None
     finding = Finding(
         case_id=detection.case_id,
         title=detection.rule_name,
@@ -4346,6 +4347,8 @@ def promote_detection_to_finding(detection_id: str, db: Session = Depends(get_db
         severity=_safe_finding_severity(detection.severity),
         event_ids=[detection.event_id] if detection.event_id else [],
         detection_ids=[detection.id],
+        related_hosts=[resolved_host["display_name"]] if resolved_host else ([detection.host_name] if detection.host_name else []),
+        linked_host_id=resolved_host["case_host_id"] if resolved_host else None,
     )
     db.add(finding)
     detection.status = "promoted_to_finding"
