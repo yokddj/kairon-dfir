@@ -2,12 +2,12 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { useParams, useSearchParams } from "react-router-dom";
-import { api, type DfirCase, type EmailArtifactItem, type MotwItem, type StartupPersistenceItem } from "../api/client";
+import { api, type EmailArtifactItem, type MotwItem, type StartupPersistenceItem } from "../api/client";
 import CreateFindingDialog from "../components/CreateFindingDialog";
 import EmptyState from "../components/EmptyState";
 import EventTable, { type EventView, type SortField, type SortOrder } from "../components/EventTable";
+import { SelectField, TextField } from "../components/FilterField";
 import IndicatorResolutionPanel from "../components/IndicatorResolutionPanel";
-import InvestigationContext from "../components/InvestigationContext";
 import PaginationControls from "../components/PaginationControls";
 import TimeField from "../components/TimeField";
 import { useActiveCase } from "../context/ActiveCaseContext";
@@ -15,7 +15,6 @@ import { useTimezonePreference } from "../context/TimezoneContext";
 import { useHostContext } from "../hooks/useHostContext";
 import { formatTimestamp } from "../lib/time";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
-import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 import { nextSortDirection } from "../lib/sorting";
 import { artifactEventView, artifactLabel as artifactViewLabel, artifactOptions, artifactOptionsForPlatforms, canonicalArtifactView } from "../lib/artifactRegistry";
 
@@ -640,12 +639,7 @@ export default function ArtifactExplorer() {
   const { activeHost, activeHostId, hasHostFilter, clearHostFilter } = useHostContext();
   const { effectiveTimezone } = useTimezonePreference();
   const queryClient = useQueryClient();
-  const [caseId, setCaseId] = useState(routeCaseId || activeCaseId);
-  // Artifact Views is a Tier 1 lens, but some capability routes land here
-  // too (e.g. linux.software.packages via ?artifact_type=linux_packages) --
-  // lensLabel is only the fallback when no capability route matches; a
-  // matching one produces the full Surface/Domain/Capability trail instead.
-  const breadcrumbs = useInvestigationBreadcrumbs({ lensLabel: "Artifact Views" });
+  const caseId = routeCaseId || activeCaseId;
   // artifactTypeFilter is the raw value as reported by facets/Search (the
   // literal indexed artifact.type, e.g. "windows_event" or "registry_event")
   // and is what actually gets sent to the search backend and bound to the
@@ -691,7 +685,6 @@ export default function ArtifactExplorer() {
   const evidenceIdFilter = searchParams.get("evidence_id") || selectedEvidenceId;
   const hostIdFilter = searchParams.get("host_id") || activeHostId;
   const hostFilter = searchParams.get("host") || activeHost || selectedHost;
-  const casesQuery = useQuery({ queryKey: ["cases"], queryFn: api.listCases });
   const facetsQuery = useQuery({
     queryKey: ["artifact-explorer-facets", caseId, hostIdFilter],
     queryFn: () => api.searchFacets({ caseId: caseId || undefined, hostId: hostIdFilter || undefined }),
@@ -960,34 +953,11 @@ export default function ArtifactExplorer() {
   }
 
   useEffect(() => {
-    setCaseId((current) => current || activeCaseId);
-  }, [activeCaseId]);
-
-  useEffect(() => {
-    if (routeCaseId) {
-      setActiveCaseId(routeCaseId);
-      setCaseId(routeCaseId);
-    }
+    if (routeCaseId) setActiveCaseId(routeCaseId);
   }, [routeCaseId, setActiveCaseId]);
 
   return (
     <div className="space-y-6">
-      <InvestigationContext
-        caseId={caseId}
-        caseName={(casesQuery.data ?? []).find((item: DfirCase) => item.id === caseId)?.name}
-        host={hostFilter}
-        hostId={hostIdFilter}
-        evidenceId={evidenceIdFilter}
-        current="Artifact Views"
-        breadcrumbs={breadcrumbs}
-        actions={caseId ? [
-          { label: "Search", to: `/cases/${caseId}/search${artifactTypeFilter ? `?artifact_type=${encodeURIComponent(artifactTypeFilter)}` : ""}`, description: "Open matching documents in Search" },
-          { label: "Timeline", to: `/cases/${caseId}/search?view=timeline&sort=@timestamp&order=asc`, description: "Timeline with this context" },
-          { label: "Processing", to: `/cases/${caseId}?tab=processing`, description: "Review processing queue" },
-          { label: "Evidence", to: `/cases/${caseId}/evidence`, description: "Return to evidence inventory" },
-          { label: "Parser Coverage", to: "/parser-coverage", description: "Understand missing artifact support" },
-        ] : []}
-      />
       <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Case Workspace</p>
         <h2 className="mt-2 text-2xl font-semibold">Artifact Views</h2>
@@ -1042,34 +1012,16 @@ export default function ArtifactExplorer() {
             {hasHostFilter ? <button type="button" onClick={clearHostFilter} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-accent">Clear host filter</button> : null}
           </div>
         ) : null}
-        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <select value={caseId} onChange={(event) => setCaseId(event.target.value)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
-            <option value="">All cases</option>
-            {(casesQuery.data ?? []).map((item: DfirCase) => <option key={item.id} value={item.id}>{item.name}</option>)}
-          </select>
-          <select aria-label="Artifact view" value={artifactTypeFilter} onChange={(event) => setArtifactTypeFilter(event.target.value)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
-            <option value="">All artifact types</option>
-            {artifactTypeSelectOptions.map((option) => <option key={option} value={option}>{artifactViewLabel(option)}</option>)}
-          </select>
-          <select value={artifactName} onChange={(event) => setArtifactName(event.target.value)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
-            <option value="">All artifact names</option>
-            {artifactNameOptions.map((option) => <option key={option} value={option}>{option}</option>)}
-          </select>
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={contextualPlaceholder} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm" />
-          <select value={searchMode} onChange={(event) => setSearchMode(event.target.value as "smart" | "contains" | "ioc")} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
-            <option value="smart">smart</option>
-            <option value="contains">contains</option>
-            <option value="ioc">ioc</option>
-          </select>
-          <select value={backendVariant} onChange={(event) => setBackendVariant(event.target.value as "default" | "advanced" | "all")} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
-            <option value="default">Default backend</option>
-            <option value="advanced">EZ advanced only</option>
-            <option value="all">Compare all backends</option>
-          </select>
-          <a href={siemLinksQuery.data?.discover_url || "#"} target="_blank" rel="noreferrer" className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-center text-sm text-muted">
-            Open selected artifact in OpenSearch
-          </a>
-          <button disabled={!caseId || !selectedEventIds.length} onClick={() => setFindingDialogOpen(true)} className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-muted disabled:opacity-50">
+        <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          <label className="block">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact type</span>
+            <select aria-label="Artifact view" value={artifactTypeFilter} onChange={(event) => setArtifactTypeFilter(event.target.value)} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50">
+              <option value="">All artifact types</option>
+              {artifactTypeSelectOptions.map((option) => <option key={option} value={option}>{artifactViewLabel(option)}</option>)}
+            </select>
+          </label>
+          <TextField label="Search" value={query} onChange={setQuery} placeholder={contextualPlaceholder} />
+          <button disabled={!caseId || !selectedEventIds.length} onClick={() => setFindingDialogOpen(true)} className="self-end rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm text-muted disabled:opacity-50">
             Create Finding from selected events
           </button>
         </div>
@@ -1086,6 +1038,28 @@ export default function ArtifactExplorer() {
         ) : (timeFrom || timeTo) ? (
           <p className="mt-3 text-xs text-amber-300">Time filter isn&apos;t supported by this specialized view yet — switch to a general artifact type or use Search.</p>
         ) : null}
+
+        <details className="mt-4 rounded-2xl border border-line bg-abyss/60" open={Boolean(artifactName || searchMode !== "smart" || backendVariant !== "default")} data-testid="artifact-explorer-more-filters">
+          <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-sm text-ink">
+            <span>More filters</span>
+            <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">Artifact name &middot; Search mode &middot; Backend</span>
+          </summary>
+          <div className="grid gap-4 px-4 pb-4 md:grid-cols-2 xl:grid-cols-3">
+            <label className="block">
+              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact name</span>
+              <select value={artifactName} onChange={(event) => setArtifactName(event.target.value)} className="w-full rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm outline-none focus:border-accent/50">
+                <option value="">All artifact names</option>
+                {artifactNameOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+              </select>
+            </label>
+            <SelectField label="Search mode" value={searchMode === "smart" ? "" : searchMode} options={["contains", "ioc"]} emptyLabel="smart" onChange={(value) => setSearchMode((value || "smart") as "smart" | "contains" | "ioc")} />
+            <SelectField label="Backend variant" value={backendVariant === "default" ? "" : backendVariant} options={["advanced", "all"]} emptyLabel="Default" onChange={(value) => setBackendVariant((value || "default") as "default" | "advanced" | "all")} />
+            <a href={siemLinksQuery.data?.discover_url || "#"} target="_blank" rel="noreferrer" className="self-end rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-center text-sm text-muted">
+              Open selected artifact in OpenSearch
+            </a>
+          </div>
+        </details>
+
         {artifactType === "mft" ? (
           <div className="mt-4 rounded-2xl border border-line bg-abyss/50 p-4">
             <div className="flex flex-wrap items-center gap-3">
