@@ -4,9 +4,9 @@ Phase 1 (see test_memory_shell_history.py) built the family end-to-end at
 the storage/search/timeline layer but deliberately did not create a real
 profile. This phase adds shell_history_basic as a genuine, selectable
 profile -- resolved exclusively through capability_registry (never a
-PROFILE_PLUGINS entry), correctly available on Linux and correctly
-unavailable on Windows, exposed in the catalogue and FAMILY_ORDER, and
-excluded from run-all and initial analysis.
+PROFILE_PLUGINS entry), correctly available on Linux (linux.bash) and on
+Windows (windows.consoles), exposed in the catalogue and FAMILY_ORDER,
+and excluded from run-all and initial analysis.
 """
 from __future__ import annotations
 
@@ -82,7 +82,17 @@ def test_linux_resolves_exactly_linux_bash() -> None:
     assert resolve_profile_plugins("shell_history_basic", plan=plan) == ["linux.bash"]
 
 
-def test_windows_resolves_to_nothing() -> None:
+def test_windows_resolves_exactly_windows_consoles() -> None:
+    plan = _plan(PlatformFamily.WINDOWS, eligible=(MemoryCapability.SHELL_HISTORY,), selected=("windows.consoles",))
+    assert resolve_profile_plugins("shell_history_basic", plan=plan) == ["windows.consoles"]
+
+
+def test_windows_resolves_to_nothing_when_the_evidence_plan_itself_found_no_eligible_capability() -> None:
+    """Not a structural Windows gap (capability_registry does have a
+    windows.consoles producer, see the test above) -- this exercises the
+    case where THIS evidence's own MemoryAnalysisPlan resolved nothing
+    eligible for SHELL_HISTORY (e.g. platform probe was inconclusive),
+    which must still raise cleanly rather than silently select nothing."""
     plan = _plan(PlatformFamily.WINDOWS, eligible=(), selected=())
     with pytest.raises(MemoryExecutionValidationError) as exc_info:
         resolve_profile_plugins("shell_history_basic", plan=plan)
@@ -219,7 +229,25 @@ def test_catalogue_marks_shell_history_available_for_linux_evidence(db: Session)
     assert item["plugins"] == ["linux.bash"]
 
 
-def test_catalogue_marks_shell_history_unavailable_for_windows_evidence(db: Session) -> None:
+def test_catalogue_marks_shell_history_available_for_windows_evidence(db: Session) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    fake_plan = _plan(PlatformFamily.WINDOWS, eligible=(MemoryCapability.SHELL_HISTORY,), selected=("windows.consoles",))
+    with patch("app.services.memory.catalogue.build_memory_analysis_plan", return_value=fake_plan), \
+         patch("app.services.memory.counts.get_memory_family_count", return_value={"total": 0}):
+        catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
+    item = next(i for i in catalogue if i["profile"] == "shell_history_basic")
+    assert item["available"] is True
+    assert item["gate_type"] == "available"
+    assert item["plugins"] == ["windows.consoles"]
+
+
+def test_catalogue_marks_shell_history_unavailable_when_this_evidence_plan_found_nothing_eligible(db: Session) -> None:
+    """Not a structural Windows gap -- capability_registry does have a
+    windows.consoles producer (see the test above). This covers a
+    per-evidence plan that itself resolved no eligible capability (e.g.
+    an inconclusive platform probe), which must still gate unavailable
+    rather than fabricate a plugin binding."""
     case = _make_case(db)
     ev = _make_evidence(db, case.id)
     fake_plan = _plan(PlatformFamily.WINDOWS, eligible=(), selected=())
@@ -231,11 +259,6 @@ def test_catalogue_marks_shell_history_unavailable_for_windows_evidence(db: Sess
     assert item["gate_type"] == "unavailable"
     assert item["plugins"] == []
     assert "windows" in (item["availability_reason"] or "")
-    # No fabricated Windows producer (windows.cmdscan/consoles) -- see
-    # capability_registry.py, which has no CapabilityPluginSpec for
-    # MemoryCapability.SHELL_HISTORY on PlatformFamily.WINDOWS.
-    assert "windows.cmdscan" not in item["plugins"]
-    assert "windows.consoles" not in item["plugins"]
 
 
 def test_catalogue_other_profiles_unaffected_by_shell_history_addition(db: Session) -> None:

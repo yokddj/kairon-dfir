@@ -26,9 +26,10 @@ availability mechanisms:
   ``execution.resolve_profile_plugins`` (the same capability_registry
   path used at execution time), so a Linux evidence correctly sees
   ``linux.bash`` as available while a Windows evidence correctly sees
-  no plugin at all (no CapabilityPluginSpec registered for
-  ``MemoryCapability.SHELL_HISTORY`` on Windows) and is gated
-  "unavailable" -- never a fabricated windows.cmdscan/consoles binding.
+  ``windows.consoles`` as available (both have a registered
+  CapabilityPluginSpec for ``MemoryCapability.SHELL_HISTORY``) -- a
+  platform with no registered producer at all would instead be gated
+  "unavailable" here, never a fabricated plugin binding.
 """
 from __future__ import annotations
 
@@ -192,11 +193,13 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         "est_duration_seconds": 1800,
         "requires_windows_symbols": False,
         "can_run_without_symbols": True,
-        # Only Linux has a real producer today (linux.bash). The
-        # capability itself is platform-agnostic -- see PROFILE_CAPABILITY
-        # in execution.py and MemoryCapability.SHELL_HISTORY -- but this
-        # list must state what's actually implemented, not the aspiration.
-        "supported_os_families": ["linux"],
+        # Both platforms have a real producer (linux.bash / windows.consoles)
+        # -- see PROFILE_CAPABILITY in execution.py and
+        # MemoryCapability.SHELL_HISTORY. NOTE: this static literal is not
+        # what the API actually returns -- ``_supported_os_families()``
+        # above recomputes it live from capability_registry, exactly to
+        # avoid this literal drifting stale the way network_basic's did.
+        "supported_os_families": ["windows", "linux"],
     },
 ]
 

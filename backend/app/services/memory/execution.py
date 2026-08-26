@@ -37,6 +37,7 @@ from app.services.memory.artifact_normalizers import (
     normalize_windows_ldrmodules,
     normalize_windows_malfind,
     normalize_windows_modules,
+    normalize_windows_consoles,
     normalize_windows_netscan,
     normalize_windows_privileges,
     normalize_windows_vadinfo,
@@ -94,6 +95,7 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "windows.privileges": "memory_privilege",
     "linux.bash": "memory_shell_history",
     "linux.sockstat": "memory_network_connection",
+    "windows.consoles": "memory_shell_history",
 }
 ARTIFACT_PLUGIN_LIMITS = {
     # Per-plugin guard-rails to keep offline execution bounded.
@@ -123,6 +125,11 @@ ARTIFACT_PLUGIN_LIMITS = {
     # without masking a genuine hang. Output was 11.5MiB, above the
     # global 10MB default, hence the explicit max_output_bytes override.
     "linux.sockstat": {"timeout_seconds": 900, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    # windows.consoles walks every conhost.exe process's console buffers
+    # (screen buffer + up to several command-history buffers each) --
+    # bounded the same as linux.bash, the other full-process-memory
+    # history scan.
+    "windows.consoles": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
 }
 
 # Each existing profile name already encodes one capability's intent.
@@ -145,10 +152,10 @@ PROFILE_CAPABILITY = {
     # resolves exclusively through capability_registry -- see
     # resolve_profile_plugins, which falls back to the capability-registry
     # path for any profile absent from PROFILE_PLUGINS. On Linux this
-    # resolves to linux.bash; on Windows it resolves to nothing (no
-    # CapabilityPluginSpec registered for MemoryCapability.SHELL_HISTORY on
-    # PlatformFamily.WINDOWS), which is the correct, honest "unavailable"
-    # outcome rather than a fabricated windows.cmdscan/consoles binding.
+    # resolves to linux.bash; on Windows it resolves to windows.consoles
+    # (conhost.exe console command-history buffers) -- see
+    # capability_registry.py's CapabilityPluginSpec for
+    # MemoryCapability.SHELL_HISTORY on PlatformFamily.WINDOWS.
     "shell_history_basic": MemoryCapability.SHELL_HISTORY,
 }
 
@@ -837,6 +844,8 @@ def _normalize_artifact_payload(
         return normalize_linux_bash(payload, source_plugin=plugin, **common)
     if plugin == "linux.sockstat":
         return normalize_linux_sockstat(payload, source_plugin=plugin, **common)
+    if plugin == "windows.consoles":
+        return normalize_windows_consoles(payload, source_plugin=plugin, **common)
     return {
         "items": [],
         "warnings": [f"unsupported_artifact_plugin:{plugin}"],

@@ -126,8 +126,9 @@ export function MemoryShellHistoryTab({ caseId, evidenceId, runOptions, selected
           <div>
             <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Shell History</h3>
             <p className="mt-1 text-xs text-muted">
-              Interactive shell command history recovered from memory (linux.bash on Linux evidence).
-              Commands without a recovered timestamp remain valid, searchable observations.
+              Interactive shell command history recovered from memory (linux.bash on Linux evidence,
+              windows.consoles on Windows evidence). Commands without a recovered timestamp remain
+              valid, searchable observations.
             </p>
           </div>
           <RunPicker runOptions={runOptions} selectedRunId={selectedRunId} onSelectRunId={(next) => { onSelectRunId(next); setPage(1); }} />

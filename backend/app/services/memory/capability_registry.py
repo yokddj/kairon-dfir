@@ -112,6 +112,11 @@ _WINDOWS: tuple[CapabilityPluginSpec, ...] = (
     CapabilityPluginSpec(MemoryCapability.KERNEL_MODULES, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "windows.info", presentation_family="memory_system_info"),
     CapabilityPluginSpec(MemoryCapability.SUSPICIOUS_REGIONS, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "windows.malfind", presentation_family="memory_suspicious_region"),
     CapabilityPluginSpec(MemoryCapability.SUSPICIOUS_REGIONS, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "windows.vadinfo", presentation_family="memory_vad"),
+    # windows.consoles recovers conhost.exe console command-history
+    # buffers (cmd.exe/PowerShell), the direct Windows analog of
+    # linux.bash below -- both feed the same platform-agnostic
+    # memory_shell_history document type.
+    CapabilityPluginSpec(MemoryCapability.SHELL_HISTORY, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "windows.consoles", depends_on=(MemoryCapability.IDENTIFICATION,), presentation_family="memory_shell_history"),
 )
 
 # ---------------------------------------------------------------------------

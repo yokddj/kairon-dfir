@@ -52,6 +52,20 @@ def _bash_rows() -> list[dict[str, Any]]:
     ]
 
 
+def _consoles_rows() -> list[dict[str, Any]]:
+    """Shaped exactly like volatility3.plugins.windows.consoles.Consoles's
+    real flattened TreeGrid output: one row per (PID, Property, Data)
+    triple, Application always emitted before its sibling Command_* rows
+    for the same history index."""
+    return [
+        {"PID": 4444, "Process": "conhost.exe", "ConsoleInfo": "0x1000", "Property": "_CONSOLE_INFORMATION.HistoryList.CommandHistory_0", "Address": "0x1010", "Data": ""},
+        {"PID": 4444, "Process": "conhost.exe", "ConsoleInfo": "0x1000", "Property": "_CONSOLE_INFORMATION.HistoryList.CommandHistory_0_Application", "Address": "0x1020", "Data": "cmd.exe"},
+        {"PID": 4444, "Process": "conhost.exe", "ConsoleInfo": "0x1000", "Property": "_CONSOLE_INFORMATION.HistoryList.CommandHistory_0_CommandCount", "Address": None, "Data": "2"},
+        {"PID": 4444, "Process": "conhost.exe", "ConsoleInfo": "0x1000", "Property": "_CONSOLE_INFORMATION.HistoryList.CommandHistory_0_Command_0", "Address": "0x1030", "Data": "whoami"},
+        {"PID": 4444, "Process": "conhost.exe", "ConsoleInfo": "0x1000", "Property": "_CONSOLE_INFORMATION.HistoryList.CommandHistory_0_Command_1", "Address": "0x1034", "Data": "net user administrator"},
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Execution dispatch (point 4): A/B distinction between a legitimate
 # zero-row result and a malformed payload that drops rows.
@@ -131,6 +145,155 @@ def test_linux_bash_malformed_payload_is_distinct_from_legitimate_zero() -> None
     # raw_count / dropped_count, even though both produce items=[].
     clean = _normalize_artifact_payload("linux.bash", [], case_id=CASE, evidence_id=EVIDENCE, scan_run_id=RUN, plugin_run_id=f"{RUN}:linux.bash")
     assert (result["raw_count"], result["dropped_count"]) != (clean["raw_count"], clean["dropped_count"])
+
+
+# ---------------------------------------------------------------------------
+# windows.consoles dispatch: the Windows analog of linux.bash, covered
+# separately because its raw shape is a flattened property bag, not
+# one row per command -- see artifact_normalizers.normalize_windows_consoles.
+# ---------------------------------------------------------------------------
+
+
+def test_windows_consoles_no_longer_falls_into_unsupported_artifact_plugin() -> None:
+    result = _normalize_artifact_payload(
+        "windows.consoles",
+        _consoles_rows(),
+        case_id=CASE,
+        evidence_id=EVIDENCE,
+        scan_run_id=RUN,
+        plugin_run_id=f"{RUN}:windows.consoles",
+    )
+    assert not any("unsupported_artifact_plugin" in w for w in result["warnings"])
+    assert result["items"][0]["document_type"] == "memory_shell_history"
+
+
+def test_windows_consoles_extracts_only_command_rows_with_application_as_process_name() -> None:
+    """The flattened payload has 5 rows for one history buffer, but only
+    the 2 Command_* rows become shell-history items; both must carry the
+    Application (cmd.exe) as process_name, not "conhost.exe" (the PID/
+    Process columns identify the console host, not the shell)."""
+    result = _normalize_artifact_payload(
+        "windows.consoles",
+        _consoles_rows(),
+        case_id=CASE,
+        evidence_id=EVIDENCE,
+        scan_run_id=RUN,
+        plugin_run_id=f"{RUN}:windows.consoles",
+    )
+    assert result["accepted_count"] == 2
+    commands = {item["command"] for item in result["items"]}
+    assert commands == {"whoami", "net user administrator"}
+    assert all(item["process_name"] == "cmd.exe" for item in result["items"])
+    assert all(item["pid"] == 4444 for item in result["items"])
+    assert all(item["command_time"] is None for item in result["items"])
+    assert all(item["platform"] == "windows" for item in result["items"])
+
+
+def test_windows_consoles_falls_back_to_conhost_name_when_application_row_missing() -> None:
+    """A Command_* row without a preceding Application row for that PID
+    (e.g. truncated/garbled read) must not crash or be dropped -- it
+    falls back to the raw Process column (conhost.exe) rather than
+    fabricating an application name."""
+    rows = [
+        {"PID": 5555, "Process": "conhost.exe", "Property": "_CONSOLE_INFORMATION.HistoryList.CommandHistory_0_Command_0", "Data": "ipconfig /all"},
+    ]
+    result = _normalize_artifact_payload(
+        "windows.consoles",
+        rows,
+        case_id=CASE,
+        evidence_id=EVIDENCE,
+        scan_run_id=RUN,
+        plugin_run_id=f"{RUN}:windows.consoles",
+    )
+    assert result["accepted_count"] == 1
+    assert result["items"][0]["process_name"] == "conhost.exe"
+
+
+def test_windows_consoles_zero_rows_is_completed_empty_not_an_error() -> None:
+    result = _normalize_artifact_payload(
+        "windows.consoles",
+        [],
+        case_id=CASE,
+        evidence_id=EVIDENCE,
+        scan_run_id=RUN,
+        plugin_run_id=f"{RUN}:windows.consoles",
+    )
+    assert result["raw_count"] == 0
+    assert result["accepted_count"] == 0
+    assert result["items"] == []
+    assert result["warnings"] == []
+
+
+def test_windows_consoles_extracts_commands_from_real_shaped_nested_children() -> None:
+    """windows.consoles is the one plugin here whose real ``-r json``
+    output is a nested tree (Volatility represents its TreeGrid ``level``
+    values as a "__children" list on the parent row), not the flat list
+    every other normalizer's test fixture assumes -- confirmed by running
+    the plugin against a real Windows memory image. A flat-only reader
+    would silently miss every row nested past the top level."""
+    nested = [
+        {
+            "PID": 5864,
+            "Process": "conhost.exe",
+            "Property": "_CONSOLE_INFORMATION",
+            "Data": None,
+            "__children": [
+                {
+                    "PID": 5864,
+                    "Process": "conhost.exe",
+                    "Property": "_CONSOLE_INFORMATION.HistoryList",
+                    "Data": None,
+                    "__children": [
+                        {
+                            "PID": 5864,
+                            "Process": "conhost.exe",
+                            "Property": "_CONSOLE_INFORMATION.HistoryList.CommandHistory_0",
+                            "Data": None,
+                            "__children": [
+                                {"PID": 5864, "Process": "conhost.exe", "Property": "_CONSOLE_INFORMATION.HistoryList.CommandHistory_0_Application", "Data": "powershell.EXE", "__children": []},
+                                {"PID": 5864, "Process": "conhost.exe", "Property": "_CONSOLE_INFORMATION.HistoryList.CommandHistory_0_Command_0", "Data": "Get-Process", "__children": []},
+                                {"PID": 5864, "Process": "conhost.exe", "Property": "_CONSOLE_INFORMATION.HistoryList.CommandHistory_0_Command_1", "Data": "whoami /priv", "__children": []},
+                            ],
+                        },
+                    ],
+                },
+            ],
+        },
+    ]
+    result = _normalize_artifact_payload(
+        "windows.consoles",
+        nested,
+        case_id=CASE,
+        evidence_id=EVIDENCE,
+        scan_run_id=RUN,
+        plugin_run_id=f"{RUN}:windows.consoles",
+    )
+    assert result["accepted_count"] == 2
+    commands = {item["command"] for item in result["items"]}
+    assert commands == {"Get-Process", "whoami /priv"}
+    assert all(item["process_name"] == "powershell.EXE" for item in result["items"])
+    assert all(item["pid"] == 5864 for item in result["items"])
+
+
+def test_windows_consoles_no_console_found_produces_zero_items_not_an_error() -> None:
+    """When a conhost.exe process has no recoverable console info, the
+    plugin emits a single non-Command row (Property=_CONSOLE_INFORMATION,
+    Data="Console Information Not Found") -- this must yield a clean
+    empty result, not a dropped/malformed row."""
+    rows = [{"PID": 6666, "Process": "conhost.exe", "Property": "_CONSOLE_INFORMATION", "Data": "Console Information Not Found"}]
+    result = _normalize_artifact_payload(
+        "windows.consoles",
+        rows,
+        case_id=CASE,
+        evidence_id=EVIDENCE,
+        scan_run_id=RUN,
+        plugin_run_id=f"{RUN}:windows.consoles",
+    )
+    assert result["raw_count"] == 1
+    assert result["accepted_count"] == 0
+    assert result["dropped_count"] == 0
+    assert result["items"] == []
+    assert result["warnings"] == []
 
 
 # ---------------------------------------------------------------------------
