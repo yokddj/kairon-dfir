@@ -54,7 +54,7 @@ from app.ingest.browser.sqlite_chromium import parse_chromium_history_sqlite
 from app.ingest.browser.sqlite_firefox import parse_firefox_places_sqlite
 from app.ingest.archive import ArchiveExtractionError, copy_folder, extract_archive, inventory_folder, write_tree_metadata
 from app.ingest.csv_json import list_generic_artifacts
-from app.ingest.detector import detect_evidence_type
+from app.ingest.detector import EVIDENCE_TYPES_WITHOUT_INGEST_SUPPORT, detect_evidence_type
 from app.ingest.host_detection import detect_host_from_artifacts, detect_host_from_velociraptor_collection, normalize_hostname
 from app.ingest.host_facts_extraction import extract_host_fact_documents
 from app.ingest.host_user_extraction import extract_host_user_documents
@@ -6287,6 +6287,18 @@ def ingest_evidence(evidence_id: str) -> None:
             artifacts_processed=artifacts_processed,
         )
 
+        # Evidence types the platform recognises but has no real ingest path
+        # for. Without this they finish as a clean "completed" with zero indexed
+        # events, and an analyst reading that concludes the evidence held no
+        # relevant activity -- when the truth is it was never parsed. Remove an
+        # entry here as soon as its parser actually lands.
+        evidence_type_label = str(getattr(evidence.evidence_type, "value", evidence.evidence_type) or "unknown")
+        if indexed_count == 0 and evidence_type_label.lower() in EVIDENCE_TYPES_WITHOUT_INGEST_SUPPORT:
+            errors = [
+                *errors,
+                f"Evidence type '{evidence_type_label}' is recognised but has no parser in this build, so no events "
+                "were extracted. Treat this evidence as NOT analysed rather than as containing nothing.",
+            ]
         if errors and indexed_count > 0:
             evidence.ingest_status = IngestStatus.completed_with_errors
         elif errors:

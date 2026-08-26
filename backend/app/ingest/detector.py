@@ -79,6 +79,15 @@ VELOCI_ARTIFACT_MAP = {
 }
 
 
+# Evidence types detect_evidence_type() recognises but for which no ingest path
+# exists yet: they are accepted, classified, and then yield zero events. That is
+# reported explicitly at the end of ingestion (see app/workers/tasks.py) rather
+# than finishing as a silent success, because "recognised but never parsed" and
+# "parsed and found nothing" mean opposite things to an investigation.
+# Delete an entry the moment its parser lands.
+EVIDENCE_TYPES_WITHOUT_INGEST_SUPPORT: frozenset[str] = frozenset({"pcap"})
+
+
 def _structured_srum_parser(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix == ".jsonl":
