@@ -263,6 +263,13 @@ EVENT_TERMS_FILTERS = {
     "event_category": "event.category",
     "severity": "event.severity",
 }
+# Params that only have a meaning for parsed events: Finding and memory-artifact
+# rows have no "parser" concept, so when one of these is set, those rows can
+# never genuinely match it. Without this, a scope="all" search silently mixes
+# in every finding/memory row regardless of the filter, making the filter look
+# broken (it *is* applied to events -- the mixed-in rows just never had the
+# attribute to begin with).
+EVENT_ONLY_PARSER_PARAMS = ("parser", "parser_backend", "backend_variant")
 EVENT_SORTS = {
     "timestamp_desc": [{"@timestamp": {"order": "desc", "missing": "_last"}}, {"event_id": {"order": "desc", "missing": "_last"}}],
     "timestamp_asc": [{"@timestamp": {"order": "asc", "missing": "_last"}}, {"event_id": {"order": "asc", "missing": "_last"}}],
@@ -1579,14 +1586,18 @@ def search_case_v2(db: Session, case_id: str, params: dict[str, Any]) -> dict[st
     fetch_limit = min(offset + page_size, OPENSEARCH_RESULT_WINDOW_LIMIT)
     if wants_non_memory_source(params):
         params = {**params}
+    event_only_filter_active = any(_dedupe(params.get(key)) for key in EVENT_ONLY_PARSER_PARAMS)
     event_total, event_rows, event_warnings, _ = search_events_v2(case_id, {**params, "page": 1, "cursor": None, "page_size": fetch_limit, "_page_size_limit": fetch_limit}, db=db)
-    finding_total, finding_rows, finding_full_rows, finding_warnings = search_findings_v2(db, case_id, {**params, "page": 1, "cursor": None, "page_size": fetch_limit, "_page_size_limit": fetch_limit}, limit_override=fetch_limit)
+    if event_only_filter_active:
+        finding_total, finding_rows, finding_full_rows, finding_warnings = 0, [], [], []
+    else:
+        finding_total, finding_rows, finding_full_rows, finding_warnings = search_findings_v2(db, case_id, {**params, "page": 1, "cursor": None, "page_size": fetch_limit, "_page_size_limit": fetch_limit}, limit_override=fetch_limit)
     warnings.extend(event_warnings)
     warnings.extend(finding_warnings)
     event_rows = [add_event_source_provenance(row) for row in event_rows]
     event_rows = _filter_source_category(event_rows, params)
     disk_rows = [*event_rows, *finding_rows]
-    if not wants_non_memory_source(params):
+    if not wants_non_memory_source(params) and not event_only_filter_active:
         memory = memory_search_results(db, case_id, {**params, "page": 1, "page_size": fetch_limit})
         memory_rows = memory.get("results") or []
         warnings.extend(memory.get("warnings") or [])

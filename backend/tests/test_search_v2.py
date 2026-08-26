@@ -102,6 +102,47 @@ def test_search_findings_scope_filters_status_and_severity():
     assert result["results"][0]["id"] == "high-new"
 
 
+def test_search_scope_all_excludes_findings_and_memory_when_parser_filter_set(monkeypatch: pytest.MonkeyPatch):
+    # Findings and memory-artifact rows have no "artifact.parser" concept, so
+    # a scope="all" search filtered by parser must not mix them in unfiltered
+    # -- otherwise the parser filter looks broken because the result set is
+    # dominated by rows the filter never applied to. See search_service.py's
+    # EVENT_ONLY_PARSER_PARAMS comment for the full root cause.
+    calls: dict[str, int] = {"findings": 0, "memory": 0}
+
+    def fake_search_events_v2(case_id, params, db=None):
+        return 1, [{"id": "evt-1", "kind": "event", "timestamp": "2026-05-15T10:00:00Z", "risk_score": 10, "raw": {}}], [], {}
+
+    def fake_search_findings_v2(db, case_id, params, limit_override=None):
+        calls["findings"] += 1
+        return 1, [{"id": "finding-1", "kind": "finding", "timestamp": "2026-05-15T10:00:00Z", "risk_score": 90}], [_finding()], []
+
+    def fake_memory_search_results(db, case_id, params):
+        calls["memory"] += 1
+        return {"results": [{"id": "mem-1", "kind": "memory", "timestamp": "2026-05-15T10:00:00Z", "risk_score": 5}], "warnings": []}
+
+    monkeypatch.setattr(search_service, "search_events_v2", fake_search_events_v2)
+    monkeypatch.setattr(search_service, "search_findings_v2", fake_search_findings_v2)
+    monkeypatch.setattr(search_service, "memory_search_results", fake_memory_search_results)
+
+    db = _FakeDb([])
+    params = search_service.build_search_v2_params(scope="all", parser=["powershell_history"], page_size=50)
+    result = search_service.search_case_v2(db, "case-1", params)
+
+    assert calls["findings"] == 0
+    assert calls["memory"] == 0
+    assert [row["id"] for row in result["results"]] == ["evt-1"]
+    assert result["total"] == 1
+
+    calls["findings"] = calls["memory"] = 0
+    params_no_parser = search_service.build_search_v2_params(scope="all", page_size=50)
+    result_no_parser = search_service.search_case_v2(db, "case-1", params_no_parser)
+
+    assert calls["findings"] == 1
+    assert calls["memory"] == 1
+    assert {row["id"] for row in result_no_parser["results"]} == {"evt-1", "finding-1", "mem-1"}
+
+
 def test_search_related_to_finding_not_found():
     with pytest.raises(Exception):
         search_service.search_related_to_finding(_FakeDb([]), "case-1", "missing")
