@@ -249,6 +249,18 @@ def search_artifact_documents(
                         {"term": {"connection_state.keyword": value}},
                     ], "minimum_should_match": 1}})
                     continue
+                if key == "process_name":
+                    # The frontend's "Process name" box (network/modules/
+                    # handles) is a free-text search input, not a value
+                    # picker -- an exact term match made it silently
+                    # return zero rows for any partial or differently-cased
+                    # text, which reads as "the search doesn't work" even
+                    # though the process is really there. Case-insensitive
+                    # substring match instead, consistent with every other
+                    # free-text search box in the app.
+                    needle = value.strip().replace("*", "").replace("?", "")
+                    query_filters.append({"wildcard": {"process_name": {"value": f"*{needle}*", "case_insensitive": True}}})
+                    continue
                 query_key = key
                 field = query_key if query_key in _EXACT_TERM_FIELDS else f"{query_key}.keyword"
                 query_filters.append({"term": {field: value}})
