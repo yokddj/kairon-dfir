@@ -869,6 +869,20 @@ describe("Search page", () => {
     expect(within(menu).queryByRole("button", { name: /exclude source file/i })).not.toBeInTheDocument();
   });
 
+  it("does not offer an execution story for a non-process event with only incidental process context", async () => {
+    // evt-dns is a DNS query event: its event_type is "dns_query", not
+    // "process_start", but raw.process.name is still populated (the process
+    // that issued the query). That incidental process context must not be
+    // enough to promise a process tree that doesn't exist.
+    renderPage();
+    const row = await screen.findByTestId("search-row-event-evt-dns");
+    await userEvent.click(within(row).getByRole("button", { name: "Actions" }));
+    const menu = screen.getByTestId("search-actions-menu-evt-dns");
+    expect(await within(menu).findByRole("button", { name: /open details/i })).toBeInTheDocument();
+    expect(within(menu).queryByRole("button", { name: /open execution story/i })).not.toBeInTheDocument();
+    expect(within(menu).queryByRole("button", { name: /open advanced process graph/i })).not.toBeInTheDocument();
+  });
+
   it("search row can mark an event suspicious", async () => {
     renderPage();
     const row = await screen.findByTestId("search-row-event-evt-process");

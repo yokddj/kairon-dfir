@@ -367,6 +367,29 @@ def test_incident_story_target_classifies_exact_process():
     assert target["story_primary_action"] == "Open Execution Story"
 
 
+def test_incident_story_target_does_not_treat_generic_windows_event_as_exact_process():
+    # A Service Control Manager 7045 "service_created" record shares the
+    # same broad artifact_type ("windows_event") as an actual process
+    # creation event (4688/Sysmon 1), and its summary can still mention a
+    # ".exe" path (the service's ImagePath) -- neither should be enough to
+    # promise a process tree that doesn't exist. See timeline_service.py's
+    # _classify_story_target comment for the full root cause.
+    item = {
+        "source": "marked_event",
+        "source_type": "marked_event",
+        "artifact_type": "windows_event",
+        "event_type": "service_created",
+        "event_id": "evt-2",
+        "execution_story_url": "/cases/case-1/w/execution/stories?story_event_id=evt-2",
+        "title": "Service DumpIt_x64 installed",
+        "summary": "ImagePath=C:\\Windows\\system32\\Drivers\\DumpIt_x64.exe",
+    }
+
+    target = timeline_service._classify_story_target(item)
+
+    assert target["story_target_type"] != "exact_process"
+
+
 def test_incident_story_target_classifies_defender_file_and_movement():
     defender = timeline_service._classify_story_target({"source_type": "defender_detection", "artifact_type": "defender", "title": "Rubeus detected"})
     file_item = timeline_service._classify_story_target({"artifact_type": "mft", "title": "sample.iso", "summary": "C:\\Users\\usera\\Downloads\\sample.iso"})

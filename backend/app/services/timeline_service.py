@@ -525,6 +525,7 @@ def _incident_item(
     phase: str = "unknown",
     phase_confidence: str = "low",
     artifact_type: str | None = None,
+    event_type: str | None = None,
     severity: str | None = None,
     risk_score: int | None = None,
     event_id: str | None = None,
@@ -551,6 +552,7 @@ def _incident_item(
         "source": source,
         "source_type": source_type,
         "artifact_type": artifact_type,
+        "event_type": event_type,
         "severity": severity,
         "risk_score": int(risk_score or 0),
         "event_id": event_id,
@@ -608,6 +610,7 @@ def _timeline_provenance_badge(item: dict[str, Any]) -> str:
 def _classify_story_target(item: dict[str, Any]) -> dict[str, str]:
     source_type = str(item.get("source_type") or item.get("source") or "").lower()
     artifact_type = str(item.get("artifact_type") or "").lower()
+    event_type = str(item.get("event_type") or "").lower()
     phase = str(item.get("phase") or "").lower()
     text = " ".join(str(item.get(key) or "") for key in ("title", "summary", "query", "notes")).lower()
     has_event = bool(item.get("event_id"))
@@ -628,9 +631,17 @@ def _classify_story_target(item: dict[str, Any]) -> dict[str, str]:
             "story_target_reason": "multi-host movement or remote execution indicator",
             "story_primary_action": "Open Movement Story",
         }
-    processish_artifacts = {"process", "windows_event", "command_history", "powershell", "sysmon", "security"}
+    # "windows_event" covers every evtx-sourced record (service installs,
+    # logons, Kerberos ticket requests, ...), not just process creation --
+    # matching on it alone routed non-process events (e.g. a Service
+    # Control Manager 7045 "service_created" record whose summary happens
+    # to mention a ".exe" path) straight to "exact_process", landing users
+    # on a process tree with nothing to draw. Require the underlying
+    # event's own type to actually be a process-creation event instead.
+    processish_artifacts = {"process", "command_history", "powershell", "sysmon", "security"}
+    process_creation_event_types = {"process_start"}
     command_tokens = ("powershell", "cmd", ".ps1", ".exe", "-ep", "-nop", "noexit", "rundll32")
-    if has_story and has_event and (artifact_type in processish_artifacts or has_command or phase == "execution") and any(token in text for token in command_tokens):
+    if has_story and has_event and (event_type in process_creation_event_types or artifact_type in processish_artifacts or has_command or phase == "execution") and any(token in text for token in command_tokens):
         return {
             "story_target_type": "exact_process",
             "story_target_confidence": "high",
@@ -701,6 +712,7 @@ def _event_to_incident_item(case_id: str, row: dict[str, Any], *, source: str, p
         phase=inferred_phase,
         phase_confidence=confidence,
         artifact_type=str(row.get("artifact_type") or (((raw.get("artifact") or {}) if isinstance(raw.get("artifact"), dict) else {}).get("type") or "")) or None,
+        event_type=str(row.get("event_type") or (((raw.get("event") or {}) if isinstance(raw.get("event"), dict) else {}).get("type") or "")) or None,
         severity=str(row.get("severity") or raw.get("severity") or "") or None,
         risk_score=int(row.get("risk_score") or raw.get("risk_score") or 0),
         event_id=event_id or None,
@@ -1173,6 +1185,7 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
                     phase=phase,
                     phase_confidence="medium",
                     artifact_type=str(row.get("artifact_type") or "memory_timeline_event"),
+                    event_type=str(row.get("event_type") or "") or None,
                     severity="info",
                     risk_score=int(row.get("risk_score") or 0),
                     event_id=str(row.get("id") or ""),
