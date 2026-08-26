@@ -68,6 +68,11 @@ INCIDENT_PHASES = [
 _INCIDENT_DRAFT_CACHE: dict[str, tuple[datetime, dict[str, Any]]] = {}
 _INCIDENT_DRAFT_CACHE_SECONDS = 300
 INCIDENT_TIMELINE_BUILDER_VERSION = "v2"
+# How many findings / analyst markings a single incident timeline build pulls.
+# Whenever one of these caps is actually hit the build emits a warning, because
+# an incident timeline that quietly drops the analyst's own curated evidence is
+# worse than a slow one.
+INCIDENT_TIMELINE_SOURCE_LIMIT = 500
 
 DEFAULT_INCIDENT_TIMELINE_SOURCES = [
     "marked_events",
@@ -1041,13 +1046,22 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
     generation_started = time.perf_counter()
 
     if "findings" in source_set:
+        # Fetch one past the cap purely to detect truncation: this list is
+        # ordered oldest-first, so a silent cap drops the most recent findings
+        # -- exactly the ones an investigation is usually converging on.
         rows = (
             db.query(Finding)
             .filter(Finding.case_id == case_id)
             .order_by(Finding.time_start.asc().nullslast(), Finding.created_at.asc())
-            .limit(100)
+            .limit(INCIDENT_TIMELINE_SOURCE_LIMIT + 1)
             .all()
         )
+        if len(rows) > INCIDENT_TIMELINE_SOURCE_LIMIT:
+            rows = rows[:INCIDENT_TIMELINE_SOURCE_LIMIT]
+            warnings.append(
+                f"Only the first {INCIDENT_TIMELINE_SOURCE_LIMIT} findings (oldest first) were used to build this timeline; "
+                "more exist in this case. Review Findings directly to see the rest."
+            )
         for finding in rows:
             text = " ".join(
                 str(value or "")
@@ -1083,9 +1097,15 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
             db.query(EventMarking)
             .filter(EventMarking.case_id == case_id, EventMarking.status.in_(["suspicious", "important"]))
             .order_by(EventMarking.timestamp.asc().nullslast(), EventMarking.created_at.asc())
-            .limit(100)
+            .limit(INCIDENT_TIMELINE_SOURCE_LIMIT + 1)
             .all()
         )
+        if len(markings) > INCIDENT_TIMELINE_SOURCE_LIMIT:
+            markings = markings[:INCIDENT_TIMELINE_SOURCE_LIMIT]
+            warnings.append(
+                f"Only the first {INCIDENT_TIMELINE_SOURCE_LIMIT} marked events (oldest first) were used to build this timeline; "
+                "you have marked more than that in this case."
+            )
         event_map = _event_map_for_ids(case_id, [marking.event_id for marking in markings])
         for marking in markings:
             event = event_map.get(marking.event_id) or {}
@@ -1210,7 +1230,17 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
     if phase_filter:
         items = [item for item in items if str(item.get("phase") or "").strip().lower() in phase_filter]
     items.sort(key=lambda item: (_parse_time(str(item.get("timestamp") or "")) or datetime.max.replace(tzinfo=UTC), str(item.get("host") or ""), str(item.get("phase") or "")))
+    # "total" below is computed after this slice, so without an explicit signal
+    # a caller cannot tell a case that genuinely produced max_items items from
+    # one where everything past max_items was dropped. Capture the real
+    # candidate count first and say so.
+    candidate_total = len(items)
     items = items[:max_items]
+    if candidate_total > len(items):
+        warnings.append(
+            f"Showing {len(items)} of {candidate_total} timeline candidates (max_items={max_items}). "
+            "Raise max_items or narrow by host/phase to review the rest."
+        )
     payload = {
         "case_id": case_id,
         "case_mode": case_mode,
@@ -1223,6 +1253,7 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
             "builder_version": INCIDENT_TIMELINE_BUILDER_VERSION,
         },
         "total": len(items),
+        "total_candidates": candidate_total,
         "items": items,
         "hosts": sorted({str(item.get("host") or "unknown") for item in items}),
         "phases": [phase for phase in INCIDENT_PHASES if any(item.get("phase") == phase for item in items)],
