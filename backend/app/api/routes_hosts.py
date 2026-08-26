@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db, utc_now
 from app.models.case import Case
 from app.models.evidence import Evidence
+from app.services.host_coverage import build_case_host_coverage
 from app.services.host_identity import build_case_host_candidates, create_manual_case_host, delete_case_host, get_case_host_deletion_preview, get_case_hosts, get_host_identity_audit, merge_hosts, rename_canonical_host, split_alias
 
 
@@ -144,6 +145,13 @@ def update_case_host(case_id: str, host_id: str, payload: RenameHostRequest, db:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"case_id": case_id, "host": host}
+
+
+@router.get("/coverage")
+def get_case_host_coverage(case_id: str, db: Session = Depends(get_db)) -> dict:
+    """Which artefact families each host actually has, and which it lacks."""
+    _ensure_case(db, case_id)
+    return build_case_host_coverage(db, case_id)
 
 
 @router.get("/{host_id}/deletion-preview")

@@ -2519,6 +2519,20 @@ export type CaseHostAuditEntry = {
   created_at?: string | null;
 };
 
+export type CaseHostCoverageResponse = {
+  case_id: string;
+  expected_families: string[];
+  hosts: Array<{
+    host_id: string;
+    host: string;
+    event_count?: number | null;
+    families: Record<string, number>;
+    missing_families: string[];
+    missing_critical_families: string[];
+  }>;
+  warnings: string[];
+};
+
 export type CaseHostsResponse = {
   case_id: string;
   hosts: CaseContextHostSummary[];
@@ -5832,6 +5846,7 @@ export const api = {
   getCaseContext: (caseId: string) => request<CaseContextResponse>(`/cases/${caseId}/context`),
   getCaseCapabilities: (caseId: string) => request<CaseCapabilitiesResponse>(`/cases/${caseId}/capabilities`),
   getCaseHosts: (caseId: string) => request<CaseHostsResponse>(`/cases/${caseId}/hosts`),
+  getCaseHostCoverage: (caseId: string) => request<CaseHostCoverageResponse>(`/cases/${caseId}/hosts/coverage`),
   getCaseHostFacts: (caseId: string, params: { host_id?: string; evidence_id?: string; fact_type?: string }) => {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
