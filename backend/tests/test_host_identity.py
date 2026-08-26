@@ -25,6 +25,18 @@ EVIDENCE_ID = "b1111111-1111-4111-8111-111111111111"
 EVIDENCE_ID_2 = "b2222222-2222-4222-8222-222222222222"
 
 
+@pytest.fixture(autouse=True)
+def _clear_host_attribution_cache():
+    # Many tests here reuse the same fixed CASE_ID against a fresh
+    # in-memory DB each time; _host_attribution_snapshot's cache is
+    # keyed by case_id alone (a real, stable, globally-unique key in
+    # production), so without this it would leak one test's fixture
+    # data into the next test using the same CASE_ID.
+    host_identity._host_attribution_cache.clear()
+    yield
+    host_identity._host_attribution_cache.clear()
+
+
 def _session(database_url: str = "sqlite:///:memory:"):
     engine = create_engine(database_url, future=True, connect_args={"check_same_thread": False})
     Base.metadata.create_all(bind=engine)
@@ -516,3 +528,48 @@ def test_event_matches_host_filter_uses_alias_expansion(monkeypatch) -> None:
     assert host_identity.event_matches_host_filter(db, CASE_ID, event, "pc02.example.corp") is True
     assert host_identity.event_matches_host_filter(db, CASE_ID, event, "pc02") is True
     assert host_identity.event_matches_host_filter(db, CASE_ID, event, "other-host") is False
+
+
+def test_host_attribution_snapshot_is_cached_within_ttl(monkeypatch) -> None:
+    """Regression guard for a real, live-profiled performance bug:
+    build_host_attribution runs a genuine OpenSearch aggregation +
+    per-candidate sampling pass (confirmed ~9s on a real 4-evidence,
+    ~300k-event case) and used to be recomputed on every single call
+    to resolve_canonical_host -- including once per finding inside a
+    host-filtered findings search before that call was hoisted out of
+    the loop (see search_service.search_findings_v2's own N+1 fix).
+    _host_attribution_snapshot must serve repeat calls for the same
+    case within the TTL from cache, not recompute."""
+    calls = {"count": 0}
+
+    def fake_build_host_attribution(case_id, *, evidences, findings, top_host_counts):
+        calls["count"] += 1
+        return {"hosts": []}
+
+    monkeypatch.setattr("app.services.host_attribution.build_host_attribution", fake_build_host_attribution)
+    db = _session()
+
+    host_identity._host_attribution_snapshot(db, CASE_ID)
+    host_identity._host_attribution_snapshot(db, CASE_ID)
+    host_identity._host_attribution_snapshot(db, CASE_ID)
+
+    assert calls["count"] == 1, f"build_host_attribution should be cached across repeat calls for the same case, was called {calls['count']} times"
+
+
+def test_host_attribution_snapshot_does_not_cache_explicit_subsets(monkeypatch) -> None:
+    """Passing explicit evidences/findings (a scoped subset, not the
+    whole-case default) must never be served from or written to the
+    whole-case cache."""
+    calls = {"count": 0}
+
+    def fake_build_host_attribution(case_id, *, evidences, findings, top_host_counts):
+        calls["count"] += 1
+        return {"hosts": []}
+
+    monkeypatch.setattr("app.services.host_attribution.build_host_attribution", fake_build_host_attribution)
+    db = _session()
+
+    host_identity._host_attribution_snapshot(db, CASE_ID, evidences=[], findings=[])
+    host_identity._host_attribution_snapshot(db, CASE_ID, evidences=[], findings=[])
+
+    assert calls["count"] == 2, "explicit evidences/findings subsets must not be cached"

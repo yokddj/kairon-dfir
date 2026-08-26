@@ -5,6 +5,7 @@ from copy import deepcopy
 from datetime import UTC, datetime
 import logging
 import threading
+import time
 from typing import Any
 
 from sqlalchemy import case as sql_case
@@ -550,6 +551,24 @@ def _serialize_case_host(host: CaseHost, *, counts: dict[str, Any] | None = None
     }
 
 
+# build_host_attribution (via this snapshot) runs a real OpenSearch
+# aggregation + sampling pass per evidence per candidate host value --
+# genuinely expensive (confirmed via live profiling: ~9s for a single
+# call on a 4-evidence, ~300k-event case), not something to recompute on
+# every call. It is also invariant on a much slower timescale than a
+# single request: it only actually changes when new evidence/findings
+# land, so a short TTL cache trades a few seconds of staleness for
+# avoiding a repeat of that same expensive pass moments later -- e.g.
+# resolve_canonical_host() (host_identity.py) triggers this on every
+# call that needs to resolve a host filter, and used to do so once per
+# finding in a host-filtered search (see search_service.search_findings_v2's
+# own fix for that N+1) before that call was hoisted out of the loop;
+# even hoisted to one call per search, back-to-back searches for the
+# same case would otherwise still each pay this cost fresh.
+_HOST_ATTRIBUTION_CACHE_TTL_SECONDS = 30.0
+_host_attribution_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
 def _host_attribution_snapshot(
     db: Session,
     case_id: str,
@@ -559,9 +578,25 @@ def _host_attribution_snapshot(
 ) -> dict[str, Any]:
     from app.services.host_attribution import build_host_attribution
 
+    # Only cache the default (whole-case) snapshot -- a caller passing
+    # explicit evidences/findings subsets wants that exact subset, not a
+    # stale whole-case result.
+    cacheable = evidences is None and findings is None
+    if cacheable:
+        cached = _host_attribution_cache.get(case_id)
+        if cached is not None:
+            expires_at, value = cached
+            if expires_at >= time.monotonic():
+                return deepcopy(value)
+            _host_attribution_cache.pop(case_id, None)
+
     evidence_rows = evidences if evidences is not None else db.query(Evidence).filter(Evidence.case_id == case_id).all()
     finding_rows = findings if findings is not None else db.query(Finding).filter(Finding.case_id == case_id).all()
-    return build_host_attribution(case_id, evidences=evidence_rows, findings=finding_rows, top_host_counts=None)
+    result = build_host_attribution(case_id, evidences=evidence_rows, findings=finding_rows, top_host_counts=None)
+
+    if cacheable:
+        _host_attribution_cache[case_id] = (time.monotonic() + _HOST_ATTRIBUTION_CACHE_TTL_SECONDS, deepcopy(result))
+    return result
 
 
 def _observed_host_counts(db: Session, case_id: str) -> dict[str, dict[str, Any]]:
