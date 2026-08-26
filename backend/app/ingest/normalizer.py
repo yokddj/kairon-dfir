@@ -661,8 +661,56 @@ def build_search_text(document: dict) -> str:
         text = str(value).strip()
         if text:
             values.append(text)
+    values.extend(_windows_event_data_search_values(document))
     return " | ".join(values)[:8192]
 
+
+
+# windows.event_data is mapped with "enabled": false so that the hundreds of
+# distinct keys Windows uses across event types cannot blow the index field
+# limit. The side effect was that none of it was searchable: WorkstationName,
+# TargetUserName, IpAddress, ServiceName and friends were visible in the event
+# detail panel yet returned zero hits when searched, which reads as "that value
+# does not exist in this case". Folding the values into search_text restores
+# searchability at no mapping cost.
+_EVENT_DATA_SKIP_KEYS = frozenset({"raw_xml", "payload_columns", "event_data_summary"})
+_EVENT_DATA_PLACEHOLDERS = frozenset({"-", "--", "0x0", "0", "n/a", "null", "none", "%%1833", "%%1843"})
+# Long enough for a full service ImagePath or process command line -- the most
+# forensically valuable content in event_data -- while still excluding raw_xml
+# style blobs. Set at 160 initially, which silently dropped exactly the command
+# lines an analyst most wants to grep for.
+_EVENT_DATA_MAX_VALUE_CHARS = 512
+_EVENT_DATA_MAX_VALUES = 60
+
+
+def _windows_event_data_search_values(document: dict) -> list[str]:
+    """Searchable values from windows.event_data, bounded and de-noised."""
+    windows = document.get("windows")
+    if not isinstance(windows, dict):
+        return []
+    event_data = windows.get("event_data")
+    if not isinstance(event_data, dict):
+        return []
+    seen: set[str] = set()
+    values: list[str] = []
+    for key, value in event_data.items():
+        if len(values) >= _EVENT_DATA_MAX_VALUES:
+            break
+        if str(key).strip().lower() in _EVENT_DATA_SKIP_KEYS:
+            continue
+        if isinstance(value, (dict, list)):
+            continue
+        text = str(value or "").strip()
+        if not text or text.lower() in _EVENT_DATA_PLACEHOLDERS:
+            continue
+        if len(text) > _EVENT_DATA_MAX_VALUE_CHARS:
+            continue
+        lowered = text.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        values.append(text)
+    return values
 
 def base_document(case_id: str, evidence_id: str, artifact_id: str, row: dict, artifact_meta: dict) -> dict:
     timestamp, precision = parse_timestamp(first_value(row, TIMESTAMP_CANDIDATES))
