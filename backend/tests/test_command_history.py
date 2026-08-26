@@ -313,7 +313,11 @@ def test_candidate_query_includes_linux_shell_history(monkeypatch) -> None:
 
     should = captured["body"]["query"]["bool"]["should"]
     assert {"term": {"artifact.type": "linux_shell_history"}} in should
-    q_clause = [clause for clause in should if "simple_query_string" in clause][0]
+    # The q text filter must be a required "must" clause, not another
+    # "should" option -- see _fetch_candidate_events's comment on why an
+    # OR'd text filter is a no-op for narrowing the fetch.
+    must = captured["body"]["query"]["bool"]["must"]
+    q_clause = [clause for clause in must if "simple_query_string" in clause][0]
     assert "linux.command" in q_clause["simple_query_string"]["fields"]
 
 

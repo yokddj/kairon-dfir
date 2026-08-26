@@ -186,8 +186,22 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> list[dict[s
         {"term": {"artifact.type": "linux_shell_history"}},
     ]
     q = str(params.get("q") or "").strip()
+    # When q is set, it MUST narrow the fetch itself, not just ride along as
+    # one more "should" option -- should-clauses only need ONE match, and
+    # the generic candidate-detection clauses above (exists:
+    # process.command_line, windows.event_id in {...}, etc.) already match
+    # nearly every process-creation event regardless of its text. Appending
+    # the text query there made it a no-op for narrowing: the fetch still
+    # pulled the same COMMAND_FETCH_LIMIT-capped firehose of ALL candidate
+    # events (oldest first), and a case with more candidate events than the
+    # cap could push a real q-matching command (e.g. a "net user ... /add"
+    # account creation on an attack date well after the cap's cutoff) out
+    # before _apply_filters ever got to text-match it. A required `must`
+    # clause instead shrinks the ES-side result set to actual matches, so
+    # the cap is applied to the filtered set, not the unfiltered one.
+    must = []
     if q:
-        should.append({"simple_query_string": {"query": q, "fields": ["process.command_line", "powershell.command", "powershell.command_preview", "task.command", "linux.command", "search_text"], "default_operator": "and"}})
+        must.append({"simple_query_string": {"query": q, "fields": ["process.command_line", "powershell.command", "powershell.command_preview", "task.command", "linux.command", "search_text"], "default_operator": "and"}})
     index = get_events_index(case_id)
     events: list[dict[str, Any]] = []
     # Undated candidates (PSReadLine/bash history and similar append-only
@@ -199,12 +213,12 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> list[dict[s
     # their own fetch budget instead of being silently truncated away.
     dated_body = {
         "size": COMMAND_FETCH_LIMIT,
-        "query": {"bool": {"filter": [*filters, {"exists": {"field": "@timestamp"}}], "should": should, "minimum_should_match": 1}},
+        "query": {"bool": {"filter": [*filters, {"exists": {"field": "@timestamp"}}], "should": should, "must": must, "minimum_should_match": 1}},
         "sort": [{"@timestamp": {"order": "asc"}}, {"event_id": {"order": "asc", "missing": "_last"}}],
     }
     undated_body = {
         "size": COMMAND_FETCH_LIMIT,
-        "query": {"bool": {"filter": [*filters, {"bool": {"must_not": [{"exists": {"field": "@timestamp"}}]}}], "should": should, "minimum_should_match": 1}},
+        "query": {"bool": {"filter": [*filters, {"bool": {"must_not": [{"exists": {"field": "@timestamp"}}]}}], "should": should, "must": must, "minimum_should_match": 1}},
     }
     for body in (dated_body, undated_body):
         result = search_documents(index, body)
