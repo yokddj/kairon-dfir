@@ -1021,6 +1021,11 @@ class TestEvidenceIdFieldQuery:
         assert "scan_run_id.keyword" in run_filter["term"]
 
     def test_search_artifact_documents_uses_exact_network_filter_fields(self) -> None:
+        """protocol/local_address/state stay exact-term (dropdown-style
+        values); process_name is deliberately NOT exact -- it is a
+        free-text search box in the UI (network/modules/handles), so an
+        exact term match made any partial or differently-cased text
+        silently return zero rows. See the wildcard assertion below."""
         from app.services.memory.artifact_indexing import search_artifact_documents
 
         fake = _CaptureSearchClient(items=[], total=0)
@@ -1037,8 +1042,51 @@ class TestEvidenceIdFieldQuery:
         filters = fake.last_body["query"]["bool"]["filter"]
         assert {"term": {"protocol": "TCPv4"}} in filters
         assert {"term": {"local_address": "192.168.20.41"}} in filters
-        assert {"term": {"process_name": "svchost.exe"}} in filters
+        assert {"wildcard": {"process_name": {"value": "*svchost.exe*", "case_insensitive": True}}} in filters
         assert {"bool": {"should": [{"term": {"connection_state": "ESTABLISHED"}}, {"term": {"connection_state.keyword": "ESTABLISHED"}}], "minimum_should_match": 1}} in filters
+
+    def test_search_artifact_documents_process_name_filter_is_case_insensitive_substring(self) -> None:
+        """Regression guard for the exact bug this fix addresses: typing
+        a partial or differently-cased process name in the Network/
+        Modules/Handles search box must not silently return zero rows."""
+        from app.services.memory.artifact_indexing import search_artifact_documents
+
+        fake = _CaptureSearchClient(items=[], total=0)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            search_artifact_documents(
+                case_id="case-1",
+                document_type="memory_network_connection",
+                run_id="run-1",
+                evidence_id="ev-1",
+                filters={"process_name": "SvcHost"},
+            )
+        assert fake.last_body is not None
+        filters = fake.last_body["query"]["bool"]["filter"]
+        assert {"wildcard": {"process_name": {"value": "*SvcHost*", "case_insensitive": True}}} in filters
+        # An exact term match must not also be present -- that was the bug.
+        assert not any("term" in f and "process_name" in f.get("term", {}) for f in filters)
+
+    def test_search_artifact_documents_process_name_filter_strips_wildcard_metacharacters(self) -> None:
+        """User-typed ``*``/``?`` must not be interpreted as wildcard
+        syntax -- they are stripped so a literal search for e.g.
+        "svc*host" behaves as a plain substring search, not an injected
+        wildcard pattern."""
+        from app.services.memory.artifact_indexing import search_artifact_documents
+
+        fake = _CaptureSearchClient(items=[], total=0)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            search_artifact_documents(
+                case_id="case-1",
+                document_type="memory_network_connection",
+                run_id="run-1",
+                evidence_id="ev-1",
+                filters={"process_name": "svc*host?.exe"},
+            )
+        assert fake.last_body is not None
+        filters = fake.last_body["query"]["bool"]["filter"]
+        assert {"wildcard": {"process_name": {"value": "*svchost.exe*", "case_insensitive": True}}} in filters
 
     # ------------------------------------------------------------------
     # Integration: full active-result pipeline returns items
