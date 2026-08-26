@@ -8767,6 +8767,51 @@ def test_ensure_case_index_raises_typed_error_on_create_index_block(monkeypatch:
         ensure_case_index("case-1")
 
 
+def test_ensure_case_index_put_mapping_backfill_covers_every_create_time_field(monkeypatch: pytest.MonkeyPatch) -> None:
+    # ensure_case_index has two independent mapping bodies: indices.create()
+    # (used only the first time an index is made) and indices.put_mapping()
+    # (used on every later call, to backfill fields added to create() after
+    # the index already existed). A field added only to create() silently
+    # never reaches indices created before that point -- dynamic:false drops
+    # unmapped fields from the searchable index (they stay in _source, so
+    # regular document fetches still see them, but exists/term/match
+    # queries against them find nothing). This regression test would have
+    # caught exactly that gap for "powershell" (command/line_number/etc.
+    # were added to create() but never backfilled via put_mapping, so
+    # PSReadLine console-history commands never appeared in Command
+    # History's exists:powershell.command query on any pre-existing case).
+    from app.core import opensearch as opensearch_module
+
+    captured: dict[str, dict] = {}
+
+    class _Indices:
+        def __init__(self, exists_value: bool):
+            self._exists_value = exists_value
+
+        def exists(self, **kwargs):
+            return self._exists_value
+
+        def create(self, **kwargs):
+            captured["create"] = kwargs["body"]["mappings"]["properties"]
+
+        def put_mapping(self, **kwargs):
+            captured["put_mapping"] = kwargs["body"]["properties"]
+
+    class _Client:
+        def __init__(self, exists_value: bool):
+            self.indices = _Indices(exists_value)
+
+    monkeypatch.setattr(opensearch_module, "get_opensearch_client", lambda timeout_seconds=None: _Client(False))
+    opensearch_module.ensure_case_index("case-create")
+    monkeypatch.setattr(opensearch_module, "get_opensearch_client", lambda timeout_seconds=None: _Client(True))
+    opensearch_module.ensure_case_index("case-existing")
+
+    create_powershell_fields = set(captured["create"]["powershell"]["properties"].keys())
+    put_mapping_powershell_fields = set(captured["put_mapping"]["powershell"]["properties"].keys())
+    missing = create_powershell_fields - put_mapping_powershell_fields
+    assert not missing, f"Fields present in create() but never backfilled via put_mapping: {missing}"
+
+
 def test_investigation_summary_no_index(monkeypatch) -> None:
     class DummyQuery:
         def filter(self, *args, **kwargs):  # noqa: ANN002, ANN003

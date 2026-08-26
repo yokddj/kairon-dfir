@@ -4664,6 +4664,7 @@ export type CommandHistoryItem = {
   parser?: string | null;
   windows_event_id?: string | number | null;
   source_file?: string | null;
+  line_number?: number | null;
   user?: string | null;
   process: {
     name?: string | null;

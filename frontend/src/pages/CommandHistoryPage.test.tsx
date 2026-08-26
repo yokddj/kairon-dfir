@@ -230,6 +230,32 @@ describe("CommandHistoryPage", () => {
     expect(screen.getByTestId("location")).toHaveTextContent("sort_order=asc");
   });
 
+  it("shows the source-file line number as an ordering hint for undated PSReadLine commands", async () => {
+    const psreadlineResponse = {
+      ...response,
+      total: 1,
+      items: [
+        {
+          ...response.items[0],
+          id: "psreadline-cmd-1",
+          timestamp: null,
+          timestamp_status: "missing",
+          command: "Add-ObjectACL -PrincipalIdentity helpdesk -Rights DCSync",
+          source_type: "psreadline",
+          source_file: "C/Users/Administrator.MEGACORP/AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt",
+          line_number: 37,
+        },
+      ],
+    };
+    getCommandHistoryMock.mockResolvedValueOnce(psreadlineResponse);
+
+    renderPage();
+
+    expect(await screen.findByText("Add-ObjectACL -PrincipalIdentity helpdesk -Rights DCSync")).toBeInTheDocument();
+    expect(screen.getByText("No timestamp")).toBeInTheDocument();
+    expect(screen.getByText("line 37 in file")).toBeInTheDocument();
+  });
+
   it("renders Linux shell history rows with artifact provenance in the existing table", async () => {
     const linuxResponse = {
       ...response,

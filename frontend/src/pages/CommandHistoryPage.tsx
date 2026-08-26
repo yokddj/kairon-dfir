@@ -377,6 +377,11 @@ export default function CommandHistoryPage() {
                   <tr className="align-top hover:bg-abyss/50">
                     <td className="whitespace-normal px-3 py-3 text-ink" title={item.timestamp ?? ""}>
                       {formatTimestamp(item.timestamp, effectiveTimezone)}
+                      {!item.timestamp && item.line_number != null ? (
+                        <div className="text-xs text-muted" title="This source has no per-command timestamp. Sorted by its position (line number) within the source history file, which reflects real execution order.">
+                          line {item.line_number} in file
+                        </div>
+                      ) : null}
                     </td>
                     <td className="px-3 py-3 text-ink" title={`Confidence: ${item.classification_confidence || item.confidence}`}>
                       <div className="truncate">{familyLabel(item)}</div>

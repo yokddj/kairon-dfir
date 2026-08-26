@@ -463,6 +463,64 @@ def test_command_history_timestamp_sort_asc_desc_and_source_doc_id(monkeypatch) 
     assert [item["source_event_id"] for item in desc["items"]] == ["event-new", "event-old"]
 
 
+def _psreadline_hit(doc_id: str, *, command: str, line_number: int, host: str = "HOSTA", user: str = "usera", source_file: str = "C/Users/usera/AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt") -> dict:
+    return {
+        "_id": doc_id,
+        "_source": {
+            "case_id": "case-1",
+            "evidence_id": "ev-1",
+            "@timestamp": None,
+            "artifact": {"type": "powershell"},
+            "host": {"name": host},
+            "user": {"name": user},
+            "powershell": {"command": command, "line_number": line_number},
+            "source_file": source_file,
+        },
+    }
+
+
+def test_undated_psreadline_commands_are_ordered_by_line_number_not_alphabetically(monkeypatch) -> None:
+    # ConsoleHost_history.txt has no per-command timestamp -- only line
+    # position reflects real execution order (it's append-only). Sorting
+    # alphabetically instead (the old behavior) actively scrambles the
+    # sequence: "zzz" would sort after "aaa" regardless of which ran first.
+    hits = [
+        _psreadline_hit("event-3", command="zzz-ran-third", line_number=3),
+        _psreadline_hit("event-1", command="aaa-ran-first", line_number=1),
+        _psreadline_hit("event-2", command="mmm-ran-second", line_number=2),
+    ]
+    monkeypatch.setattr(command_history, "get_events_index", lambda case_id: f"events-{case_id}")
+    monkeypatch.setattr(command_history, "search_documents", lambda *_args, **_kwargs: {"hits": {"hits": hits}})
+    # get_command_history also merges in memory-sourced commands via a real
+    # DB session when no source_category filter narrows to disk-only; stub
+    # it out so this test exercises only the disk-event sort logic under
+    # test, matching the pre-existing gap tracked for the sibling sort test
+    # in known_failures.txt (real DB session + non-UUID test case_id).
+    monkeypatch.setattr(command_history, "memory_command_history", lambda *_args, **_kwargs: {"items": []})
+
+    result = command_history.get_command_history("case-1", {"sort_by": "timestamp", "sort_order": "asc", "page_size": 10})
+
+    assert [item["command"] for item in result["items"]] == ["aaa-ran-first", "mmm-ran-second", "zzz-ran-third"]
+    assert [item["line_number"] for item in result["items"]] == [1, 2, 3]
+
+
+def test_undated_psreadline_commands_group_by_source_file_before_line_number(monkeypatch) -> None:
+    hits = [
+        _psreadline_hit("event-b1", command="b-file-first", line_number=1, user="userb", source_file="C/Users/userb/.../ConsoleHost_history.txt"),
+        _psreadline_hit("event-a2", command="a-file-second", line_number=2, user="usera", source_file="C/Users/usera/.../ConsoleHost_history.txt"),
+        _psreadline_hit("event-a1", command="a-file-first", line_number=1, user="usera", source_file="C/Users/usera/.../ConsoleHost_history.txt"),
+    ]
+    monkeypatch.setattr(command_history, "get_events_index", lambda case_id: f"events-{case_id}")
+    monkeypatch.setattr(command_history, "search_documents", lambda *_args, **_kwargs: {"hits": {"hits": hits}})
+    monkeypatch.setattr(command_history, "memory_command_history", lambda *_args, **_kwargs: {"items": []})
+
+    result = command_history.get_command_history("case-1", {"sort_by": "timestamp", "sort_order": "asc", "page_size": 10})
+
+    # Same host ("HOSTA" for all three); each source file's own commands
+    # must stay in line-number order and not interleave with the other file.
+    assert [item["command"] for item in result["items"]] == ["a-file-first", "a-file-second", "b-file-first"]
+
+
 def test_command_history_filters_preserve_sort_count(monkeypatch) -> None:
     hits = [
         _hit("event-new", ts="2024-03-22T12:30:00Z", command="powershell.exe -File C:\\new.ps1", pid=2000),

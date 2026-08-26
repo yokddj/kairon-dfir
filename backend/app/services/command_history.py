@@ -99,7 +99,25 @@ def get_command_history(case_id: str, params: dict[str, Any]) -> dict[str, Any]:
     dated = [item for item in commands if item.get("timestamp")]
     undated = [item for item in commands if not item.get("timestamp")]
     dated.sort(key=lambda item: (_safe_dt(item.get("timestamp")), item.get("command_normalized") or ""), reverse=reverse)
-    commands = dated + sorted(undated, key=lambda item: item.get("command_normalized") or "")
+    # PSReadLine's ConsoleHost_history.txt (and similar append-only shell
+    # history files) carries no per-command timestamp at all -- only a
+    # whole-file mtime. Sorting these "undated" commands alphabetically (as
+    # before) actively scrambles them: it looks like an order but has
+    # nothing to do with execution sequence. line_number reflects the line's
+    # position in the source file, which for an append-only history file IS
+    # the true execution order -- so group by (host, source_file) and sort
+    # by line_number within each file to reconstruct real order wherever
+    # possible, instead of pretending alphabetical order means anything.
+    undated.sort(
+        key=lambda item: (
+            item.get("host") or "",
+            item.get("source_file") or "",
+            item.get("line_number") if item.get("line_number") is not None else float("inf"),
+            item.get("command_normalized") or "",
+        ),
+        reverse=reverse,
+    )
+    commands = dated + undated
     total = len(commands)
     start = (page - 1) * page_size
     items = commands[start:start + page_size]
@@ -170,17 +188,30 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> list[dict[s
     q = str(params.get("q") or "").strip()
     if q:
         should.append({"simple_query_string": {"query": q, "fields": ["process.command_line", "powershell.command", "powershell.command_preview", "task.command", "linux.command", "search_text"], "default_operator": "and"}})
-    body = {
-        "size": COMMAND_FETCH_LIMIT,
-        "query": {"bool": {"filter": filters, "should": should, "minimum_should_match": 1}},
-        "sort": [{"@timestamp": {"order": "asc", "missing": "_last"}}, {"event_id": {"order": "asc", "missing": "_last"}}],
-    }
-    result = search_documents(get_events_index(case_id), body)
+    index = get_events_index(case_id)
     events: list[dict[str, Any]] = []
-    for hit in result.get("hits", {}).get("hits", []):
-        source = dict(hit.get("_source") or {})
-        source["id"] = source.get("id") or hit.get("_id")
-        events.append(source)
+    # Undated candidates (PSReadLine/bash history and similar append-only
+    # shell history sources have no per-command timestamp at all) sort dead
+    # last under "missing": "_last" -- sharing one size-capped query with
+    # dated events means any case with more dated candidate events than the
+    # cap starves out every undated command before it's ever fetched. Two
+    # independently capped queries guarantee undated commands always get
+    # their own fetch budget instead of being silently truncated away.
+    dated_body = {
+        "size": COMMAND_FETCH_LIMIT,
+        "query": {"bool": {"filter": [*filters, {"exists": {"field": "@timestamp"}}], "should": should, "minimum_should_match": 1}},
+        "sort": [{"@timestamp": {"order": "asc"}}, {"event_id": {"order": "asc", "missing": "_last"}}],
+    }
+    undated_body = {
+        "size": COMMAND_FETCH_LIMIT,
+        "query": {"bool": {"filter": [*filters, {"bool": {"must_not": [{"exists": {"field": "@timestamp"}}]}}], "should": should, "minimum_should_match": 1}},
+    }
+    for body in (dated_body, undated_body):
+        result = search_documents(index, body)
+        for hit in result.get("hits", {}).get("hits", []):
+            source = dict(hit.get("_source") or {})
+            source["id"] = source.get("id") or hit.get("_id")
+            events.append(source)
     return events
 
 
@@ -252,6 +283,7 @@ def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, 
             "source_event_id": event_doc_id,
             "windows_event_id": windows_event_id,
             "source_file": event.get("source_file"),
+            "line_number": _to_int(powershell.get("line_number"), None),
             "user": user_value,
             "process": {
                 "name": process.get("name"),
