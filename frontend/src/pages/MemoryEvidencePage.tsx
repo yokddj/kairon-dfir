@@ -370,10 +370,11 @@ export default function MemoryEvidencePage() {
     },
   });
   const symbolPreparation = symbolPreparationQuery.data ?? null;
-  // Both panels are diagnostics: only worth auto-opening when something
-  // actually needs the analyst's attention, mirroring the same "ready ==
-  // nothing to show" convention MemoryEvidenceHeader already uses for its
-  // own inline banner (showPreparationInfo).
+  // Both panels are diagnostics: stays collapsed by default (the analyst
+  // opens it deliberately) but flags itself with a warning marker when
+  // something needs attention, mirroring the same "ready == nothing to
+  // show" convention MemoryEvidenceHeader already uses for its own inline
+  // banner (showPreparationInfo) -- just without auto-expanding.
   const symbolsNeedAttention = Boolean(symbolReadiness && symbolReadiness.state !== "cached");
   const preparationState = symbolPreparation?.effective_state || symbolPreparation?.preparation_state || symbolPreparation?.ui_state;
   const preparationNeedsAttention = Boolean(symbolPreparation && preparationState !== "ready");
@@ -586,10 +587,16 @@ export default function MemoryEvidencePage() {
       ) : null}
 
       {evidence && (symbolReadiness || symbolPreparation) ? (
-        <details className="rounded-[28px] border border-line bg-panel/60 shadow-panel" open={symbolsNeedAttention || preparationNeedsAttention} data-testid="memory-evidence-readiness-details">
+        <details className="rounded-[28px] border border-line bg-panel/60 shadow-panel" data-testid="memory-evidence-readiness-details">
           <summary className="flex cursor-pointer select-none items-center justify-between gap-3 p-5 text-sm text-ink">
             <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Evidence readiness</span>
-            <span className="text-xs text-muted">{symbolsNeedAttention || preparationNeedsAttention ? "Needs attention" : "Symbols cached · ready for analysis"}</span>
+            {symbolsNeedAttention || preparationNeedsAttention ? (
+              <span className="flex items-center gap-1.5 text-xs text-amber" data-testid="memory-evidence-readiness-attention-flag">
+                <span aria-hidden="true">⚠</span> Needs attention
+              </span>
+            ) : (
+              <span className="text-xs text-muted">Symbols cached · ready for analysis</span>
+            )}
           </summary>
           <div className="space-y-6 px-5 pb-5">
             {symbolReadiness ? (

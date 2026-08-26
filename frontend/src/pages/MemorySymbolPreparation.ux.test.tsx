@@ -513,6 +513,8 @@ describe("Automatic Windows symbol preparation", () => {
     const evidence = makeEvidence();
     const preparation = makePreparation({ ui_state: "preparing" });
     setup(buildApiMock(evidence, preparation, makeReadiness()));
+    const details = await screen.findByTestId("memory-evidence-readiness-details");
+    await userEvent.click(within(details).getByText("Evidence readiness"));
     const card = await screen.findByTestId("memory-preparation-card");
     expect(card).toBeVisible();
     const title = within(card).getByTestId("memory-preparation-title");
@@ -523,6 +525,8 @@ describe("Automatic Windows symbol preparation", () => {
     const evidence = makeEvidence();
     const preparation = makePreparation({ ui_state: "preparing" });
     setup(buildApiMock(evidence, preparation, makeReadiness()));
+    const details = await screen.findByTestId("memory-evidence-readiness-details");
+    await userEvent.click(within(details).getByText("Evidence readiness"));
     const card = await screen.findByTestId("memory-preparation-card");
     expect(card).toBeVisible();
   });
