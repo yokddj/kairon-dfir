@@ -7,7 +7,7 @@ def _doc(event_data: dict) -> dict:
     return {
         "event": {"message": "Successful logon"},
         "host": {"name": "DC02"},
-        "user": {"name": "administrat0r"},
+        "user": {"name": "attacker01"},
         "windows": {"event_id": 4624, "event_data": event_data},
     }
 
@@ -19,9 +19,9 @@ def test_event_data_values_are_searchable() -> None:
     reads as "that value does not exist in this case" -- the exact failure that
     hid an attacker's machine name during a real investigation.
     """
-    text = build_search_text(_doc({"WorkstationName": "ubuntu", "TargetUserName": "administrat0r", "IpAddress": "192.168.20.42"}))
+    text = build_search_text(_doc({"WorkstationName": "ubuntu", "TargetUserName": "attacker01", "IpAddress": "10.10.10.42"}))
     assert "ubuntu" in text
-    assert "192.168.20.42" in text
+    assert "10.10.10.42" in text
 
 
 def test_placeholder_values_are_not_folded_in() -> None:
@@ -52,7 +52,7 @@ def test_existing_fields_still_present() -> None:
     """Regression guard: folding event_data in must not displace what
     search_text already carried."""
     text = build_search_text(_doc({"WorkstationName": "ubuntu"}))
-    assert "DC02" in text and "administrat0r" in text and "Successful logon" in text
+    assert "DC02" in text and "attacker01" in text and "Successful logon" in text
 
 
 def test_command_lines_are_long_enough_to_survive() -> None:
