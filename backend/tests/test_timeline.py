@@ -712,3 +712,90 @@ def test_no_cross_case_leakage_for_bookmark_delete():
     )
     with pytest.raises(HTTPException):
         timeline_service.delete_key_event(_FakeDb(bookmarks=[bookmark]), "case-1", "bookmark-1")
+
+
+def test_incident_timeline_warns_when_finding_cap_truncates(monkeypatch):
+    """An incident timeline that quietly drops the analyst's own curated
+    evidence is worse than a slow one. Both source queries are ordered
+    oldest-first, so silently hitting the cap discards the most RECENT
+    findings -- the ones an investigation is usually converging on."""
+    timeline_service._INCIDENT_DRAFT_CACHE.clear()
+    limit = timeline_service.INCIDENT_TIMELINE_SOURCE_LIMIT
+    findings = [
+        Finding(
+            id=f"finding-{i}",
+            case_id="case-1",
+            title=f"Finding {i}",
+            severity=FindingSeverity.high,
+            status=FindingStatus.new,
+            finding_type="lateral_movement",
+            risk_score=50,
+            related_hosts=["HOSTA"],
+        )
+        for i in range(limit + 5)
+    ]
+    monkeypatch.setattr(timeline_service, "get_command_history", lambda *_a, **_k: {"items": []})
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (0, [], [], {}))
+
+    response = timeline_service.build_incident_timeline_draft(
+        _FakeDb(findings=findings), "case-1", {"sources": ["findings"], "max_items": 10}
+    )
+
+    assert any("findings" in w and str(limit) in w for w in response["warnings"]), (
+        f"a truncated finding set must warn, got: {response['warnings']}"
+    )
+
+
+def test_incident_timeline_does_not_warn_below_the_cap(monkeypatch):
+    timeline_service._INCIDENT_DRAFT_CACHE.clear()
+    findings = [
+        Finding(
+            id=f"finding-{i}",
+            case_id="case-1",
+            title=f"Finding {i}",
+            severity=FindingSeverity.high,
+            status=FindingStatus.new,
+            finding_type="lateral_movement",
+            risk_score=50,
+            related_hosts=["HOSTA"],
+        )
+        for i in range(3)
+    ]
+    monkeypatch.setattr(timeline_service, "get_command_history", lambda *_a, **_k: {"items": []})
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (0, [], [], {}))
+
+    response = timeline_service.build_incident_timeline_draft(
+        _FakeDb(findings=findings), "case-1", {"sources": ["findings"], "max_items": 10}
+    )
+
+    assert not [w for w in response["warnings"] if "were used to build this timeline" in w]
+
+
+def test_incident_timeline_reports_how_many_candidates_were_cut_by_max_items(monkeypatch):
+    """`total` is computed after the max_items slice, so on its own it cannot
+    distinguish "this case produced exactly max_items" from "everything past
+    max_items was dropped". The build must say which one happened."""
+    timeline_service._INCIDENT_DRAFT_CACHE.clear()
+    findings = [
+        Finding(
+            id=f"finding-{i}",
+            case_id="case-1",
+            title=f"Finding {i}",
+            severity=FindingSeverity.high,
+            status=FindingStatus.new,
+            finding_type="lateral_movement",
+            risk_score=50,
+            related_hosts=[f"HOST{i}"],
+        )
+        for i in range(25)
+    ]
+    monkeypatch.setattr(timeline_service, "get_command_history", lambda *_a, **_k: {"items": []})
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (0, [], [], {}))
+
+    response = timeline_service.build_incident_timeline_draft(
+        _FakeDb(findings=findings), "case-1", {"sources": ["findings"], "max_items": 10}
+    )
+
+    assert response["total"] == 10
+    assert response["total_candidates"] == 25
+    assert any("10 of 25" in w for w in response["warnings"]), response["warnings"]

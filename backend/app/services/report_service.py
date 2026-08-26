@@ -1182,6 +1182,12 @@ def _build_evidence_summary_payload(
         if include_detections
         else 0
     )
+    # detection_rows is a capped sample kept only for the "top detections"
+    # listing below. The breakdowns must NOT be derived from it: presenting a
+    # by_severity that sums to the sample size next to a true total_detections
+    # produces a report whose own numbers contradict each other, which in a
+    # forensic deliverable is worse than omitting the breakdown. Aggregate
+    # those over every row in the database instead.
     detection_rows = (
         db.query(DetectionResult)
         .filter(DetectionResult.evidence_id == evidence.id)
@@ -1191,12 +1197,30 @@ def _build_evidence_summary_payload(
         if include_detections
         else []
     )
+    severity_counts: dict[str, int] = {}
+    rule_counts: dict[str, int] = {}
+    if include_detections:
+        for severity, count in (
+            db.query(DetectionResult.severity, func.count(DetectionResult.id))
+            .filter(DetectionResult.evidence_id == evidence.id)
+            .group_by(DetectionResult.severity)
+            .all()
+        ):
+            key = str(severity or "unknown").strip().lower() or "unknown"
+            severity_counts[key] = severity_counts.get(key, 0) + int(count or 0)
+        for rule_name, count in (
+            db.query(DetectionResult.rule_name, func.count(DetectionResult.id))
+            .filter(DetectionResult.evidence_id == evidence.id)
+            .group_by(DetectionResult.rule_name)
+            .order_by(func.count(DetectionResult.id).desc())
+            .limit(10)
+            .all()
+        ):
+            rule_counts[str(rule_name or "unknown").strip() or "unknown"] = int(count or 0)
     detections_summary = {
         "total_detections": total_detections,
-        "by_severity": dict(
-            sorted(Counter(str(item.severity or "unknown").strip().lower() or "unknown" for item in detection_rows).items())
-        ),
-        "by_rule": dict(sorted(Counter(str(item.rule_name or "unknown").strip() or "unknown" for item in detection_rows).most_common(10))),
+        "by_severity": dict(sorted(severity_counts.items())),
+        "by_rule": rule_counts,
         "latest_rule_run_ids": [
             run_id
             for run_id in dict.fromkeys(str((item.raw or {}).get("rule_run_id") or "").strip() for item in detection_rows)
