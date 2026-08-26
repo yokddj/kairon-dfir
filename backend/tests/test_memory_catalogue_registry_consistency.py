@@ -134,8 +134,8 @@ def test_network_basic_supported_os_families_includes_linux() -> None:
     assert set(_supported_os_families("network_basic")) == {"windows", "linux"}
 
 
-def test_shell_history_basic_supported_os_families_is_linux_only() -> None:
-    assert set(_supported_os_families("shell_history_basic")) == {"linux"}
+def test_shell_history_basic_supported_os_families_includes_windows_and_linux() -> None:
+    assert set(_supported_os_families("shell_history_basic")) == {"windows", "linux"}
 
 
 # ---------------------------------------------------------------------------
@@ -203,7 +203,25 @@ def test_shell_history_basic_catalogue_shows_linux_bash_on_linux_evidence(db: Se
     assert item["available"] is True
 
 
-def test_shell_history_basic_catalogue_stays_unavailable_on_windows_evidence(db: Session) -> None:
+def test_shell_history_basic_catalogue_shows_windows_consoles_on_windows_evidence(db: Session) -> None:
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id)
+    windows_plan = _plan(PlatformFamily.WINDOWS, eligible=(MemoryCapability.SHELL_HISTORY,), selected=("windows.consoles",))
+    settings = _settings_with_process_profiles_enabled()
+    with patch("app.services.memory.counts.get_memory_family_count", return_value={"total": 0}), \
+         patch("app.services.memory.catalogue.build_memory_analysis_plan", return_value=windows_plan), \
+         patch("app.services.memory.catalogue.get_settings", return_value=settings):
+        catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
+    item = next(i for i in catalogue if i["profile"] == "shell_history_basic")
+    assert item["plugins"] == ["windows.consoles"]
+    assert item["available"] is True
+
+
+def test_shell_history_basic_catalogue_stays_unavailable_when_evidence_plan_finds_nothing_eligible(db: Session) -> None:
+    """Not a structural Windows gap -- capability_registry does have a
+    windows.consoles producer for MemoryCapability.SHELL_HISTORY (see the
+    test above). This covers a per-evidence plan that itself resolved no
+    eligible capability."""
     case = _make_case(db)
     ev = _make_evidence(db, case.id)
     windows_plan = _plan(PlatformFamily.WINDOWS, eligible=(), selected=())
@@ -215,6 +233,3 @@ def test_shell_history_basic_catalogue_stays_unavailable_on_windows_evidence(db:
     item = next(i for i in catalogue if i["profile"] == "shell_history_basic")
     assert item["available"] is False
     assert item["plugins"] == []
-    # No fabricated Windows producer -- capability_registry has no
-    # CapabilityPluginSpec for MemoryCapability.SHELL_HISTORY on Windows.
-    assert "windows.cmdscan" not in item["plugins"]

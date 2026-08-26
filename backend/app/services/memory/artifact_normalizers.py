@@ -1206,9 +1206,9 @@ def normalize_windows_privileges(
 #   raw and never fabricated.  The schema intentionally has no user,
 #   cwd, tty, session, or parent-pid fields: linux.bash does not report
 #   them, and none of the other Linux plugins provide a validated way to
-#   derive them.  Kept platform-agnostic (a future windows.cmdscan /
-#   windows.consoles producer would emit the same document_type with
-#   command_time left null).
+#   derive them.  Kept platform-agnostic: normalize_windows_consoles
+#   below (the Windows producer, windows.consoles) emits the same
+#   document_type with command_time left null for the same reason.
 # ---------------------------------------------------------------------------
 
 
@@ -1260,6 +1260,146 @@ def normalize_linux_bash(
             "process_name": process_name,
             "command": command,
             "command_time": command_time,
+            "source_plugin": source_plugin,
+            "source_record_index": index,
+            "confidence": "reported_by_plugin",
+            "provenance": _provenance(
+                case_id=case_id,
+                evidence_id=evidence_id,
+                scan_run_id=scan_run_id,
+                plugin_run_id=plugin_run_id,
+                source_plugin=source_plugin,
+            ),
+            "normalization_version": NORMALIZATION_VERSION,
+            "unresolved_process_reference": pid is None,
+        }
+        items.append(doc)
+        accepted += 1
+    return {
+        "items": items,
+        "warnings": warnings,
+        "raw_count": raw_count,
+        "accepted_count": accepted,
+        "dropped_count": dropped,
+        "conflicts": 0,
+        "normalization_version": NORMALIZATION_VERSION,
+    }
+
+
+# ---------------------------------------------------------------------------
+# shell_history -> memory_shell_history (Windows)
+#   windows.consoles walks every conhost.exe process's console buffers and
+#   flattens the recovered _CONSOLE_INFORMATION structures into one row
+#   per (PID, Property, Data) triple -- there is no one-row-per-command
+#   shape the way linux.bash has. Recovered typed commands are the rows
+#   whose Property matches
+#   "..._HistoryList.CommandHistory_{index}_Command_{cmd_index}"; the
+#   application that owned that history buffer (cmd.exe, powershell.exe,
+#   ...) is a sibling row, "..._CommandHistory_{index}_Application",
+#   which the plugin always emits before its Command_* rows for the same
+#   index (verified against volatility3.framework.plugins.windows.
+#   consoles.Consoles._generator). This is tracked as "last Application
+#   seen for this PID" while scanning rows in order rather than a full
+#   index-keyed state machine, since the plugin's own emission order
+#   already guarantees Application precedes its Commands.
+#   PID/Process here identify conhost.exe itself (the plugin scans only
+#   conhost.exe processes), so process_name is deliberately overridden
+#   with the recovered Application when available -- that is the actual
+#   shell the analyst cares about, not the console host. No timestamp is
+#   ever available from this plugin, matching linux.bash's contract:
+#   command_time is always None here, never fabricated.
+# ---------------------------------------------------------------------------
+
+_CONSOLE_COMMAND_PROPERTY = re.compile(r"_Command_\d+$")
+_CONSOLE_APPLICATION_PROPERTY = re.compile(r"_Application$")
+
+
+def _flatten_console_rows(payload: Any) -> list[dict[str, Any]]:
+    """windows.consoles is the one plugin in this registry whose TreeGrid
+    uses real ``level`` nesting (PID -> HistoryList -> CommandHistory_N ->
+    Command_N) rather than the flat level-0-only rows every other plugin
+    here emits.  Volatility's ``-r json`` renderer represents that as a
+    ``__children`` list on the parent row instead of sibling flat rows
+    (verified against a real evidence run: a CommandHistory_N node's
+    Application/Command_* properties arrive nested under its
+    "__children", not alongside it) -- so a plain ``_rows()`` walk would
+    silently miss every command past the top level.  This walks the tree
+    at any depth and returns every node as a flat row; safe to reuse for
+    already-flat plugin output too, since a row with no "__children" key
+    is simply appended as-is.
+    """
+    flat: list[dict[str, Any]] = []
+
+    def walk(nodes: list[dict[str, Any]]) -> None:
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            children = node.get("__children")
+            flat.append({key: value for key, value in node.items() if key != "__children"})
+            if isinstance(children, list):
+                walk([child for child in children if isinstance(child, dict)])
+
+    walk(_rows(payload))
+    return flat
+
+
+def normalize_windows_consoles(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "windows.consoles",
+    max_records: int = 200000,
+) -> dict[str, Any]:
+    rows = _flatten_console_rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    raw_count = len(rows)
+    dropped = 0
+    accepted = 0
+    last_application_by_pid: dict[int, str] = {}
+    for index, row in enumerate(rows):
+        if accepted >= max_records:
+            warnings.append("consoles_max_records_reached")
+            dropped += len(rows) - index
+            break
+        pid = _int_or_none(_lookup(row, "PID", "Pid", "pid"))
+        conhost_process_name = _str_or_none(_lookup(row, "Process", "process_name"), MAX_NAME_LENGTH)
+        property_name = _str_or_none(_lookup(row, "Property", "property"), MAX_OBJECT_NAME_LENGTH) or ""
+        data = _lookup(row, "Data", "data")
+        if pid is not None and _CONSOLE_APPLICATION_PROPERTY.search(property_name):
+            application = _str_or_none(data, MAX_NAME_LENGTH)
+            if application:
+                last_application_by_pid[pid] = application
+            continue
+        if not _CONSOLE_COMMAND_PROPERTY.search(property_name):
+            continue
+        command = _str_or_none(data, MAX_OBJECT_NAME_LENGTH)
+        if command:
+            command = _scrub_paths(command)
+        if not command:
+            dropped += 1
+            warnings.append("consoles_row_missing_command")
+            continue
+        if pid is None:
+            warnings.append("consoles_row_missing_pid")
+        process_name = (pid is not None and last_application_by_pid.get(pid)) or conhost_process_name
+        identity = _identity_pid_offset(pid, property_name, command, index)
+        doc = {
+            "document_id": _document_id(prefix="memory_shell_history", case_id=case_id, run_id=scan_run_id, identity=identity),
+            "document_type": "memory_shell_history",
+            "case_id": case_id,
+            "evidence_id": evidence_id,
+            "scan_run_id": scan_run_id,
+            "plugin_run_id": plugin_run_id,
+            "platform": "windows",
+            "pid": pid,
+            "process_entity_id": None,
+            "process_name": process_name,
+            "command": command,
+            "command_time": None,
             "source_plugin": source_plugin,
             "source_record_index": index,
             "confidence": "reported_by_plugin",

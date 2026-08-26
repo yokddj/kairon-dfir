@@ -126,6 +126,7 @@ ALLOWED_VOLATILITY_PLUGINS = {
     "windows.vadinfo",
     "windows.filescan",
     "windows.dumpfiles",
+    "windows.consoles",
     "linux.pslist",
     "linux.pstree",
     "linux.sockstat",
@@ -411,6 +412,7 @@ VOLATILITY_PLUGIN_CLASSES = {
     "windows.netstat": ("volatility3.plugins.windows.netstat", "NetStat"),
     "windows.malfind": ("volatility3.plugins.windows.malfind", "Malfind"),
     "windows.vadinfo": ("volatility3.plugins.windows.vadinfo", "VadInfo"),
+    "windows.consoles": ("volatility3.plugins.windows.consoles", "Consoles"),
     # Linux plugins -- verified present in the installed Volatility 3
     # framework (volatility3.framework.plugins.linux, merged into the
     # volatility3.plugins.linux namespace package at import time) as of

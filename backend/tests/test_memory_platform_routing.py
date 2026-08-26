@@ -384,11 +384,11 @@ def test_resolved_plugins_for_capability_reproduces_legacy_profile_plugins_exact
     it must not silently change behavior for the platform that already
     worked.
 
-    shell_history_basic is deliberately excluded: it has no
-    PROFILE_PLUGINS entry at all (Linux Memory Shell History Phase 2) --
-    it resolves exclusively through capability_registry, and Windows has
-    no CapabilityPluginSpec for MemoryCapability.SHELL_HISTORY, so the
-    correct Windows answer is an empty list, not a PROFILE_PLUGINS
+    shell_history_basic is deliberately excluded (skipped by the
+    ``profile not in PROFILE_PLUGINS`` guard below): it has no
+    PROFILE_PLUGINS entry at all (Memory Shell History Phase 2) -- it
+    resolves exclusively through capability_registry (linux.bash on
+    Linux, windows.consoles on Windows), never a PROFILE_PLUGINS
     lookup."""
     for profile, capability in PROFILE_CAPABILITY.items():
         if profile not in PROFILE_PLUGINS:
@@ -397,10 +397,13 @@ def test_resolved_plugins_for_capability_reproduces_legacy_profile_plugins_exact
         assert resolved == PROFILE_PLUGINS[profile], profile
 
 
-def test_shell_history_basic_has_no_windows_producer() -> None:
+def test_shell_history_basic_windows_producer_is_windows_consoles() -> None:
+    """windows.info is prepended: SHELL_HISTORY depends_on IDENTIFICATION,
+    the same dependency-expansion PROCESSES already uses so windows.info
+    (which warms the symbol/ISF cache) always runs first."""
     from app.services.memory.capability_registry import MemoryCapability
 
-    assert resolved_plugins_for_capability(PlatformFamily.WINDOWS, MemoryCapability.SHELL_HISTORY) == []
+    assert resolved_plugins_for_capability(PlatformFamily.WINDOWS, MemoryCapability.SHELL_HISTORY) == ["windows.info", "windows.consoles"]
 
 
 # ---------------------------------------------------------------------------
