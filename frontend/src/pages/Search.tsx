@@ -2304,9 +2304,16 @@ export default function Search() {
           </div>
         ) : null}
 
-        <details className="mt-4 rounded-2xl border border-line bg-abyss/60" open={hasMoreFiltersActive} data-testid="search-more-filters">
+        <details className="mt-4 rounded-2xl border border-line bg-abyss/60" data-testid="search-more-filters">
           <summary className="flex cursor-pointer select-none items-center justify-between gap-3 px-4 py-3 text-sm text-ink">
-            <span>More filters</span>
+            <span className="flex items-center gap-2">
+              More filters
+              {hasMoreFiltersActive ? (
+                <span className="rounded-full border border-accent/30 bg-accent/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.14em] text-accent" data-testid="search-more-filters-active-flag">
+                  Active
+                </span>
+              ) : null}
+            </span>
             <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">Scope &middot; Artifact type &middot; Host &middot; Capability &middot; Risk &middot; Markings &middot; Advanced</span>
           </summary>
           <div className="space-y-4 px-4 pb-4">
