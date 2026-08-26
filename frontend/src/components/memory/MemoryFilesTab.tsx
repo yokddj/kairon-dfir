@@ -1,11 +1,145 @@
 import { type FormEvent, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type MemoryFileExtraction, api } from "../../api/client";
+import { MemoryPaginationControls } from "./MemoryPaginationControls";
 
 type Props = {
   caseId: string;
   evidenceId?: string;
 };
+
+type FileObjectRow = {
+  document_id?: string;
+  name?: string | null;
+  offset?: string | null;
+};
+
+function FileBrowser({ caseId, evidenceId, onPickPath }: { caseId: string; evidenceId: string; onPickPath: (path: string) => void }) {
+  const [page, setPage] = useState(1);
+  const [nameFilter, setNameFilter] = useState("");
+  const pageSize = 50;
+
+  const activeResultQuery = useQuery({
+    queryKey: ["memory-active-result", caseId, evidenceId, "files", page, nameFilter],
+    queryFn: () =>
+      api.getMemoryActiveResult(caseId, evidenceId, "files", undefined, {
+        name: nameFilter || undefined,
+        page,
+        page_size: pageSize,
+      }),
+    enabled: Boolean(caseId && evidenceId),
+    refetchOnWindowFocus: false,
+  });
+
+  const result = activeResultQuery.data;
+  const items = (result?.items ?? []) as FileObjectRow[];
+  const total = result?.total ?? 0;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const state = result?.analysis_state ?? "not_analyzed";
+
+  return (
+    <section className="rounded-[28px] border border-line bg-panel/60 p-5 shadow-panel" data-testid="memory-file-browser">
+      <header className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Browse files seen in memory</h3>
+          <p className="mt-1 max-w-2xl text-xs text-muted">
+            Every file object Windows currently references (open handle, cached section, mapped image) --
+            windows.filescan, image-wide. Being listed here means Windows still has a reference to the path,
+            not that its bytes are recoverable; pick a path below to attempt recovery.
+          </p>
+        </div>
+      </header>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2 text-xs">
+        <label className="text-muted" htmlFor="memory-file-browser-search">Path contains</label>
+        <input
+          id="memory-file-browser-search"
+          value={nameFilter}
+          onChange={(event) => { setNameFilter(event.target.value); setPage(1); }}
+          placeholder="schtask\\check-updates.ps1"
+          className="min-w-[16rem] flex-1 rounded-xl border border-line bg-abyss/70 px-3 py-1.5 font-mono text-sm text-ink outline-none focus:border-accent/50"
+          data-testid="memory-file-browser-search-input"
+        />
+      </div>
+
+      {activeResultQuery.isLoading ? <p className="mt-3 text-xs text-muted">Loading...</p> : null}
+      {activeResultQuery.error instanceof Error ? (
+        <p className="mt-3 rounded-2xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs text-rose-200">
+          {activeResultQuery.error.message}
+        </p>
+      ) : null}
+
+      {!activeResultQuery.isLoading && !activeResultQuery.error && state === "not_analyzed" ? (
+        <p className="mt-3 rounded-2xl border border-line bg-abyss/40 p-3 text-xs text-muted" data-testid="memory-file-browser-empty-not-analyzed">
+          Files has not been analyzed yet. Run the "Files" profile from Run analysis to browse what Windows currently references in this image.
+        </p>
+      ) : null}
+
+      {!activeResultQuery.isLoading && !activeResultQuery.error && (state === "failed" || state === "latest_attempt_failed") ? (
+        <div className="mt-3 rounded-2xl border border-rose-400/30 bg-rose-500/10 p-3 text-xs text-rose-100" data-testid="memory-file-browser-empty-failed">
+          <p>The latest Files run did not complete successfully.</p>
+          {result?.latest_attempt?.status ? <p className="mt-1 text-rose-200">Latest attempt status: {result.latest_attempt.status}</p> : null}
+        </div>
+      ) : null}
+
+      {!activeResultQuery.isLoading && !activeResultQuery.error && state === "analyzed_empty" ? (
+        <p className="mt-3 rounded-2xl border border-line bg-abyss/40 p-3 text-xs text-muted" data-testid="memory-file-browser-empty-zero-results">
+          {nameFilter ? "No file object matched that search." : "No file objects were recovered from this memory image."}
+        </p>
+      ) : null}
+
+      {!activeResultQuery.isLoading && !activeResultQuery.error && (state === "analyzed_with_results" || state === "partial") ? (
+        <>
+          <p className="mt-3 text-xs text-muted" data-testid="memory-file-browser-summary">
+            {total} file object{total === 1 ? "" : "s"} · page {page} of {totalPages}
+          </p>
+          <div className="mt-2 max-w-full overflow-x-auto rounded-2xl border border-line bg-abyss/40">
+            <table className="min-w-[720px] w-full divide-y divide-line text-xs" data-testid="memory-file-browser-table">
+              <thead className="bg-abyss/70 text-left text-[10px] uppercase tracking-[0.14em] text-muted">
+                <tr>
+                  <th className="px-2 py-1">Path</th>
+                  <th className="px-2 py-1">Offset</th>
+                  <th className="px-2 py-1">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {items.map((row, idx) => (
+                  <tr key={row.document_id || `${row.offset}-${idx}`} data-testid="memory-file-browser-row">
+                    <td className="break-all px-2 py-1 font-mono text-ink">{row.name || "—"}</td>
+                    <td className="px-2 py-1 font-mono text-muted">{row.offset || "—"}</td>
+                    <td className="px-2 py-1">
+                      <button
+                        type="button"
+                        onClick={() => row.name && onPickPath(row.name)}
+                        disabled={!row.name}
+                        className="rounded-lg border border-accent/40 bg-accent/10 px-2.5 py-1 text-xs text-accent disabled:opacity-50"
+                        data-testid="memory-file-browser-use-path"
+                      >
+                        Use this path
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="mt-3 flex items-center justify-between text-xs">
+            <span className="text-muted">
+              {items.length === 0 ? "No rows on this page." : `Showing ${(page - 1) * pageSize + 1}-${(page - 1) * pageSize + items.length} of ${total}`}
+            </span>
+            <MemoryPaginationControls
+              page={page}
+              totalPages={totalPages}
+              onPage={setPage}
+              prevTestId="memory-file-browser-prev-page"
+              nextTestId="memory-file-browser-next-page"
+            />
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
 
 const ACTIVE_STATUSES = new Set(["queued", "running"]);
 
@@ -148,6 +282,8 @@ export function MemoryFilesTab({ caseId, evidenceId }: Props) {
 
   return (
     <div className="space-y-4">
+      <FileBrowser caseId={caseId} evidenceId={evidenceId} onPickPath={setPath} />
+
       <section className="rounded-[28px] border border-line bg-panel/70 p-5 shadow-panel">
         <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-muted">Recover a file from memory</h3>
         <p className="mt-1 max-w-2xl text-xs text-muted">

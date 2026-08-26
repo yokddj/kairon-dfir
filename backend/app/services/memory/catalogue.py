@@ -201,6 +201,27 @@ PROFILE_CATALOGUE: list[dict[str, Any]] = [
         # avoid this literal drifting stale the way network_basic's did.
         "supported_os_families": ["windows", "linux"],
     },
+    {
+        "profile": "files_basic",
+        "family": "files",
+        "title": "Files",
+        "description": "Browsable, searchable list of file objects Windows currently references in memory (windows.filescan).",
+        # windows.filescan walks pool allocations image-wide -- benchmarked
+        # under 240s on a real 4GB image (13,191 rows). Matches
+        # FILESCAN_TIMEOUT_SECONDS, the same bound the separate on-demand
+        # "recover this exact file" action already uses for the identical
+        # plugin.
+        "cost_label": "Slow",
+        "est_duration_seconds": 240,
+        "requires_windows_symbols": True,
+        "can_run_without_symbols": False,
+        # Windows-only producer today -- see PROFILE_CAPABILITY in
+        # execution.py and MemoryCapability.FILES. This static literal is
+        # not what the API returns; _supported_os_families() recomputes it
+        # live from capability_registry (see the shell_history_basic note
+        # above for why that matters).
+        "supported_os_families": ["windows"],
+    },
 ]
 
 

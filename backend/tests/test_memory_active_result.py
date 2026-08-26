@@ -359,9 +359,9 @@ def test_catalogue_returns_eight_profiles_with_network_plugin_availability(db: S
          patch("app.services.memory.catalogue.build_memory_analysis_plan", return_value=windows_plan), \
          patch("app.services.memory.catalogue.get_settings", return_value=settings_with_process_profiles):
         catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
-    # 8 original Windows-shaped profiles + shell_history_basic (Linux
-    # Memory Shell History Phase 2, resolved via capability_registry).
-    assert len(catalogue) == 9
+    # 8 original Windows-shaped profiles + shell_history_basic + files_basic
+    # (both resolved via capability_registry, not PROFILE_PLUGINS).
+    assert len(catalogue) == 10
     profiles = [item["profile"] for item in catalogue]
     assert "metadata_only" in profiles
     assert "processes_extended" in profiles
@@ -541,7 +541,7 @@ def _mock_family_count(monkeypatch, *, total: int, count_source: str = "summary"
     monkeypatch.setattr(
         active_result,
         "_family_items",
-        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "summary_fallback"),
+        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "summary_fallback", None),
     )
 
 
@@ -663,7 +663,7 @@ def test_family_response_returns_real_total_and_items(db: Session, monkeypatch) 
         }
 
     def fake_items(*, case_id, evidence_id, family, active_run, page, page_size, filters):
-        return ([{"document_id": "doc-1"}, {"document_id": "doc-2"}], "opensearch")
+        return ([{"document_id": "doc-1"}, {"document_id": "doc-2"}], "opensearch", None)
 
     monkeypatch.setattr(active_result, "_family_count", fake_count)
     monkeypatch.setattr(active_result, "_family_items", fake_items)
@@ -702,7 +702,7 @@ def test_pagination_for_large_handles_results(db: Session, monkeypatch) -> None:
     def fake_items(*, case_id, evidence_id, family, active_run, page, page_size, filters):
         captured["page"] = page
         captured["page_size"] = page_size
-        return ([{"document_id": f"doc-{page}-{i}"} for i in range(page_size)], "opensearch")
+        return ([{"document_id": f"doc-{page}-{i}"} for i in range(page_size)], "opensearch", None)
 
     monkeypatch.setattr(active_result, "_family_count", fake_count)
     monkeypatch.setattr(active_result, "_family_items", fake_items)
@@ -741,7 +741,7 @@ def test_completed_zero_row_run_returns_analyzed_empty(db: Session, monkeypatch)
     monkeypatch.setattr(
         active_result,
         "_family_items",
-        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "opensearch"),
+        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "opensearch", None),
     )
     case = _make_case(db)
     ev = _make_evidence(db, case.id, "a.dmp")
@@ -809,7 +809,7 @@ def test_active_result_response_carries_count_source(db: Session, monkeypatch) -
     monkeypatch.setattr(
         active_result,
         "_family_items",
-        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "summary_fallback"),
+        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "summary_fallback", None),
     )
     case = _make_case(db)
     ev = _make_evidence(db, case.id, "a.dmp")
@@ -860,7 +860,7 @@ def test_active_result_analysis_state_partial_when_plugins_failed(db: Session, m
     monkeypatch.setattr(
         active_result,
         "_family_items",
-        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "opensearch"),
+        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "opensearch", None),
     )
     case = _make_case(db)
     ev = _make_evidence(db, case.id, "a.dmp")
@@ -900,7 +900,7 @@ def test_active_result_does_not_mutate_database(db: Session, monkeypatch) -> Non
     monkeypatch.setattr(
         active_result,
         "_family_items",
-        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "summary_fallback"),
+        lambda *, case_id, evidence_id, family, active_run, page, page_size, filters: ([], "summary_fallback", None),
     )
     case = _make_case(db)
     ev = _make_evidence(db, case.id, "a.dmp")
@@ -1088,6 +1088,27 @@ class TestEvidenceIdFieldQuery:
         filters = fake.last_body["query"]["bool"]["filter"]
         assert {"wildcard": {"process_name": {"value": "*svchost.exe*", "case_insensitive": True}}} in filters
 
+    def test_search_artifact_documents_name_filter_is_case_insensitive_substring(self) -> None:
+        """The Files browser's "Path contains" box (memory_file_object's
+        ``name`` field) gets the same free-text substring treatment as
+        process_name -- not an exact term match."""
+        from app.services.memory.artifact_indexing import search_artifact_documents
+
+        fake = _CaptureSearchClient(items=[], total=0)
+        p1, p2 = self._patch_client(fake)
+        with p1, p2:
+            search_artifact_documents(
+                case_id="case-1",
+                document_type="memory_file_object",
+                run_id="run-1",
+                evidence_id="ev-1",
+                filters={"name": "check-updates"},
+            )
+        assert fake.last_body is not None
+        filters = fake.last_body["query"]["bool"]["filter"]
+        assert {"wildcard": {"name": {"value": "*check-updates*", "case_insensitive": True}}} in filters
+        assert not any("term" in f and "name" in f.get("term", {}) for f in filters)
+
     # ------------------------------------------------------------------
     # Integration: full active-result pipeline returns items
     # ------------------------------------------------------------------
@@ -1248,3 +1269,84 @@ class TestEvidenceIdFieldQuery:
         assert "put_mapping" not in call_names
         assert "reindex" not in call_names
         assert "update_by_query" not in call_names
+
+
+class _DualTotalSearchClient:
+    """Fake OpenSearch client that returns a different ``total`` for the
+    unfiltered per-family count query than for a filtered items query --
+    distinguished by whether the query body contains a "wildcard" clause
+    (only the filtered items search does). Regression fixture for the
+    "13191 total but only 7 rows shown" bug: the unfiltered family
+    counter and the filtered items search are two separate queries, and
+    the active-result response must report the filtered one whenever
+    real filters were applied."""
+
+    def __init__(self, filtered_items: list[dict[str, Any]], *, unfiltered_total: int, filtered_total: int) -> None:
+        self.filtered_items = filtered_items
+        self.unfiltered_total = unfiltered_total
+        self.filtered_total = filtered_total
+
+    def search(self, index: str, body: dict[str, Any], params: dict[str, Any] | None = None) -> dict[str, Any]:
+        is_filtered_query = "wildcard" in str(body)
+        if is_filtered_query:
+            return {
+                "hits": {
+                    "total": {"value": self.filtered_total, "relation": "eq"},
+                    "hits": [{"_id": item["document_id"], "_source": item} for item in self.filtered_items],
+                }
+            }
+        return {"hits": {"total": {"value": self.unfiltered_total, "relation": "eq"}, "hits": []}}
+
+    def count(self, index: str, body: dict[str, Any], params: dict[str, Any] | None = None) -> dict[str, Any]:
+        return {"count": self.unfiltered_total}
+
+
+def test_active_result_total_reflects_the_applied_filter_not_the_unfiltered_run_count(db: Session) -> None:
+    """The exact bug found while building the Files browser: searching
+    "cmd.exe" against 13,191 indexed file objects correctly narrowed the
+    *rows* to 7, but the summary line still said "13191 file objects" /
+    "Showing 1-7 of 13191" -- the unfiltered per-family counter, not the
+    filtered search's own total. Reproduced here with a Files-shaped
+    scenario, must report the filtered total once real filters are
+    supplied."""
+    from app.services.memory import active_result
+
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    _make_run(db, case.id, ev.id, "files_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+
+    fake = _DualTotalSearchClient(
+        filtered_items=[{"document_id": f"fo-{i}", "name": "\\Windows\\System32\\cmd.exe"} for i in range(7)],
+        unfiltered_total=13191,
+        filtered_total=7,
+    )
+    with patch.multiple("app.services.memory.artifact_indexing", get_opensearch_client=lambda: fake), \
+         patch.multiple("app.core.opensearch", get_opensearch_client=lambda: fake):
+        result = active_result.resolve_active_memory_result(
+            db, case_id=case.id, evidence_id=ev.id, family="files", filters={"name": "cmd.exe"},
+        )
+    assert len(result["items"]) == 7
+    assert result["total"] == 7, f"expected the filtered total (7), got the unfiltered run count instead: {result['total']}"
+
+
+def test_active_result_total_stays_the_unfiltered_count_when_no_filters_given(db: Session) -> None:
+    """Without filters, the unfiltered per-family count is still correct
+    (and cheaper than re-deriving it from a filtered search) -- this
+    fix must not change the no-filter case."""
+    from app.services.memory import active_result
+
+    case = _make_case(db)
+    ev = _make_evidence(db, case.id, "a.dmp")
+    _make_run(db, case.id, ev.id, "files_basic", "completed", _utc(2026, 6, 15), _utc(2026, 6, 15, 0, 1))
+
+    fake = _DualTotalSearchClient(
+        filtered_items=[{"document_id": "fo-1", "name": "\\Windows\\System32\\cmd.exe"}],
+        unfiltered_total=13191,
+        filtered_total=1,
+    )
+    with patch.multiple("app.services.memory.artifact_indexing", get_opensearch_client=lambda: fake), \
+         patch.multiple("app.core.opensearch", get_opensearch_client=lambda: fake):
+        result = active_result.resolve_active_memory_result(
+            db, case_id=case.id, evidence_id=ev.id, family="files",
+        )
+    assert result["total"] == 13191

@@ -49,6 +49,7 @@ FAMILY_TO_DOCUMENT_TYPE: dict[str, str] = {
     "network": "memory_network_connection",
     "raw_observations": "memory_process_observation",
     "shell_history": "memory_shell_history",
+    "files": "memory_file_object",
 }
 
 
@@ -66,6 +67,7 @@ FAMILY_ORDER: tuple[str, ...] = (
     "drivers",
     "suspicious_regions",
     "network",
+    "files",
     "raw_observations",
 )
 
@@ -81,6 +83,7 @@ FAMILY_TITLE: dict[str, str] = {
     "network": "Network connections",
     "raw_observations": "Raw observations",
     "shell_history": "Shell history",
+    "files": "Files",
 }
 
 

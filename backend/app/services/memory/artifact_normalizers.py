@@ -1424,3 +1424,85 @@ def normalize_windows_consoles(
         "conflicts": 0,
         "normalization_version": NORMALIZATION_VERSION,
     }
+
+
+# ---------------------------------------------------------------------------
+# files -> memory_file_object
+#   windows.filescan walks pool allocations for _FILE_OBJECT structures
+#   image-wide and reports only Offset + Name -- unlike windows.consoles,
+#   its TreeGrid always renders at level 0 (verified against a real
+#   evidence run: 13,191 rows, none nested), so this is a plain flat
+#   normalizer like linux.bash, no tree-walk needed. This is the same
+#   plugin app.services.memory.file_extraction's on-demand "recover this
+#   exact file" action already runs per request and discards everything
+#   but one matching row; this normalizer persists the full result as a
+#   browsable, searchable list instead. Offset+Name is the identity (no
+#   PID exists for a file object), so the same file object reported
+#   twice in one run collapses to one document rather than duplicating.
+# ---------------------------------------------------------------------------
+
+
+def normalize_windows_filescan(
+    payload: Any,
+    *,
+    case_id: str,
+    evidence_id: str,
+    scan_run_id: str,
+    plugin_run_id: str,
+    source_plugin: str = "windows.filescan",
+    max_records: int = 200000,
+) -> dict[str, Any]:
+    rows = _rows(payload)
+    items: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    raw_count = len(rows)
+    dropped = 0
+    accepted = 0
+    for index, row in enumerate(rows):
+        if accepted >= max_records:
+            warnings.append("filescan_max_records_reached")
+            dropped += len(rows) - index
+            break
+        name = _str_or_none(_lookup(row, "Name", "name"), MAX_OBJECT_NAME_LENGTH)
+        if name:
+            name = _scrub_paths(name)
+        offset = _str_or_none(_lookup(row, "Offset", "offset"), 32)
+        if not name:
+            dropped += 1
+            warnings.append("filescan_row_missing_name")
+            continue
+        identity = _identity_pid_offset(offset, name)
+        doc = {
+            "document_id": _document_id(prefix="memory_file_object", case_id=case_id, run_id=scan_run_id, identity=identity),
+            "document_type": "memory_file_object",
+            "case_id": case_id,
+            "evidence_id": evidence_id,
+            "scan_run_id": scan_run_id,
+            "plugin_run_id": plugin_run_id,
+            "platform": "windows",
+            "offset": offset,
+            "name": name,
+            "process_entity_id": None,
+            "source_plugin": source_plugin,
+            "source_record_index": index,
+            "confidence": "reported_by_plugin",
+            "provenance": _provenance(
+                case_id=case_id,
+                evidence_id=evidence_id,
+                scan_run_id=scan_run_id,
+                plugin_run_id=plugin_run_id,
+                source_plugin=source_plugin,
+            ),
+            "normalization_version": NORMALIZATION_VERSION,
+        }
+        items.append(doc)
+        accepted += 1
+    return {
+        "items": items,
+        "warnings": warnings,
+        "raw_count": raw_count,
+        "accepted_count": accepted,
+        "dropped_count": dropped,
+        "conflicts": 0,
+        "normalization_version": NORMALIZATION_VERSION,
+    }

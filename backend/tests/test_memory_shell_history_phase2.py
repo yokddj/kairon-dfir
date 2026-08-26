@@ -275,7 +275,7 @@ def test_catalogue_other_profiles_unaffected_by_shell_history_addition(db: Sessi
     with patch("app.services.memory.counts.get_memory_family_count", return_value={"total": 0}), \
          patch("app.services.memory.catalogue.build_memory_analysis_plan", return_value=windows_plan):
         catalogue = build_analysis_catalogue(db, case_id=case.id, evidence_id=ev.id)
-    assert len(catalogue) == len(PROFILE_CATALOGUE) == 9
+    assert len(catalogue) == len(PROFILE_CATALOGUE) == 10
     network = next(i for i in catalogue if i["profile"] == "network_basic")
     assert network["plugins"] == ["windows.netscan", "windows.netstat"]
 
@@ -303,8 +303,9 @@ def test_shell_history_in_family_order_after_processes() -> None:
 
 def test_family_order_length_matches_catalogue_growth() -> None:
     # system_info, processes, shell_history, modules, handles,
-    # kernel_modules, drivers, suspicious_regions, network, raw_observations
-    assert len(FAMILY_ORDER) == 10
+    # kernel_modules, drivers, suspicious_regions, network, files,
+    # raw_observations
+    assert len(FAMILY_ORDER) == 11
 
 
 # ---------------------------------------------------------------------------

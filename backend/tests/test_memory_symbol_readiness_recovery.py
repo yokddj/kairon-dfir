@@ -546,12 +546,15 @@ def test_catalogue_uses_blocked_not_unavailable_for_symbol_probe_required(db_ses
         evidence_id=FRESH_EVIDENCE_ID,
     )
     for item in items:
-        if item["profile"] == "shell_history_basic":
-            # Orthogonal to this test's symbol-probe gate: this fixture's
-            # evidence is detected_format="windows_crash_dump" (Windows),
-            # and shell_history_basic has no Windows producer today (only
-            # linux.bash exists) -- correctly unavailable regardless of
-            # symbol state, per Linux Memory Shell History Phase 2.
+        if item["profile"] in ("shell_history_basic", "files_basic"):
+            # Orthogonal to this test's symbol-probe gate: this test's fake
+            # MemoryAnalysisPlan only marks MemoryCapability.NETWORK
+            # eligible, so any other capability-registry-only profile
+            # (shell_history_basic -> SHELL_HISTORY, files_basic -> FILES)
+            # is correctly unavailable here regardless of symbol state --
+            # that reflects this synthetic plan's narrow eligible_capabilities,
+            # not a real Windows producer gap (both have one today:
+            # windows.consoles / windows.filescan).
             continue
         assert item["gate_type"] != GATE_TYPE_UNAVAILABLE, f"profile {item['profile']} got unavailable"
 

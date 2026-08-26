@@ -119,12 +119,13 @@ class Settings(BaseSettings):
         "windows.envars,windows.getsids,windows.privileges,"
         "windows.netscan,windows.netstat,windows.dlllist,windows.ldrmodules,windows.handles,"
         "windows.modules,windows.driverscan,windows.malfind,windows.vadinfo,windows.consoles,"
+        "windows.filescan,"
         "linux.pslist,linux.pstree,linux.sockstat,linux.bash"
     )
     memory_allowed_profiles: str = (
         "metadata_only,processes_basic,processes_extended,"
         "network_basic,modules_basic,handles_basic,kernel_basic,suspicious_memory,"
-        "shell_history_basic"
+        "shell_history_basic,files_basic"
     )
     memory_default_profile: str = "metadata_only"
     memory_process_profile_enabled: bool = False
@@ -521,6 +522,7 @@ class Settings(BaseSettings):
             "windows.malfind",
             "windows.vadinfo",
             "windows.consoles",
+            "windows.filescan",
             "linux.pslist",
             "linux.pstree",
             "linux.sockstat",
@@ -545,6 +547,7 @@ class Settings(BaseSettings):
             "kernel_basic",
             "suspicious_memory",
             "shell_history_basic",
+            "files_basic",
         }
         profiles = [item.strip() for item in str(self.memory_allowed_profiles or "").split(",") if item.strip()]
         return [profile for profile in profiles if profile in allowed] or ["metadata_only"]
