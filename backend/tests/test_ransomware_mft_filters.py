@@ -68,3 +68,34 @@ def test_double_extension_pattern_matches_ransomware_and_spares_lookalikes() -> 
     # Single-extension files must not match the pattern at all.
     for name in ("informe.docx", "backup.gz", "notes.txt"):
         assert not pattern.fullmatch(name), name
+
+
+def test_mass_rename_detection_separates_ransomware_from_windows_noise() -> None:
+    """The aggregation ranks by how many of an extension's files still carry
+    their original document extension.
+
+    An earlier version filtered by "extension not in a known-benign list" and
+    was abandoned: enumerating every legitimate Windows extension is a losing
+    game (.mfl, .adml, .inf_loc, .ps1xml were all missed on the first pass) and
+    every miss is a false positive. The ratio below is intrinsic to how
+    ransomware renames files, so it needs no such list.
+    """
+    import re
+
+    pattern = re.compile(rf".*\.({RANSOM_TARGET_EXTENSIONS})\.[-a-z0-9_]{{2,12}}", re.IGNORECASE)
+
+    def ratio(names: list[str]) -> float:
+        return sum(1 for name in names if pattern.fullmatch(name)) / len(names)
+
+    encrypted = [f"conf-2024-{i}.docx.baklava" for i in range(1, 21)] + ["management-passwords-1.kdbx.baklava"]
+    assert ratio(encrypted) == 1.0
+
+    # Real extensions that a benign-list approach flagged on a live case.
+    windows_noise = {
+        ".mfl": ["CIMWin32.mfl", "WMIPCIMA.mfl"],
+        ".adml": ["inetres.adml", "windowsdefender.adml"],
+        ".ps1xml": ["types.ps1xml", "Diagnostics.Format.ps1xml"],
+        ".inf_loc": ["usbport.inf_loc", "wpdmtp.inf_loc"],
+    }
+    for extension, names in windows_noise.items():
+        assert ratio(names) == 0.0, extension
