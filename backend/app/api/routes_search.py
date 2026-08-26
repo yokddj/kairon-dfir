@@ -308,6 +308,36 @@ FACET_FIELDS = {
     "user.name": "user.name",
     "evidence_id": "evidence_id",
 }
+# --- Ransomware-oriented MFT heuristics -------------------------------------
+# Extensions a mass-rename would plausibly target. Used to spot the
+# "<original name>.<original ext>.<new ext>" shape ransomware leaves behind.
+RANSOM_TARGET_EXTENSIONS = (
+    "doc|docx|xls|xlsx|ppt|pptx|pdf|txt|rtf|csv|jpg|jpeg|png|gif|bmp|zip|rar|7z|"
+    "sql|bak|mdb|accdb|odt|ods|psd|dwg|kdbx|pst|ost|eml|msg"
+)
+# Trailing extensions that legitimately follow another extension (installers,
+# shortcuts, Windows component files, archives). Without excluding these, the
+# double-extension heuristic flags things like "Windows.Data.Pdf.dll" or
+# "users.txt.lnk", which drowns the real signal.
+BENIGN_TRAILING_EXTENSIONS = [
+    ".lnk", ".dll", ".exe", ".sys", ".url", ".ini", ".log", ".tmp", ".old",
+    ".config", ".json", ".xml", ".md", ".gz", ".zip", ".bak", ".manifest",
+    ".cat", ".mui", ".txt", ".sqlite", ".db", ".dat", ".png", ".jpg", ".jpeg",
+    ".svg", ".js", ".css", ".html", ".htm", ".pdf", ".mum", ".cdxml", ".psd1",
+    ".psm1", ".resx", ".xsd", ".pri", ".winmd", ".nupkg", ".sig",
+]
+# Extensions publicly associated with ransomware families. Deliberately a
+# curated list rather than a heuristic: it is high precision and easy to extend
+# as new families appear.
+KNOWN_RANSOMWARE_EXTENSIONS = [
+    ".locked", ".encrypted", ".crypt", ".crypted", ".crypto", ".enc", ".enc1",
+    ".lockbit", ".conti", ".ryk", ".ryuk", ".wcry", ".wncry", ".wannacry",
+    ".djvu", ".basta", ".akira", ".royal", ".hive", ".blackcat", ".alphv",
+    ".phobos", ".dharma", ".makop", ".mallox", ".stop", ".cuba", ".avos",
+    ".babuk", ".clop", ".egregor", ".maze", ".revil", ".sodinokibi", ".zeppelin",
+]
+
+
 FACET_ALIASES = {
     "artifact.type": "artifact_type",
     "artifact.parser": "parser",
@@ -1024,6 +1054,30 @@ def build_search_query(payload: SearchRequest, timeline: bool = False, db: Sessi
         filters.append({"bool": {"must_not": [{"exists": {"field": "file.path"}}]}})
     if payload.filters.suspicious_paths_only:
         filters.append({"term": {"tags": "suspicious_path"}})
+    if payload.filters.double_extension_only:
+        # "report.docx.locked": a document extension still in the name, with a
+        # different extension appended. file.extension holds only the trailing
+        # one, so the benign trailing extensions are excluded there rather than
+        # trying to express the exclusion inside the regexp.
+        filters.append(
+            {
+                "bool": {
+                    "must": [
+                        {
+                            "regexp": {
+                                "file.name": {
+                                    "value": rf".*\.({RANSOM_TARGET_EXTENSIONS})\.[-a-z0-9_]{{2,12}}",
+                                    "case_insensitive": True,
+                                }
+                            }
+                        }
+                    ],
+                    "must_not": [{"terms": {"file.extension": BENIGN_TRAILING_EXTENSIONS}}],
+                }
+            }
+        )
+    if payload.filters.ransomware_extension_only:
+        filters.append({"terms": {"file.extension": KNOWN_RANSOMWARE_EXTENSIONS}})
     if payload.filters.extension:
         filters.append({"terms": {"file.extension": payload.filters.extension}})
     if payload.filters.domain:
