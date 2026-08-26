@@ -305,26 +305,55 @@ export function WorkbenchOverview({ registry, workbenchId, caseId }: { registry:
     });
   }
 
+  const isMemoryWorkbench = workbench.id === "memory";
+
+  const coverageSection = (
+    <section>
+      <p className="mb-3 font-mono text-xs uppercase tracking-[0.18em] text-accent">Coverage</p>
+      {activeDomainId ? (
+        <>
+          <DomainTabBar domains={domainTabs} activeDomainId={activeDomainId} onSelect={selectDomain} />
+          {activeDomain ? (
+            <div role="tabpanel" id={`domain-panel-${activeDomain.id}`} aria-labelledby={`domain-tab-${activeDomain.id}`} className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {activeDomainCapabilities.map((capability) => <CapabilityCard key={capability.id} capability={capability} caseId={caseId} evidenceId={evidenceId} warnings={overview?.warnings ?? []} />)}
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <p className="text-sm text-muted">No domains are visible for this workbench yet.</p>
+      )}
+    </section>
+  );
+
+  if (isMemoryWorkbench) {
+    return (
+      <div className="space-y-5" data-testid={`workbench-overview-${workbench.id}`}>
+        <PlatformHeader workbench={workbench} />
+        <MemoryImagesPanel images={overview?.memory_images ?? []} />
+        <details className="rounded-[28px] border border-line bg-panel/60 shadow-panel">
+          <summary className="cursor-pointer px-5 py-4 font-mono text-xs uppercase tracking-[0.18em] text-accent">
+            Capability coverage
+          </summary>
+          <div className="space-y-4 px-5 pb-5">
+            <SurfaceCoverageSummary coverage={overview?.coverage ?? { capability_count: 0, status_counts: {} }} />
+            <QuickActionsPanel actions={overview?.quick_actions ?? []} />
+            {coverageSection}
+          </div>
+        </details>
+        <div className="grid gap-4 lg:grid-cols-2">
+          <RecentActivityPanel activity={overview?.recent_activity ?? []} />
+          <WarningPanel warnings={overview?.warnings ?? []} />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-5" data-testid={`workbench-overview-${workbench.id}`}>
       <PlatformHeader workbench={workbench} />
       <SurfaceCoverageSummary coverage={overview?.coverage ?? { capability_count: 0, status_counts: {} }} />
       <QuickActionsPanel actions={overview?.quick_actions ?? []} />
-      <section>
-        <p className="mb-3 font-mono text-xs uppercase tracking-[0.18em] text-accent">Coverage</p>
-        {activeDomainId ? (
-          <>
-            <DomainTabBar domains={domainTabs} activeDomainId={activeDomainId} onSelect={selectDomain} />
-            {activeDomain ? (
-              <div role="tabpanel" id={`domain-panel-${activeDomain.id}`} aria-labelledby={`domain-tab-${activeDomain.id}`} className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {activeDomainCapabilities.map((capability) => <CapabilityCard key={capability.id} capability={capability} caseId={caseId} evidenceId={evidenceId} warnings={overview?.warnings ?? []} />)}
-              </div>
-            ) : null}
-          </>
-        ) : (
-          <p className="text-sm text-muted">No domains are visible for this workbench yet.</p>
-        )}
-      </section>
+      {coverageSection}
       <MemoryImagesPanel images={overview?.memory_images ?? []} />
       <div className="grid gap-4 lg:grid-cols-2">
         <RecentActivityPanel activity={overview?.recent_activity ?? []} />
