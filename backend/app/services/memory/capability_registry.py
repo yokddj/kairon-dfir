@@ -37,6 +37,7 @@ class MemoryCapability(str, enum.Enum):
     KERNEL_MODULES = "kernel_modules"
     SUSPICIOUS_REGIONS = "suspicious_regions"
     SHELL_HISTORY = "shell_history"
+    FILES = "files"
 
 
 class SkipReason(str, enum.Enum):
@@ -117,6 +118,15 @@ _WINDOWS: tuple[CapabilityPluginSpec, ...] = (
     # linux.bash below -- both feed the same platform-agnostic
     # memory_shell_history document type.
     CapabilityPluginSpec(MemoryCapability.SHELL_HISTORY, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "windows.consoles", depends_on=(MemoryCapability.IDENTIFICATION,), presentation_family="memory_shell_history"),
+    # windows.filescan walks pool allocations for _FILE_OBJECT structures
+    # image-wide -- every file Windows currently has any object reference
+    # to (open handle, cached section, mapped image), not just ones an
+    # analyst already knows the path of. This is the same plugin the
+    # on-demand "recover this exact file" action (file_extraction.py)
+    # already runs per request and discards everything but one matching
+    # row; this capability persists the full result as a browsable,
+    # searchable list instead.
+    CapabilityPluginSpec(MemoryCapability.FILES, PlatformFamily.WINDOWS, FRAMEWORK_VOLATILITY3, "windows.filescan", depends_on=(MemoryCapability.IDENTIFICATION,), presentation_family="memory_file_object"),
 )
 
 # ---------------------------------------------------------------------------

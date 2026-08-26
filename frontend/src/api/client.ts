@@ -5673,6 +5673,11 @@ export type MemoryArtifactOverview = {
     active_run: MemoryActiveRun | null;
     analysis_state: MemoryFamilyState;
   };
+  files: {
+    count: number;
+    active_run: MemoryActiveRun | null;
+    analysis_state: MemoryFamilyState;
+  };
   facets: Record<string, unknown>;
   normalization_version: string;
 };
@@ -6398,6 +6403,7 @@ export const api = {
       load_state?: string;
       object_type?: string;
       object_name?: string;
+      name?: string;
       page?: number;
       page_size?: number;
     },
@@ -6660,6 +6666,10 @@ export const api = {
     caseId: string,
     params: { evidence_id: string; run_id?: string; page?: number; page_size?: number },
   ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/drivers`, params)),
+  getMemoryFileObjects: (
+    caseId: string,
+    params: { evidence_id: string; run_id?: string; name?: string; page?: number; page_size?: number },
+  ) => request<MemoryArtifactList>(buildArtifactQuery(`/cases/${caseId}/memory/files`, params)),
   getMemorySuspiciousRegions: (
     caseId: string,
     params?: {

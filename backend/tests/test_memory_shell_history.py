@@ -694,6 +694,7 @@ def test_profile_capability_now_includes_shell_history_basic() -> None:
         MemoryCapability.KERNEL_MODULES,
         MemoryCapability.SUSPICIOUS_REGIONS,
         MemoryCapability.SHELL_HISTORY,
+        MemoryCapability.FILES,
     }
     assert PROFILE_CAPABILITY["shell_history_basic"] == MemoryCapability.SHELL_HISTORY
 

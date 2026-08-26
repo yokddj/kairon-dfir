@@ -38,6 +38,7 @@ from app.services.memory.artifact_normalizers import (
     normalize_windows_malfind,
     normalize_windows_modules,
     normalize_windows_consoles,
+    normalize_windows_filescan,
     normalize_windows_netscan,
     normalize_windows_privileges,
     normalize_windows_vadinfo,
@@ -96,6 +97,7 @@ ARTIFACT_PLUGIN_NORMALIZER = {
     "linux.bash": "memory_shell_history",
     "linux.sockstat": "memory_network_connection",
     "windows.consoles": "memory_shell_history",
+    "windows.filescan": "memory_file_object",
 }
 ARTIFACT_PLUGIN_LIMITS = {
     # Per-plugin guard-rails to keep offline execution bounded.
@@ -130,6 +132,13 @@ ARTIFACT_PLUGIN_LIMITS = {
     # bounded the same as linux.bash, the other full-process-memory
     # history scan.
     "windows.consoles": {"timeout_seconds": 1800, "max_output_bytes": 32 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
+    # windows.filescan walks pool allocations image-wide; benchmarked well
+    # under 240s on a real 4GB image (13,191 file objects recovered) --
+    # matches FILESCAN_TIMEOUT_SECONDS already used by the separate
+    # on-demand recovery action in file_extraction.py. Output is a large
+    # flat Offset+Name list (tens of thousands of short rows), hence the
+    # higher max_output_bytes than the other flat plugins here.
+    "windows.filescan": {"timeout_seconds": 240, "max_output_bytes": 64 * 1024 * 1024, "max_records": 200000, "max_preview_bytes": 0},
 }
 
 # Each existing profile name already encodes one capability's intent.
@@ -157,6 +166,12 @@ PROFILE_CAPABILITY = {
     # capability_registry.py's CapabilityPluginSpec for
     # MemoryCapability.SHELL_HISTORY on PlatformFamily.WINDOWS.
     "shell_history_basic": MemoryCapability.SHELL_HISTORY,
+    # Same capability-registry-only resolution as shell_history_basic
+    # above: files_basic has no PROFILE_PLUGINS entry either. Windows
+    # resolves to windows.filescan; no Linux producer is registered
+    # (file_extraction.py's dumpfiles-based recovery is Windows-only and
+    # windows.filescan has no analogous Linux plugin in this registry).
+    "files_basic": MemoryCapability.FILES,
 }
 
 TIMEOUT_POLICY_VERSION = "memory_timeout_hierarchy_v1"
@@ -846,6 +861,8 @@ def _normalize_artifact_payload(
         return normalize_linux_sockstat(payload, source_plugin=plugin, **common)
     if plugin == "windows.consoles":
         return normalize_windows_consoles(payload, source_plugin=plugin, **common)
+    if plugin == "windows.filescan":
+        return normalize_windows_filescan(payload, source_plugin=plugin, **common)
     return {
         "items": [],
         "warnings": [f"unsupported_artifact_plugin:{plugin}"],

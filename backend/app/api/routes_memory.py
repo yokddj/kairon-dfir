@@ -808,6 +808,7 @@ def get_memory_active_result(
     load_state: str | None = Query(default=None),
     object_type: str | None = Query(default=None),
     object_name: str | None = Query(default=None),
+    name: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> dict:
     """Return the active scan run for a single artifact family of an
@@ -851,6 +852,7 @@ def get_memory_active_result(
         "load_state": load_state,
         "object_type": object_type,
         "object_name": object_name,
+        "name": name,
     }
     return resolve_active_memory_result(
         db,
@@ -3464,6 +3466,7 @@ def _artifact_overview(
             "handles": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
             "suspicious_regions": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
             "shell_history": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
+            "files": {"count": 0, "active_run": None, "analysis_state": "not_analyzed"},
             "facets": {},
             "normalization_version": "memory_artifact_canonical_v1",
         }
@@ -3550,6 +3553,11 @@ def _artifact_overview(
             "count": counts["shell_history"],
             "active_run": family_states.get("shell_history", {}).get("active_run"),
             "analysis_state": family_states.get("shell_history", {}).get("analysis_state", "not_analyzed"),
+        },
+        "files": {
+            "count": counts["files"],
+            "active_run": family_states.get("files", {}).get("active_run"),
+            "analysis_state": family_states.get("files", {}).get("analysis_state", "not_analyzed"),
         },
         "facets": facets,
         "normalization_version": "memory_artifact_canonical_v1",
@@ -3776,6 +3784,32 @@ def list_memory_drivers(
         evidence_id=evidence_id,
         page=page,
         page_size=page_size,
+    )
+
+
+@router.get("/cases/{case_id}/memory/files", response_model=MemoryArtifactListRead)
+def list_memory_file_objects(
+    case_id: str,
+    evidence_id: str = Query(...),
+    run_id: str | None = Query(default=None),
+    name: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+):
+    """Browsable, searchable list of file objects windows.filescan found
+    in this evidence's memory image -- what's *present*, not recovered
+    bytes (see the separate on-demand /extract-file action for that)."""
+    _require_evidence_for_case(db, case_id, evidence_id)
+    _require_run_or_any(db, case_id, run_id)
+    return _artifact_list(
+        case_id,
+        document_type="memory_file_object",
+        run_id=run_id,
+        evidence_id=evidence_id,
+        page=page,
+        page_size=page_size,
+        filters={"name": name},
     )
 
 

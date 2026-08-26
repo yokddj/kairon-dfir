@@ -138,6 +138,11 @@ FAMILY_RESOLUTION = {
         "fallback_doc_types": ["memory_shell_history"],
         "evidence_id_required": True,
     },
+    "files": {
+        "preferred_profiles": ["files_basic"],
+        "fallback_doc_types": ["memory_file_object"],
+        "evidence_id_required": True,
+    },
 }
 
 
@@ -456,7 +461,7 @@ def _build_response(
     base["total"] = int(counts["total"])
     base["count_source"] = counts.get("count_source")
     bounded_page_size = min(max(int(page_size or 50), 1), _ACTIVE_RESULT_MAX_PAGE_SIZE)
-    items, items_source = _family_items(
+    items, items_source, filtered_total = _family_items(
         case_id=case_id,
         evidence_id=evidence_id,
         family=family,
@@ -468,6 +473,13 @@ def _build_response(
     base["items"] = items
     base["page"] = page
     base["page_size"] = bounded_page_size
+    has_real_filters = bool(filters) and any(v is not None and v != "" for v in filters.values())
+    if has_real_filters and filtered_total is not None:
+        # The unfiltered per-family counter above answers a different
+        # question ("how many documents exist for this run") than what
+        # the analyst just searched for -- use the OpenSearch-reported
+        # total for the actual filtered query instead.
+        base["total"] = filtered_total
     if counts.get("count_source") == "summary_fallback" and items_source == "summary_fallback":
         base["count_source"] = "summary_fallback"
     elif items_source == "summary_fallback":
@@ -550,7 +562,7 @@ def _family_items(
     page: int,
     page_size: int,
     filters: dict[str, Any] | None,
-) -> tuple[list[dict[str, Any]], str]:
+) -> tuple[list[dict[str, Any]], str, int | None]:
     """Return the paginated items for the active run, when the family
     has a corresponding OpenSearch document type.
 
@@ -558,6 +570,16 @@ def _family_items(
     index (e.g. ``system_info``, ``raw_observations``) the function
     returns an empty list and the count is the only data the UI
     needs to display.
+
+    The third return value is the OpenSearch-reported total for this
+    exact (run, filters) query -- ``None`` when the OpenSearch path was
+    not used (summary-table fallback, or a family with no document
+    type). Callers must use this instead of the unfiltered per-family
+    counter whenever real filters were applied: that counter answers
+    "how many documents does this run have in total", never "how many
+    match what was just searched for", and returning it unchanged next
+    to an already-filtered items list is exactly the "13191 total but
+    only 7 rows shown" bug this return value exists to prevent.
     """
     from app.services.memory.counts import FAMILY_TO_DOCUMENT_TYPE
     from app.services.memory.artifact_indexing import (
@@ -565,7 +587,7 @@ def _family_items(
     )
 
     if family not in FAMILY_TO_DOCUMENT_TYPE:
-        return [], "not_applicable"
+        return [], "not_applicable", None
     document_type = FAMILY_TO_DOCUMENT_TYPE[family]
     try:
         payload = search_artifact_documents(
@@ -577,18 +599,20 @@ def _family_items(
             page_size=page_size,
             filters=filters,
         )
-        return list(payload.get("items", [])), "opensearch"
+        total = payload.get("total")
+        return list(payload.get("items", [])), "opensearch", (int(total) if total is not None else None)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "active-result items fallback: case=%s family=%s run=%s: %s",
             case_id, family, active_run.id, exc,
         )
-        return _summary_items(
+        items, source = _summary_items(
             case_id=case_id,
             evidence_id=evidence_id,
             family=family,
             active_run=active_run,
         )
+        return items, source, None
 
 
 def _summary_items(
