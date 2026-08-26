@@ -240,9 +240,9 @@ describe("CommandHistoryPage", () => {
           id: "psreadline-cmd-1",
           timestamp: null,
           timestamp_status: "missing",
-          command: "Add-ObjectACL -PrincipalIdentity helpdesk -Rights DCSync",
+          command: "Add-ObjectACL -PrincipalIdentity svc-account -Rights DCSync",
           source_type: "psreadline",
-          source_file: "C/Users/Administrator.MEGACORP/AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt",
+          source_file: "C/Users/Administrator.EXAMPLECORP/AppData/Roaming/Microsoft/Windows/PowerShell/PSReadLine/ConsoleHost_history.txt",
           line_number: 37,
         },
       ],
@@ -251,7 +251,7 @@ describe("CommandHistoryPage", () => {
 
     renderPage();
 
-    expect(await screen.findByText("Add-ObjectACL -PrincipalIdentity helpdesk -Rights DCSync")).toBeInTheDocument();
+    expect(await screen.findByText("Add-ObjectACL -PrincipalIdentity svc-account -Rights DCSync")).toBeInTheDocument();
     expect(screen.getByText("No timestamp")).toBeInTheDocument();
     expect(screen.getByText("line 37 in file")).toBeInTheDocument();
   });
