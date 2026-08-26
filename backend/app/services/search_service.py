@@ -278,11 +278,27 @@ EVENT_SORTS = {
 }
 OPENSEARCH_RESULT_WINDOW_LIMIT = 10000
 TIMELINE_LOW_VALUE_TYPES = {"file_observed", "generic_record", "process_observed"}
+# Authentication event types, kept cross-platform on purpose: a "Logins" filter
+# that only understood Windows would quietly return nothing on a Linux case,
+# which reads as "nobody logged in" rather than "this filter does not cover you".
+# Windows values are the normalized ones from evtxecmd/security; Linux values
+# come from the linux_auth family in artifact_normalizers.
+WINDOWS_LOGIN_EVENT_TYPES = ["logon_success", "logon_failed", "explicit_credentials_logon", "rdp_authentication_success", "event_id_4625"]
+LINUX_LOGIN_EVENT_TYPES = ["login_success", "login_failure", "invalid_user", "authentication_failure"]
+LOGIN_EVENT_TYPES = WINDOWS_LOGIN_EVENT_TYPES + LINUX_LOGIN_EVENT_TYPES
+# "event_id_4625" is not a typo: a few 4625 records normalize to that instead of
+# logon_failed, so both are needed or a failed-logon hunt silently misses some.
+FAILED_LOGIN_EVENT_TYPES = ["logon_failed", "event_id_4625", "login_failure", "invalid_user", "authentication_failure"]
+PRIVILEGED_LOGON_EVENT_TYPES = ["special_privileges_assigned", "privilege_authentication"]
+
 QUICK_FILTERS = [
     {"id": "high_risk", "label": "High risk events", "params": {"scope": "events", "risk_min": 70}},
     {"id": "critical_findings", "label": "Critical findings", "params": {"scope": "findings", "severity": ["critical"]}},
     {"id": "powershell_activity", "label": "PowerShell activity", "params": {"scope": "events", "process_name": "powershell.exe"}},
     {"id": "downloads", "label": "Downloads", "params": {"scope": "events", "event_type": ["file_downloaded"]}},
+    {"id": "logins", "label": "Logins", "params": {"scope": "events", "event_type": LOGIN_EVENT_TYPES}},
+    {"id": "failed_logins", "label": "Failed logins", "params": {"scope": "events", "event_type": FAILED_LOGIN_EVENT_TYPES}},
+    {"id": "privileged_logons", "label": "Privileged logons", "params": {"scope": "events", "event_type": PRIVILEGED_LOGON_EVENT_TYPES}},
     {"id": "defender_detections", "label": "Defender detections", "params": {"scope": "events", "artifact_type": ["defender", "detection"]}},
     {"id": "persistence", "label": "Persistence", "params": {"scope": "events", "event_category": ["persistence"]}},
     {"id": "network_activity", "label": "Network activity", "params": {"scope": "events", "event_category": ["network"]}},
