@@ -671,6 +671,21 @@ def ensure_case_index(case_id: str) -> str:
                                 "referrer": {"type": "keyword"},
                             }
                         },
+                        # This mapping used to be defined twice in this same dict (once here,
+                        # once further down before "winrm") -- a Python dict literal silently
+                        # keeps only the last of two duplicate keys, so every case index ever
+                        # created via this create() call actually got the OTHER, narrower
+                        # definition (just the script-block-logging fields below), never these
+                        # PSReadLine console-history fields (command/line_number/etc). Under
+                        # "dynamic": False, a field missing from the index mapping is dropped
+                        # from the searchable index entirely -- it's still readable in
+                        # _source, so plain document fetches (Search) see it fine, but any
+                        # exists/term/match query against it (e.g. Command History's
+                        # candidate-event query, which requires exists:powershell.command)
+                        # matches nothing. That's why PSReadLine commands never showed up in
+                        # Command History. See the put_mapping() call further down for the
+                        # backfill applied to indices that already existed under the old,
+                        # incomplete mapping.
                         "powershell": {
                             "properties": {
                                 "artifact_type": {"type": "keyword"},
@@ -700,6 +715,16 @@ def ensure_case_index(case_id: str) -> str:
                                 "indicators": {"type": "keyword"},
                                 "parser_status": {"type": "keyword"},
                                 "timestamp_interpretation": {"type": "keyword"},
+                                "script_block_text": {"type": "text"},
+                                "script_block_id": {"type": "keyword"},
+                                "path": {"type": "keyword"},
+                                "message_number": {"type": "keyword"},
+                                "message_total": {"type": "keyword"},
+                                "command_invocation": {"type": "text"},
+                                "parameter_binding": {"type": "text"},
+                                "payload": {"type": "text"},
+                                "context_info": {"type": "text"},
+                                "user": {"type": "keyword"},
                             }
                         },
                         "url": {
@@ -1480,20 +1505,6 @@ def ensure_case_index(case_id: str) -> str:
                                 "timestamp_interpretation": {"type": "keyword"},
                             }
                         },
-                        "powershell": {
-                            "properties": {
-                                "script_block_text": {"type": "text"},
-                                "script_block_id": {"type": "keyword"},
-                                "path": {"type": "keyword"},
-                                "message_number": {"type": "keyword"},
-                                "message_total": {"type": "keyword"},
-                                "command_invocation": {"type": "text"},
-                                "parameter_binding": {"type": "text"},
-                                "payload": {"type": "text"},
-                                "context_info": {"type": "text"},
-                                "user": {"type": "keyword"},
-                            }
-                        },
                         "winrm": {
                             "properties": {
                                 "shell_id": {"type": "keyword"},
@@ -1622,6 +1633,52 @@ def ensure_case_index(case_id: str) -> str:
                                         "command_line": {"type": "text"},
                                     }
                                 }
+                            }
+                        },
+                        # Backfill for indices created before the "powershell" mapping bug
+                        # (see the comment on create()'s "powershell" block above) was fixed.
+                        # put_mapping additively merges new fields into an already-existing
+                        # object field, so this is safe to send on every call even for
+                        # indices that already have some of these fields.
+                        "powershell": {
+                            "properties": {
+                                "artifact_type": {"type": "keyword"},
+                                "command": {"type": "text"},
+                                "command_preview": {"type": "text"},
+                                "line_number": {"type": "integer", "ignore_malformed": True},
+                                "source_file": {"type": "keyword"},
+                                "transcript_start_time": {"type": "date"},
+                                "transcript_end_time": {"type": "date"},
+                                "username": {"type": "keyword"},
+                                "run_as": {"type": "keyword"},
+                                "machine": {"type": "keyword"},
+                                "host_application": {"type": "text"},
+                                "process_id": {"type": "keyword"},
+                                "ps_version": {"type": "keyword"},
+                                "has_encoded_command": {"type": "boolean"},
+                                "encoded_command": {"type": "text"},
+                                "decoded_command_preview": {"type": "text"},
+                                "has_download": {"type": "boolean"},
+                                "has_iex": {"type": "boolean"},
+                                "has_execution_policy_bypass": {"type": "boolean"},
+                                "has_defender_tampering": {"type": "boolean"},
+                                "has_persistence": {"type": "boolean"},
+                                "urls": {"type": "keyword"},
+                                "domains": {"type": "keyword"},
+                                "paths": {"type": "keyword"},
+                                "indicators": {"type": "keyword"},
+                                "parser_status": {"type": "keyword"},
+                                "timestamp_interpretation": {"type": "keyword"},
+                                "script_block_text": {"type": "text"},
+                                "script_block_id": {"type": "keyword"},
+                                "path": {"type": "keyword"},
+                                "message_number": {"type": "keyword"},
+                                "message_total": {"type": "keyword"},
+                                "command_invocation": {"type": "text"},
+                                "parameter_binding": {"type": "text"},
+                                "payload": {"type": "text"},
+                                "context_info": {"type": "text"},
+                                "user": {"type": "keyword"},
                             }
                         },
                         "registry": {
