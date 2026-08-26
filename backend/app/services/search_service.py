@@ -1156,7 +1156,16 @@ def _finding_text_haystack(finding: Finding) -> str:
     return "\n".join(item for item in values if item).lower()
 
 
-def _match_finding(finding: Finding, params: dict[str, Any], normalized_query: str, *, case_id: str, db: Session | None = None) -> tuple[bool, int]:
+def _match_finding(
+    finding: Finding,
+    params: dict[str, Any],
+    normalized_query: str,
+    *,
+    case_id: str,
+    db: Session | None = None,
+    expanded_host_filter: set[str] | None = None,
+    expanded_exclude_host: set[str] | None = None,
+) -> tuple[bool, int]:
     if "finding" in _artifact_type_values(_dedupe(params.get("exclude_artifact_type"))):
         return False, 0
     if params.get("evidence_id") and finding.evidence_id != params.get("evidence_id"):
@@ -1185,7 +1194,13 @@ def _match_finding(finding: Finding, params: dict[str, Any], normalized_query: s
         return False, 0
     if time_to and candidate_time and candidate_time.astimezone(UTC) > time_to:
         return False, 0
-    expanded_host_filter = set(expand_host_filter(db, case_id, params.get("host")) if params.get("host") and db else [])
+    # Precomputed by the caller (search_findings_v2) once for the whole
+    # search, not per finding -- see its own comment for why recomputing
+    # this here was a severe N+1 (each call can trigger a full
+    # OpenSearch aggregation via resolve_canonical_host). Falls back to
+    # computing it directly only for callers that do not pass it.
+    if expanded_host_filter is None:
+        expanded_host_filter = set(expand_host_filter(db, case_id, params.get("host")) if params.get("host") and db else [])
     for key, values in (
         ("host", finding.related_hosts or []),
         ("user", finding.related_users or []),
@@ -1208,7 +1223,8 @@ def _match_finding(finding: Finding, params: dict[str, Any], normalized_query: s
     exclude_query, _ = normalize_search_value(params.get("exclude_q"))
     if exclude_query and exclude_query.lower() in haystack:
         return False, 0
-    expanded_exclude_host = set(expand_host_filter(db, case_id, params.get("exclude_host")) if params.get("exclude_host") and db else [])
+    if expanded_exclude_host is None:
+        expanded_exclude_host = set(expand_host_filter(db, case_id, params.get("exclude_host")) if params.get("exclude_host") and db else [])
     for key, values in (
         ("exclude_host", finding.related_hosts or []),
         ("exclude_user", finding.related_users or []),
@@ -1459,9 +1475,25 @@ def search_findings_v2(db: Session, case_id: str, params: dict[str, Any], *, lim
             ) from exc
         params["_query_syntax"] = query_info
     all_rows = db.query(Finding).filter(Finding.case_id == case_id).all()
+    # expand_host_filter (and exclude_host's mirror) resolve a canonical
+    # host + its aliases via resolve_canonical_host, which -- on its first
+    # call for this case -- runs _ensure_default_case_hosts, an expensive
+    # OpenSearch aggregation over the whole events index to discover
+    # observed hosts. params["host"]/params["exclude_host"] are the same
+    # for every finding in this search, so this must be computed once
+    # before the loop, not per row: _match_finding used to call it fresh
+    # for every finding, turning one search into hundreds of full
+    # index-wide aggregations (confirmed via a live py-spy stack trace
+    # showing this exact call chain during a ~2 minute host-filtered
+    # search on a case with 168 findings).
+    expanded_host_filter = set(expand_host_filter(db, case_id, params.get("host")) if params.get("host") and db else [])
+    expanded_exclude_host = set(expand_host_filter(db, case_id, params.get("exclude_host")) if params.get("exclude_host") and db else [])
     matched: list[tuple[Finding, int]] = []
     for row in all_rows:
-        ok, relevance = _match_finding(row, params, query_text, case_id=case_id, db=db)
+        ok, relevance = _match_finding(
+            row, params, query_text, case_id=case_id, db=db,
+            expanded_host_filter=expanded_host_filter, expanded_exclude_host=expanded_exclude_host,
+        )
         if ok:
             matched.append((row, relevance))
     sort = str(params.get("sort") or "timestamp_desc")

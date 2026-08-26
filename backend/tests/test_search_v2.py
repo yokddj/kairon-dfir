@@ -773,6 +773,34 @@ def test_search_findings_respects_negative_text_and_artifact_type() -> None:
     assert excluded["total"] == 0
 
 
+def test_search_findings_with_host_filter_resolves_host_alias_once_not_per_finding(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression guard for a real N+1 found via a live py-spy trace:
+    _match_finding used to call expand_host_filter() (which can trigger
+    a full OpenSearch host-attribution aggregation via
+    resolve_canonical_host -> _ensure_default_case_hosts on its first
+    call for a case) fresh for every single finding, turning one
+    host-filtered search into hundreds of full index scans. host/case_id
+    are invariant across the whole search, so this must be computed
+    once in search_findings_v2, not per finding."""
+    db = _FakeDb([
+        _finding(id=f"finding-{i}", related_hosts=["desktop-1"])
+        for i in range(25)
+    ])
+    calls: list[str | None] = []
+
+    def fake_expand_host_filter(db_arg, case_id_arg, value):  # noqa: ANN001
+        calls.append(value)
+        return [str(value).strip().lower()] if value else []
+
+    monkeypatch.setattr(search_service, "expand_host_filter", fake_expand_host_filter)
+    result = search_service.search_case_v2(
+        db, "case-1",
+        search_service.build_search_v2_params(scope="findings", host="desktop-1", page_size=50),
+    )
+    assert result["total"] == 25
+    assert len(calls) == 1, f"expand_host_filter should be called once for the whole search, was called {len(calls)} times (once per finding = N+1 regression)"
+
+
 def test_facet_counts_include_parser_and_source_file() -> None:
     facets = search_service._facet_counts(
         [
