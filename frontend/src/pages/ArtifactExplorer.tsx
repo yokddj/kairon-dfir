@@ -659,6 +659,8 @@ export default function ArtifactExplorer() {
   const [mftDeletedOnly, setMftDeletedOnly] = useState(false);
   const [mftSuspiciousPathsOnly, setMftSuspiciousPathsOnly] = useState(false);
   const [mftExtension, setMftExtension] = useState("");
+  const [mftDoubleExtension, setMftDoubleExtension] = useState(false);
+  const [mftRansomwareExtension, setMftRansomwareExtension] = useState(false);
   const [backendVariant, setBackendVariant] = useState<"default" | "advanced" | "all">((searchParams.get("backend_variant") as "default" | "advanced" | "all") || "default");
   // Keyed by the simple filter-dimension name EventTable's onFilterField/
   // onExcludeField callbacks use ("user", "domain", "ip", ...) -- "host" is
@@ -729,6 +731,8 @@ export default function ArtifactExplorer() {
           artifact_name: artifactName ? [artifactName] : [],
           deleted_only: mftDeletedOnly || undefined,
           suspicious_paths_only: mftSuspiciousPathsOnly || undefined,
+          double_extension_only: mftDoubleExtension || undefined,
+          ransomware_extension_only: mftRansomwareExtension || undefined,
           extension: mftExtension ? [mftExtension.startsWith(".") ? mftExtension.toLowerCase() : `.${mftExtension.toLowerCase()}`] : [],
           backend_variant: backendVariant === "advanced" ? ["advanced"] : backendVariant === "all" ? ["all"] : [],
         evidence_id: evidenceIdFilter ? [evidenceIdFilter] : [],
@@ -758,7 +762,7 @@ export default function ArtifactExplorer() {
       sort_by: sortBy && SERVER_SORTABLE_FIELDS.has(sortBy) ? sortBy : undefined,
       sort_order: sortBy && SERVER_SORTABLE_FIELDS.has(sortBy) ? sortOrder : undefined,
     }),
-    [artifactName, artifactTypeFilter, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, fieldFilters, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly, timeFrom, timeTo, sortBy, sortOrder],
+    [artifactName, artifactTypeFilter, backendVariant, caseId, effectiveTimezone, page, pageSize, query, searchMode, evidenceIdFilter, hostFilter, hostIdFilter, fieldFilters, mftDeletedOnly, mftExtension, mftSuspiciousPathsOnly, mftDoubleExtension, mftRansomwareExtension, timeFrom, timeTo, sortBy, sortOrder],
   );
   function handleFilterField(field: string, value: string) {
     if (field === "host") {
@@ -1127,6 +1131,15 @@ export default function ArtifactExplorer() {
                 Temp/Public/AppData/Startup
               </label>
               <input value={mftExtension} onChange={(event) => setMftExtension(event.target.value)} placeholder=".ps1, .exe, .dll" className="rounded-xl border border-line bg-abyss/80 px-3 py-2 text-sm" />
+              <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-amber-300/80">Ransomware</span>
+              <label className="flex items-center gap-2 text-sm text-muted" title="Files whose name still carries a document extension with another one appended, e.g. report.docx.locked. Benign trailing extensions (.dll, .lnk, installers) are excluded.">
+                <input type="checkbox" data-testid="mft-double-extension" checked={mftDoubleExtension} onChange={(event) => setMftDoubleExtension(event.target.checked)} />
+                Double extension
+              </label>
+              <label className="flex items-center gap-2 text-sm text-muted" title="Files whose extension matches a known ransomware family (.locked, .lockbit, .conti, ...).">
+                <input type="checkbox" data-testid="mft-ransomware-extension" checked={mftRansomwareExtension} onChange={(event) => setMftRansomwareExtension(event.target.checked)} />
+                Known ransomware extension
+              </label>
               {caseId ? (
                 <Link
                   to={`/cases/${caseId}/search?artifact_type=mft${evidenceIdFilter ? `&evidence_id=${encodeURIComponent(evidenceIdFilter)}` : ""}${hostFilter ? `&host=${encodeURIComponent(hostFilter)}` : ""}${query ? `&q=${encodeURIComponent(query)}` : ""}`}

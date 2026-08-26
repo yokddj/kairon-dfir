@@ -35,6 +35,8 @@ class SearchFilters(BaseModel):
     in_use_only: bool | None = None
     has_path: bool | None = None
     suspicious_paths_only: bool | None = None
+    double_extension_only: bool | None = None
+    ransomware_extension_only: bool | None = None
     extension: list[str] = Field(default_factory=list)
     domain: list[str] = Field(default_factory=list)
     ip: list[str] = Field(default_factory=list)
