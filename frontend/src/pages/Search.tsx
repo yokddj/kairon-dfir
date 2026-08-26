@@ -2038,6 +2038,7 @@ export default function Search() {
     const raw = asRecord(result.raw);
     const summary = summarizeResult(result);
     const process = asRecord(raw.process);
+    const event = asRecord(raw.event);
     const marking = getResultMarking(result);
     const processNodeIds = Array.isArray(raw.related_process_node_ids) ? (raw.related_process_node_ids as string[]) : [];
     const evidenceId = asString(raw.evidence_id);
@@ -2046,6 +2047,15 @@ export default function Search() {
     const sourceEventId = asString(raw.search_doc_id) || asString(raw.id) || result.id;
     const timestamp = asString(raw["@timestamp"]) || asString(raw.timestamp) || result.timestamp || "";
     const processName = summary.primaryProcess;
+    // Every windows_event doc carries SOME process object (e.g. the PID of
+    // the service that wrote the log), even for events with nothing to do
+    // with process creation -- a 7045 "service created" record's process.pid
+    // is Service Control Manager's own PID, not a process worth building a
+    // tree around. Only trust pid/name/guid as real process identity when
+    // the event itself is an actual process-creation record; correlated
+    // memory process node ids are trustworthy on their own regardless.
+    const isProcessCreationEvent = (asString(result.event_type) || asString(event.type)).toLowerCase() === "process_start";
+    const hasProcessIdentity = processNodeIds.length > 0 || (isProcessCreationEvent && Boolean(processName || pid || processGuid));
     const host = asString(summary.primaryHost) || asString(result.host) || asString(asRecord(raw.host).name);
     const actions: RowAction[] = [];
 
@@ -2094,7 +2104,7 @@ export default function Search() {
       actions.push({ label: "Copy event ID", onClick: () => void copyToClipboard(result.id), ariaLabel: "Copy event ID" });
       actions.push({ label: "Copy raw JSON", onClick: () => void copyToClipboard(JSON.stringify(raw, null, 2)), ariaLabel: "Copy raw JSON" });
     }
-    if (processNodeIds.length || processName || pid || processGuid || sourceEventId) {
+    if (hasProcessIdentity) {
       const buildProcessParams = (modeValue: string) => {
         const params = new URLSearchParams();
         params.set("mode", modeValue);
