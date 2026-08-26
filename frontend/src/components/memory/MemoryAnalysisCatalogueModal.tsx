@@ -49,7 +49,7 @@ function familyHref(caseId: string, evidenceId: string, item: MemoryAnalysisCata
   if (item.family === "processes") return memoryEvidenceRoute(caseId, evidenceId, "processes");
   if (item.family === "system_info") return memoryEvidenceRoute(caseId, evidenceId, "system");
   if (item.family === "raw_observations") return memoryEvidenceRoute(caseId, evidenceId);
-  const map: Record<string, string> = { network: "network", modules: "modules", handles: "handles", drivers: "modules", kernel_modules: "modules", suspicious_regions: "suspicious", shell_history: "shell_history" };
+  const map: Record<string, string> = { network: "network", modules: "modules", handles: "handles", drivers: "drivers", kernel_modules: "kernel", suspicious_regions: "suspicious", shell_history: "shell_history" };
   return memoryEvidenceRoute(caseId, evidenceId, map[item.family] || "network");
 }
 
@@ -220,7 +220,7 @@ function CatalogueCard({
               Run
             </button>
             <Link
-              to={memoryEvidenceRoute(caseId, evidenceId, "artifacts", new URLSearchParams({ artifact: item.family }))}
+              to={familyHref(caseId, evidenceId, item)}
               className="rounded-md border border-line bg-abyss/70 px-2 py-1 text-[10px] text-muted"
               data-testid={`memory-catalogue-view-requirements-${item.profile}`}
             >
