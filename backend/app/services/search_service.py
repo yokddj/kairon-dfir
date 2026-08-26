@@ -322,6 +322,24 @@ def _dedupe(values: list[str] | None) -> list[str]:
     return output
 
 
+
+def _dedupe_enum(values: list[str] | str | None) -> list[str]:
+    """_dedupe for enum-like params, additionally splitting on commas.
+
+    The UI writes multi-value filters into the URL comma-joined
+    ("event_type=a,b,c"), but the API only accepted repeated params, so
+    replaying a URL's own query string against the API matched a literal
+    "a,b,c" and returned zero results with no warning. Only enum-like params
+    use this: free-text ones (q, file_path, file_name, host, user) keep plain
+    _dedupe, because a comma can be part of a legitimate value there.
+    """
+    raw = [values] if isinstance(values, str) else (values or [])
+    expanded: list[str] = []
+    for value in raw:
+        expanded.extend(str(value).split(","))
+    return _dedupe(expanded)
+
+
 def normalize_search_value(value: str | None, *, max_length: int = 512) -> tuple[str, list[str]]:
     warnings: list[str] = []
     text = CONTROL_CHARS_RE.sub(" ", str(value or "")).strip()
@@ -1829,16 +1847,16 @@ def quick_filters() -> list[dict[str, Any]]:
 
 def build_search_v2_params(**kwargs: Any) -> dict[str, Any]:
     params = dict(kwargs)
-    params["artifact_type"] = _dedupe(kwargs.get("artifact_type"))
-    params["parser"] = _dedupe(kwargs.get("parser"))
-    params["exclude_artifact_type"] = _dedupe(kwargs.get("exclude_artifact_type"))
-    params["exclude_parser"] = _dedupe(kwargs.get("exclude_parser"))
-    params["event_type"] = _dedupe(kwargs.get("event_type"))
-    params["event_category"] = _dedupe(kwargs.get("event_category"))
-    params["severity"] = _dedupe(kwargs.get("severity"))
-    params["status"] = _dedupe(kwargs.get("status"))
-    params["confidence"] = _dedupe(kwargs.get("confidence"))
-    params["finding_type"] = _dedupe(kwargs.get("finding_type"))
+    params["artifact_type"] = _dedupe_enum(kwargs.get("artifact_type"))
+    params["parser"] = _dedupe_enum(kwargs.get("parser"))
+    params["exclude_artifact_type"] = _dedupe_enum(kwargs.get("exclude_artifact_type"))
+    params["exclude_parser"] = _dedupe_enum(kwargs.get("exclude_parser"))
+    params["event_type"] = _dedupe_enum(kwargs.get("event_type"))
+    params["event_category"] = _dedupe_enum(kwargs.get("event_category"))
+    params["severity"] = _dedupe_enum(kwargs.get("severity"))
+    params["status"] = _dedupe_enum(kwargs.get("status"))
+    params["confidence"] = _dedupe_enum(kwargs.get("confidence"))
+    params["finding_type"] = _dedupe_enum(kwargs.get("finding_type"))
     params["platform"] = str(kwargs.get("platform") or "").strip().lower()
     params["include_highlights"] = kwargs.get("include_highlights", True)
     params["include_facets"] = kwargs.get("include_facets", True)
