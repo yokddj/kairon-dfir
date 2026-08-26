@@ -692,6 +692,13 @@ export default function ArtifactExplorer() {
   const evidenceIdFilter = searchParams.get("evidence_id") || selectedEvidenceId;
   const hostIdFilter = searchParams.get("host_id") || activeHostId;
   const hostFilter = searchParams.get("host") || activeHost || selectedHost;
+  const extensionAnomaliesQuery = useQuery({
+    queryKey: ["mft-extension-anomalies", caseId, hostFilter],
+    queryFn: () => api.getMftExtensionAnomalies(caseId!, { host: hostFilter || undefined }),
+    enabled: Boolean(caseId) && artifactType === "mft",
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
   const facetsQuery = useQuery({
     queryKey: ["artifact-explorer-facets", caseId, hostIdFilter],
     queryFn: () => api.searchFacets({ caseId: caseId || undefined, hostId: hostIdFilter || undefined }),
@@ -1140,6 +1147,26 @@ export default function ArtifactExplorer() {
                 <input type="checkbox" data-testid="mft-ransomware-extension" checked={mftRansomwareExtension} onChange={(event) => setMftRansomwareExtension(event.target.checked)} />
                 Known ransomware extension
               </label>
+              {(extensionAnomaliesQuery.data?.candidates ?? []).length ? (
+                <div data-testid="mft-extension-anomalies" className="w-full basis-full rounded-xl border border-rose-400/40 bg-rose-500/10 p-3">
+                  <p className="text-xs text-rose-100">
+                    Possible mass rename: these extensions are carried by many files that still hold their original document extension.
+                  </p>
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {(extensionAnomaliesQuery.data?.candidates ?? []).map((item) => (
+                      <button
+                        key={item.extension}
+                        type="button"
+                        onClick={() => { setMftExtension(item.extension); setPage(1); }}
+                        className="rounded-full border border-rose-400/50 bg-abyss/60 px-3 py-1 text-xs text-rose-100 hover:bg-rose-500/20"
+                        title={`${item.renamed_file_count} of ${item.file_count} files keep their original extension (${Math.round(item.double_extension_ratio * 100)}%)`}
+                      >
+                        {item.extension} · {item.file_count.toLocaleString()} files{item.known_ransomware ? " · known family" : ""}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               {caseId ? (
                 <Link
                   to={`/cases/${caseId}/search?artifact_type=mft${evidenceIdFilter ? `&evidence_id=${encodeURIComponent(evidenceIdFilter)}` : ""}${hostFilter ? `&host=${encodeURIComponent(hostFilter)}` : ""}${query ? `&q=${encodeURIComponent(query)}` : ""}`}

@@ -1818,6 +1818,82 @@ def save_siem_query_history(payload: dict) -> list[dict]:
     return history
 
 
+@router.get("/api/cases/{case_id}/mft/extension-anomalies")
+def mft_extension_anomalies(
+    case_id: str,
+    host: str | None = Query(default=None),
+    min_files: int = Query(default=20, ge=2, le=100000),
+    min_double_extension_ratio: float = Query(default=0.5, ge=0.0, le=1.0),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Extensions that look like the result of a mass rename.
+
+    Mass encryption is an aggregate event, not a property of any single file:
+    one .baklava file is noise, twenty thousand is an incident. So this cannot
+    be a row filter.
+
+    The signal used is intrinsic rather than a whitelist. Trying to enumerate
+    every legitimate Windows extension is a losing game (.mfl, .adml, .inf_loc,
+    .ps1xml ... there is always one more), and every miss becomes a false
+    positive. Instead: ransomware appends its extension to the existing name,
+    so the files under a rename-created extension nearly all still carry their
+    original document extension. Ordinary system extensions almost never do.
+    That ratio separates the two without needing to know what Windows ships.
+    """
+    client = get_opensearch_client()
+    index = _resolve_index(case_id)
+    if not _index_available(index):
+        return {"case_id": case_id, "min_files": min_files, "candidates": [], "warnings": ["No indexed events for this case."]}
+    filters: list[dict] = [{"term": {"case_id": case_id}}, {"term": {"artifact.type": "mft"}}]
+    if host:
+        filters.append({"terms": {"host.name": [host, host.lower(), host.upper()]}})
+    double_extension = {
+        "regexp": {
+            "file.name": {
+                "value": rf".*\.({RANSOM_TARGET_EXTENSIONS})\.[-a-z0-9_]{{2,12}}",
+                "case_insensitive": True,
+            }
+        }
+    }
+    body = {
+        "size": 0,
+        "query": {"bool": {"filter": filters}},
+        "aggs": {
+            "ext": {
+                "terms": {"field": "file.extension", "size": 400, "order": {"_count": "desc"}},
+                "aggs": {"double": {"filter": double_extension}},
+            }
+        },
+    }
+    try:
+        result = client.search(index=index, body=body, params={"ignore_unavailable": "true"})
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not aggregate MFT extensions for %s: %s", case_id, exc)
+        return {"case_id": case_id, "min_files": min_files, "candidates": [], "warnings": [f"Aggregation failed: {exc}"]}
+    known_ransomware = {item.lower() for item in KNOWN_RANSOMWARE_EXTENSIONS}
+    candidates = []
+    for bucket in result.get("aggregations", {}).get("ext", {}).get("buckets", []):
+        extension = str(bucket.get("key") or "").strip().lower()
+        count = int(bucket.get("doc_count") or 0)
+        if not extension or count < min_files:
+            continue
+        renamed = int((bucket.get("double") or {}).get("doc_count") or 0)
+        ratio = renamed / count if count else 0.0
+        if ratio < min_double_extension_ratio:
+            continue
+        candidates.append(
+            {
+                "extension": extension,
+                "file_count": count,
+                "renamed_file_count": renamed,
+                "double_extension_ratio": round(ratio, 3),
+                "known_ransomware": extension in known_ransomware,
+            }
+        )
+    candidates.sort(key=lambda item: (-item["file_count"], item["extension"]))
+    return {"case_id": case_id, "host": host, "min_files": min_files, "candidates": candidates[:50], "warnings": []}
+
+
 @router.get("/api/siem/saved-searches")
 def siem_saved_searches() -> list[dict]:
     searches = _load_json_setting(SIEM_SAVED_SEARCHES_KEY, [])

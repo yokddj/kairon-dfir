@@ -2519,6 +2519,14 @@ export type CaseHostAuditEntry = {
   created_at?: string | null;
 };
 
+export type MftExtensionAnomaliesResponse = {
+  case_id: string;
+  host?: string | null;
+  min_files: number;
+  candidates: Array<{ extension: string; file_count: number; renamed_file_count: number; double_extension_ratio: number; known_ransomware: boolean }>;
+  warnings: string[];
+};
+
 export type CaseHostCoverageResponse = {
   case_id: string;
   expected_families: string[];
@@ -5847,6 +5855,12 @@ export const api = {
   getCaseCapabilities: (caseId: string) => request<CaseCapabilitiesResponse>(`/cases/${caseId}/capabilities`),
   getCaseHosts: (caseId: string) => request<CaseHostsResponse>(`/cases/${caseId}/hosts`),
   getCaseHostCoverage: (caseId: string) => request<CaseHostCoverageResponse>(`/cases/${caseId}/hosts/coverage`),
+  getMftExtensionAnomalies: (caseId: string, params?: { host?: string; min_files?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.host) query.set("host", params.host);
+    if (params?.min_files) query.set("min_files", String(params.min_files));
+    return request<MftExtensionAnomaliesResponse>(`/cases/${caseId}/mft/extension-anomalies${query.size ? `?${query.toString()}` : ""}`);
+  },
   getCaseHostFacts: (caseId: string, params: { host_id?: string; evidence_id?: string; fact_type?: string }) => {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {
