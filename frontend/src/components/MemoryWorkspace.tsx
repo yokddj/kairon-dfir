@@ -214,32 +214,45 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
     [],
   );
 
+  // The full "Authorized RAM evidence" header only earns its place when
+  // this is the primary page header (e.g. MemoryRunsPage, no evidenceIdProp).
+  // Embedded inside MemoryEvidencePage for a specific dump, MemoryEvidenceHeader
+  // already covers the title/actions -- repeating them here (plus a fixed
+  // description paragraph) was pure duplication standing between page load
+  // and the tab bar below, so evidence-scoped mounts get just the one
+  // status line instead.
   return (
     <div className="space-y-6" data-testid="memory-workspace">
-      <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
-        <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Memory Analysis</p>
-        <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h2 className="text-3xl font-semibold">Authorized RAM evidence</h2>
-            <p className="mt-2 max-w-3xl text-sm text-muted">
-              Isolated analysis for authorized memory evidence. Process results remain only in Memory Analysis and never enter global disk views.
+      {!evidenceIdProp ? (
+        <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
+          <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Memory Analysis</p>
+          <div className="mt-2 flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <h2 className="text-3xl font-semibold">Authorized RAM evidence</h2>
+              <p className="mt-2 max-w-3xl text-sm text-muted">
+                Isolated analysis for authorized memory evidence. Process results remain only in Memory Analysis and never enter global disk views.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Link to={`/cases/${caseId}/evidence?add_evidence=1&expected_kind=memory_dump`} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">
+                Add memory image
+              </Link>
+              <Link to={`/cases/${caseId}/evidence`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">
+                Evidence &amp; Ingest
+              </Link>
+            </div>
+          </div>
+          {overview ? (
+            <p className="mt-3 text-xs text-muted">
+              Mode: <span className="text-ink">{modeLabel(overview.mode)}</span> · {overview.evidences.length} memory evidence · {overview.runs.length} runs
             </p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Link to={`/cases/${caseId}/evidence?add_evidence=1&expected_kind=memory_dump`} className="rounded-xl bg-accent px-3 py-2 text-xs font-semibold text-abyss">
-              Add memory image
-            </Link>
-            <Link to={`/cases/${caseId}/evidence`} className="rounded-xl border border-line bg-abyss/70 px-3 py-2 text-xs text-muted">
-              Evidence &amp; Ingest
-            </Link>
-          </div>
-        </div>
-        {overview ? (
-          <p className="mt-3 text-xs text-muted">
-            Mode: <span className="text-ink">{modeLabel(overview.mode)}</span> · {overview.evidences.length} memory evidence · {overview.runs.length} runs
-          </p>
-        ) : null}
-      </section>
+          ) : null}
+        </section>
+      ) : overview ? (
+        <p className="text-xs text-muted">
+          Mode: <span className="text-ink">{modeLabel(overview.mode)}</span> · {overview.evidences.length} memory evidence · {overview.runs.length} runs
+        </p>
+      ) : null}
 
       {overviewQuery.isLoading ? (
         <section className="rounded-2xl border border-line bg-panel/60 p-5 text-sm text-muted">Loading memory overview...</section>

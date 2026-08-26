@@ -4,9 +4,7 @@ import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/rea
 import { api, type EvidencePlatformCapabilities } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
 import { MemoryWorkspace } from "../components/MemoryWorkspace";
-import InvestigationContext from "../components/InvestigationContext";
 import { useHostContext } from "../hooks/useHostContext";
-import { useInvestigationBreadcrumbs } from "../lib/useInvestigationBreadcrumbs";
 import { MemoryEvidenceHeader } from "../components/memory/MemoryEvidenceHeader";
 import { MemoryEvidenceSelector } from "../components/memory/MemoryEvidenceSelector";
 import { MemoryAnalysisCatalogueModal } from "../components/memory/MemoryAnalysisCatalogueModal";
@@ -181,14 +179,6 @@ export default function MemoryEvidencePage() {
 
   const overview = overviewQuery.data;
   const evidence = landingQuery.data?.items?.find((item) => item.evidence_id === evidenceId) || null;
-  // Tabs that are registered capabilities (processes, network) resolve to
-  // the full Case/Surface/Domain/Capability trail on their own, with the
-  // evidence name auto-derived from the registry; "Memory" is the fallback
-  // for the other tabs (overview, modules, handles, ...), which aren't
-  // registered capabilities. The evidence filename is passed explicitly
-  // either way since this page already has it directly, rather than
-  // depending on whether capability matching happened to fire.
-  const breadcrumbs = useInvestigationBreadcrumbs({ lensLabel: "Memory", context: evidence?.filename || undefined });
   const evidencePlatformProfile = evidence?.platform_capabilities ? { capabilities: evidence.platform_capabilities as EvidencePlatformCapabilities } : null;
   const linuxMemoryHint = capabilityEnabled(evidencePlatformProfile, "supportsJournal") || capabilityEnabled(evidencePlatformProfile, "supportsPackages") || capabilityEnabled(evidencePlatformProfile, "supportsUsers");
   const caseHosts = caseHostsQuery.data?.hosts ?? [];
@@ -380,6 +370,13 @@ export default function MemoryEvidencePage() {
     },
   });
   const symbolPreparation = symbolPreparationQuery.data ?? null;
+  // Both panels are diagnostics: only worth auto-opening when something
+  // actually needs the analyst's attention, mirroring the same "ready ==
+  // nothing to show" convention MemoryEvidenceHeader already uses for its
+  // own inline banner (showPreparationInfo).
+  const symbolsNeedAttention = Boolean(symbolReadiness && symbolReadiness.state !== "cached");
+  const preparationState = symbolPreparation?.effective_state || symbolPreparation?.preparation_state || symbolPreparation?.ui_state;
+  const preparationNeedsAttention = Boolean(symbolPreparation && preparationState !== "ready");
 
   // Memory Evidence Preparation (Phase 1/2, app.services.memory.preparation)
   // -- a separate, platform-agnostic read-only snapshot from the
@@ -452,23 +449,6 @@ export default function MemoryEvidencePage() {
 
   return (
     <div className="space-y-6" data-testid="memory-evidence-workspace">
-      <InvestigationContext
-        caseId={caseId}
-        host={activeHost || evidence.detected_host}
-        hostId={activeHostId || evidence.host_id}
-        evidenceId={evidenceId}
-        evidenceName={evidence.filename}
-        current="Memory"
-        breadcrumbs={breadcrumbs}
-        actions={[
-          { label: "Evidence Detail", to: `/evidences/${evidenceId}`, description: "Open integrity and processing details" },
-          { label: "Search", to: `/cases/${caseId}/search?source_category=Memory`, description: "Search memory-derived documents" },
-          { label: "Timeline", to: `/cases/${caseId}/search?source_category=Memory&view=timeline&sort=@timestamp&order=asc`, description: "Timeline memory-derived events" },
-          { label: "Artifacts", to: `/cases/${caseId}/artifacts?source_category=Memory`, description: "Review artifact views with this scope" },
-          { label: "Add finding", to: `/cases/${caseId}/findings?create=1&source_view=memory&artifact_family=${encodeURIComponent(family)}&evidence_id=${encodeURIComponent(evidenceId)}&title=${encodeURIComponent("Suspicious memory artifact")}${activeHostId || evidence.host_id ? `&host_id=${encodeURIComponent(activeHostId || evidence.host_id || "")}` : ""}`, description: "Create a contextual memory finding" },
-          { label: "Processing", to: `/cases/${caseId}?tab=processing`, description: "Open processing queue" },
-        ]}
-      />
       {landingItems.length > 1 ? (
         <MemoryEvidenceSelector
           caseId={caseId}
@@ -481,15 +461,18 @@ export default function MemoryEvidencePage() {
         />
       ) : null}
 
-      <section className="rounded-[28px] border border-accent/30 bg-panel/70 p-5 shadow-panel" data-testid="memory-host-assignment-panel">
-        <div className="flex flex-wrap items-start justify-between gap-3">
+      <details className="rounded-[28px] border border-accent/30 bg-panel/70 shadow-panel" open={!displayedEvidence?.host_id} data-testid="memory-host-assignment-panel">
+        <summary className="flex cursor-pointer select-none flex-wrap items-center justify-between gap-3 p-5">
           <div>
             <p className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Host assignment</p>
-            <h2 className="mt-1 text-lg font-semibold text-ink">Assign this memory evidence to a case host</h2>
-            <p className="mt-2 max-w-3xl text-sm text-muted">Assigned host controls Memory host filters. Detected/provided host stays as evidence metadata.</p>
+            <h2 className="mt-1 text-lg font-semibold text-ink">
+              {assignedHostDisplayOverride ?? selectedAssignedHost?.display_name ?? currentAssignedHost?.display_name ?? "Unassigned"}
+            </h2>
           </div>
           <span className={`rounded-full border px-3 py-1 text-xs ${currentHostStatus.tone}`} data-testid="memory-host-assignment-status">{currentHostStatus.label}</span>
-        </div>
+        </summary>
+        <div className="px-5 pb-5">
+        <p className="max-w-3xl text-sm text-muted">Assigned host controls Memory host filters. Detected/provided host stays as evidence metadata.</p>
         {!displayedEvidence?.host_id ? (
           <div className="mt-3 rounded-2xl border border-amber/30 bg-amber/10 p-3 text-sm text-amber" role="alert">
             This memory evidence is not assigned to a case host. Host filters may not include it until assigned.
@@ -538,7 +521,8 @@ export default function MemoryEvidencePage() {
           </button>
         </div>
         {hostAssignmentMutation.error instanceof Error ? <p className="mt-2 text-xs text-danger">{hostAssignmentMutation.error.message}</p> : null}
-      </section>
+        </div>
+      </details>
 
       {linuxMemoryHint ? (
         <section className="rounded-[28px] border border-mint/30 bg-emerald-500/10 p-5 shadow-panel" data-testid="memory-linux-notice">
@@ -601,21 +585,30 @@ export default function MemoryEvidencePage() {
         </div>
       ) : null}
 
-      {evidence && symbolReadiness ? (
-        <MemorySymbolResolutionPanel
-          caseId={caseId}
-          evidenceId={evidenceId}
-          readiness={symbolReadiness}
-        />
-      ) : null}
-
-      {evidence && symbolPreparation ? (
-        <MemoryPreparationCard
-          caseId={caseId}
-          evidenceId={evidenceId}
-          preparation={symbolPreparation}
-          nativeProbeStatus={nativeProbeQuery.data ?? null}
-        />
+      {evidence && (symbolReadiness || symbolPreparation) ? (
+        <details className="rounded-[28px] border border-line bg-panel/60 shadow-panel" open={symbolsNeedAttention || preparationNeedsAttention} data-testid="memory-evidence-readiness-details">
+          <summary className="flex cursor-pointer select-none items-center justify-between gap-3 p-5 text-sm text-ink">
+            <span className="font-mono text-[11px] uppercase tracking-[0.18em] text-accent">Evidence readiness</span>
+            <span className="text-xs text-muted">{symbolsNeedAttention || preparationNeedsAttention ? "Needs attention" : "Symbols cached · ready for analysis"}</span>
+          </summary>
+          <div className="space-y-6 px-5 pb-5">
+            {symbolReadiness ? (
+              <MemorySymbolResolutionPanel
+                caseId={caseId}
+                evidenceId={evidenceId}
+                readiness={symbolReadiness}
+              />
+            ) : null}
+            {symbolPreparation ? (
+              <MemoryPreparationCard
+                caseId={caseId}
+                evidenceId={evidenceId}
+                preparation={symbolPreparation}
+                nativeProbeStatus={nativeProbeQuery.data ?? null}
+              />
+            ) : null}
+          </div>
+        </details>
       ) : null}
 
       {evidence && evidencePreparation ? (
