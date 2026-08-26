@@ -111,6 +111,15 @@ function renderLegacyArtifactsPage() {
   return renderPage("/cases/case-1/memory/ev-memory?tab=artifacts");
 }
 
+// Drivers/Kernel Modules/Modules/Handles/Suspicious Memory are each their
+// own top-level MemoryWorkspace tab (the redundant internal Artifacts
+// subview switcher that used to let a single "artifacts" tab mount jump
+// between all of them was removed) -- reach a non-network family by
+// rendering its own tab directly, the same way the app navigates to it.
+function renderArtifactsFamilyPage(tab: string) {
+  return renderPage(`/cases/case-1/memory/ev-memory?tab=${tab}`);
+}
+
 function overview() {
   return {
     case_id: "case-1",
@@ -792,12 +801,15 @@ describe("Memory analysis UX fixes v1", () => {
     expect(await screen.findByTestId("memory-artifacts-overview-network-value")).toHaveTextContent("Not analyzed");
   });
 
-  // 28. Artifacts subviews are present
-  it("lists every Artifacts subview", async () => {
-    renderLegacyArtifactsPage();
-    await screen.findByTestId("memory-artifacts-tab");
+  // 28. Every artifact family has its own top-level MemoryWorkspace tab
+  // (the redundant internal Artifacts subview switcher was removed --
+  // network/modules/handles/drivers/kernel/suspicious are each reached
+  // directly, not via an in-page pill switcher).
+  it("lists every Artifacts subview as its own top-level tab", async () => {
+    renderPage("/cases/case-1/memory/ev-memory");
+    await screen.findByTestId("memory-subview-tabs");
     for (const sv of ["network", "modules", "handles", "drivers", "kernel", "suspicious"]) {
-      expect(screen.getByTestId(`memory-artifacts-subview-${sv}`)).toBeInTheDocument();
+      expect(screen.getByTestId(`memory-tab-${sv}`)).toBeInTheDocument();
     }
   });
 
@@ -810,33 +822,29 @@ describe("Memory analysis UX fixes v1", () => {
 
   // 30. Modules subview renders the empty state when no rows
   it("renders the Modules empty state when no rows", async () => {
-    renderLegacyArtifactsPage();
+    renderArtifactsFamilyPage("modules");
     await screen.findByTestId("memory-artifacts-tab");
-    fireEvent.click(await screen.findByTestId("memory-artifacts-subview-modules"));
     expect(await screen.findByTestId("memory-artifacts-modules-empty")).toBeInTheDocument();
   });
 
   // 31. Handles subview renders the empty state when no rows
   it("renders the Handles empty state when no rows", async () => {
-    renderLegacyArtifactsPage();
+    renderArtifactsFamilyPage("handles");
     await screen.findByTestId("memory-artifacts-tab");
-    fireEvent.click(await screen.findByTestId("memory-artifacts-subview-handles"));
     expect(await screen.findByTestId("memory-artifacts-handles-empty")).toBeInTheDocument();
   });
 
   // 32. Drivers subview renders the empty state when no rows
   it("renders the Drivers empty state when no rows", async () => {
-    renderLegacyArtifactsPage();
+    renderArtifactsFamilyPage("drivers");
     await screen.findByTestId("memory-artifacts-tab");
-    fireEvent.click(await screen.findByTestId("memory-artifacts-subview-drivers"));
     expect(await screen.findByTestId("memory-artifacts-drivers-empty")).toBeInTheDocument();
   });
 
   // 33. Suspicious regions show needs_review status
   it("renders the suspicious regions empty state when no rows", async () => {
-    renderLegacyArtifactsPage();
+    renderArtifactsFamilyPage("suspicious");
     await screen.findByTestId("memory-artifacts-tab");
-    fireEvent.click(await screen.findByTestId("memory-artifacts-subview-suspicious"));
     expect(await screen.findByTestId("memory-artifacts-suspicious-empty")).toBeInTheDocument();
   });
 
@@ -910,9 +918,8 @@ describe("Memory analysis UX fixes v1", () => {
       }],
       facets: {}, normalization_version: "memory_artifact_canonical_v1",
     });
-    renderLegacyArtifactsPage();
+    renderArtifactsFamilyPage("suspicious");
     await screen.findByTestId("memory-artifacts-tab");
-    fireEvent.click(await screen.findByTestId("memory-artifacts-subview-suspicious"));
     expect(await screen.findByTestId("memory-artifacts-suspicious-review")).toHaveTextContent("needs_review");
     expect(document.body.textContent || "").not.toContain("malware confirmed");
   });

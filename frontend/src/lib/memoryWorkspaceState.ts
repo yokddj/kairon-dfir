@@ -26,6 +26,8 @@ export type MemoryTab =
   | "network"
   | "modules"
   | "handles"
+  | "drivers"
+  | "kernel"
   | "suspicious"
   | "vads"
   | "files"
@@ -42,6 +44,8 @@ export const MEMORY_TABS: ReadonlyArray<{ key: MemoryTab; label: string; testId:
   { key: "network", label: "Network", testId: "memory-tab-network", routeSegment: "network" },
   { key: "modules", label: "Modules & DLLs", testId: "memory-tab-modules", routeSegment: "modules" },
   { key: "handles", label: "Handles", testId: "memory-tab-handles", routeSegment: "handles" },
+  { key: "drivers", label: "Drivers", testId: "memory-tab-drivers", routeSegment: "drivers" },
+  { key: "kernel", label: "Kernel Modules", testId: "memory-tab-kernel", routeSegment: "kernel-modules" },
   { key: "suspicious", label: "Suspicious Memory", testId: "memory-tab-suspicious", routeSegment: "suspicious" },
   { key: "vads", label: "VADs", testId: "memory-tab-vads", routeSegment: "vads" },
   { key: "files", label: "Files", testId: "memory-tab-files", routeSegment: "files" },

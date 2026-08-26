@@ -689,7 +689,11 @@ export function MemoryArtifactsTab({
   onJumpToTree,
   initialSubView,
 }: Props) {
-  const [subView, setSubView] = useState<SubView>(initialSubView ?? "network");
+  // No longer switchable in-page (the redundant internal subview tab
+  // bar was removed -- Drivers and Kernel Modules are now reached via
+  // their own top-level MemoryWorkspace tabs, same as every other
+  // family), so this is fixed for the lifetime of the mount.
+  const [subView] = useState<SubView>(initialSubView ?? "network");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [filter, setFilter] = useState("");
@@ -880,23 +884,6 @@ export function MemoryArtifactsTab({
             />
           )}
         </header>
-        <div className="mt-3 flex flex-wrap gap-2" role="tablist" aria-label="Memory artifact subviews">
-          {SUBVIEWS.map((sv) => (
-            <button
-              key={sv.key}
-              type="button"
-              role="tab"
-              aria-selected={subView === sv.key}
-              onClick={() => { setSubView(sv.key); setPage(1); }}
-              data-testid={sv.testId}
-              className={`rounded-xl border px-3 py-1.5 text-xs ${
-                subView === sv.key ? "border-accent bg-accent/10 text-accent" : "border-line bg-abyss/70 text-muted"
-              }`}
-            >
-              {sv.label}
-            </button>
-          ))}
-        </div>
         <p className="mt-2 text-[11px] text-muted" data-testid="memory-artifacts-subview-description">
           {SUBVIEWS.find((sv) => sv.key === subView)?.description}
         </p>

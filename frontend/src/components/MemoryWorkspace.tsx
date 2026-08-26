@@ -396,6 +396,34 @@ export function MemoryWorkspace({ caseId, evidenceId: evidenceIdProp, activeTab,
             initialSubView="handles"
           />
         ) : null}
+        {tab === "drivers" ? (
+          <MemoryArtifactsTab
+            caseId={caseId}
+            runOptions={runOptionsQuery.data ?? null}
+            selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
+            onSelectEntity={(entityId) => { setSelectedEntityId(entityId); }}
+            onJumpToProcesses={(entityId) => { setSelectedEntityId(entityId); onTabChange("processes"); }}
+            onJumpToGraph={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            onJumpToTree={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            evidenceId={effectiveEvidenceId}
+            initialSubView="drivers"
+          />
+        ) : null}
+        {tab === "kernel" ? (
+          <MemoryArtifactsTab
+            caseId={caseId}
+            runOptions={runOptionsQuery.data ?? null}
+            selectedRunId={selectedRunId}
+            onSelectRunId={setSelectedRunId}
+            onSelectEntity={(entityId) => { setSelectedEntityId(entityId); }}
+            onJumpToProcesses={(entityId) => { setSelectedEntityId(entityId); onTabChange("processes"); }}
+            onJumpToGraph={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            onJumpToTree={(entityId) => { setSelectedEntityId(entityId); onTabChange("graph"); }}
+            evidenceId={effectiveEvidenceId}
+            initialSubView="kernel"
+          />
+        ) : null}
         {tab === "suspicious" ? (
           <MemoryArtifactsTab
             caseId={caseId}
