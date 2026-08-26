@@ -346,8 +346,6 @@ def ensure_case_index(case_id: str) -> str:
                         "@timestamp": {"type": "date"},
                         "timestamp_precision": {"type": "keyword"},
                         "timezone": {"type": "keyword"},
-                        "timestamp_precision": {"type": "keyword"},
-                        "timezone": {"type": "keyword"},
                         "tags": {"type": "keyword"},
                         "risk_score": {"type": "integer"},
                         "raw_summary": {"type": "text"},
@@ -518,19 +516,6 @@ def ensure_case_index(case_id: str) -> str:
                                 "ads": {"type": "keyword"},
                                 "has_ads": {"type": "boolean"},
                                 "source_path": {"type": "keyword"},
-                            }
-                        },
-                        "download": {
-                            "properties": {
-                                "url": {"type": "keyword"},
-                                "final_url": {"type": "keyword"},
-                                "referrer": {"type": "keyword"},
-                                "target_path": {"type": "keyword"},
-                                "file_name": {"type": "keyword"},
-                                "mime_type": {"type": "keyword"},
-                                "total_bytes": {"type": "long"},
-                                "received_bytes": {"type": "long"},
-                                "state": {"type": "keyword"},
                             }
                         },
                         "filesystem": {
@@ -758,22 +743,6 @@ def ensure_case_index(case_id: str) -> str:
                                 "normalized_windows_path": {"type": "keyword"},
                                 "artifact_category": {"type": "keyword"},
                                 "parser_status": {"type": "keyword"},
-                            }
-                        },
-                        "object": {
-                            "properties": {
-                                "name": {"type": "keyword"},
-                                "path": {"type": "keyword"},
-                                "type": {"type": "keyword"},
-                                "server": {"type": "keyword"},
-                            }
-                        },
-                        "access": {
-                            "properties": {
-                                "mask": {"type": "keyword"},
-                                "list": {"type": "keyword"},
-                                "accesses": {"type": "keyword"},
-                                "reason": {"type": "text"},
                             }
                         },
                         "registry": {

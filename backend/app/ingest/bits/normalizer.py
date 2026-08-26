@@ -118,32 +118,31 @@ def normalize_bits_row(document: dict, row: dict, artifact_meta: dict) -> dict:
     if direction == "download" and download_state == "complete":
         event_type = "file_downloaded"
         event_action = "bits_transfer_observed"
-        event_category = "download"
         message = f"BITS transfer observed: {transfer_url or remote_name or 'unknown'} -> {target_path or local_name or 'unknown'}"
     elif direction == "download" and download_state == "in_progress":
         event_type = "download_started"
         event_action = "bits_transfer_observed"
-        event_category = "download"
         message = f"BITS download in progress: {transfer_url or remote_name or 'unknown'} -> {target_path or local_name or 'unknown'}"
     elif direction == "download" and download_state in {"error", "cancelled", "interrupted"}:
         event_type = "download_interrupted"
         event_action = "bits_transfer_observed"
-        event_category = "download"
         message = f"BITS transfer interrupted: {transfer_url or remote_name or 'unknown'} -> {target_path or local_name or 'unknown'}"
     else:
         event_type = "bits_job_observed"
         event_action = "bits_transfer_observed"
-        event_category = "download"
         message = f"BITS job observed: {display_name or job_id or transfer_url or target_path or 'job'}"
     if notify_cmd:
         message = f"{message} | NotifyCmdLine: {notify_cmd}"
 
     document["event"].update(
         {
+            # A duplicate "category" key here used to silently override this
+            # with "download" -- a value used nowhere else in the codebase,
+            # which kept BITS transfers (MITRE T1197) out of the "Network
+            # activity" quick filter that selects event.category == "network".
             "category": "network",
             "type": event_type,
             "action": event_action,
-            "category": event_category,
             "severity": "high" if risk >= 70 else "medium" if risk >= 40 else "info",
             "timeline_include": True,
             "message": message,

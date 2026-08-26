@@ -256,6 +256,18 @@ describe("CommandHistoryPage", () => {
     expect(screen.getByText("line 37 in file")).toBeInTheDocument();
   });
 
+  it("surfaces a truncation warning so an incomplete result set is never silent", async () => {
+    getCommandHistoryMock.mockResolvedValueOnce({
+      ...response,
+      warnings: ["More than 5000 candidate command events matched; narrow by host, time range or search text to see the rest."],
+    });
+
+    renderPage();
+
+    const warning = await screen.findByTestId("command-history-warning");
+    expect(warning).toHaveTextContent(/More than 5000 candidate command events matched/i);
+  });
+
   it("renders Linux shell history rows with artifact provenance in the existing table", async () => {
     const linuxResponse = {
       ...response,

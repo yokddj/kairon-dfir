@@ -326,6 +326,12 @@ export default function CommandHistoryPage() {
 
       {error ? <div className="rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger">{error}</div> : null}
 
+      {(data?.warnings ?? []).map((warning) => (
+        <div key={warning} data-testid="command-history-warning" className="rounded-lg border border-amber-400/40 bg-amber-500/10 p-3 text-sm text-amber-100">
+          {warning}
+        </div>
+      ))}
+
       {paginationControls}
 
       <div className="rounded-lg border border-line bg-panel/60">

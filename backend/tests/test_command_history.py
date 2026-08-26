@@ -525,6 +525,55 @@ def test_undated_psreadline_commands_group_by_source_file_before_line_number(mon
     assert [item["command"] for item in result["items"]] == ["a-file-first", "a-file-second", "b-file-first"]
 
 
+def test_candidate_fetch_follows_requested_sort_direction(monkeypatch) -> None:
+    # The fetch is size-capped, so whichever end of the timeline it sorts from
+    # is the end that survives truncation. Fetching oldest-first while the UI
+    # asks for newest-first built the whole view out of the oldest events (OS
+    # install baseline) and could not surface a single command from the
+    # incident window. See _fetch_candidate_events for the full root cause.
+    captured: list[dict] = []
+    monkeypatch.setattr(command_history, "get_events_index", lambda case_id: f"events-{case_id}")
+    monkeypatch.setattr(command_history, "search_documents", lambda index, body: captured.append(body) or {"hits": {"hits": []}})
+    monkeypatch.setattr(command_history, "memory_command_history", lambda *_a, **_k: {"items": []})
+
+    command_history.get_command_history("case-1", {"sort_by": "timestamp", "sort_order": "desc", "page_size": 10})
+    dated_sort = captured[0]["sort"][0]["@timestamp"]["order"]
+    assert dated_sort == "desc"
+
+    captured.clear()
+    command_history.get_command_history("case-1", {"sort_by": "timestamp", "sort_order": "asc", "page_size": 10})
+    assert captured[0]["sort"][0]["@timestamp"]["order"] == "asc"
+
+
+def test_command_history_warns_when_candidate_fetch_is_truncated(monkeypatch) -> None:
+    monkeypatch.setattr(command_history, "get_events_index", lambda case_id: f"events-{case_id}")
+
+    def fake_search(index, body):
+        # One row returned, but far more matched -> the cap truncated the fetch.
+        return {"hits": {"total": {"value": 84771}, "hits": [_hit("event-1", ts="2024-03-22T12:00:00Z", command="cmd.exe /c whoami", pid=1)]}}
+
+    monkeypatch.setattr(command_history, "search_documents", fake_search)
+    monkeypatch.setattr(command_history, "memory_command_history", lambda *_a, **_k: {"items": []})
+
+    result = command_history.get_command_history("case-1", {"page_size": 10})
+
+    assert result["warnings"], "a truncated candidate fetch must not be silent"
+    assert "5000" in result["warnings"][0]
+
+
+def test_command_history_pushes_host_filter_into_the_query(monkeypatch) -> None:
+    captured: list[dict] = []
+    monkeypatch.setattr(command_history, "get_events_index", lambda case_id: f"events-{case_id}")
+    monkeypatch.setattr(command_history, "search_documents", lambda index, body: captured.append(body) or {"hits": {"hits": []}})
+    monkeypatch.setattr(command_history, "memory_command_history", lambda *_a, **_k: {"items": []})
+
+    command_history.get_command_history("case-1", {"host": "HOSTA", "page_size": 10})
+
+    filters = captured[0]["query"]["bool"]["filter"]
+    host_clause = [f for f in filters if isinstance(f, dict) and "bool" in f and any("host.name" in str(c) for c in f["bool"].get("should", []))]
+    assert host_clause, "the host filter must pre-narrow the query, not only filter in Python"
+
+
 def test_command_history_filters_preserve_sort_count(monkeypatch) -> None:
     hits = [
         _hit("event-new", ts="2024-03-22T12:30:00Z", command="powershell.exe -File C:\\new.ps1", pid=2000),

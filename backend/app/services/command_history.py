@@ -84,8 +84,15 @@ def get_command_history(case_id: str, params: dict[str, Any]) -> dict[str, Any]:
     if wants_memory_source(params):
         return memory_command_history(None, case_id, {**params, "page": page, "page_size": page_size})
     commands: list[dict[str, Any]] = []
+    warnings: list[str] = []
     if not wants_memory_source(params):
-        events = _fetch_candidate_events(case_id, params)
+        events, truncated = _fetch_candidate_events(case_id, params)
+        if truncated:
+            warnings.append(
+                f"More than {COMMAND_FETCH_LIMIT} candidate command events matched; "
+                "showing the ones closest to the current sort order. Narrow by host, "
+                "time range or search text to see the rest."
+            )
         commands = _dedupe_commands([item for event in events for item in _commands_from_event(case_id, event)])
         registry_events = [event for event in events if str(_obj(event.get("artifact")).get("type") or "").lower() == "registry_event" or _to_int(_obj(event.get("windows")).get("event_id") or event.get("event_id"), None) in {12, 13, 14, 4657}]
         commands = correlate_registry_commands(commands, registry_events)
@@ -130,6 +137,7 @@ def get_command_history(case_id: str, params: dict[str, Any]) -> dict[str, Any]:
         "sort_order": "desc" if reverse else "asc",
         "items": items,
         "facets": _facets(commands),
+        "warnings": warnings,
         "summary": {
             "commands_total": total,
             "suspicious_total": sum(1 for item in commands if int(item.get("risk_score") or 0) >= 50),
@@ -155,14 +163,32 @@ def _add_command_source_provenance(item: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
-def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> tuple[list[dict[str, Any]], bool]:
     filters: list[dict[str, Any]] = [{"term": {"case_id": case_id}}]
     evidence_id = str(params.get("evidence_id") or "").strip()
     if evidence_id:
         filters.append({"term": {"evidence_id": evidence_id}})
-    # Host aliases are intentionally filtered after retrieval. Some ingests store
-    # HOSTA as hosta.domain.local, and a strict OpenSearch terms filter would miss
-    # those commands before canonical alias matching can run.
+    # Canonical host matching still happens in Python (_apply_filters ->
+    # _host_matches), because some ingests store HOSTA as hosta.domain.local
+    # and only alias normalization can settle that. But leaving the host
+    # entirely out of the query meant a single-host view still had to fetch
+    # (and then throw away) every other host's commands out of the same
+    # COMMAND_FETCH_LIMIT budget -- on a multi-host case that is how a host's
+    # own commands got squeezed out of the fetch before Python ever saw them.
+    # This pre-narrowing is deliberately a SUPERSET of what _host_matches
+    # accepts (prefix wildcards cover the FQDN form, and the authoritative
+    # match still runs afterwards), so it can only save budget, never drop a
+    # command the Python filter would have kept.
+    host_aliases = _host_aliases(str(params.get("host") or ""))
+    if host_aliases:
+        host_clauses: list[dict[str, Any]] = []
+        for field in ("host.name", "host.hostname", "host.canonical"):
+            host_clauses.append({"terms": {field: sorted(host_aliases)}})
+            host_clauses.extend(
+                {"wildcard": {field: {"value": f"{alias}*", "case_insensitive": True}}}
+                for alias in sorted(host_aliases)
+            )
+        filters.append({"bool": {"should": host_clauses, "minimum_should_match": 1}})
     time_from = str(params.get("time_from") or "").strip()
     time_to = str(params.get("time_to") or "").strip()
     if time_from or time_to:
@@ -204,6 +230,14 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> list[dict[s
         must.append({"simple_query_string": {"query": q, "fields": ["process.command_line", "powershell.command", "powershell.command_preview", "task.command", "linux.command", "search_text"], "default_operator": "and"}})
     index = get_events_index(case_id)
     events: list[dict[str, Any]] = []
+    # Fetch in the same direction the caller asked to sort by. The fetch is
+    # capped, so whichever end of the timeline the query sorts from is the end
+    # that survives truncation -- fetching oldest-first while the UI defaults
+    # to newest-first meant that on any case with more candidates than the cap
+    # the view was built exclusively out of the oldest events (typically OS
+    # install baseline noise) and could not show a single command from the
+    # incident window, with nothing on screen saying so.
+    fetch_order = "desc" if _resolve_sort(params) == "timestamp_desc" else "asc"
     # Undated candidates (PSReadLine/bash history and similar append-only
     # shell history sources have no per-command timestamp at all) sort dead
     # last under "missing": "_last" -- sharing one size-capped query with
@@ -213,20 +247,29 @@ def _fetch_candidate_events(case_id: str, params: dict[str, Any]) -> list[dict[s
     # their own fetch budget instead of being silently truncated away.
     dated_body = {
         "size": COMMAND_FETCH_LIMIT,
+        "track_total_hits": True,
         "query": {"bool": {"filter": [*filters, {"exists": {"field": "@timestamp"}}], "should": should, "must": must, "minimum_should_match": 1}},
-        "sort": [{"@timestamp": {"order": "asc"}}, {"event_id": {"order": "asc", "missing": "_last"}}],
+        "sort": [{"@timestamp": {"order": fetch_order}}, {"event_id": {"order": fetch_order, "missing": "_last"}}],
     }
     undated_body = {
         "size": COMMAND_FETCH_LIMIT,
+        "track_total_hits": True,
         "query": {"bool": {"filter": [*filters, {"bool": {"must_not": [{"exists": {"field": "@timestamp"}}]}}], "should": should, "must": must, "minimum_should_match": 1}},
     }
+    truncated = False
     for body in (dated_body, undated_body):
         result = search_documents(index, body)
-        for hit in result.get("hits", {}).get("hits", []):
+        hits = result.get("hits", {}) or {}
+        rows = hits.get("hits", []) or []
+        matched = hits.get("total")
+        matched_value = matched.get("value") if isinstance(matched, dict) else matched
+        if isinstance(matched_value, int) and matched_value > len(rows):
+            truncated = True
+        for hit in rows:
             source = dict(hit.get("_source") or {})
             source["id"] = source.get("id") or hit.get("_id")
             events.append(source)
-    return events
+    return events, truncated
 
 
 def _commands_from_event(case_id: str, event: dict[str, Any]) -> list[dict[str, Any]]:
