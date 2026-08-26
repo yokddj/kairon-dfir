@@ -672,6 +672,18 @@ export default function HostInformationPage() {
     }
   }, [hosts, selectedHostId, searchParams, setSearchParams]);
 
+  const coverageQuery = useQuery({
+    queryKey: ["case-host-coverage", caseId],
+    queryFn: () => api.getCaseHostCoverage(caseId),
+    enabled: Boolean(caseId),
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
+  const coverageForHost = useMemo(
+    () => (coverageQuery.data?.hosts ?? []).find((row) => row.host_id === selectedHostId),
+    [coverageQuery.data, selectedHostId],
+  );
+
   const factsQuery = useQuery({
     queryKey: ["case-host-facts", caseId, selectedHostId],
     queryFn: () => api.getCaseHostFacts(caseId, { host_id: selectedHostId }),
@@ -732,6 +744,34 @@ export default function HostInformationPage() {
           </div>
           <Fingerprint size={32} className="shrink-0 text-accent/60" aria-hidden="true" />
         </div>
+
+        {coverageForHost ? (
+          <div data-testid="host-coverage" className="mt-5 rounded-2xl border border-line bg-abyss/50 p-4">
+            <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Evidence coverage</p>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(coverageQuery.data?.expected_families ?? []).map((family) => {
+                const count = coverageForHost.families[family] ?? 0;
+                const critical = coverageForHost.missing_critical_families.includes(family);
+                const cls = count > 0
+                  ? "border-line bg-abyss/70 text-muted"
+                  : critical
+                    ? "border-rose-400/50 bg-rose-500/10 text-rose-100"
+                    : "border-amber-400/40 bg-amber-500/10 text-amber-100";
+                return (
+                  <span key={family} className={`rounded-full border px-3 py-1 text-xs ${cls}`} title={count > 0 ? `${count.toLocaleString()} events` : "No data indexed for this host"}>
+                    {family}: {count > 0 ? count.toLocaleString() : "none"}
+                  </span>
+                );
+              })}
+            </div>
+            {coverageForHost.missing_families.length ? (
+              <p className="mt-3 text-xs text-amber-100">
+                Other hosts in this case have {coverageForHost.missing_families.join(", ")} but this one has none.
+                Questions that depend on it cannot be answered for this host until that evidence is indexed.
+              </p>
+            ) : null}
+          </div>
+        ) : null}
 
         {hosts.length > 1 ? (
           <label className="mt-5 block max-w-sm text-xs text-muted">
