@@ -28,6 +28,10 @@ RULE_PACK_PATH = Path(__file__).resolve().parents[1] / "rules" / "hunting_builti
 HUNTING_ENGINE_VERSION = "hunting-v1"
 MAX_COMMAND_CHARS = 2048
 MAX_REASON_CHARS = 500
+# Upper bound on disk events pulled into a single hunting evaluation. Kept
+# explicit (and well above the old hardcoded 500) because this cap decides how
+# much of a case the rule engine can actually see.
+DISK_EVENT_SCAN_LIMIT = 5000
 SENSITIVE_PRIVILEGES = {
     "sedebugprivilege",
     "setcbprivilege",
@@ -889,7 +893,35 @@ def _collect_disk_event_artifacts(*, case_id: str, evidence_id: str | None, proc
         filters.append({"term": {"evidence_id": evidence_id}})
     if process_entity_id:
         filters.append({"bool": {"should": [{"term": {"process.entity_id": process_entity_id}}, {"term": {"process.guid": process_entity_id}}], "minimum_should_match": 1}})
-    body = {"size": 500, "query": {"bool": {"filter": filters or [{"match_all": {}}]}}, "sort": [{"@timestamp": {"order": "asc", "unmapped_type": "date"}}]}
+    # Only events that _artifact_from_event_hit can actually turn into a
+    # command_line/network/persistence/process artifact are worth spending the
+    # fetch budget on -- a bare match_all spent it on MFT/shimcache/LNK rows
+    # that carry none of the fields the rules read.
+    candidate_shapes = [
+        {"exists": {"field": "process.command_line"}},
+        {"exists": {"field": "powershell.command"}},
+        {"exists": {"field": "process.name"}},
+        {"exists": {"field": "destination.ip"}},
+        {"exists": {"field": "network.protocol"}},
+        {"exists": {"field": "autoruns.key"}},
+        {"exists": {"field": "task.command"}},
+        {"exists": {"field": "service.name"}},
+        {"exists": {"field": "registry.path"}},
+    ]
+    body = {
+        "size": DISK_EVENT_SCAN_LIMIT,
+        "query": {"bool": {"filter": filters, "should": candidate_shapes, "minimum_should_match": 1}},
+        # Rules are looking for the suspicious end of the case, and this fetch
+        # is capped -- so order by what an investigation cares about (risk,
+        # then most recent) instead of oldest-first. Sorting ascending here
+        # meant a case whose candidate events exceeded the cap fed the rule
+        # engine nothing but the oldest OS-install baseline rows, so every
+        # disk-based detection silently evaluated against the wrong window.
+        "sort": [
+            {"risk_score": {"order": "desc", "unmapped_type": "integer", "missing": "_last"}},
+            {"@timestamp": {"order": "desc", "unmapped_type": "date", "missing": "_last"}},
+        ],
+    }
     hits = client.search(index=index, body=body).get("hits", {}).get("hits", [])
     return [_artifact_from_event_hit(case_id, hit) for hit in hits]
 

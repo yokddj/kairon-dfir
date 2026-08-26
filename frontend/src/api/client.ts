@@ -4708,6 +4708,7 @@ export type CommandHistoryResponse = {
   sort_by?: "timestamp" | string;
   sort_order?: "asc" | "desc" | string;
   items: CommandHistoryItem[];
+  warnings?: string[];
   facets: {
     shell: Record<string, number>;
     family?: Record<string, number>;

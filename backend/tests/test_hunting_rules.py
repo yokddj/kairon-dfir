@@ -302,3 +302,33 @@ def test_finding_detail_includes_reasons_raw_refs_navigation_and_pagination_meta
     assert detail["raw_references"]
     assert detail["navigation_targets"]
     assert detail["matched_fields"]
+
+
+def test_disk_event_scan_targets_candidates_and_ranks_by_risk(monkeypatch) -> None:
+    # This fetch is size-capped, so its sort order decides which slice of the
+    # case the rule engine can see at all. A bare match_all sorted oldest-first
+    # fed the engine nothing but the earliest OS-install baseline rows, so every
+    # disk-based rule silently evaluated against the wrong window.
+    from app.services import hunting
+
+    captured: dict = {}
+
+    class _Client:
+        def search(self, index, body):
+            captured["body"] = body
+            return {"hits": {"hits": []}}
+
+    monkeypatch.setattr(hunting, "get_opensearch_client", lambda: _Client())
+    monkeypatch.setattr(hunting, "get_events_index", lambda case_id: f"events-{case_id}")
+    monkeypatch.setattr(hunting, "index_exists", lambda client, index: True)
+
+    hunting._collect_disk_event_artifacts(case_id="case-1", evidence_id=None, process_entity_id=None)
+
+    body = captured["body"]
+    assert body["sort"][0]["risk_score"]["order"] == "desc"
+    assert body["sort"][1]["@timestamp"]["order"] == "desc"
+    assert body["size"] == hunting.DISK_EVENT_SCAN_LIMIT
+    # must narrow to events the artifact mapper can actually use, not match_all
+    should = body["query"]["bool"]["should"]
+    assert {"exists": {"field": "process.command_line"}} in should
+    assert body["query"]["bool"]["minimum_should_match"] == 1
