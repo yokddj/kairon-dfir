@@ -25,6 +25,17 @@ const SECTION_LABELS: Record<string, string> = {
   appendix: "Appendix",
 };
 
+// A report carries at most REPORT_SOURCE_LIMIT detections/markings. Showing the
+// carried count alone understates the case; showing the matched count alone
+// implies the document holds them all. Show both whenever they differ.
+function formatMatchedCount(matched: unknown, included: unknown): string {
+  const total = typeof matched === "number" ? matched : 0;
+  if (typeof included === "number" && included < total) {
+    return `${included} of ${total}`;
+  }
+  return String(total);
+}
+
 function downloadBlobFile(filename: string, blob: Blob) {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
@@ -655,8 +666,8 @@ export default function CaseReportsPage() {
                 <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-4" data-testid="report-preview-counts">
                   {[
                     ["Findings", previewCounts.findings_matched ?? previewCounts.selected_findings ?? 0],
-                    ["Detections", previewCounts.detections_matched ?? 0],
-                    ["Marked events", previewCounts.marked_events_matched ?? 0],
+                    ["Detections", formatMatchedCount(previewCounts.detections_matched, previewCounts.detections_included)],
+                    ["Marked events", formatMatchedCount(previewCounts.marked_events_matched, previewCounts.marked_events_included)],
                     ["Timeline events", previewCounts.timeline_events_matched ?? previewCounts.selected_key_events ?? 0],
                     ["Commands", previewCounts.command_history_matched ?? 0],
                     ["Suspicious commands", previewCounts.suspicious_commands_matched ?? 0],

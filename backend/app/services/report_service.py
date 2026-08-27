@@ -78,6 +78,11 @@ REPORT_TEMPLATES = [
     }
 ]
 
+# How many detection/marking rows a single report will carry. The cap exists to
+# keep a report readable; what it must never do is masquerade as the number of
+# rows that actually matched.
+REPORT_SOURCE_LIMIT = 500
+
 DEFAULT_SECTIONS_ENABLED = {section: True for section in REPORT_TEMPLATES[0]["sections"]}
 DEFAULT_ANALYST_NOTES = {
     "executive_summary": "",
@@ -246,8 +251,8 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
     filters = {**_default_report_filters_for_case(case), **dict(report.filters or {})}
     sections_enabled = {**DEFAULT_SECTIONS_ENABLED, **dict(report.sections_enabled or {})}
     findings = _filtered_findings(db, case_id, filters)
-    detections = _filtered_detections(db, case_id, filters)
-    marked_events = _filtered_markings(db, case_id, filters)
+    detections, detections_total = _filtered_detections(db, case_id, filters)
+    marked_events, marked_events_total = _filtered_markings(db, case_id, filters)
     command_report = _build_command_history_report_context(db, case, case_id, filters)
     defender_report = _build_defender_report_context(db, case_id, filters)
     email_report = build_email_artifacts_report_context(db, case_id, filters)
@@ -276,11 +281,27 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
     ioc_rows = _extract_iocs(case_id, selected_findings, selected_bookmarks)
     sections = []
     warnings: list[str] = []
+    if detections_total > len(detections):
+        warnings.append(
+            f"detections: showing the {len(detections)} most recent of {detections_total} matched; "
+            "narrow by host, severity or time range to review the rest"
+        )
+    if marked_events_total > len(marked_events):
+        warnings.append(
+            f"marked events: showing the {len(marked_events)} most recent of {marked_events_total} matched; "
+            "narrow by host or time range to review the rest"
+        )
     stats = {
         "findings_matched": len(findings),
-        "detections_matched": len(detections),
-        "marked_events_matched": len(marked_events),
+        "detections_matched": detections_total,
+        "detections_included": len(detections),
+        "marked_events_matched": marked_events_total,
+        "marked_events_included": len(marked_events),
+        # Counts the analyst's key-event bookmarks. The timeline section is also
+        # fed by findings and marked events, so it can be populated while this
+        # is zero -- timeline_entries_included is what the section actually has.
         "timeline_events_matched": len(bookmarks),
+        "timeline_entries_included": len(timeline_entries),
         "command_history_matched": int(command_report["counts"]["command_history_matched"]),
         "suspicious_commands_matched": int(command_report["counts"]["suspicious_commands_matched"]),
         "marked_commands_matched": int(command_report["counts"]["marked_commands_matched"]),
@@ -1446,9 +1467,9 @@ def _filtered_bookmarks(db: Session, case_id: str, filters: dict[str, Any]) -> l
     return filtered
 
 
-def _filtered_detections(db: Session, case_id: str, filters: dict[str, Any]) -> list[DetectionResult]:
+def _filtered_detections(db: Session, case_id: str, filters: dict[str, Any]) -> tuple[list[DetectionResult], int]:
     if not filters.get("include_detections", True):
-        return []
+        return [], 0
     evidence_id = str(filters.get("evidence_id") or "").strip()
     host = str(filters.get("host") or "").strip().lower()
     expanded_hosts = _expanded_report_hosts(db, case_id, host) if host else set()
@@ -1489,12 +1510,16 @@ def _filtered_detections(db: Session, case_id: str, filters: dict[str, Any]) -> 
         if time_to and matched_at and matched_at > time_to:
             continue
         output.append(row)
-    return output[:500]
+    # Rows are ordered newest-first, so the cap keeps the most recent ones.
+    # The caller needs the real match count too: reporting the capped length as
+    # "detections matched" puts a number in a forensic deliverable that is
+    # indistinguishable from the true one and silently understates the case.
+    return output[:REPORT_SOURCE_LIMIT], len(output)
 
 
-def _filtered_markings(db: Session, case_id: str, filters: dict[str, Any]) -> list[EventMarking]:
+def _filtered_markings(db: Session, case_id: str, filters: dict[str, Any]) -> tuple[list[EventMarking], int]:
     if not filters.get("include_marked_events", True):
-        return []
+        return [], 0
     evidence_id = str(filters.get("evidence_id") or "").strip()
     host = str(filters.get("host") or "").strip().lower()
     expanded_hosts = _expanded_report_hosts(db, case_id, host) if host else set()
@@ -1522,7 +1547,12 @@ def _filtered_markings(db: Session, case_id: str, filters: dict[str, Any]) -> li
         if time_to and row_time and row_time > time_to:
             continue
         output.append(row)
-    return output[:500]
+    matched_total = len(output)
+    if matched_total > REPORT_SOURCE_LIMIT:
+        # Rows arrive oldest-first, so slicing here would keep the oldest
+        # markings and drop everything the analyst marked most recently.
+        output = output[-REPORT_SOURCE_LIMIT:]
+    return output, matched_total
 
 
 def _auto_select_findings(findings: list[Finding]) -> list[Finding]:
@@ -1685,13 +1715,20 @@ def _build_command_history_report_context(db: Session, case: Case, case_id: str,
     selected.sort(key=lambda item: (_safe_dt(item.get("timestamp")), -int(item.get("risk_score") or 0), str(item.get("command") or "")))
     included = selected[:max_commands]
     stories, story_warnings = _build_command_execution_stories(db, case, case_id, included, filters, max_stories=max_stories)
+    # get_command_history caps its own candidate scan and says so in its
+    # warnings. Returning only the story warnings dropped that on the floor, so
+    # the report published a command count with no hint that the underlying
+    # scan had been truncated.
+    source_warnings = [str(item) for item in (result.get("warnings") or []) if str(item).strip()]
     facets = dict(result.get("facets") or {})
     return {
         "commands": included,
         "stories": stories,
-        "warnings": story_warnings,
+        "warnings": [*source_warnings, *story_warnings],
         "counts": {
             "command_history_matched": int(result.get("total") or len(all_commands)),
+            # Counted over the commands actually scanned, which get_command_history
+            # may have capped -- see the propagated warnings above.
             "suspicious_commands_matched": suspicious_total,
             "marked_commands_matched": marked_total,
             "execution_stories_available": len(stories),
