@@ -428,6 +428,18 @@ def analyze_sigma_engine_compatibility(rule_data: dict) -> dict:
     primary_status = "executable_by_current_engine"
     reason = "compiled"
 
+    # A detection made only of bare keywords names no field at all, so it
+    # compiles to a query with no clauses -- which matches every document in the
+    # index. Four such rules each hit their 1000-detection cap on a case that
+    # had nothing to do with Apache, Nginx or Exchange. Free-text matching is a
+    # real Sigma feature and worth supporting one day; until then, refusing is
+    # the only honest option, because the alternative is a rule that appears to
+    # fire on everything.
+    if not required_fields and (rule_data.get("detection") or {}):
+        unsupported_features.append("keyword_only_detection")
+        primary_status = "keyword_only_detection"
+        reason = "detection names no field this engine can query"
+
     unmapped_fields = _detect_unmapped_fields(rule_data)
     if unmapped_fields:
         unsupported_features.extend([f"unmapped_field:{field}" for field in unmapped_fields])
@@ -588,6 +600,15 @@ def sigma_condition_supported(condition: str) -> tuple[bool, str | None]:
     return True, None
 
 
+# artifact.type fragment -> the Sigma logsource product it satisfies.
+_ARTIFACT_PRODUCT_MARKERS = {
+    "apache": "apache",
+    "nginx": "nginx",
+    "exim": "exim",
+    "sshd": "sshd",
+}
+
+
 def build_sigma_case_profile(events: list[dict], *, total_events: int | None = None) -> dict:
     artifact_types: Counter[str] = Counter()
     parsers: Counter[str] = Counter()
@@ -655,6 +676,12 @@ def build_sigma_case_profile(events: list[dict], *, total_events: int | None = N
             products.add("linux")
         if str(artifact_type).startswith("macos_") or str(host.get("os") or "").strip().lower() in {"macos", "darwin"}:
             products.add("macos")
+        # Application products a case can genuinely hold. Without these an
+        # apache rule would be skipped on a case that really does carry apache
+        # logs, which is the opposite error.
+        for marker, product_name in _ARTIFACT_PRODUCT_MARKERS.items():
+            if marker in str(artifact_type):
+                products.add(product_name)
 
         _mark_field("windows.event_id", windows.get("event_id") is not None)
         _mark_field("windows.channel", bool(windows.get("channel")))
@@ -889,7 +916,13 @@ def preflight_compiled_sigma_rule(compiled_rule: dict, case_profile: dict, *, en
     available_fields = set(case_profile.get("available_fields") or [])
     products = set(case_profile.get("source_products") or [])
     channels_present = [str(item).lower() for item in (case_profile.get("channels_present") or {}).keys()]
-    if product and product in {"windows", "linux", "macos", "cloud"} and product not in products:
+    # Gate on any named product, not a hardcoded four. Rules for products this
+    # case does not hold -- cisco, apache, azure, exchange -- used to slip past
+    # a whitelist that only knew windows/linux/macos/cloud, then matched
+    # everything through generic fallbacks: twelve such rules each hit their
+    # 1000-detection cap on a Windows workstation case, 12000 findings about
+    # Cisco switches and Azure subscriptions that case never contained.
+    if product and product not in products:
         return {"status": "skipped_unsupported_platform", "reason": product, "logsource": logsource, "fields": fields, "prefilter": {}}
     if service:
         hints = SIGMA_SERVICE_CHANNEL_HINTS.get(service, [])

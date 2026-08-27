@@ -9437,6 +9437,14 @@ _PLATFORM_MARKER_FIELDS = {
     "macos": "macos.artifact_family",
 }
 
+# Application products a case can hold, keyed by the artifact type that carries
+# them. A rule for one of these is now gated like any other, so a case that
+# genuinely holds apache logs has to be able to say so.
+_ARTIFACT_TYPE_PRODUCTS = {
+    "apache": "linux_apache",
+    "exim": "linux_exim",
+}
+
 
 def _case_source_products(case_id: str, scope_query: dict) -> set[str]:
     products: set[str] = set()
@@ -9448,7 +9456,40 @@ def _case_source_products(case_id: str, scope_query: dict) -> set[str]:
             continue
         if found > 0:
             products.add(product)
+    for product, artifact_type in _ARTIFACT_TYPE_PRODUCTS.items():
+        query = {"bool": {"filter": [scope_query, {"term": {"artifact.type": artifact_type}}]}}
+        try:
+            found = int(count_documents(get_events_index(case_id), query).get("count", 0))
+        except Exception:  # noqa: BLE001
+            continue
+        if found > 0:
+            products.add(product)
     return products
+
+
+# Cached per process: an index's result window does not change during a run, and
+# this is consulted once per rule.
+_RESULT_WINDOW_CACHE: dict[str, int] = {}
+_DEFAULT_RESULT_WINDOW = 10000
+
+
+def _index_result_window(case_id: str) -> int:
+    """How many hits a single search on this index may return."""
+    cached = _RESULT_WINDOW_CACHE.get(case_id)
+    if cached is not None:
+        return cached
+    window = _DEFAULT_RESULT_WINDOW
+    try:
+        response = get_opensearch_client().indices.get_settings(index=get_events_index(case_id))
+        for entry in (response or {}).values():
+            configured = ((entry or {}).get("settings") or {}).get("index", {}).get("max_result_window")
+            if configured:
+                window = int(configured)
+                break
+    except Exception:  # noqa: BLE001
+        window = _DEFAULT_RESULT_WINDOW
+    _RESULT_WINDOW_CACHE[case_id] = window
+    return window
 
 
 def _indexed_field_names(case_id: str) -> set[str]:
@@ -9948,11 +9989,27 @@ def run_rule_on_case(rule_id: str | None, case_id: str, evidence_id: str | None 
                             "skipped_too_broad_count": skipped_too_broad_count,
                             "top_noisy_rules": top_noisy_rules[:10],
                         }
-                    sigma_runtime_options["max_events"] = min(
+                    requested_candidates = min(
                         max(int(sigma_mode_config.get("max_candidate_events_per_rule") or 0), 1),
                         max(total_events, 1),
                     )
+                    # OpenSearch refuses a single search asking for more hits
+                    # than the index's result window, so the balanced mode's
+                    # 25000 (and exhaustive's 200000) did not truncate the scan
+                    # -- they made the search fail outright. Every rule matching
+                    # more than the window contributed nothing, counted as an
+                    # execution_error, and the run still reported success: 252
+                    # rules on one case, silently detecting nothing.
+                    window = _index_result_window(case_id)
+                    sigma_runtime_options["max_events"] = min(requested_candidates, window)
                     body["size"] = max(int(sigma_runtime_options["max_events"]), 1)
+                    if requested_candidates > window:
+                        truncation_warning = (
+                            f"Rule {rule.name} matched more candidates than one search can return; "
+                            f"examined the first {window} of {total_events}. Narrow by host or time range to see the rest."
+                        )
+                        if truncation_warning not in warnings:
+                            warnings.append(truncation_warning)
                 if rule_run:
                     _update_rule_run(
                         db,
