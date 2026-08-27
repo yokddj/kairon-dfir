@@ -204,15 +204,35 @@ def extract_sigma_metadata(rule_data: dict) -> dict:
     }
 
 
+def _iter_selection_blocks(selection: object) -> list[dict]:
+    """Every field-bearing block in a selection.
+
+    Sigma allows a selection to be a list of maps, which is how a rule ORs
+    several alternatives together. Treating only the dict form as real made
+    those fields invisible: a rule whose selective half was written as a list
+    was judged on its remaining half alone. "Transferring Files with Credential
+    Data via Network Shares" is EventID 5145 AND a RelativeTargetName naming a
+    credential store; with the list ignored it became "any network share
+    access" and produced a thousand detections on one case, burying the genuine
+    hits underneath.
+    """
+    if isinstance(selection, dict):
+        return [selection]
+    if isinstance(selection, list):
+        return [item for item in selection if isinstance(item, dict)]
+    return []
+
+
 def extract_sigma_detection_fields(rule_data: dict) -> list[str]:
     detection = dict(rule_data.get("detection") or {})
     fields: list[str] = []
     for selection_name, selection in detection.items():
-        if selection_name == "condition" or not isinstance(selection, dict):
+        if selection_name == "condition":
             continue
-        for sigma_field in selection.keys():
-            base_field, _ = _split_field_and_modifier(str(sigma_field))
-            fields.append(base_field)
+        for block in _iter_selection_blocks(selection):
+            for sigma_field in block.keys():
+                base_field, _ = _split_field_and_modifier(str(sigma_field))
+                fields.append(base_field)
     return sorted(dict.fromkeys(fields))
 
 
@@ -332,12 +352,19 @@ def _detect_unsupported_modifiers(rule_data: dict) -> list[str]:
     detection = dict(rule_data.get("detection") or {})
     unsupported: list[str] = []
     for selection_name, selection in detection.items():
-        if selection_name == "condition" or not isinstance(selection, dict):
+        if selection_name == "condition":
             continue
-        for sigma_field in selection.keys():
-            _, modifier = _split_field_and_modifier(str(sigma_field))
-            if modifier and modifier not in SUPPORTED_MODIFIERS:
-                unsupported.append(modifier)
+        for block in _iter_selection_blocks(selection):
+            for sigma_field in block.keys():
+                # Read every pipe segment, not just a recognised trailing one.
+                # _split_field_and_modifier only strips suffixes it already
+                # supports, so an unknown modifier such as |base64offset was
+                # invisible here -- the rule compiled as though the modifier
+                # were absent and matched on the raw value instead.
+                for modifier in str(sigma_field).split("|")[1:]:
+                    modifier = modifier.strip()
+                    if modifier and modifier not in SUPPORTED_MODIFIERS:
+                        unsupported.append(modifier)
     return sorted(dict.fromkeys(unsupported))
 
 
