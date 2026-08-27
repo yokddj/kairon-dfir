@@ -15,6 +15,15 @@ settings = get_settings()
 logger = logging.getLogger(__name__)
 IGNORED_NAMES = {".DS_Store"}
 WINDOWS_IGNORED_NAMES = {"desktop.ini", "thumbs.db"}
+# What Python's own zipfile can decompress. Anything else in a .zip has to go
+# through 7-Zip; Deflate64 (9) is the one that shows up in practice.
+_ZIPFILE_SUPPORTED_COMPRESSION = frozenset({
+    zipfile.ZIP_STORED,
+    zipfile.ZIP_DEFLATED,
+    zipfile.ZIP_BZIP2,
+    zipfile.ZIP_LZMA,
+})
+
 SEVEN_ZIP_ARCHIVE_SUFFIXES: tuple[tuple[str, ...], ...] = (
     (".7z",),
     (".rar",),
@@ -317,10 +326,30 @@ def _extract_seven_zip(source: Path, dest_dir: Path, progress_cb: Callable[[dict
         _raise_classified(_classify_seven_zip_failure(exc, source), source, exc)
 
 
+def _zip_needs_seven_zip(source: Path) -> bool:
+    """Whether this .zip uses a compression method Python cannot read.
+
+    Python's zipfile supports stored/deflate/bzip2/lzma and nothing else, so a
+    Deflate64 member -- what Windows and several collection tools emit once the
+    content gets large -- makes it raise NotImplementedError halfway through.
+    7-Zip reads those, and is already a dependency for the other archive
+    formats, so the entry is worth checking before committing to zipfile.
+    """
+    try:
+        with zipfile.ZipFile(source) as archive:
+            return any(entry.compress_type not in _ZIPFILE_SUPPORTED_COMPRESSION for entry in archive.infolist())
+    except Exception:  # noqa: BLE001
+        # Unreadable central directory is a different failure; let the normal
+        # zip path classify and report it rather than silently rerouting.
+        return False
+
+
 def extract_archive(source: Path, dest_dir: Path, progress_cb: Callable[[dict], None] | None = None) -> tuple[list[str], list[dict]]:
     dest_dir.mkdir(parents=True, exist_ok=True)
     suffix = source.suffix.lower()
-    if suffix == ".zip":
+    if suffix == ".zip" and _zip_needs_seven_zip(source):
+        extracted, manifest_entries = _extract_seven_zip(source, dest_dir, progress_cb)
+    elif suffix == ".zip":
         extracted, manifest_entries = _extract_zip(source, dest_dir, progress_cb)
     elif _is_seven_zip_supported_archive(source):
         extracted, manifest_entries = _extract_seven_zip(source, dest_dir, progress_cb)
