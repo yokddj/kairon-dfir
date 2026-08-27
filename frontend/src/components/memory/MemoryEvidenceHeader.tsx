@@ -164,8 +164,12 @@ export function MemoryEvidenceHeader({
             >
               ← All evidence
             </Link>
+            {/* Say which thing is "completed". On its own, next to a memory
+                image whose analysis has barely started, a bare "completed"
+                chip reads as "analysis done" -- it only ever described the
+                ingest. */}
             <span className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted">
-              {evidence.ingest_status || "ingest_unknown"}
+              Ingest: {evidence.ingest_status || "unknown"}
             </span>
             <span className="rounded-md border border-line bg-abyss/70 px-2 py-0.5 text-[10px] text-muted">
               {evidence.run_count} {evidence.run_count === 1 ? "run" : "runs"}
