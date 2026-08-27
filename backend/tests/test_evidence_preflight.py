@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from app.core.config import get_settings
-from app.services.evidence_preflight import run_preflight
+from app.services.evidence_preflight import SETTINGS_OVERRIDE_FILE, run_preflight
 
 settings = get_settings()
 
@@ -300,7 +300,9 @@ def test_nested_archive_depth_exceeded(tmp_path, monkeypatch):
     assert report.status == "blocked"
     diag = next(d for d in report.diagnostics if d.problem == "Nested archives too deep")
     assert diag.configuration_key == "MAX_ARCHIVE_DEPTH"
-    assert diag.configuration_file == "backend/.env"
+    # backend/.env does not exist in the deployment; the root .env is what
+    # docker-compose loads last and therefore what an operator must edit.
+    assert diag.configuration_file == SETTINGS_OVERRIDE_FILE
     assert diag.how_to_fix
 
 
@@ -316,7 +318,9 @@ def test_upload_limit_exceeded_diagnostic(tmp_path, monkeypatch):
     assert not check.ok
     diag = next(d for d in report.diagnostics if d.problem == "Upload limit exceeded")
     assert diag.configuration_key == "BACKEND_MAX_UPLOAD_SIZE"
-    assert diag.configuration_file == "backend/.env"
+    # backend/.env does not exist in the deployment; the root .env is what
+    # docker-compose loads last and therefore what an operator must edit.
+    assert diag.configuration_file == SETTINGS_OVERRIDE_FILE
     assert any("upgrade.sh" in step for step in diag.how_to_fix)
 
 
