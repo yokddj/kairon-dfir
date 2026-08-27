@@ -175,7 +175,10 @@ function detectionReadiness(status: string | null | undefined): DetectionReadine
  * fetches, and stops at the first step that isn't done yet so exactly one
  * step is ever marked "next".
  */
-function buildInvestigationChecklist(
+// Exported for tests: this pure function is where the checklist's decisions
+// live, and rendering it would only add four mocked queries around the same
+// logic.
+export function buildInvestigationChecklist(
   landing: MemoryEvidenceLandingItem | null,
   readiness: MemoryEvidenceReadiness | null,
   families: OverviewFamily[],
@@ -187,12 +190,23 @@ function buildInvestigationChecklist(
   const suspiciousFamily = families.find((f) => f.family === "suspicious_regions");
   const networkFamily = families.find((f) => f.family === "network");
   const anyAnalyzed = families.some((f) => isFamilyAnalyzed(f.state));
+  // A memory image is analysed family by family, and the first profile to run
+  // covers only processes. Marking this step done as soon as *any* family had
+  // content told the analyst the image was analysed while most of it -- network,
+  // suspicious regions, handles, drivers -- had never been looked at, and the
+  // only hint was the header button quietly reading "Complete analysis".
+  // "unavailable" families are excluded: they do not apply to this image, so
+  // they can never be completed and must not hold the step open forever.
+  const pendingFamilies = families.filter((f) => !isFamilyAnalyzed(f.state) && f.state !== "unavailable");
+  const fullyAnalyzed = anyAnalyzed && pendingFamilies.length === 0;
 
   type Step = {
     id: string;
     label: string;
     done: boolean;
     blocked?: string;
+    /** Started but not finished -- shown as the next action, with what is left. */
+    partial?: string;
     action?: InvestigationChecklistItem["action"];
   };
 
@@ -224,7 +238,12 @@ function buildInvestigationChecklist(
     {
       id: "analyze",
       label: "Analyze memory",
-      done: anyAnalyzed,
+      done: fullyAnalyzed,
+      partial: anyAnalyzed && !fullyAnalyzed
+        ? `${pendingFamilies.length} of ${pendingFamilies.length + families.filter((f) => isFamilyAnalyzed(f.state)).length} families not analyzed yet (${pendingFamilies
+            .map((f) => f.title)
+            .join(", ")}). Use "Complete analysis" above to run the rest.`
+        : undefined,
     },
     {
       id: "review_processes",
@@ -258,7 +277,7 @@ function buildInvestigationChecklist(
     if (step.blocked) {
       return { id: step.id, label: step.label, status: "blocked", detail: step.blocked, action: step.action } satisfies InvestigationChecklistItem;
     }
-    const detail = step.id === "analyze" ? 'Use "Analyze memory" above to start.' : undefined;
+    const detail = step.partial ?? (step.id === "analyze" ? 'Use "Analyze memory" above to start.' : undefined);
     return { id: step.id, label: step.label, status: "next", detail, action: step.action } satisfies InvestigationChecklistItem;
   });
 }
