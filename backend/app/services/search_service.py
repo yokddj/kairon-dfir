@@ -89,6 +89,10 @@ TEXT_FIELDS = [
     "srum.table",
     "network.application",
 ]
+# Terms safe to expand into a substring (wildcard) match: no query-syntax
+# metacharacters, and long enough that a substring scan stays selective.
+_SUBSTRING_SAFE_TERM = r"[A-Za-z0-9_.:-]{3,128}"
+
 GENERIC_WILDCARD_TEXT_FIELDS = [
     "search_text.wildcard",
     "file.path",
@@ -555,10 +559,23 @@ def _build_text_query(query: str) -> dict[str, Any]:
         return {"bool": {"should": should, "minimum_should_match": 1}}
     if query:
         simple_query = {"simple_query_string": {"query": query, "fields": TEXT_FIELDS, "default_operator": "and"}}
-        if re.fullmatch(r"[A-Za-z0-9_.:-]{3,128}", query):
+        terms = query.split()
+        if len(terms) == 1 and re.fullmatch(_SUBSTRING_SAFE_TERM, query):
             should = [simple_query]
             should.extend(_build_should_terms(GENERIC_WILDCARD_TEXT_FIELDS, query, wildcard=True))
             return {"bool": {"should": should, "minimum_should_match": 1}}
+        # The analyzer keeps "comsvcs.dll" as one token, so a bare stem only
+        # matches through the wildcard subfield. That fallback covered a single
+        # word but not two, and simple_query_string ANDs its terms -- so
+        # "rundll32 comsvcs" returned nothing at all even though both strings
+        # were in the index. Require every term to match, each allowed to match
+        # as a substring.
+        if len(terms) > 1 and all(re.fullmatch(_SUBSTRING_SAFE_TERM, term) for term in terms):
+            per_term = [
+                {"bool": {"should": _build_should_terms(GENERIC_WILDCARD_TEXT_FIELDS, term, wildcard=True), "minimum_should_match": 1}}
+                for term in terms
+            ]
+            return {"bool": {"should": [simple_query, {"bool": {"must": per_term}}], "minimum_should_match": 1}}
         return simple_query
     return {"match_all": {}}
 
