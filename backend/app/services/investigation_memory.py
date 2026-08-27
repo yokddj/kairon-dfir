@@ -7,6 +7,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.core.database import SessionLocal
+from app.models.case_host import CaseHost
 from app.models.evidence import Evidence, EvidenceType
 from app.services.memory.command_history import build_command_line_history
 from app.services.memory.search import search_memory_artifacts
@@ -229,7 +230,8 @@ def _memory_command_history(db: Session, case_id: str, params: dict[str, Any]) -
             page=1,
             page_size=500,
         )
-        rows.extend(_memory_command_row(case_id, evidence, row, payload.get("selected_run")) for row in payload.get("items") or [])
+        host_name = _evidence_host_name(db, evidence)
+        rows.extend(_memory_command_row(case_id, evidence, row, payload.get("selected_run"), host_name) for row in payload.get("items") or [])
     rows.sort(key=lambda item: (item.get("timestamp") is None, item.get("timestamp") or "", item.get("id") or ""), reverse=str(params.get("sort") or params.get("sort_order") or "").endswith("desc"))
     total = len(rows)
     start = (page - 1) * page_size
@@ -316,7 +318,27 @@ def _memory_timeline_row(case_id: str, row: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _memory_command_row(case_id: str, evidence: Evidence, row: dict[str, Any], selected_run: dict[str, Any] | None) -> dict[str, Any]:
+def _evidence_host_name(db: Session, evidence: Evidence) -> str | None:
+    """Host an evidence belongs to, preferring what the parser detected.
+
+    detected_host is frequently empty for memory dumps -- nothing inside a raw
+    image announces the machine name the way a triage collection does -- while
+    the evidence is still assigned to a host in the case. Falling back to that
+    assignment is what stops memory rows from being hostless, which otherwise
+    makes them invisible to every host filter in the product.
+    """
+    detected = str(evidence.detected_host or "").strip()
+    if detected:
+        return detected
+    host_id = getattr(evidence, "host_id", None)
+    if not host_id:
+        return None
+    host = db.get(CaseHost, host_id)
+    canonical = str(getattr(host, "canonical_name", "") or "").strip() if host else ""
+    return canonical or None
+
+
+def _memory_command_row(case_id: str, evidence: Evidence, row: dict[str, Any], selected_run: dict[str, Any] | None, host_name: str | None = None) -> dict[str, Any]:
     run_id = (selected_run or {}).get("id")
     plugin = ",".join(row.get("source_plugins") or []) or "windows.cmdline"
     command_id = f"memory-command:{evidence.id}:{run_id or 'active'}:{row.get('process_entity_id')}:{row.get('pid')}"
@@ -327,7 +349,7 @@ def _memory_command_row(case_id: str, evidence: Evidence, row: dict[str, Any], s
         "evidence_id": str(evidence.id),
         "evidence_name": evidence.original_filename,
         "run_id": run_id,
-        "host": evidence.detected_host,
+        "host": host_name if host_name is not None else evidence.detected_host,
         "timestamp": row.get("create_time"),
         "timestamp_status": "process_creation_time" if row.get("create_time") else "undated",
         "timestamp_semantics": row.get("timestamp_source"),

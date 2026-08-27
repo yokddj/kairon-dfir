@@ -96,11 +96,17 @@ def get_command_history(case_id: str, params: dict[str, Any]) -> dict[str, Any]:
         commands = _dedupe_commands([item for event in events for item in _commands_from_event(case_id, event)])
         registry_events = [event for event in events if str(_obj(event.get("artifact")).get("type") or "").lower() == "registry_event" or _to_int(_obj(event.get("windows")).get("event_id") or event.get("event_id"), None) in {12, 13, 14, 4657}]
         commands = correlate_registry_commands(commands, registry_events)
-        commands = _apply_filters(commands, params)
         commands = [_add_command_source_provenance(item) for item in commands]
     if not wants_non_memory_source(params):
         memory_payload = memory_command_history(None, case_id, {**params, "page": 1, "page_size": 500})
         commands.extend(memory_payload.get("items") or [])
+    # Filtering has to happen after the merge. Applying it to the disk-derived
+    # half only meant memory commands ignored every filter the analyst set:
+    # asking for only_suspicious, or risk_min=50, or a specific launcher,
+    # returned a full page of memory rows matching none of it. The disk half
+    # correctly collapsed to nothing and the unfiltered memory half made the
+    # result look populated, so the filter appeared to work.
+    commands = _apply_filters(commands, params)
     sort = _resolve_sort(params)
     reverse = sort == "timestamp_desc"
     dated = [item for item in commands if item.get("timestamp")]
@@ -550,7 +556,6 @@ def _risk(command: str, process: dict[str, Any], parent: dict[str, Any]) -> tupl
         (("rundll32", "regsvr32", "mshta", "wscript", "cscript"), 25, "suspicious LOLBin execution"),
         (("psexec", "psexesvc"), 30, "PsExec activity"),
         (("\\temp\\", "\\downloads\\", "\\appdata\\"), 15, "execution path in user-writable location"),
-        (("maintenance.ps1", "example-control.test"), 45, "Synthetic indicator"),
         (("whoami",), 10, "reconnaissance command"),
     ]
     for tokens, points, reason in checks:
