@@ -25,6 +25,8 @@ const getEvidenceMock = vi.fn();
 const getMemoryEvidencePreparationMock = vi.fn();
 const listMemoryRunsMock = vi.fn();
 const startMemoryScanMock = vi.fn();
+const startMemoryRunAllMock = vi.fn();
+const getActiveMemoryAnalysisBatchMock = vi.fn();
 const navigateMock = vi.fn();
 
 vi.mock("react-router-dom", async () => {
@@ -52,6 +54,8 @@ vi.mock("../api/client", () => ({
     getMemoryEvidencePreparation: (...args: unknown[]) => getMemoryEvidencePreparationMock(...args),
     listMemoryRuns: (...args: unknown[]) => listMemoryRunsMock(...args),
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
+    startMemoryRunAll: (...args: unknown[]) => startMemoryRunAllMock(...args),
+    getActiveMemoryAnalysisBatch: (...args: unknown[]) => getActiveMemoryAnalysisBatchMock(...args),
   },
 }));
 
@@ -203,6 +207,7 @@ describe("EvidenceIngestionWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     navigateMock.mockReset();
+    getActiveMemoryAnalysisBatchMock.mockResolvedValue(null);
     getCaseHostsMock.mockResolvedValue({ hosts: [{ id: "host-1", display_name: "WS-01" }] });
     getIngestionReadinessMock.mockResolvedValue(readyHealth());
     createEvidenceUploadSessionMock.mockResolvedValue(sessionResponse());
@@ -1056,17 +1061,38 @@ describe("EvidenceIngestionWizard", () => {
     expect(continueButton.className).toContain("bg-accent");
   });
 
-  it("clicking Start memory analysis calls startMemoryScan with processes_basic, never metadata_only", async () => {
+  it("starts the full memory battery by default, never metadata_only", async () => {
+    // The wizard used to run processes_basic alone and say nothing about the
+    // rest, so an image left the wizard with network, suspicious regions and
+    // handles unexamined and no sign that a second manual step existed.
+    startMemoryRunAllMock.mockResolvedValue({ id: "batch-1", status: "queued", requested_profiles: ["processes_basic"], completed_profiles: [], failed_profiles: [] });
+    await reachMemoryPreparationStep({ id: "evidence-3", original_filename: "capture.mem" });
+
+    await userEvent.click(await screen.findByTestId("memory-initial-analysis-start-button"));
+
+    await waitFor(() => expect(startMemoryRunAllMock).toHaveBeenCalledWith("case-1", "evidence-3", {
+      mode: "missing_or_failed",
+      authorization_acknowledged: true,
+      continue_on_failure: true,
+    }));
+    expect(startMemoryScanMock).not.toHaveBeenCalledWith("case-1", "evidence-3", "metadata_only");
+  });
+
+  it("unchecking the full-analysis option falls back to the single initial profile", async () => {
     startMemoryScanMock.mockResolvedValue({
       accepted: true, evidence_id: "evidence-3", run_id: "run-1", status: "queued", message: "queued",
       run: { id: "run-1", case_id: "case-1", evidence_id: "evidence-3", backend: "volatility3", profile: "processes_basic", status: "queued", requested_plugin_count: 2, plugin_count: 2, plugins_completed: 0, plugins_failed: 0, plugins_skipped: 0, started_at: null, completed_at: null, duration_ms: null, output_dir: null, metadata_json: {}, error_log: {}, backend_version: null, worker_task_id: null, cancellation_requested: false, created_at: new Date().toISOString() },
     });
     await reachMemoryPreparationStep({ id: "evidence-3", original_filename: "capture.mem" });
 
+    const toggle = (await screen.findByTestId("memory-full-analysis-toggle")).querySelector("input") as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    await userEvent.click(toggle);
+
     await userEvent.click(await screen.findByTestId("memory-initial-analysis-start-button"));
 
     await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith("case-1", "evidence-3", "processes_basic"));
-    expect(startMemoryScanMock).not.toHaveBeenCalledWith("case-1", "evidence-3", "metadata_only");
+    expect(startMemoryRunAllMock).not.toHaveBeenCalled();
   });
 
   it("refresh/reopen with an already-completed initial analysis shows View memory results, not Start", async () => {

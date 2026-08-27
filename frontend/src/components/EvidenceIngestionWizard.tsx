@@ -274,6 +274,11 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [selectionAdvancedOpen, setSelectionAdvancedOpen] = useState(false);
   const [processingMode, setProcessingMode] = useState<ProcessingMode>("recommended");
+  // Default on: leaving the wizard after only the first profile left the image
+  // mostly unexamined, with nothing saying a second manual step was needed.
+  // Opting out stays available because the full battery is several minutes of
+  // Volatility per image and some operators want to choose what runs.
+  const [runFullMemoryAnalysis, setRunFullMemoryAnalysis] = useState(true);
   const [labels, setLabels] = useState("");
   const [notes, setNotes] = useState("");
   // Wizard Advanced Options (WIZARD_ADVANCED_OPTIONS_ENABLED). Defaults
@@ -1803,7 +1808,27 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
                 escape hatch (still functional, never removed) rather than
                 letting the wizard hand off to MemoryEvidencePage without
                 ever having offered to start the initial analysis. */}
-            <MemoryInitialAnalysisAction caseId={caseId} evidenceId={preparationEvidence.id} onBeforeNavigateToResults={handleClose} />
+            <label className="mt-5 flex items-start gap-2 text-xs text-muted" data-testid="memory-full-analysis-toggle">
+              <input
+                type="checkbox"
+                checked={runFullMemoryAnalysis}
+                onChange={(event) => setRunFullMemoryAnalysis(event.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                <span className="font-semibold text-ink">Run the full memory analysis</span>
+                <br />
+                Runs every applicable profile (processes, network, suspicious regions, handles, modules, drivers).
+                Uncheck to run the initial process analysis only and choose the rest yourself later.
+              </span>
+            </label>
+
+            <MemoryInitialAnalysisAction
+              caseId={caseId}
+              evidenceId={preparationEvidence.id}
+              onBeforeNavigateToResults={handleClose}
+              runFullAnalysis={runFullMemoryAnalysis}
+            />
 
             <div className="mt-5 flex justify-end">
               <button

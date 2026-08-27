@@ -9,6 +9,8 @@ import { MemoryInitialAnalysisAction } from "./MemoryInitialAnalysisAction";
 const getMemoryEvidencePreparationMock = vi.fn();
 const listMemoryRunsMock = vi.fn();
 const startMemoryScanMock = vi.fn();
+const startMemoryRunAllMock = vi.fn();
+const getActiveMemoryAnalysisBatchMock = vi.fn();
 const navigateMock = vi.fn();
 
 vi.mock("../../api/client", () => ({
@@ -16,6 +18,8 @@ vi.mock("../../api/client", () => ({
     getMemoryEvidencePreparation: (...args: unknown[]) => getMemoryEvidencePreparationMock(...args),
     listMemoryRuns: (...args: unknown[]) => listMemoryRunsMock(...args),
     startMemoryScan: (...args: unknown[]) => startMemoryScanMock(...args),
+    startMemoryRunAll: (...args: unknown[]) => startMemoryRunAllMock(...args),
+    getActiveMemoryAnalysisBatch: (...args: unknown[]) => getActiveMemoryAnalysisBatchMock(...args),
   },
 }));
 
@@ -83,11 +87,14 @@ function startResponse(overrides: Partial<MemoryScanRun> = {}) {
   return { accepted: true, evidence_id: EVIDENCE, run_id: scanRun.id, status: scanRun.status, message: "queued", run: scanRun };
 }
 
-function renderAction() {
+// These cases exercise the single-profile path, which is now what an operator
+// gets by unchecking "Run the full memory analysis" in the wizard. The default
+// is the full battery and is covered separately below.
+function renderAction(runFullAnalysis = false) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <MemoryInitialAnalysisAction caseId={CASE} evidenceId={EVIDENCE} />
+      <MemoryInitialAnalysisAction caseId={CASE} evidenceId={EVIDENCE} runFullAnalysis={runFullAnalysis} />
     </QueryClientProvider>,
   );
 }
@@ -96,6 +103,7 @@ describe("MemoryInitialAnalysisAction", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     listMemoryRunsMock.mockResolvedValue([]);
+    getActiveMemoryAnalysisBatchMock.mockResolvedValue(null);
   });
 
   it("shows Start memory analysis when preparation is ready and no run exists yet", async () => {
@@ -253,5 +261,102 @@ describe("MemoryInitialAnalysisAction", () => {
     );
     renderAction();
     expect(await screen.findByTestId("memory-initial-analysis-start-button")).toBeInTheDocument();
+  });
+});
+
+describe("MemoryInitialAnalysisAction — full battery by default", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listMemoryRunsMock.mockResolvedValue([]);
+    getActiveMemoryAnalysisBatchMock.mockResolvedValue(null);
+  });
+
+  function batch(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "batch-1",
+      case_id: CASE,
+      evidence_id: EVIDENCE,
+      mode: "missing_or_failed",
+      status: "running",
+      requested_profiles: ["processes_basic", "network_basic", "suspicious_memory", "handles_basic"],
+      skipped_profiles: [],
+      current_profile: "network_basic",
+      completed_profiles: ["processes_basic"],
+      failed_profiles: [],
+      continue_on_failure: true,
+      cancellation_requested: false,
+      authorization_acknowledged: true,
+      created_at: null,
+      started_at: null,
+      completed_at: null,
+      ...overrides,
+    };
+  }
+
+  it("starts the whole battery, not just the first profile", async () => {
+    // Running processes_basic alone left network, suspicious regions and
+    // handles unexamined, with nothing in the wizard saying a second manual
+    // step existed.
+    getMemoryEvidencePreparationMock.mockResolvedValue(preparation());
+    startMemoryRunAllMock.mockResolvedValue(batch());
+    renderAction(true);
+
+    await userEvent.click(await screen.findByTestId("memory-initial-analysis-start-button"));
+
+    await waitFor(() =>
+      expect(startMemoryRunAllMock).toHaveBeenCalledWith(CASE, EVIDENCE, {
+        mode: "missing_or_failed",
+        authorization_acknowledged: true,
+        continue_on_failure: true,
+      }),
+    );
+    expect(startMemoryScanMock).not.toHaveBeenCalled();
+  });
+
+  it("reports batch progress rather than the first profile finishing", async () => {
+    // Watching processes_basic alone would announce completion the moment the
+    // first profile finished, while the rest was still queued.
+    getMemoryEvidencePreparationMock.mockResolvedValue(preparation());
+    getActiveMemoryAnalysisBatchMock.mockResolvedValue(batch());
+    renderAction(true);
+
+    const progress = await screen.findByTestId("memory-full-analysis-progress");
+    expect(progress.textContent).toContain("1 / 4 profiles completed");
+    expect(progress.textContent).toContain("network_basic");
+    expect(screen.queryByTestId("memory-initial-analysis-start-button")).not.toBeInTheDocument();
+  });
+
+  it("only reports completion when the batch itself is finished", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(preparation());
+    getActiveMemoryAnalysisBatchMock.mockResolvedValue(
+      batch({ status: "completed", current_profile: null, completed_profiles: ["processes_basic", "network_basic", "suspicious_memory", "handles_basic"] }),
+    );
+    renderAction(true);
+
+    const done = await screen.findByTestId("memory-full-analysis-finished");
+    expect(done.textContent).toContain("Full memory analysis completed");
+    expect(done.textContent).toContain("4 of 4 profiles completed");
+  });
+
+  it("surfaces failed profiles instead of reporting a clean finish", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(preparation());
+    getActiveMemoryAnalysisBatchMock.mockResolvedValue(
+      batch({ status: "completed_with_errors", current_profile: null, completed_profiles: ["processes_basic"], failed_profiles: ["network_basic"] }),
+    );
+    renderAction(true);
+
+    const done = await screen.findByTestId("memory-full-analysis-finished");
+    expect(done.textContent).toContain("1 failed");
+  });
+
+  it("opting out still runs the single initial profile", async () => {
+    getMemoryEvidencePreparationMock.mockResolvedValue(preparation());
+    startMemoryScanMock.mockResolvedValue(startResponse());
+    renderAction(false);
+
+    await userEvent.click(await screen.findByTestId("memory-initial-analysis-start-button"));
+
+    await waitFor(() => expect(startMemoryScanMock).toHaveBeenCalledWith(CASE, EVIDENCE, "processes_basic"));
+    expect(startMemoryRunAllMock).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import { useMemo, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
-import { api, type MemoryEvidencePreparation, type MemoryScanRun } from "../../api/client";
+import { api, type MemoryAnalysisBatch, type MemoryEvidencePreparation, type MemoryScanRun } from "../../api/client";
 import { memoryQueryKeys } from "../../lib/memoryQueryKeys";
 import { memoryEvidenceRoute } from "../../lib/canonicalRoutes";
 
@@ -30,6 +30,7 @@ import { memoryEvidenceRoute } from "../../lib/canonicalRoutes";
 
 export const INITIAL_ANALYSIS_PROFILE = "processes_basic";
 const ACTIVE_RUN_STATUSES = new Set(["pending", "queued", "running"]);
+const ACTIVE_BATCH_STATUSES = new Set(["queued", "running"]);
 
 type Tone = "good" | "warn" | "bad";
 
@@ -58,9 +59,18 @@ export type MemoryInitialAnalysisActionProps = {
   // + navigate() sequencing, just decomposed so this component still
   // owns the route construction and the navigate() call itself.
   onBeforeNavigateToResults?: () => void;
+  /**
+   * Run every applicable profile rather than just the first one.
+   *
+   * Defaults to true because the previous behaviour ran processes_basic alone
+   * and said nothing about the rest: the analyst left the wizard with an image
+   * whose network, suspicious regions, handles and drivers had never been
+   * looked at, and no indication that a second, manual step existed.
+   */
+  runFullAnalysis?: boolean;
 };
 
-export function MemoryInitialAnalysisAction({ caseId, evidenceId, onBeforeNavigateToResults }: MemoryInitialAnalysisActionProps) {
+export function MemoryInitialAnalysisAction({ caseId, evidenceId, onBeforeNavigateToResults, runFullAnalysis = true }: MemoryInitialAnalysisActionProps) {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const submittingRef = useRef(false);
@@ -89,14 +99,44 @@ export function MemoryInitialAnalysisAction({ caseId, evidenceId, onBeforeNaviga
     return runs.find((run) => run.profile === INITIAL_ANALYSIS_PROFILE) ?? null;
   }, [runsQuery.data]);
 
+  // In full mode the unit of work is the batch, not one run. Watching only
+  // processes_basic would announce "analysis completed" the moment the first
+  // profile finished, while the rest of the battery was still queued.
+  const batchQuery = useQuery({
+    queryKey: ["memory-active-analysis-batch", caseId, evidenceId],
+    queryFn: () => api.getActiveMemoryAnalysisBatch(caseId, evidenceId),
+    enabled: Boolean(runFullAnalysis && caseId && evidenceId),
+    refetchOnWindowFocus: false,
+    refetchInterval: (query) => {
+      const batch = query.state.data as MemoryAnalysisBatch | null | undefined;
+      return batch && ACTIVE_BATCH_STATUSES.has(batch.status) ? 3000 : false;
+    },
+  });
+  const activeBatch = (batchQuery.data ?? null) as MemoryAnalysisBatch | null;
+
   const startMutation = useMutation({
-    mutationFn: () => api.startMemoryScan(caseId, evidenceId, INITIAL_ANALYSIS_PROFILE),
+    // The response is never read -- progress comes from the runs/batch queries
+    // invalidated below -- so the two start calls are normalised to void rather
+    // than leaking a union return type into the mutation's generics.
+    mutationFn: async (): Promise<void> => {
+      if (runFullAnalysis) {
+        await api.startMemoryRunAll(caseId, evidenceId, {
+          mode: "missing_or_failed",
+          authorization_acknowledged: true,
+          continue_on_failure: true,
+        });
+        return;
+      }
+      await api.startMemoryScan(caseId, evidenceId, INITIAL_ANALYSIS_PROFILE);
+    },
     onSuccess: () => {
       const keys = memoryQueryKeys.invalidateAfterMutation(caseId, evidenceId);
       for (const key of keys) void queryClient.invalidateQueries({ queryKey: key });
       void queryClient.invalidateQueries({ queryKey: memoryQueryKeys.runs(caseId, evidenceId) });
+      void queryClient.invalidateQueries({ queryKey: ["memory-active-analysis-batch", caseId, evidenceId] });
     },
     onError: () => {
+      void queryClient.invalidateQueries({ queryKey: ["memory-active-analysis-batch", caseId, evidenceId] });
       // start_memory_scan can leave a real, terminal MemoryScanRun row
       // behind even when the HTTP response itself is an error (e.g. an
       // enqueue failure marks the run "failed" before the 500 is
@@ -125,6 +165,58 @@ export function MemoryInitialAnalysisAction({ caseId, evidenceId, onBeforeNaviga
   // has an active or completed run (see the reanudación requirement).
   if (preparationQuery.isLoading || runsQuery.isLoading) {
     return null;
+  }
+
+  if (runFullAnalysis && activeBatch) {
+    const requested = activeBatch.requested_profiles?.length ?? 0;
+    const done = (activeBatch.completed_profiles?.length ?? 0) + (activeBatch.failed_profiles?.length ?? 0);
+    if (ACTIVE_BATCH_STATUSES.has(activeBatch.status)) {
+      return (
+        <div className="mt-5 rounded-2xl border border-line bg-abyss/60 p-4" data-testid="memory-full-analysis-running">
+          <p className="text-sm font-semibold text-ink">Full memory analysis running</p>
+          <p className="mt-1 text-xs text-muted" data-testid="memory-full-analysis-progress">
+            {done} / {requested} profiles completed
+            {activeBatch.current_profile ? ` · running ${activeBatch.current_profile}` : ""}
+          </p>
+          <p className="mt-2 text-xs text-muted">
+            This continues in the background. You can close the wizard and follow it from the memory workspace.
+          </p>
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={handleViewResults}
+              className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink"
+              data-testid="memory-full-analysis-view-results-button"
+            >
+              View memory results
+            </button>
+          </div>
+        </div>
+      );
+    }
+    const failed = activeBatch.failed_profiles?.length ?? 0;
+    const batchTone: Tone = activeBatch.status === "completed" ? "good" : failed > 0 ? "warn" : "bad";
+    return (
+      <div className="mt-5 rounded-2xl border border-line bg-abyss/60 p-4" data-testid="memory-full-analysis-finished">
+        <p className={`text-sm font-semibold ${TONE_TEXT[batchTone]}`}>
+          {activeBatch.status === "completed" ? "✓ Full memory analysis completed" : `Full memory analysis ${activeBatch.status.replace(/_/g, " ")}`}
+        </p>
+        <p className="mt-1 text-xs text-muted">
+          {activeBatch.completed_profiles?.length ?? 0} of {requested} profiles completed
+          {failed > 0 ? ` · ${failed} failed` : ""}
+        </p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={handleViewResults}
+            className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss"
+            data-testid="memory-full-analysis-view-results-button"
+          >
+            View memory results
+          </button>
+        </div>
+      </div>
+    );
   }
 
   if (initialRun) {
@@ -204,10 +296,12 @@ export function MemoryInitialAnalysisAction({ caseId, evidenceId, onBeforeNaviga
         className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-60"
         data-testid="memory-initial-analysis-start-button"
       >
-        Start memory analysis
+        {runFullAnalysis ? "Start full memory analysis" : "Start initial analysis"}
       </button>
       <p className="mt-2 text-xs text-muted">
-        Kairon will run the initial memory analysis. You can run additional analysis profiles later from the memory workspace.
+        {runFullAnalysis
+          ? "Kairon will run every applicable analysis profile for this image. It continues in the background, so you can close the wizard."
+          : "Kairon will run the initial process analysis only. You can run the remaining profiles later from the memory workspace."}
       </p>
       {startMutation.isError ? (
         <p className="mt-2 text-xs text-danger" data-testid="memory-initial-analysis-start-error">
