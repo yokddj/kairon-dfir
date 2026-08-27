@@ -2329,6 +2329,39 @@ def _run_is_active(run: RuleRun) -> bool:
     return run.status in {RuleRunStatus.queued, RuleRunStatus.running}
 
 
+def _drop_rules_this_engine_cannot_evaluate(rules: list[Rule]) -> tuple[list[Rule], dict[str, int]]:
+    """Keep only Sigma rules the engine can actually answer.
+
+    Compatibility was analysed at import time and then ignored at run time, so
+    a rule the analyser had already judged unevaluable still ran -- against a
+    query compiled with its unreadable half silently dropped. On a real pack
+    that turned "EventID 5145 AND a credential-store filename" into "any
+    network share access": two rules alone produced 2000 of 2271 detections and
+    buried the genuine hits. Judged from the rule's own content rather than the
+    stored verdict, so a rule imported before a mapping improved is re-judged
+    on today's engine instead of yesterday's.
+    """
+    kept: list[Rule] = []
+    dropped: dict[str, int] = {}
+    for rule in rules:
+        if str(getattr(rule.engine, "value", rule.engine) or "") != "sigma":
+            kept.append(rule)
+            continue
+        try:
+            compatibility = analyze_sigma_engine_compatibility(yaml.safe_load(rule.content) or {})
+        except Exception:  # noqa: BLE001
+            # Unparseable content is a different failure with its own reporting;
+            # leave it to the runner rather than dropping it silently here.
+            kept.append(rule)
+            continue
+        if compatibility.get("executable_by_current_engine"):
+            kept.append(rule)
+            continue
+        reason = str(compatibility.get("engine_status") or "not_evaluable")
+        dropped[reason] = dropped.get(reason, 0) + 1
+    return kept, dropped
+
+
 def _resolve_rule_ids_for_case_with_dedupe(db: Session, *, case_id: str, payload: RulesRunRequest) -> tuple[list[str], dict]:
     query = db.query(Rule)
     if payload.rule_ids:
@@ -2350,7 +2383,10 @@ def _resolve_rule_ids_for_case_with_dedupe(db: Session, *, case_id: str, payload
             search=payload.search,
         )
     rules = query.all()
+    rules, not_evaluable = _drop_rules_this_engine_cannot_evaluate(rules)
     selected, dedupe = _dedupe_rules_for_execution(rules)
+    if not_evaluable:
+        dedupe = {**dedupe, "not_evaluable": not_evaluable}
     return [rule.id for rule in selected], dedupe
 
 
