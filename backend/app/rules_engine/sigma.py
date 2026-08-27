@@ -39,6 +39,25 @@ SIGMA_FIELD_MAP = {
     "GrantedAccess": ["process.granted_access", "windows.event_data.GrantedAccess", "winlog.event_data.GrantedAccess"],
     "ScriptBlockText": ["powershell.script_block_text", "search_text"],
     "Url": ["url.full", "download.url"],
+    # Added after measuring a real SigmaHQ import against a live index. Every
+    # target below was checked to exist AND to be populated with the shape the
+    # Sigma field means -- a mapping onto a field that is declared but empty, or
+    # that holds a different representation, is a rule that quietly never fires.
+    #
+    # Deliberately NOT mapped, for that reason:
+    #   IntegrityLevel  - process.integrity_level holds a SID (S-1-16-16384);
+    #                     Sigma rules match "High"/"Medium", so it would never hit.
+    #   PipeName        - file.name holds filenames, not named pipes.
+    #   OriginalFileName, TargetImage, CallTrace, SourceImage - no field carries
+    #                     these; SourceImage in particular only means anything
+    #                     paired with TargetImage, so mapping it alone would
+    #                     match far too broadly.
+    "ServiceName": ["service.name", "service.display_name"],
+    "ServiceFileName": ["service.image_path"],
+    "ImagePath": ["service.image_path", "process.executable"],
+    "ObjectName": ["object.name", "registry.path"],
+    "ObjectType": ["object.type"],
+    "EventLog": ["windows.channel", "event.channel"],
 }
 
 MODIFIER_SUFFIXES = ("|contains", "|endswith", "|startswith", "|re", "|all")

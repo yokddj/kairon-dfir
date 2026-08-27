@@ -28,12 +28,12 @@ def test_an_unmapped_field_makes_the_rule_non_executable() -> None:
     rule that is silently never firing.
     """
     result = analyze_sigma_engine_compatibility(
-        _rule({"sel": {"EventID": 7045, "ServiceFileName|contains": "evil"}, "condition": "sel"})
+        _rule({"sel": {"EventID": 10, "CallTrace|contains": "UNKNOWN"}, "condition": "sel"})
     )
     assert result["executable_by_current_engine"] is False
     assert result["engine_status"] == "unmapped_field"
-    assert result["unmapped_fields"] == ["ServiceFileName"]
-    assert "unmapped_field:ServiceFileName" in result["unsupported_features"]
+    assert result["unmapped_fields"] == ["CallTrace"]
+    assert "unmapped_field:CallTrace" in result["unsupported_features"]
 
 
 def test_the_offending_field_is_named_so_it_can_be_mapped_later() -> None:
@@ -89,8 +89,8 @@ def test_a_chain_of_modifiers_does_not_hide_the_field_name() -> None:
 
 def test_an_unmappable_field_is_still_caught_through_a_modifier_chain() -> None:
     assert _detect_unmapped_fields(
-        _rule({"sel": {"ServiceFileName|contains|all": ["a"]}, "condition": "sel"})
-    ) == ["ServiceFileName"]
+        _rule({"sel": {"CallTrace|contains|all": ["a"]}, "condition": "sel"})
+    ) == ["CallTrace"]
 
 
 def test_a_rule_with_a_chained_modifier_stays_executable() -> None:
@@ -98,3 +98,42 @@ def test_a_rule_with_a_chained_modifier_stays_executable() -> None:
         _rule({"sel": {"CommandLine|contains|all": ["whoami", "/all"]}, "condition": "sel"})
     )
     assert result["unmapped_fields"] == []
+
+
+class TestFieldsAddedFromRealMeasurement:
+    """Each of these was verified against a live index before being mapped:
+    the target field must exist and hold the shape the Sigma field means."""
+
+    def test_service_install_rules_can_be_evaluated(self) -> None:
+        # 7045 is how a remote-execution tool announces itself; these three
+        # fields are what Sigma rules key on to catch it.
+        for field in ("ServiceName", "ServiceFileName", "ImagePath"):
+            result = analyze_sigma_engine_compatibility(
+                _rule({"sel": {f"{field}|contains": "evil"}, "condition": "sel"})
+            )
+            assert result["unmapped_fields"] == [], field
+            assert result["executable_by_current_engine"] is True, field
+
+    def test_object_access_and_channel_rules_can_be_evaluated(self) -> None:
+        for field in ("ObjectName", "ObjectType", "EventLog"):
+            result = analyze_sigma_engine_compatibility(_rule({"sel": {field: "x"}, "condition": "sel"}))
+            assert result["unmapped_fields"] == [], field
+
+    def test_integrity_level_stays_unmapped_because_the_value_shape_differs(self) -> None:
+        """process.integrity_level holds a SID; Sigma rules match "High".
+
+        Mapping it would compile a rule that runs and never matches, which is
+        the exact silence this whole check exists to remove.
+        """
+        assert _detect_unmapped_fields(_rule({"sel": {"IntegrityLevel": "High"}, "condition": "sel"})) == ["IntegrityLevel"]
+
+    def test_pipe_and_target_image_stay_unmapped_for_want_of_a_field(self) -> None:
+        for field in ("PipeName", "TargetImage", "OriginalFileName", "CallTrace"):
+            assert _detect_unmapped_fields(_rule({"sel": {field: "x"}, "condition": "sel"})) == [field], field
+
+    def test_every_mapped_target_is_a_dotted_document_path(self) -> None:
+        """Guards against pasting a Sigma name into the target list by mistake."""
+        for sigma_field, targets in SIGMA_FIELD_MAP.items():
+            assert targets, sigma_field
+            for target in targets:
+                assert target == target.lower() or "." in target, f"{sigma_field} -> {target}"
