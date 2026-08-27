@@ -611,3 +611,64 @@ def test_pdf_export_renderer_unavailable_returns_clear_error(monkeypatch: pytest
 
     assert exc.value.status_code == 503
     assert "renderer missing" in str(exc.value.detail)
+
+
+def test_preview_separates_matched_detections_from_the_ones_it_carries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A report cap must never be reported as the number of matching rows.
+
+    The detection listing is capped so the document stays readable. Publishing
+    the capped length as "detections matched" put a figure in a forensic
+    deliverable that understated the case with nothing to indicate it.
+    """
+    case = Case(id="case-1", name="Capped sample", status="open", timezone="UTC")
+    over_limit = report_service.REPORT_SOURCE_LIMIT + 37
+    detections = [_detection(f"det-{index}", status="new", severity="high", risk=90) for index in range(over_limit)]
+    report = CaseReport(
+        id="report-1",
+        case_id="case-1",
+        title="Capped sample report",
+        template="standard_investigation",
+        sections_enabled=report_service.DEFAULT_SECTIONS_ENABLED,
+        analyst_notes=report_service.DEFAULT_ANALYST_NOTES,
+        filters={**report_service.DEFAULT_FILTERS, "include_command_history": False, "include_defender": False, "include_email": False, "include_srum": False, "include_motw": False, "include_persistence": False, "include_incident_timeline": False, "detection_statuses": ["new"]},
+        selected_finding_ids=[],
+        selected_key_event_ids=[],
+        selected_process_chain_ids=[],
+    )
+    db = _FakeDb(case=case, reports=[report], detections=detections)
+    monkeypatch.setattr(report_service, "_build_case_context", lambda db, case_id: {"case": {"id": case_id, "name": "Capped sample"}, "hosts": [], "evidences": [], "summary": {"events_indexed": 0, "findings_total": 0, "findings_high": 0, "parser_errors": 0, "warnings": []}})
+    monkeypatch.setattr(report_service, "fetch_event_by_id", lambda *args, **kwargs: _event_payload())
+
+    preview = report_service.build_case_report_preview(db, "case-1", "report-1")
+
+    assert preview["counts"]["detections_matched"] == over_limit
+    assert preview["counts"]["detections_included"] == report_service.REPORT_SOURCE_LIMIT
+    assert any("detections: showing" in warning for warning in preview["warnings"]), preview["warnings"]
+
+
+def test_preview_marked_event_cap_keeps_the_most_recent(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Markings arrive oldest-first, so a naive slice would drop recent work."""
+    case = Case(id="case-1", name="Capped markings", status="open", timezone="UTC")
+    over_limit = report_service.REPORT_SOURCE_LIMIT + 5
+    markings = [_marking(f"mark-{index}", status="suspicious") for index in range(over_limit)]
+    report = CaseReport(
+        id="report-1",
+        case_id="case-1",
+        title="Capped markings report",
+        template="standard_investigation",
+        sections_enabled=report_service.DEFAULT_SECTIONS_ENABLED,
+        analyst_notes=report_service.DEFAULT_ANALYST_NOTES,
+        filters={**report_service.DEFAULT_FILTERS, "include_command_history": False, "include_defender": False, "include_email": False, "include_srum": False, "include_motw": False, "include_persistence": False, "include_incident_timeline": False, "marking_statuses": ["suspicious"]},
+        selected_finding_ids=[],
+        selected_key_event_ids=[],
+        selected_process_chain_ids=[],
+    )
+    db = _FakeDb(case=case, reports=[report], markings=markings)
+    monkeypatch.setattr(report_service, "_build_case_context", lambda db, case_id: {"case": {"id": case_id, "name": "Capped markings"}, "hosts": [], "evidences": [], "summary": {"events_indexed": 0, "findings_total": 0, "findings_high": 0, "parser_errors": 0, "warnings": []}})
+    monkeypatch.setattr(report_service, "fetch_event_by_id", lambda *args, **kwargs: _event_payload())
+
+    preview = report_service.build_case_report_preview(db, "case-1", "report-1")
+
+    assert preview["counts"]["marked_events_matched"] == over_limit
+    assert preview["counts"]["marked_events_included"] == report_service.REPORT_SOURCE_LIMIT
+    assert any("marked events: showing" in warning for warning in preview["warnings"]), preview["warnings"]

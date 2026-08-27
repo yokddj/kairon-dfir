@@ -891,3 +891,34 @@ def test_incident_timeline_cap_does_not_favour_undated_items(monkeypatch):
     )
 
     assert [item["title"] for item in response["items"]] == ["Recent credential access"]
+
+
+def test_timeline_response_reports_the_real_event_total_when_capped(monkeypatch):
+    """The paginable window must not read as the size of the case.
+
+    build_timeline_response merges a bounded slice of events with findings and
+    bookmarks, so its "total" settles near the fetch cap however many events
+    actually matched. Without an explicit signal a 1.4M-event case looks like a
+    few hundred rows.
+    """
+    rows = [_event_doc(f"evt-{index}", ts="2026-05-15T10:00:00Z") for index in range(500)]
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (874_212, rows, [], {}))
+    monkeypatch.setattr(timeline_service, "search_findings_v2", lambda *_a, **_k: (0, [], [], []))
+    monkeypatch.setattr(timeline_service, "memory_timeline_items", lambda *_a, **_k: {"items": [], "warnings": [], "undated_count": 0})
+
+    response = timeline_service.build_timeline_response(_FakeDb(), "case-1", {"page_size": 50})
+
+    assert response["event_total"] == 874_212
+    assert any("874212" in warning or "874,212" in warning for warning in response["warnings"]), response["warnings"]
+
+
+def test_timeline_response_stays_quiet_when_nothing_was_cut(monkeypatch):
+    rows = [_event_doc(f"evt-{index}", ts="2026-05-15T10:00:00Z") for index in range(3)]
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (3, rows, [], {}))
+    monkeypatch.setattr(timeline_service, "search_findings_v2", lambda *_a, **_k: (0, [], [], []))
+    monkeypatch.setattr(timeline_service, "memory_timeline_items", lambda *_a, **_k: {"items": [], "warnings": [], "undated_count": 0})
+
+    response = timeline_service.build_timeline_response(_FakeDb(), "case-1", {"page_size": 50})
+
+    assert response["event_total"] == 3
+    assert not [warning for warning in response["warnings"] if "matching events" in warning]

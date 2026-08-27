@@ -1784,6 +1784,15 @@ def build_timeline_response(db: Session, case_id: str, params: dict[str, Any]) -
         merged = [item for item in merged if item.get("is_key_event")]
 
     total = len(merged)
+    # "total" is the size of the merged, paginable window -- not how many events
+    # the query actually matched. The window is bounded by fetch_limit, so on a
+    # large case it silently settles near that bound and reads as if the case
+    # held only a few hundred events. Say what was really matched.
+    if len(event_rows) >= fetch_limit and event_total > len(event_rows):
+        warnings.append(
+            f"Showing {len(event_rows)} of {event_total} matching events in this view. "
+            "Narrow by host, time range or filters to reach the rest."
+        )
     page_items = merged[offset : offset + page_size]
     groups = _timeline_groups(page_items, str(params.get("group_by") or "hour"))
     next_cursor = _encode_cursor(offset + page_size) if offset + page_size < total else None
@@ -1792,6 +1801,7 @@ def build_timeline_response(db: Session, case_id: str, params: dict[str, Any]) -
         "query": params,
         "mode": mode,
         "total": total,
+        "event_total": event_total,
         "page_size": page_size,
         "next_cursor": next_cursor,
         "items": page_items,
