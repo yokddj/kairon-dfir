@@ -119,16 +119,24 @@ class TestFieldsAddedFromRealMeasurement:
             result = analyze_sigma_engine_compatibility(_rule({"sel": {field: "x"}, "condition": "sel"}))
             assert result["unmapped_fields"] == [], field
 
-    def test_integrity_level_stays_unmapped_because_the_value_shape_differs(self) -> None:
-        """process.integrity_level holds a SID; Sigma rules match "High".
+    def test_integrity_level_points_at_the_word_form_not_the_sid(self) -> None:
+        """Sigma rules match "High"; process.integrity_level holds a SID.
 
-        Mapping it would compile a rule that runs and never matches, which is
-        the exact silence this whole check exists to remove.
+        The normalizer promotes Sysmon's word form to its own field, so the
+        mapping targets that and never the SID -- pointing at the SID would
+        compile a rule that runs and never matches, the exact silence this
+        check exists to remove.
         """
-        assert _detect_unmapped_fields(_rule({"sel": {"IntegrityLevel": "High"}, "condition": "sel"})) == ["IntegrityLevel"]
+        assert _detect_unmapped_fields(_rule({"sel": {"IntegrityLevel": "High"}, "condition": "sel"})) == []
+        assert SIGMA_FIELD_MAP["IntegrityLevel"] == ["process.integrity_level_name"]
+        assert "process.integrity_level" not in SIGMA_FIELD_MAP["IntegrityLevel"]
 
-    def test_pipe_and_target_image_stay_unmapped_for_want_of_a_field(self) -> None:
-        for field in ("PipeName", "TargetImage", "OriginalFileName", "CallTrace"):
+    def test_original_file_name_is_mappable_once_the_normalizer_promotes_it(self) -> None:
+        """It blocked 559 rules while it lived only inside windows.event_data."""
+        assert _detect_unmapped_fields(_rule({"sel": {"OriginalFileName": "PowerShell.EXE"}, "condition": "sel"})) == []
+
+    def test_fields_with_nothing_to_point_at_stay_unmapped(self) -> None:
+        for field in ("PipeName", "TargetImage", "CallTrace"):
             assert _detect_unmapped_fields(_rule({"sel": {field: "x"}, "condition": "sel"})) == [field], field
 
     def test_every_mapped_target_is_a_dotted_document_path(self) -> None:

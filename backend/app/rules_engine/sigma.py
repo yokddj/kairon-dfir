@@ -45,19 +45,28 @@ SIGMA_FIELD_MAP = {
     # that holds a different representation, is a rule that quietly never fires.
     #
     # Deliberately NOT mapped, for that reason:
-    #   IntegrityLevel  - process.integrity_level holds a SID (S-1-16-16384);
-    #                     Sigma rules match "High"/"Medium", so it would never hit.
     #   PipeName        - file.name holds filenames, not named pipes.
-    #   OriginalFileName, TargetImage, CallTrace, SourceImage - no field carries
-    #                     these; SourceImage in particular only means anything
-    #                     paired with TargetImage, so mapping it alone would
-    #                     match far too broadly.
+    #   TargetImage, CallTrace, SourceImage - no field carries these;
+    #                     SourceImage in particular only means anything paired
+    #                     with TargetImage, so mapping it alone would match far
+    #                     too broadly.
+    #
+    # OriginalFileName, IntegrityLevel, Description, Product and Company are
+    # promoted out of windows.event_data by the ingest normalizer, which is why
+    # they can be mapped at all -- see _PROMOTED_EVENT_DATA_FIELDS there.
+    # IntegrityLevel deliberately points at integrity_level_name and not
+    # process.integrity_level, which other sources fill with a SID.
     "ServiceName": ["service.name", "service.display_name"],
     "ServiceFileName": ["service.image_path"],
     "ImagePath": ["service.image_path", "process.executable"],
     "ObjectName": ["object.name", "registry.path"],
     "ObjectType": ["object.type"],
     "EventLog": ["windows.channel", "event.channel"],
+    "OriginalFileName": ["process.original_file_name"],
+    "IntegrityLevel": ["process.integrity_level_name"],
+    "Description": ["process.description"],
+    "Product": ["process.product"],
+    "Company": ["process.company"],
 }
 
 MODIFIER_SUFFIXES = ("|contains", "|endswith", "|startswith", "|re", "|all")

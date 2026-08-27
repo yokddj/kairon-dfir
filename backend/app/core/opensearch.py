@@ -473,6 +473,20 @@ def ensure_case_index(case_id: str) -> str:
                                     }
                                 },
                                 "integrity_level": {"type": "keyword"},
+                                # Promoted out of windows.event_data by the ingest
+                                # normalizer. The root mapping is dynamic:false, so
+                                # without an entry here the value lands in _source
+                                # and stays unqueryable -- which is exactly the
+                                # condition that made Sigma rules keying on
+                                # OriginalFileName impossible to evaluate.
+                                # integrity_level_name is separate from
+                                # integrity_level above: that one carries a SID
+                                # from other sources, this one Sysmon's word form.
+                                "original_file_name": {"type": "keyword"},
+                                "integrity_level_name": {"type": "keyword"},
+                                "description": {"type": "keyword"},
+                                "product": {"type": "keyword"},
+                                "company": {"type": "keyword"},
                                 "token_elevation": {"type": "keyword"},
                             }
                         },

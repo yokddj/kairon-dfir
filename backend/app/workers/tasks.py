@@ -9426,6 +9426,37 @@ def _sigma_scope_filter_clauses(case_id: str, evidence_id: str | None, metadata_
     return filters
 
 
+def _indexed_field_names(case_id: str) -> set[str]:
+    """Every field the case index can actually be queried on.
+
+    Authoritative where a document sample is only suggestive: a field is
+    queryable because the mapping declares it, whether or not it appears in the
+    handful of documents that were sampled.
+    """
+    try:
+        client = get_opensearch_client()
+        response = client.indices.get_mapping(index=get_events_index(case_id), params={"ignore_unavailable": "true"})
+    except Exception:  # noqa: BLE001
+        return set()
+    names: set[str] = set()
+
+    def walk(properties: dict, prefix: str) -> None:
+        for name, definition in (properties or {}).items():
+            path = f"{prefix}{name}"
+            if not isinstance(definition, dict):
+                continue
+            nested = definition.get("properties")
+            if isinstance(nested, dict):
+                walk(nested, f"{path}.")
+                continue
+            names.add(path)
+
+    for index_mapping in (response or {}).values():
+        mappings = (index_mapping or {}).get("mappings") or {}
+        walk(mappings.get("properties") or {}, "")
+    return names
+
+
 def _build_sigma_case_profile_for_scope(case_id: str, evidence_id: str | None, metadata_json: dict | None = None) -> dict:
     filters = _sigma_scope_filter_clauses(case_id, evidence_id, metadata_json)
     query = {"bool": {"filter": filters}}
@@ -9466,6 +9497,17 @@ def _build_sigma_case_profile_for_scope(case_id: str, evidence_id: str | None, m
     )
     hits = [hit.get("_source") or {} for hit in result.get("hits", {}).get("hits", [])]
     profile = build_sigma_case_profile(hits, total_events=total_events)
+    # Which fields exist is a property of the index, not of whichever thousand
+    # documents came back first. Deriving it from the sample meant a case whose
+    # sample happened to contain no Windows events reported windows.event_id as
+    # absent, and every rule keying on it was skipped as "missing_fields" --
+    # silently, and with the run still reporting success. Re-indexing a case was
+    # enough to change which documents the unsorted sample returned and take a
+    # run from 271 detections to zero. Ask the mapping instead; the sample still
+    # supplies what it is genuinely good for, like which channels are present.
+    profile["available_fields"] = sorted(
+        set(profile.get("available_fields") or []) | _indexed_field_names(case_id)
+    )
     profile["case_id"] = case_id
     if evidence_id:
         profile["evidence_id"] = evidence_id

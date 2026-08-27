@@ -1980,9 +1980,60 @@ def normalize_row(case_id: str, evidence_id: str, artifact_id: str, row: dict, a
         )
     document = _apply_false_positive_reduction(document)
     document["event"]["timeline_include"] = bool(timeline_include)
+    _promote_event_data_fields(document)
     document["search_text"] = build_search_text(document)
     document.pop("_preserve_risk_score", None)
     return _apply_data_quality(document)
+
+
+# windows.event_data holds the richest content Windows emits, but it is mapped
+# with "enabled": false so the hundreds of distinct keys across event types
+# cannot blow up the index. That leaves genuinely valuable, stable keys
+# unqueryable: on a real SigmaHQ pack OriginalFileName alone was the single
+# field blocking 559 rules, because a detection cannot ask a field the index
+# does not expose.
+#
+# So promote a short, explicit allow-list into fields of their own. The list
+# stays small on purpose -- it is the opposite of dynamic mapping, and every
+# entry has to earn its place by unlocking real detections.
+#
+# IntegrityLevel is promoted under its own name rather than into the existing
+# process.integrity_level, which other sources populate with a SID
+# (S-1-16-8192). Sysmon writes the word ("Medium"), which is what Sigma rules
+# compare against; mixing both shapes in one field would make every rule using
+# it wrong for half the data.
+_PROMOTED_EVENT_DATA_FIELDS: dict[str, tuple[str, str]] = {
+    "OriginalFileName": ("process", "original_file_name"),
+    "IntegrityLevel": ("process", "integrity_level_name"),
+    "Description": ("process", "description"),
+    "Product": ("process", "product"),
+    "Company": ("process", "company"),
+}
+
+
+def _promote_event_data_fields(document: dict) -> None:
+    windows = document.get("windows")
+    if not isinstance(windows, dict):
+        return
+    event_data = windows.get("event_data")
+    if not isinstance(event_data, dict):
+        return
+    for key, (section, field) in _PROMOTED_EVENT_DATA_FIELDS.items():
+        value = event_data.get(key)
+        if value in (None, ""):
+            continue
+        text = str(value).strip()
+        if not text or text in _EVENT_DATA_PLACEHOLDERS:
+            continue
+        block = document.get(section)
+        if not isinstance(block, dict):
+            block = {}
+            document[section] = block
+        # Never overwrite a value a dedicated parser already established: those
+        # are derived from the artifact's own schema and are more trustworthy
+        # than a generic event_data key of the same name.
+        if block.get(field) in (None, ""):
+            block[field] = text
 
 
 def read_records(path: Path) -> list[dict]:
