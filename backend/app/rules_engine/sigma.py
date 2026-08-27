@@ -603,6 +603,7 @@ def build_sigma_case_profile(events: list[dict], *, total_events: int | None = N
     for event in events:
         artifact = dict(event.get("artifact") or {})
         windows = dict(event.get("windows") or {})
+        linux = dict(event.get("linux") or {})
         process = dict(event.get("process") or {})
         registry = dict(event.get("registry") or {})
         file_obj = dict(event.get("file") or {})
@@ -639,8 +640,21 @@ def build_sigma_case_profile(events: list[dict], *, total_events: int | None = N
         event_id = windows.get("event_id")
         if event_id is not None and str(event_id).strip():
             event_ids[str(event_id)] += 1
-        if windows or parser_name == "evtx_raw" or artifact_type == "windows_event":
+        # `windows` is a block every document carries, populated or not, so
+        # testing it for truthiness marked every case -- including Linux-only
+        # ones -- as a Windows case. Require something actually in it.
+        if any(value not in (None, "", [], {}) for value in windows.values()) or parser_name == "evtx_raw" or artifact_type == "windows_event":
             products.add("windows")
+        # Nothing ever added "linux", so a Sigma rule with logsource
+        # product: linux was skipped as unsupported_platform on every case there
+        # has ever been, including a Linux one: 195 rules refused to run against
+        # 89788 Linux events, and the run reported success.
+        if any(value not in (None, "", [], {}) for value in linux.values()) or str(artifact_type).startswith("linux_"):
+            products.add("linux")
+        if str(host.get("os") or "").strip().lower() == "linux":
+            products.add("linux")
+        if str(artifact_type).startswith("macos_") or str(host.get("os") or "").strip().lower() in {"macos", "darwin"}:
+            products.add("macos")
 
         _mark_field("windows.event_id", windows.get("event_id") is not None)
         _mark_field("windows.channel", bool(windows.get("channel")))

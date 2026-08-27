@@ -9426,6 +9426,31 @@ def _sigma_scope_filter_clauses(case_id: str, evidence_id: str | None, metadata_
     return filters
 
 
+# A field whose presence identifies the platform an event came from. Counting
+# them is authoritative where a document sample only suggests: which platforms a
+# case holds decides which Sigma rules are even allowed to run, and getting it
+# from a thousand sampled documents meant a Linux-only case was read as Windows
+# -- so every Linux rule was skipped as unsupported_platform, on every case.
+_PLATFORM_MARKER_FIELDS = {
+    "windows": "windows.event_id",
+    "linux": "linux.artifact_family",
+    "macos": "macos.artifact_family",
+}
+
+
+def _case_source_products(case_id: str, scope_query: dict) -> set[str]:
+    products: set[str] = set()
+    for product, marker in _PLATFORM_MARKER_FIELDS.items():
+        query = {"bool": {"filter": [scope_query, {"exists": {"field": marker}}]}}
+        try:
+            found = int(count_documents(get_events_index(case_id), query).get("count", 0))
+        except Exception:  # noqa: BLE001
+            continue
+        if found > 0:
+            products.add(product)
+    return products
+
+
 def _indexed_field_names(case_id: str) -> set[str]:
     """Every field the case index can actually be queried on.
 
@@ -9507,6 +9532,9 @@ def _build_sigma_case_profile_for_scope(case_id: str, evidence_id: str | None, m
     # supplies what it is genuinely good for, like which channels are present.
     profile["available_fields"] = sorted(
         set(profile.get("available_fields") or []) | _indexed_field_names(case_id)
+    )
+    profile["source_products"] = sorted(
+        set(profile.get("source_products") or []) | _case_source_products(case_id, query)
     )
     profile["case_id"] = case_id
     if evidence_id:

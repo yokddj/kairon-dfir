@@ -1514,7 +1514,29 @@ def ensure_case_index(case_id: str) -> str:
                                 "virtual_address": {"type": "keyword"},
                             }
                         },
-                        "linux": {"type": "object", "enabled": True},
+                        # Declared field by field, not left as a bare enabled
+                        # object: the root mapping is dynamic:false, so an
+                        # object with no properties never gets subfields and
+                        # everything the Linux parsers write ends up in _source
+                        # and unqueryable. A Linux case had 89788 events whose
+                        # command, process and username could not be searched,
+                        # filtered or matched by a detection rule at all.
+                        "linux": {
+                            "properties": {
+                                "artifact_family": {"type": "keyword"},
+                                "artifact_type": {"type": "keyword"},
+                                "source_file": {"type": "keyword"},
+                                "username": {"type": "keyword"},
+                                "process": {"type": "keyword"},
+                                "pid": {"type": "long"},
+                                "command": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 1024}}},
+                                "event_action": {"type": "keyword"},
+                                "auth_method": {"type": "keyword"},
+                                "source_ip": {"type": "keyword"},
+                                "hostname": {"type": "keyword"},
+                                "message": {"type": "text"},
+                            }
+                        },
                         "macos": {"type": "object", "enabled": True},
                         "raw": {"type": "object", "enabled": False},
                         "data_quality": {"type": "keyword"},
