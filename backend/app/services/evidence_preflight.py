@@ -49,6 +49,14 @@ from app.schemas.evidence_preflight import (
     PreflightWarning,
 )
 
+# The file an operator must actually edit to change a limit. docker-compose
+# loads config/defaults.env first and this second, so this is the one that
+# wins -- and the one that exists: the diagnostics used to name "backend/.env",
+# which is not present in the deployment at all, so following the instructions
+# to the letter changed nothing and the upload stayed blocked.
+SETTINGS_OVERRIDE_FILE = ".env"
+
+
 # Rough throughput assumption for the processing-time estimate. There is no
 # historical benchmark table to draw from (confirmed during investigation),
 # so this is a documented, conservative heuristic, not a measured figure.
@@ -651,9 +659,9 @@ def run_preflight(
             current_configuration={"limit": _human(upload_limit)},
             required_configuration={"limit": f"at least {_human(file_size)}"},
             configuration_key="MEMORY_UPLOAD_MAX_BYTES" if classification_category_value == "memory_dump" else "BACKEND_MAX_UPLOAD_SIZE",
-            configuration_file="backend/.env",
+            configuration_file=SETTINGS_OVERRIDE_FILE,
             how_to_fix=[
-                "Edit backend/.env",
+                f"Edit {SETTINGS_OVERRIDE_FILE}",
                 f"Increase {'MEMORY_UPLOAD_MAX_BYTES' if classification_category_value == 'memory_dump' else 'BACKEND_MAX_UPLOAD_SIZE'} to at least {file_size} bytes",
                 "Run ./scripts/upgrade.sh",
             ],
@@ -673,7 +681,7 @@ def run_preflight(
             current_configuration={"available": _human(available_space), "temp_directory": str(settings.backend_temp_dir)},
             required_configuration={"available": _human(storage_needed)},
             configuration_key="BACKEND_TEMP_DIR",
-            configuration_file="backend/.env",
+            configuration_file=SETTINGS_OVERRIDE_FILE,
             how_to_fix=[
                 "Free space on the temp directory's volume",
                 "Or move BACKEND_TEMP_DIR to a volume with more free space",
@@ -709,8 +717,8 @@ def run_preflight(
                 current_configuration={"limit": _human(settings.backend_max_extracted_bytes)},
                 required_configuration={"limit": f"at least ~{_human(estimated_extracted_bytes)}"},
                 configuration_key="BACKEND_MAX_EXTRACTED_BYTES",
-                configuration_file="backend/.env",
-                how_to_fix=["Edit backend/.env", "Increase BACKEND_MAX_EXTRACTED_BYTES", "Run ./scripts/upgrade.sh"],
+                configuration_file=SETTINGS_OVERRIDE_FILE,
+                how_to_fix=[f"Edit {SETTINGS_OVERRIDE_FILE}", "Increase BACKEND_MAX_EXTRACTED_BYTES", "Run ./scripts/upgrade.sh"],
             ))
 
     if detected_archive_depth is not None:
@@ -727,8 +735,8 @@ def run_preflight(
                 current_configuration={"depth": str(settings.max_archive_depth)},
                 required_configuration={"depth": str(detected_archive_depth)},
                 configuration_key="MAX_ARCHIVE_DEPTH",
-                configuration_file="backend/.env",
-                how_to_fix=["Edit backend/.env", "Increase MAX_ARCHIVE_DEPTH", "Run ./scripts/upgrade.sh"],
+                configuration_file=SETTINGS_OVERRIDE_FILE,
+                how_to_fix=[f"Edit {SETTINGS_OVERRIDE_FILE}", "Increase MAX_ARCHIVE_DEPTH", "Run ./scripts/upgrade.sh"],
             ))
 
     if detected_backing_chain_depth is not None:
@@ -745,8 +753,8 @@ def run_preflight(
                 current_configuration={"depth": str(settings.disk_image_max_chain_depth)},
                 required_configuration={"depth": str(detected_backing_chain_depth)},
                 configuration_key="DISK_IMAGE_MAX_CHAIN_DEPTH",
-                configuration_file="backend/.env",
-                how_to_fix=["Edit backend/.env", "Increase DISK_IMAGE_MAX_CHAIN_DEPTH", "Run ./scripts/upgrade.sh"],
+                configuration_file=SETTINGS_OVERRIDE_FILE,
+                how_to_fix=[f"Edit {SETTINGS_OVERRIDE_FILE}", "Increase DISK_IMAGE_MAX_CHAIN_DEPTH", "Run ./scripts/upgrade.sh"],
             ))
 
     low_confidence = classification_confidence in {"low"} or classification_category_value == "unknown"
