@@ -166,6 +166,42 @@ def _extract_persistence_command(event: dict) -> str | None:
     return None
 
 
+def _persistence_finding_title(mechanism: str | None, label: str | None) -> str:
+    kind = mechanism or "persistence"
+    return f"Persistence matched execution: {label} ({kind})" if label else f"Persistence matched execution: {kind}"
+
+
+def _persistence_entity_label(event: dict, command: str | None) -> str | None:
+    """Name of the persistence entry, for a title that identifies which one.
+
+    Titling these findings by mechanism alone produced pages of byte-identical
+    rows -- "Persistence matched execution: windows_service" repeated for every
+    service on the host -- which is unusable in a timeline or a report, because
+    nothing distinguishes the attacker's entry from the platform's own. The
+    identifying name is already on the event; this just puts it in the title.
+    """
+    for dotted in [
+        "persistence.name",
+        "task.name",
+        "service.name",
+        "service.display_name",
+        "registry.value_name",
+        "autoruns.entry",
+        "autoruns.entry_name",
+        "wmi.filter_name",
+    ]:
+        value = _normalize_text(_nested_get(event, dotted))
+        if value:
+            return value
+    if command:
+        # Fall back to the executable's own name rather than the whole command
+        # line, which is usually far too long to read in a timeline row.
+        leaf = str(command).replace("/", "\\").rstrip("\\").split("\\")[-1].strip().strip('"')
+        if leaf:
+            return leaf
+    return None
+
+
 def _extract_related_artifact_id(event: dict) -> str | None:
     value = event.get("artifact_id")
     return str(value) if value not in (None, "") else None
@@ -771,7 +807,7 @@ def _generate_findings(case: Case, evidences: list[Evidence], events: list[dict]
                 case.id,
                 evidence_id=evidence_id,
                 finding_type="persistence_execution",
-                title=f"Persistence matched execution: {mechanism or 'persistence'}",
+                title=_persistence_finding_title(mechanism, _persistence_entity_label(persistence_event, command)),
                 summary="A persistence mechanism was correlated with later execution evidence for the same binary or script.",
                 confidence="high" if matches and _match_paths(command, _extract_event_path(matches[0]))[0] else "medium" if matches else "low" if supporting_inventory else "low",
                 events=[persistence_event] + matches[:1] + supporting_inventory[:1],

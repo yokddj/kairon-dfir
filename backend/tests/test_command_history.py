@@ -128,7 +128,12 @@ def test_powershell_4104_extracts_script_block() -> None:
     assert items[0]["shell"] == "powershell"
     assert items[0]["shell_family"] == "powershell"
     assert "download cradle or file transfer utility" in items[0]["risk_reasons"]
-    assert "Synthetic indicator" in items[0]["risk_reasons"]
+    # The scorer used to award 45 points for the literal strings "maintenance.ps1"
+    # and "example-control.test" under the reason "Synthetic indicator" -- demo
+    # fixtures baked into production scoring, which would have flagged any real
+    # host with a legitimately named maintenance script. Scoring must come from
+    # tradecraft, so no reason is asserted for those names any more.
+    assert "Synthetic indicator" not in items[0]["risk_reasons"]
 
 
 def test_powershell_placeholder_command_falls_back_to_host_application_payload() -> None:

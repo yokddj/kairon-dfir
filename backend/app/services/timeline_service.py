@@ -74,6 +74,10 @@ INCIDENT_TIMELINE_BUILDER_VERSION = "v2"
 # worse than a slow one.
 INCIDENT_TIMELINE_SOURCE_LIMIT = 500
 
+# Floor of the "medium" risk bucket used across the product (see
+# command_history._risk_bucket). Commands below it carry no scorer signal at all.
+INCIDENT_COMMAND_RISK_MIN = 25
+
 DEFAULT_INCIDENT_TIMELINE_SOURCES = [
     "marked_events",
     "findings",
@@ -494,7 +498,58 @@ def _canonicalize_incident_item_hosts(db: Session, case_id: str, items: list[dic
     return output
 
 
+# Finding types that name a real ATT&CK-style concept without carrying a phase
+# word in the string itself. Anything whose name already contains its phase --
+# "persistence_execution", "credential_access_dump" -- is handled structurally
+# by _phase_from_finding_type and does not belong here.
+_FINDING_TYPE_PHASE_ALIASES = {
+    "process_chain": "execution",
+    "suspicious_process_chain": "execution",
+    "autorun": "persistence",
+    "startup_item": "persistence",
+    "scheduled_task": "persistence",
+    "service_install": "persistence",
+    "registry_run_key": "persistence",
+    "credential_dump": "credential_access",
+    "kerberoasting": "credential_access",
+    "dcsync": "credential_access",
+    "data_staging": "collection",
+    "data_transfer": "exfiltration",
+    "ransomware": "impact",
+    "log_clearing": "defense_evasion",
+    "av_tampering": "defense_evasion",
+}
+
+
+def _phase_from_finding_type(value: str) -> str | None:
+    """Map the finding-type taxonomy onto the incident-phase vocabulary.
+
+    These two vocabularies grew separately and the fallback used to require
+    exact equality, so a single near-miss was fatal: a case whose findings are
+    all typed "persistence_execution" got every one of them classified
+    "unknown", because the phase is spelled "persistence". Match structurally
+    on the phase component instead, longest phase first so "credential_access"
+    is not shadowed by a shorter name.
+    """
+    normalized = re.sub(r"[^a-z0-9]+", "_", str(value or "").strip().lower()).strip("_")
+    if not normalized:
+        return None
+    if normalized in INCIDENT_PHASES and normalized != "unknown":
+        return normalized
+    for phase in sorted(INCIDENT_PHASES, key=len, reverse=True):
+        if phase == "unknown":
+            continue
+        if normalized.startswith(f"{phase}_") or normalized.endswith(f"_{phase}"):
+            return phase
+    return _FINDING_TYPE_PHASE_ALIASES.get(normalized)
+
+
 def _infer_incident_phase(text: str, *, fallback: str = "unknown") -> tuple[str, str]:
+    # Every token here must describe attacker tradecraft, never an artefact of
+    # one investigation. Literal indicators from a past case (an IP, a specific
+    # filename) and words that occur throughout normal Windows ("onedrive",
+    # "desktop", "downloads") do not identify a phase: they mislabel healthy
+    # hosts with confidence, which is worse than leaving a row unclassified.
     lower = text.lower()
     if any(token in lower for token in ("psexec", "psexesvc", "\\\\ws", "winrs", "wmic ")):
         return "lateral_movement", "medium"
@@ -504,18 +559,17 @@ def _infer_incident_phase(text: str, *, fallback: str = "unknown") -> tuple[str,
         return "discovery", "medium"
     if any(token in lower for token in ("-ep bypass", "executionpolicy bypass", "-nop", "-w hidden", "powershell", "cmd.exe /c")):
         return "execution", "medium"
-    if any(token in lower for token in ("schtasks", "startup", "runonce", "check-updates", "onedrive")):
+    if any(token in lower for token in ("schtasks", "runonce", "\\startup\\", "currentversion\\run")):
         return "persistence", "medium"
     if any(token in lower for token in ("disablerealtimemonitoring", "defender", "tamper", "wevtutil", "clear-eventlog")):
         return "defense_evasion", "medium"
-    if any(token in lower for token in ("filezilla", "ftp", "200.234.235.200", "exfil")):
+    if any(token in lower for token in ("filezilla", "exfil", "megasync", "rclone")):
         return "exfiltration", "medium"
-    if any(token in lower for token in ("management-passwords", "collection", "desktop", "downloads")):
-        return "collection", "low"
-    if any(token in lower for token in (".encrypted", ".locked", "readme.txt", "ransom", "encryptor")):
+    if any(token in lower for token in (".encrypted", ".locked", "ransom", "encryptor")):
         return "impact", "medium"
-    if fallback in INCIDENT_PHASES:
-        return fallback, "high" if fallback != "unknown" else "low"
+    inferred = _phase_from_finding_type(fallback)
+    if inferred:
+        return inferred, "high"
     return "unknown", "low"
 
 
@@ -1140,7 +1194,14 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
                 {
                     "page": 1,
                     "page_size": min(max_items, 100),
-                    "only_suspicious": True,
+                    # "Suspicious" is risk >= 50, which needs two independent
+                    # signals to stack. A draft timeline wants everything the
+                    # scorer flagged at all -- these rows enter as candidates,
+                    # not conclusions -- so use the medium bucket floor from
+                    # _risk_bucket instead. Asking for only_suspicious here
+                    # returned nothing on cases where the attacker used plain
+                    # commands, dropping the whole source without a word.
+                    "risk_min": INCIDENT_COMMAND_RISK_MIN,
                     "sort": "timestamp_asc",
                 },
             ).get("items", [])
