@@ -149,3 +149,34 @@ class TestEventHostIsSingleAndFalsyWhenAbsent:
 
     def test_two_hostless_events_are_not_the_same_host(self) -> None:
         assert correlation_engine._same_host({"evidence_id": "a"}, {"evidence_id": "b"}) is False
+
+
+class TestCommandTimelineTitles:
+    def test_title_identifies_the_command_not_just_its_launcher(self) -> None:
+        """"powershell.exe command" repeated down a timeline says nothing.
+
+        The launcher is shared by the attacker's invocation and the platform's
+        own; the command line is what separates them, and it was left in the
+        summary where a timeline row does not show it.
+        """
+        title = timeline_service._command_incident_title(
+            {"launcher": "cmd.exe"}, "/c psexec.exe \\\\FILESERVER -accepteula powershell -ep bypass"
+        )
+        assert "psexec.exe" in title
+        assert title != "cmd.exe command"
+
+    def test_two_commands_from_one_launcher_get_different_titles(self) -> None:
+        first = timeline_service._command_incident_title({"launcher": "powershell.exe"}, "powershell -ep bypass a.ps1")
+        second = timeline_service._command_incident_title({"launcher": "powershell.exe"}, "powershell -ep bypass b.ps1")
+        assert first != second
+
+    def test_a_long_command_is_truncated_for_a_timeline_row(self) -> None:
+        title = timeline_service._command_incident_title({"launcher": "x"}, "y" * 400)
+        assert len(title) <= timeline_service._COMMAND_TITLE_MAX_CHARS + len("x: ")
+
+    def test_the_launcher_is_not_repeated_when_the_command_already_names_it(self) -> None:
+        title = timeline_service._command_incident_title({"launcher": "powershell.exe"}, "powershell.exe -enc AAAA")
+        assert title.count("powershell.exe") == 1
+
+    def test_a_command_with_no_text_keeps_the_old_shape(self) -> None:
+        assert timeline_service._command_incident_title({"launcher": "svchost.exe"}, "") == "svchost.exe command"
