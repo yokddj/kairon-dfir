@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { api, type HuntingDetectionRun, type HuntingEvaluationEnqueueResponse, type HuntingEvaluationResult, type Rule, type RuleImportResponse, type RuleImportRun, type RuleRun, type RuleRunResult, type RuleSet, type SigmaSmokeResponse } from "../api/client";
 import { useActiveCase } from "../context/ActiveCaseContext";
+import { RuleImportWizard } from "../components/rules/RuleImportWizard";
 
 type RulesTab = "sigma" | "yara" | "heuristics" | "runs" | "library";
 type SigmaSelectionMode = "all_enabled" | "selected_rules";
@@ -374,6 +375,7 @@ export default function Rules() {
   const [tab, setTab] = useState<RulesTab>("sigma");
   const [scopeCaseId, setScopeCaseId] = useState(activeCaseId);
   const [namespace, setNamespace] = useState("");
+  const [wizardEngine, setWizardEngine] = useState<"sigma" | "yara" | null>(null);
   const [viewRuleId, setViewRuleId] = useState<string | null>(null);
   const [viewRuleSetId, setViewRuleSetId] = useState<string | null>(null);
   const [ruleSetPreviewSearch, setRuleSetPreviewSearch] = useState("");
@@ -1429,10 +1431,35 @@ export default function Rules() {
 
   return (
     <div className="space-y-6">
+      <RuleImportWizard
+        open={wizardEngine !== null}
+        onClose={() => setWizardEngine(null)}
+        engine={wizardEngine ?? "sigma"}
+        namespace={namespace}
+        caseId={scopeCaseId}
+      />
       <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Rules</p>
         <h2 className="mt-2 text-2xl font-semibold">Sigma-first detection workflow for indexed events and preserved files.</h2>
         <p className="mt-2 text-sm text-muted">Use Sigma for indexed events, YARA for preserved files, and heuristics for built-in detections. Results always land in Detections so you can pivot into Search, Timeline, Findings and Reports.</p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setWizardEngine("sigma")}
+            className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss"
+            data-testid="open-sigma-import-wizard"
+          >
+            Import Sigma rules
+          </button>
+          <button
+            type="button"
+            onClick={() => setWizardEngine("yara")}
+            className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink"
+            data-testid="open-yara-import-wizard"
+          >
+            Import YARA rules
+          </button>
+        </div>
         <div className="mt-4 grid gap-3 md:grid-cols-4">
           {Object.entries(enginesQuery.data ?? {}).map(([engineName, engineStatus]) => (
             <div key={engineName} className="rounded-2xl border border-line bg-abyss/80 p-4 text-sm text-muted">

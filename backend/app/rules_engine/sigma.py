@@ -322,6 +322,35 @@ def _detect_unsupported_modifiers(rule_data: dict) -> list[str]:
     return sorted(dict.fromkeys(unsupported))
 
 
+# Fields the index does not expose as their own searchable field. windows.event_data
+# is mapped with "enabled": false to avoid a field explosion across the hundreds of
+# keys Windows puts there, so a query against one of these can never match however
+# correct the mapping looks.
+_NON_QUERYABLE_FIELD_PREFIXES = ("windows.event_data.", "winlog.event_data.")
+
+
+def _detect_unmapped_fields(rule_data: dict) -> list[str]:
+    """Sigma fields this engine has no way to evaluate.
+
+    An unmapped field used to fall through to the raw Sigma name and be queried
+    as if it were a document key. Kairon's schema has no such key, so the rule
+    matched nothing, reported no problem, and sat in the list looking armed --
+    a detection rule that silently never fires is worse than one that refuses
+    to load, because nobody goes looking for it.
+    """
+    unmapped: list[str] = []
+    for base_field in extract_sigma_detection_fields(rule_data):
+        if base_field in SEARCH_TEXT_FALLBACK_FIELDS:
+            continue
+        mapped = SIGMA_FIELD_MAP.get(base_field)
+        if not mapped:
+            unmapped.append(base_field)
+            continue
+        if all(target.startswith(_NON_QUERYABLE_FIELD_PREFIXES) for target in mapped):
+            unmapped.append(base_field)
+    return sorted(dict.fromkeys(unmapped))
+
+
 def analyze_sigma_engine_compatibility(rule_data: dict) -> dict:
     metadata = extract_sigma_metadata(rule_data)
     condition = metadata.get("condition") or ""
@@ -330,6 +359,12 @@ def analyze_sigma_engine_compatibility(rule_data: dict) -> dict:
     supported_features: list[str] = []
     primary_status = "executable_by_current_engine"
     reason = "compiled"
+
+    unmapped_fields = _detect_unmapped_fields(rule_data)
+    if unmapped_fields:
+        unsupported_features.extend([f"unmapped_field:{field}" for field in unmapped_fields])
+        primary_status = "unmapped_field"
+        reason = ",".join(unmapped_fields)
 
     unsupported_modifiers = _detect_unsupported_modifiers(rule_data)
     if unsupported_modifiers:
@@ -388,6 +423,7 @@ def analyze_sigma_engine_compatibility(rule_data: dict) -> dict:
         "supported_features": sorted(dict.fromkeys(supported_features)),
         "unsupported_features": sorted(dict.fromkeys(unsupported_features)),
         "required_fields": required_fields,
+        "unmapped_fields": unmapped_fields,
         "logsource": metadata.get("logsource") or {},
         "condition": condition,
         "expanded_condition": str(expansion.get("expanded_condition") or condition),
