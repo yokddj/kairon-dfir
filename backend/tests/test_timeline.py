@@ -798,4 +798,96 @@ def test_incident_timeline_reports_how_many_candidates_were_cut_by_max_items(mon
 
     assert response["total"] == 10
     assert response["total_candidates"] == 25
-    assert any("10 of 25" in w for w in response["warnings"]), response["warnings"]
+    assert any("10 most recent of 25" in w for w in response["warnings"]), response["warnings"]
+
+
+def test_incident_timeline_keeps_newest_candidates_when_capped(monkeypatch):
+    """The cap must drop the oldest baseline noise, never the recent intrusion.
+
+    Windows cases are full of default scheduled tasks and service installs
+    stamped decades before the incident. Selecting max_items in chronological
+    order handed the whole budget to those rows and dropped every event from the
+    day of the attack, with nothing in the output to say so.
+    """
+    timeline_service._INCIDENT_DRAFT_CACHE.clear()
+    baseline = [
+        Finding(
+            id=f"old-{index}",
+            case_id="case-1",
+            title=f"Scheduled task observed {index}",
+            severity=FindingSeverity.high,
+            status=FindingStatus.new,
+            finding_type="persistence",
+            risk_score=70,
+            related_hosts=["HOSTA"],
+            time_start=f"200{index}-01-01T00:00:00Z",
+        )
+        for index in range(5)
+    ]
+    intrusion = Finding(
+        id="recent-1",
+        case_id="case-1",
+        title="Recent credential access",
+        severity=FindingSeverity.critical,
+        status=FindingStatus.new,
+        finding_type="credential_access",
+        risk_score=95,
+        related_hosts=["HOSTA"],
+        time_start="2031-04-02T09:15:00Z",
+    )
+    monkeypatch.setattr(timeline_service, "get_command_history", lambda *_args, **_kwargs: {"items": []})
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *args, **kwargs: (0, [], [], {}))
+
+    response = timeline_service.build_incident_timeline_draft(
+        _FakeDb(findings=[*baseline, intrusion]),
+        "case-1",
+        {"sources": ["findings"], "max_items": 2, "regenerate": True},
+    )
+
+    titles = [item["title"] for item in response["items"]]
+    assert "Recent credential access" in titles
+    assert response["total_candidates"] == 6
+    # Still presented oldest-first, so the story reads chronologically.
+    timestamps = [str(item.get("timestamp") or "") for item in response["items"]]
+    assert timestamps == sorted(timestamps)
+    assert any("most recent" in warning for warning in response["warnings"])
+
+
+def test_incident_timeline_cap_does_not_favour_undated_items(monkeypatch):
+    """An item with no usable timestamp must never evict a dated recent one."""
+    timeline_service._INCIDENT_DRAFT_CACHE.clear()
+    undated = [
+        Finding(
+            id=f"undated-{index}",
+            case_id="case-1",
+            title=f"Undated candidate {index}",
+            severity=FindingSeverity.high,
+            status=FindingStatus.new,
+            finding_type="persistence",
+            risk_score=60,
+            related_hosts=["HOSTA"],
+            time_start=None,
+        )
+        for index in range(4)
+    ]
+    recent = Finding(
+        id="recent-1",
+        case_id="case-1",
+        title="Recent credential access",
+        severity=FindingSeverity.critical,
+        status=FindingStatus.new,
+        finding_type="credential_access",
+        risk_score=95,
+        related_hosts=["HOSTA"],
+        time_start="2031-04-02T09:15:00Z",
+    )
+    monkeypatch.setattr(timeline_service, "get_command_history", lambda *_a, **_k: {"items": []})
+    monkeypatch.setattr(timeline_service, "search_events_v2", lambda *_a, **_k: (0, [], [], {}))
+
+    response = timeline_service.build_incident_timeline_draft(
+        _FakeDb(findings=[*undated, recent]),
+        "case-1",
+        {"sources": ["findings"], "max_items": 1, "regenerate": True},
+    )
+
+    assert [item["title"] for item in response["items"]] == ["Recent credential access"]

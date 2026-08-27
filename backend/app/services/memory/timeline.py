@@ -301,12 +301,41 @@ def _disk_events(case_id: str, docs: list[dict[str, Any]]) -> list[dict[str, Any
     return events
 
 
+def _correlation_key(event: dict[str, Any], *, side: str) -> dict[str, Any]:
+    """Per-event values the pair comparison would otherwise recompute.
+
+    Correlation compares every memory event against every disk event, so
+    anything derived only from one side was previously recomputed once per
+    pair: on a real case that meant millions of redundant ``dateutil`` parses
+    and path normalisations, and it was the single reason a case with memory
+    dumps could not build an incident timeline at all. The derivations here are
+    byte-for-byte the ones ``_correlate_pair`` used to do inline.
+    """
+    if side == "memory":
+        name = _norm_name(event.get("process_name"))
+    else:
+        name = _norm_name(event.get("process_name") or event.get("executable_path") or event.get("title"))
+    path = _norm_path(event.get("executable_path") or _extract_executable(event.get("command_line_summary")))
+    command = event.get("command_line_summary")
+    return {
+        "dt": _parse_dt(event.get("occurred_at")),
+        "name": name,
+        "name_basename": _basename(name),
+        "path": path,
+        "path_basename": _basename(path),
+        "command": _norm_text(command) if command else None,
+        "path_absolute": _is_absolute_windows_path(path) if path else False,
+    }
+
+
 def _build_correlations(memory_events: list[dict[str, Any]], disk_events: list[dict[str, Any]], *, include_low: bool = False) -> list[dict[str, Any]]:
     correlations: list[dict[str, Any]] = []
     rejected = 0
+    disk_keyed = [(disk, _correlation_key(disk, side="disk")) for disk in disk_events]
     for mem in memory_events:
-        for disk in disk_events:
-            corr = _correlate_pair(mem, disk)
+        mem_key = _correlation_key(mem, side="memory")
+        for disk, disk_key in disk_keyed:
+            corr = _correlate_pair(mem, disk, mem_key, disk_key)
             if not corr:
                 rejected += 1
                 continue
@@ -317,17 +346,22 @@ def _build_correlations(memory_events: list[dict[str, Any]], disk_events: list[d
     return correlations
 
 
-def _correlate_pair(mem: dict[str, Any], disk: dict[str, Any]) -> dict[str, Any] | None:
+def _correlate_pair(mem: dict[str, Any], disk: dict[str, Any], mem_key: dict[str, Any] | None = None, disk_key: dict[str, Any] | None = None) -> dict[str, Any] | None:
     if mem.get("is_undated") or disk.get("is_undated"):
         return None
+    if mem_key is None:
+        mem_key = _correlation_key(mem, side="memory")
+    if disk_key is None:
+        disk_key = _correlation_key(disk, side="disk")
     reasons: list[str] = []
     matched: list[str] = []
     contradictions: list[str] = []
-    delta = _time_delta(mem.get("occurred_at"), disk.get("occurred_at"))
-    mem_name = _norm_name(mem.get("process_name"))
-    disk_name = _norm_name(disk.get("process_name") or disk.get("executable_path") or disk.get("title"))
-    mem_path = _norm_path(mem.get("executable_path") or _extract_executable(mem.get("command_line_summary")))
-    disk_path = _norm_path(disk.get("executable_path") or _extract_executable(disk.get("command_line_summary")))
+    mem_dt, disk_dt = mem_key["dt"], disk_key["dt"]
+    delta = abs((mem_dt - disk_dt).total_seconds()) if mem_dt and disk_dt else None
+    mem_name = mem_key["name"]
+    disk_name = disk_key["name"]
+    mem_path = mem_key["path"]
+    disk_path = disk_key["path"]
     if mem.get("pid") is not None and disk.get("pid") is not None and int(mem["pid"]) == int(disk["pid"]):
         reasons.append("same PID")
         matched.append("pid")
@@ -336,19 +370,19 @@ def _correlate_pair(mem: dict[str, Any], disk: dict[str, Any]) -> dict[str, Any]
     if mem_name and disk_name and mem_name == disk_name:
         reasons.append("same normalized process name")
         matched.append("process.name")
-    elif mem_name and disk_name and _basename(disk_name) != mem_name:
+    elif mem_name and disk_name and disk_key["name_basename"] != mem_name:
         contradictions.append("mismatched process name")
     if mem_path and disk_path and mem_path == disk_path:
         reasons.append("same executable path")
         matched.append("path")
-    elif mem_path and disk_path and _is_absolute_windows_path(mem_path) and _is_absolute_windows_path(disk_path):
+    elif mem_path and disk_path and mem_key["path_absolute"] and disk_key["path_absolute"]:
         contradictions.append("mismatched executable path")
-    elif mem_path and disk_path and _basename(mem_path) == _basename(disk_path):
+    elif mem_path and disk_path and mem_key["path_basename"] == disk_key["path_basename"]:
         reasons.append("compatible executable name")
         matched.append("path")
-    elif mem_path and disk_path and _basename(mem_path) != _basename(disk_path):
+    elif mem_path and disk_path and mem_key["path_basename"] != disk_key["path_basename"]:
         contradictions.append("mismatched executable path")
-    if mem.get("command_line_summary") and disk.get("command_line_summary") and _norm_text(mem["command_line_summary"]) == _norm_text(disk["command_line_summary"]):
+    if mem.get("command_line_summary") and disk.get("command_line_summary") and mem_key["command"] == disk_key["command"]:
         reasons.append("matching command line")
         matched.append("command_line")
     if delta is not None:
@@ -497,13 +531,6 @@ def _parse_dt(value: Any) -> datetime | None:
     except Exception:
         return None
     return dt if dt.tzinfo else dt.replace(tzinfo=UTC)
-
-
-def _time_delta(left: Any, right: Any) -> float | None:
-    ldt, rdt = _parse_dt(left), _parse_dt(right)
-    if not ldt or not rdt:
-        return None
-    return abs((ldt - rdt).total_seconds())
 
 
 def _sort_key(event: dict[str, Any]) -> str:

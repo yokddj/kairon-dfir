@@ -1229,16 +1229,41 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
         items = [item for item in items if str(item.get("host") or "").strip().lower() in host_filter]
     if phase_filter:
         items = [item for item in items if str(item.get("phase") or "").strip().lower() in phase_filter]
-    items.sort(key=lambda item: (_parse_time(str(item.get("timestamp") or "")) or datetime.max.replace(tzinfo=UTC), str(item.get("host") or ""), str(item.get("phase") or "")))
+    def _chronological_key(item: dict[str, Any]) -> tuple[Any, str, str]:
+        return (
+            _parse_time(str(item.get("timestamp") or "")) or datetime.max.replace(tzinfo=UTC),
+            str(item.get("host") or ""),
+            str(item.get("phase") or ""),
+        )
+
+    def _recency_key(item: dict[str, Any]) -> tuple[Any, str, str]:
+        # Undated items sort last for display, but they must not win the
+        # recency selection below -- treating "no timestamp" as "newest" would
+        # let undated rows evict the very events the cap is meant to keep.
+        return (
+            _parse_time(str(item.get("timestamp") or "")) or datetime.min.replace(tzinfo=UTC),
+            str(item.get("host") or ""),
+            str(item.get("phase") or ""),
+        )
+
     # "total" below is computed after this slice, so without an explicit signal
     # a caller cannot tell a case that genuinely produced max_items items from
     # one where everything past max_items was dropped. Capture the real
     # candidate count first and say so.
     candidate_total = len(items)
+    # Selection is by recency, presentation is chronological. Selecting in
+    # chronological order instead keeps the OLDEST max_items candidates, and on
+    # a real case the oldest rows are Windows baseline noise -- default
+    # scheduled tasks and service installs stamped 1992-2024 -- while the
+    # intrusion is the newest thing in the case. That combination silently
+    # produced incident timelines containing none of the incident.
+    items.sort(key=_recency_key, reverse=True)
     items = items[:max_items]
+    items.sort(key=_chronological_key)
     if candidate_total > len(items):
         warnings.append(
-            f"Showing {len(items)} of {candidate_total} timeline candidates (max_items={max_items}). "
+            f"Showing the {len(items)} most recent of {candidate_total} timeline candidates "
+            f"(max_items={max_items}); older candidates were dropped. "
             "Raise max_items or narrow by host/phase to review the rest."
         )
     payload = {
