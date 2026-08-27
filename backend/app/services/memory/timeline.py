@@ -30,6 +30,11 @@ class TimestampSpec:
     confidence: str
 
 
+# How many disk events are offered to the memory/disk correlator. Correlation is
+# O(memory x disk), so this bounds the work; it must be drawn from the newest
+# events, not the oldest.
+DISK_CANDIDATE_LIMIT = 1000
+
 MEMORY_TIMESTAMP_MATRIX: dict[str, dict[str, Any]] = {
     "memory_process_entity": {"source_plugin": "windows.pslist/psscan/pstree/cmdline", "fields": {"process.create_time": "process_start", "process.exit_time": "process_exit"}, "timezone": "source/UTC-normalized when parseable", "precision": "second", "nullable": True, "occurrence": True, "historical": "legacy process rows may expose CreateTime/ExitTime via observations"},
     "memory_process_observation": {"source_plugin": "windows.pslist/psscan/pstree/cmdline", "fields": {"observed.create_time": "process_start", "observed.exit_time": "process_exit"}, "timezone": "source/UTC-normalized when parseable", "precision": "second", "nullable": True, "occurrence": True, "historical": "raw source_fields may contain CreateTime/ExitTime"},
@@ -201,7 +206,14 @@ def _fetch_disk_docs(case_id: str, *, source_parser: str | None = None) -> list[
         {"exists": {"field": "registry.value_data"}},
         {"exists": {"field": "network.destination_ip"}},
     ]
-    body = {"query": {"bool": {"filter": filters, "should": should, "minimum_should_match": 1}}, "size": 1000, "track_total_hits": True, "sort": [{"@timestamp": {"order": "asc", "missing": "_last"}}]}
+    # Newest first. Sorted ascending, the size cap handed back the OLDEST
+    # candidates in the case -- default scheduled tasks and service installs
+    # stamped decades earlier -- while a memory image is by definition captured
+    # at the newest point in the investigation. The two sets could not overlap
+    # in time, so every pair was rejected as "incompatible timestamps" and the
+    # correlation engine returned zero matches on any case with more than
+    # DISK_CANDIDATE_LIMIT events predating the capture.
+    body = {"query": {"bool": {"filter": filters, "should": should, "minimum_should_match": 1}}, "size": DISK_CANDIDATE_LIMIT, "track_total_hits": True, "sort": [{"@timestamp": {"order": "desc", "missing": "_last"}}]}
     try:
         response = get_opensearch_client().search(index=get_events_index(), body=body, params={"ignore_unavailable": "true"})
     except Exception:

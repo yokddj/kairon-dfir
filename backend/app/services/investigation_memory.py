@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.database import SessionLocal
 from app.models.case_host import CaseHost
 from app.models.evidence import Evidence, EvidenceType
+from app.services.command_risk import score_command
 from app.services.memory.command_history import build_command_line_history
 from app.services.memory.search import search_memory_artifacts
 from app.services.memory.timeline import get_memory_timeline
@@ -338,10 +339,48 @@ def _evidence_host_name(db: Session, evidence: Evidence) -> str | None:
     return canonical or None
 
 
+# Windows stores a process image name in a fixed 15-byte EPROCESS field, so
+# anything longer comes back cut ("RuntimeBroker.", "fontdrvhost.ex"). That is a
+# real limit of the source, not a parsing mistake -- but showing the stump raw
+# in a report makes an investigator doubt the tooling, and the full name is
+# usually sitting right there in the command line.
+_EPROCESS_IMAGE_NAME_LIMIT = 14
+
+
+def _untruncated_process_name(process_name: str | None, command_line: str | None) -> str | None:
+    name = str(process_name or "").strip()
+    if not name or len(name) < _EPROCESS_IMAGE_NAME_LIMIT:
+        return process_name
+    command = str(command_line or "").strip()
+    if not command:
+        return process_name
+    executable = command
+    if executable.startswith('"'):
+        executable = executable[1:].split('"', 1)[0]
+    else:
+        executable = executable.split(" ", 1)[0]
+    leaf = executable.replace("/", "\\").rstrip("\\").split("\\")[-1].strip()
+    # Only accept a longer name that the truncated one is a prefix of, so an
+    # unrelated command line can never rename the process.
+    if leaf and len(leaf) > len(name) and leaf.lower().startswith(name.lower()):
+        return leaf
+    return process_name
+
+
 def _memory_command_row(case_id: str, evidence: Evidence, row: dict[str, Any], selected_run: dict[str, Any] | None, host_name: str | None = None) -> dict[str, Any]:
     run_id = (selected_run or {}).get("id")
     plugin = ",".join(row.get("source_plugins") or []) or "windows.cmdline"
     command_id = f"memory-command:{evidence.id}:{run_id or 'active'}:{row.get('process_entity_id')}:{row.get('pid')}"
+    # Scored with the same rules as a command recovered from disk. Handing these
+    # out at a hardcoded 0 made them unreachable through any risk filter, which
+    # on a memory-heavy case hides precisely the process activity that only RAM
+    # still holds.
+    process_name = _untruncated_process_name(row.get("process_name"), row.get("command_line"))
+    risk_score, risk_reasons = score_command(
+        str(row.get("command_line") or ""),
+        {"name": process_name, "parent_name": row.get("parent_process_name")},
+        {"name": row.get("parent_process_name")},
+    )
     return {
         "id": command_id,
         "command_id": command_id,
@@ -357,7 +396,7 @@ def _memory_command_row(case_id: str, evidence: Evidence, row: dict[str, Any], s
         "command_line": row.get("command_line"),
         "command_normalized": str(row.get("command_line") or "").lower(),
         "shell": "memory",
-        "launcher": row.get("process_name"),
+        "launcher": process_name,
         "launcher_path": None,
         "shell_family": "memory",
         "classification_confidence": "observed",
@@ -370,11 +409,11 @@ def _memory_command_row(case_id: str, evidence: Evidence, row: dict[str, Any], s
         "source_event_id": command_id,
         "source_file": evidence.original_filename,
         "user": None,
-        "process": {"name": row.get("process_name"), "pid": row.get("pid"), "guid": row.get("process_entity_id"), "entity_id": row.get("process_entity_id"), "command_line": row.get("command_line")},
+        "process": {"name": process_name, "pid": row.get("pid"), "guid": row.get("process_entity_id"), "entity_id": row.get("process_entity_id"), "command_line": row.get("command_line")},
         "parent_process": {"pid": row.get("ppid"), "guid": row.get("parent_entity_id")},
         "process_entity_id": row.get("process_entity_id"),
-        "risk_score": 0,
-        "risk_reasons": [],
+        "risk_score": risk_score,
+        "risk_reasons": risk_reasons,
         "confidence": "observed",
         "supporting_events": [],
         "raw_reference": {"process_entity_id": row.get("process_entity_id"), "run_id": run_id},
