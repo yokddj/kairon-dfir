@@ -137,3 +137,50 @@ class TestFieldsAddedFromRealMeasurement:
             assert targets, sigma_field
             for target in targets:
                 assert target == target.lower() or "." in target, f"{sigma_field} -> {target}"
+
+
+class TestListFormSelections:
+    """Sigma lets a selection be a list of maps, to OR alternatives together."""
+
+    def test_fields_inside_a_list_selection_are_seen(self) -> None:
+        """Ignoring the list form judged a rule on half its logic.
+
+        "Transferring Files with Credential Data via Network Shares" is
+        EventID 5145 AND a RelativeTargetName naming a credential store. With
+        the list-form half invisible it compiled to "any network share access"
+        and produced 1000 detections on a single case -- burying the one
+        genuine service-installation hit underneath. Over-matching is the more
+        dangerous silence: the rule looks like it is working.
+        """
+        rule = _rule(
+            {
+                "selection_eid": {"EventID": 5145},
+                "selection_object": [
+                    {"RelativeTargetName|contains": ["\\lsass", "\\mimidrv"]},
+                    {"RelativeTargetName": ["Windows\\NTDS\\ntds.dit"]},
+                ],
+                "condition": "all of selection_*",
+            }
+        )
+        assert _detect_unmapped_fields(rule) == ["RelativeTargetName"]
+        assert analyze_sigma_engine_compatibility(rule)["executable_by_current_engine"] is False
+
+    def test_a_list_selection_of_mapped_fields_stays_executable(self) -> None:
+        rule = _rule(
+            {
+                "selection": [{"CommandLine|contains": "whoami"}, {"Image|endswith": "\\net.exe"}],
+                "condition": "selection",
+            }
+        )
+        assert _detect_unmapped_fields(rule) == []
+        assert analyze_sigma_engine_compatibility(rule)["executable_by_current_engine"] is True
+
+    def test_unsupported_modifiers_inside_a_list_are_also_seen(self) -> None:
+        rule = _rule({"selection": [{"CommandLine|base64offset": "x"}], "condition": "selection"})
+        result = analyze_sigma_engine_compatibility(rule)
+        assert result["executable_by_current_engine"] is False
+        assert any("base64offset" in feature for feature in result["unsupported_features"])
+
+    def test_non_mapping_entries_in_a_list_are_ignored(self) -> None:
+        rule = _rule({"selection": ["a bare string", {"CommandLine": "x"}], "condition": "selection"})
+        assert _detect_unmapped_fields(rule) == []
