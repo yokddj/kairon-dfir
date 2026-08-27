@@ -52,3 +52,9 @@ def test_host_os_alone_is_enough_to_identify_the_platform() -> None:
     """Some artifacts carry no platform block of their own."""
     profile = build_sigma_case_profile([{"host": {"os": "Linux"}, "artifact": {"type": "network"}}])
     assert "linux" in profile["source_products"]
+
+
+def test_application_products_are_recognised_when_the_case_holds_them() -> None:
+    """A rule for apache must not be gated out of a case that has apache logs."""
+    profile = build_sigma_case_profile([{"artifact": {"type": "linux_apache"}, "host": {"os": "Linux"}}])
+    assert "apache" in profile["source_products"]
