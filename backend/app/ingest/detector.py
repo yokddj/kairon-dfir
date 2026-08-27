@@ -243,6 +243,23 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
             "parser": "windows_ui_generic_raw",
             "reason": "Detected raw Windows UI/local DB artifact; inventory preserved even if not parsed directly.",
         }
+    # An .evtx is a binary event log whatever its channel is called, and the
+    # EVTX parser already extracts PowerShell, Task Scheduler and the rest from
+    # it correctly. This has to be decided before the name-based branches
+    # below: they matched on the channel name and handed
+    # "Microsoft-Windows-PowerShell%4Operational.evtx" to a JSON parser and
+    # "...TaskScheduler%4Operational.evtx" to a CSV one, which failed on the
+    # binary with "Expecting value: line 1 column 1" and "Dict key must be
+    # str". The events were still ingested by the EVTX parser, so nothing was
+    # lost -- but every collection finished completed_with_errors, and the
+    # errors an analyst was shown pointed at healthy files.
+    # oalerts.evtx keeps its Windows UI handling above, deliberately.
+    if suffix == ".evtx":
+        return {
+            "artifact_type": "windows_event",
+            "profile": "account_usage",
+            "parser": "evtx_raw",
+        }
     if lower_name in {"readme.txt", "readme.md", "readme"}:
         return {
             "artifact_type": "document",
@@ -764,12 +781,6 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
             "profile": "file_folder_opening",
             "parser": "raw_custom_destinations",
             "jumplist_artifact_type": "jumplist_custom_destinations",
-        }
-    if path.suffix.lower() == ".evtx":
-        return {
-            "artifact_type": "windows_event",
-            "profile": "account_usage",
-            "parser": "evtx_raw",
         }
     if path.suffix.lower() == ".lnk":
         return {
