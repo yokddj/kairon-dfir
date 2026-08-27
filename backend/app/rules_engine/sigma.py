@@ -14,13 +14,16 @@ SIGMA_FIELD_MAP = {
     "Channel": ["windows.channel"],
     "Provider_Name": ["windows.provider"],
     "Computer": ["host.name"],
-    "User": ["user.name"],
+    "User": ["user.name", "linux.username"],
     "TargetUserName": ["user.name"],
     "SubjectUserName": ["user.name"],
-    "Image": ["process.executable", "process.path", "process.name"],
+    "Image": ["process.executable", "process.path", "process.name", "linux.process"],
     "NewProcessName": ["process.executable", "process.path", "process.name"],
-    "ProcessName": ["process.name", "process.executable", "process.path"],
-    "CommandLine": ["process.command_line"],
+    "ProcessName": ["process.name", "process.executable", "process.path", "linux.process"],
+    # linux.command is where the Linux parsers put a command line; without it
+    # every Linux rule keying on CommandLine ran against a field only the
+    # Windows pipeline fills, and matched nothing while looking healthy.
+    "CommandLine": ["process.command_line", "linux.command"],
     "ParentImage": ["process.parent.executable", "process.parent.path", "process.parent_path", "process.parent_name", "parent.process.executable", "parent.process.path", "parent.process.name"],
     "ParentProcessName": ["process.parent.name", "process.parent.path", "process.parent_name", "process.parent_path", "parent.process.name", "parent.process.path"],
     "ParentCommandLine": ["process.parent.command_line", "process.parent_command_line", "parent.process.command_line"],
@@ -921,7 +924,13 @@ def _split_field_and_modifier(field: str) -> tuple[str, str | None]:
 
 
 def _mapped_sigma_fields(field: str) -> tuple[list[str], bool]:
-    base_field, _ = _split_field_and_modifier(field)
+    # Everything before the first pipe is the field; the rest are modifiers.
+    # _split_field_and_modifier removes one recognised suffix, so a chain like
+    # "CommandLine|contains|all" came back as "CommandLine|contains" and was
+    # then queried as a document key of that literal name. At run time the rule
+    # was skipped for missing fields -- a rule the analyser had just declared
+    # perfectly evaluable.
+    base_field = str(field).split("|", 1)[0].strip()
     mapped = SIGMA_FIELD_MAP.get(base_field)
     if mapped:
         return mapped, False
