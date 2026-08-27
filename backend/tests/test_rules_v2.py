@@ -597,7 +597,10 @@ detection:
     assert len(results) == 1
     assert results[0].status == "ready"
     assert results[0].scanned_events == 1
-    assert results[0].field_mappings["CommandLine"] == ["process.command_line"]
+    # Windows target first; linux.command is appended so a single rule can match
+    # both platforms, so assert the mapping rather than freeze the whole list.
+    assert results[0].field_mappings["CommandLine"][0] == "process.command_line"
+    assert "linux.command" in results[0].field_mappings["CommandLine"]
     assert results[0].expected_logsource == {"product": "windows", "category": "process_creation"}
 
 

@@ -192,3 +192,42 @@ class TestListFormSelections:
     def test_non_mapping_entries_in_a_list_are_ignored(self) -> None:
         rule = _rule({"selection": ["a bare string", {"CommandLine": "x"}], "condition": "selection"})
         assert _detect_unmapped_fields(rule) == []
+
+
+class TestLinuxCoverage:
+    """Linux events are normalised into the linux.* block, not into the
+    ECS-style process.* fields the Windows pipeline fills."""
+
+    def test_command_line_reaches_the_linux_block(self) -> None:
+        """Without this a Linux rule ran against a field only Windows fills.
+
+        It was reported executable, it was queued, it queried a field that is
+        empty on a Linux case, and it found nothing -- with no error and no
+        skip. The rule looked armed and could never fire.
+        """
+        assert "linux.command" in SIGMA_FIELD_MAP["CommandLine"]
+
+    def test_process_name_reaches_the_linux_block(self) -> None:
+        assert "linux.process" in SIGMA_FIELD_MAP["Image"]
+        assert "linux.process" in SIGMA_FIELD_MAP["ProcessName"]
+
+    def test_the_windows_targets_are_kept_first(self) -> None:
+        """Both platforms are matched with one OR; Windows must not regress."""
+        assert SIGMA_FIELD_MAP["CommandLine"][0] == "process.command_line"
+        assert SIGMA_FIELD_MAP["Image"][0] == "process.executable"
+
+
+def test_the_runtime_mapper_reads_past_a_modifier_chain() -> None:
+    """The analyser and the runtime mapper have to agree on a field's name.
+
+    _mapped_sigma_fields stripped a single recognised suffix, so
+    "CommandLine|contains|all" was queried as a document key of that literal
+    name: a rule the analyser had just declared evaluable was skipped at run
+    time for missing fields.
+    """
+    from app.rules_engine.sigma import _mapped_sigma_fields
+
+    mapped, _ = _mapped_sigma_fields("CommandLine|contains|all")
+    assert "process.command_line" in mapped
+    mapped_plain, _ = _mapped_sigma_fields("CommandLine")
+    assert mapped == mapped_plain
