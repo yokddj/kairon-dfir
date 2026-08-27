@@ -10,6 +10,7 @@ from dateutil import parser as date_parser
 
 from app.core.opensearch import get_events_index, search_documents
 from app.ingest.normalization.registry_modifications import correlate_registry_commands, detect_registry_command
+from app.services.command_risk import score_command
 from app.services.host_identity import normalize_host_alias
 from app.services.investigation_memory import memory_command_history, wants_memory_source, wants_non_memory_source
 
@@ -545,29 +546,7 @@ def _source_type(event: dict[str, Any], event_id: int | None) -> str:
 
 
 def _risk(command: str, process: dict[str, Any], parent: dict[str, Any]) -> tuple[int, list[str]]:
-    lower = command.lower()
-    reasons: list[str] = []
-    score = 0
-    checks = [
-        (("-enc", "-encodedcommand", "frombase64string"), 35, "encoded command or base64 decoding"),
-        (("-ep bypass", "executionpolicy bypass", "-executionpolicy bypass"), 30, "PowerShell execution policy bypass"),
-        (("-w hidden", "windowstyle hidden", "-windowstyle hidden"), 20, "hidden window execution"),
-        (("invoke-webrequest", "webclient", "downloadstring", "curl ", "certutil", "bitsadmin"), 25, "download cradle or file transfer utility"),
-        (("rundll32", "regsvr32", "mshta", "wscript", "cscript"), 25, "suspicious LOLBin execution"),
-        (("psexec", "psexesvc"), 30, "PsExec activity"),
-        (("\\temp\\", "\\downloads\\", "\\appdata\\"), 15, "execution path in user-writable location"),
-        (("whoami",), 10, "reconnaissance command"),
-    ]
-    for tokens, points, reason in checks:
-        if any(token in lower for token in tokens):
-            score += points
-            reasons.append(reason)
-    parent_name = str(parent.get("name") or process.get("parent_name") or "").lower()
-    proc_name = str(process.get("name") or "").lower()
-    if any(parent in parent_name for parent in ("winword", "excel", "chrome", "firefox", "msedge", "explorer")) and any(child in proc_name or child in lower for child in ("powershell", "cmd.exe")):
-        score += 20
-        reasons.append("suspicious parent-child relationship")
-    return min(score, 100), sorted(set(reasons))
+    return score_command(command, process, parent)
 
 
 def _classify_command(command: str, process: dict[str, Any], parent: dict[str, Any], source_type: str) -> dict[str, str]:

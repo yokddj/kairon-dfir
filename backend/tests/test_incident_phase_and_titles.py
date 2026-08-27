@@ -88,3 +88,64 @@ class TestPersistenceFindingTitles:
             "windows_service", correlation_engine._persistence_entity_label({"service": {"name": "EvilSvc"}}, None)
         )
         assert first != second
+
+
+class TestPersistenceExecutionIsHostBound:
+    def test_inventory_evidence_from_another_host_does_not_support_persistence(self) -> None:
+        """Execution evidence only supports a persistence entry on its own host.
+
+        The process-execution path checked the host; the inventory path did not.
+        Because default Windows entries exist on every machine, one platform
+        scheduled task produced a near-identical finding per host in the case,
+        each citing the other hosts as related.
+        """
+        persistence = {"host": {"name": "HOSTA"}}
+        same_host = {"host": {"name": "HOSTA"}}
+        other_host = {"host": {"name": "HOSTB"}}
+
+        assert correlation_engine._same_host(persistence, same_host) is True
+        assert correlation_engine._same_host(persistence, other_host) is False
+
+    def test_same_evidence_still_correlates_when_host_is_unknown(self) -> None:
+        """Missing host attribution must not break a single collection.
+
+        Raw artefacts often carry no host at all. Requiring an equal host would
+        have silently dropped correlations inside one evidence, so events from
+        the same evidence count as the same machine.
+        """
+        left = {"evidence_id": "ev-1"}
+        right = {"evidence_id": "ev-1"}
+        assert correlation_engine._same_machine(left, right) is True
+
+    def test_different_evidence_without_hosts_does_not_correlate(self) -> None:
+        assert correlation_engine._same_machine({"evidence_id": "ev-1"}, {"evidence_id": "ev-2"}) is False
+        assert correlation_engine._same_machine({}, {}) is False
+
+    def test_known_different_hosts_never_correlate(self) -> None:
+        left = {"host": {"name": "HOSTA"}, "evidence_id": "ev-1"}
+        right = {"host": {"name": "HOSTB"}, "evidence_id": "ev-1"}
+        assert correlation_engine._same_machine(left, right) is False
+
+
+class TestEventHostIsSingleAndFalsyWhenAbsent:
+    def test_absent_host_is_falsy(self) -> None:
+        """A second definition of _event_host shadowed the first and returned
+        "unknown" for an event with no host. Callers treated that as a real
+        name, so hostless events compared equal to each other, and a guard
+        written as `not _event_host(event)` could never fire."""
+        assert correlation_engine._event_host({"evidence_id": "ev-1"}) == ""
+        assert not correlation_engine._event_host({})
+
+    def test_only_one_definition_survives(self) -> None:
+        import inspect
+
+        source = inspect.getsource(correlation_engine)
+        assert source.count("def _event_host(") == 1
+
+    def test_all_the_documented_host_fields_are_read(self) -> None:
+        assert correlation_engine._event_host({"host": {"name": "HOSTA"}}) == "HOSTA"
+        assert correlation_engine._event_host({"host": {"canonical": "hosta.corp"}}) == "hosta.corp"
+        assert correlation_engine._event_host({"host": "HOSTB"}) == "HOSTB"
+
+    def test_two_hostless_events_are_not_the_same_host(self) -> None:
+        assert correlation_engine._same_host({"evidence_id": "a"}, {"evidence_id": "b"}) is False

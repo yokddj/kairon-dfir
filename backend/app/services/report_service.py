@@ -321,8 +321,11 @@ def build_case_report_preview(db: Session, case_id: str, report_id: str) -> dict
         "motw_items": int(motw_report["counts"].get("total") or 0),
         "motw_suspicious": int(motw_report["counts"].get("suspicious") or 0),
         "incident_timeline_items": int(incident_timeline_report["counts"]["incident_timeline_items"]),
+        # total describes every persistence entry found; suspicious is how many
+        # of them cleared the risk bar; included is how many the report carries.
         "startup_persistence_items": int(persistence_report["counts"].get("total") or 0),
         "startup_persistence_suspicious": int(persistence_report["counts"].get("suspicious") or 0),
+        "startup_persistence_included": len(persistence_report.get("items") or []),
         "commands_by_shell": command_report["counts"]["commands_by_shell"],
         "commands_by_family": command_report["counts"].get("commands_by_family", command_report["counts"]["commands_by_shell"]),
         "commands_by_launcher": command_report["counts"].get("commands_by_launcher", {}),

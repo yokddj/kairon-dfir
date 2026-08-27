@@ -122,3 +122,83 @@ def test_unassigned_memory_evidence_stays_hostless(monkeypatch) -> None:
     db = SimpleNamespace(get=lambda _model, ident: None)
 
     assert investigation_memory._evidence_host_name(db, evidence) is None
+
+
+class TestMemoryCommandRiskScoring:
+    def test_memory_commands_are_scored_like_disk_commands(self) -> None:
+        """Handing memory rows a hardcoded 0 hid them from every risk filter.
+
+        A command only RAM still remembers is often the most interesting one in
+        the case; scoring it 0 by construction made it unreachable through
+        "only suspicious", a risk floor, or any risk ordering.
+        """
+        from types import SimpleNamespace
+
+        from app.services import investigation_memory
+
+        evidence = SimpleNamespace(id="ev-1", original_filename="mem.raw", detected_host=None, host_id=None)
+        row = {
+            "command_line": "cmd /c psexec.exe \\\\FILESERVER -accepteula powershell -ep bypass",
+            "process_name": "cmd.exe",
+            "pid": 4242,
+            "process_entity_id": "pe-1",
+        }
+
+        item = investigation_memory._memory_command_row("case-1", evidence, row, None, "HOSTA")
+
+        assert item["risk_score"] >= 50
+        assert "PsExec activity" in item["risk_reasons"]
+        assert "PowerShell execution policy bypass" in item["risk_reasons"]
+
+    def test_benign_memory_command_still_scores_zero(self) -> None:
+        from types import SimpleNamespace
+
+        from app.services import investigation_memory
+
+        evidence = SimpleNamespace(id="ev-1", original_filename="mem.raw", detected_host=None, host_id=None)
+        row = {"command_line": "C:\\Windows\\system32\\svchost.exe -k netsvcs", "process_name": "svchost.exe", "pid": 8}
+
+        item = investigation_memory._memory_command_row("case-1", evidence, row, None, "HOSTA")
+
+        assert item["risk_score"] == 0
+        assert item["risk_reasons"] == []
+
+
+def test_disk_and_memory_scoring_share_one_implementation() -> None:
+    """Two copies of this logic would drift, and the memory copy is the one
+    nobody would notice going stale."""
+    from app.services import command_history, command_risk, investigation_memory
+
+    assert command_history._risk("powershell -enc AAAA", {}, {}) == command_risk.score_command("powershell -enc AAAA", {}, {})
+    assert investigation_memory.score_command is command_risk.score_command
+
+
+class TestTruncatedProcessNames:
+    def test_eprocess_truncation_is_repaired_from_the_command_line(self) -> None:
+        """Windows caps the image name in EPROCESS at 15 bytes.
+
+        The stump ("RuntimeBroker.", "fontdrvhost.ex") is what the source really
+        holds, but publishing it raw in a report makes an investigator doubt the
+        tooling -- and the full name is usually right there in the command line.
+        """
+        from app.services.investigation_memory import _untruncated_process_name
+
+        assert _untruncated_process_name("RuntimeBroker.", "C:\\Windows\\System32\\RuntimeBroker.exe -Embedding") == "RuntimeBroker.exe"
+        assert _untruncated_process_name("fontdrvhost.ex", '"C:\\Windows\\system32\\fontdrvhost.exe"') == "fontdrvhost.exe"
+
+    def test_a_mismatched_command_line_never_renames_the_process(self) -> None:
+        """Only a longer name the stump is a prefix of may replace it."""
+        from app.services.investigation_memory import _untruncated_process_name
+
+        assert _untruncated_process_name("RuntimeBroker.", "C:\\Windows\\System32\\svchost.exe -k netsvcs") == "RuntimeBroker."
+
+    def test_short_names_are_left_alone(self) -> None:
+        from app.services.investigation_memory import _untruncated_process_name
+
+        assert _untruncated_process_name("cmd.exe", "cmd.exe /c whoami") == "cmd.exe"
+        assert _untruncated_process_name(None, "anything") is None
+
+    def test_missing_command_line_leaves_the_stump_untouched(self) -> None:
+        from app.services.investigation_memory import _untruncated_process_name
+
+        assert _untruncated_process_name("MoUsoCoreWorke", None) == "MoUsoCoreWorke"

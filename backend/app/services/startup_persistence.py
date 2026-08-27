@@ -112,12 +112,20 @@ def list_startup_persistence_items(db: Session, case_id: str, params: dict[str, 
         fetched.extend(_command_history_candidates(case_id, host_filter))
 
     deduped = _dedupe_items(fetched)
+    # Structural filters (what kind of entry, whether it is enabled) scope the
+    # population being described. Risk filters then select from within it. The
+    # summary is computed over the population, because computing it after the
+    # risk filter made "suspicious" tautological: a report asking only for
+    # suspicious entries got back "38 items, 38 suspicious", which says nothing
+    # about the host and reads as though everything on it were flagged.
+    population: list[dict[str, Any]] = []
     filtered: list[dict[str, Any]] = []
     for item in deduped:
         if type_filter and str(item.get("type") or "").lower() not in type_filter:
             continue
         if enabled_filter is not None and item.get("enabled") is not enabled_filter:
             continue
+        population.append(item)
         if suspicious_only and int(item.get("risk_score") or 0) < 40:
             continue
         if risk_min_int is not None and int(item.get("risk_score") or 0) < risk_min_int:
@@ -127,7 +135,8 @@ def list_startup_persistence_items(db: Session, case_id: str, params: dict[str, 
     filtered.sort(key=lambda item: (-(int(item.get("risk_score") or 0)), str(item.get("host") or ""), str(item.get("last_modified") or item.get("first_seen") or "")))
     start = (page - 1) * page_size
     page_items = filtered[start : start + page_size]
-    summary = _summary(filtered)
+    summary = _summary(population)
+    summary["matched"] = len(filtered)
     return {
         "case_id": case_id,
         "total": len(filtered),

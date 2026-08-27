@@ -473,8 +473,36 @@ def _same_host(left: dict, right: dict) -> bool:
     return normalize_host_alias(left_host) == normalize_host_alias(right_host)
 
 
+def _same_machine(left: dict, right: dict) -> bool:
+    """Whether two events can be treated as coming from the same machine.
+
+    Stricter than "hosts are equal" would be wrong here: host attribution is
+    frequently absent on raw artefacts, and refusing to correlate whenever it is
+    missing would silently drop correlations inside a single collection. Two
+    events from the same evidence are the same machine by construction. What
+    must never happen is correlating across hosts that are known to differ.
+    """
+    left_host, right_host = _event_host(left), _event_host(right)
+    if left_host and right_host:
+        return _same_host_value(left_host, right_host)
+    left_evidence = str(left.get("evidence_id") or "")
+    right_evidence = str(right.get("evidence_id") or "")
+    return bool(left_evidence) and left_evidence == right_evidence
+
+
 def _event_host(event: dict) -> str:
-    return str(_nested_get(event, "host.name") or _nested_get(event, "host.canonical") or _nested_get(event, "host.identity_id") or _nested_get(event, "host.id") or "")
+    """Host an event belongs to, or "" when the event does not say.
+
+    There used to be a second definition of this further down the module which
+    shadowed this one and returned "unknown" for an event with no host. Callers
+    read that as a real host name, so two hostless events compared equal and
+    correlated with each other, and a guard written as `not _event_host(event)`
+    could never fire. An absent host must be falsy.
+    """
+    host = _nested_get(event, "host.name") or _nested_get(event, "host.canonical") or _nested_get(event, "host.identity_id") or _nested_get(event, "host.id")
+    if not host and isinstance(event.get("host"), str):
+        host = event.get("host")
+    return str(host or "")
 
 
 def _same_host_value(left_host: str, right_host: str) -> bool:
@@ -506,10 +534,6 @@ def _counter_dict(values: list[str]) -> dict[str, int]:
 
 def _event_artifact_type(event: dict) -> str:
     return str(_nested_get(event, "artifact.type") or event.get("artifact_type") or "unknown")
-
-
-def _event_host(event: dict) -> str:
-    return str(_nested_get(event, "host.name") or event.get("host") or "unknown")
 
 
 def _display_host(value: object | None) -> str:
@@ -791,7 +815,17 @@ def _generate_findings(case: Case, evidences: list[Evidence], events: list[dict]
                     matches.append(process_event)
         supporting_inventory = []
         for event in inventory_exec:
-            if _match_paths(command, _extract_event_path(event))[0] or _match_paths(command, _extract_event_path(event))[1]:
+            # The process-execution loop above checks the host; this one did
+            # not, so a scheduled task on one machine was "confirmed" by
+            # prefetch or amcache evidence from a different machine. Because
+            # default Windows entries exist on every host, one platform task
+            # produced a near-identical finding per host in the case, each
+            # citing the others in related_hosts. Execution evidence only
+            # supports a persistence entry on the same host.
+            if not _same_machine(persistence_event, event):
+                continue
+            prefix_match, path_match = _match_paths(command, _extract_event_path(event))
+            if prefix_match or path_match:
                 supporting_inventory.append(event)
         if not matches and not supporting_inventory:
             continue
