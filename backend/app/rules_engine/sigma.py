@@ -339,7 +339,17 @@ def _detect_unmapped_fields(rule_data: dict) -> list[str]:
     to load, because nobody goes looking for it.
     """
     unmapped: list[str] = []
-    for base_field in extract_sigma_detection_fields(rule_data):
+    for extracted in extract_sigma_detection_fields(rule_data):
+        # A field can carry a chain of modifiers ("CommandLine|contains|all").
+        # _split_field_and_modifier removes one suffix, which is right for
+        # deciding whether the modifier is supported but leaves a name like
+        # "CommandLine|contains" that no map will ever contain. Judging
+        # mappability on that stump reported hundreds of ordinary rules as
+        # unusable -- a far worse failure than the silence this check replaced.
+        # The field's identity is everything before the first pipe.
+        base_field = extracted.split("|", 1)[0].strip()
+        if not base_field:
+            continue
         if base_field in SEARCH_TEXT_FALLBACK_FIELDS:
             continue
         mapped = SIGMA_FIELD_MAP.get(base_field)

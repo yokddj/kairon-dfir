@@ -71,3 +71,30 @@ def test_a_mapping_with_one_real_target_stays_executable() -> None:
         _rule({"sel": {"TargetFilename|endswith": ".exe"}, "condition": "sel"})
     )
     assert result["unmapped_fields"] == []
+
+
+def test_a_chain_of_modifiers_does_not_hide_the_field_name() -> None:
+    """"CommandLine|contains|all" is still the CommandLine field.
+
+    _split_field_and_modifier removes one suffix, which is right for deciding
+    whether a modifier is supported but leaves "CommandLine|contains" -- a name
+    no map will ever hold. Judging mappability on that stump reported 615
+    ordinary rules from a real SigmaHQ pack as unusable, which is a worse
+    failure than the silence this check exists to replace.
+    """
+    assert _detect_unmapped_fields(_rule({"sel": {"CommandLine|contains|all": ["a", "b"]}, "condition": "sel"})) == []
+    assert _detect_unmapped_fields(_rule({"sel": {"CommandLine|contains|windash": "x"}, "condition": "sel"})) == []
+    assert _detect_unmapped_fields(_rule({"sel": {"ScriptBlockText|contains|all": ["a"]}, "condition": "sel"})) == []
+
+
+def test_an_unmappable_field_is_still_caught_through_a_modifier_chain() -> None:
+    assert _detect_unmapped_fields(
+        _rule({"sel": {"ServiceFileName|contains|all": ["a"]}, "condition": "sel"})
+    ) == ["ServiceFileName"]
+
+
+def test_a_rule_with_a_chained_modifier_stays_executable() -> None:
+    result = analyze_sigma_engine_compatibility(
+        _rule({"sel": {"CommandLine|contains|all": ["whoami", "/all"]}, "condition": "sel"})
+    )
+    assert result["unmapped_fields"] == []
