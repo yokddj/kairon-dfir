@@ -573,6 +573,26 @@ def _infer_incident_phase(text: str, *, fallback: str = "unknown") -> tuple[str,
     return "unknown", "low"
 
 
+_COMMAND_TITLE_MAX_CHARS = 90
+
+
+def _command_incident_title(command: dict[str, Any], command_text: str) -> str:
+    """Title that identifies which command, not just what launched it.
+
+    Titling these "<launcher> command" gave a timeline dozens of rows reading
+    "powershell.exe command", with the one thing that separates the attacker's
+    invocation from the platform's own left in the summary. Lead with the
+    command itself and keep the launcher as context.
+    """
+    launcher = str(command.get("launcher") or command.get("shell_family") or "Command").strip()
+    text = " ".join(str(command_text or "").split())
+    if not text:
+        return f"{launcher} command"
+    if len(text) > _COMMAND_TITLE_MAX_CHARS:
+        text = text[: _COMMAND_TITLE_MAX_CHARS - 1].rstrip() + "\u2026"
+    return f"{launcher}: {text}" if launcher and launcher.lower() not in text.lower() else text
+
+
 def _incident_item(
     case_id: str,
     *,
@@ -1219,7 +1239,7 @@ def build_incident_timeline_draft(db: Session, case_id: str, params: dict[str, A
                     _incident_item(
                         case_id,
                         source="command_history",
-                        title=str(command.get("launcher") or command.get("shell_family") or "Command") + " command",
+                        title=_command_incident_title(command, text),
                         summary=summary or text,
                         timestamp=command.get("timestamp"),
                         host=command.get("host"),
