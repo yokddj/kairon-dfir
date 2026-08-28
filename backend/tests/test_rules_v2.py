@@ -21,7 +21,6 @@ from app.models.rule_run import RuleRun, RuleRunStatus
 from app.models.rule_set import RuleSet
 from fastapi import HTTPException
 
-from app.rules_engine import yara_engine
 from app.rules_engine.sigma import (
     build_sigma_case_profile,
     build_sigma_rule_prefilter,
@@ -1159,60 +1158,3 @@ def test_bulk_detection_insert_only_creates_missing_and_preserves_dismissed() ->
     assert refreshed_existing.status == "dismissed"
     assert db.query(DetectionResult).count() == 2
 
-
-def test_yara_validate_or_unavailable_state_clear() -> None:
-    result = yara_engine.validate_yara_content('rule marker { strings: $a = "malicious_test_marker" condition: $a }')
-    if yara_engine.yara_available():
-        assert result["valid"] is True
-    else:
-        assert result["available"] is False
-        assert result["errors"]
-
-
-def test_yara_marker_match_size_limit_and_symlink_escape() -> None:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        temp_root = Path(tmp_dir)
-        original_data_dir = yara_engine.settings.backend_data_dir
-        yara_engine.settings.backend_data_dir = temp_root
-        try:
-            evidence = Evidence(
-                id=EVIDENCE_ID,
-                case_id=CASE_ID,
-                original_filename="sample",
-                stored_path=str(temp_root / "sample.zip"),
-                sha256="00",
-                size_bytes=1,
-                evidence_type=EvidenceType.unknown,
-            )
-            evidence_root = temp_root / "evidence" / CASE_ID / EVIDENCE_ID / "extracted"
-            evidence_root.mkdir(parents=True, exist_ok=True)
-            marker = evidence_root / "marker.bin"
-            marker.write_text("malicious_test_marker", encoding="utf-8")
-            large = evidence_root / "large.bin"
-            large.write_bytes(b"A" * (2 * 1024 * 1024))
-            outside = temp_root / "outside.bin"
-            outside.write_text("malicious_test_marker", encoding="utf-8")
-            link = evidence_root / "outside-link.bin"
-            try:
-                link.symlink_to(outside)
-            except Exception:
-                link = None
-
-            class _FakeCompiled:
-                def match(self, path: str, timeout: int = 0):
-                    return [type("Match", (), {"rule": "marker", "strings": []})()] if "marker.bin" in path else []
-
-            original_yara = yara_engine.yara
-            yara_engine.yara = object()
-            result = yara_engine._run_compiled_yara_on_evidence(  # type: ignore[attr-defined]
-                _FakeCompiled(),
-                evidence,
-                scan_options={"max_file_size_mb": 1, "selected_paths": ["extracted"], "max_files": 100},
-            )
-            yara_engine.yara = original_yara
-            assert result["matched_files"] == 1
-            assert result["skipped_by_reason"]["too_large"] >= 1
-            if link is not None:
-                assert result["skipped_by_reason"].get("symlink", 0) >= 1
-        finally:
-            yara_engine.settings.backend_data_dir = original_data_dir

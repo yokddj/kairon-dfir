@@ -405,7 +405,6 @@ class RuleImportResponse(BaseModel):
     duplicate_count: int = 0
     imported_rules: int = 0
     imported_rule_sets: int = 0
-    total_yara_rules_inside: int = 0
     compiled_count: int = 0
     unsupported_condition_count: int = 0
     compile_error_count: int = 0

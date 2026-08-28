@@ -62,36 +62,6 @@ def test_rule_run_serialization_exposes_progress_and_warnings() -> None:
     assert payload.metadata_json["case_compatibility"]["applicable_to_case"] == 10
 
 
-def test_rule_run_running_without_heartbeat_is_exposed_as_stale() -> None:
-    db = _session()
-    db.add(Case(id="case-1", name="Case"))
-    stale_heartbeat = (datetime.now(UTC) - timedelta(minutes=10)).isoformat()
-    run = RuleRun(
-        id="run-2",
-        case_id="case-1",
-        engine="yara",
-        status=RuleRunStatus.running,
-        scope="evidence",
-        total_rules=12,
-        processed_rules=3,
-        total_files=40,
-        scanned_files=8,
-        skipped_files=0,
-        errors=[],
-        current_phase="scanning_files",
-        heartbeat_at=stale_heartbeat,
-        started_at=(datetime.now(UTC) - timedelta(minutes=12)).isoformat(),
-        metadata_json={},
-    )
-    db.add(run)
-    db.commit()
-
-    payload = _serialize_rule_run(run)
-    assert payload.status == RuleRunStatus.stale
-    assert payload.stale is True
-    assert payload.percent_complete == 20.0
-
-
 def test_rule_run_serialization_separates_case_compatibility_reasons() -> None:
     db = _session()
     db.add(Case(id="case-1", name="Case"))
@@ -125,49 +95,6 @@ def test_rule_run_serialization_separates_case_compatibility_reasons() -> None:
     assert case_compatibility["skipped_missing_fields_in_case"] == 3
     assert case_compatibility["skipped_too_broad"] == 1
     assert case_compatibility["runtime_error"] == 1
-
-
-def test_list_rules_totals_support_imported_vs_enabled_inventory() -> None:
-    db = _session()
-    db.add(Case(id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", name="Case"))
-    db.add_all(
-        [
-            Rule(
-                id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
-                case_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-                name="Sigma One",
-                engine=RuleEngine.sigma,
-                content="title: one",
-                enabled=True,
-                severity="high",
-            ),
-            Rule(
-                id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
-                case_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-                name="Sigma Two",
-                engine=RuleEngine.sigma,
-                content="title: two",
-                enabled=False,
-                severity="medium",
-            ),
-            Rule(
-                id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb3",
-                case_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-                name="Yara One",
-                engine=RuleEngine.yara,
-                content="rule one { condition: true }",
-                enabled=True,
-                severity="medium",
-            ),
-        ]
-    )
-    db.commit()
-
-    imported_sigma = list_rules(case_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", engine="sigma", enabled=None, scope="all", page=1, page_size=1, db=db)
-    enabled_sigma = list_rules(case_id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", engine="sigma", enabled=True, scope="all", page=1, page_size=1, db=db)
-
-    assert imported_sigma.total == 2
-    assert enabled_sigma.total == 1
 
 
 def test_run_case_rules_defaults_to_all_scope_and_includes_global_sigma(monkeypatch) -> None:

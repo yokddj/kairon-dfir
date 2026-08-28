@@ -39,8 +39,6 @@ from app.rules_engine.sigma import (
     SIGMA_SERVICE_CHANNEL_HINTS,
     validate_sigma_rule_content,
 )
-from app.rules_engine.yara_import import classify_yara_import, detect_yara_rules, split_yara_rules
-from app.rules_engine.yara_engine import detect_rule_names_from_content, validate_yara_content, yara_available
 from app.services.host_identity import is_invalid_host_value, resolve_canonical_host
 from app.schemas.finding import FindingRead
 from app.schemas.rule import (
@@ -86,7 +84,6 @@ from app.workers.tasks import enqueue_rule_run, enqueue_rules_run
 
 router = APIRouter(tags=["rules", "detections"])
 settings = get_settings()
-YARA_RULE_RE = re.compile(r"\brule\s+[A-Za-z0-9_]+\s*[:{]")
 RULE_METADATA_FILENAMES = {".ds_store"}
 DETECTION_SORT_FIELDS = {
     "created_at": DetectionResult.created_at,
@@ -147,10 +144,6 @@ def _classify_rule_file(path: Path, content: str) -> str:
     lower = path.name.lower()
     if lower.endswith((".yml", ".yaml")):
         return "sigma"
-    if lower.endswith((".yar", ".yara")):
-        return "yara"
-    if detect_yara_rules(content):
-        return "yara"
     return "ignored"
 
 
@@ -396,9 +389,7 @@ def _serialize_rule_run(run: RuleRun) -> RuleRunRead:
     total_files = int(run.total_files or 0)
     scanned_files = int(run.scanned_files or metadata.get("files_scanned") or 0)
     percent_complete: float | None = None
-    if run.engine == "yara" and total_files > 0:
-        percent_complete = round(min(100.0, (scanned_files / total_files) * 100), 1)
-    elif total_rules > 0:
+    if total_rules > 0:
         percent_complete = round(min(100.0, (processed_rules / total_rules) * 100), 1)
     elif total_files > 0:
         percent_complete = round(min(100.0, (scanned_files / total_files) * 100), 1)
@@ -450,8 +441,6 @@ def _serialize_rule_run(run: RuleRun) -> RuleRunRead:
 def _validate_rule_payload(engine: RuleEngine, content: str) -> dict:
     if engine == RuleEngine.sigma:
         return validate_sigma_rule_content(content)
-    if engine == RuleEngine.yara:
-        return validate_yara_content(content)
     if engine == RuleEngine.heuristic:
         load_heuristic_rule(content)
         return {"valid": True}
@@ -507,32 +496,6 @@ def _build_rule_from_import(
                 )
             )
         return rules
-    if engine == RuleEngine.yara:
-        first_match = re.search(r"rule\s+([A-Za-z0-9_]+)", content)
-        return [
-            Rule(
-                case_id=case_id,
-                name=first_match.group(1) if first_match else Path(filename).stem,
-                title=first_match.group(1) if first_match else Path(filename).stem,
-                engine=RuleEngine.yara,
-                namespace=namespace,
-                source="uploaded",
-                description=f"Imported from {filename}",
-                content=content,
-                content_hash=_rule_content_hash(content),
-                enabled=enabled,
-                severity=None,
-                status="valid" if validate_yara_content(content).get("valid") else "invalid",
-                tags=["yara_forge"] if "yara-forge" in filename.lower() or "yara_forge" in filename.lower() else [],
-                validation_errors=validate_yara_content(content).get("errors", []),
-                metadata_json={
-                    "rule_names": detect_rule_names_from_content(content)[:50],
-                    "external_rule_id": (first_match.group(1) if first_match else Path(filename).stem),
-                    "source_filename": filename,
-                    "validation_status": "valid" if validate_yara_content(content).get("valid") else ("not_compiled" if not validate_yara_content(content).get("available") else "invalid"),
-                },
-            )
-        ]
     if engine == RuleEngine.heuristic:
         rule_data = load_heuristic_rule(content)
         return [
@@ -555,49 +518,10 @@ def _build_rule_from_import(
     raise ValueError(f"Unsupported engine: {engine}")
 
 
-def _build_rule_set_from_import(
-    *,
-    filename: str,
-    content: str,
-    case_id: str | None,
-    namespace: str | None,
-    enabled: bool,
-    severity: str | None = None,
-    tags: list[str] | None = None,
-    metadata: dict | None = None,
-) -> RuleSet:
-    metadata = metadata or {}
-    first_rule = detect_yara_rules(content)[:1]
-    friendly_name = metadata.get("name") or Path(filename).stem
-    return RuleSet(
-        case_id=case_id,
-        name=str(friendly_name),
-        engine=RuleEngine.yara,
-        namespace=namespace,
-        description=metadata.get("description") or f"Imported YARA rule pack from {filename}",
-        source_filename=filename,
-        content_path=None,
-        content=content,
-        rules_count=int(metadata.get("number_of_rules") or metadata.get("rules_count") or len(detect_yara_rules(content))),
-        enabled=enabled,
-        severity=severity,
-        tags=tags or [],
-        metadata_json={
-            **metadata,
-            "first_rules": metadata.get("first_rules") or detect_yara_rules(content)[:50],
-            "first_rule_name": first_rule[0] if first_rule else None,
-            "external_rule_id": str(friendly_name),
-            "source_filename": filename,
-        },
-    )
-
-
 def _detect_import_engine(filename: str, content: str, requested: str) -> RuleEngine:
     if requested != "auto":
         return RuleEngine(requested)
     lower = filename.lower()
-    if lower.endswith((".yar", ".yara")) or detect_yara_rules(content):
-        return RuleEngine.yara
     if lower.endswith((".yml", ".yaml")):
         try:
             docs = parse_sigma_rule(content)
@@ -617,24 +541,7 @@ def _detect_import_engine(filename: str, content: str, requested: str) -> RuleEn
 def _default_namespace(filename: str, namespace: str | None, engine: RuleEngine) -> str | None:
     if namespace:
         return namespace
-    lower = filename.lower()
-    if engine == RuleEngine.yara and ("yara-forge" in lower or "yara_forge" in lower):
-        return "yara_forge"
-    if engine == RuleEngine.yara:
-        return "imported"
     return None
-
-
-def _resolve_yara_import_mode(import_mode: str, rules_count: int) -> str:
-    normalized = (import_mode or "auto").strip().lower().replace("-", "_")
-    if normalized in {"rule_pack", "pack", "ruleset", "rule_set"}:
-        return "rule_pack"
-    if normalized in {"split", "split_into_individual_rules", "individual", "individual_rules"}:
-        return "split"
-    if normalized == "auto":
-        return "rule_pack" if rules_count > 1 else "individual"
-    return "individual"
-
 
 def _import_content(
     db: Session,
@@ -653,67 +560,14 @@ def _import_content(
     try:
         resolved_engine = _detect_import_engine(filename, content, engine)
         resolved_namespace = _default_namespace(filename, namespace, resolved_engine)
-        if resolved_engine == RuleEngine.yara:
-            classification = classify_yara_import(content, filename)
-            rules_count = int(classification["rules_count"])
-            mode = _resolve_yara_import_mode(import_mode, rules_count)
-            tags = ["yara_forge"] if str(classification.get("metadata", {}).get("package", "")).lower() == "yara-forge".lower() or "yara-forge" in filename.lower() or "yara_forge" in filename.lower() else []
-            if mode == "rule_pack":
-                rule_set = _build_rule_set_from_import(
-                    filename=filename,
-                    content=content,
-                    case_id=case_id,
-                    namespace=resolved_namespace,
-                    enabled=enabled,
-                    tags=tags,
-                    metadata={**classification["metadata"], "rules_count": rules_count},
-                )
-                db.add(rule_set)
-                db.commit()
-                db.refresh(rule_set)
-                imported_rule_sets.append(rule_set)
-                log_activity(
-                    db,
-                    activity_type="rule_import_completed",
-                    title="YARA rule pack imported",
-                    message=f"Imported YARA rule pack {rule_set.name} with {rule_set.rules_count} rules",
-                    case_id=rule_set.case_id,
-                    metadata={"rule_set_id": rule_set.id, "engine": "yara", "rules_count": rule_set.rules_count},
-                )
-                return imported, imported_rule_sets, errors
-            if mode == "split" and rules_count > 1:
-                created = [
-                    Rule(
-                        case_id=case_id,
-                        name=rule_name,
-                        engine=RuleEngine.yara,
-                        namespace=resolved_namespace,
-                        description=f"Imported from {filename}",
-                        content=rule_content,
-                        enabled=enabled,
-                        severity=None,
-                        tags=tags,
-                    )
-                    for rule_name, rule_content in split_yara_rules(content, filename)
-                ]
-            else:
-                created = _build_rule_from_import(
-                    filename=filename,
-                    content=content,
-                    engine=resolved_engine,
-                    case_id=case_id,
-                    namespace=resolved_namespace,
-                    enabled=enabled,
-                )
-        else:
-            created = _build_rule_from_import(
-                filename=filename,
-                content=content,
-                engine=resolved_engine,
-                case_id=case_id,
-                namespace=resolved_namespace,
-                enabled=enabled,
-            )
+        created = _build_rule_from_import(
+            filename=filename,
+            content=content,
+            engine=resolved_engine,
+            case_id=case_id,
+            namespace=resolved_namespace,
+            enabled=enabled,
+        )
         for rule in created:
             db.add(rule)
         db.commit()
@@ -922,7 +776,6 @@ def _build_import_response(
         "compile_error_count": int(details.get("compile_error_count") or 0),
         "sigma_engine_coverage_report": dict(details.get("sigma_engine_coverage_report") or {}),
         "pysigma_evaluation": dict(details.get("pysigma_evaluation") or {}),
-        "total_yara_rules_inside": int(details.get("total_yara_rules_inside") or 0),
         "performance": _import_run_performance(details),
     }
     return RuleImportResponse(
@@ -941,7 +794,6 @@ def _build_import_response(
         duplicate_count=run.duplicate_count,
         imported_rules=len(imported_rules),
         imported_rule_sets=len(imported_rule_sets),
-        total_yara_rules_inside=int(details.get("total_yara_rules_inside") or 0),
         compiled_count=run.compiled_count,
         unsupported_condition_count=int(details.get("unsupported_condition_count") or 0),
         compile_error_count=int(details.get("compile_error_count") or 0),
@@ -1040,7 +892,6 @@ def _run_import(
     duplicate_count = 0
     invalid_count = 0
     unsupported_count = 0
-    total_yara_rules_inside = 0
     started_at = run.started_at or _utc_iso_now()
     pack_name = run.pack_name or Path(uploaded_filename or "rules").stem
     existing_rules = _prefetch_existing_rules(db, case_id=case_id)
@@ -1266,123 +1117,6 @@ def _run_import(
                 run.error_count = len(errors)
                 persist_progress(force=True)
                 continue
-            if file_type == "yara":
-                run.status = RuleImportRunStatus.validating
-                run.current_phase = "validating_yara"
-                writes_dirty = True
-                validation_started = time.perf_counter()
-                validation = validate_yara_content(content)
-                perf["compile_seconds"] = perf.get("compile_seconds", 0.0) + (time.perf_counter() - validation_started)
-                rules_count = len(detect_yara_rules(content))
-                total_rules_found += max(rules_count, 1)
-                if not validation.get("valid") and validation.get("available", True):
-                    invalid_count += 1
-                    invalid_items.append({"file": name, "engine": "yara", "reason": "; ".join(validation.get("errors") or [])})
-                    errors.append(f"{name}: {'; '.join(validation.get('errors') or [])}")
-                    run.invalid_count = invalid_count
-                    run.error_count = len(errors)
-                    persist_progress()
-                    continue
-                if not validation.get("available"):
-                    warnings.append("YARA validation is limited because compiler is not available.")
-                classification = classify_yara_import(content, name)
-                mode = _resolve_yara_import_mode(import_mode, int(classification["rules_count"]))
-                tags = ["yara_forge"] if str(classification.get("metadata", {}).get("package", "")).lower() == "yara-forge" else []
-                if mode == "rule_pack" and int(classification["rules_count"]) > 1:
-                    total_yara_rules_inside += int(classification["rules_count"])
-                    rule_set = _build_rule_set_from_import(
-                        filename=name,
-                        content=content,
-                        case_id=case_id,
-                        namespace=namespace,
-                        enabled=enabled,
-                        tags=tags,
-                        metadata={**classification["metadata"], "rules_count": int(classification["rules_count"])},
-                    )
-                    existing_rule_set = existing_rule_sets.get((rule_set.name or "").strip().lower())
-                    action, saved_rule_set = _upsert_imported_rule_set(db, rule_set=rule_set, import_run_id=run.id, source_pack=pack_name, existing=existing_rule_set)
-                    if action == "imported":
-                        imported_count += 1
-                        imported_rule_sets.append(saved_rule_set)
-                    elif action == "updated":
-                        updated_count += 1
-                        imported_rule_sets.append(saved_rule_set)
-                    else:
-                        duplicate_count += 1
-                    existing_rule_sets[(saved_rule_set.name or "").strip().lower()] = saved_rule_set
-                    run.processed_rules += 1
-                    writes_dirty = True
-                    persist_progress(force=True)
-                    continue
-                for yara_rule_name, yara_rule_content in split_yara_rules(content, name):
-                    if cancel_if_requested("Cancel requested while validating YARA rules."):
-                        return _reload_import_run(db, run.id) or run, imported_rules, imported_rule_sets
-                    content_hash = _rule_content_hash(yara_rule_content)
-                    identity = _rule_identity_from_values(RuleEngine.yara, yara_rule_name, content_hash)
-                    existing_rule = existing_rules.get(identity)
-                    if existing_rule and (existing_rule.content_hash or "") == content_hash:
-                        existing_metadata = dict(existing_rule.metadata_json or {})
-                        existing_metadata.update(
-                            {
-                                "import_run_id": run.id,
-                                "source_pack": pack_name,
-                                "last_import_status": "duplicate",
-                            }
-                        )
-                        existing_rule.metadata_json = existing_metadata
-                        duplicate_count += 1
-                        duplicate_rule_ids.append(existing_rule.id)
-                        run.processed_rules += 1
-                        writes_dirty = True
-                        continue
-                    rule = Rule(
-                        case_id=case_id,
-                        name=yara_rule_name,
-                        title=yara_rule_name,
-                        engine=RuleEngine.yara,
-                        namespace=namespace or _default_namespace(name, namespace, RuleEngine.yara),
-                        source="uploaded",
-                        description=f"Imported from {name}",
-                        content=yara_rule_content,
-                        content_hash=_rule_content_hash(yara_rule_content),
-                        enabled=enabled,
-                        severity=None,
-                        status="valid" if validation.get("valid") else "invalid",
-                        tags=tags,
-                        validation_errors=list(validation.get("errors") or []),
-                        metadata_json={
-                            "rule_names": [yara_rule_name],
-                            "external_rule_id": yara_rule_name,
-                            "source_filename": name,
-                            "validation_status": "valid" if validation.get("valid") else ("not_compiled" if not validation.get("available") else "invalid"),
-                        },
-                    )
-                    action, saved_rule = _upsert_imported_rule(db, rule=rule, import_run_id=run.id, source_pack=pack_name, existing=existing_rule)
-                    if action == "imported":
-                        imported_count += 1
-                        created_rule_ids.append(saved_rule.id)
-                        imported_rules.append(saved_rule)
-                    elif action == "updated":
-                        updated_count += 1
-                        updated_rule_ids.append(saved_rule.id)
-                        imported_rules.append(saved_rule)
-                    else:
-                        duplicate_count += 1
-                        duplicate_rule_ids.append(saved_rule.id)
-                    existing_rules[identity] = saved_rule
-                    run.processed_rules += 1
-                    writes_dirty = True
-                run.status = RuleImportRunStatus.saving
-                run.current_phase = "saving_rules"
-                run.total_rules_found = total_rules_found
-                run.imported_count = imported_count
-                run.updated_count = updated_count
-                run.duplicate_count = duplicate_count
-                run.invalid_count = invalid_count
-                run.warning_count = len(warnings)
-                run.error_count = len(errors)
-                persist_progress(force=True)
-                continue
         final_status = RuleImportRunStatus.completed_with_warnings if (warnings or errors or invalid_items or unsupported_items) else RuleImportRunStatus.completed
         run.engine = "mixed" if len(detected_engine_counts) > 1 else (next(iter(detected_engine_counts.keys()), "unknown"))
         run.status = final_status
@@ -1431,7 +1165,6 @@ def _run_import(
                 "examples_by_feature": sigma_coverage_examples,
             },
             "pysigma_evaluation": pysigma_capabilities(),
-            "total_yara_rules_inside": total_yara_rules_inside,
             "ignored_macos_metadata_count": sum(1 for item in warnings if "macOS metadata" in item),
             "performance": perf,
         }
@@ -2672,7 +2405,6 @@ def _queue_case_rules_run(
         "scan_parsed_outputs": bool(payload.include_parsed_outputs),
         "scan_archives": bool(payload.include_archives),
         "scan_text_outputs": bool(payload.include_text_outputs),
-        "max_file_size_mb": payload.max_file_size_mb or settings.yara_max_file_size_mb,
         "evidence_id": payload.evidence_id,
         "host": payload.host,
         "time_from": payload.time_from,
@@ -2851,19 +2583,9 @@ def list_rule_sets(
 
 @router.get("/api/rules/engines/status")
 def rules_engine_status() -> dict[str, RuleEngineStatusRead]:
-    yara_ok = yara_available()
     return {
         "heuristic": RuleEngineStatusRead(available=True, runs_on="indexed_events"),
         "sigma": RuleEngineStatusRead(available=True, runs_on="indexed_events", supported="basic Sigma subset"),
-        "yara": RuleEngineStatusRead(
-            available=yara_ok,
-            runs_on="preserved_files",
-            supports_rule_packs=True,
-            scan_extracted=settings.yara_scan_extracted,
-            scan_originals=settings.yara_scan_originals,
-            max_file_size_mb=settings.yara_max_file_size_mb,
-            error=None if yara_ok else "yara-python not installed",
-        ),
     }
 
 
@@ -3379,12 +3101,7 @@ def run_rule(rule_id: str, payload: RuleRunRequest, db: Session = Depends(get_db
         evidence_id=payload.evidence_id,
         dry_run=payload.dry_run,
         run_id=run.id,
-        scan_options={
-            "scan_parsed_outputs": bool(payload.include_parsed_outputs),
-            "scan_archives": bool(payload.include_archives),
-            "scan_text_outputs": bool(payload.include_text_outputs),
-            "max_file_size_mb": payload.max_file_size_mb,
-        } if item.engine == RuleEngine.yara else None,
+        scan_options=None,
     )
     run.metadata_json = {**(run.metadata_json or {}), "job_id": job_id}
     db.commit()
@@ -3406,7 +3123,7 @@ def run_rule(rule_id: str, payload: RuleRunRequest, db: Session = Depends(get_db
         created_detections=0,
         duplicates=0,
         skipped=False,
-        error=None if item.engine != RuleEngine.yara else "YARA run queued. If yara-python is unavailable, the run will be skipped with a warning activity event.",
+        error=None,
         status="queued",
         run_id=run.id,
     )
@@ -3480,7 +3197,7 @@ def run_rule_set(rule_set_id: str, payload: RuleRunRequest, db: Session = Depend
         created_detections=0,
         duplicates=0,
         skipped=False,
-        error=None if item.engine != RuleEngine.yara else "YARA rule pack run queued. If yara-python is unavailable, the run will be skipped with a warning activity event.",
+        error=None,
         status="queued",
         run_id=run.id,
     )

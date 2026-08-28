@@ -38,10 +38,10 @@ def test_a_rule_the_engine_cannot_answer_is_not_queued() -> None:
 
 
 def test_engines_other_than_sigma_are_left_alone() -> None:
-    yara_rule = SimpleNamespace(id="y", name="y", engine="yara", content="rule x { condition: true }")
-    kept, dropped = _drop_rules_this_engine_cannot_evaluate([yara_rule])
+    other = SimpleNamespace(id="h", name="h", engine="heuristic", content="{}")
+    kept, dropped = _drop_rules_this_engine_cannot_evaluate([other])
 
-    assert [rule.id for rule in kept] == ["y"]
+    assert [rule.id for rule in kept] == ["h"]
     assert dropped == {}
 
 

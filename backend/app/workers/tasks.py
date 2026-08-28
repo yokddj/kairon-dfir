@@ -94,7 +94,6 @@ from app.rules_engine.sigma import (
     preflight_compiled_sigma_rule,
     preflight_sigma_rule,
 )
-from app.rules_engine.yara_engine import run_yara_rule_on_evidence, run_yara_rule_set_on_evidence, yara_available
 from app.services.host_attribution import choose_primary_host, classify_host_candidate
 from app.services.host_facts import create_host_fact_observations, delete_host_facts_for_evidence
 from app.services.host_users import create_host_user_fact_observations, delete_host_user_facts_for_evidence
@@ -9195,8 +9194,6 @@ def _event_search_body(case_id: str, evidence_id: str | None, rule: Rule) -> dic
         if not sigma_rules:
             raise ValueError("No Sigma rules found in content")
         query = build_sigma_query(sigma_rules[0])
-    elif rule.engine.value == "yara":
-        raise ValueError("YARA rules must be run in files mode.")
     else:
         raise ValueError(f"Unsupported rule engine {rule.engine.value}")
     bool_query = query.setdefault("query", {}).setdefault("bool", {})
@@ -9652,43 +9649,277 @@ def run_rule_on_case(rule_id: str | None, case_id: str, evidence_id: str | None 
         matches_capped_count = 0
         detections_capped_count = 0
         top_noisy_rules: list[dict[str, object]] = []
-        if runnable.engine.value == "yara":
-            if not yara_available():
+        sigma_rule_data = None
+        sigma_compiled = None
+        sigma_metadata = {}
+        if rule.engine.value == "sigma":
+            sigma_compiled = dict((rule.metadata_json or {}).get("sigma_compilation") or {})
+            if sigma_compiled.get("compile_status") != "compiled":
+                sigma_rule_data = parse_sigma_rule(rule.content)[0]
+                sigma_compiled = compile_sigma_rule(sigma_rule_data)
+            sigma_metadata = extract_sigma_metadata(sigma_rule_data) if sigma_rule_data else {
+                "title": rule.title or rule.name,
+                "description": rule.description,
+                "author": rule.author,
+                "rule_version": rule.rule_version,
+                "level": rule.level,
+                "tags": list(rule.tags or []),
+                "references": list(rule.references or []),
+                "false_positives": list(rule.false_positives or []),
+            }
+        sigma_case_profile = None
+        sigma_preflight = None
+        if rule.engine.value == "sigma":
+            sigma_case_profile = (scan_options or {}).get("_sigma_case_profile")
+            if not isinstance(sigma_case_profile, dict):
+                sigma_case_profile = _build_sigma_case_profile_for_scope(case_id, evidence_id, scan_options or {})
+            sigma_preflight = (scan_options or {}).get("_sigma_preflight")
+            if not isinstance(sigma_preflight, dict):
+                sigma_preflight = preflight_compiled_sigma_rule(sigma_compiled or {}, sigma_case_profile, enabled=rule.enabled)
+            if str(sigma_preflight.get("status") or "").startswith("skipped_"):
+                warnings.append(f"Sigma rule skipped: {sigma_preflight.get('status')}")
                 if rule_run:
                     _update_rule_run(
                         db,
                         rule_run,
                         status=RuleRunStatus.skipped,
                         finished_at=utc_now().isoformat(),
+                        matched=0,
+                        created_detections=0,
+                        duplicates=0,
+                        scanned_events=0,
+                        processed_rules=1,
                         current_phase="completed",
-                        errors=["YARA engine unavailable in this build."],
-                        last_error="YARA engine unavailable in this build.",
-                        metadata_json={"reason": "yara-python not installed"},
+                        last_error=None,
+                        errors=[],
+                        metadata_json={
+                            "dry_run": dry_run,
+                            "evidence_id": evidence_id,
+                            "rule_set_id": rule_set.id if rule_set else None,
+                            "scan_options": scan_options or {},
+                            "warnings": warnings,
+                            "skipped_by_reason": {str(sigma_preflight.get("status")).replace("skipped_", ""): 1},
+                            "sigma_case_profile": sigma_case_profile,
+                            "sigma_preflight": sigma_preflight,
+                            "current_phase": "completed",
+                        },
                     )
-                log_activity(
-                    db,
-                    activity_type="rule_run_skipped",
-                    title="YARA engine unavailable",
-                    message=f"YARA {'rule pack' if rule_set else 'rule'} {runnable.name} requested but yara-python is not available.",
-                    severity="warning",
-                    case_id=case_id,
-                    evidence_id=evidence_id,
-                    metadata={"rule_id": rule.id if rule else None, "rule_set_id": rule_set.id if rule_set else None},
+                return {
+                    "status": "skipped",
+                    "matched": 0,
+                    "created_detections": 0,
+                    "duplicates": 0,
+                    "scanned_events": 0,
+                    "scanned_files": scanned_files,
+                    "skipped_files": skipped_files,
+                    "errors": [],
+                    "warnings": warnings,
+                    "skipped_by_reason": {str(sigma_preflight.get("status")).replace("skipped_", ""): 1},
+                }
+        sigma_runtime_options = dict(scan_options or {})
+        if sigma_preflight:
+            sigma_runtime_options["_sigma_preflight"] = sigma_preflight
+        if sigma_case_profile:
+            sigma_runtime_options["_sigma_case_profile"] = sigma_case_profile
+        if sigma_compiled:
+            sigma_runtime_options["_sigma_compiled"] = sigma_compiled
+        sigma_run_mode = _resolve_sigma_run_mode(sigma_runtime_options)
+        sigma_mode_config = _resolve_sigma_mode_config(sigma_runtime_options, runtime_settings)
+        body = _build_sigma_search_body(case_id, evidence_id, rule, sigma_runtime_options, runtime_settings) if rule.engine.value == "sigma" else _event_search_body(case_id, evidence_id, rule)
+        if rule.engine.value == "sigma" and sigma_compiled:
+            sigma_body = build_sigma_query_from_compiled(sigma_compiled)
+            if isinstance(body, dict) and isinstance(sigma_body, dict):
+                body["query"] = sigma_body.get("query")
+        query = body.get("query") if isinstance(body, dict) else None
+        try:
+            query_started = time.perf_counter()
+            total_events = int(count_documents(get_events_index(case_id), query).get("count", 0))
+            broadness_reason = _sigma_broadness_reason(
+                candidate_count_estimate=total_events,
+                preflight=sigma_preflight,
+                mode_config=sigma_mode_config,
+            ) if rule.engine.value == "sigma" else None
+            if broadness_reason and rule.engine.value == "sigma":
+                status_name = "skipped_too_broad" if sigma_run_mode == "fast_triage" else "noisy_capped"
+                if sigma_run_mode == "fast_triage":
+                    skipped_too_broad_count += 1
+                    skipped_by_reason["too_broad"] = int(skipped_by_reason.get("too_broad") or 0) + 1
+                    top_noisy_rules.append(
+                        {
+                            "rule_id": rule.id,
+                            "rule_name": rule.name,
+                            "candidate_count": total_events,
+                            "matches_found": 0,
+                            "created_detections": 0,
+                            "duplicates": 0,
+                            "duration_ms": 0,
+                            "capped": False,
+                            "skipped": True,
+                            "status": "skipped_too_broad",
+                            "reason": broadness_reason,
+                        }
+                    )
+                    warning_text = f"Rule {rule.name} was skipped in {sigma_run_mode} mode because it is too broad: {broadness_reason}."
+                    if warning_text not in warnings:
+                        warnings.append(warning_text)
+                    if rule_run:
+                        _update_rule_run(
+                            db,
+                            rule_run,
+                            status=RuleRunStatus.completed,
+                            finished_at=utc_now().isoformat(),
+                            matched=0,
+                            created_detections=0,
+                            duplicates=0,
+                            scanned_events=0,
+                            processed_rules=1,
+                            current_phase="completed",
+                            last_error=None,
+                            errors=[],
+                            metadata_json={
+                                **(rule_run.metadata_json or {}),
+                                "dry_run": dry_run,
+                                "evidence_id": evidence_id,
+                                "rule_set_id": rule_set.id if rule_set else None,
+                                "scan_options": scan_options or {},
+                                "sigma_run_mode": sigma_run_mode,
+                                "sigma_run_mode_config": sigma_mode_config,
+                                "warnings": warnings,
+                                "skipped_by_reason": skipped_by_reason,
+                                "sigma_case_profile": sigma_case_profile,
+                                "sigma_preflight": sigma_preflight,
+                                "candidate_count_estimate": total_events,
+                                "current_phase": "completed",
+                                "noisy_rules_count": noisy_rules_count,
+                                "capped_rules_count": capped_rules_count,
+                                "skipped_too_broad_count": skipped_too_broad_count,
+                                "matches_capped_count": matches_capped_count,
+                                "detections_capped_count": detections_capped_count,
+                                "top_noisy_rules": top_noisy_rules[:10],
+                                "display_status": "completed_with_warnings",
+                            },
+                        )
+                    return {
+                        "status": "skipped",
+                        "matched": 0,
+                        "created_detections": 0,
+                        "duplicates": 0,
+                        "scanned_events": 0,
+                        "scanned_files": scanned_files,
+                        "skipped_files": skipped_files,
+                        "errors": [],
+                        "warnings": warnings,
+                        "skipped_by_reason": skipped_by_reason,
+                        "candidate_events_prefiltered": 0,
+                        "candidate_count_estimate": total_events,
+                        "sigma_run_mode": sigma_run_mode,
+                        "skipped_too_broad_count": skipped_too_broad_count,
+                        "top_noisy_rules": top_noisy_rules[:10],
+                    }
+                requested_candidates = min(
+                    max(int(sigma_mode_config.get("max_candidate_events_per_rule") or 0), 1),
+                    max(total_events, 1),
                 )
-                return {"status": "skipped", "matched": 0, "created_detections": 0, "duplicates": 0, "scanned_events": 0, "scanned_files": 0, "skipped_files": 0, "errors": ["YARA engine unavailable in this build."], "warnings": []}
-            evidence_query = db.query(Evidence).filter(Evidence.case_id == case_id)
-            if evidence_id:
-                evidence_query = evidence_query.filter(Evidence.id == evidence_id)
-            candidate_evidences = evidence_query.all()
+                # OpenSearch refuses a single search asking for more hits
+                # than the index's result window, so the balanced mode's
+                # 25000 (and exhaustive's 200000) did not truncate the scan
+                # -- they made the search fail outright. Every rule matching
+                # more than the window contributed nothing, counted as an
+                # execution_error, and the run still reported success: 252
+                # rules on one case, silently detecting nothing.
+                window = _index_result_window(case_id)
+                sigma_runtime_options["max_events"] = min(requested_candidates, window)
+                body["size"] = max(int(sigma_runtime_options["max_events"]), 1)
+                if requested_candidates > window:
+                    truncation_warning = (
+                        f"Rule {rule.name} matched more candidates than one search can return; "
+                        f"examined the first {window} of {total_events}. Narrow by host or time range to see the rest."
+                    )
+                    if truncation_warning not in warnings:
+                        warnings.append(truncation_warning)
             if rule_run:
                 _update_rule_run(
                     db,
                     rule_run,
-                    current_phase="scanning_files",
-                    total_files=len(candidate_evidences),
-                    scanned_files=0,
+                    current_phase="counting_events",
+                    total_events=total_events,
+                    scanned_events=0,
                 )
-            for evidence in candidate_evidences:
+            result = search_documents(get_events_index(case_id), body)
+            query_time_ms_total += int((time.perf_counter() - query_started) * 1000)
+        except RequestError as exc:
+            if rule.engine.value == "sigma":
+                request_error = str(exc)
+                skip_reason = "unsupported_condition"
+                if "failed to create query" not in request_error.lower():
+                    skip_reason = "execution_error"
+                warnings.append(request_error)
+                if rule_run:
+                    metadata = rule_run.metadata_json or {}
+                    _update_rule_run(
+                        db,
+                        rule_run,
+                        status=RuleRunStatus.completed,
+                        finished_at=utc_now().isoformat(),
+                        matched=0,
+                        created_detections=0,
+                        duplicates=0,
+                        scanned_events=0,
+                        processed_rules=1,
+                        current_phase="completed",
+                        last_error=None,
+                        errors=[],
+                        metadata_json={
+                            **metadata,
+                            "warnings": warnings,
+                            "skipped_by_reason": {skip_reason: 1},
+                            "sigma_case_profile": sigma_case_profile if rule.engine.value == "sigma" else None,
+                            "sigma_preflight": sigma_preflight if rule.engine.value == "sigma" else None,
+                            "candidate_events_prefiltered": 0,
+                            "current_phase": "completed",
+                        },
+                    )
+                return {
+                    "status": "skipped",
+                    "matched": 0,
+                    "created_detections": 0,
+                    "duplicates": 0,
+                    "scanned_events": 0,
+                    "scanned_files": scanned_files,
+                    "skipped_files": skipped_files,
+                    "errors": [],
+                    "warnings": warnings,
+                    "skipped_by_reason": {skip_reason: 1},
+                    "candidate_events_prefiltered": 0,
+                }
+            raise
+        candidate_hits = result.get("hits", {}).get("hits", [])
+        if rule_run:
+            _update_rule_run(
+                db,
+                rule_run,
+                current_phase="matching_events",
+                total_events=int((sigma_case_profile or {}).get("total_events") or len(candidate_hits)),
+                scanned_events=int((sigma_case_profile or {}).get("total_events") or len(candidate_hits)),
+            )
+        hits = []
+        if not dry_run:
+            max_detections_per_rule = max(
+                int(sigma_mode_config.get("max_detections_per_rule") or 0),
+                0,
+            )
+            max_matches_per_rule = max(int(sigma_mode_config.get("max_matches_per_rule") or 0), 0)
+            noisy_rule_threshold = max(
+                int((scan_options or {}).get("sigma_noisy_rule_threshold") or runtime_settings.get("SIGMA_NOISY_RULE_THRESHOLD") or settings.sigma_noisy_rule_threshold),
+                0,
+            )
+            detection_write_batch_size = max(int(runtime_settings.get("DETECTION_WRITE_BATCH_SIZE") or 1000), 100)
+            duplicate_lookup_batch_size = max(int(runtime_settings.get("DETECTION_DUPLICATE_LOOKUP_BATCH_SIZE") or 2000), 100)
+            detection_candidates: list[dict] = []
+            rule_capped = False
+            rule_marked_noisy = False
+            rule_started = time.perf_counter()
+            for hit in candidate_hits:
                 if _is_rule_run_cancel_requested(run_id):
                     if rule_run:
                         _update_rule_run(
@@ -9704,558 +9935,154 @@ def run_rule_on_case(rule_id: str | None, case_id: str, evidence_id: str | None 
                         "matched": len(hits),
                         "created_detections": created_count,
                         "duplicates": duplicates,
-                        "scanned_events": 0,
+                        "scanned_events": len(candidate_hits),
                         "scanned_files": scanned_files,
                         "skipped_files": skipped_files,
                         "errors": errors,
                         "warnings": warnings,
                     }
-                yara_result = run_yara_rule_set_on_evidence(rule_set, evidence, scan_options=scan_options) if rule_set else run_yara_rule_on_evidence(rule, evidence, scan_options=scan_options)
-                scanned_files += int(yara_result.get("scanned_files", 0))
-                skipped_files += int(yara_result.get("skipped_files", 0))
-                errors.extend(yara_result.get("errors", []))
-                warnings.extend(yara_result.get("warnings", []))
-                for key, value in (yara_result.get("skipped_by_reason", {}) or {}).items():
-                    skipped_by_reason[key] = skipped_by_reason.get(key, 0) + int(value)
-                for key, value in (yara_result.get("candidate_breakdown", {}) or {}).items():
-                    candidate_breakdown[key] = candidate_breakdown.get(key, 0) + int(value)
-                if rule_run:
-                    _update_rule_run(
-                        db,
-                        rule_run,
-                        current_phase="scanning_files",
-                        total_files=max(int(rule_run.total_files or 0), scanned_files + skipped_files),
-                        scanned_files=scanned_files,
-                        skipped_files=skipped_files,
+                source = hit["_source"]
+                sigma_eval = {"matched": True, "matched_fields": {}, "condition_summary": None, "data_quality": []}
+                if rule.engine.value == "sigma" and sigma_compiled:
+                    sigma_eval = evaluate_compiled_sigma_rule(sigma_compiled, source)
+                    if not sigma_eval["matched"]:
+                        continue
+                hits.append(hit)
+                if max_matches_per_rule and len(hits) >= max_matches_per_rule:
+                    rule_capped = True
+                    matches_capped_count += 1
+                    break
+                if max_detections_per_rule and len(detection_candidates) >= max_detections_per_rule:
+                    rule_capped = True
+                    detections_capped_count += 1
+                    break
+                detection_payload = _build_sigma_detection_payload(
+                    case_id=case_id,
+                    rule=rule,
+                    rule_run_id=detection_rule_run_id,
+                    sigma_metadata=sigma_metadata,
+                    sigma_eval=sigma_eval,
+                    source=source,
+                    hit=hit,
+                )
+                if str((scan_options or {}).get("run_type") or "").lower() == "smoke":
+                    detection_payload["dedup_fingerprint"] = _dedup_fingerprint(
+                        case_id,
+                        rule.id,
+                        detection_rule_run_id,
+                        source.get("stable_event_id") or source.get("event_fingerprint") or source.get("event_id"),
+                        "sigma_smoke",
                     )
-                for match in yara_result["matches"]:
-                    if _is_rule_run_cancel_requested(run_id):
-                        if rule_run:
-                            _update_rule_run(
-                                db,
-                                rule_run,
-                                status=RuleRunStatus.cancelled,
-                                finished_at=utc_now().isoformat(),
-                                current_phase="cancelled",
-                                last_error="Cancelled at worker checkpoint.",
-                            )
-                        return {
-                            "status": "cancelled",
-                            "matched": len(hits),
-                            "created_detections": created_count,
-                            "duplicates": duplicates,
-                            "scanned_events": 0,
-                            "scanned_files": scanned_files,
-                            "skipped_files": skipped_files,
-                            "errors": errors,
-                            "warnings": warnings,
+                    detection_payload.setdefault("tags", [])
+                    if "smoke" not in detection_payload["tags"]:
+                        detection_payload["tags"].append("smoke")
+                    raw = dict(detection_payload.get("raw") or {})
+                    raw.update(
+                        {
+                            "run_type": "smoke",
+                            "smoke": True,
+                            "smoke_rule_run_id": detection_rule_run_id,
+                            "field_mapping_explanation": {
+                                "expected_logsource": raw.get("expected_logsource") or sigma_metadata.get("logsource") or {},
+                                "sigma_to_normalized_fields": raw.get("sigma_to_normalized_fields") or {},
+                                "actual_event_source": raw.get("actual_event_source") or {},
+                            },
                         }
-                    matched_rule_names = match.get("match_names", []) or [runnable.name]
-                    detection_rule_name = matched_rule_names[0] if rule_set else runnable.name
-                    related_event_ids = _collect_related_event_ids(case_id, file_path=match.get("path"), file_hash=match.get("file_sha256"))
-                    dedup_fingerprint = _dedup_fingerprint(case_id, rule.id if rule else "", rule_set.id if rule_set else "", match.get("path"), match.get("file_sha256"), detection_rule_name)
-                    detection, created = create_detection_if_missing(
+                    )
+                    detection_payload["raw"] = raw
+                detection_candidates.append(detection_payload)
+            current_rule_matches = len(hits)
+            if noisy_rule_threshold and current_rule_matches >= noisy_rule_threshold:
+                noisy_rules_count += 1
+                rule_marked_noisy = True
+            if rule_capped or (max_detections_per_rule and len(detection_candidates) >= max_detections_per_rule and len(candidate_hits) >= max_detections_per_rule):
+                capped_rules_count += 1
+                if not rule_marked_noisy:
+                    noisy_rules_count += 1
+                    rule_marked_noisy = True
+                warning_text = f"Rule {rule.name} produced too many matches in {sigma_run_mode} mode and was capped."
+                if warning_text not in warnings:
+                    warnings.append(warning_text)
+            if detection_candidates:
+                try:
+                    bulk_result = create_detections_bulk_if_missing(
                         db,
                         case_id=case_id,
-                        evidence_id=evidence.id,
-                        artifact_id=None,
-                        rule_id=rule.id if rule else None,
-                        rule_set_id=rule_set.id if rule_set else None,
-                        engine="yara",
-                        source_engine="yara",
-                        rule_name=detection_rule_name,
-                        rule_title=runnable.title or detection_rule_name,
-                        rule_version=runnable.rule_version,
-                        rule_author=runnable.author,
-                        rule_level=runnable.level or runnable.severity,
-                        severity=runnable.severity or "medium",
-                        confidence=_severity_to_confidence(runnable.severity or "medium"),
-                        event_id=None,
-                        event_index=None,
-                        opensearch_id=None,
-                        target_type="file",
-                        target_path=match["path"],
-                        matched_at=utc_now().isoformat(),
-                        matched_stable_event_id=None,
-                        matched_file_hash=match.get("file_sha256"),
-                        host_name=(scan_options or {}).get("host"),
-                        message=f"YARA match {detection_rule_name}{f' from ruleset {rule_set.name}' if rule_set else ''} on {match['path']}",
-                        matched_fields={"file.path": match.get("path"), "file.sha256": match.get("file_sha256")},
-                        matched_strings=match.get("matched_strings") or [],
-                        condition_summary=f"YARA matched rule {detection_rule_name}",
-                        description=runnable.description,
-                        false_positives=getattr(runnable, "false_positives", []) or [],
-                        references=getattr(runnable, "references", []) or [],
-                        tags=list(dict.fromkeys((getattr(runnable, "tags", []) or []) + ["yara"])),
-                        mitre=getattr(runnable, "mitre", []) or [],
-                        related_event_ids=related_event_ids,
-                        related_iocs={
-                            "files": [match.get("path")] if match.get("path") else [],
-                            "hashes": [match.get("file_sha256")] if match.get("file_sha256") else [],
-                            "domains": [],
-                            "ips": [],
-                            "urls": [],
-                            "registry": [],
-                        },
-                        risk_score=float({"low": 35, "medium": 60, "high": 80, "critical": 95}.get(str((runnable.severity or "medium")).lower(), 60)),
-                        dedup_fingerprint=dedup_fingerprint,
-                        engine_version="rules_v2",
-                        raw={
-                            **match,
-                            "rule_engine": "yara",
-                            "rule_title": runnable.title or detection_rule_name,
-                            "rule_level": runnable.level or runnable.severity,
-                            "rule_run_id": detection_rule_run_id,
-                            "rule_import_run_id": (dict(rule.metadata_json or {}).get("import_run_id") if rule else None),
-                            "rule_source_pack": (dict(rule.metadata_json or {}).get("source_pack") if rule else None),
-                            "rule_set_id": rule_set.id if rule_set else None,
-                            "rule_set_name": rule_set.name if rule_set else None,
-                            "match_reason": f"YARA matched {', '.join(matched_rule_names)}",
-                            "target_kind": "file",
-                            "skipped_by_reason": yara_result.get("skipped_by_reason", {}),
-                            "candidate_breakdown": yara_result.get("candidate_breakdown", {}),
-                        },
+                        detection_payloads=detection_candidates,
+                        duplicate_lookup_batch_size=duplicate_lookup_batch_size,
+                        insert_batch_size=detection_write_batch_size,
                     )
-                    if created:
-                        created_count += 1
-                    else:
-                        duplicates += 1
-                hits.extend(yara_result["matches"])
-        else:
-            sigma_rule_data = None
-            sigma_compiled = None
-            sigma_metadata = {}
-            if rule.engine.value == "sigma":
-                sigma_compiled = dict((rule.metadata_json or {}).get("sigma_compilation") or {})
-                if sigma_compiled.get("compile_status") != "compiled":
-                    sigma_rule_data = parse_sigma_rule(rule.content)[0]
-                    sigma_compiled = compile_sigma_rule(sigma_rule_data)
-                sigma_metadata = extract_sigma_metadata(sigma_rule_data) if sigma_rule_data else {
-                    "title": rule.title or rule.name,
-                    "description": rule.description,
-                    "author": rule.author,
-                    "rule_version": rule.rule_version,
-                    "level": rule.level,
-                    "tags": list(rule.tags or []),
-                    "references": list(rule.references or []),
-                    "false_positives": list(rule.false_positives or []),
-                }
-            sigma_case_profile = None
-            sigma_preflight = None
-            if rule.engine.value == "sigma":
-                sigma_case_profile = (scan_options or {}).get("_sigma_case_profile")
-                if not isinstance(sigma_case_profile, dict):
-                    sigma_case_profile = _build_sigma_case_profile_for_scope(case_id, evidence_id, scan_options or {})
-                sigma_preflight = (scan_options or {}).get("_sigma_preflight")
-                if not isinstance(sigma_preflight, dict):
-                    sigma_preflight = preflight_compiled_sigma_rule(sigma_compiled or {}, sigma_case_profile, enabled=rule.enabled)
-                if str(sigma_preflight.get("status") or "").startswith("skipped_"):
-                    warnings.append(f"Sigma rule skipped: {sigma_preflight.get('status')}")
-                    if rule_run:
-                        _update_rule_run(
-                            db,
-                            rule_run,
-                            status=RuleRunStatus.skipped,
-                            finished_at=utc_now().isoformat(),
-                            matched=0,
-                            created_detections=0,
-                            duplicates=0,
-                            scanned_events=0,
-                            processed_rules=1,
-                            current_phase="completed",
-                            last_error=None,
-                            errors=[],
-                            metadata_json={
-                                "dry_run": dry_run,
-                                "evidence_id": evidence_id,
-                                "rule_set_id": rule_set.id if rule_set else None,
-                                "scan_options": scan_options or {},
-                                "warnings": warnings,
-                                "skipped_by_reason": {str(sigma_preflight.get("status")).replace("skipped_", ""): 1},
-                                "sigma_case_profile": sigma_case_profile,
-                                "sigma_preflight": sigma_preflight,
-                                "current_phase": "completed",
-                            },
-                        )
-                    return {
-                        "status": "skipped",
-                        "matched": 0,
-                        "created_detections": 0,
-                        "duplicates": 0,
-                        "scanned_events": 0,
-                        "scanned_files": scanned_files,
-                        "skipped_files": skipped_files,
-                        "errors": [],
-                        "warnings": warnings,
-                        "skipped_by_reason": {str(sigma_preflight.get("status")).replace("skipped_", ""): 1},
+                    created_count += int(bulk_result.get("created_count") or 0)
+                    duplicates += int(bulk_result.get("duplicate_count") or 0)
+                    current_rule_created = int(bulk_result.get("created_count") or 0)
+                    current_rule_duplicates = int(bulk_result.get("duplicate_count") or 0)
+                    dedupe_time_ms_total += int(bulk_result.get("dedupe_time_ms") or 0)
+                    write_time_ms_total += int(bulk_result.get("write_time_ms") or 0)
+                    bulk_insert_batches += int(bulk_result.get("bulk_insert_batches") or 0)
+                    bulk_duplicate_lookups += int(bulk_result.get("bulk_lookup_count") or 0)
+                except Exception as exc:  # noqa: BLE001
+                    db.rollback()
+                    error_detail = str(exc).splitlines()[0].strip() or exc.__class__.__name__
+                    error_text = f"Detection creation failed for rule {rule.name}: {error_detail}"
+                    if error_text not in runtime_errors_local:
+                        runtime_errors_local.append(error_text)
+                    if error_text not in warnings:
+                        warnings.append(error_text)
+            if rule_capped:
+                top_noisy_rules.append(
+                    {
+                        "rule_id": rule.id,
+                        "rule_name": rule.name,
+                        "level": sigma_metadata.get("level"),
+                        "source_pack": (rule.metadata_json or {}).get("source_pack"),
+                        "logsource": sigma_metadata.get("logsource") or {},
+                        "candidate_count": total_events,
+                        "matches_found": current_rule_matches,
+                        "created_detections": current_rule_created,
+                        "duplicates": current_rule_duplicates,
+                        "duration_ms": int((time.perf_counter() - rule_started) * 1000),
+                        "detections_capped_at": max_detections_per_rule,
+                        "candidate_count_cap": sigma_mode_config.get("max_candidate_events_per_rule"),
+                        "broadness_reason": broadness_reason if 'broadness_reason' in locals() else None,
+                        "capped": True,
+                        "skipped": False,
+                        "status": "noisy_capped",
+                        "reason": broadness_reason if 'broadness_reason' in locals() else "match/detection cap applied",
                     }
-            sigma_runtime_options = dict(scan_options or {})
-            if sigma_preflight:
-                sigma_runtime_options["_sigma_preflight"] = sigma_preflight
-            if sigma_case_profile:
-                sigma_runtime_options["_sigma_case_profile"] = sigma_case_profile
-            if sigma_compiled:
-                sigma_runtime_options["_sigma_compiled"] = sigma_compiled
-            sigma_run_mode = _resolve_sigma_run_mode(sigma_runtime_options)
-            sigma_mode_config = _resolve_sigma_mode_config(sigma_runtime_options, runtime_settings)
-            body = _build_sigma_search_body(case_id, evidence_id, rule, sigma_runtime_options, runtime_settings) if rule.engine.value == "sigma" else _event_search_body(case_id, evidence_id, rule)
-            if rule.engine.value == "sigma" and sigma_compiled:
-                sigma_body = build_sigma_query_from_compiled(sigma_compiled)
-                if isinstance(body, dict) and isinstance(sigma_body, dict):
-                    body["query"] = sigma_body.get("query")
-            query = body.get("query") if isinstance(body, dict) else None
-            try:
-                query_started = time.perf_counter()
-                total_events = int(count_documents(get_events_index(case_id), query).get("count", 0))
-                broadness_reason = _sigma_broadness_reason(
-                    candidate_count_estimate=total_events,
-                    preflight=sigma_preflight,
-                    mode_config=sigma_mode_config,
-                ) if rule.engine.value == "sigma" else None
-                if broadness_reason and rule.engine.value == "sigma":
-                    status_name = "skipped_too_broad" if sigma_run_mode == "fast_triage" else "noisy_capped"
-                    if sigma_run_mode == "fast_triage":
-                        skipped_too_broad_count += 1
-                        skipped_by_reason["too_broad"] = int(skipped_by_reason.get("too_broad") or 0) + 1
-                        top_noisy_rules.append(
-                            {
-                                "rule_id": rule.id,
-                                "rule_name": rule.name,
-                                "candidate_count": total_events,
-                                "matches_found": 0,
-                                "created_detections": 0,
-                                "duplicates": 0,
-                                "duration_ms": 0,
-                                "capped": False,
-                                "skipped": True,
-                                "status": "skipped_too_broad",
-                                "reason": broadness_reason,
-                            }
-                        )
-                        warning_text = f"Rule {rule.name} was skipped in {sigma_run_mode} mode because it is too broad: {broadness_reason}."
-                        if warning_text not in warnings:
-                            warnings.append(warning_text)
-                        if rule_run:
-                            _update_rule_run(
-                                db,
-                                rule_run,
-                                status=RuleRunStatus.completed,
-                                finished_at=utc_now().isoformat(),
-                                matched=0,
-                                created_detections=0,
-                                duplicates=0,
-                                scanned_events=0,
-                                processed_rules=1,
-                                current_phase="completed",
-                                last_error=None,
-                                errors=[],
-                                metadata_json={
-                                    **(rule_run.metadata_json or {}),
-                                    "dry_run": dry_run,
-                                    "evidence_id": evidence_id,
-                                    "rule_set_id": rule_set.id if rule_set else None,
-                                    "scan_options": scan_options or {},
-                                    "sigma_run_mode": sigma_run_mode,
-                                    "sigma_run_mode_config": sigma_mode_config,
-                                    "warnings": warnings,
-                                    "skipped_by_reason": skipped_by_reason,
-                                    "sigma_case_profile": sigma_case_profile,
-                                    "sigma_preflight": sigma_preflight,
-                                    "candidate_count_estimate": total_events,
-                                    "current_phase": "completed",
-                                    "noisy_rules_count": noisy_rules_count,
-                                    "capped_rules_count": capped_rules_count,
-                                    "skipped_too_broad_count": skipped_too_broad_count,
-                                    "matches_capped_count": matches_capped_count,
-                                    "detections_capped_count": detections_capped_count,
-                                    "top_noisy_rules": top_noisy_rules[:10],
-                                    "display_status": "completed_with_warnings",
-                                },
-                            )
-                        return {
-                            "status": "skipped",
-                            "matched": 0,
-                            "created_detections": 0,
-                            "duplicates": 0,
-                            "scanned_events": 0,
-                            "scanned_files": scanned_files,
-                            "skipped_files": skipped_files,
-                            "errors": [],
-                            "warnings": warnings,
-                            "skipped_by_reason": skipped_by_reason,
-                            "candidate_events_prefiltered": 0,
-                            "candidate_count_estimate": total_events,
-                            "sigma_run_mode": sigma_run_mode,
-                            "skipped_too_broad_count": skipped_too_broad_count,
-                            "top_noisy_rules": top_noisy_rules[:10],
-                        }
-                    requested_candidates = min(
-                        max(int(sigma_mode_config.get("max_candidate_events_per_rule") or 0), 1),
-                        max(total_events, 1),
-                    )
-                    # OpenSearch refuses a single search asking for more hits
-                    # than the index's result window, so the balanced mode's
-                    # 25000 (and exhaustive's 200000) did not truncate the scan
-                    # -- they made the search fail outright. Every rule matching
-                    # more than the window contributed nothing, counted as an
-                    # execution_error, and the run still reported success: 252
-                    # rules on one case, silently detecting nothing.
-                    window = _index_result_window(case_id)
-                    sigma_runtime_options["max_events"] = min(requested_candidates, window)
-                    body["size"] = max(int(sigma_runtime_options["max_events"]), 1)
-                    if requested_candidates > window:
-                        truncation_warning = (
-                            f"Rule {rule.name} matched more candidates than one search can return; "
-                            f"examined the first {window} of {total_events}. Narrow by host or time range to see the rest."
-                        )
-                        if truncation_warning not in warnings:
-                            warnings.append(truncation_warning)
-                if rule_run:
-                    _update_rule_run(
-                        db,
-                        rule_run,
-                        current_phase="counting_events",
-                        total_events=total_events,
-                        scanned_events=0,
-                    )
-                result = search_documents(get_events_index(case_id), body)
-                query_time_ms_total += int((time.perf_counter() - query_started) * 1000)
-            except RequestError as exc:
-                if rule.engine.value == "sigma":
-                    request_error = str(exc)
-                    skip_reason = "unsupported_condition"
-                    if "failed to create query" not in request_error.lower():
-                        skip_reason = "execution_error"
-                    warnings.append(request_error)
-                    if rule_run:
-                        metadata = rule_run.metadata_json or {}
-                        _update_rule_run(
-                            db,
-                            rule_run,
-                            status=RuleRunStatus.completed,
-                            finished_at=utc_now().isoformat(),
-                            matched=0,
-                            created_detections=0,
-                            duplicates=0,
-                            scanned_events=0,
-                            processed_rules=1,
-                            current_phase="completed",
-                            last_error=None,
-                            errors=[],
-                            metadata_json={
-                                **metadata,
-                                "warnings": warnings,
-                                "skipped_by_reason": {skip_reason: 1},
-                                "sigma_case_profile": sigma_case_profile if rule.engine.value == "sigma" else None,
-                                "sigma_preflight": sigma_preflight if rule.engine.value == "sigma" else None,
-                                "candidate_events_prefiltered": 0,
-                                "current_phase": "completed",
-                            },
-                        )
-                    return {
-                        "status": "skipped",
-                        "matched": 0,
-                        "created_detections": 0,
-                        "duplicates": 0,
-                        "scanned_events": 0,
-                        "scanned_files": scanned_files,
-                        "skipped_files": skipped_files,
-                        "errors": [],
-                        "warnings": warnings,
-                        "skipped_by_reason": {skip_reason: 1},
-                        "candidate_events_prefiltered": 0,
-                    }
-                raise
-            candidate_hits = result.get("hits", {}).get("hits", [])
+                )
             if rule_run:
                 _update_rule_run(
                     db,
                     rule_run,
                     current_phase="matching_events",
-                    total_events=int((sigma_case_profile or {}).get("total_events") or len(candidate_hits)),
-                    scanned_events=int((sigma_case_profile or {}).get("total_events") or len(candidate_hits)),
+                    matched=current_rule_matches,
+                    created_detections=created_count,
+                    duplicates=duplicates,
+                    metadata_json={
+                        **(rule_run.metadata_json or {}),
+                        "current_rule": rule.id,
+                        "current_rule_title": rule.title or rule.name,
+                        "current_rule_matches": current_rule_matches,
+                        "current_rule_created": current_rule_created,
+                        "current_rule_duplicates": current_rule_duplicates,
+                        "current_rule_duration_ms": int((time.perf_counter() - rule_started) * 1000),
+                        "query_time_ms_total": query_time_ms_total,
+                        "write_time_ms_total": write_time_ms_total,
+                        "dedupe_time_ms_total": dedupe_time_ms_total,
+                        "bulk_insert_batches": bulk_insert_batches,
+                        "bulk_duplicate_lookups": bulk_duplicate_lookups,
+                        "noisy_rules_count": noisy_rules_count,
+                        "capped_rules_count": capped_rules_count,
+                        "skipped_too_broad_count": skipped_too_broad_count,
+                        "matches_capped_count": matches_capped_count,
+                        "detections_capped_count": detections_capped_count,
+                        "sigma_run_mode": sigma_run_mode,
+                        "sigma_run_mode_config": sigma_mode_config,
+                        "top_noisy_rules": top_noisy_rules[:10],
+                    },
                 )
-            hits = []
-            if not dry_run:
-                max_detections_per_rule = max(
-                    int(sigma_mode_config.get("max_detections_per_rule") or 0),
-                    0,
-                )
-                max_matches_per_rule = max(int(sigma_mode_config.get("max_matches_per_rule") or 0), 0)
-                noisy_rule_threshold = max(
-                    int((scan_options or {}).get("sigma_noisy_rule_threshold") or runtime_settings.get("SIGMA_NOISY_RULE_THRESHOLD") or settings.sigma_noisy_rule_threshold),
-                    0,
-                )
-                detection_write_batch_size = max(int(runtime_settings.get("DETECTION_WRITE_BATCH_SIZE") or 1000), 100)
-                duplicate_lookup_batch_size = max(int(runtime_settings.get("DETECTION_DUPLICATE_LOOKUP_BATCH_SIZE") or 2000), 100)
-                detection_candidates: list[dict] = []
-                rule_capped = False
-                rule_marked_noisy = False
-                rule_started = time.perf_counter()
-                for hit in candidate_hits:
-                    if _is_rule_run_cancel_requested(run_id):
-                        if rule_run:
-                            _update_rule_run(
-                                db,
-                                rule_run,
-                                status=RuleRunStatus.cancelled,
-                                finished_at=utc_now().isoformat(),
-                                current_phase="cancelled",
-                                last_error="Cancelled at worker checkpoint.",
-                            )
-                        return {
-                            "status": "cancelled",
-                            "matched": len(hits),
-                            "created_detections": created_count,
-                            "duplicates": duplicates,
-                            "scanned_events": len(candidate_hits),
-                            "scanned_files": scanned_files,
-                            "skipped_files": skipped_files,
-                            "errors": errors,
-                            "warnings": warnings,
-                        }
-                    source = hit["_source"]
-                    sigma_eval = {"matched": True, "matched_fields": {}, "condition_summary": None, "data_quality": []}
-                    if rule.engine.value == "sigma" and sigma_compiled:
-                        sigma_eval = evaluate_compiled_sigma_rule(sigma_compiled, source)
-                        if not sigma_eval["matched"]:
-                            continue
-                    hits.append(hit)
-                    if max_matches_per_rule and len(hits) >= max_matches_per_rule:
-                        rule_capped = True
-                        matches_capped_count += 1
-                        break
-                    if max_detections_per_rule and len(detection_candidates) >= max_detections_per_rule:
-                        rule_capped = True
-                        detections_capped_count += 1
-                        break
-                    detection_payload = _build_sigma_detection_payload(
-                        case_id=case_id,
-                        rule=rule,
-                        rule_run_id=detection_rule_run_id,
-                        sigma_metadata=sigma_metadata,
-                        sigma_eval=sigma_eval,
-                        source=source,
-                        hit=hit,
-                    )
-                    if str((scan_options or {}).get("run_type") or "").lower() == "smoke":
-                        detection_payload["dedup_fingerprint"] = _dedup_fingerprint(
-                            case_id,
-                            rule.id,
-                            detection_rule_run_id,
-                            source.get("stable_event_id") or source.get("event_fingerprint") or source.get("event_id"),
-                            "sigma_smoke",
-                        )
-                        detection_payload.setdefault("tags", [])
-                        if "smoke" not in detection_payload["tags"]:
-                            detection_payload["tags"].append("smoke")
-                        raw = dict(detection_payload.get("raw") or {})
-                        raw.update(
-                            {
-                                "run_type": "smoke",
-                                "smoke": True,
-                                "smoke_rule_run_id": detection_rule_run_id,
-                                "field_mapping_explanation": {
-                                    "expected_logsource": raw.get("expected_logsource") or sigma_metadata.get("logsource") or {},
-                                    "sigma_to_normalized_fields": raw.get("sigma_to_normalized_fields") or {},
-                                    "actual_event_source": raw.get("actual_event_source") or {},
-                                },
-                            }
-                        )
-                        detection_payload["raw"] = raw
-                    detection_candidates.append(detection_payload)
-                current_rule_matches = len(hits)
-                if noisy_rule_threshold and current_rule_matches >= noisy_rule_threshold:
-                    noisy_rules_count += 1
-                    rule_marked_noisy = True
-                if rule_capped or (max_detections_per_rule and len(detection_candidates) >= max_detections_per_rule and len(candidate_hits) >= max_detections_per_rule):
-                    capped_rules_count += 1
-                    if not rule_marked_noisy:
-                        noisy_rules_count += 1
-                        rule_marked_noisy = True
-                    warning_text = f"Rule {rule.name} produced too many matches in {sigma_run_mode} mode and was capped."
-                    if warning_text not in warnings:
-                        warnings.append(warning_text)
-                if detection_candidates:
-                    try:
-                        bulk_result = create_detections_bulk_if_missing(
-                            db,
-                            case_id=case_id,
-                            detection_payloads=detection_candidates,
-                            duplicate_lookup_batch_size=duplicate_lookup_batch_size,
-                            insert_batch_size=detection_write_batch_size,
-                        )
-                        created_count += int(bulk_result.get("created_count") or 0)
-                        duplicates += int(bulk_result.get("duplicate_count") or 0)
-                        current_rule_created = int(bulk_result.get("created_count") or 0)
-                        current_rule_duplicates = int(bulk_result.get("duplicate_count") or 0)
-                        dedupe_time_ms_total += int(bulk_result.get("dedupe_time_ms") or 0)
-                        write_time_ms_total += int(bulk_result.get("write_time_ms") or 0)
-                        bulk_insert_batches += int(bulk_result.get("bulk_insert_batches") or 0)
-                        bulk_duplicate_lookups += int(bulk_result.get("bulk_lookup_count") or 0)
-                    except Exception as exc:  # noqa: BLE001
-                        db.rollback()
-                        error_detail = str(exc).splitlines()[0].strip() or exc.__class__.__name__
-                        error_text = f"Detection creation failed for rule {rule.name}: {error_detail}"
-                        if error_text not in runtime_errors_local:
-                            runtime_errors_local.append(error_text)
-                        if error_text not in warnings:
-                            warnings.append(error_text)
-                if rule_capped:
-                    top_noisy_rules.append(
-                        {
-                            "rule_id": rule.id,
-                            "rule_name": rule.name,
-                            "level": sigma_metadata.get("level"),
-                            "source_pack": (rule.metadata_json or {}).get("source_pack"),
-                            "logsource": sigma_metadata.get("logsource") or {},
-                            "candidate_count": total_events,
-                            "matches_found": current_rule_matches,
-                            "created_detections": current_rule_created,
-                            "duplicates": current_rule_duplicates,
-                            "duration_ms": int((time.perf_counter() - rule_started) * 1000),
-                            "detections_capped_at": max_detections_per_rule,
-                            "candidate_count_cap": sigma_mode_config.get("max_candidate_events_per_rule"),
-                            "broadness_reason": broadness_reason if 'broadness_reason' in locals() else None,
-                            "capped": True,
-                            "skipped": False,
-                            "status": "noisy_capped",
-                            "reason": broadness_reason if 'broadness_reason' in locals() else "match/detection cap applied",
-                        }
-                    )
-                if rule_run:
-                    _update_rule_run(
-                        db,
-                        rule_run,
-                        current_phase="matching_events",
-                        matched=current_rule_matches,
-                        created_detections=created_count,
-                        duplicates=duplicates,
-                        metadata_json={
-                            **(rule_run.metadata_json or {}),
-                            "current_rule": rule.id,
-                            "current_rule_title": rule.title or rule.name,
-                            "current_rule_matches": current_rule_matches,
-                            "current_rule_created": current_rule_created,
-                            "current_rule_duplicates": current_rule_duplicates,
-                            "current_rule_duration_ms": int((time.perf_counter() - rule_started) * 1000),
-                            "query_time_ms_total": query_time_ms_total,
-                            "write_time_ms_total": write_time_ms_total,
-                            "dedupe_time_ms_total": dedupe_time_ms_total,
-                            "bulk_insert_batches": bulk_insert_batches,
-                            "bulk_duplicate_lookups": bulk_duplicate_lookups,
-                            "noisy_rules_count": noisy_rules_count,
-                            "capped_rules_count": capped_rules_count,
-                            "skipped_too_broad_count": skipped_too_broad_count,
-                            "matches_capped_count": matches_capped_count,
-                            "detections_capped_count": detections_capped_count,
-                            "sigma_run_mode": sigma_run_mode,
-                            "sigma_run_mode_config": sigma_mode_config,
-                            "top_noisy_rules": top_noisy_rules[:10],
-                        },
-                    )
-            else:
-                hits = candidate_hits
+        else:
+            hits = candidate_hits
         if rule_run:
             _update_rule_run(
                 db,
@@ -10268,7 +10095,7 @@ def run_rule_on_case(rule_id: str | None, case_id: str, evidence_id: str | None 
                 scanned_files=scanned_files,
                 skipped_files=skipped_files,
                 processed_rules=1,
-                scanned_events=len(candidate_hits) if runnable.engine.value != "yara" else int(rule_run.scanned_events or 0),
+                scanned_events=len(candidate_hits),
                 current_phase="completed" if not errors else "failed",
                 last_error="; ".join(errors)[:2048] if errors else None,
                 errors=errors,
@@ -10282,12 +10109,12 @@ def run_rule_on_case(rule_id: str | None, case_id: str, evidence_id: str | None 
                     "warnings": warnings,
                     "rules_evaluated": 1,
                     "events_in_scope": int((sigma_case_profile or {}).get("total_events") or len(candidate_hits)) if rule.engine.value == "sigma" else 0,
-                    "candidate_event_evaluations": len(candidate_hits) if runnable.engine.value != "yara" else 0,
+                    "candidate_event_evaluations": len(candidate_hits),
                     "matches_found": len(hits),
                     "rules_runtime_error": 1 if runtime_errors_local else 0,
                     "runtime_error_events_count": len(runtime_errors_local),
                     "runtime_errors": runtime_errors_local,
-                    "events_scanned": len(candidate_hits) if runnable.engine.value != "yara" else 0,
+                    "events_scanned": len(candidate_hits),
                     "files_scanned": scanned_files,
                     "current_rule": rule.id if rule else None,
                     "current_rule_title": rule.title if rule else None,
@@ -10335,12 +10162,12 @@ def run_rule_on_case(rule_id: str | None, case_id: str, evidence_id: str | None 
             "runtime_errors_count": 1 if runtime_errors_local else 0,
             "runtime_error_events_count": len(runtime_errors_local),
             "runtime_errors": runtime_errors_local,
-            "scanned_events": len(candidate_hits) if runnable.engine.value != "yara" else 0,
+            "scanned_events": len(candidate_hits),
             "scanned_files": scanned_files,
             "skipped_files": skipped_files,
             "errors": errors,
             "warnings": warnings,
-            "candidate_events_prefiltered": len(candidate_hits) if runnable.engine.value != "yara" else 0,
+            "candidate_events_prefiltered": len(candidate_hits),
             "query_time_ms_total": query_time_ms_total,
             "write_time_ms_total": write_time_ms_total,
             "dedupe_time_ms_total": dedupe_time_ms_total,
@@ -10378,7 +10205,7 @@ def run_rule_on_case(rule_id: str | None, case_id: str, evidence_id: str | None 
                 errors=[str(exc)],
                 metadata_json={"dry_run": dry_run, "evidence_id": evidence_id, "rule_set_id": rule_set.id if rule_set else None, "current_phase": "failed"},
             )
-        severity = "warning" if runnable.engine.value == "yara" else "error"
+        severity = "error"
         log_activity(
             db,
             activity_type="rule_run_failed",

@@ -8,7 +8,6 @@ import app.parsers.windows.evtx  # noqa: F401
 import app.parsers.macos.triage  # noqa: F401
 import app.parsers.network.pcap  # noqa: F401
 import app.parsers.network.zeek  # noqa: F401
-import app.parsers.rules.yara  # noqa: F401
 import app.parsers.rules.sigma  # noqa: F401
 import app.parsers.memory.volatility  # noqa: F401
 import app.parsers.memory.memprocfs  # noqa: F401

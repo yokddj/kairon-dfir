@@ -151,8 +151,6 @@ from app.models.case_analysis_job import CaseAnalysisJob
 from app.models.artifact import Artifact
 from app.models.detection_result import DetectionResult
 from app.models.finding import Finding, FindingSeverity, FindingStatus
-from app.rules_engine.yara_engine import classify_yara_target, yara_available
-from app.rules_engine.yara_import import classify_yara_import, detect_yara_rules
 from app.rules_engine.heuristic import build_heuristic_query, load_heuristic_rule
 from app.rules_engine.sigma import build_sigma_query
 from app.api.routes_search import _build_text_query, _dashboards_discover_url, build_search_query, run_search
@@ -8426,11 +8424,6 @@ def test_sigma_and_heuristic_queries_build() -> None:
     assert heuristic["query"]["bool"]["should"]
 
 
-def test_rule_engine_auto_detection() -> None:
-    assert _detect_import_engine("rule.yara", "rule x {}", "auto").value == "yara"
-    assert _detect_import_engine("rule.yml", "title: test\ndetection:\n  selection:\n    EventID: 7045\n  condition: selection\n", "auto").value == "sigma"
-
-
 def test_delete_events_by_evidence_no_index(monkeypatch) -> None:
     class DummyIndices:
         def exists(self, index: str) -> bool:
@@ -8871,160 +8864,6 @@ def test_get_case_includes_detection_and_finding_counts(monkeypatch) -> None:
     case = get_case("case-1", DummyDb())
     assert case.detections_count == 3
     assert case.findings_count == 2
-
-
-def test_yara_engine_availability_shape() -> None:
-    assert isinstance(yara_available(), bool)
-
-
-def test_detect_yara_rules_supports_private_and_global_forms() -> None:
-    content = """
-rule A { condition: true }
-private rule B { condition: true }
-global rule C { condition: true }
-private global rule D { condition: true }
-"""
-    assert detect_yara_rules(content) == ["A", "B", "C", "D"]
-
-
-def test_classify_yara_import_marks_multi_rule_file_as_pack() -> None:
-    content = """/*
-YARA-Forge Version: 0.40.0
-Creation Date: 2026-05-03
-Number of Rules: 3
-*/
-rule REVERSINGLABS_Win32_Downloader_Dlmarlboro { condition: true }
-rule REVERSINGLABS_Linux_Backdoor_Chaosrat { condition: true }
-rule REVERSINGLABS_Linux_Backdoor_Autocolor { condition: true }
-"""
-    classified = classify_yara_import(content, "yara-rules-full.yar")
-    assert classified["is_rule_pack"] is True
-    assert classified["rules_count"] == 3
-    assert classified["metadata"]["number_of_rules"] == 3
-
-
-def test_import_multi_rule_yara_creates_rule_set_not_fake_single_rule(monkeypatch) -> None:
-    monkeypatch.setattr("app.api.routes_rules.log_activity", lambda *args, **kwargs: None)
-
-    class DummyDb:
-        def __init__(self):
-            self.added = []
-
-        def add(self, item):
-            self.added.append(item)
-
-        def commit(self):
-            return None
-
-        def refresh(self, item):  # noqa: ANN001
-            return None
-
-        def rollback(self):
-            return None
-
-    content = """/*
-YARA-Forge Version: 0.40.0
-Creation Date: 2026-05-03
-Number of Rules: 3
-*/
-rule REVERSINGLABS_Win32_Downloader_Dlmarlboro { condition: true }
-rule REVERSINGLABS_Linux_Backdoor_Chaosrat { condition: true }
-rule REVERSINGLABS_Linux_Backdoor_Autocolor { condition: true }
-"""
-    rules, rule_sets, errors = _import_content(DummyDb(), filename="yara-rules-full.yar", content=content, engine="auto", import_mode="auto", case_id=None, namespace=None, enabled=True)
-    assert errors == []
-    assert len(rules) == 0
-    assert len(rule_sets) == 1
-    assert rule_sets[0].rules_count == 3
-
-
-def test_import_single_rule_yara_creates_rule_only(monkeypatch) -> None:
-    monkeypatch.setattr("app.api.routes_rules.log_activity", lambda *args, **kwargs: None)
-
-    class DummyDb:
-        def __init__(self):
-            self.added = []
-
-        def add(self, item):
-            self.added.append(item)
-
-        def commit(self):
-            return None
-
-        def refresh(self, item):  # noqa: ANN001
-            return None
-
-        def rollback(self):
-            return None
-
-    content = "rule OnlyOne { condition: true }"
-    rules, rule_sets, errors = _import_content(DummyDb(), filename="single.yar", content=content, engine="auto", import_mode="auto", case_id=None, namespace=None, enabled=True)
-    assert errors == []
-    assert len(rules) == 1
-    assert rules[0].name == "OnlyOne"
-    assert rule_sets == []
-
-
-def test_list_rule_sets_returns_imported_item() -> None:
-    class DummyQuery:
-        def __init__(self, items):
-            self.items = items
-
-        def filter(self, *args, **kwargs):  # noqa: ANN002, ANN003
-            return self
-
-        def count(self):
-            return len(self.items)
-
-        def order_by(self, *args, **kwargs):  # noqa: ANN002, ANN003
-            return self
-
-        def offset(self, value):  # noqa: ANN001
-            return self
-
-        def limit(self, value):  # noqa: ANN001
-            return self
-
-        def all(self):
-            return self.items
-
-    class DummyDb:
-        def query(self, model):  # noqa: ANN001
-            now = datetime.now(UTC).replace(tzinfo=None)
-            return DummyQuery([SimpleNamespace(id="rs-1", case_id=None, name="yara-rules-full", engine="yara", namespace="yara_forge", description="Imported", source_filename="yara-rules-full.yar", content_path=None, content="rule A {}", rules_count=11658, enabled=True, severity=None, tags=["yara_forge"], metadata_json={"first_rules": ["A"]}, created_at=now, updated_at=now)])
-
-    response = list_rule_sets(scope="all", page=1, page_size=50, db=DummyDb())
-    assert response.total == 1
-    assert response.items[0].name == "yara-rules-full"
-
-
-def test_rules_engine_status_reports_yara_rule_pack_support() -> None:
-    status = rules_engine_status()
-    assert status["yara"].supports_rule_packs is True
-
-
-def test_yara_classifies_mftecmd_csv_as_parsed_output() -> None:
-    target = classify_yara_target(Path("/tmp/parsed/MFTECmd_Output.csv"))
-    assert target["candidate_type"] == "parsed_output"
-    assert target["scan"] is False
-
-
-def test_yara_classifies_exe_as_executable() -> None:
-    target = classify_yara_target(Path("/tmp/sample.exe"))
-    assert target["candidate_type"] == "executable"
-    assert target["scan"] is True
-
-
-def test_yara_classifies_ps1_as_script() -> None:
-    target = classify_yara_target(Path("/tmp/evil.ps1"))
-    assert target["candidate_type"] == "script"
-    assert target["scan"] is True
-
-
-def test_yara_classifies_zip_as_archive_and_skips_by_default() -> None:
-    target = classify_yara_target(Path("/tmp/original/malware.zip"))
-    assert target["candidate_type"] == "archive"
-    assert target["scan"] is False
 
 
 def test_semi_auto_analysis_generates_expected_sections(monkeypatch) -> None:
