@@ -36,12 +36,16 @@ const ACTIVE_RUN_STATUSES = new Set(["queued", "running", "pending"]);
 
 export function coverageTotals(coverage: unknown): { evaluable: number; blocked: number; reasons: Array<{ reason: string; count: number }> } {
   const data = (coverage ?? {}) as Record<string, unknown>;
-  const evaluable = Number(data.executable_rules ?? data.executable ?? 0) || 0;
-  const byReason = (data.unsupported_by_feature ?? data.by_feature ?? {}) as Record<string, number>;
-  const reasons = Object.entries(byReason)
+  const support = (data.by_support_status ?? {}) as Record<string, number>;
+  const evaluable = (Number(support.fully_supported) || 0) + (Number(support.partially_supported) || 0);
+  const blocked = Number(support.unsupported) || 0;
+  // by_compile_status counts every rule; the compiled bucket is the evaluable
+  // ones and is not a reason for anything, so it is dropped from the breakdown.
+  const byStatus = (data.by_compile_status ?? {}) as Record<string, number>;
+  const reasons = Object.entries(byStatus)
+    .filter(([status]) => status !== "compiled")
     .map(([reason, count]) => ({ reason, count: Number(count) || 0 }))
     .sort((a, b) => b.count - a.count);
-  const blocked = Number(data.not_executable_rules ?? 0) || reasons.reduce((total, item) => total + item.count, 0);
   return { evaluable, blocked, reasons };
 }
 

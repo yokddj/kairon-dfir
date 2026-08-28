@@ -41,7 +41,10 @@ describe("DetectionRulesPanel", () => {
       { id: "r1", name: "one", title: "Rule one", engine: "sigma", severity: "high", enabled: true },
       { id: "r2", name: "two", title: "Rule two", engine: "sigma", severity: "low", enabled: false },
     ] });
-    getSigmaCoverageMock.mockResolvedValue({ executable_rules: 2279, not_executable_rules: 1004, unsupported_by_feature: { unmapped_field: 858, keyword_only_detection: 58 } });
+    getSigmaCoverageMock.mockResolvedValue({
+      by_support_status: { fully_supported: 1810, partially_supported: 469, unsupported: 1004 },
+      by_compile_status: { compiled: 2279, unmapped_field: 858, keyword_only_detection: 58 },
+    });
     listCaseRuleRunsMock.mockResolvedValue([]);
   });
 
@@ -99,14 +102,15 @@ describe("DetectionRulesPanel", () => {
 
 describe("coverageTotals", () => {
   it("ranks the reasons by cost", () => {
-    const totals = coverageTotals({ executable_rules: 10, not_executable_rules: 5, unsupported_by_feature: { a: 2, b: 3 } });
+    const totals = coverageTotals({ by_support_status: { fully_supported: 7, partially_supported: 3, unsupported: 5 }, by_compile_status: { compiled: 10, a: 2, b: 3 } });
     expect(totals.reasons.map((row) => row.reason)).toEqual(["b", "a"]);
     expect(totals.evaluable).toBe(10);
+    expect(totals.blocked).toBe(5);
   });
 
-  it("derives the blocked count when the payload omits it", () => {
-    const totals = coverageTotals({ executable_rules: 1, unsupported_by_feature: { a: 2, b: 3 } });
-    expect(totals.blocked).toBe(5);
+  it("never counts the compiled bucket as a reason", () => {
+    const totals = coverageTotals({ by_support_status: { fully_supported: 10, unsupported: 5 }, by_compile_status: { compiled: 10, a: 5 } });
+    expect(totals.reasons.map((row) => row.reason)).toEqual(["a"]);
   });
 
   it("survives an empty payload", () => {
