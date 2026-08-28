@@ -555,6 +555,27 @@ def _minimal_volatility_env() -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
+# Formats that, on their own, identify a platform. Anything outside this
+# table (notably "raw_candidate", which the ingest detector writes to mean
+# "no signature found in the first 1 MiB", i.e. a non-answer) leaves the
+# platform unknown and must never outrank a later, deeper identification.
+# execute_memory_preparation reads this to decide whether the worker-side
+# probe may overwrite evidence.detected_format, so the two stay in step.
+#
+# "linux_banner_scan" is persisted by a prior worker-side
+# _bounded_linux_banner_scan success, so a later call -- even from the
+# backend process, where Volatility is absent and the stage 4 fallback is a
+# no-op -- still resolves to Linux without re-scanning the image.
+PLATFORM_RESOLVING_FORMATS: dict[str, tuple["PlatformFamily", "Architecture", "ProbeConfidence"]] = {
+    "windows_crash_dump": (PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.HIGH),
+    "hibernation": (PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.MEDIUM),
+    "vmware_vmem": (PlatformFamily.WINDOWS, Architecture.UNKNOWN, ProbeConfidence.MEDIUM),
+    "lime": (PlatformFamily.LINUX, Architecture.X64, ProbeConfidence.HIGH),
+    "elf_core": (PlatformFamily.LINUX, Architecture.UNKNOWN, ProbeConfidence.MEDIUM),
+    "linux_banner_scan": (PlatformFamily.LINUX, Architecture.UNKNOWN, ProbeConfidence.MEDIUM),
+}
+
+
 def probe_memory_platform(
     *,
     canonical_path: Path,
@@ -597,29 +618,9 @@ def probe_memory_platform(
     # Stage 2: detected_format (upload probe result).
     if family == PlatformFamily.UNKNOWN and detected_format:
         fmt_lower = detected_format.lower().strip()
-        if fmt_lower in ("windows_crash_dump",):
-            family, arch, confidence = PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.HIGH
-            reason = f"detected_format:{fmt_lower}"
-        elif fmt_lower in ("hibernation",):
-            family, arch, confidence = PlatformFamily.WINDOWS, Architecture.X64, ProbeConfidence.MEDIUM
-            reason = f"detected_format:{fmt_lower}"
-        elif fmt_lower in ("lime",):
-            family, arch, confidence = PlatformFamily.LINUX, Architecture.X64, ProbeConfidence.HIGH
-            reason = f"detected_format:{fmt_lower}"
-        elif fmt_lower in ("elf_core",):
-            family, arch, confidence = PlatformFamily.LINUX, Architecture.UNKNOWN, ProbeConfidence.MEDIUM
-            reason = f"detected_format:{fmt_lower}"
-        elif fmt_lower in ("vmware_vmem",):
-            family, arch, confidence = PlatformFamily.WINDOWS, Architecture.UNKNOWN, ProbeConfidence.MEDIUM
-            reason = f"detected_format:{fmt_lower}"
-        elif fmt_lower in ("linux_banner_scan",):
-            # Persisted by a prior worker-side _bounded_linux_banner_scan
-            # success (see execute_memory_preparation) -- reuse it here so
-            # a later call to this function, even one made from the
-            # backend process (no Volatility installed, stage 4 below is
-            # a no-op there), still resolves to Linux without re-scanning
-            # the image.
-            family, arch, confidence = PlatformFamily.LINUX, Architecture.UNKNOWN, ProbeConfidence.MEDIUM
+        resolved = PLATFORM_RESOLVING_FORMATS.get(fmt_lower)
+        if resolved is not None:
+            family, arch, confidence = resolved
             reason = f"detected_format:{fmt_lower}"
 
     # Stage 3: Historical SHA match (prior successful preparation).

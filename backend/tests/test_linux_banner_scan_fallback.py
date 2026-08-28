@@ -88,3 +88,50 @@ def test_probe_memory_platform_stays_unknown_without_banner_or_format_hint(tmp_p
     )
 
     assert result.platform is PlatformFamily.UNKNOWN
+
+
+def test_raw_candidate_does_not_resolve_a_platform() -> None:
+    """"raw_candidate" is what the ingest detector writes when it finds no
+    signature in the first 1 MiB. It is a non-answer, so it must not sit in
+    the table that lets a stored format resolve a platform on its own -- that
+    membership is what decides whether the worker probe may overwrite it."""
+    from app.services.memory.platform import PLATFORM_RESOLVING_FORMATS
+
+    assert "raw_candidate" not in PLATFORM_RESOLVING_FORMATS
+    assert "linux_banner_scan" in PLATFORM_RESOLVING_FORMATS
+
+
+def test_probe_memory_platform_stays_unknown_for_raw_candidate(tmp_path: Path) -> None:
+    """A Linux raw dump is stored as detected_format="raw_candidate". On its
+    own that must leave the platform unknown, so the deeper banner scan is the
+    thing that identifies the image."""
+    image = tmp_path / "victoria.img"
+    image.write_bytes(b"\x00" * 8192)
+
+    result = probe_memory_platform(
+        canonical_path=image,
+        detected_format="raw_candidate",
+        use_volatility_fallback=False,
+    )
+
+    assert result.platform is PlatformFamily.UNKNOWN
+
+
+def test_worker_probe_overwrites_an_inconclusive_stored_format() -> None:
+    """The regression this file's raw_candidate cases describe: the worker
+    probe identified Linux from the kernel banner, but the stored
+    "raw_candidate" was non-empty, so its result was discarded and the static
+    re-probe reported PLATFORM_NOT_IDENTIFIED on every one of many retries."""
+    from app.services.memory.preparation_runtime import _probe_may_overwrite_detected_format
+
+    assert _probe_may_overwrite_detected_format("raw_candidate", "linux") is True
+    assert _probe_may_overwrite_detected_format(None, "linux") is True
+    assert _probe_may_overwrite_detected_format("", "linux") is True
+
+    # A format that already identifies a platform stands.
+    assert _probe_may_overwrite_detected_format("linux_banner_scan", "linux") is False
+    assert _probe_may_overwrite_detected_format("windows_crash_dump", "windows") is False
+
+    # An inconclusive probe never overwrites anything.
+    assert _probe_may_overwrite_detected_format("raw_candidate", "unknown") is False
+    assert _probe_may_overwrite_detected_format("raw_candidate", None) is False
