@@ -46,12 +46,12 @@ export function reasonLabel(reason: string): string {
 type Props = {
   open: boolean;
   onClose: () => void;
-  engine: "sigma" | "yara";
+  engine?: "sigma";
   namespace?: string;
   caseId?: string;
 };
 
-export function RuleImportWizard({ open, onClose, engine, namespace, caseId }: Props) {
+export function RuleImportWizard({ open, onClose, engine = "sigma", namespace, caseId }: Props) {
   const queryClient = useQueryClient();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [step, setStep] = useState<Step>("choose");
@@ -75,8 +75,8 @@ export function RuleImportWizard({ open, onClose, engine, namespace, caseId }: P
     mutationFn: async (selected: File): Promise<string | null> => {
       const options = {
         engine,
-        import_mode: engine === "yara" ? (isArchive(selected) ? "rule_pack" : "auto") : "split",
-        case_id: engine === "yara" ? caseId || undefined : undefined,
+        import_mode: "split",
+        case_id: undefined,
         namespace: namespace || undefined,
         enabled: true,
       };
@@ -123,7 +123,7 @@ export function RuleImportWizard({ open, onClose, engine, namespace, caseId }: P
       <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl border border-line bg-abyss p-6">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-lg font-semibold text-ink">Import {engine === "sigma" ? "Sigma" : "YARA"} rules</h2>
+            <h2 className="text-lg font-semibold text-ink">Import Sigma rules</h2>
             <p className="mt-1 text-xs text-muted">
               Rules are stored once and reused for every run. You never upload them again to re-run them.
             </p>

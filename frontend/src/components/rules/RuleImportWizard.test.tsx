@@ -37,7 +37,7 @@ function run(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function renderWizard(engine: "sigma" | "yara" = "sigma") {
+function renderWizard(engine: "sigma" = "sigma") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>

@@ -7,7 +7,6 @@ import {
   Home,
   KeyRound,
   LogOut,
-  ScrollText,
   Search,
   ShieldAlert,
   UserCog,
@@ -176,22 +175,6 @@ export default function Sidebar() {
         >
           <Database size={16} />
           Cases
-        </NavLink>
-
-        {/* Detection rules are a library, not case data: they are imported once
-            and reused across every case, so this sits alongside Cases rather
-            than inside the per-case section. Without it the page was reachable
-            only by typing the URL. */}
-        <NavLink
-          to="/rules"
-          className={({ isActive }) =>
-            `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
-              isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
-            }`
-          }
-        >
-          <ScrollText size={16} />
-          Rules
         </NavLink>
 
         <NavigationSection title="Investigation" items={INVESTIGATION_ITEMS} activeCaseId={activeCaseId} />
