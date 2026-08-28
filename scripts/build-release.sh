@@ -3,7 +3,7 @@ set -euo pipefail
 # Kairon Release Build Script
 # Usage: bash scripts/build-release.sh [VERSION]
 
-VERSION="${1:-0.9.0-beta}"
+VERSION="${1:-1.1.0}"
 KAIRON_COMMIT="$(git rev-parse HEAD)"
 KAIRON_VERSION="$VERSION"
 SOURCE_DATE_EPOCH="$(git show -s --format=%ct HEAD)"
