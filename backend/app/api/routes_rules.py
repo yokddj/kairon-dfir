@@ -27,6 +27,7 @@ from app.models.rule_set import RuleSet
 from app.models.rule_run import RuleRun, RuleRunStatus
 from app.rules_engine.heuristic import load_heuristic_rule
 from app.rules_engine.sigma import (
+    _mapped_sigma_fields,
     analyze_sigma_engine_compatibility,
     compile_sigma_rule,
     ENGINE_COMPATIBILITY_VERSION,
@@ -1387,9 +1388,26 @@ def _dedupe_rules_for_execution(rules: list[Rule]) -> tuple[list[Rule], dict]:
 def _sigma_rule_support_record(rule: Rule) -> dict:
     metadata = dict(rule.metadata_json or {})
     compilation = dict(metadata.get("sigma_compilation") or {})
-    engine_compatibility = dict(metadata.get("engine_compatibility") or compilation.get("engine_compatibility") or {})
+    # Recomputed from the rule's own content rather than read from the metadata
+    # written at import time. A coverage report is a claim about what this
+    # engine will do now: served from stored analysis it froze at whatever the
+    # engine could manage on the day the rules were imported, so improving a
+    # field mapping or a modifier left the report under-reporting by hundreds
+    # of rules while the runs themselves had already moved on.
+    engine_compatibility: dict = {}
+    try:
+        engine_compatibility = analyze_sigma_engine_compatibility(yaml.safe_load(rule.content) or {})
+    except Exception:  # noqa: BLE001
+        engine_compatibility = dict(metadata.get("engine_compatibility") or compilation.get("engine_compatibility") or {})
     logsource = dict(compilation.get("sigma_logsource") or engine_compatibility.get("logsource") or metadata.get("logsource") or {})
-    compile_status = str(compilation.get("compile_status") or metadata.get("compile_status") or "").strip()
+    # Derived from the fresh analysis when there is one, for the third time in
+    # this function and the same reason: a rule the engine can evaluate today
+    # must not be reported as uncompilable because it was not evaluable on the
+    # day it was imported.
+    if engine_compatibility:
+        compile_status = "compiled" if engine_compatibility.get("executable_by_current_engine") else str(engine_compatibility.get("engine_status") or "not_compiled")
+    else:
+        compile_status = str(compilation.get("compile_status") or metadata.get("compile_status") or "").strip()
     compile_error = compilation.get("compile_error") or metadata.get("compile_error")
     executable = bool(engine_compatibility.get("executable_by_current_engine")) if engine_compatibility else compile_status == "compiled"
     required_fields = [
@@ -1401,7 +1419,13 @@ def _sigma_rule_support_record(rule: Rule) -> dict:
             or []
         )
     ]
-    field_mappings = dict(compilation.get("sigma_field_mappings") or {})
+    # Recomputed alongside the compatibility above, and for the same reason:
+    # served from the import-time metadata, a field mapped since then still
+    # reads as unmapped, so the report named fields as blockers that the engine
+    # had already learned to answer.
+    field_mappings = {field: _mapped_sigma_fields(field)[0] for field in required_fields}
+    if not field_mappings:
+        field_mappings = dict(compilation.get("sigma_field_mappings") or {})
     unsupported_features = [str(item) for item in (compilation.get("unsupported_features") or engine_compatibility.get("unsupported_features") or [])]
     compile_warnings = [str(item) for item in (compilation.get("compile_warnings") or engine_compatibility.get("expansion_warnings") or [])]
 
@@ -1434,7 +1458,7 @@ def _sigma_rule_support_record(rule: Rule) -> dict:
     if generic_mapping_fields:
         risk_reasons.append("generic_multi_field_mapping")
 
-    if compile_status != "compiled" or not executable or compile_error:
+    if compile_status != "compiled" or not executable or (compile_error and not engine_compatibility):
         support_status = "unsupported"
     elif risk_reasons:
         support_status = "partially_supported"
