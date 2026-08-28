@@ -99,6 +99,21 @@ export default function Detections() {
   const [groupPage, setGroupPage] = useState(1);
   const [groupTab, setGroupTab] = useState<GroupDetailTab>("overview");
   const [orphanedOnly, setOrphanedOnly] = useState(searchParams.get("orphaned_only") === "true");
+  // Filters that arrive by deep link (e.g. from an evidence page) rather than
+  // from a control on this page. They stay honoured, but must be visible and
+  // clearable so a filtered list never looks like an empty case.
+  const linkFilters = useMemo(
+    () =>
+      [
+        { label: "Rule run", value: ruleRunIdFilter, clear: () => setRuleRunIdFilter("") },
+        { label: "Rule", value: ruleIdQuery, clear: () => setRuleIdQuery("") },
+        { label: "Import run", value: importRunIdFilter, clear: () => setImportRunIdFilter("") },
+        { label: "Pack", value: sourcePackFilter, clear: () => setSourcePackFilter("") },
+        { label: "Run type", value: runTypeFilter, clear: () => setRunTypeFilter("") },
+      ].filter((item) => Boolean(item.value)),
+    [ruleRunIdFilter, ruleIdQuery, importRunIdFilter, sourcePackFilter, runTypeFilter],
+  );
+
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewEvent, setPreviewEvent] = useState<Record<string, unknown> | null>(null);
@@ -117,8 +132,12 @@ export default function Detections() {
   const [deleteConfirmText, setDeleteConfirmText] = useState("");
   const selectedCaseId = caseId || "";
 
+  // The global case selector is the only way to change case here, so this view
+  // must follow it rather than latch onto whatever was selected first.
   useEffect(() => {
-    setCaseId((current) => current || activeCaseId);
+    if (activeCaseId) {
+      setCaseId(activeCaseId);
+    }
   }, [activeCaseId]);
 
   useEffect(() => {
@@ -133,7 +152,9 @@ export default function Detections() {
   }, [selectedEvidenceId]);
 
   useEffect(() => {
-    setHostFilter((current) => current || selectedHost);
+    if (selectedHost) {
+      setHostFilter(selectedHost);
+    }
   }, [selectedHost]);
 
   useEffect(() => {
@@ -659,7 +680,7 @@ export default function Detections() {
         {!selectedCaseId ? <p className="mt-2 text-sm text-amber-300">All cases selected. Results include detections across the workspace.</p> : null}
         {selectedHost || selectedEvidenceId ? (
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted">
-            <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{selectedHost ? `Host filter not supported in this view yet: ${selectedHost}` : "Host filter: All hosts"}</span>
+            <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{hostFilter ? `Host filter: ${hostFilter}` : "Host filter: All hosts"}</span>
             <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">{evidenceFilter ? `Evidence filter: ${evidenceFilter.slice(0, 8)}` : "Evidence filter: All evidence"}</span>
           </div>
         ) : null}
@@ -680,19 +701,6 @@ export default function Detections() {
           </div>
         ) : null}
         <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <div className="rounded-2xl border border-line bg-abyss/80 p-3">
-            <label className="block">
-              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Case</span>
-              <select value={selectedCaseId} onChange={(event) => setCaseId(event.target.value)} className="w-full rounded-xl border border-line bg-panel/70 px-3 py-2 text-sm">
-                <option value="">All cases</option>
-                {(cases ?? []).map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
           <SearchableFacetSelect label="Source" value={source} onChange={setSource} options={(facetsQuery.data?.sources ?? []).map((item) => ({ value: item.value, count: item.count }))} />
           <SearchableFacetSelect label="Engine" value={engine} onChange={setEngine} options={(facetsQuery.data?.engines ?? []).map((item) => ({ value: item.value, count: item.count }))} />
           <SearchableFacetSelect label="Severity" value={severity} onChange={setSeverity} options={(facetsQuery.data?.severities ?? []).map((item) => ({ value: item.value, count: item.count }))} />
@@ -703,45 +711,7 @@ export default function Detections() {
           <SearchableFacetSelect label="Matched object" value={matchedObjectType} onChange={setMatchedObjectType} options={(facetsQuery.data?.matched_object_types ?? []).map((item) => ({ value: item.value, count: item.count }))} />
           <SearchableFacetSelect label="Has linked event" value={linkedEventFilter} onChange={setLinkedEventFilter} options={(facetsQuery.data?.has_linked_event ?? []).map((item) => ({ value: String(item.value), label: item.value ? "Yes" : "No", count: item.count }))} />
           <SearchableFacetSelect label="Has file target" value={fileTargetFilter} onChange={setFileTargetFilter} options={(facetsQuery.data?.has_file_target ?? []).map((item) => ({ value: String(item.value), label: item.value ? "Yes" : "No", count: item.count }))} />
-          <div className="rounded-2xl border border-line bg-abyss/80 p-3">
-            <label className="block">
-              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Rule ID</span>
-              <input value={ruleIdQuery} onChange={(event) => setRuleIdQuery(event.target.value)} className="w-full rounded-xl border border-line bg-panel/70 px-3 py-2 text-sm" />
-            </label>
-          </div>
-          <div className="rounded-2xl border border-line bg-abyss/80 p-3">
-            <label className="block">
-              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Rule run ID</span>
-              <input value={ruleRunIdFilter} onChange={(event) => setRuleRunIdFilter(event.target.value)} className="w-full rounded-xl border border-line bg-panel/70 px-3 py-2 text-sm" />
-            </label>
-          </div>
-          <div className="rounded-2xl border border-line bg-abyss/80 p-3">
-            <label className="block">
-              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Import run ID</span>
-              <input value={importRunIdFilter} onChange={(event) => setImportRunIdFilter(event.target.value)} className="w-full rounded-xl border border-line bg-panel/70 px-3 py-2 text-sm" />
-            </label>
-          </div>
-          <div className="rounded-2xl border border-line bg-abyss/80 p-3">
-            <label className="block">
-              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Source pack</span>
-              <input value={sourcePackFilter} onChange={(event) => setSourcePackFilter(event.target.value)} className="w-full rounded-xl border border-line bg-panel/70 px-3 py-2 text-sm" />
-            </label>
-          </div>
-          <div className="rounded-2xl border border-line bg-abyss/80 p-3">
-            <label className="block">
-              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Run type</span>
-              <select value={runTypeFilter} onChange={(event) => setRunTypeFilter(event.target.value)} className="w-full rounded-xl border border-line bg-panel/70 px-3 py-2 text-sm">
-                <option value="">Any</option>
-                <option value="smoke">Smoke</option>
-              </select>
-            </label>
-          </div>
-          <div className="rounded-2xl border border-line bg-abyss/80 p-3">
-            <label className="block">
-              <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Artifact type</span>
-              <input value={artifactTypeFilter} onChange={(event) => setArtifactTypeFilter(event.target.value)} className="w-full rounded-xl border border-line bg-panel/70 px-3 py-2 text-sm" />
-            </label>
-          </div>
+          <SearchableFacetSelect label="Artifact type" value={artifactTypeFilter} onChange={setArtifactTypeFilter} options={(facetsQuery.data?.artifacts ?? []).map((item) => ({ value: item.value, count: item.count }))} />
           <div className="rounded-2xl border border-line bg-abyss/80 p-3">
             <label className="block">
               <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search</span>
@@ -749,6 +719,24 @@ export default function Detections() {
             </label>
           </div>
         </div>
+        {linkFilters.length ? (
+          <div className="mt-4 flex flex-wrap items-center gap-2">
+            <span className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Linked from</span>
+            {linkFilters.map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                onClick={item.clear}
+                title={`Clear ${item.label} filter`}
+                className="flex items-center gap-2 rounded-full border border-line bg-abyss/80 px-3 py-1 text-xs"
+              >
+                <span className="text-muted">{item.label}</span>
+                <span className="font-mono">{item.value.slice(0, 8)}</span>
+                <span aria-hidden="true">&times;</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <label className="text-sm text-muted">
             Sort
