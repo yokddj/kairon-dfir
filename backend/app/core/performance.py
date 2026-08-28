@@ -60,7 +60,6 @@ SETTING_ALIASES = {
     "WORKER_SCALE": "worker_concurrency",
     "DOCKER_CPU_LIMIT": "docker_cpu_limit",
     "DOCKER_MEMORY_LIMIT": "docker_memory_limit",
-    "OPENSEARCH_DASHBOARDS_PUBLIC_URL": "opensearch_dashboards_public_url",
     "REPORT_BRAND_NAME": "report_brand_name",
     "REPORT_BRAND_SUBTITLE": "report_brand_subtitle",
     "REPORT_BRAND_PRIMARY_COLOR": "report_brand_primary_color",

@@ -488,16 +488,6 @@ export default function Detections() {
     }
   }
 
-  async function openDetectionInSiem(detection: (typeof detections)[number]) {
-    if (detection.target_type !== "event" || (!detection.event_id && !detection.opensearch_id)) return;
-    const links = await api.siemExternalLinks({
-      case_id: detection.case_id,
-      event_id: detection.event_id || undefined,
-      detection_id: detection.id,
-    });
-    window.open(links.discover_url, "_blank", "noopener,noreferrer");
-  }
-
   function renderDetectionActions(detection: (typeof detections)[number]) {
     return (
       <>
@@ -520,9 +510,6 @@ export default function Detections() {
           <>
             <button onClick={() => void openEvent(detection.id)} className="rounded-2xl border border-line bg-panel/40 px-4 py-2 text-sm text-muted">
               Open event
-            </button>
-            <button onClick={() => void openDetectionInSiem(detection)} className="rounded-2xl border border-line bg-panel/40 px-4 py-2 text-sm text-muted">
-              Open in OpenSearch
             </button>
           </>
         ) : (

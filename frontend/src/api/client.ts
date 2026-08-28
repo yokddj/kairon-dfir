@@ -4894,87 +4894,9 @@ export type SiemFieldFilter = {
 };
 
 export type SiemExternalLinks = {
-  dashboards_home: string;
-  discover_url: string;
-  index_pattern: string;
   case_filter: string;
   kql_or_lucene_query: string;
   copyable_filters: Record<string, string>;
-};
-
-export type SiemExternalStatus = {
-  enabled: boolean;
-  internal_url: string;
-  public_url: string;
-  index_pattern: string;
-  time_field: string;
-  available: boolean;
-  error: string | null;
-  case_filter: string;
-};
-
-export type SiemExternalSetup = {
-  dashboards_available: boolean;
-  opensearch_indices_found: boolean;
-  indices: string[];
-  data_view_created: boolean;
-  data_view_exists: boolean;
-  manual_steps_required: boolean;
-  manual_steps: string[];
-};
-
-export type SiemExternalDiagnostics = {
-  opensearch: {
-    available: boolean;
-    indices: string[];
-    docs_count: number;
-  };
-  dashboards: {
-    available: boolean;
-    public_url: string;
-    internal_url: string;
-    data_view: {
-      exists: boolean;
-      title: string;
-      time_field: string;
-    };
-    error?: string | null;
-  };
-  case: {
-    case_id: string | null;
-    events_count: number;
-    filter: string;
-  };
-};
-
-export type AdminOpenSearchDashboardsStatus = {
-  opensearch: {
-    available: boolean;
-    events_index_pattern: string;
-    events_count: number;
-    indices: string[];
-  };
-  dashboards: {
-    available: boolean;
-    url: string;
-    data_view_exists: boolean;
-    data_view_id: string | null;
-    data_view_title: string;
-    time_field: string;
-    warnings: string[];
-    recommended_columns: string[];
-  };
-};
-
-export type AdminOpenSearchDashboardsBootstrapResponse = {
-  created: boolean;
-  updated: boolean;
-  data_view_id: string | null;
-  data_view_title: string;
-  time_field: string;
-  message: string;
-  warnings: string[];
-  status: AdminOpenSearchDashboardsStatus;
 };
 
 export type EvidenceManifest = {
@@ -7722,12 +7644,6 @@ export const api = {
   },
   siem: (payload: Record<string, unknown>) => request<SearchResponse>("/siem", { method: "POST", body: JSON.stringify(payload) }),
   siemFields: (caseId?: string) => request<SiemFieldsResponse>(`/siem/fields${caseId ? `?case_id=${caseId}` : ""}`),
-  siemExternalStatus: (caseId?: string) => request<SiemExternalStatus>(`/siem/external/status${caseId ? `?case_id=${caseId}` : ""}`),
-  siemExternalSetup: () => request<SiemExternalSetup>("/siem/external/setup", { method: "POST" }),
-  siemExternalDiagnostics: (caseId?: string) => request<SiemExternalDiagnostics>(`/siem/external/diagnostics${caseId ? `?case_id=${caseId}` : ""}`),
-  getAdminOpenSearchDashboardsStatus: () => request<AdminOpenSearchDashboardsStatus>("/admin/opensearch-dashboards/status"),
-  bootstrapAdminOpenSearchDashboards: (payload?: { repair?: boolean }) =>
-    request<AdminOpenSearchDashboardsBootstrapResponse>("/admin/opensearch-dashboards/bootstrap", { method: "POST", body: JSON.stringify(payload ?? {}) }),
   siemExternalLinks: (params?: { case_id?: string; query?: string; artifact_type?: string; event_id?: string; detection_id?: string }) => {
     const query = new URLSearchParams();
     if (params?.case_id) query.append("case_id", params.case_id);

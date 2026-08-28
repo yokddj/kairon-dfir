@@ -153,7 +153,7 @@ from app.models.detection_result import DetectionResult
 from app.models.finding import Finding, FindingSeverity, FindingStatus
 from app.rules_engine.heuristic import build_heuristic_query, load_heuristic_rule
 from app.rules_engine.sigma import build_sigma_query
-from app.api.routes_search import _build_text_query, _dashboards_discover_url, build_search_query, run_search
+from app.api.routes_search import _build_text_query, build_search_query, run_search
 from app.api.routes_rules import _detect_import_engine, _import_content, list_rule_sets, rules_engine_status
 from app.api.routes_system import patch_system_settings, system_status
 from app.models.evidence import EvidenceType
@@ -8446,15 +8446,6 @@ def test_search_without_indices_returns_zero(monkeypatch) -> None:
     response = run_search(SearchRequest(query="powershell"), timeline=False)
     assert response.total == 0
     assert response.items == []
-
-
-def test_dashboards_discover_url_uses_safe_rison_state() -> None:
-    url = _dashboards_discover_url(case_id="case-1", query='process.name:"powershell.exe"')
-    assert "/app/discover#/" in url
-    assert "hideChart%3A%21t" in url
-    assert "index%3A%27dfir-events%27" in url
-    assert "language%3Akuery" in url
-    assert "case_id%3A%22case-1%22" in url
 
 
 def test_search_request_pagination_validation() -> None:

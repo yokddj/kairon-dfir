@@ -126,7 +126,6 @@ export default function CaseDetail() {
   const activityQuery = useQuery({ queryKey: ["case-activity", caseId], queryFn: () => api.listCaseActivity(caseId), enabled: Boolean(caseId), staleTime: 10_000, refetchOnWindowFocus: false });
   const processingQuery = useQuery({ queryKey: ["case-processing", caseId, activeHostId, activeHost], queryFn: () => api.getCaseProcessing(caseId, { host_id: activeHostId || undefined, host: activeHost || undefined }), enabled: Boolean(caseId), staleTime: 5_000, refetchInterval: tab === "processing" ? 5000 : false, refetchOnWindowFocus: false });
   const hostNameById = useMemo(() => new Map((caseContext?.hosts ?? []).map((host) => [host.id, host.display_name || host.canonical_name])), [caseContext?.hosts]);
-  const siemLinksQuery = useQuery({ queryKey: ["siem-external-links", "case", caseId], queryFn: () => api.siemExternalLinks({ case_id: caseId }), enabled: Boolean(caseId), staleTime: 30_000, refetchOnWindowFocus: false });
   const searchQuery = useQuery({
     queryKey: ["case-search", caseId, query, searchEventId, searchEvidenceId, activeHostId, activeHost],
     queryFn: () =>
@@ -392,11 +391,6 @@ export default function CaseDetail() {
               <Link to={`/cases/${caseId}/timeline`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Timeline</Link>
               <Link to={`/cases/${caseId}/artifacts`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Open Artifact Search</Link>
               <Link to={`/cases/${caseId}/findings`} className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">Run correlation in Findings</Link>
-              {siemLinksQuery.data?.discover_url ? (
-                <a href={siemLinksQuery.data.discover_url} target="_blank" rel="noreferrer" className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">
-                  Open in OpenSearch
-                </a>
-              ) : null}
             </div>
             <div className="mt-4 flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-abyss/70 p-4">
               <input

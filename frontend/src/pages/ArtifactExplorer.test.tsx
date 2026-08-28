@@ -385,7 +385,8 @@ describe("ArtifactExplorer", () => {
     renderPage();
     expect(await screen.findByRole("heading", { name: "Artifact Views" })).toBeInTheDocument();
     expect(screen.getByText(/Open focused views for parsed artifact families/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /Open selected artifact in OpenSearch/i })).toBeInTheDocument();
+    // Kairon no longer links out to the OpenSearch Dashboards console.
+    expect(screen.queryByRole("link", { name: /OpenSearch/i })).not.toBeInTheDocument();
   });
 
   it("uses user-facing artifact view labels and hides registry_persistence from the main selector", async () => {

@@ -68,7 +68,6 @@ DEPLOYMENT_MODE=""
 PUBLIC_URL=""
 AUTH_ENABLED="true"
 ENABLE_MEMORY="${KAIRON_ENABLE_MEMORY:-false}"
-ENABLE_DASHBOARDS="${KAIRON_ENABLE_DASHBOARDS:-false}"
 BOOTSTRAP_ADMIN_USERNAME=""
 BOOTSTRAP_ADMIN_EMAIL=""
 INTERACTIVE=true
@@ -92,7 +91,6 @@ Options:
   --mode MODE              Deployment mode: localhost, lan, https.
   --url URL                Public URL (e.g. http://localhost:5173).
   --memory                 Enable memory analysis feature.
-  --dashboards             Enable OpenSearch Dashboards.
   --admin-user USERNAME    Bootstrap admin username.
   --admin-email EMAIL      Bootstrap admin email.
   --no-build               Skip Docker image build (warns about stale images).
@@ -112,7 +110,6 @@ Environment variables (non-interactive mode):
   KAIRON_DEPLOYMENT_MODE
   KAIRON_PUBLIC_URL
   KAIRON_ENABLE_MEMORY
-  KAIRON_ENABLE_DASHBOARDS
 EOF
   exit 0
 }
@@ -174,7 +171,6 @@ preserve_secrets_from_env() {
 
   # Read existing feature flags
   ENABLE_MEMORY_EXISTING=$(grep '^KAIRON_ENABLE_MEMORY=' "$env_file" | sed 's/^KAIRON_ENABLE_MEMORY=//' || echo "false")
-  ENABLE_DASHBOARDS_EXISTING=$(grep '^KAIRON_ENABLE_DASHBOARDS=' "$env_file" | sed 's/^KAIRON_ENABLE_DASHBOARDS=//' || echo "false")
 
   # Preserved across runs so the host directories' group ownership (set by
   # prepare_memory_storage_permissions.sh) and docker-compose's
@@ -187,7 +183,6 @@ preserve_secrets_from_env() {
   export OPENSEARCH_INITIAL_ADMIN_PASSWORD_EXISTING
   export MEMORY_EVIDENCE_SHARED_GID_EXISTING
   [[ -n "$ENABLE_MEMORY_EXISTING" ]] && ENABLE_MEMORY="$ENABLE_MEMORY_EXISTING"
-  [[ -n "$ENABLE_DASHBOARDS_EXISTING" ]] && ENABLE_DASHBOARDS="$ENABLE_DASHBOARDS_EXISTING"
 }
 
 write_env() {
@@ -196,7 +191,6 @@ write_env() {
   timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
   local derived_url="$PUBLIC_URL"
-  local derived_dashboards_url="http://localhost:5601"
   if [[ -z "$derived_url" ]]; then
     case "$DEPLOYMENT_MODE" in
       localhost) derived_url="http://localhost:5173" ;;
@@ -252,7 +246,6 @@ KAIRON_BOOTSTRAP_ADMIN_PASSWORD=
 
 # ---- Optional features ----
 KAIRON_ENABLE_MEMORY=${ENABLE_MEMORY}
-KAIRON_ENABLE_DASHBOARDS=${ENABLE_DASHBOARDS}
 MEMORY_ANALYSIS_ENABLED=${ENABLE_MEMORY}
 MEMORY_ALLOW_EXTERNAL_TOOL_EXECUTION=${ENABLE_MEMORY}
 MEMORY_UPLOAD_ENABLED=${ENABLE_MEMORY}
@@ -278,7 +271,6 @@ ENVEOF
   echo "  URL:   $derived_url"
   echo "  Auth:  $AUTH_ENABLED"
   echo "  Memory:  $ENABLE_MEMORY"
-  echo "  Dashboards:  $ENABLE_DASHBOARDS"
 }
 
 build_and_start() {
@@ -286,7 +278,6 @@ build_and_start() {
   echo "=== Building Docker images ==="
   local compose_args=()
   [[ "$ENABLE_MEMORY" == true ]] && compose_args+=(--profile memory)
-  [[ "$ENABLE_DASHBOARDS" == true ]] && compose_args+=(--profile dashboards)
 
   if [[ "$ENABLE_MEMORY" == true ]]; then
     echo "Preparing memory storage permissions..."
@@ -375,7 +366,6 @@ show_planned_actions() {
 
   local profiles="none"
   [[ "$ENABLE_MEMORY" == true ]] && profiles="memory"
-  [[ "$ENABLE_DASHBOARDS" == true ]] && profiles="${profiles:+$profiles,}dashboards"
   [[ -z "$profiles" ]] && profiles="none"
 
   echo ""
@@ -429,10 +419,6 @@ show_final_output() {
     echo "    docker compose --profile memory up -d"
   fi
 
-  if [[ "$ENABLE_DASHBOARDS" == true ]]; then
-    echo ""
-    echo "  Dashboards: http://localhost:5601"
-  fi
   echo "============================================"
 }
 
@@ -481,20 +467,11 @@ interactive_mode() {
   echo "  Memory analysis: $ENABLE_MEMORY"
   echo ""
 
-  read -r -p "Enable OpenSearch Dashboards? [y/N]: " dash_input
-  case "${dash_input:-n}" in
-    [Yy]*) ENABLE_DASHBOARDS="true" ;;
-    *)    ENABLE_DASHBOARDS="false" ;;
-  esac
-  echo "  Dashboards: $ENABLE_DASHBOARDS"
-  echo ""
-
   echo "=== Configuration summary ==="
   echo "  Mode:  $DEPLOYMENT_MODE"
   echo "  URL:   $PUBLIC_URL"
   echo "  Auth:  $AUTH_ENABLED"
   echo "  Memory: $ENABLE_MEMORY"
-  echo "  Dashboards: $ENABLE_DASHBOARDS"
   echo ""
 
   if [[ "$DEPLOYMENT_MODE" == "lan" ]]; then
@@ -589,7 +566,6 @@ while [[ $# -gt 0 ]]; do
       exit 2
       ;;
     --memory) ENABLE_MEMORY="true"; shift ;;
-    --dashboards) ENABLE_DASHBOARDS="true"; shift ;;
     --admin-user) BOOTSTRAP_ADMIN_USERNAME="$2"; shift 2 ;;
     --admin-email) BOOTSTRAP_ADMIN_EMAIL="$2"; shift 2 ;;
     --no-build) DO_BUILD=false; shift ;;

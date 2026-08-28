@@ -74,7 +74,7 @@ cd kairon-dfir
 ./scripts/setup.sh
 ```
 
-The setup wizard generates configuration, builds Docker images, and starts all services. Configuration defaults are documented in `.env.example`; never commit a real `.env` file. See [docs/deployment/deployment.md](docs/deployment/deployment.md) for the full deployment reference (environment variables, volumes, health checks, upgrades) and [docs/deployment/deployment-modes.md](docs/deployment/deployment-modes.md) for `localhost` / `lan` / `https` modes.
+The setup wizard generates configuration, builds Docker images, and starts all services. Configuration defaults are documented in `.env.example`. See [docs/deployment/deployment.md](docs/deployment/deployment.md) for the full deployment reference (environment variables, volumes, health checks, upgrades) and [docs/deployment/deployment-modes.md](docs/deployment/deployment-modes.md) for `localhost` / `lan` / `https` modes.
 
 ## Quick Start
 

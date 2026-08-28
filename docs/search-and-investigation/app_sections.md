@@ -76,14 +76,13 @@
 
 ## SIEM
 
-- **What it's for**: advanced analysis and bridge to OpenSearch Dashboards.
+- **What it's for**: advanced, field-level analysis of the indexed events.
 - **What it shows**:
-  - OpenSearch Dashboards status
   - Query Builder
   - Field Explorer
   - Saved SIEM Queries
-- **What to look at first**: whether you need to pivot by field or open the case in Dashboards.
-- **When to use it**: when `Search` is no longer enough and you need precise technical queries by field, DSL or advanced exploration in OpenSearch Dashboards.
+- **What to look at first**: which field you need to pivot on.
+- **When to use it**: when `Search` is no longer enough and you need precise technical queries by field or DSL.
 
 ## Rules
 

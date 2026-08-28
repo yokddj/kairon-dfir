@@ -153,7 +153,6 @@ jobs:
           KAIRON_BOOTSTRAP_ADMIN_USERNAME=
           KAIRON_BOOTSTRAP_ADMIN_PASSWORD=
           KAIRON_ENABLE_MEMORY=false
-          KAIRON_ENABLE_DASHBOARDS=false
           EOF
       - name: Docker Compose config
         run: |
