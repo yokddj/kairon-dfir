@@ -34,8 +34,6 @@ jobs:
         working-directory: backend
     env:
       KAIRON_AUTH_ENABLED: "false"
-      BACKEND_DATA_DIR: ${{ runner.temp }}/kairon-ci-data
-      BACKEND_TEMP_DIR: ${{ runner.temp }}/kairon-ci-data/tmp
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -49,7 +47,12 @@ jobs:
       # pytest-timeout plugin installed, which made this job error out on
       # argument parsing before running a single test, entirely hidden by
       # continue-on-error; removed to match the working ci.yml invocation.)
-      - run: python -m pytest tests/ -q --ignore=tests/test_demo_pack.py -k "not (eml or edr_cache)"
+      # runner.* is only available inside steps; setting these in the
+      # job-level env made GitHub reject the whole workflow at validation time.
+      - env:
+          BACKEND_DATA_DIR: ${{ runner.temp }}/kairon-ci-data
+          BACKEND_TEMP_DIR: ${{ runner.temp }}/kairon-ci-data/tmp
+        run: python -m pytest tests/ -q --ignore=tests/test_demo_pack.py -k "not (eml or edr_cache)"
 
   frontend:
     needs: validate-tag

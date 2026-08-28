@@ -34,8 +34,6 @@ jobs:
         working-directory: backend
     env:
       KAIRON_AUTH_ENABLED: "false"
-      BACKEND_DATA_DIR: ${{ runner.temp }}/kairon-ci-data
-      BACKEND_TEMP_DIR: ${{ runner.temp }}/kairon-ci-data/tmp
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -44,6 +42,13 @@ jobs:
       - name: Install dependencies
         run: pip install -e ".[dev]"
       - name: Run tests
+        # runner.* is only available inside steps; setting these in the
+        # job-level env made GitHub reject the whole workflow at validation
+        # time, which is why every run since 2c461f3 reported "No jobs were
+        # run" instead of failing a job.
+        env:
+          BACKEND_DATA_DIR: ${{ runner.temp }}/kairon-ci-data
+          BACKEND_TEMP_DIR: ${{ runner.temp }}/kairon-ci-data/tmp
         # Known pre-existing failures are marked xfail via
         # tests/conftest.py + tests/known_failures.txt, so this job now
         # genuinely fails on any regression instead of being advisory.
