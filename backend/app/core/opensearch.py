@@ -1604,6 +1604,15 @@ def ensure_case_index(case_id: str) -> str:
                                 "working_directory": {"type": "keyword"},
                                 "parent_entity_id": {"type": "keyword"},
                                 "parent_pid": {"type": "keyword"},
+                                # Promoted out of windows.event_data by the
+                                # normalizer; sent here so an upgraded install
+                                # indexes them too instead of keeping them in
+                                # _source where no rule can reach them.
+                                "original_file_name": {"type": "keyword"},
+                                "integrity_level_name": {"type": "keyword"},
+                                "description": {"type": "keyword"},
+                                "product": {"type": "keyword"},
+                                "company": {"type": "keyword"},
                                 "parent": {
                                     "properties": {
                                         "entity_id": {"type": "keyword"},
@@ -1698,6 +1707,30 @@ def ensure_case_index(case_id: str) -> str:
                                 "query": {"type": "keyword"},
                                 "question": {"properties": {"name": {"type": "keyword"}}},
                                 "answers": {"type": "keyword"},
+                            }
+                        },
+                        # Sent to indices created before these existed, for the
+                        # same reason as the powershell block above. Without it
+                        # an upgraded install keeps the old mapping: its Linux
+                        # data stays unqueryable and the promoted Sysmon fields
+                        # are never indexed, so the machine behaves like the
+                        # version it was installed at rather than the one it is
+                        # running. Existing documents still need a reindex to
+                        # populate the new fields; new events get them at once.
+                        "linux": {
+                            "properties": {
+                                "artifact_family": {"type": "keyword"},
+                                "artifact_type": {"type": "keyword"},
+                                "source_file": {"type": "keyword"},
+                                "username": {"type": "keyword"},
+                                "process": {"type": "keyword"},
+                                "pid": {"type": "long"},
+                                "command": {"type": "text", "fields": {"keyword": {"type": "keyword", "ignore_above": 1024}}},
+                                "event_action": {"type": "keyword"},
+                                "auth_method": {"type": "keyword"},
+                                "source_ip": {"type": "keyword"},
+                                "hostname": {"type": "keyword"},
+                                "message": {"type": "text"},
                             }
                         },
                     }
