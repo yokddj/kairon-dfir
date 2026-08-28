@@ -357,45 +357,6 @@ detection:
     assert refreshed.metadata_json["compile_version"] == "rules_v3"
 
 
-def test_import_mixed_archive_and_history_details() -> None:
-    db = _session()
-    _seed_case(db)
-    result = import_rule_archive(
-        file=_zip_file(
-            {
-                "sigma.yml": """
-title: Encoded PowerShell
-id: sigma-encoded-ps
-logsource:
-  product: windows
-  category: process_creation
-detection:
-  selection:
-    Image|endswith: powershell.exe
-  condition: selection
-""",
-                "marker.yar": "rule MarkerRule { condition: true }",
-            }
-        ),
-        engine="auto",
-        import_mode="auto",
-        case_id=CASE_ID,
-        namespace="lab",
-        enabled=True,
-        db=db,
-    )
-
-    history = list_rule_imports(case_id=CASE_ID, limit=50, db=db)
-    detail = get_rule_import(result.import_run_id, db)
-
-    assert result.engine == "mixed"
-    assert history.total == 1
-    assert history.items[0].id == result.import_run_id
-    assert detail.id == result.import_run_id
-    assert detail.details_json["detected_engine_counts"]["sigma"] == 1
-    assert detail.details_json["detected_engine_counts"]["yara"] == 1
-
-
 def test_cancel_rule_import_marks_queued_run_cancelled() -> None:
     db = _session()
     _seed_case(db)

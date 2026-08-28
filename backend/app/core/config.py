@@ -434,13 +434,6 @@ class Settings(BaseSettings):
     sigma_noisy_rule_threshold: int = 10000
     search_default_page_size: int = 50
     search_max_page_size: int = 200
-    yara_max_file_size_mb: int = 100
-    yara_scan_originals: bool = False
-    yara_scan_extracted: bool = True
-    yara_scan_raw_evidence: bool = True
-    yara_scan_parsed_outputs: bool = False
-    yara_scan_archives: bool = False
-    yara_scan_text_outputs: bool = False
     dfir_allow_host_path_import: bool = False
     dfir_allowed_evidence_roots: str = "/mnt/evidence,/data/evidence,/cases"
     dfir_enable_demo_cases: bool = False

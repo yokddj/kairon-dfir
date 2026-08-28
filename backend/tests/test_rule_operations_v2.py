@@ -75,47 +75,6 @@ def test_bulk_delete_matching_sigma_rules_by_namespace_and_keep_detections() -> 
     assert db.get(DetectionResult, "ffffffff-ffff-4fff-8fff-ffffffffffff") is not None
 
 
-def test_delete_all_imported_rules_requires_confirmation_and_protects_builtin_heuristics() -> None:
-    db = _session()
-    _seed_case(db)
-    uploaded = Rule(id=RULE_1_ID, case_id=CASE_ID, name="YARA One", engine=RuleEngine.yara, source="uploaded", content="rule one { condition: true }", enabled=True)
-    builtin_heur = Rule(id=RULE_2_ID, case_id=CASE_ID, name="Heuristic", engine=RuleEngine.heuristic, source="builtin", content="{}", enabled=True)
-    db.add_all([uploaded, builtin_heur])
-    db.commit()
-
-    failed = False
-    try:
-        bulk_delete_rules(RuleBulkActionRequest(mode="all_imported", engine="all", case_id=CASE_ID, scope="all"), db)
-    except Exception:
-        failed = True
-    assert failed is True
-
-    result = bulk_delete_rules(
-        RuleBulkActionRequest(mode="all_imported", engine="all", case_id=CASE_ID, scope="all", confirm="DELETE IMPORTED RULES"),
-        db,
-    )
-    assert result.deleted == 1
-    assert db.get(Rule, RULE_1_ID) is None
-    assert db.get(Rule, RULE_2_ID) is not None
-
-
-def test_delete_all_imported_rules_requires_distinct_confirmation_phrase() -> None:
-    db = _session()
-    _seed_case(db)
-    db.add(Rule(id=RULE_1_ID, case_id=CASE_ID, name="YARA One", engine=RuleEngine.yara, source="uploaded", content="rule one { condition: true }", enabled=True))
-    db.commit()
-
-    failed = False
-    try:
-        bulk_delete_rules(
-            RuleBulkActionRequest(mode="all_imported", engine="all", case_id=CASE_ID, scope="all", confirm="DELETE RULES"),
-            db,
-        )
-    except Exception:
-        failed = True
-    assert failed is True
-
-
 def test_bulk_enable_disable_selected_rules() -> None:
     db = _session()
     _seed_case(db)
@@ -155,25 +114,6 @@ def test_bulk_preview_and_delete_by_import_run() -> None:
     )
     assert result.deleted == 2
     assert db.get(Rule, RULE_3_ID) is not None
-
-
-def test_deleting_pack_deletes_child_rules() -> None:
-    db = _session()
-    _seed_case(db)
-    pack = RuleSet(id=PACK_ID, case_id=CASE_ID, name="Pack", engine=RuleEngine.yara, content="rules", rules_count=2, enabled=True)
-    child_1 = Rule(id=RULE_1_ID, case_id=CASE_ID, rule_set_id=PACK_ID, name="YARA A", engine=RuleEngine.yara, source="uploaded", content="rule a { condition: true }", enabled=True)
-    child_2 = Rule(id=RULE_2_ID, case_id=CASE_ID, rule_set_id=PACK_ID, name="YARA B", engine=RuleEngine.yara, source="uploaded", content="rule b { condition: true }", enabled=True)
-    db.add_all([pack, child_1, child_2])
-    db.commit()
-
-    result = bulk_delete_rule_sets(
-            RuleSetBulkDeleteRequest(mode="selected", pack_ids=[PACK_ID], confirm="DELETE RULE PACKS"),
-            db,
-        )
-    assert result.deleted == 1
-    assert db.get(RuleSet, PACK_ID) is None
-    assert db.get(Rule, RULE_1_ID) is None
-    assert db.get(Rule, RULE_2_ID) is None
 
 
 def test_mass_imported_rule_delete_requires_global_library_confirmation() -> None:
