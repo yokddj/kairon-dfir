@@ -320,16 +320,18 @@ describe("Detections", () => {
     expect(searchBoxes[0]).toHaveValue("sigma");
   });
 
-  it("reads source and rule run filters from the URL", async () => {
-    renderPage("/cases/case-1/detections?source=sigma&rule_run_id=run-123");
+  it("reads the rule run filter from the URL and lets it be cleared", async () => {
+    renderPage("/cases/case-1/detections?rule_run_id=run-123");
     await screen.findByText(/Triage overview/i);
     await waitFor(() =>
       expect(listDetectionsMock).toHaveBeenCalledWith(
         "case-1",
-        expect.objectContaining({ source: "sigma", rule_run_id: "run-123" }),
+        expect.objectContaining({ rule_run_id: "run-123" }),
       ),
     );
     expect(screen.getByText(/Rule run filter: run-123/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /Clear rule run filter/i }));
+    expect(screen.queryByText(/Rule run filter: run-123/i)).not.toBeInTheDocument();
   });
 
   it("status action buttons render", async () => {
