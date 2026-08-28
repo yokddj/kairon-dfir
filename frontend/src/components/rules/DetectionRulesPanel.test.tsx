@@ -11,6 +11,7 @@ const getSigmaCoverageMock = vi.fn();
 const listCaseRuleRunsMock = vi.fn();
 const runRulesForCaseMock = vi.fn();
 const updateRuleMock = vi.fn();
+const getCaseHostsMock = vi.fn();
 
 vi.mock("../../api/client", () => ({
   api: {
@@ -19,6 +20,7 @@ vi.mock("../../api/client", () => ({
     listCaseRuleRuns: (...args: unknown[]) => listCaseRuleRunsMock(...args),
     runRulesForCase: (...args: unknown[]) => runRulesForCaseMock(...args),
     updateRule: (...args: unknown[]) => updateRuleMock(...args),
+    getCaseHosts: (...args: unknown[]) => getCaseHostsMock(...args),
     importRuleFile: vi.fn(),
     importRuleArchive: vi.fn(),
     getRuleImport: vi.fn(),
@@ -46,6 +48,10 @@ describe("DetectionRulesPanel", () => {
       by_compile_status: { compiled: 2279, unmapped_field: 858, keyword_only_detection: 58 },
     });
     listCaseRuleRunsMock.mockResolvedValue([]);
+    getCaseHostsMock.mockResolvedValue({ hosts: [
+      { id: "h1", canonical_name: "WS01", display_name: "WS01" },
+      { id: "h2", canonical_name: "DC02", display_name: "DC02" },
+    ] });
   });
 
   it("opens on the library, because that is the question asked first", async () => {
@@ -102,6 +108,50 @@ describe("DetectionRulesPanel", () => {
     await userEvent.click(await screen.findByText("Enabled"));
 
     await waitFor(() => expect(updateRuleMock).toHaveBeenCalledWith("r1", { enabled: false }));
+  });
+});
+
+describe("Run scope", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    listRulesMock.mockResolvedValue({ total: 0, items: [] });
+    listCaseRuleRunsMock.mockResolvedValue([]);
+    getCaseHostsMock.mockResolvedValue({ hosts: [{ id: "h1", canonical_name: "WS01", display_name: "WS01" }] });
+    runRulesForCaseMock.mockResolvedValue({ accepted: true, status: "queued", queued_rules: 5 });
+  });
+
+  it("runs over the whole case by default", async () => {
+    renderPanel("runs");
+    await userEvent.click(await screen.findByTestId("rules-panel-run"));
+
+    await waitFor(() => expect(runRulesForCaseMock).toHaveBeenCalled());
+    const payload = runRulesForCaseMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload.scope).toBe("all");
+    expect(payload.host).toBeUndefined();
+  });
+
+  it("narrows the run to one host when asked", async () => {
+    // The worker filters candidate events by host, so this is a real narrowing:
+    // on the case this was built against it is 43059 events instead of 112246.
+    renderPanel("runs");
+    await screen.findByRole("option", { name: "WS01" });
+    await userEvent.selectOptions(screen.getByTestId("rules-panel-scope"), "WS01");
+    await userEvent.click(screen.getByTestId("rules-panel-run"));
+
+    await waitFor(() => expect(runRulesForCaseMock).toHaveBeenCalled());
+    const payload = runRulesForCaseMock.mock.calls[0][1] as Record<string, unknown>;
+    expect(payload.scope).toBe("host");
+    expect(payload.host).toBe("WS01");
+  });
+
+  it("says what the run was scoped to, so a narrow run is not mistaken for a full one", async () => {
+    renderPanel("runs");
+    await screen.findByRole("option", { name: "WS01" });
+    await userEvent.selectOptions(screen.getByTestId("rules-panel-scope"), "WS01");
+    await userEvent.click(screen.getByTestId("rules-panel-run"));
+
+    const message = await screen.findByTestId("rules-panel-run-message");
+    expect(message.textContent).toContain("WS01");
   });
 });
 

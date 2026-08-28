@@ -71,6 +71,7 @@ export function DetectionRulesPanel({ open, onClose, caseId, initialZone = "libr
   const [search, setSearch] = useState("");
   const [engine, setEngine] = useState("");
   const [depth, setDepth] = useState<RunDepth>("balanced");
+  const [scopeHost, setScopeHost] = useState("");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [runMessage, setRunMessage] = useState<string | null>(null);
 
@@ -94,20 +95,38 @@ export function DetectionRulesPanel({ open, onClose, caseId, initialZone = "libr
     },
   });
 
+  const hostsQuery = useQuery({
+    queryKey: ["case-hosts", caseId],
+    queryFn: () => api.getCaseHosts(caseId),
+    enabled: open && zone === "runs" && Boolean(caseId),
+  });
+  const hosts = hostsQuery.data?.hosts ?? [];
+
   const toggleMutation = useMutation({
     mutationFn: (rule: Rule) => api.updateRule(rule.id, { enabled: !rule.enabled }),
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["rules"] }),
   });
 
   const runMutation = useMutation({
-    mutationFn: () => api.runRulesForCase(caseId, { engines: ["sigma"], enabled_only: true, scope: "all", run_mode: depth }),
+    mutationFn: () =>
+      api.runRulesForCase(caseId, {
+        engines: ["sigma"],
+        enabled_only: true,
+        // The worker filters candidate events by host, so scoping a run is a
+        // real narrowing rather than a label: on a multi-host case it is the
+        // difference between minutes and seconds, and between detections about
+        // one machine and detections about all of them.
+        scope: scopeHost ? "host" : "all",
+        host: scopeHost || undefined,
+        run_mode: depth,
+      }),
     onSuccess: (response) => {
       // Say how many rules are actually going to run. "Queued" alone hides the
       // difference between a full sweep and one that silently skipped half the
       // library.
       setRunMessage(
         response.queued_rules !== undefined
-          ? `${response.queued_rules} rules queued. Follow it under Runs.`
+          ? `${response.queued_rules} rules queued against ${scopeHost || "the whole case"}.`
           : response.message || "Run queued.",
       );
       setZone("runs");
@@ -230,7 +249,18 @@ export function DetectionRulesPanel({ open, onClose, caseId, initialZone = "libr
           <div className="mt-4" data-testid="rules-panel-runs">
             <div className="mb-4 rounded-2xl border border-line bg-panel/50 p-4">
           <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm text-ink">Run the rules over this case</span>
+            <span className="text-sm text-ink">Run the rules over</span>
+            <select
+              value={scopeHost}
+              onChange={(event) => setScopeHost(event.target.value)}
+              className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-sm"
+              data-testid="rules-panel-scope"
+            >
+              <option value="">the whole case</option>
+              {hosts.map((host) => (
+                <option key={host.id} value={host.canonical_name}>{host.display_name || host.canonical_name}</option>
+              ))}
+            </select>
             <select
               value={depth}
               onChange={(event) => setDepth(event.target.value as RunDepth)}
