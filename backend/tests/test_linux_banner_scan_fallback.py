@@ -135,3 +135,54 @@ def test_worker_probe_overwrites_an_inconclusive_stored_format() -> None:
     # An inconclusive probe never overwrites anything.
     assert _probe_may_overwrite_detected_format("raw_candidate", "unknown") is False
     assert _probe_may_overwrite_detected_format("raw_candidate", None) is False
+
+
+def test_banner_scan_carries_the_kernel_identity_it_read(tmp_path: Path) -> None:
+    """The scan already reads the release and the full banner out of the
+    image. They must travel as fields, because they are what lets an uploaded
+    ISF be checked against this dump -- encoding them only inside the
+    human-readable reason string left the identity unavailable, readiness
+    stuck on kernel_identity_unknown, and any ISF accepted unchecked."""
+    image = tmp_path / "raw.img"
+    banner = b"Linux version 2.6.26-2-686 (Debian 2.6.26-29) (dannf@debian.org) #1 SMP\x00"
+    image.write_bytes(b"\x00" * (2 * 1024 * 1024) + banner)
+
+    result = _bounded_linux_banner_scan(image)
+
+    assert result is not None
+    assert result.kernel_release == "2.6.26-2-686"
+    assert result.kernel_banner is not None
+    assert result.kernel_banner.startswith("Linux version 2.6.26-2-686")
+
+
+def test_recorded_kernel_identity_is_read_back_as_a_required_identity(tmp_path: Path) -> None:
+    """The shape execute_memory_preparation writes must be the shape
+    expected_linux_identity_from_evidence reads, or resolve_linux_symbols
+    still has nothing to match an uploaded ISF against."""
+    from types import SimpleNamespace
+
+    from app.services.memory.linux_symbols import expected_linux_identity_from_evidence
+
+    evidence = SimpleNamespace(
+        metadata_json={
+            "linux_kernel": {
+                "kernel_release": "2.6.26-2-686",
+                "banner": "Linux version 2.6.26-2-686 (Debian 2.6.26-29)",
+                "architecture": "x86",
+            }
+        }
+    )
+
+    identity = expected_linux_identity_from_evidence(evidence)
+
+    assert identity is not None
+    assert identity.kernel_release == "2.6.26-2-686"
+    assert identity.banner is not None
+
+
+def test_no_recorded_kernel_identity_stays_unknown() -> None:
+    from types import SimpleNamespace
+
+    from app.services.memory.linux_symbols import expected_linux_identity_from_evidence
+
+    assert expected_linux_identity_from_evidence(SimpleNamespace(metadata_json={})) is None

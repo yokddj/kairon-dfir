@@ -140,6 +140,12 @@ class MemoryProbeResult:
     confidence: ProbeConfidence = ProbeConfidence.LOW
     reason: str = ""
     evidence_format: str | None = None
+    # Set by the Linux banner scan, which reads both out of the image. They
+    # are what makes an uploaded ISF checkable against this dump instead of
+    # accepted blind, so they are carried as fields rather than left encoded
+    # in the human-readable ``reason`` string.
+    kernel_release: str | None = None
+    kernel_banner: str | None = None
 
 
 @dataclass
@@ -451,6 +457,8 @@ def _bounded_linux_banner_scan(canonical_path: Path) -> MemoryProbeResult | None
                         architecture=architecture,
                         confidence=ProbeConfidence.MEDIUM,
                         reason=f"linux_banner_scan:{kernel_release}",
+                        kernel_release=kernel_release,
+                        kernel_banner=banner_text,
                     )
                 tail = chunk[-_LINUX_BANNER_SCAN_OVERLAP_BYTES:]
     except OSError:

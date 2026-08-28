@@ -203,7 +203,9 @@ def _probe_evidence(evidence) -> dict[str, Any]:
     The probe is read-only and bounded to the first 4 KiB of
     the image.  It NEVER downloads symbols.
     """
-    from app.services.memory.platform import probe_memory_platform
+    from dataclasses import replace
+
+    from app.services.memory.platform import Architecture, PlatformFamily, probe_memory_platform
 
     try:
         path = _evidence_canonical_path(evidence)
@@ -223,6 +225,24 @@ def _probe_evidence(evidence) -> dict[str, Any]:
         use_volatility_fallback=True,
         evidence=evidence,
     )
+    # Stage 2 resolves Linux straight from a stored "linux_banner_scan"
+    # format without rescanning, which is the point of persisting it -- but
+    # it therefore carries no kernel identity. Evidence probed before the
+    # identity was recorded would never be able to recover it, leaving the
+    # ISF upload permanently unvalidated. Rescan once, only when the
+    # platform is Linux and the identity is still missing; the scan is
+    # wall-clock bounded and returns None rather than raising.
+    if result.platform is PlatformFamily.LINUX and not result.kernel_release:
+        from app.services.memory.platform import _bounded_linux_banner_scan
+
+        recovered = _bounded_linux_banner_scan(path)
+        if recovered is not None and recovered.kernel_release:
+            result = replace(
+                result,
+                kernel_release=recovered.kernel_release,
+                kernel_banner=recovered.kernel_banner,
+                architecture=result.architecture if result.architecture is not Architecture.UNKNOWN else recovered.architecture,
+            )
     return {
         "platform": result.platform.value,
         "format": result.format,
@@ -230,6 +250,8 @@ def _probe_evidence(evidence) -> dict[str, Any]:
         "confidence": result.confidence.value,
         "reason": result.reason,
         "adapter": result.platform.value,
+        "kernel_release": result.kernel_release,
+        "kernel_banner": result.kernel_banner,
     }
 
 
@@ -693,6 +715,29 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
             evidence.detection_confidence = probe_summary.get("confidence") or None
             evidence.detection_reason = probe_summary.get("reason") or None
             db.commit()
+
+        # Record the kernel identity the banner scan read out of the image.
+        # expected_linux_identity_from_evidence() looks for it here, and
+        # without it resolve_linux_symbols() has nothing to match against:
+        # readiness stayed "kernel_identity_unknown" and an operator-supplied
+        # ISF was accepted without checking it belongs to this dump. A wrong
+        # ISF does not fail loudly -- it yields plausible, wrong output.
+        kernel_release = probe_summary.get("kernel_release")
+        kernel_banner = probe_summary.get("kernel_banner")
+        if kernel_release or kernel_banner:
+            metadata = dict(getattr(evidence, "metadata_json", None) or {})
+            recorded = dict(metadata.get("linux_kernel") or {})
+            if kernel_release:
+                recorded["kernel_release"] = kernel_release
+            if kernel_banner:
+                recorded["banner"] = kernel_banner
+            architecture = probe_summary.get("architecture")
+            if architecture and architecture != "unknown":
+                recorded["architecture"] = architecture
+            if recorded != metadata.get("linux_kernel"):
+                metadata["linux_kernel"] = recorded
+                evidence.metadata_json = metadata
+                db.commit()
 
         # 3. Build the adapter and evaluate readiness.
         from app.services.memory.platform import (
