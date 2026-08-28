@@ -56,7 +56,6 @@ export default function Detections() {
   const { activeCaseId, selectedEvidenceId, selectedHost, setActiveCaseId } = useActiveCase();
   const { data: cases } = useQuery({ queryKey: ["cases"], queryFn: api.listCases });
   const [caseId, setCaseId] = useState(routeCaseId || activeCaseId);
-  const [source, setSource] = useState(searchParams.get("source") ?? "");
   const [engine, setEngine] = useState(searchParams.get("engine") ?? "");
   const [ruleIdQuery, setRuleIdQuery] = useState(searchParams.get("rule_id") ?? "");
   const [ruleRunIdFilter, setRuleRunIdFilter] = useState(searchParams.get("rule_run_id") ?? "");
@@ -68,11 +67,7 @@ export default function Detections() {
   const [ruleName, setRuleName] = useState(searchParams.get("rule_name") ?? "");
   const [evidenceFilter, setEvidenceFilter] = useState(searchParams.get("evidence_id") ?? selectedEvidenceId);
   const [hostFilter, setHostFilter] = useState(searchParams.get("host") ?? selectedHost);
-  const [artifactTypeFilter, setArtifactTypeFilter] = useState(searchParams.get("artifact_type") ?? "");
-  const [matchedObjectType, setMatchedObjectType] = useState(searchParams.get("matched_object_type") ?? "");
   const [queryText, setQueryText] = useState(searchParams.get("q") ?? "");
-  const [linkedEventFilter, setLinkedEventFilter] = useState("");
-  const [fileTargetFilter, setFileTargetFilter] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [allMatchingSelected, setAllMatchingSelected] = useState(false);
   const [sortField, setSortField] = useState<SortField>("created_at");
@@ -105,13 +100,12 @@ export default function Detections() {
   const linkFilters = useMemo(
     () =>
       [
-        { label: "Rule run", value: ruleRunIdFilter, clear: () => setRuleRunIdFilter("") },
         { label: "Rule", value: ruleIdQuery, clear: () => setRuleIdQuery("") },
         { label: "Import run", value: importRunIdFilter, clear: () => setImportRunIdFilter("") },
         { label: "Pack", value: sourcePackFilter, clear: () => setSourcePackFilter("") },
         { label: "Run type", value: runTypeFilter, clear: () => setRunTypeFilter("") },
       ].filter((item) => Boolean(item.value)),
-    [ruleRunIdFilter, ruleIdQuery, importRunIdFilter, sourcePackFilter, runTypeFilter],
+    [ruleIdQuery, importRunIdFilter, sourcePackFilter, runTypeFilter],
   );
 
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -161,11 +155,10 @@ export default function Detections() {
     setPage(1);
     setAllMatchingSelected(false);
     setSelectedIds([]);
-  }, [caseId, source, engine, ruleIdQuery, ruleRunIdFilter, importRunIdFilter, sourcePackFilter, runTypeFilter, severity, statusFilter, ruleName, evidenceFilter, hostFilter, artifactTypeFilter, matchedObjectType, queryText, linkedEventFilter, fileTargetFilter, orphanedOnly, sortField, sortDirection, pageSize]);
+  }, [caseId, engine, ruleIdQuery, ruleRunIdFilter, importRunIdFilter, sourcePackFilter, runTypeFilter, severity, statusFilter, ruleName, evidenceFilter, hostFilter, queryText, orphanedOnly, sortField, sortDirection, pageSize]);
 
   const queryOptions = {
     include_event_preview: true,
-    source: source || undefined,
     engine: engine || undefined,
     rule_id: ruleIdQuery || undefined,
     rule_run_id: ruleRunIdFilter || undefined,
@@ -177,11 +170,7 @@ export default function Detections() {
     rule_name: ruleName || undefined,
     evidence_id: evidenceFilter || undefined,
     host: hostFilter || undefined,
-    artifact_type: artifactTypeFilter || undefined,
-    matched_object_type: matchedObjectType || undefined,
     q: queryText || undefined,
-    has_linked_event: linkedEventFilter ? linkedEventFilter === "true" : undefined,
-    has_file_target: fileTargetFilter ? fileTargetFilter === "true" : undefined,
     orphaned_only: orphanedOnly || undefined,
     page,
     page_size: pageSize,
@@ -189,7 +178,6 @@ export default function Detections() {
     sort_direction: sortDirection,
   };
   const summaryOptions = {
-    source: source || undefined,
     engine: engine || undefined,
     rule_id: ruleIdQuery || undefined,
     rule_run_id: ruleRunIdFilter || undefined,
@@ -201,7 +189,6 @@ export default function Detections() {
     rule_name: ruleName || undefined,
     evidence_id: evidenceFilter || undefined,
     host: hostFilter || undefined,
-    artifact_type: artifactTypeFilter || undefined,
     q: queryText || undefined,
     limit: 100,
   };
@@ -337,7 +324,6 @@ export default function Detections() {
   function buildBulkFilters() {
     return {
       case_id: selectedCaseId || undefined,
-      source: source || undefined,
       engine: engine || undefined,
       rule_id: ruleIdQuery || undefined,
       rule_run_id: ruleRunIdFilter || undefined,
@@ -348,11 +334,7 @@ export default function Detections() {
       rule_name: ruleName || undefined,
       evidence_id: evidenceFilter || undefined,
       host: hostFilter || undefined,
-      artifact_type: artifactTypeFilter || undefined,
-      matched_object_type: matchedObjectType || undefined,
       q: queryText || undefined,
-      has_linked_event: linkedEventFilter ? linkedEventFilter === "true" : undefined,
-      has_file_target: fileTargetFilter ? fileTargetFilter === "true" : undefined,
       orphaned_only: orphanedOnly || undefined,
     };
   }
@@ -687,6 +669,9 @@ export default function Detections() {
         {ruleRunIdFilter ? (
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted">
             <span className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">Rule run filter: {ruleRunIdFilter}</span>
+            <button type="button" onClick={() => setRuleRunIdFilter("")} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">
+              Clear rule run filter
+            </button>
             <button type="button" onClick={() => void openDeletePreview("rule_run")} className="rounded-full border border-danger/40 bg-danger/10 px-3 py-1.5 text-danger">
               Clean detections from this run
             </button>
@@ -701,17 +686,12 @@ export default function Detections() {
           </div>
         ) : null}
         <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <SearchableFacetSelect label="Source" value={source} onChange={setSource} options={(facetsQuery.data?.sources ?? []).map((item) => ({ value: item.value, count: item.count }))} />
           <SearchableFacetSelect label="Engine" value={engine} onChange={setEngine} options={(facetsQuery.data?.engines ?? []).map((item) => ({ value: item.value, count: item.count }))} />
           <SearchableFacetSelect label="Severity" value={severity} onChange={setSeverity} options={(facetsQuery.data?.severities ?? []).map((item) => ({ value: item.value, count: item.count }))} />
           <SearchableFacetSelect label="Status" value={statusFilter} onChange={setStatusFilter} options={(facetsQuery.data?.statuses ?? []).map((item) => ({ value: item.value, count: item.count }))} />
           <SearchableFacetSelect label="Rule name" value={ruleName} onChange={setRuleName} options={(facetsQuery.data?.rule_names ?? []).map((item) => ({ value: item.value, count: item.count }))} />
           <SearchableFacetSelect label="Evidence" value={evidenceFilter} onChange={setEvidenceFilter} options={(facetsQuery.data?.evidences ?? []).map((item) => ({ value: item.id, label: item.name, count: item.count }))} />
           <SearchableFacetSelect label="Host" value={hostFilter} onChange={setHostFilter} options={(facetsQuery.data?.hosts ?? []).map((item) => ({ value: item.value, count: item.count }))} />
-          <SearchableFacetSelect label="Matched object" value={matchedObjectType} onChange={setMatchedObjectType} options={(facetsQuery.data?.matched_object_types ?? []).map((item) => ({ value: item.value, count: item.count }))} />
-          <SearchableFacetSelect label="Has linked event" value={linkedEventFilter} onChange={setLinkedEventFilter} options={(facetsQuery.data?.has_linked_event ?? []).map((item) => ({ value: String(item.value), label: item.value ? "Yes" : "No", count: item.count }))} />
-          <SearchableFacetSelect label="Has file target" value={fileTargetFilter} onChange={setFileTargetFilter} options={(facetsQuery.data?.has_file_target ?? []).map((item) => ({ value: String(item.value), label: item.value ? "Yes" : "No", count: item.count }))} />
-          <SearchableFacetSelect label="Artifact type" value={artifactTypeFilter} onChange={setArtifactTypeFilter} options={(facetsQuery.data?.artifacts ?? []).map((item) => ({ value: item.value, count: item.count }))} />
           <div className="rounded-2xl border border-line bg-abyss/80 p-3">
             <label className="block">
               <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Search</span>
@@ -909,7 +889,6 @@ export default function Detections() {
                     <option value="severity">Severity</option>
                     <option value="host">Host</option>
                     <option value="user">User</option>
-                    <option value="artifact_type">Artifact type</option>
                     <option value="source_file">Source file</option>
                     <option value="evidence">Evidence</option>
                     <option value="rule_run">Rule run</option>
