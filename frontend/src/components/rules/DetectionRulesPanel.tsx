@@ -53,11 +53,21 @@ type Props = {
   open: boolean;
   onClose: () => void;
   caseId: string;
+  /** Which question the panel opens on. Managing rules and running them are
+   *  separate intentions, so they get separate entry points. */
+  initialZone?: Zone;
 };
 
-export function DetectionRulesPanel({ open, onClose, caseId }: Props) {
+export function DetectionRulesPanel({ open, onClose, caseId, initialZone = "library" }: Props) {
   const queryClient = useQueryClient();
-  const [zone, setZone] = useState<Zone>("library");
+  const [zone, setZone] = useState<Zone>(initialZone);
+  const [lastOpenedAt, setLastOpenedAt] = useState<Zone | null>(null);
+  if (open && lastOpenedAt !== initialZone) {
+    // Re-entering from the other button lands on that button's zone rather
+    // than wherever the panel was left last time.
+    setLastOpenedAt(initialZone);
+    setZone(initialZone);
+  }
   const [search, setSearch] = useState("");
   const [engine, setEngine] = useState("");
   const [depth, setDepth] = useState<RunDepth>("balanced");
@@ -122,33 +132,6 @@ export function DetectionRulesPanel({ open, onClose, caseId }: Props) {
           <button type="button" onClick={onClose} className="rounded-md border border-line px-2 py-1 text-xs text-muted" data-testid="rules-panel-close">
             Close
           </button>
-        </div>
-
-        <div className="mt-5 rounded-2xl border border-line bg-panel/50 p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm text-ink">Run the rules over this case</span>
-            <select
-              value={depth}
-              onChange={(event) => setDepth(event.target.value as RunDepth)}
-              className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-sm"
-              data-testid="rules-panel-depth"
-            >
-              {DEPTHS.map((item) => (
-                <option key={item.id} value={item.id}>{item.label}</option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => runMutation.mutate()}
-              disabled={runMutation.isPending}
-              className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
-              data-testid="rules-panel-run"
-            >
-              {runMutation.isPending ? "Starting..." : "Run"}
-            </button>
-          </div>
-          <p className="mt-2 text-xs text-muted">{DEPTHS.find((item) => item.id === depth)?.hint}</p>
-          {runMessage ? <p className="mt-2 text-xs text-mint" data-testid="rules-panel-run-message">{runMessage}</p> : null}
         </div>
 
         <div className="mt-5 flex gap-2">
@@ -245,6 +228,33 @@ export function DetectionRulesPanel({ open, onClose, caseId }: Props) {
 
         {zone === "runs" ? (
           <div className="mt-4" data-testid="rules-panel-runs">
+            <div className="mb-4 rounded-2xl border border-line bg-panel/50 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm text-ink">Run the rules over this case</span>
+            <select
+              value={depth}
+              onChange={(event) => setDepth(event.target.value as RunDepth)}
+              className="rounded-xl border border-line bg-abyss/70 px-3 py-1.5 text-sm"
+              data-testid="rules-panel-depth"
+            >
+              {DEPTHS.map((item) => (
+                <option key={item.id} value={item.id}>{item.label}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              onClick={() => runMutation.mutate()}
+              disabled={runMutation.isPending}
+              className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss disabled:opacity-50"
+              data-testid="rules-panel-run"
+            >
+              {runMutation.isPending ? "Starting..." : "Run"}
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-muted">{DEPTHS.find((item) => item.id === depth)?.hint}</p>
+          {runMessage ? <p className="mt-2 text-xs text-mint" data-testid="rules-panel-run-message">{runMessage}</p> : null}
+        </div>
+
             {(runsQuery.data ?? []).length === 0 ? (
               <p className="text-sm text-muted">No runs yet for this case.</p>
             ) : (

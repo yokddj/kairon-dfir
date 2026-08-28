@@ -52,7 +52,7 @@ export default function Detections() {
   const queryClient = useQueryClient();
   const { caseId: routeCaseId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [rulesPanelOpen, setRulesPanelOpen] = useState(false);
+  const [rulesPanel, setRulesPanel] = useState<"library" | "runs" | null>(null);
   const { activeCaseId, selectedEvidenceId, selectedHost, setActiveCaseId } = useActiveCase();
   const { data: cases } = useQuery({ queryKey: ["cases"], queryFn: api.listCases });
   const [caseId, setCaseId] = useState(routeCaseId || activeCaseId);
@@ -626,21 +626,36 @@ export default function Detections() {
 
   return (
     <div className="space-y-6">
-      <DetectionRulesPanel open={rulesPanelOpen} onClose={() => setRulesPanelOpen(false)} caseId={selectedCaseId || ""} />
+      <DetectionRulesPanel
+        open={rulesPanel !== null}
+        onClose={() => setRulesPanel(null)}
+        caseId={selectedCaseId || ""}
+        initialZone={rulesPanel ?? "library"}
+      />
       <section className="rounded-[28px] border border-line bg-panel/70 p-6 shadow-panel">
         <p className="font-mono text-xs uppercase tracking-[0.24em] text-accent">Detections</p>
         <h2 className="mt-2 text-2xl font-semibold">Automatic matches from rules and engines. Review them before turning them into findings.</h2>
         <p className="mt-2 text-sm text-muted">
           Detections are automatic matches from built-in heuristics and from Sigma rules evaluated over indexed events.
         </p>
-        <button
-          type="button"
-          onClick={() => setRulesPanelOpen(true)}
-          className="mt-3 rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink"
-          data-testid="open-detection-rules"
-        >
-          Detection rules
-        </button>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setRulesPanel("library")}
+            className="rounded-2xl border border-line bg-abyss/70 px-4 py-2 text-sm text-ink"
+            data-testid="open-detection-rules"
+          >
+            Detection rules
+          </button>
+          <button
+            type="button"
+            onClick={() => setRulesPanel("runs")}
+            className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss"
+            data-testid="open-run-rules"
+          >
+            Run rules
+          </button>
+        </div>
         {!selectedCaseId ? <p className="mt-2 text-sm text-amber-300">All cases selected. Results include detections across the workspace.</p> : null}
         {selectedHost || selectedEvidenceId ? (
           <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted">
