@@ -25,11 +25,11 @@ vi.mock("../../api/client", () => ({
   },
 }));
 
-function renderPanel() {
+function renderPanel(initialZone: "library" | "coverage" | "runs" = "library") {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <DetectionRulesPanel open onClose={() => {}} caseId="case-1" />
+      <DetectionRulesPanel open onClose={() => {}} caseId="case-1" initialZone={initialZone} />
     </QueryClientProvider>,
   );
 }
@@ -64,7 +64,7 @@ describe("DetectionRulesPanel", () => {
 
   it("says how many rules will actually run rather than just 'queued'", async () => {
     runRulesForCaseMock.mockResolvedValue({ accepted: true, status: "queued", queued_rules: 2279 });
-    renderPanel();
+    renderPanel("runs");
 
     await userEvent.click(await screen.findByTestId("rules-panel-run"));
 
@@ -72,13 +72,18 @@ describe("DetectionRulesPanel", () => {
     expect(message.textContent).toContain("2279");
   });
 
-  it("moves to the runs zone once a run starts, so progress is where you are looking", async () => {
-    runRulesForCaseMock.mockResolvedValue({ accepted: true, status: "queued", queued_rules: 10 });
-    renderPanel();
-
-    await userEvent.click(await screen.findByTestId("rules-panel-run"));
-
+  it("opens straight on the zone the entry point asked for", async () => {
+    // Managing rules and running them are separate intentions, so each button
+    // lands on its own question instead of on whichever zone was left open.
+    renderPanel("runs");
     expect(await screen.findByTestId("rules-panel-runs")).toBeInTheDocument();
+    expect(screen.queryByTestId("rules-panel-library")).not.toBeInTheDocument();
+  });
+
+  it("keeps running out of the library, where it is not the question being asked", async () => {
+    renderPanel("library");
+    await screen.findByTestId("rules-panel-library");
+    expect(screen.queryByTestId("rules-panel-run")).not.toBeInTheDocument();
   });
 
   it("shows why rules cannot be evaluated, ranked by how many they cost", async () => {
