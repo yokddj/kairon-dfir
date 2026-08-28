@@ -25,7 +25,6 @@ from app.core.performance import (
 from app.ingest.raw_parsers.evtxecmd_backend import detect_evtx_parser_backends
 from app.disk_images.service import disk_image_readiness
 from app.services.parser_backend_evaluation import build_core_parser_backend_evaluation, detect_ez_tools
-from app.services.opensearch_dashboards import bootstrap_dashboards_data_view, dashboards_admin_status
 from app.services.task_registry import build_task_health_snapshot, build_task_registry_summary
 
 
@@ -451,15 +450,6 @@ def admin_performance_restart_instructions(db: Session = Depends(get_db)) -> dic
     return manual_restart_instructions(list(state.get("services_to_restart") or []))
 
 
-@router.get("/api/admin/opensearch-dashboards/status")
-def admin_opensearch_dashboards_status(request: Request, db: Session = Depends(get_db)) -> dict:
-    return dashboards_admin_status(db=db, request=request)
-
-
-@router.post("/api/admin/opensearch-dashboards/bootstrap")
-def admin_opensearch_dashboards_bootstrap(request: Request, payload: dict | None = None, db: Session = Depends(get_db)) -> dict:
-    result = bootstrap_dashboards_data_view(repair=bool((payload or {}).get("repair")))
-    return {**result, "status": dashboards_admin_status(db=db, request=request)}
 
 
 @router.get("/api/admin/performance/recommendation")

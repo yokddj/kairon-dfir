@@ -35,7 +35,6 @@ logger = logging.getLogger(__name__)
 settings = get_settings()
 _FACETS_CACHE_TTL = 10.0
 _FACETS_CACHE: dict[str, tuple[float, dict]] = {}
-OPENSEARCH_DASHBOARDS_PUBLIC_URL_KEY = "OPENSEARCH_DASHBOARDS_PUBLIC_URL"
 
 SORT_FIELD_MAP = {
     "@timestamp": "@timestamp",
@@ -518,102 +517,6 @@ def _http_available(url: str) -> tuple[bool, str | None]:
         return False, str(exc)
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
-
-
-def _dashboards_status(case_id: str | None = None) -> dict:
-    enabled = bool(settings.opensearch_dashboards_enabled)
-    internal_url = settings.opensearch_dashboards_internal_url.rstrip("/")
-    public_url = settings.opensearch_dashboards_public_url.rstrip("/")
-    available, error = _http_available(internal_url) if enabled else (False, "OpenSearch Dashboards integration disabled")
-    return {
-        "enabled": enabled,
-        "internal_url": internal_url,
-        "public_url": public_url,
-        "index_pattern": settings.opensearch_dashboards_index_pattern,
-        "time_field": settings.opensearch_dashboards_time_field,
-        "available": available if enabled else False,
-        "error": error,
-        "case_filter": f'case_id:"{case_id}"' if case_id else "",
-    }
-
-
-def _dashboard_host_needs_rewrite(hostname: str | None, request_hostname: str | None) -> bool:
-    normalized = (hostname or "").strip().lower()
-    request_normalized = (request_hostname or "").strip().lower()
-    if not normalized:
-        return False
-    if normalized in {"localhost", "127.0.0.1", "::1", "0.0.0.0", "opensearch-dashboards"}:
-        return True
-    if request_normalized and normalized == request_normalized:
-        return False
-    try:
-        parsed_ip = ip_address(normalized)
-    except ValueError:
-        return "." not in normalized and normalized != request_normalized
-    return bool((parsed_ip.is_loopback or parsed_ip.is_unspecified) or (parsed_ip.is_private and normalized != request_normalized))
-
-
-def _configured_dashboards_public_url(db: Session | None = None) -> str:
-    if db is None:
-        return settings.opensearch_dashboards_public_url.rstrip("/")
-    value = str(get_setting(db, OPENSEARCH_DASHBOARDS_PUBLIC_URL_KEY, settings.opensearch_dashboards_public_url) or "").strip()
-    return value.rstrip("/")
-
-
-def _resolve_dashboards_public_url(request: FastAPIRequest | None = None, db: Session | None = None) -> str:
-    public_url = _configured_dashboards_public_url(db)
-    if not public_url:
-        if request is None:
-            return ""
-        request_hostname = request.url.hostname or ""
-        default_port = urlsplit(settings.opensearch_dashboards_internal_url).port or 5601
-        netloc = request_hostname if not default_port else f"{request_hostname}:{default_port}"
-        return urlunsplit((request.url.scheme, netloc, "", "", "")).rstrip("/")
-    if request is None:
-        return public_url
-    parsed = urlsplit(public_url)
-    request_hostname = request.url.hostname or ""
-    if not _dashboard_host_needs_rewrite(parsed.hostname, request_hostname):
-        return public_url
-    port = parsed.port
-    netloc = request_hostname if not port else f"{request_hostname}:{port}"
-    return urlunsplit((request.url.scheme, netloc, parsed.path.rstrip("/"), "", "")).rstrip("/")
-
-
-def _dashboards_discover_url(
-    *,
-    request: FastAPIRequest | None = None,
-    db: Session | None = None,
-    case_id: str | None = None,
-    query: str | None = None,
-    artifact_type: str | None = None,
-    event_id: str | None = None,
-) -> str:
-    public_url = _resolve_dashboards_public_url(request, db)
-    clauses: list[str] = []
-    if case_id:
-        clauses.append(f'case_id:"{case_id}"')
-    if artifact_type:
-        clauses.append(f'artifact.type:"{artifact_type}"')
-    if event_id:
-        clauses.append(f'event_id:"{event_id}"')
-    if query:
-        clauses.append(f"({query})")
-    query_string = " AND ".join(clauses) if clauses else "*"
-    # Use a Discover deep link that is explicit about the DFIR data view and
-    # hides the chart. This avoids malformed JSON `_a` state and works around
-    # a Dashboards crash path where the top histogram request fails and the UI
-    # still dereferences missing aggregations.
-    query_rison = query_string.replace("!", "!!").replace("'", "!'")
-    app_state = (
-        "(columns:!(_source),"
-        "hideChart:!t,"
-        "index:'dfir-events',"
-        "interval:auto,"
-        f"query:(language:kuery,query:'{query_rison}'),"
-        "sort:!(!('@timestamp',desc)))"
-    )
-    return f"{public_url}/app/discover#/?_a={quote(app_state, safe='')}"
 
 
 def _escape_wildcard_term(value: str) -> str:
@@ -1689,82 +1592,6 @@ def siem_fields(case_id: str | None = None, sample_size: int = 25) -> dict:
     }
 
 
-@router.get("/api/siem/external/status")
-def siem_external_status(request: FastAPIRequest, case_id: str | None = None, db: Session = Depends(get_db)) -> dict:
-    payload = _dashboards_status(case_id)
-    payload["public_url"] = _resolve_dashboards_public_url(request, db)
-    return payload
-
-
-@router.post("/api/siem/external/setup")
-def siem_external_setup(request: FastAPIRequest, db: Session = Depends(get_db)) -> dict:
-    client = get_opensearch_client()
-    index_pattern = settings.opensearch_dashboards_index_pattern
-    matching_indices = []
-    try:
-        matching_indices = list((client.indices.get(index=index_pattern, params={"ignore_unavailable": "true"}) or {}).keys())
-    except Exception:  # noqa: BLE001
-        matching_indices = []
-    dashboards = _dashboards_status()
-    dashboards["public_url"] = _resolve_dashboards_public_url(request, db)
-    manual_steps = [
-        f"Open OpenSearch Dashboards at {dashboards['public_url']}",
-        f"Create a Data View / Index Pattern with title {settings.opensearch_dashboards_index_pattern}",
-        f"Set time field to {settings.opensearch_dashboards_time_field}",
-    ]
-    return {
-        "dashboards_available": dashboards["available"],
-        "opensearch_indices_found": bool(matching_indices),
-        "indices": matching_indices,
-        "data_view_created": False,
-        "data_view_exists": False,
-        "manual_steps_required": True,
-        "manual_steps": manual_steps,
-    }
-
-
-@router.get("/api/siem/external/diagnostics")
-def siem_external_diagnostics(request: FastAPIRequest, case_id: str | None = None, db: Session = Depends(get_db)) -> dict:
-    client = get_opensearch_client()
-    index_pattern = settings.opensearch_dashboards_index_pattern
-    opensearch_available = True
-    try:
-        matching_indices = list((client.indices.get(index=index_pattern, params={"ignore_unavailable": "true"}) or {}).keys())
-    except Exception:
-        matching_indices = []
-        opensearch_available = False
-    try:
-        count_info = count_documents(get_events_index(case_id), {"term": {"case_id": case_id}} if case_id else None)
-    except Exception:
-        count_info = {"count": 0, "relation": "eq", "source": "count_api"}
-        opensearch_available = False
-    dashboards = _dashboards_status(case_id)
-    dashboards["public_url"] = _resolve_dashboards_public_url(request, db)
-    return {
-        "opensearch": {
-            "available": opensearch_available,
-            "indices": matching_indices,
-            "docs_count": count_info["count"],
-        },
-        "dashboards": {
-            "available": dashboards["available"],
-            "public_url": dashboards["public_url"],
-            "internal_url": dashboards["internal_url"],
-            "data_view": {
-                "exists": False,
-                "title": settings.opensearch_dashboards_index_pattern,
-                "time_field": settings.opensearch_dashboards_time_field,
-            },
-            "error": dashboards["error"],
-        },
-        "case": {
-            "case_id": case_id,
-            "events_count": count_info["count"],
-            "filter": f'case_id:"{case_id}"' if case_id else "",
-        },
-    }
-
-
 @router.get("/api/siem/external/links")
 def siem_external_links(
     request: FastAPIRequest,
@@ -1782,10 +1609,7 @@ def siem_external_links(
     case_filter = f'case_id:"{case_id}"' if case_id else ""
     artifact_filter = f'artifact.type:"{artifact_type}"' if artifact_type else ""
     event_filter = f'event_id:"{event_id}"' if event_id else ""
-    dashboards_public_url = _resolve_dashboards_public_url(request, db)
     return {
-        "dashboards_home": dashboards_public_url,
-        "discover_url": _dashboards_discover_url(request=request, db=db, case_id=case_id, query=query_string, artifact_type=artifact_type, event_id=event_id),
         "case_filter": case_filter,
         "kql_or_lucene_query": " AND ".join([part for part in [case_filter, artifact_filter, event_filter, query_string] if part]) or "*",
         "copyable_filters": {

@@ -12,7 +12,6 @@ The stack runs:
 - `postgres`
 - `redis`
 - `opensearch`
-- `opensearch-dashboards` on port `5601`
 
 Rules, reports, parser rebuilds and SRUM Windows-worker parsing are not part of initial evidence indexing. They remain explicit analyst actions.
 
@@ -64,7 +63,6 @@ Default endpoints once the stack is up:
 
 - frontend: `http://localhost:5173`
 - backend docs: `http://localhost:8000/docs`
-- dashboards: `http://localhost:5601`
 
 ## Environment Variables Reference
 
@@ -86,8 +84,6 @@ Default endpoints once the stack is up:
 - `OPENSEARCH_INITIAL_ADMIN_PASSWORD`
 - `OPENSEARCH_INDEX_PREFIX`
 - `OPENSEARCH_JAVA_HEAP`
-- `OPENSEARCH_DASHBOARDS_INTERNAL_URL`
-- `OPENSEARCH_DASHBOARDS_PUBLIC_URL`
 
 ### Backend / evidence
 

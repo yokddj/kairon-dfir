@@ -6,7 +6,6 @@
 - worker up
 - frontend up
 - OpenSearch healthy
-- OpenSearch Dashboards data view available
 
 ## Pack
 

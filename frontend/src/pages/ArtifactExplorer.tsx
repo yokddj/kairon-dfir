@@ -934,17 +934,6 @@ export default function ArtifactExplorer() {
       queryClient.invalidateQueries({ queryKey: ["artifact-explorer"] });
     },
   });
-  const siemLinksQuery = useQuery({
-    queryKey: ["artifact-explorer-siem-links", caseId, artifactTypeFilter, query],
-    queryFn: () =>
-      api.siemExternalLinks({
-        case_id: caseId || undefined,
-        artifact_type: artifactTypeFilter || undefined,
-        query: query || undefined,
-      }),
-    staleTime: 15_000,
-    refetchOnWindowFocus: false,
-  });
 
   useEffect(() => {
     setPage(1);
@@ -1119,9 +1108,6 @@ export default function ArtifactExplorer() {
             </label>
             <SelectField label="Search mode" value={searchMode === "smart" ? "" : searchMode} options={["contains", "ioc"]} emptyLabel="smart" onChange={(value) => setSearchMode((value || "smart") as "smart" | "contains" | "ioc")} />
             <SelectField label="Backend variant" value={backendVariant === "default" ? "" : backendVariant} options={["advanced", "all"]} emptyLabel="Default" onChange={(value) => setBackendVariant((value || "default") as "default" | "advanced" | "all")} />
-            <a href={siemLinksQuery.data?.discover_url || "#"} target="_blank" rel="noreferrer" className="self-end rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-center text-sm text-muted">
-              Open selected artifact in OpenSearch
-            </a>
           </div>
         </details>
 

@@ -178,7 +178,6 @@ def _patch_non_memory_startup_side_effects(monkeypatch, main):
     Memory-gating logic itself untouched."""
     monkeypatch.setattr(main, "init_db", lambda: None)
     monkeypatch.setattr(main, "ensure_events_indices_safe_settings", lambda: None)
-    monkeypatch.setattr(main, "auto_bootstrap_dashboards", lambda: None)
 
     from app.services import bootstrap as bootstrap_module
     monkeypatch.setattr(bootstrap_module, "bootstrap_admin", lambda: False)

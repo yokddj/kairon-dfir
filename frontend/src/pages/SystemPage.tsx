@@ -507,9 +507,6 @@ export default function SystemPage() {
       example_path: `${path.replace(/\/$/, "")}/case001`,
     }));
 
-  const dashboardsUrlEntry = openSearchSettings.find((entry) => entry.name === "opensearch_dashboards_public_url");
-  const dashboardsUrl = String(draftSettings.opensearch_dashboards_public_url ?? dashboardsUrlEntry?.effective_value ?? "");
-  const derivedDashboardsUrl = API_BASE_URL.replace(/:8000\/api$/, ":5601");
 
   return (
     <div className="space-y-6">
@@ -917,7 +914,7 @@ export default function SystemPage() {
       {activeSection === "opensearch" ? (
         <section className="space-y-6">
           <div className="rounded-3xl border border-line bg-panel/70 p-5 shadow-panel">
-            <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">OpenSearch / Dashboards</p>
+            <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">OpenSearch</p>
             <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="rounded-2xl border border-line bg-abyss/80 p-4">
                 <p className="text-xs uppercase tracking-[0.16em] text-muted">Health</p>
@@ -930,10 +927,6 @@ export default function SystemPage() {
               <div className="rounded-2xl border border-line bg-abyss/80 p-4">
                 <p className="text-xs uppercase tracking-[0.16em] text-muted">Heap</p>
                 <p className="mt-2 text-lg font-semibold">{String(data.services.opensearch.heap_used_percent ?? "n/a")}%</p>
-              </div>
-              <div className="rounded-2xl border border-line bg-abyss/80 p-4">
-                <p className="text-xs uppercase tracking-[0.16em] text-muted">Data view status</p>
-                <p className="mt-2 text-lg font-semibold">Bootstrap ready</p>
               </div>
               <div className="rounded-2xl border border-line bg-abyss/80 p-4">
                 <p className="text-xs uppercase tracking-[0.16em] text-muted">Write block</p>
@@ -960,14 +953,6 @@ export default function SystemPage() {
                   onChange={updateDraft}
                 />
               ))}
-            </div>
-            <div className="mt-4 flex flex-wrap gap-3">
-              <a href={dashboardsUrl || derivedDashboardsUrl} target="_blank" rel="noreferrer" className="rounded-2xl bg-accent px-4 py-2 text-sm font-semibold text-abyss">
-                Open OpenSearch Console
-              </a>
-              <button type="button" className="rounded-2xl border border-line bg-abyss/80 px-4 py-2 text-sm text-muted">
-                Bootstrap / Repair Data View
-              </button>
             </div>
           </div>
         </section>

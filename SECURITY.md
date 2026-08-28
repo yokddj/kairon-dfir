@@ -11,13 +11,12 @@ Recommended access controls:
 - VPN or private network.
 - Reverse proxy with TLS.
 - HTTP basic auth, SSO, or another access-control layer in front of frontend/backend.
-- Firewall rules blocking direct access to Postgres, Redis, OpenSearch and OpenSearch Dashboards.
+- Firewall rules blocking direct access to Postgres, Redis and OpenSearch.
 
 Do not publish these ports publicly:
 
 - `5173` frontend
 - `8000` backend/API
-- `5601` OpenSearch Dashboards
 - `9200` OpenSearch
 - `5432` Postgres
 - `6379` Redis

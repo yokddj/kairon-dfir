@@ -11,7 +11,6 @@ from app.api import routes_activity, routes_admin, routes_auth, routes_cases, ro
 from app.core.config import get_settings
 from app.core.database import init_db
 from app.core.opensearch import ensure_events_indices_safe_settings
-from app.services.opensearch_dashboards import auto_bootstrap_dashboards
 
 
 settings = get_settings()
@@ -346,7 +345,6 @@ def on_startup() -> None:
 
     init_db()
     ensure_events_indices_safe_settings()
-    auto_bootstrap_dashboards()
 
     from app.core.database import SessionLocal
 

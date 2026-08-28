@@ -95,6 +95,5 @@ jobs:
           POSTGRES_PASSWORD=release-ci-placeholder
           OPENSEARCH_INITIAL_ADMIN_PASSWORD=release-ci-placeholder
           KAIRON_ENABLE_MEMORY=false
-          KAIRON_ENABLE_DASHBOARDS=false
           EOF
       - run: docker compose config -q || exit 1

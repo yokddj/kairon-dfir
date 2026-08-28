@@ -172,18 +172,6 @@ if has "KAIRON_ENABLE_MEMORY"; then
 fi
 
 echo ""
-echo "--- Dashboard consistency ---"
-if has "KAIRON_ENABLE_DASHBOARDS"; then
-  dash_enabled="$(get "KAIRON_ENABLE_DASHBOARDS")"
-  if [[ "$dash_enabled" == "true" ]]; then
-    if has "OPENSEARCH_DASHBOARDS_ENABLED" && [[ "$(get "OPENSEARCH_DASHBOARDS_ENABLED")" != "true" ]]; then
-      warn "KAIRON_ENABLE_DASHBOARDS=true but OPENSEARCH_DASHBOARDS_ENABLED is not true"
-    fi
-  fi
-  pass "Dashboard feature config is present"
-fi
-
-echo ""
 echo "--- File permissions ---"
 perms="$(stat -c '%a' "$DOTENV" 2>/dev/null || echo "")"
 if [[ "$perms" == "600" ]]; then

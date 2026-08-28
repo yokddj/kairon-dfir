@@ -32,14 +32,6 @@ class Settings(BaseSettings):
     opensearch_verify_certs: bool = False
     opensearch_index_prefix: str = "dfir-events"
     opensearch_memory_index_prefix: str = "dfir-memory"
-    opensearch_dashboards_internal_url: str = "http://opensearch-dashboards:5601"
-    opensearch_dashboards_public_url: str = "http://localhost:5601"
-    opensearch_dashboards_username: str | None = None
-    opensearch_dashboards_password: str | None = None
-    opensearch_dashboards_index_pattern: str = "dfir-events-*"
-    opensearch_dashboards_time_field: str = "@timestamp"
-    opensearch_dashboards_enabled: bool = True
-    dfir_auto_bootstrap_dashboards: bool = True
     report_brand_name: str = "Kairon DFIR"
     report_brand_subtitle: str = "Digital Forensics & Incident Response"
     report_brand_primary_color: str = "#0f172a"

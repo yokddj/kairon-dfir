@@ -34,7 +34,6 @@ RUNTIME_DEFAULTS = {
     "DETECTION_WRITE_BATCH_SIZE": 1000,
     "DETECTION_DUPLICATE_LOOKUP_BATCH_SIZE": 2000,
     "METADATA_UPDATE_THROTTLE_SECONDS": 3,
-    "OPENSEARCH_DASHBOARDS_PUBLIC_URL": settings.opensearch_dashboards_public_url,
     "REPORT_BRAND_NAME": settings.report_brand_name,
     "REPORT_BRAND_SUBTITLE": settings.report_brand_subtitle,
     "REPORT_BRAND_PRIMARY_COLOR": settings.report_brand_primary_color,
@@ -380,14 +379,6 @@ SETTING_META: dict[str, dict[str, Any]] = {
         "requires_restart": True,
         "restart_scope": "full_stack",
         "applies_immediately": False,
-        "value_type": "string",
-    },
-    "OPENSEARCH_DASHBOARDS_PUBLIC_URL": {
-        "category": "runtime",
-        "description": "Public OpenSearch Dashboards URL used in UI redirects. Leave empty to derive it from the current request host.",
-        "requires_restart": False,
-        "restart_scope": "none",
-        "applies_immediately": True,
         "value_type": "string",
     },
     "REPORT_BRAND_NAME": {
