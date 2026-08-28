@@ -587,6 +587,22 @@ def _discovery_work_dir(evidence) -> Path:
         return Path("/tmp")
 
 
+def _probe_may_overwrite_detected_format(existing_format: str | None, probed_platform: str | None) -> bool:
+    """Whether this worker-side probe's result should replace the stored format.
+
+    True when the probe identified a platform and the stored format does not
+    identify one by itself. The ingest detector writes "raw_candidate" for a
+    file with no signature in its first 1 MiB, which is a non-answer; treating
+    it as an answer is what made Linux raw dumps loop on
+    PLATFORM_NOT_IDENTIFIED while every attempt rediscovered the platform.
+    """
+    from app.services.memory.platform import PLATFORM_RESOLVING_FORMATS
+
+    if probed_platform in (None, "unknown", ""):
+        return False
+    return (existing_format or "").lower().strip() not in PLATFORM_RESOLVING_FORMATS
+
+
 def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
     """Run the OS-agnostic preparation for a single evidence.
 
@@ -664,7 +680,15 @@ def execute_memory_preparation(evidence_id: str) -> dict[str, Any]:
         # of probe_memory_platform's own detection order, so persisting
         # it here is enough for every future caller to resolve the
         # platform without re-running Volatility.
-        if not evidence.detected_format and probe_summary.get("platform") not in (None, "unknown"):
+        # The guard here used to be "only if detected_format is empty", which
+        # let the ingest detector's inconclusive guess win over this probe.
+        # A Linux raw dump is written as "raw_candidate" ("no signature in the
+        # first 1 MiB") -- not an identification, but non-empty, so the banner
+        # scan's result was dropped, the static re-probe below saw
+        # "raw_candidate" again and reported PLATFORM_NOT_IDENTIFIED. The
+        # preparation then retried and rediscovered the same platform forever.
+        # Only a format that actually resolves a platform may stand.
+        if _probe_may_overwrite_detected_format(evidence.detected_format, probe_summary.get("platform")):
             evidence.detected_format = probe_summary.get("format") or None
             evidence.detection_confidence = probe_summary.get("confidence") or None
             evidence.detection_reason = probe_summary.get("reason") or None
