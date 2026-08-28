@@ -8,6 +8,7 @@ general upload/registration paths in routes_evidence.py.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -48,8 +49,15 @@ def _configure(monkeypatch, tmp_path, enqueue_calls: list):
     counter = {"n": 0}
 
     def _fake_save_upload(case_id, file):
+        # Mirror app.core.storage.save_upload, which keeps the uploaded
+        # filename. Storing everything as .bin made the detector classify
+        # every upload here as a memory dump, and memory evidence requires an
+        # explicit host, so these tests failed on host resolution long before
+        # reaching the duplicate check they exist to cover.
         counter["n"] += 1
-        stored_path = tmp_path / f"upload-{counter['n']}.bin"
+        original_dir = tmp_path / f"upload-{counter['n']}"
+        original_dir.mkdir(parents=True, exist_ok=True)
+        stored_path = original_dir / Path(file.filename or "upload.bin").name
         stored_path.write_bytes(b"placeholder")
         return str(uuid4()), stored_path, stored_path.stat().st_size, file._fake_sha256
 
@@ -173,9 +181,12 @@ def test_register_path_duplicate_detection_reuses_the_same_helper(tmp_path, monk
     monkeypatch.setattr(routes_evidence, "log_activity", lambda *a, **k: None)
     monkeypatch.setattr(routes_evidence, "enqueue_ingest", lambda evidence_id: None)
 
-    file_a = tmp_path / "case_file_a.bin"
+    # Not .bin: that extension is detected as a memory dump, and memory
+    # evidence requires an explicit host, which this test does not provide
+    # and is not what it covers.
+    file_a = tmp_path / "case_file_a.zip"
     file_a.write_bytes(b"identical evidence bytes")
-    file_b = tmp_path / "case_file_b.bin"
+    file_b = tmp_path / "case_file_b.zip"
     file_b.write_bytes(b"identical evidence bytes")  # same content, different path/name
 
     def _validate_ok(path, *, scan_limit=5000):

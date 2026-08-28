@@ -70,10 +70,27 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.api import routes_memory, routes_memory_experimental, routes_memory_recovery
 
+def collect_paths(routes):
+    # FastAPI wraps included routers in _IncludedRouter objects, which carry
+    # no .path of their own and hold the real routes on .original_router.
+    # Reading route.path directly raised AttributeError and made every probe
+    # in this file fail.
+    found = set()
+    for route in routes:
+        path = getattr(route, "path", None)
+        if path is not None:
+            found.add(path)
+            continue
+        nested = getattr(route, "original_router", None)
+        if nested is not None:
+            found.update(collect_paths(nested.routes))
+    return found
+
+
 memory_paths = set()
 for module in (routes_memory, routes_memory_experimental, routes_memory_recovery):
-    memory_paths.update(route.path for route in module.router.routes)
-app_paths = {route.path for route in app.routes}
+    memory_paths.update(collect_paths(module.router.routes))
+app_paths = collect_paths(app.routes)
 
 client = TestClient(app)
 health = client.get("/health")

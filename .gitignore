@@ -60,6 +60,12 @@ data/tmp/*
 /cases/
 backups/
 logs/
+# ...but winevt/Logs/ is a real Windows artifact path, so the rule above was
+# silently excluding .evtx fixtures from three Velociraptor collection trees.
+# Those files exist locally and pass locally, while CI checks out a tree
+# without them and fails.
+!backend/tests/fixtures/**/Logs/
+!backend/tests/fixtures/**/Logs/**
 reports/generated/
 opensearch_data/
 postgres_data/
