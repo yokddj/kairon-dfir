@@ -334,6 +334,9 @@ def test_chain_loop_detected(monkeypatch, tmp_path: Path) -> None:
     from app.disk_images.qcow import QcowImageAdapter
     adapter = QcowImageAdapter()
     authorized = _build_authorized_set(tmp_path, [])
+    # Without this the adapter returns missing_dependency on any machine that
+    # has no qemu-img, and the chain-loop path this test is named for never runs.
+    monkeypatch.setattr(adapter, "readiness", lambda: {"ready": True, "reason": None})
     adapter._check_chain_depth = lambda path, auth, depth: {"error": "chain_loop_detected"}
     result = adapter.expose_readonly(evidence_id="ev-1", path=tmp_path / "test.qcow2", companions=[], workspace=tmp_path)
     assert result.get("error") == "chain_loop_detected" or "qemu-img" in str(result.get("error", ""))
@@ -348,6 +351,9 @@ def test_subprocess_never_shell_true(monkeypatch, tmp_path: Path) -> None:
         return sp.CompletedProcess(args=command, returncode=0, stdout="{}", stderr="")
 
     monkeypatch.setattr(sp, "run", fake_run)
+    # qemu_img_info() returns early when qemu-img is absent, so without this
+    # no subprocess is ever built and the assertion below has nothing to check.
+    monkeypatch.setattr("app.disk_images.qemu._qemu_img_exists", lambda: True)
     qemu_img_info(Path("/fake/path"))
     assert len(captured) > 0
     for call in captured:

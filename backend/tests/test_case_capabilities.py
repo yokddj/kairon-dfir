@@ -50,6 +50,24 @@ def _registered_routes() -> set[str]:
     return registered_paths
 
 
+def _route_is_registered(route: str, registered_paths: set[str]) -> bool:
+    """React Router matches a ":param" segment against any single literal
+    segment, so a capability route like /cases/:caseId/m/:evidenceId/processes
+    is served by the registered /cases/:caseId/m/:evidenceId/:memoryTab. A
+    literal set-membership check misses that and reports a reachable route as
+    unregistered."""
+    if route in registered_paths:
+        return True
+    wanted = route.strip("/").split("/")
+    for candidate in registered_paths:
+        parts = candidate.strip("/").split("/")
+        if len(parts) != len(wanted):
+            continue
+        if all(part.startswith(":") or part == segment for part, segment in zip(parts, wanted)):
+            return True
+    return False
+
+
 def _case(db):
     db.add(Case(id=CASE_ID, name="Capability Case", description=None))
     db.add(CaseHost(id=HOST_ID, case_id=CASE_ID, canonical_name="web-01", display_name="WEB-01", confidence="manual", source="manual"))
@@ -282,7 +300,7 @@ def test_registry_canonical_routes_are_registered_in_app_router():
 
     for capability in CAPABILITY_REGISTRY:
         route = _route_path(capability["route"])
-        assert route in registered_paths, f"{capability['id']} route {route} is not registered in App.tsx"
+        assert _route_is_registered(route, registered_paths), f"{capability['id']} route {route} is not registered in App.tsx"
 
 
 def test_generated_workbench_summaries_have_no_orphan_routes_or_capabilities():

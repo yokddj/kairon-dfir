@@ -1,4 +1,5 @@
 import {
+  BookOpen,
   Database,
   FileArchive,
   Fingerprint,
@@ -214,6 +215,17 @@ export default function Sidebar() {
             Users
           </NavLink>
         )}
+        <NavLink
+          to="/docs"
+          className={({ isActive }) =>
+            `flex items-center gap-3 rounded-2xl px-4 py-3 text-sm transition ${
+              isActive ? "bg-accent/10 text-accent shadow-panel" : "text-muted hover:bg-white/5 hover:text-ink"
+            }`
+          }
+        >
+          <BookOpen size={16} />
+          Docs
+        </NavLink>
         <NavLink
           to="/account/change-password"
           className={({ isActive }) =>
