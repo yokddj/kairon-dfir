@@ -11,7 +11,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    app_version: str = "0.9.0-beta"
+    app_version: str = "1.1.0"
     app_vendor_id: str = "yokddj"
     app_build_channel: str = "public-beta"
     app_build_fingerprint: str = "kairon-dfir-public-beta"

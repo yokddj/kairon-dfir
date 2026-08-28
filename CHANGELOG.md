@@ -39,6 +39,22 @@
 - Debug Export (the technical ZIP export of ingest, process-graph, and rules diagnostics). Its shared process-tree/execution-story code was decoupled into `app/services/process_tree.py` and continues to power the `/process-tree`, `/process-tree/expand`, `/process-tree/focused`, and `/execution-story` endpoints as well as correlation findings.
 - Validation Matrix (the demo/training ground-truth coverage view and its report section, timeline seeding, and case-mode visibility gating). The underlying case mode classification (`investigation`/`demo`/`training`/`validation`) and demo cases remain.
 
+## 1.1.0 - 2026-08-28
+
+Full notes: [docs/releases/1.1.0.md](docs/releases/1.1.0.md).
+
+### Highlights
+
+- Sigma rulesets are imported once and run repeatedly against the case, Chainsaw/Hayabusa-style, only against the data the case actually holds.
+- Linux cases became searchable at all: their fields were undeclared in the index mapping, so evidence was indexed but could not be queried. Linux Sigma rules now run against them.
+- A pass over silent failures — queries, filters and caps that returned zero or truncated results indistinguishably from "no such data exists" — across incident timeline, reports, Command History, persistence, host filters and Linux memory platform identification.
+- GitHub Actions had refused to run any job since 25 July; restored, and the 21 backend tests that outage hid are fixed.
+
+### Removed
+
+- The YARA engine.
+- The OpenSearch Dashboards console, including the compose service (which shipped in the `default` profile regardless of `KAIRON_ENABLE_DASHBOARDS`), its admin endpoints, the `--dashboards` setup flag and port 5601.
+
 ## 0.9.0-beta - 2026-07-18
 
 ### Highlights

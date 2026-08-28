@@ -2,7 +2,7 @@ FROM node:20-alpine@sha256:fb4cd12c85ee03686f6af5362a0b0d56d50c58a04632e6c0fb836
 
 ARG KAIRON_COMMIT=unknown
 ARG BUILD_DATE=unknown
-ARG KAIRON_VERSION=0.9.0-beta
+ARG KAIRON_VERSION=1.1.0
 
 WORKDIR /workspace/frontend
 
@@ -17,7 +17,7 @@ FROM nginx:stable-alpine@sha256:0d3b80406a13a767339fbe2f41406d6c7da727ab89cf8fae
 
 ARG KAIRON_COMMIT=unknown
 ARG BUILD_DATE=unknown
-ARG KAIRON_VERSION=0.9.0-beta
+ARG KAIRON_VERSION=1.1.0
 
 LABEL org.opencontainers.image.title="Kairon DFIR frontend" \
       org.opencontainers.image.version="${KAIRON_VERSION}" \
