@@ -156,7 +156,7 @@ SIGMA_CATEGORY_SERVICE_HINTS = {
     "powershell": ["powershell"],
 }
 ENGINE_COMPATIBILITY_VERSION = "rules_v3"
-SUPPORTED_MODIFIERS = {"contains", "endswith", "startswith", "re", "all"}
+SUPPORTED_MODIFIERS = {"contains", "endswith", "startswith", "re", "all", "windash"}
 UNSUPPORTED_FEATURE_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("unsupported_correlation", re.compile(r"\bnear\b|\bwithin\b|\bby\b", re.IGNORECASE)),
 ]
@@ -571,14 +571,17 @@ def compile_sigma_rule(rule_data: dict) -> dict:
         compiled_selection: list[dict[str, object]] = []
         for sigma_field, expected in selection.items():
             mapped_fields, used_fallback = _mapped_sigma_fields(str(sigma_field))
-            _, modifier = _split_field_and_modifier(str(sigma_field))
+            base_field, modifier, transforms = parse_field_modifiers(str(sigma_field))
+            expected_values = _flatten_values(expected)
+            if transforms:
+                expected_values = apply_value_transforms([str(item) for item in expected_values], transforms)
             compiled_selection.append(
                 {
                     "sigma_field": str(sigma_field),
-                    "base_field": _split_field_and_modifier(str(sigma_field))[0],
+                    "base_field": base_field,
                     "mapped_fields": mapped_fields,
                     "modifier": modifier,
-                    "expected": _flatten_values(expected),
+                    "expected": expected_values,
                     "used_fallback": used_fallback,
                 }
             )
@@ -1069,6 +1072,57 @@ def _stringify_values(value: object) -> list[str]:
     return [str(value)]
 
 
+# Sigma's windash modifier: Windows treats these interchangeably as the marker
+# before a command-line switch, and attackers swap them precisely because
+# detections tend to hardcode one. Expanding the expected value is the whole of
+# the modifier -- there is no separate matching behaviour.
+_WINDASH_VARIANTS = ("-", "/", "\u2013", "\u2014", "\u2015")
+
+
+def parse_field_modifiers(field: str) -> tuple[str, str | None, set[str]]:
+    """Split a Sigma field into its name, its match modifier and its transforms.
+
+    A field can carry a chain ("CommandLine|contains|windash"), and the pieces
+    do different jobs: one decides how to compare, the rest rewrite the value
+    being compared. Reading only a trailing suffix conflated the two, so a rule
+    using windash was reported as using an unsupported modifier and never ran.
+    """
+    parts = [part.strip() for part in str(field).split("|")]
+    base = parts[0]
+    match_modifier: str | None = None
+    transforms: set[str] = set()
+    for modifier in parts[1:]:
+        if not modifier:
+            continue
+        if modifier in {"contains", "startswith", "endswith", "re", "all"}:
+            match_modifier = modifier if match_modifier is None else match_modifier
+        else:
+            transforms.add(modifier)
+    return base, match_modifier, transforms
+
+
+def expand_windash_values(values: list[str]) -> list[str]:
+    """Every dash variant of each value, deduplicated and order-preserving."""
+    expanded: list[str] = []
+    for value in values:
+        text = str(value)
+        candidates = [text]
+        for index, character in enumerate(text):
+            if character in _WINDASH_VARIANTS:
+                for variant in _WINDASH_VARIANTS:
+                    candidates.append(text[:index] + variant + text[index + 1 :])
+        for candidate in candidates:
+            if candidate not in expanded:
+                expanded.append(candidate)
+    return expanded
+
+
+def apply_value_transforms(values: list[str], transforms: set[str]) -> list[str]:
+    if "windash" in transforms:
+        return expand_windash_values(values)
+    return values
+
+
 def _match_scalar(actual_values: list[str], expected: object, modifier: str | None) -> bool:
     expected_values = [str(item) for item in _flatten_values(expected)]
     if modifier == "all":
@@ -1091,7 +1145,9 @@ def _match_selection(selection_name: str, selection: object, document: dict) -> 
     data_quality: list[str] = []
     for sigma_field, expected in selection.items():
         mapped_fields, used_fallback = _mapped_sigma_fields(str(sigma_field))
-        _, modifier = _split_field_and_modifier(str(sigma_field))
+        _, modifier, transforms = parse_field_modifiers(str(sigma_field))
+        if transforms:
+            expected = apply_value_transforms([str(item) for item in _flatten_values(expected)], transforms)
         found = False
         for mapped_field in mapped_fields:
             actual_values = _stringify_values(_get_nested_value(document, mapped_field))
