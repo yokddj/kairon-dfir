@@ -3681,7 +3681,7 @@ export type Rule = {
   rule_set_id: string | null;
   name: string;
   title: string | null;
-  engine: "yara" | "sigma" | "heuristic";
+  engine: "sigma" | "heuristic";
   namespace: string | null;
   source: string | null;
   description: string | null;
@@ -3779,7 +3779,7 @@ export type RuleSet = {
   id: string;
   case_id: string | null;
   name: string;
-  engine: "yara" | "sigma" | "heuristic";
+  engine: "sigma" | "heuristic";
   namespace: string | null;
   description: string | null;
   source_filename: string | null;
@@ -3929,7 +3929,6 @@ export type RuleImportResponse = {
   duplicate_count: number;
   imported_rules: number;
   imported_rule_sets: number;
-  total_yara_rules_inside: number;
   compiled_count: number;
   unsupported_condition_count: number;
   compile_error_count: number;

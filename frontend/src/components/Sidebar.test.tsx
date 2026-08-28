@@ -243,23 +243,3 @@ describe("registry-driven sidebar", () => {
     expect(screen.queryByTestId(/^surface-/)).not.toBeInTheDocument();
   });
 });
-
-describe("Rules navigation", () => {
-  it("offers a way to reach the rule library", async () => {
-    // The Rules page existed as a route but appeared nowhere in the navigation,
-    // so the only way in was typing /rules by hand -- which meant the rule
-    // import wizard was, in practice, unreachable.
-    renderSidebar();
-    const link = await screen.findByRole("link", { name: /rules/i });
-    expect(link).toHaveAttribute("href", "/rules");
-  });
-
-  it("keeps it outside the per-case section, since rules are reused across cases", async () => {
-    renderSidebar();
-    const investigation = screen.getByRole("navigation");
-    const link = await screen.findByRole("link", { name: /rules/i });
-    const section = link.closest("section");
-    expect(section).toBeNull();
-    expect(investigation).toContainElement(link);
-  });
-});

@@ -60,7 +60,6 @@ export default function EvidenceDetail() {
   const [selectedProblematicArtifactIds, setSelectedProblematicArtifactIds] = useState<string[]>([]);
   const [problematicRetryMode, setProblematicRetryMode] = useState("higher_timeout");
   const [latestStartedRunId, setLatestStartedRunId] = useState<string | null>(null);
-  const [rulesEngineSelection, setRulesEngineSelection] = useState<"sigma" | "yara" | "all">("sigma");
   const [indexingProfile, setIndexingProfile] = useState<"recommended" | "fast" | "advanced_custom">("recommended");
   const [benchmarkAutopilot, setBenchmarkAutopilot] = useState(true);
   const [benchmarkMaxAttempts, setBenchmarkMaxAttempts] = useState(2);
@@ -427,7 +426,7 @@ export default function EvidenceDetail() {
       api.runRulesForEvidence(evidenceId, {
         mode: "on_demand",
         scope: "evidence",
-        rule_types: rulesEngineSelection === "all" ? ["sigma", "yara"] : [rulesEngineSelection],
+        rule_types: ["sigma"],
       }),
     onSuccess: async (result) => {
       notify({

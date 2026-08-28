@@ -34,7 +34,6 @@ const ArtifactExplorer = lazy(() => import("./pages/ArtifactExplorer"));
 const Siem = lazy(() => import("./pages/Siem"));
 const ActivityPage = lazy(() => import("./pages/ActivityPage"));
 const Findings = lazy(() => import("./pages/Findings"));
-const Rules = lazy(() => import("./pages/Rules"));
 const Detections = lazy(() => import("./pages/Detections"));
 const SystemPage = lazy(() => import("./pages/SystemPage"));
 const DocsPage = lazy(() => import("./pages/DocsPage"));
@@ -204,7 +203,6 @@ export default function App() {
                         <Route path="/dashboard" element={<ActiveCaseCanonicalRedirect suffix="/overview" />} />
                         <Route path="/analysis/semi-auto" element={<ActiveCaseCanonicalRedirect suffix="/findings" />} />
                         <Route path="/semi-auto" element={<ActiveCaseCanonicalRedirect suffix="/findings" />} />
-                        <Route path="/rules" element={<Rules />} />
                         <Route path="/detections" element={<LegacyCaseRoute suffix="/detections" />} />
                         <Route path="/findings" element={<LegacyCaseRoute suffix="/findings" />} />
                         <Route path="/docs" element={<DocsPage />} />
