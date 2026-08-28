@@ -120,6 +120,7 @@ This documentation describes the real state of the platform. Partial capabilitie
 
 ## Releases
 
+- [releases/1.1.0.md](releases/1.1.0.md): release notes for 1.1.0.
 - [releases/0.9.0-beta.md](releases/0.9.0-beta.md): release notes for 0.9.0-beta (historical).
 
 ## Community
