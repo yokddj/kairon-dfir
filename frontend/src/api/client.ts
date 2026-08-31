@@ -5769,6 +5769,18 @@ function buildArtifactQuery(path: string, params: Record<string, unknown> | unde
 }
 
 export const api = {
+  getAiConfig: () => request<AiConfigResponse>("/ai/config"),
+  updateAiConfig: (payload: { enabled?: boolean; active_provider?: string; max_tokens?: number }) =>
+    request<AiConfigResponse>("/ai/config", { method: "PUT", body: JSON.stringify(payload) }),
+  updateAiProvider: (provider: string, payload: AiProviderProbe) =>
+    request<AiConfigResponse>(`/ai/providers/${provider}`, { method: "PUT", body: JSON.stringify(payload) }),
+  deleteAiProvider: (provider: string) =>
+    request<AiConfigResponse>(`/ai/providers/${provider}`, { method: "DELETE" }),
+  testAiProvider: (provider: string, payload: AiProviderProbe) =>
+    request<AiProviderTestResponse>(`/ai/providers/${provider}/test`, { method: "POST", body: JSON.stringify(payload) }),
+  listAiProviderModels: (provider: string, payload: AiProviderProbe) =>
+    request<AiProviderModelsResponse>(`/ai/providers/${provider}/models`, { method: "POST", body: JSON.stringify(payload) }),
+  getAiStatus: () => request<AiStatusResponse>("/ai/status"),
   listCases: (params?: CaseListParams | { queryKey?: unknown }) => request<DfirCase[]>(buildArtifactQuery("/cases", params && "queryKey" in params ? undefined : params)),
   createCase: (payload: Partial<DfirCase>) => request<DfirCase>("/cases", { method: "POST", body: JSON.stringify(payload) }),
   getCase: (caseId: string) => request<DfirCase>(`/cases/${caseId}`),
@@ -8326,3 +8338,121 @@ export type RuleQualityResponse = {
   items: RuleQualityMetric[];
   total: number;
 };
+
+// --- AI assistant ---------------------------------------------------------
+
+export type AiProviderEntry = {
+  provider: string;
+  label: string;
+  /** cloud | local | custom -- drives the "evidence leaves the lab" warning. */
+  hosting: string;
+  requires_api_key: boolean;
+  base_url_editable: boolean;
+  help: string;
+  default_model: string;
+  default_base_url: string | null;
+  model: string;
+  base_url: string;
+  /** The key itself is never sent to the browser, only its presence. */
+  has_api_key: boolean;
+  configured: boolean;
+};
+
+export type AiConfigResponse = {
+  enabled: boolean;
+  active_provider: string | null;
+  max_tokens: number;
+  providers: AiProviderEntry[];
+};
+
+export type AiStatusResponse = {
+  enabled: boolean;
+  provider: string | null;
+  label?: string;
+  model: string | null;
+  hosting: string | null;
+};
+
+export type AiProviderProbe = {
+  model?: string;
+  base_url?: string;
+  api_key?: string;
+};
+
+export type AiProviderTestResponse = {
+  ok: boolean;
+  models?: string[];
+  model_count?: number;
+  error?: string;
+};
+
+export type AiProviderModelsResponse = {
+  ok: boolean;
+  models: string[];
+  error?: string;
+};
+
+export type AiChatMessage = {
+  role: "user" | "assistant";
+  content: string;
+};
+
+/** One decoded frame of the assistant's answer stream. */
+export type AiStreamEvent = {
+  type: "meta" | "text" | "notice" | "error" | "done";
+  text?: string;
+  provider?: string;
+  model?: string;
+};
+
+/**
+ * Stream one answer over SSE. Resolves once the server closes the stream;
+ * abort through `signal` to stop generating.
+ */
+export async function streamCaseAiChat(
+  caseId: string,
+  payload: { messages: AiChatMessage[]; provider?: string | null },
+  onEvent: (event: AiStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await apiFetch(`/cases/${caseId}/ai/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+    body: JSON.stringify(payload),
+    signal,
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    let message = body;
+    try {
+      const parsed = JSON.parse(body) as { detail?: string };
+      if (typeof parsed.detail === "string") message = parsed.detail;
+    } catch {
+      // Keep the raw body as the message.
+    }
+    throw new ApiError(response.status, null, message || `Request failed (${response.status})`, body);
+  }
+  if (!response.body) throw new Error("The assistant returned no stream");
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    // SSE frames are separated by a blank line; keep the trailing partial.
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      for (const line of frame.split("\n")) {
+        if (!line.startsWith("data:")) continue;
+        try {
+          onEvent(JSON.parse(line.slice(5).trim()) as AiStreamEvent);
+        } catch {
+          // A frame we cannot parse is dropped rather than breaking the stream.
+        }
+      }
+    }
+  }
+}
