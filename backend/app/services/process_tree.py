@@ -860,14 +860,17 @@ def _filter_process_graph(graph: dict, *, pid: int | None = None, process_name: 
     if pid is None and not process_name and not entity_id:
         return graph
 
-    process_name_lower = (process_name or "").strip().lower()
+    # Compared the same way everywhere: a pasted full path, a name with or
+    # without .exe, and any casing all have to select the same node, or the
+    # graph goes empty for a process that is plainly in it.
+    wanted_name = normalize_process_name(process_name)
     focus_ids = {
         str(node.get("id"))
         for node in graph.get("nodes", [])
         if (
             (entity_id and str(node.get("id") or "") == entity_id)
             or (pid is not None and _safe_intish(node.get("pid")) == int(pid))
-            or (process_name_lower and process_name_lower in str(node.get("name") or "").lower())
+            or (wanted_name and _node_matches_name(node, wanted_name))
         )
     }
     if not focus_ids:
@@ -1106,25 +1109,42 @@ def _process_focus_filter(*, pid: int | None = None, process_name: str | None = 
         )
     process_name_value = str(process_name or "").strip()
     if process_name_value:
-        wildcard_value = f"*{process_name_value.replace('*', '').replace('?', '')}*"
-        for field in (
-            "process.name",
-            "process.executable",
-            "process.path",
-            "process.command_line",
-            "process.parent.name",
-            "process.parent.executable",
-            "process.parent.path",
-            "process.parent.command_line",
-            "parent.process.name",
-            "parent.process.executable",
-            "parent.process.path",
-            "parent.process.command_line",
-        ):
-            should.append({"wildcard": {field: {"value": wildcard_value, "case_insensitive": True}}})
+        # Search for what the analyst typed and, if they pasted a full path,
+        # for the executable name inside it too. Otherwise pasting
+        # "C:\\Windows\\System32\\cmd.exe" matches nothing, because
+        # process.name only ever holds "cmd.exe".
+        terms = {process_name_value}
+        basename = normalize_process_name(process_name_value)
+        if basename:
+            terms.add(basename)
+        for term in sorted(terms):
+            _extend_process_name_should(should, term)
     if not should:
         return None
     return {"bool": {"should": should, "minimum_should_match": 1}}
+
+
+PROCESS_NAME_SEARCH_FIELDS = (
+    "process.name",
+    "process.executable",
+    "process.path",
+    "process.command_line",
+    "process.parent.name",
+    "process.parent.executable",
+    "process.parent.path",
+    "process.parent.command_line",
+    "parent.process.name",
+    "parent.process.executable",
+    "parent.process.path",
+    "parent.process.command_line",
+)
+
+
+def _extend_process_name_should(should: list[dict], term: str) -> None:
+    """Add case-insensitive substring clauses for one search term."""
+    wildcard_value = f"*{term.replace('*', '').replace('?', '')}*"
+    for field in PROCESS_NAME_SEARCH_FIELDS:
+        should.append({"wildcard": {field: {"value": wildcard_value, "case_insensitive": True}}})
 
 
 def _process_start_filter() -> dict:
@@ -1776,6 +1796,150 @@ def _node_identity_matches(node: dict, *, process_guid: str | None, pid: int | N
     return False
 
 
+def normalize_process_name(value: str | None) -> str:
+    """Reduce a process reference to something comparable.
+
+    Analysts and events refer to the same process in several ways: a bare name,
+    a full path, with or without the extension, in any case. Comparing those
+    literally is what makes a search for "powershell" miss
+    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe".
+    """
+    text = str(value or "").strip().strip('"').lower()
+    if not text:
+        return ""
+    # Take the basename of either path flavour, then drop a trailing extension.
+    for separator in ("\\", "/"):
+        if separator in text:
+            text = text.rsplit(separator, 1)[-1]
+    if text.endswith(".exe"):
+        text = text[: -len(".exe")]
+    return text.strip()
+
+
+def _node_name_haystack(node: dict) -> str:
+    return " ".join(
+        str(node.get(field) or "")
+        for field in ("name", "path", "command_line")
+    ).lower()
+
+
+def _node_matches_name(node: dict, wanted: str) -> bool:
+    """True when a node plausibly is the process the analyst named."""
+    if not wanted:
+        return False
+    if normalize_process_name(node.get("name")) == wanted:
+        return True
+    if normalize_process_name(node.get("path")) == wanted:
+        return True
+    return wanted in _node_name_haystack(node)
+
+
+# Ordered from "this is certainly the process you clicked" to "this is a
+# process with the right name". Every step after the first is a guess, so the
+# strategy that matched is reported and shown to the analyst -- silently
+# resolving a different process than the one clicked would be far worse than
+# finding nothing.
+FOCUS_MATCH_EXPLANATIONS = {
+    "source_event": "Matched the exact event you opened.",
+    "process_guid": "Matched the exact process by its ProcessGuid.",
+    "pid_and_name": "No node carried that exact event, so this was matched by PID and process name.",
+    "pid": "No node carried that exact event, so this was matched by PID alone. Confirm it is the right process before relying on it.",
+    "name": "No node matched that PID or event, so this was matched by process name alone. It may be a different execution of the same program.",
+}
+
+
+def _resolve_focus_node(
+    nodes: list[dict],
+    *,
+    process_guid: str | None,
+    pid: int | None,
+    source_event_id: str | None,
+    process_name: str | None,
+) -> tuple[dict | None, str | None, list[dict]]:
+    """Find the process to focus on, relaxing the criteria step by step.
+
+    Returns the chosen node, the strategy that found it, and any other nodes
+    that also fit -- so the caller can offer them rather than leaving the
+    analyst with an empty graph and no way forward.
+    """
+    wanted_name = normalize_process_name(process_name)
+
+    def pick(candidates: list[dict], strategy: str) -> tuple[dict, str, list[dict]]:
+        chosen = min(candidates, key=_focus_candidate_rank)
+        others = [node for node in candidates if node is not chosen]
+        return chosen, strategy, others
+
+    if source_event_id:
+        wanted = str(source_event_id)
+        matches = [
+            node for node in nodes
+            if str(node.get("source_event_id") or "") == wanted
+            or wanted in {str(item) for item in (node.get("source_events") or []) if item}
+        ]
+        if matches:
+            return pick(matches, "source_event")
+
+    if process_guid:
+        wanted = str(process_guid).strip()
+        matches = [node for node in nodes if str(node.get("id") or "").strip() == wanted]
+        if matches:
+            return pick(matches, "process_guid")
+
+    if pid is not None:
+        same_pid = [node for node in nodes if _safe_intish(node.get("pid")) == int(pid)]
+        if same_pid and wanted_name:
+            named = [node for node in same_pid if _node_matches_name(node, wanted_name)]
+            if named:
+                return pick(named, "pid_and_name")
+        if same_pid:
+            return pick(same_pid, "pid")
+
+    if wanted_name:
+        matches = [node for node in nodes if _node_matches_name(node, wanted_name)]
+        if matches:
+            return pick(matches, "name")
+
+    return None, None, []
+
+
+def _nearest_named_nodes(nodes: list[dict], wanted_name: str | None, limit: int = 10) -> list[dict]:
+    """Processes whose name is closest to what was asked for.
+
+    Exists so a failed lookup ends with "did you mean one of these?" rather
+    than an empty graph. Falls back to the busiest processes when no name was
+    given at all, since those are the ones an analyst is most likely after.
+    """
+    wanted = normalize_process_name(wanted_name)
+    if wanted:
+        matches = [node for node in nodes if _node_matches_name(node, wanted)]
+        if matches:
+            return sorted(matches, key=_focus_candidate_rank)[:limit]
+        # Nothing contains the whole term; offer names sharing its start, which
+        # catches a truncated or misremembered name.
+        prefix = wanted[:4]
+        if len(prefix) >= 3:
+            near = [node for node in nodes if normalize_process_name(node.get("name")).startswith(prefix)]
+            if near:
+                return sorted(near, key=_focus_candidate_rank)[:limit]
+        return []
+    return sorted(nodes, key=_focus_candidate_rank)[:limit]
+
+
+def _focus_candidate_summary(node: dict) -> dict:
+    """The minimum an analyst needs to choose between similar processes."""
+    return {
+        "id": node.get("id"),
+        "pid": node.get("pid"),
+        "name": node.get("name"),
+        "path": node.get("path"),
+        "command_line": node.get("command_line"),
+        "user": node.get("user"),
+        "host": node.get("host"),
+        "first_seen": node.get("first_seen"),
+        "last_seen": node.get("last_seen"),
+    }
+
+
 def _focus_candidate_rank(node: dict) -> tuple[bool, bool]:
     node_id = str(node.get("id") or "")
     is_synthetic = node_id.startswith("security:")
@@ -1867,21 +2031,18 @@ def build_process_tree_focused(
     )
     base_graph = base_bundle.get("graph") or {}
     base_nodes = list(base_graph.get("nodes") or [])
-    exact_identity_requested = bool(source_event_id or process_guid)
-    matching_candidates = [
-        node
-        for node in base_nodes
-        if _node_identity_matches(node, process_guid=resolved_guid, pid=resolved_pid, source_event_id=source_event_id, process_name=resolved_name)
-    ]
-    if matching_candidates:
-        # Multiple candidates can match a bare PID lookup when the same process
-        # was also ingested from a non-Sysmon source (e.g. Security 4688) that
-        # only has a synthetic per-event entity_id and no real parent/child
-        # edges. Prefer a candidate with a genuine ProcessGuid and a captured
-        # command line over a synthetic, edge-less duplicate.
-        focus_node = min(matching_candidates, key=_focus_candidate_rank)
-    else:
-        focus_node = base_nodes[0] if (not exact_identity_requested and base_nodes) else None
+    # Resolve by exact identity first, then progressively relax. A node built
+    # from a different source than the event clicked (Security 4688 vs Sysmon)
+    # carries neither the same event id nor the same ProcessGuid, and refusing
+    # to look any further is what leaves the analyst with an empty graph for a
+    # process that is plainly in the tree.
+    focus_node, focus_match, focus_alternatives = _resolve_focus_node(
+        base_nodes,
+        process_guid=resolved_guid,
+        pid=resolved_pid,
+        source_event_id=source_event_id,
+        process_name=resolved_name,
+    )
     if focus_node:
         resolved_guid = resolved_guid or str(focus_node.get("id") or "").strip() or None
         resolved_pid = resolved_pid if resolved_pid is not None else _safe_intish(focus_node.get("pid"))
@@ -1891,13 +2052,26 @@ def build_process_tree_focused(
     parts = [base_graph]
     warnings: list[str] = []
     if not focus_node:
-        if source_event_id:
+        # Even with nothing matched, hand back what the case does contain for
+        # this name so the analyst has somewhere to go next.
+        focus_alternatives = _nearest_named_nodes(base_nodes, resolved_name)
+        if focus_alternatives:
+            warnings.append(
+                "No process matched that PID, ProcessGuid or event. The closest processes "
+                "by name are offered as candidates below."
+            )
+        elif source_event_id:
             warnings.append("Could not build exact story for selected process event. No process node matched the requested source_event_id.")
         elif process_guid:
             warnings.append("Could not build exact story for selected process. No process node matched the requested ProcessGuid.")
         else:
             warnings.append("No process node matched the requested PID, ProcessGuid, or source event.")
     else:
+        if focus_match and focus_match not in ("source_event", "process_guid"):
+            # A relaxed match must never pass as the exact one: the analyst has
+            # to know they may be looking at a different execution. The tree is
+            # still built -- a warning is the point, not a dead end.
+            warnings.append(FOCUS_MATCH_EXPLANATIONS[focus_match])
         expansion_kwargs = {
             "scope": scope,
             "evidence_id": evidence_id,
@@ -2007,6 +2181,12 @@ def build_process_tree_focused(
             "target_identity_matches": target_identity_matches,
             "requested_source_event_id": source_event_id,
             "requested_process_guid": process_guid,
+            # How the focus was found, and what else it could have been. An
+            # empty graph with no way forward is the failure mode this avoids.
+            "focus_match": focus_match,
+            "focus_match_explanation": FOCUS_MATCH_EXPLANATIONS.get(focus_match or "", ""),
+            "is_exact_match": focus_match in ("source_event", "process_guid"),
+            "candidates": [_focus_candidate_summary(node) for node in focus_alternatives[:10]],
         },
     }
 
