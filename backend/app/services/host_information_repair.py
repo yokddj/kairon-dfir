@@ -45,6 +45,7 @@ def rebuild_host_information(db: Session, case_id: str) -> dict[str, Any]:
             "scanned_events": 0,
             "host_facts_created": 0,
             "host_user_facts_created": 0,
+            "hosts": [],
             "warnings": ["This case has no indexed events, so there is nothing to rebuild."],
         }
 
@@ -109,8 +110,72 @@ def rebuild_host_information(db: Session, case_id: str) -> dict[str, Any]:
         "scanned_events": scanned,
         "host_facts_created": host_facts_created,
         "host_user_facts_created": host_user_facts_created,
+        # Per host, so a host that gained nothing can say whether that is
+        # because it already had everything or because the artifact that
+        # carries it was never collected for that machine.
+        "hosts": _identity_source_coverage(db, client, index, case_id),
         "warnings": warnings,
     }
+
+
+# The artifacts that can produce a local account inventory. A host with none of
+# these cannot have Users listed no matter how often the rebuild is run, and
+# saying so is the difference between "this host has no users" (impossible) and
+# "the hive that lists them was never collected" (actionable).
+IDENTITY_SOURCE_TYPES = (
+    "windows_sam_identity",
+    "windows_profile_list",
+    "linux_identity",
+    "linux_lastlog",
+)
+
+
+def _identity_source_coverage(db: Session, client, index: str, case_id: str) -> list[dict]:
+    """For each host, which identity artifacts exist in the indexed events."""
+    hosts = db.query(CaseHost).filter(CaseHost.case_id == case_id).all()
+    counts: dict[str, dict[str, int]] = {}
+    try:
+        result = client.search(
+            index=index,
+            body={
+                "size": 0,
+                "query": {
+                    "bool": {
+                        "filter": [
+                            {"term": {"case_id": case_id}},
+                            {"terms": {"artifact.type": list(IDENTITY_SOURCE_TYPES)}},
+                        ]
+                    }
+                },
+                "aggs": {
+                    "by_host": {
+                        "terms": {"field": "host.name", "size": 200},
+                        "aggs": {"by_type": {"terms": {"field": "artifact.type", "size": 10}}},
+                    }
+                },
+            },
+            params={"ignore_unavailable": "true"},
+        )
+        for bucket in (result.get("aggregations", {}).get("by_host", {}).get("buckets") or []):
+            counts[str(bucket.get("key") or "").lower()] = {
+                str(inner.get("key")): int(inner.get("doc_count") or 0)
+                for inner in (bucket.get("by_type", {}).get("buckets") or [])
+            }
+    except Exception as exc:  # noqa: BLE001 - coverage is explanatory, not essential
+        logger.warning("Identity source coverage lookup failed: %s", exc)
+
+    coverage = []
+    for host in hosts:
+        sources = counts.get((host.display_name or "").lower()) or counts.get(
+            (host.canonical_name or "").lower()
+        ) or {}
+        coverage.append({
+            "host_id": host.id,
+            "host": host.display_name,
+            "identity_sources": sources,
+            "has_identity_source": bool(sources),
+        })
+    return coverage
 
 
 def _sole_host_id(db: Session, case_id: str) -> str | None:
