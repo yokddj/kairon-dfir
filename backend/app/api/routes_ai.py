@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.database import get_db
+from app.models.ai_conversation import AiConversation
 from app.models.case import Case
 from app.models.user import User
 from app.schemas.ai import AIChatRequest, AIGeneralUpdate, AIProviderProbe, AIProviderUpdate
@@ -27,10 +29,19 @@ from app.services.ai.config import (
 )
 from app.services.ai.config import delete_provider as delete_provider_config
 from app.services.ai.crypto import CredentialCryptoError, open_sealed
+from app.services.ai.history import (
+    append_turn,
+    delete_conversation,
+    get_conversation,
+    list_conversations,
+    start_or_resume,
+)
 from app.services.ai.providers import ProviderError, build_provider
 from app.services.audit import log_audit
 from app.services.auth_dependencies import get_current_user, get_effective_case_role, get_optional_user
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["ai"])
 
@@ -225,8 +236,26 @@ def case_ai_chat(
 
     messages = [message.model_dump() for message in payload.messages]
     actor_user_id = getattr(user, "id", None)
+    question = messages[-1]["content"] if messages else ""
+    credentials = resolve_provider(db, payload.provider)
+    conversation = start_or_resume(
+        db,
+        case_id=case_id,
+        conversation_id=payload.conversation_id,
+        user_id=actor_user_id,
+        question=question,
+        provider=credentials.provider,
+        model=credentials.model,
+    )
+    db.commit()
+    conversation_id = conversation.id
 
     def event_stream() -> Iterator[str]:
+        # Buffered so the finished answer can be persisted; the analyst still
+        # sees each fragment as it arrives.
+        answer: list[str] = []
+        lookups: list[dict] = []
+        yield _sse({"type": "conversation", "conversation_id": conversation_id})
         try:
             for event in stream_answer(
                 db,
@@ -234,10 +263,25 @@ def case_ai_chat(
                 messages=messages,
                 actor_user_id=actor_user_id,
                 provider=payload.provider,
+                active_host=payload.active_host,
             ):
+                if event.type == "text":
+                    answer.append(event.text)
+                elif event.type == "notice" and event.data.get("tool"):
+                    lookups.append({"tool": event.data["tool"], "arguments": event.data.get("arguments") or {}})
                 yield _sse({"type": event.type, "text": event.text, **event.data})
         except (ChatValidationError, AIConfigError, CredentialCryptoError) as exc:
             yield _sse({"type": "error", "text": str(exc)})
+        finally:
+            text = "".join(answer).strip()
+            if text:
+                try:
+                    stored = db.get(AiConversation, conversation_id)
+                    if stored is not None:
+                        append_turn(db, stored, question=question, answer=text, lookups=lookups)
+                except Exception:  # noqa: BLE001 - a history failure must not break the answer
+                    logger.exception("Could not persist the assistant conversation")
+                    db.rollback()
         yield _sse({"type": "done"})
 
     return StreamingResponse(
@@ -245,3 +289,55 @@ def case_ai_chat(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/api/cases/{case_id}/ai/conversations")
+def case_ai_conversations(
+    case_id: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+) -> dict:
+    """Past assistant threads for this case, newest first."""
+    _require_case_access(db, case_id, user)
+    return {"conversations": list_conversations(db, case_id)}
+
+
+@router.get("/api/cases/{case_id}/ai/conversations/{conversation_id}")
+def case_ai_conversation(
+    case_id: str,
+    conversation_id: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+) -> dict:
+    _require_case_access(db, case_id, user)
+    found = get_conversation(db, case_id, conversation_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return found
+
+
+@router.delete("/api/cases/{case_id}/ai/conversations/{conversation_id}")
+def case_ai_conversation_delete(
+    case_id: str,
+    conversation_id: str,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+) -> dict:
+    _require_case_access(db, case_id, user)
+    if not delete_conversation(db, case_id, conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    log_audit(
+        "ai.conversation.deleted",
+        actor_user_id=getattr(user, "id", None),
+        case_id=case_id,
+        resource_type="ai_conversation",
+        resource_id=conversation_id,
+    )
+    return {"deleted": True}
+
+
+def _require_case_access(db: Session, case_id: str, user: User | None) -> None:
+    if db.get(Case, case_id) is None:
+        raise HTTPException(status_code=404, detail="Case not found")
+    if user is not None and get_effective_case_role(user, case_id, db) is None:
+        raise HTTPException(status_code=403, detail="Access denied to this case")

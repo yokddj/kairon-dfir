@@ -1,3 +1,4 @@
+from app.models.ai_conversation import AiConversation, AiMessage
 from app.models.app_setting import AppSetting
 from app.models.activity import AppActivityEvent
 from app.models.artifact import Artifact

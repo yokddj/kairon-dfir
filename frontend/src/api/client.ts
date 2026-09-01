@@ -5769,6 +5769,14 @@ function buildArtifactQuery(path: string, params: Record<string, unknown> | unde
 }
 
 export const api = {
+  listAiConversations: (caseId: string) =>
+    request<{ conversations: AiConversationSummary[] }>(`/cases/${caseId}/ai/conversations`),
+  getAiConversation: (caseId: string, conversationId: string) =>
+    request<AiConversationDetail>(`/cases/${caseId}/ai/conversations/${conversationId}`),
+  deleteAiConversation: (caseId: string, conversationId: string) =>
+    request<{ deleted: boolean }>(`/cases/${caseId}/ai/conversations/${conversationId}`, {
+      method: "DELETE",
+    }),
   getAiConfig: () => request<AiConfigResponse>("/ai/config"),
   updateAiConfig: (payload: { enabled?: boolean; active_provider?: string; max_tokens?: number }) =>
     request<AiConfigResponse>("/ai/config", { method: "PUT", body: JSON.stringify(payload) }),
@@ -8399,19 +8407,50 @@ export type AiChatMessage = {
 
 /** One decoded frame of the assistant's answer stream. */
 export type AiStreamEvent = {
-  type: "meta" | "text" | "notice" | "error" | "done";
+  type: "meta" | "text" | "notice" | "error" | "done" | "conversation";
   text?: string;
   provider?: string;
   model?: string;
+  /** Present on "conversation": the thread this answer is being stored in. */
+  conversation_id?: string;
+  /** Present on a lookup notice: which tool the assistant is running. */
+  tool?: string;
+  arguments?: Record<string, unknown>;
 };
 
 /**
  * Stream one answer over SSE. Resolves once the server closes the stream;
  * abort through `signal` to stop generating.
  */
+export type AiConversationSummary = {
+  id: string;
+  title: string;
+  provider: string | null;
+  model: string | null;
+  message_count: number;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+export type AiConversationLookup = { tool: string; arguments: Record<string, unknown> };
+
+export type AiConversationDetail = {
+  id: string;
+  title: string;
+  provider: string | null;
+  model: string | null;
+  created_at: string | null;
+  messages: Array<{ id: string; role: string; content: string; lookups: AiConversationLookup[] }>;
+};
+
 export async function streamCaseAiChat(
   caseId: string,
-  payload: { messages: AiChatMessage[]; provider?: string | null },
+  payload: {
+    messages: AiChatMessage[];
+    provider?: string | null;
+    conversation_id?: string | null;
+    active_host?: string | null;
+  },
   onEvent: (event: AiStreamEvent) => void,
   signal?: AbortSignal,
 ): Promise<void> {

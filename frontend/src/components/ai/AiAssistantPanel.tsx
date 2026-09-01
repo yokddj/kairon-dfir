@@ -1,18 +1,40 @@
 import { useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Bot, Loader2, Send, Square, X } from "lucide-react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Bot, Clock, Loader2, Plus, Search, Send, Square, Trash2, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamCaseAiChat, type AiChatMessage } from "../../api/client";
 import { useActiveCase } from "../../context/ActiveCaseContext";
+import { useHostContext } from "../../hooks/useHostContext";
 
-type Turn = AiChatMessage & { error?: boolean; notice?: string };
+/** What the assistant looked up for one answer, shown above it. */
+type Lookup = { tool: string; detail: string };
+
+type Turn = AiChatMessage & { error?: boolean; notice?: string; lookups?: Lookup[] };
 
 const SUGGESTIONS = [
-  "Where would I look for persistence on this case?",
+  "Is there any suspicious persistence on this host?",
+  "Were any files downloaded from the internet?",
   "Summarise what evidence is loaded and what is still missing.",
-  "Which artifacts would confirm lateral movement here?",
 ];
+
+/** The lookups the assistant ran, so a claim can be traced back to a query. */
+function Lookups({ items }: { items: Lookup[] }) {
+  if (!items.length) return null;
+  return (
+    <ul className="mb-2 space-y-1 border-b border-line/50 pb-2">
+      {items.map((item, index) => (
+        <li key={index} className="flex items-start gap-1.5 text-[11px] text-muted">
+          <Search size={11} className="mt-0.5 shrink-0 text-accent/70" />
+          <span className="min-w-0">
+            <span className="text-ink/80">{item.tool}</span>
+            {item.detail ? <span className="break-words"> · {item.detail}</span> : null}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
 
 /** Answers arrive as markdown; render it compactly inside the bubble. */
 function AnswerMarkdown({ content }: { content: string }) {
@@ -50,8 +72,12 @@ function AnswerMarkdown({ content }: { content: string }) {
 
 export default function AiAssistantPanel() {
   const { activeCaseId, activeCase } = useActiveCase();
+  const { activeHost } = useHostContext();
+  const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
   const [turns, setTurns] = useState<Turn[]>([]);
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
@@ -65,6 +91,13 @@ export default function AiAssistantPanel() {
   });
   const status = statusQuery.data;
 
+  const historyQuery = useQuery({
+    queryKey: ["ai-conversations", activeCaseId],
+    queryFn: () => api.listAiConversations(activeCaseId!),
+    enabled: Boolean(activeCaseId) && open && showHistory,
+    staleTime: 10_000,
+  });
+
   useEffect(() => {
     const node = scrollRef.current;
     if (!node) return;
@@ -77,6 +110,8 @@ export default function AiAssistantPanel() {
   useEffect(() => {
     abortRef.current?.abort();
     setTurns([]);
+    setConversationId(null);
+    setShowHistory(false);
   }, [activeCaseId]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
@@ -104,10 +139,28 @@ export default function AiAssistantPanel() {
     try {
       await streamCaseAiChat(
         activeCaseId,
-        { messages: history },
+        {
+          messages: history,
+          conversation_id: conversationId,
+          // Without this the assistant has to ask which machine we mean.
+          active_host: activeHost || null,
+        },
         (event) => {
-          if (event.type === "text" && event.text) {
+          if (event.type === "conversation" && event.conversation_id) {
+            setConversationId(event.conversation_id);
+          } else if (event.type === "text" && event.text) {
             patchLast((turn) => ({ ...turn, content: turn.content + event.text }));
+          } else if (event.type === "notice" && event.tool) {
+            // A lookup: keep every one, so the answer shows its working.
+            const detail = String(
+              (event.arguments?.query as string) ||
+                (event.arguments?.host as string) ||
+                "",
+            );
+            patchLast((turn) => ({
+              ...turn,
+              lookups: [...(turn.lookups ?? []), { tool: event.tool!, detail }],
+            }));
           } else if (event.type === "notice" && event.text) {
             patchLast((turn) => ({ ...turn, notice: event.text }));
           } else if (event.type === "error" && event.text) {
@@ -129,6 +182,45 @@ export default function AiAssistantPanel() {
           ? { ...turn, content: "The assistant returned nothing.", error: true }
           : turn,
       );
+      queryClient.invalidateQueries({ queryKey: ["ai-conversations", activeCaseId] });
+    }
+  };
+
+  const startNewConversation = () => {
+    abortRef.current?.abort();
+    setTurns([]);
+    setConversationId(null);
+    setShowHistory(false);
+  };
+
+  const openConversation = async (id: string) => {
+    abortRef.current?.abort();
+    try {
+      const detail = await api.getAiConversation(activeCaseId, id);
+      setTurns(
+        detail.messages.map((message) => ({
+          role: message.role === "assistant" ? "assistant" : "user",
+          content: message.content,
+          lookups: (message.lookups ?? []).map((lookup) => ({
+            tool: lookup.tool,
+            detail: String((lookup.arguments?.query as string) || (lookup.arguments?.host as string) || ""),
+          })),
+        })),
+      );
+      setConversationId(id);
+      setShowHistory(false);
+    } catch {
+      // Leave the panel as it was; the thread list stays open to retry.
+    }
+  };
+
+  const removeConversation = async (id: string) => {
+    try {
+      await api.deleteAiConversation(activeCaseId, id);
+      if (id === conversationId) startNewConversation();
+      queryClient.invalidateQueries({ queryKey: ["ai-conversations", activeCaseId] });
+    } catch {
+      // Ignored: the list refreshes and will still show it if it survived.
     }
   };
 
@@ -157,17 +249,39 @@ export default function AiAssistantPanel() {
             <Bot size={15} className="text-accent" /> Case assistant
           </p>
           <p className="truncate text-[11px] text-muted">
-            {activeCase?.name ?? activeCaseId} · {status.label ?? status.provider} / {status.model}
+            {activeCase?.name ?? activeCaseId}
+            {activeHost ? ` · ${activeHost}` : ""} · {status.label ?? status.provider} / {status.model}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => setOpen(false)}
-          aria-label="Close the AI assistant"
-          className="rounded-lg p-1 text-muted transition hover:text-ink"
-        >
-          <X size={16} />
-        </button>
+        <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={startNewConversation}
+            aria-label="New conversation"
+            title="New conversation"
+            className="rounded-lg p-1 text-muted transition hover:text-ink"
+          >
+            <Plus size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowHistory((value) => !value)}
+            aria-label="Past conversations"
+            title="Past conversations"
+            aria-pressed={showHistory}
+            className={`rounded-lg p-1 transition hover:text-ink ${showHistory ? "text-accent" : "text-muted"}`}
+          >
+            <Clock size={16} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setOpen(false)}
+            aria-label="Close the AI assistant"
+            className="rounded-lg p-1 text-muted transition hover:text-ink"
+          >
+            <X size={16} />
+          </button>
+        </div>
       </header>
 
       {status.hosting === "cloud" ? (
@@ -176,12 +290,51 @@ export default function AiAssistantPanel() {
         </p>
       ) : null}
 
+      {showHistory ? (
+        <div className="flex-1 overflow-y-auto px-3 py-3">
+          <p className="px-1 pb-2 text-[11px] uppercase tracking-wide text-muted">Past conversations</p>
+          {historyQuery.isLoading ? (
+            <p className="px-1 text-xs text-muted">Loading…</p>
+          ) : (historyQuery.data?.conversations.length ?? 0) === 0 ? (
+            <p className="px-1 text-xs text-muted">No conversations saved for this case yet.</p>
+          ) : (
+            <ul className="space-y-1">
+              {historyQuery.data?.conversations.map((conversation) => (
+                <li key={conversation.id} className="group flex items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => openConversation(conversation.id)}
+                    className="min-w-0 flex-1 rounded-xl px-2 py-2 text-left transition hover:bg-accent/10"
+                  >
+                    <span className="block truncate text-xs text-ink">{conversation.title}</span>
+                    <span className="block text-[10px] text-muted">
+                      {conversation.message_count} messages
+                      {conversation.updated_at
+                        ? ` · ${new Date(conversation.updated_at).toLocaleString()}`
+                        : ""}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeConversation(conversation.id)}
+                    aria-label={`Delete conversation: ${conversation.title}`}
+                    className="rounded-lg p-1.5 text-muted opacity-0 transition hover:text-danger focus:opacity-100 group-hover:opacity-100"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ) : (
       <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
         {turns.length === 0 ? (
           <div className="space-y-3">
             <p className="text-xs text-muted">
-              The assistant knows the shape of this case — its hosts, evidence and findings — but it
-              cannot read the events themselves. Ask it where to look and what to look for.
+              The assistant can search this case&rsquo;s events, persistence entries, findings and
+              timeline, and will show you the queries behind each answer.
+              {activeHost ? ` Questions default to ${activeHost}.` : ""}
             </p>
             <div className="space-y-2">
               {SUGGESTIONS.map((suggestion) => (
@@ -209,6 +362,9 @@ export default function AiAssistantPanel() {
                   }`
             }
           >
+            {turn.role === "assistant" && turn.lookups?.length ? (
+              <Lookups items={turn.lookups} />
+            ) : null}
             {turn.content ? (
               turn.role === "assistant" && !turn.error ? (
                 <AnswerMarkdown content={turn.content} />
@@ -222,6 +378,7 @@ export default function AiAssistantPanel() {
           </div>
         ))}
       </div>
+      )}
 
       <form
         onSubmit={(event) => {

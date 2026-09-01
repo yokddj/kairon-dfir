@@ -52,7 +52,12 @@ class ProviderError(RuntimeError):
 
 @dataclass(frozen=True)
 class StreamEvent:
-    """One piece of a streamed answer. `type` is text | notice | error."""
+    """One piece of a streamed answer.
+
+    `type` is text | notice | error | tool_use. A tool_use event carries
+    {id, name, input} in `data` and means the model paused to look something up;
+    the caller runs the tool and feeds the result back.
+    """
 
     type: str
     text: str = ""
@@ -64,8 +69,14 @@ class ChatProvider(ABC):
         self.credentials = credentials
 
     @abstractmethod
-    def stream_chat(self, *, system: str, messages: list[dict]) -> Iterator[StreamEvent]:
-        """Yield the answer as it arrives. `messages` is [{role, content}]."""
+    def stream_chat(
+        self, *, system: str, messages: list[dict], tools: list[dict] | None = None
+    ) -> Iterator[StreamEvent]:
+        """Yield the answer as it arrives. `messages` is [{role, content}].
+
+        When `tools` is given the model may pause and emit tool_use events instead
+        of finishing; the caller runs those and calls again with the results.
+        """
 
     @abstractmethod
     def list_models(self) -> list[str]:
@@ -75,6 +86,14 @@ class ChatProvider(ABC):
         """Cheap reachability + credential check."""
         models = self.list_models()
         return {"ok": True, "models": models[:50], "model_count": len(models)}
+
+    @abstractmethod
+    def tool_turn_messages(self, calls: list[dict], results: list[dict]) -> list[dict]:
+        """Messages recording that the model called tools and what came back.
+
+        Anthropic and OpenAI disagree on the shape of this exchange, so each
+        adapter renders its own and the orchestration loop stays provider-neutral.
+        """
 
 
 class AnthropicProvider(ChatProvider):
@@ -90,20 +109,24 @@ class AnthropicProvider(ChatProvider):
             kwargs["base_url"] = self.credentials.base_url
         return anthropic.Anthropic(**kwargs)
 
-    def _request_kwargs(self, *, system: str, messages: list[dict]) -> dict:
+    def _request_kwargs(self, *, system: str, messages: list[dict], tools: list[dict] | None = None) -> dict:
         kwargs: dict = {
             "model": self.credentials.model,
             "max_tokens": self.credentials.max_tokens,
             "system": system,
             "messages": messages,
         }
+        if tools:
+            kwargs["tools"] = tools
         if self.credentials.model in ADAPTIVE_THINKING_MODELS:
             kwargs["thinking"] = {"type": "adaptive"}
         return kwargs
 
-    def stream_chat(self, *, system: str, messages: list[dict]) -> Iterator[StreamEvent]:
+    def stream_chat(
+        self, *, system: str, messages: list[dict], tools: list[dict] | None = None
+    ) -> Iterator[StreamEvent]:
         client = self._client()
-        kwargs = self._request_kwargs(system=system, messages=messages)
+        kwargs = self._request_kwargs(system=system, messages=messages, tools=tools)
         use_fallbacks = self.credentials.model in SERVER_FALLBACK_MODELS
 
         if use_fallbacks:
@@ -139,6 +162,20 @@ class AnthropicProvider(ChatProvider):
                 raise _StreamNotStarted(str(exc)) from exc
             raise ProviderError(_readable_anthropic_error(exc)) from exc
 
+        if getattr(final, "stop_reason", None) == "tool_use":
+            for block in getattr(final, "content", None) or []:
+                if getattr(block, "type", None) != "tool_use":
+                    continue
+                yield StreamEvent(
+                    type="tool_use",
+                    data={
+                        "id": getattr(block, "id", ""),
+                        "name": getattr(block, "name", ""),
+                        "input": getattr(block, "input", None) or {},
+                    },
+                )
+            return
+
         if getattr(final, "stop_reason", None) == "refusal":
             details = getattr(final, "stop_details", None)
             category = getattr(details, "category", None) or "policy"
@@ -161,6 +198,24 @@ class AnthropicProvider(ChatProvider):
             return [model.id for model in client.models.list()]
         except Exception as exc:  # noqa: BLE001
             raise ProviderError(_readable_anthropic_error(exc)) from exc
+
+    def tool_turn_messages(self, calls: list[dict], results: list[dict]) -> list[dict]:
+        return [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": c["id"], "name": c["name"], "input": c.get("input") or {}}
+                    for c in calls
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "tool_result", "tool_use_id": c["id"], "content": r}
+                    for c, r in zip(calls, results)
+                ],
+            },
+        ]
 
 
 class OpenAICompatibleProvider(ChatProvider):
@@ -193,12 +248,27 @@ class OpenAICompatibleProvider(ChatProvider):
     # so retrying cannot duplicate output.
     TOKEN_LIMIT_FIELDS = ("max_tokens", "max_completion_tokens")
 
-    def stream_chat(self, *, system: str, messages: list[dict]) -> Iterator[StreamEvent]:
-        body = {
+    def stream_chat(
+        self, *, system: str, messages: list[dict], tools: list[dict] | None = None
+    ) -> Iterator[StreamEvent]:
+        body: dict = {
             "model": self.credentials.model,
             "stream": True,
             "messages": [{"role": "system", "content": system}, *messages],
         }
+        if tools:
+            # OpenAI nests the schema one level deeper than Anthropic does.
+            body["tools"] = [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": spec["name"],
+                        "description": spec.get("description", ""),
+                        "parameters": spec.get("input_schema") or {"type": "object", "properties": {}},
+                    },
+                }
+                for spec in tools
+            ]
         rejected: ProviderError | None = None
         for field in self.TOKEN_LIMIT_FIELDS:
             try:
@@ -225,9 +295,14 @@ class OpenAICompatibleProvider(ChatProvider):
                         if _rejects_token_field(response.status_code, response.text, payload):
                             raise _WrongTokenField(message)
                         raise ProviderError(message)
+                    # Tool call arguments arrive as JSON fragments spread over many
+                    # chunks, keyed by index, so they are assembled here and emitted
+                    # once the stream ends rather than forwarded piecemeal.
+                    pending: dict[int, dict] = {}
                     for line in response.iter_lines():
-                        for event in _parse_sse_line(line):
+                        for event in _parse_sse_line(line, pending):
                             yield event
+                    yield from _finish_tool_calls(pending)
         except (ProviderError, _WrongTokenField):
             raise
         except Exception as exc:  # noqa: BLE001
@@ -247,6 +322,30 @@ class OpenAICompatibleProvider(ChatProvider):
         except ValueError as exc:
             raise ProviderError("The endpoint did not return a model list") from exc
         return sorted(str(item.get("id")) for item in data if isinstance(item, dict) and item.get("id"))
+
+    def tool_turn_messages(self, calls: list[dict], results: list[dict]) -> list[dict]:
+        messages: list[dict] = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": c["id"],
+                        "type": "function",
+                        "function": {
+                            "name": c["name"],
+                            "arguments": json.dumps(c.get("input") or {}),
+                        },
+                    }
+                    for c in calls
+                ],
+            }
+        ]
+        messages.extend(
+            {"role": "tool", "tool_call_id": c["id"], "content": r}
+            for c, r in zip(calls, results)
+        )
+        return messages
 
 
 class _StreamNotStarted(RuntimeError):
@@ -272,7 +371,8 @@ def _rejects_token_field(status: int, body: str, payload: dict) -> bool:
     )
 
 
-def _parse_sse_line(line: str) -> list[StreamEvent]:
+def _parse_sse_line(line: str, pending: dict[int, dict] | None = None) -> list[StreamEvent]:
+    """Turn one SSE line into events, accumulating tool calls into `pending`."""
     if not line or not line.startswith("data:"):
         return []
     payload = line[len("data:"):].strip()
@@ -287,13 +387,58 @@ def _parse_sse_line(line: str) -> list[StreamEvent]:
         return [StreamEvent(type="error", text=str(message))]
     events: list[StreamEvent] = []
     for choice in chunk.get("choices") or []:
-        text = ((choice.get("delta") or {}).get("content")) or ""
+        delta = choice.get("delta") or {}
+        text = delta.get("content") or ""
         if text:
             events.append(StreamEvent(type="text", text=str(text)))
+        if pending is not None:
+            _accumulate_tool_calls(delta.get("tool_calls"), pending)
         if choice.get("finish_reason") == "length":
             events.append(
                 StreamEvent(type="notice", text="Answer truncated at the configured token limit.")
             )
+    return events
+
+
+def _accumulate_tool_calls(deltas, pending: dict[int, dict]) -> None:
+    """Merge one chunk's tool_calls fragments into the calls being assembled."""
+    for delta in deltas or []:
+        if not isinstance(delta, dict):
+            continue
+        index = int(delta.get("index") or 0)
+        slot = pending.setdefault(index, {"id": "", "name": "", "arguments": ""})
+        if delta.get("id"):
+            slot["id"] = str(delta["id"])
+        function = delta.get("function") or {}
+        if function.get("name"):
+            slot["name"] = str(function["name"])
+        if function.get("arguments"):
+            slot["arguments"] += str(function["arguments"])
+
+
+def _finish_tool_calls(pending: dict[int, dict]) -> list[StreamEvent]:
+    """Emit the assembled tool calls once the stream is done."""
+    events: list[StreamEvent] = []
+    for index in sorted(pending):
+        slot = pending[index]
+        if not slot.get("name"):
+            continue
+        raw = slot.get("arguments") or "{}"
+        try:
+            arguments = json.loads(raw) if raw.strip() else {}
+        except ValueError:
+            # A model that emits malformed JSON should hear about it, not crash us.
+            arguments = {"__parse_error__": raw[:200]}
+        events.append(
+            StreamEvent(
+                type="tool_use",
+                data={
+                    "id": slot.get("id") or f"call_{index}",
+                    "name": slot["name"],
+                    "input": arguments if isinstance(arguments, dict) else {},
+                },
+            )
+        )
     return events
 
 

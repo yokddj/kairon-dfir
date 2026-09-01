@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import AiAssistantPanel from "./AiAssistantPanel";
@@ -8,15 +9,28 @@ import type { AiStatusResponse, AiStreamEvent } from "../../api/client";
 
 const getAiStatusMock = vi.fn();
 const streamCaseAiChatMock = vi.fn();
+const listAiConversationsMock = vi.fn();
+const getAiConversationMock = vi.fn();
+const deleteAiConversationMock = vi.fn();
 const activeCase = { activeCaseId: "case-1", activeCase: { id: "case-1", name: "Ransomware IR" } };
+const hostContext = { activeHost: "WS-01" };
 
 vi.mock("../../api/client", () => ({
-  api: { getAiStatus: () => getAiStatusMock() },
+  api: {
+    getAiStatus: () => getAiStatusMock(),
+    listAiConversations: (...args: unknown[]) => listAiConversationsMock(...args),
+    getAiConversation: (...args: unknown[]) => getAiConversationMock(...args),
+    deleteAiConversation: (...args: unknown[]) => deleteAiConversationMock(...args),
+  },
   streamCaseAiChat: (...args: unknown[]) => streamCaseAiChatMock(...args),
 }));
 
 vi.mock("../../context/ActiveCaseContext", () => ({
   useActiveCase: () => activeCase,
+}));
+
+vi.mock("../../hooks/useHostContext", () => ({
+  useHostContext: () => hostContext,
 }));
 
 const LOCAL_STATUS: AiStatusResponse = {
@@ -31,14 +45,19 @@ function renderPanel() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <AiAssistantPanel />
+      <MemoryRouter>
+        <AiAssistantPanel />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hostContext.activeHost = "WS-01";
   getAiStatusMock.mockResolvedValue(LOCAL_STATUS);
+  listAiConversationsMock.mockResolvedValue({ conversations: [] });
+  deleteAiConversationMock.mockResolvedValue({ deleted: true });
   streamCaseAiChatMock.mockImplementation(
     async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
       onEvent({ type: "meta", provider: "ollama", model: "llama-local" });
@@ -69,7 +88,12 @@ describe("AiAssistantPanel", () => {
 
     const [caseId, payload] = streamCaseAiChatMock.mock.calls[0];
     expect(caseId).toBe("case-1");
-    expect(payload).toEqual({ messages: [{ role: "user", content: "any persistence?" }] });
+    expect(payload).toEqual({
+      messages: [{ role: "user", content: "any persistence?" }],
+      conversation_id: null,
+      // The host on screen travels with the question, so "this host" resolves.
+      active_host: "WS-01",
+    });
   });
 
   it("shows an error in the transcript when the request fails", async () => {
@@ -113,5 +137,138 @@ describe("AiAssistantPanel", () => {
       { role: "assistant", content: "Check **Run keys** and scheduled tasks." },
       { role: "user", content: "second" },
     ]);
+  });
+
+  it("shows the lookups the assistant ran, so a claim can be traced", async () => {
+    const user = userEvent.setup();
+    streamCaseAiChatMock.mockImplementation(
+      async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
+        onEvent({ type: "notice", text: "Checking persistence mechanisms", tool: "list_persistence", arguments: { host: "WS-01" } });
+        onEvent({ type: "notice", text: "Searching events: run key", tool: "search_events", arguments: { query: "run key" } });
+        onEvent({ type: "text", text: "Three run keys found." });
+      },
+    );
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+    await user.type(screen.getByLabelText(/question for the assistant/i), "persistence?");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(screen.getByText(/Three run keys found/)).toBeInTheDocument());
+    expect(screen.getByText("list_persistence")).toBeInTheDocument();
+    expect(screen.getByText("search_events")).toBeInTheDocument();
+    // The query itself is shown beside the tool name, not just the tool.
+    expect(screen.getByText("· run key")).toBeInTheDocument();
+  });
+
+  it("keeps every lookup rather than overwriting with the last one", async () => {
+    const user = userEvent.setup();
+    streamCaseAiChatMock.mockImplementation(
+      async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
+        onEvent({ type: "notice", text: "a", tool: "list_hosts", arguments: {} });
+        onEvent({ type: "notice", text: "b", tool: "list_findings", arguments: {} });
+        onEvent({ type: "text", text: "done" });
+      },
+    );
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+    await user.type(screen.getByLabelText(/question for the assistant/i), "q");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(screen.getByText("done")).toBeInTheDocument());
+    expect(screen.getByText("list_hosts")).toBeInTheDocument();
+    expect(screen.getByText("list_findings")).toBeInTheDocument();
+  });
+
+  it("names the host it will assume questions are about", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+
+    expect(screen.getByText(/Questions default to WS-01/)).toBeInTheDocument();
+  });
+
+  it("continues the same thread on a follow-up question", async () => {
+    const user = userEvent.setup();
+    streamCaseAiChatMock.mockImplementation(
+      async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
+        onEvent({ type: "conversation", conversation_id: "conv-9" });
+        onEvent({ type: "text", text: "ok" });
+      },
+    );
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+    await user.type(screen.getByLabelText(/question for the assistant/i), "first");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(streamCaseAiChatMock).toHaveBeenCalledTimes(1));
+
+    await user.type(screen.getByLabelText(/question for the assistant/i), "second");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(streamCaseAiChatMock).toHaveBeenCalledTimes(2));
+
+    expect(streamCaseAiChatMock.mock.calls[0][1].conversation_id).toBeNull();
+    expect(streamCaseAiChatMock.mock.calls[1][1].conversation_id).toBe("conv-9");
+  });
+
+  it("lists past conversations and reopens one", async () => {
+    const user = userEvent.setup();
+    listAiConversationsMock.mockResolvedValue({
+      conversations: [
+        { id: "c1", title: "any persistence?", provider: "ollama", model: "m", message_count: 4, created_at: null, updated_at: null },
+      ],
+    });
+    getAiConversationMock.mockResolvedValue({
+      id: "c1",
+      title: "any persistence?",
+      provider: "ollama",
+      model: "m",
+      created_at: null,
+      messages: [
+        { id: "m1", role: "user", content: "any persistence?", lookups: [] },
+        { id: "m2", role: "assistant", content: "Yes, three run keys.", lookups: [{ tool: "list_persistence", arguments: {} }] },
+      ],
+    });
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+    await user.click(screen.getByRole("button", { name: /past conversations/i }));
+
+    await user.click(await screen.findByText("any persistence?"));
+
+    await waitFor(() => expect(screen.getByText(/Yes, three run keys/)).toBeInTheDocument());
+    expect(screen.getByText("list_persistence")).toBeInTheDocument();
+  });
+
+  it("starting a new conversation clears the transcript", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+    await user.type(screen.getByLabelText(/question for the assistant/i), "first");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(screen.getByText(/scheduled tasks/)).toBeInTheDocument());
+
+    await user.click(screen.getByRole("button", { name: /new conversation/i }));
+
+    expect(screen.queryByText(/scheduled tasks/)).not.toBeInTheDocument();
+  });
+
+  it("deletes a conversation from the history list", async () => {
+    const user = userEvent.setup();
+    listAiConversationsMock.mockResolvedValue({
+      conversations: [
+        { id: "c1", title: "old thread", provider: null, model: null, message_count: 2, created_at: null, updated_at: null },
+      ],
+    });
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+    await user.click(screen.getByRole("button", { name: /past conversations/i }));
+    await user.click(await screen.findByRole("button", { name: /delete conversation: old thread/i }));
+
+    await waitFor(() => expect(deleteAiConversationMock).toHaveBeenCalledWith("case-1", "c1"));
   });
 });

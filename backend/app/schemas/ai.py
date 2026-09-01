@@ -32,3 +32,7 @@ class AIChatMessage(BaseModel):
 class AIChatRequest(BaseModel):
     messages: list[AIChatMessage]
     provider: str | None = None
+    # Continues an existing thread; omitted on the first question of a new one.
+    conversation_id: str | None = None
+    # The host the analyst is looking at, so "this host" resolves without asking.
+    active_host: str | None = None

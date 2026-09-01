@@ -29,25 +29,66 @@ class FakeSettingsDb:
     def __init__(self, case: Case | None = None):
         self.rows: dict[str, AppSetting] = {}
         self.case = case
+        # The chat endpoint also persists conversations. These tests are about
+        # configuration and streaming, so those objects are accepted and kept
+        # aside rather than stored; test_ai_history.py covers them properly.
+        self.other: list = []
 
     def get(self, model, identifier):
         if model is AppSetting:
             return self.rows.get(identifier)
         if model is Case:
             return self.case if self.case and self.case.id == identifier else None
+        for item in self.other:
+            if isinstance(item, model) and getattr(item, "id", None) == identifier:
+                return item
         return None
 
     def add(self, item):
-        self.rows[item.key] = item
+        key = getattr(item, "key", None)
+        if key is None:
+            self.other.append(item)
+            return
+        self.rows[key] = item
 
     def commit(self):
         return None
 
+    def rollback(self):
+        return None
+
+    def flush(self):
+        for item in self.other:
+            if getattr(item, "id", None) is None:
+                item.id = f"fake-{len(self.other)}"
+
     def refresh(self, _item):
         return None
 
-    def query(self, *_args, **_kwargs):
-        raise AssertionError("This test should not need a real query")
+    def query(self, model=None, *_args, **_kwargs):
+        # Only the conversation-history path queries here, and these tests do
+        # not assert on it, so it sees an empty table rather than an error.
+        return _EmptyQuery()
+
+
+class _EmptyQuery:
+    def filter(self, *_args, **_kwargs):
+        return self
+
+    def order_by(self, *_args, **_kwargs):
+        return self
+
+    def limit(self, *_args, **_kwargs):
+        return self
+
+    def count(self):
+        return 0
+
+    def all(self):
+        return []
+
+    def one_or_none(self):
+        return None
 
 
 # --- credential sealing ---------------------------------------------------
@@ -168,14 +209,18 @@ class StubProvider:
     def __init__(self, credentials):
         self.credentials = credentials
 
-    def stream_chat(self, *, system, messages):
+    def stream_chat(self, *, system, messages, tools=None):
         StubProvider.last_system = system
         StubProvider.last_messages = messages
+        StubProvider.last_tools = tools
         yield StreamEvent(type="text", text="No persistence artifacts ")
         yield StreamEvent(type="text", text="are ingested for this case yet.")
 
     def list_models(self):
         return ["stub-model"]
+
+    def tool_turn_messages(self, calls, results):
+        return []
 
 
 def _client(db: FakeSettingsDb) -> TestClient:
@@ -203,7 +248,9 @@ def test_chat_streams_the_answer(monkeypatch):
     )
     assert response.status_code == 200
     payloads = [json.loads(line[len("data: "):]) for line in response.text.splitlines() if line.startswith("data: ")]
-    assert payloads[0]["type"] == "meta" and payloads[0]["model"] == "llama-local"
+    # The stream opens by naming the thread the answer is stored in, then the model.
+    assert payloads[0]["type"] == "conversation" and payloads[0]["conversation_id"]
+    assert payloads[1]["type"] == "meta" and payloads[1]["model"] == "llama-local"
     assert "".join(p["text"] for p in payloads if p["type"] == "text").startswith("No persistence")
     assert payloads[-1]["type"] == "done"
 
