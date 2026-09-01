@@ -316,3 +316,238 @@ def test_persistence_gets_the_canonical_host_name(monkeypatch):
     tools_module.tool_list_persistence(session, "case-1", {"host": "id-1"})
 
     assert captured["host"] == ["WS01"]
+
+
+# --------------------------------------------------------------------------
+# Knowing what the case contains. Guessing at artifact types and reading the
+# resulting zero as absence is the failure this prevents.
+# --------------------------------------------------------------------------
+
+
+class FakeOpenSearch:
+    def __init__(self, payload, exists=True):
+        self.payload = payload
+        self.exists = exists
+        self.bodies: list[dict] = []
+
+    def search(self, index=None, body=None, params=None, **kwargs):
+        self.bodies.append(body)
+        return self.payload
+
+
+def _patch_opensearch(monkeypatch, client):
+    monkeypatch.setattr("app.core.opensearch.get_opensearch_client", lambda **kw: client)
+    monkeypatch.setattr("app.core.opensearch.get_events_index", lambda case_id=None: "idx")
+    monkeypatch.setattr("app.core.opensearch.index_exists", lambda c, i: client.exists)
+
+
+AGG_PAYLOAD = {
+    "hits": {"total": {"value": 23683}},
+    "aggregations": {
+        "artifact_type": {"buckets": [{"key": "linux_auth", "doc_count": 23683}]},
+        "parser": {"buckets": [{"key": "linux_auth_raw", "doc_count": 23683}]},
+        "event_type": {"buckets": [{"key": "login_failure", "doc_count": 900}]},
+        "host": {"buckets": [{"key": "victoria", "doc_count": 23683}]},
+        "severity": {"buckets": [{"key": "medium", "doc_count": 12}]},
+    },
+}
+
+
+def test_describe_case_counts_the_whole_index_not_a_page(monkeypatch):
+    client = FakeOpenSearch(AGG_PAYLOAD)
+    _patch_opensearch(monkeypatch, client)
+
+    result = tools_module.tool_describe_case(None, "case-1", {})
+
+    assert result["indexed"] is True
+    assert result["total_events"] == 23683
+    assert result["artifact_types"] == {"linux_auth": 23683}
+    # size 0 means aggregations only: no documents are shipped back.
+    assert client.bodies[0]["size"] == 0
+    assert client.bodies[0]["track_total_hits"] is True
+
+
+def test_describe_case_warns_that_absent_artifacts_explain_zeros(monkeypatch):
+    _patch_opensearch(monkeypatch, FakeOpenSearch(AGG_PAYLOAD))
+
+    guidance = tools_module.tool_describe_case(None, "case-1", {})["how_to_read_this"]
+
+    assert "never collected" in guidance
+    assert "NOT evidence" in guidance
+
+
+def test_describe_case_reports_an_unindexed_case_plainly(monkeypatch):
+    _patch_opensearch(monkeypatch, FakeOpenSearch(AGG_PAYLOAD, exists=False))
+
+    result = tools_module.tool_describe_case(None, "case-1", {})
+
+    assert result["indexed"] is False
+    assert "no search will return anything" in result["message"]
+
+
+def test_a_zero_search_explains_what_the_case_actually_holds(monkeypatch):
+    """The reported failure: zeros presented as proof nothing was downloaded."""
+    monkeypatch.setattr(
+        "app.services.search_service.search_events_v2",
+        lambda case_id, params, db=None: (0, [], [], {}),
+    )
+    monkeypatch.setattr("app.services.search_service.build_search_v2_params", lambda **kw: dict(kw))
+    _patch_opensearch(monkeypatch, FakeOpenSearch(AGG_PAYLOAD))
+
+    result = tools_module.tool_search_events(None, "case-1", {"query": "file.extension:crdownload"})
+
+    assert result["total_matches"] == 0
+    guidance = result["zero_result_guidance"]
+    assert "linux_auth" in guidance, "it must name what the case does contain"
+    assert "never collected" in guidance
+
+
+def test_a_non_zero_search_carries_no_zero_guidance(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.search_service.search_events_v2",
+        lambda case_id, params, db=None: (5, [{"id": "e1"}], [], {}),
+    )
+    monkeypatch.setattr("app.services.search_service.build_search_v2_params", lambda **kw: dict(kw))
+
+    result = tools_module.tool_search_events(None, "case-1", {"query": "x"})
+
+    assert result["zero_result_guidance"] is None
+
+
+def test_zero_guidance_survives_a_broken_index(monkeypatch):
+    """Guidance is a bonus; failing to produce it must not fail the search."""
+    monkeypatch.setattr(
+        "app.services.search_service.search_events_v2",
+        lambda case_id, params, db=None: (0, [], [], {}),
+    )
+    monkeypatch.setattr("app.services.search_service.build_search_v2_params", lambda **kw: dict(kw))
+    monkeypatch.setattr(
+        "app.core.opensearch.get_opensearch_client",
+        lambda **kw: (_ for _ in ()).throw(RuntimeError("cluster down")),
+    )
+    session = RecordingSession()
+
+    result = tools_module.tool_search_events(session, "case-1", {"query": "x"})
+
+    assert result["total_matches"] == 0
+    assert "describe_case" in result["zero_result_guidance"]
+
+
+# --------------------------------------------------------------------------
+# Downloads come from Mark of the Web, not from guessing at folder paths.
+# --------------------------------------------------------------------------
+
+
+def test_downloads_use_mark_of_the_web(monkeypatch):
+    captured = {}
+
+    def fake(db, case_id, params):
+        captured.update(params)
+        return {
+            "total": 2,
+            "summary": {"total": 2},
+            "items": [
+                {
+                    "file_name": "installer.exe",
+                    "host_url": "https://example.test/installer.exe",
+                    "referrer_url": "https://example.test/",
+                    "zone": "Internet",
+                    "risk_score": 70,
+                    "bulky": "x" * 9000,
+                }
+            ],
+        }
+
+    monkeypatch.setattr("app.services.motw.list_motw_items", fake)
+    session = RecordingSession(hosts=[FakeHost("id-1", "WS01")])
+
+    monkeypatch.setattr(
+        "app.services.search_service.search_events_v2",
+        lambda case_id, params, db=None: (0, [], [], {}),
+    )
+    monkeypatch.setattr("app.services.search_service.build_search_v2_params", lambda **kw: dict(kw))
+
+    result = tools_module.tool_list_downloads(session, "case-1", {"host": "WS01"})
+
+    assert result["total_downloads"] == 2
+    assert captured["host"] == ["WS01"]
+    entry = result["downloads"][0]
+    assert entry["host_url"] == "https://example.test/installer.exe"
+    assert "bulky" not in entry, "unmodelled fields must not reach the model"
+    assert result["note"] is None
+
+
+def test_no_downloads_says_what_that_does_and_does_not_prove(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.motw.list_motw_items",
+        lambda db, case_id, params: {"total": 0, "summary": {}, "items": []},
+    )
+    monkeypatch.setattr(
+        "app.services.search_service.search_events_v2",
+        lambda case_id, params, db=None: (0, [], [], {}),
+    )
+    monkeypatch.setattr("app.services.search_service.build_search_v2_params", lambda **kw: dict(kw))
+    session = RecordingSession(hosts=[])
+
+    result = tools_module.tool_list_downloads(session, "case-1", {})
+
+    assert result["total_downloads"] == 0
+    assert "describe_case" in result["note"]
+    assert "not the same as nothing having been downloaded" in result["note"]
+
+
+def test_browser_downloads_are_found_without_a_filesystem_artifact(monkeypatch):
+    """A case with browser history but no MFT still answers the question.
+
+    This is the reported failure: the assistant reported no downloads on a host
+    whose browser history held file_downloaded events all along.
+    """
+    monkeypatch.setattr(
+        "app.services.motw.list_motw_items",
+        lambda db, case_id, params: {"total": 0, "summary": {}, "items": []},
+    )
+    captured = {}
+
+    def fake_search(case_id, params, db=None):
+        captured.update(params)
+        return (
+            3,
+            [{"id": "e1", "host": "WS01", "user": "mshutter", "event_type": "file_downloaded",
+              "title": "Browser download", "risk_score": 65}],
+            [],
+            {},
+        )
+
+    monkeypatch.setattr("app.services.search_service.search_events_v2", fake_search)
+    monkeypatch.setattr("app.services.search_service.build_search_v2_params", lambda **kw: dict(kw))
+    session = RecordingSession(hosts=[FakeHost("id-1", "WS01")])
+
+    result = tools_module.tool_list_downloads(session, "case-1", {"host": "WS01"})
+
+    assert result["total_downloads"] == 3
+    assert result["by_source"] == {"mark_of_the_web": 0, "browser_history": 3}
+    assert result["downloads"][0]["event_type"] == "file_downloaded"
+    assert captured["q"] == "event.type:file_downloaded"
+    assert result["note"] is None, "downloads were found, so there is nothing to caveat"
+
+
+def test_a_failing_browser_lookup_does_not_hide_motw_results(monkeypatch):
+    """One source breaking must not turn the other source's findings into zero."""
+    monkeypatch.setattr(
+        "app.services.motw.list_motw_items",
+        lambda db, case_id, params: {
+            "total": 1, "summary": {}, "items": [{"file_name": "a.exe", "host": "WS01"}],
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.search_service.search_events_v2",
+        lambda case_id, params, db=None: (_ for _ in ()).throw(RuntimeError("index missing")),
+    )
+    monkeypatch.setattr("app.services.search_service.build_search_v2_params", lambda **kw: dict(kw))
+    session = RecordingSession(hosts=[FakeHost("id-1", "WS01")])
+
+    result = tools_module.tool_list_downloads(session, "case-1", {"host": "WS01"})
+
+    assert result["total_downloads"] == 1
+    assert any("Browser history lookup failed" in w for w in result["warnings"])
+    assert session.rolled_back == 1

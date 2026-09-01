@@ -169,7 +169,32 @@ def tool_search_events(db: Session, case_id: str, args: dict) -> dict:
             "The breakdown counts only those shown. To characterise the rest, "
             "run narrower queries and read their total_matches."
         ) if total > returned else None,
+        # A zero is ambiguous on its own: the activity may be absent, or the
+        # artifact that would record it may never have been collected. Saying
+        # which is the difference between an answer and a misleading one.
+        "zero_result_guidance": _zero_guidance(db, case_id) if total == 0 else None,
     }
+
+
+def _zero_guidance(db: Session, case_id: str) -> str:
+    """Explain what a zero actually means in this case."""
+    try:
+        described = tool_describe_case(db, case_id, {})
+    except Exception:  # noqa: BLE001 - guidance is a bonus, never a failure
+        _recover_session(db)
+        return (
+            "Nothing matched. Before reporting this as absence, confirm with describe_case "
+            "that the artifact that would record it was collected."
+        )
+    if not described.get("indexed"):
+        return "Nothing matched because this case has no indexed events at all."
+    present = ", ".join(sorted(described.get("artifact_types") or {})) or "none"
+    return (
+        "Nothing matched this query. This case contains only these artifact types: "
+        f"{present}. If the activity you are looking for would be recorded by an artifact "
+        "that is not in that list, the correct answer is that the evidence needed to "
+        "decide was never collected -- not that the activity did not happen."
+    )
 
 
 def _compact_facets(facets: dict) -> dict:
@@ -295,9 +320,172 @@ def tool_get_timeline(db: Session, case_id: str, args: dict) -> dict:
     }
 
 
+def tool_describe_case(db: Session, case_id: str, args: dict) -> dict:
+    """What data this case actually holds, counted over the whole index.
+
+    Without this the model guesses field values -- searching for .crdownload
+    files in a case that never ingested a filesystem artifact -- and then reads
+    the resulting zero as proof that nothing was downloaded. Knowing which
+    artifact types, parsers and event types exist, and how many events each has,
+    is what turns a blind keyword hunt into an actual search strategy.
+    """
+    from app.core.opensearch import get_events_index, get_opensearch_client, index_exists
+
+    client = get_opensearch_client()
+    index = get_events_index(case_id)
+    if not index_exists(client, index):
+        return {
+            "indexed": False,
+            "message": "No events are indexed for this case yet, so no search will return anything.",
+        }
+
+    facets = {
+        "artifact_type": "artifact.type",
+        "parser": "artifact.parser",
+        "event_type": "event.type",
+        "host": "host.name",
+        "severity": "event.severity",
+    }
+    body = {
+        "size": 0,
+        "track_total_hits": True,
+        "query": {"bool": {"filter": [{"term": {"case_id": case_id}}]}},
+        "aggs": {
+            name: {"terms": {"field": field, "size": 30}} for name, field in facets.items()
+        },
+    }
+    try:
+        result = client.search(index=index, body=body, params={"ignore_unavailable": "true"})
+    except Exception as exc:  # noqa: BLE001
+        raise ToolError(f"Could not summarise the case index: {exc}") from exc
+
+    total_meta = result.get("hits", {}).get("total", 0)
+    total = int(total_meta.get("value", 0) if isinstance(total_meta, dict) else total_meta)
+    aggs = result.get("aggregations") or {}
+
+    def buckets(name: str) -> dict[str, int]:
+        raw = (aggs.get(name) or {}).get("buckets") or []
+        return {str(b.get("key")): int(b.get("doc_count") or 0) for b in raw if b.get("key") is not None}
+
+    present = buckets("artifact_type")
+    return {
+        "indexed": True,
+        "total_events": total,
+        # These counts cover the whole case, unlike a search's sample_breakdown.
+        "artifact_types": present,
+        "parsers": buckets("parser"),
+        "event_types": buckets("event_type"),
+        "hosts": buckets("host"),
+        "severities": buckets("severity"),
+        "how_to_read_this": (
+            "Only the artifact types listed here exist in this case. A query filtering on "
+            "anything absent from this list returns zero because the data was never "
+            "collected -- which is NOT evidence that the activity did not happen. Say so "
+            "explicitly when it applies."
+        ),
+    }
+
+
+DOWNLOAD_KEYS = (
+    "file_name", "file_path", "host", "timestamp", "zone", "zone_id",
+    "host_url", "referrer_url", "source", "risk_score", "file_extension",
+)
+
+
+def tool_list_downloads(db: Session, case_id: str, args: dict) -> dict:
+    """Files downloaded from the internet, via Mark of the Web.
+
+    Windows records where a downloaded file came from in the Zone.Identifier
+    alternate data stream, and Kairon correlates that with Sysmon event 15 and
+    browser history. That is the artifact that answers "what was downloaded",
+    far more reliably than guessing at .crdownload extensions or a Downloads
+    folder path that may never have been collected.
+    """
+    from app.services.motw import list_motw_items
+
+    limit = _limit(args.get("limit"))
+    host = _resolve_host(db, case_id, args.get("host") or args.get("host_id"))
+    result = list_motw_items(
+        db,
+        case_id,
+        {
+            "host": [host.display_name] if host else None,
+            "q": args.get("query") or None,
+            "extension": args.get("extension") or None,
+            "risk_min": args.get("risk_min"),
+            "page": 1,
+            "page_size": limit,
+        },
+    )
+    motw_total = int(result.get("total") or 0)
+    motw_rows = _rows(result.get("items") or [], DOWNLOAD_KEYS, limit)
+
+    # Mark of the Web needs a filesystem or Sysmon artifact. Browser history
+    # records downloads independently, and a case can easily have one without
+    # the other, so both are asked and the answer says which source it came
+    # from -- otherwise "no downloads" would really mean "no MFT was collected".
+    browser = _browser_downloads(db, case_id, host, limit)
+
+    total = motw_total + browser["total"]
+    return {
+        "total_downloads": total,
+        "by_source": {
+            "mark_of_the_web": motw_total,
+            "browser_history": browser["total"],
+        },
+        "summary": result.get("summary") or {},
+        "downloads": (motw_rows + browser["rows"])[:limit],
+        "warnings": (result.get("warnings") or []) + browser["warnings"],
+        "note": (
+            "No download evidence was recovered from Mark of the Web or browser history. "
+            "Check describe_case: if neither a filesystem artifact (mft/ntfs), Sysmon nor "
+            "browser history was ingested, the evidence needed to answer was never "
+            "collected -- which is not the same as nothing having been downloaded."
+        ) if total == 0 else None,
+    }
+
+
+BROWSER_DOWNLOAD_KEYS = (
+    "id", "timestamp", "host", "user", "title", "summary",
+    "artifact_type", "parser", "event_type", "risk_score",
+)
+
+
+def _browser_downloads(db: Session, case_id: str, host, limit: int) -> dict:
+    """Download events recorded by browser history parsers."""
+    from app.services.search_service import build_search_v2_params, search_events_v2
+
+    params = build_search_v2_params(
+        q="event.type:file_downloaded",
+        host_id=host.id if host else None,
+        page_size=limit,
+        page=1,
+        include_highlights=False,
+        include_facets=False,
+    )
+    try:
+        total, rows, warnings, _facets = search_events_v2(case_id, params, db=db)
+    except Exception as exc:  # noqa: BLE001 - one source failing must not hide the other
+        logger.info("Browser download lookup failed: %s", exc)
+        _recover_session(db)
+        return {"total": 0, "rows": [], "warnings": [f"Browser history lookup failed: {exc}"]}
+    return {
+        "total": total,
+        "rows": _rows(rows, BROWSER_DOWNLOAD_KEYS, limit),
+        "warnings": list(warnings or []),
+    }
+
+
 # --------------------------------------------------------------------------
 # Schemas advertised to the model
 # --------------------------------------------------------------------------
+
+QUERY_HELP_CONSTRAINTS = (
+    "Wildcards may not lead a term (`*\\Downloads` matches nothing and is not an error), "
+    "backslashes in Windows paths must be escaped or the path quoted, and an unknown field "
+    "name silently matches nothing. When a query returns zero, confirm with describe_case "
+    "that the artifact type behind that field exists before reading the zero as an answer."
+)
 
 QUERY_HELP = (
     "Search syntax: field:value pairs combined with spaces, quotes for phrases, "
@@ -312,6 +500,41 @@ QUERY_HELP = (
 )
 
 TOOL_SPECS: list[dict] = [
+    {
+        "name": "describe_case",
+        "description": (
+            "Report which artifact types, parsers, event types and hosts actually exist in "
+            "this case, with counts over every indexed event. CALL THIS FIRST for any "
+            "question about whether something happened. It tells you which searches can "
+            "possibly return anything: a filter on an artifact type absent from this list "
+            "returns zero because that data was never collected, which is not evidence the "
+            "activity did not occur."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "list_downloads",
+        "description": (
+            "List files downloaded from the internet. It asks two independent sources "
+            "and reports which found what: Mark of the Web (the Zone.Identifier alternate "
+            "data stream, plus Sysmon event 15), which needs a filesystem artifact, and "
+            "browser history download records, which do not. This is the right tool for "
+            "any question about downloads -- use it instead of guessing at Downloads "
+            "folder paths or .crdownload extensions, which only work if a filesystem "
+            "artifact happened to be collected."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "string", "description": "Restrict to one host. A name or a host_id both work."},
+                "query": {"type": "string", "description": "Free-text filter over file name, path and URL."},
+                "extension": {"type": "string", "description": "Filter by file extension, e.g. exe."},
+                "risk_min": {"type": "integer", "description": "Minimum risk score, 0-100."},
+                "limit": {"type": "integer", "description": f"Max entries, 1-{MAX_ROWS_HARD}."},
+            },
+            "required": [],
+        },
+    },
     {
         "name": "list_hosts",
         "description": (
@@ -331,6 +554,8 @@ TOOL_SPECS: list[dict] = [
             "case-wide count. To count a subset, run a narrower query and read its "
             "total_matches. "
             + QUERY_HELP
+            + " "
+            + QUERY_HELP_CONSTRAINTS
         ),
         "input_schema": {
             "type": "object",
@@ -403,6 +628,8 @@ TOOL_SPECS: list[dict] = [
 ]
 
 HANDLERS: dict[str, Callable[[Session, str, dict], dict]] = {
+    "describe_case": tool_describe_case,
+    "list_downloads": tool_list_downloads,
     "list_hosts": tool_list_hosts,
     "search_events": tool_search_events,
     "list_persistence": tool_list_persistence,

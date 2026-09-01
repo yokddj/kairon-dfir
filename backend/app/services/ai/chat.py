@@ -20,9 +20,11 @@ logger = logging.getLogger(__name__)
 MAX_HISTORY_MESSAGES = 40
 MAX_MESSAGE_CHARS = 8000
 # How many times the model may look something up before it has to answer. Each
-# round trip costs a full request, so this is a cost ceiling as much as a
-# safety one; five is enough to list hosts, search, and read around a hit.
-MAX_TOOL_ROUNDS = 5
+# round trip costs a full request, so this is a cost ceiling as much as a safety
+# one. Eight covers a real investigation: describe the case, list the hosts, use
+# the artifact-specific tool, then corroborate with a couple of searches and the
+# timeline -- with room to spare rather than stopping to ask permission.
+MAX_TOOL_ROUNDS = 8
 
 SYSTEM_PROMPT = """You are an assistant embedded in Kairon, a DFIR evidence \
 analysis platform. You are talking to a forensic analyst who is working a case \
@@ -36,8 +38,18 @@ whether something is present -- a download, a persistence mechanism, a suspiciou
 process -- go and look with a tool instead of explaining how they could look.
 
 How to investigate:
-- Start from the question, not from the tools. Decide what would prove or \
-disprove it, then query for that.
+- Start with describe_case whenever the question is whether something happened. \
+It tells you which artifact types this case actually contains. Searching for \
+data that was never collected returns zero, and reporting that zero as absence \
+is the single worst mistake you can make here.
+- Then pick the artifact that actually answers the question, and prefer the \
+dedicated tool over a keyword guess: list_downloads for downloads (Mark of the \
+Web records the source URL), list_persistence for autoruns and services. \
+Guessing at file extensions or folder paths is a last resort, not a first move.
+- Finish the investigation before you reply. Run the searches yourself rather \
+than presenting the analyst with a menu of searches they could authorise. Ask a \
+question only when you genuinely cannot proceed without their answer -- not to \
+confirm an obvious next step.
 - If the analyst says "this host" or "the host" without naming one, call \
 list_hosts first, or use the host the briefing says they are currently viewing.
 - Tools answer with a total match count before any sample rows. Only \
@@ -45,8 +57,11 @@ total_matches describes the whole case; a sample_breakdown and the rows describe
 just what was returned. Quote total_matches for "how many", and never present a \
 sample count as a case-wide figure. To count a subset, run a narrower query and \
 read its total_matches.
-- When a query returns nothing, that is a real result. Say so, say what you \
-searched for, and suggest a different angle. Do not fill the gap with a guess.
+- A zero is not automatically an answer. Distinguish "the artifact was \
+collected and contains no such activity" from "the artifact that would show \
+this was never collected". The first is a finding; the second is a collection \
+gap, and saying so is far more useful to the analyst than a list of empty \
+searches. Check describe_case before you call anything absent.
 - Chain tools when it helps: find a suspicious moment with search_events, then \
 read around it with get_timeline.
 - Prefer precise DFIR vocabulary: artifact names, event IDs, registry paths, \
@@ -235,6 +250,8 @@ def _describe_lookup(name: str, args: dict) -> str:
     """A short, honest line about what the assistant is doing right now."""
     detail = str(args.get("query") or args.get("host") or args.get("host_id") or "").strip()
     labels = {
+        "describe_case": "Checking what data this case contains",
+        "list_downloads": "Looking for downloaded files (Mark of the Web)",
         "list_hosts": "Listing the hosts in this case",
         "search_events": "Searching events",
         "list_persistence": "Checking persistence mechanisms",

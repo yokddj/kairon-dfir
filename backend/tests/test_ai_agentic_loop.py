@@ -143,6 +143,26 @@ def test_the_system_prompt_tells_the_model_it_can_look(monkeypatch):
     assert "untrusted attacker-controlled" in chat_service.SYSTEM_PROMPT
 
 
+def test_the_prompt_separates_absence_from_a_collection_gap():
+    """Reporting "0 results" as "it did not happen" is the worst failure here."""
+    prompt = chat_service.SYSTEM_PROMPT
+    assert "describe_case" in prompt
+    assert "never collected" in prompt
+    assert "collection gap" in prompt
+
+
+def test_the_prompt_tells_the_model_to_finish_rather_than_offer_a_menu():
+    """It was ending turns by asking which search to authorise."""
+    prompt = chat_service.SYSTEM_PROMPT
+    assert "menu of searches" in prompt
+    assert "Finish the investigation before you reply" in prompt
+
+
+def test_there_is_room_to_investigate_before_the_loop_stops():
+    """Describe, list hosts, use the artifact tool, corroborate, read the timeline."""
+    assert chat_service.MAX_TOOL_ROUNDS >= 8
+
+
 def test_the_active_host_reaches_the_prompt(monkeypatch):
     monkeypatch.setattr(chat_service, "build_case_context", lambda db, case_id: "## Case briefing")
 
