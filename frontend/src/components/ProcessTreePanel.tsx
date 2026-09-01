@@ -696,6 +696,22 @@ function downloadBlob(filename: string, content: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Whether the execution story's own tree should be what the canvas draws.
+ *
+ * A story that resolved its target by PID, timestamp and host rather than by an
+ * exact event id is still a story about a real process, and its tree is the
+ * only graph that contains that process: the base query is rebuilt from the
+ * submitted focus and does not include it. Drawing only exact stories left the
+ * canvas empty -- "0 visible nodes" beside a fully populated narrative naming
+ * the process, its child and its command line. How the identity was resolved is
+ * disclosed by the badge beside the story title, so drawing the tree reports
+ * what was found without overstating how firmly it was matched.
+ */
+export function shouldDrawStoryGraph(target: unknown, storyNodeCount: number): boolean {
+  return Boolean(target) && storyNodeCount > 0;
+}
+
 export default function ProcessTreePanel({
   caseId,
   evidences,
@@ -1039,13 +1055,14 @@ export default function ProcessTreePanel({
   const storyVisualEdges = useMemo(() => executionStory?.visual_tree?.edges ?? [], [executionStory?.visual_tree?.edges]);
   const storyVisualTargetId = executionStory?.target_node_id || executionStory?.default_selected_node_id || executionStory?.target?.id || null;
   const isExactStoryActive = Boolean(isExactStoryContext && executionStory?.target && storyVisualNodes.length);
-  const graphNodes = useMemo(() => (isExactStoryActive ? storyVisualNodes : limitedNodes), [isExactStoryActive, limitedNodes, storyVisualNodes]);
+  const storyGraphActive = shouldDrawStoryGraph(executionStory?.target, storyVisualNodes.length);
+  const graphNodes = useMemo(() => (storyGraphActive ? storyVisualNodes : limitedNodes), [storyGraphActive, limitedNodes, storyVisualNodes]);
   const graphNodeIds = useMemo(() => new Set(graphNodes.map((node) => node.id)), [graphNodes]);
   const graphEdges = useMemo(
-    () => (isExactStoryActive ? storyVisualEdges.filter((edge) => graphNodeIds.has(edge.source) && graphNodeIds.has(edge.target)) : limitedEdges),
-    [graphNodeIds, isExactStoryActive, limitedEdges, storyVisualEdges],
+    () => (storyGraphActive ? storyVisualEdges.filter((edge) => graphNodeIds.has(edge.source) && graphNodeIds.has(edge.target)) : limitedEdges),
+    [graphNodeIds, storyGraphActive, limitedEdges, storyVisualEdges],
   );
-  const exactStoryTargetMissing = Boolean(isExactStoryActive && storyVisualTargetId && !graphNodeIds.has(storyVisualTargetId));
+  const exactStoryTargetMissing = Boolean(storyGraphActive && storyVisualTargetId && !graphNodeIds.has(storyVisualTargetId));
   const displayedGraphNodes = useMemo(() => graphNodes.filter((node) => !hiddenNodeIds.has(node.id)), [graphNodes, hiddenNodeIds]);
   const displayedGraphEdges = useMemo(
     () => graphEdges.filter((edge) => !hiddenNodeIds.has(edge.source) && !hiddenNodeIds.has(edge.target)),
