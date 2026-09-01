@@ -185,14 +185,31 @@ class OpenAICompatibleProvider(ChatProvider):
             headers["Authorization"] = f"Bearer {self.credentials.api_key}"
         return headers
 
+    # Newer OpenAI models reject "max_tokens" and require "max_completion_tokens",
+    # while Ollama, vLLM and LM Studio only understand the original spelling. The
+    # split does not follow anything we can detect from the model id, and hard-coding
+    # a list of names would rot within weeks, so we send the classic spelling and let
+    # a rejection tell us to switch. The 400 arrives before any token is streamed,
+    # so retrying cannot duplicate output.
+    TOKEN_LIMIT_FIELDS = ("max_tokens", "max_completion_tokens")
+
     def stream_chat(self, *, system: str, messages: list[dict]) -> Iterator[StreamEvent]:
-        httpx = self._http()
-        payload = {
+        body = {
             "model": self.credentials.model,
-            "max_tokens": self.credentials.max_tokens,
             "stream": True,
             "messages": [{"role": "system", "content": system}, *messages],
         }
+        rejected: ProviderError | None = None
+        for field in self.TOKEN_LIMIT_FIELDS:
+            try:
+                yield from self._stream_once({**body, field: self.credentials.max_tokens})
+                return
+            except _WrongTokenField as exc:
+                rejected = ProviderError(str(exc))
+        raise rejected or ProviderError("The endpoint rejected the token limit parameter")
+
+    def _stream_once(self, payload: dict) -> Iterator[StreamEvent]:
+        httpx = self._http()
         timeout = httpx.Timeout(READ_TIMEOUT_SECONDS, connect=CONNECT_TIMEOUT_SECONDS)
         try:
             with httpx.Client(timeout=timeout) as client:
@@ -204,11 +221,14 @@ class OpenAICompatibleProvider(ChatProvider):
                 ) as response:
                     if response.status_code >= 400:
                         response.read()
-                        raise ProviderError(_readable_http_error(response.status_code, response.text))
+                        message = _readable_http_error(response.status_code, response.text)
+                        if _rejects_token_field(response.status_code, response.text, payload):
+                            raise _WrongTokenField(message)
+                        raise ProviderError(message)
                     for line in response.iter_lines():
                         for event in _parse_sse_line(line):
                             yield event
-        except ProviderError:
+        except (ProviderError, _WrongTokenField):
             raise
         except Exception as exc:  # noqa: BLE001
             raise ProviderError(f"Could not reach the provider: {exc}") from exc
@@ -231,6 +251,25 @@ class OpenAICompatibleProvider(ChatProvider):
 
 class _StreamNotStarted(RuntimeError):
     """Internal: the request was rejected before any output, so a retry is safe."""
+
+
+class _WrongTokenField(RuntimeError):
+    """Internal: the endpoint wants the other spelling of the token limit field."""
+
+
+def _rejects_token_field(status: int, body: str, payload: dict) -> bool:
+    """True when the endpoint refused the token-limit parameter we just sent.
+
+    OpenAI answers an unsupported spelling with a 400 that names the one it wants,
+    so we only retry when the response points at a field we did not send.
+    """
+    if status != 400:
+        return False
+    text = (body or "").lower()
+    return any(
+        field not in payload and field in text
+        for field in OpenAICompatibleProvider.TOKEN_LIMIT_FIELDS
+    )
 
 
 def _parse_sse_line(line: str) -> list[StreamEvent]:

@@ -15,7 +15,12 @@ from app.models.case import Case
 from app.services.ai import chat as chat_service
 from app.services.ai import config as ai_config
 from app.services.ai.crypto import CredentialCryptoError, mask, open_sealed, seal
-from app.services.ai.providers import StreamEvent, _parse_sse_line
+from app.services.ai.config import ResolvedProvider
+from app.services.ai.providers import (
+    ProviderError,
+    StreamEvent,
+    _parse_sse_line,
+)
 
 
 class FakeSettingsDb:
@@ -242,3 +247,119 @@ def test_status_endpoint_reports_hosting_mode(monkeypatch):
         "model": "llama-local",
         "hosting": "local",
     }
+
+
+class _FakeStreamResponse:
+    """Minimal stand-in for httpx's streaming response."""
+
+    def __init__(self, status_code: int, *, body: str = "", lines: list[str] | None = None):
+        self.status_code = status_code
+        self.text = body
+        self._lines = lines or []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.text
+
+    def iter_lines(self):
+        return iter(self._lines)
+
+
+class _RecordingClient:
+    """Captures every request body so a test can assert what was sent."""
+
+    def __init__(self, responses):
+        self._responses = list(responses)
+        self.payloads: list[dict] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def stream(self, method, url, *, headers=None, json=None):
+        self.payloads.append(json)
+        return self._responses.pop(0)
+
+
+def _openai_provider(monkeypatch, responses):
+    """Build the adapter with its httpx module swapped for a recorder."""
+    from app.services.ai import providers as providers_module
+
+    client = _RecordingClient(responses)
+
+    class _FakeHttpx:
+        @staticmethod
+        def Timeout(*a, **k):
+            return None
+
+        @staticmethod
+        def Client(*a, **k):
+            return client
+
+    provider = providers_module.OpenAICompatibleProvider(
+        ResolvedProvider(
+            provider="openai",
+            model="gpt-5-mini",
+            base_url="https://api.openai.com/v1",
+            api_key="sk-test",
+            max_tokens=1234,
+        )
+    )
+    monkeypatch.setattr(provider, "_http", lambda: _FakeHttpx)
+    return provider, client
+
+
+REJECTION_BODY = (
+    '{"error": {"message": "Unsupported parameter: \'max_tokens\' is not supported '
+    "with this model. Use 'max_completion_tokens' instead.\", \"type\": \"invalid_request_error\"}}"
+)
+
+
+def test_retries_with_max_completion_tokens_when_the_model_demands_it(monkeypatch):
+    """A model that rejects max_tokens still answers, using the other spelling."""
+    ok = _FakeStreamResponse(
+        200,
+        lines=['data: {"choices": [{"delta": {"content": "persistence"}}]}', "data: [DONE]"],
+    )
+    provider, client = _openai_provider(
+        monkeypatch, [_FakeStreamResponse(400, body=REJECTION_BODY), ok]
+    )
+
+    events = list(provider.stream_chat(system="sys", messages=[{"role": "user", "content": "hi"}]))
+
+    assert "".join(e.text for e in events if e.type == "text") == "persistence"
+    assert [p.get("max_tokens") for p in client.payloads] == [1234, None]
+    assert client.payloads[1]["max_completion_tokens"] == 1234
+    assert "max_tokens" not in client.payloads[1]
+
+
+def test_local_endpoints_keep_using_max_tokens(monkeypatch):
+    """Ollama and friends only know max_tokens, so a success must not trigger a retry."""
+    ok = _FakeStreamResponse(
+        200, lines=['data: {"choices": [{"delta": {"content": "ok"}}]}', "data: [DONE]"]
+    )
+    provider, client = _openai_provider(monkeypatch, [ok])
+
+    list(provider.stream_chat(system="sys", messages=[{"role": "user", "content": "hi"}]))
+
+    assert len(client.payloads) == 1
+    assert client.payloads[0]["max_tokens"] == 1234
+
+
+def test_an_unrelated_400_is_not_retried(monkeypatch):
+    """A bad model name must surface immediately, not burn a second request."""
+    body = '{"error": {"message": "The model `nope` does not exist"}}'
+    provider, client = _openai_provider(monkeypatch, [_FakeStreamResponse(400, body=body)])
+
+    with pytest.raises(ProviderError) as excinfo:
+        list(provider.stream_chat(system="sys", messages=[{"role": "user", "content": "hi"}]))
+
+    assert "does not exist" in str(excinfo.value)
+    assert len(client.payloads) == 1
