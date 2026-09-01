@@ -2359,7 +2359,19 @@ def start_memory_scan(evidence_id: str, payload: MemoryStartScanRequest | None =
             },
         ) from exc
     profile_plan = plan_profile_capability(profile) if analysis_plan.detected_platform == PlatformFamily.WINDOWS else None
-    if profile_plan is not None and resolved_plugins and not profile_plan["has_enabled_plugins"]:
+    # `plugin_names` is empty for a capability-registry-only profile such as
+    # files_basic or shell_history_basic, which resolve per-platform through
+    # capability_registry instead of PROFILE_PLUGINS. Without this guard the
+    # blind re-plan reported "no enabled plugins" and rejected a launch whose
+    # plugins had already been resolved correctly a few lines above, so those
+    # profiles could never start. profile_has_enabled_plugins() has always
+    # guarded the same way; this brings the two into agreement.
+    if (
+        profile_plan is not None
+        and resolved_plugins
+        and profile_plan["plugin_names"]
+        and not profile_plan["has_enabled_plugins"]
+    ):
         raise HTTPException(
             status_code=400,
             detail={
