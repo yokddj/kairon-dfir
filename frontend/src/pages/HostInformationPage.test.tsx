@@ -13,12 +13,15 @@ const getCaseHostUnverifiedProfilesMock = vi.fn();
 const getCaseHostNetworkMock = vi.fn();
 const useActiveCaseMock = vi.fn();
 
+const rebuildCaseHostInformationMock = vi.fn();
+
 vi.mock("../api/client", () => ({
   api: {
     getCaseHostFacts: (...args: unknown[]) => getCaseHostFactsMock(...args),
     getCaseHostUsers: (...args: unknown[]) => getCaseHostUsersMock(...args),
     getCaseHostUnverifiedProfiles: (...args: unknown[]) => getCaseHostUnverifiedProfilesMock(...args),
     getCaseHostNetwork: (...args: unknown[]) => getCaseHostNetworkMock(...args),
+    rebuildCaseHostInformation: (...args: unknown[]) => rebuildCaseHostInformationMock(...args),
   },
 }));
 
@@ -634,6 +637,53 @@ describe("HostInformationPage", () => {
       expect(screen.queryByText("192.168.20.41")).not.toBeInTheDocument();
       expect(getCaseHostNetworkMock).toHaveBeenCalledWith("case-1", { host_id: "host-1" });
       expect(getCaseHostNetworkMock).toHaveBeenCalledWith("case-1", { host_id: "host-2" });
+    });
+  });
+
+  describe("completing host information for a case ingested before it was derived", () => {
+    it("recovers the missing observations and refreshes the panels", async () => {
+      const user = userEvent.setup();
+      rebuildCaseHostInformationMock.mockResolvedValue({
+        case_id: "case-1",
+        scanned_events: 1200,
+        host_facts_created: 4,
+        host_user_facts_created: 3,
+        warnings: [],
+      });
+      renderPage();
+
+      await user.click(await screen.findByRole("button", { name: /complete host information/i }));
+
+      // The event count is locale-formatted, so match around it.
+      expect(await screen.findByRole("status")).toHaveTextContent(
+        /Recovered 3 user and 4 host observations from [\d,.\u202f\u00a0]+ events/,
+      );
+    });
+
+    it("says plainly when there was nothing left to recover", async () => {
+      const user = userEvent.setup();
+      rebuildCaseHostInformationMock.mockResolvedValue({
+        case_id: "case-1",
+        scanned_events: 500,
+        host_facts_created: 0,
+        host_user_facts_created: 0,
+        warnings: [],
+      });
+      renderPage();
+
+      await user.click(await screen.findByRole("button", { name: /complete host information/i }));
+
+      expect(await screen.findByRole("status")).toHaveTextContent(/Nothing to recover/);
+    });
+
+    it("surfaces a failure instead of looking like it did nothing", async () => {
+      const user = userEvent.setup();
+      rebuildCaseHostInformationMock.mockRejectedValue(new Error("OpenSearch unavailable"));
+      renderPage();
+
+      await user.click(await screen.findByRole("button", { name: /complete host information/i }));
+
+      expect(await screen.findByRole("status")).toHaveTextContent("OpenSearch unavailable");
     });
   });
 });
