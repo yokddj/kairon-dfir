@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -16,6 +18,9 @@ from app.models.evidence import Evidence
 from app.schemas.event import SearchRequest
 from app.services.host_identity import normalize_host_alias
 from app.analysis.suspicious import normalize_windows_path_for_classification
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -856,14 +861,36 @@ def _build_process_tree_sample_chains(graph: dict) -> list[dict]:
     return chains[:10]
 
 
-def _filter_process_graph(graph: dict, *, pid: int | None = None, process_name: str | None = None, entity_id: str | None = None) -> dict:
+def _filter_process_graph(
+    graph: dict,
+    *,
+    pid: int | None = None,
+    process_name: str | None = None,
+    entity_id: str | None = None,
+    matched_event_ids: set[str] | None = None,
+    outside_graph_hint: str | None = None,
+) -> dict:
+    """Narrow a graph to the process that was asked for, and its relatives.
+
+    ``matched_event_ids`` are the events the search itself matched. A node is
+    kept when it was built from one of them, whatever its own summarised fields
+    say. Without that, a search for a script name finds the events but then
+    discards the nodes built from them, because a node's ``command_line`` is a
+    summary of the process and does not always carry the text that matched --
+    which is why searching one script name returned a graph while another,
+    matched by the very same query shape, returned nothing.
+    """
     if pid is None and not process_name and not entity_id:
         return graph
 
     # Compared the same way everywhere: a pasted full path, a name with or
     # without .exe, and any casing all have to select the same node, or the
     # graph goes empty for a process that is plainly in it.
+    empty_focus_warning = (
+        outside_graph_hint or "No process graph nodes matched the selected focus filter."
+    )
     wanted_name = normalize_process_name(process_name)
+    matched_events = matched_event_ids or set()
     focus_ids = {
         str(node.get("id"))
         for node in graph.get("nodes", [])
@@ -871,6 +898,7 @@ def _filter_process_graph(graph: dict, *, pid: int | None = None, process_name: 
             (entity_id and str(node.get("id") or "") == entity_id)
             or (pid is not None and _safe_intish(node.get("pid")) == int(pid))
             or (wanted_name and _node_matches_name(node, wanted_name))
+            or (matched_events and _node_built_from(node, matched_events))
         )
     }
     if not focus_ids:
@@ -886,7 +914,7 @@ def _filter_process_graph(graph: dict, *, pid: int | None = None, process_name: 
                 "high_risk_nodes_count": 0,
                 "suspicious_chains_count": 0,
                 "orphan_nodes_count": 0,
-                "warnings": sorted(set(list((graph.get("summary") or {}).get("warnings") or []) + ["No process graph nodes matched the selected focus filter."])),
+                "warnings": sorted(set(list((graph.get("summary") or {}).get("warnings") or []) + [empty_focus_warning])),
                 "warnings_summary": dict((graph.get("summary") or {}).get("warnings_summary") or {}),
                 "warnings_samples": list((graph.get("summary") or {}).get("warnings_samples") or []),
             },
@@ -1441,6 +1469,18 @@ def build_process_tree_bundle(
         process_filters.append(focus_filter)
     focused_query = bool(focus_filter)
     process_events, _, _ = _search_scope_events(context, size=500 if focused_query else 2000, extra_filters=process_filters)
+    # Captured here, before parent and context events are appended below: those
+    # are fetched without the focus filter, so including them would make every
+    # search match everything.
+    matched_event_ids = (
+        {
+            str(event.get("id") or event.get("event_id") or "")
+            for event in process_events
+            if event.get("id") or event.get("event_id")
+        }
+        if focused_query
+        else set()
+    )
     if focused_query:
         parent_entity_ids = sorted(
             {
@@ -1495,7 +1535,20 @@ def build_process_tree_bundle(
         deduped_events.append(event)
 
     graph = _build_process_graph(deduped_events, case.id, evidence_id, scope)
-    filtered_graph = _filter_process_graph(graph, pid=pid, process_name=process_name, entity_id=entity_id)
+    filtered_graph = _filter_process_graph(
+        graph,
+        pid=pid,
+        process_name=process_name,
+        entity_id=entity_id,
+        matched_event_ids=matched_event_ids,
+        # Only computed when the focused query found no process-creation
+        # events, which is exactly when the analyst needs to know why.
+        outside_graph_hint=(
+            describe_matches_outside_the_process_graph(context, focus_filter)
+            if focused_query and not matched_event_ids
+            else None
+        ),
+    )
     compact_graph = _compact_process_graph(
         filtered_graph,
         include_activity=include_activity,
@@ -1814,6 +1867,50 @@ def normalize_process_name(value: str | None) -> str:
     if text.endswith(".exe"):
         text = text[: -len(".exe")]
     return text.strip()
+
+
+def describe_matches_outside_the_process_graph(
+    context: "_ProcessTreeContext",
+    focus_filter: dict | None,
+) -> str | None:
+    """Explain a search that matched real events which have no process node.
+
+    The process graph is built from process-creation records only. A term that
+    appears solely in, say, PowerShell script-block logs or command history
+    matches nothing here and never will, however the search is written. Saying
+    only "no nodes matched" sends the analyst hunting for a graph that cannot
+    exist; naming where the term *does* appear points them at the evidence.
+    """
+    if not focus_filter:
+        return None
+    try:
+        events, _, _ = _search_scope_events(context, size=1, extra_filters=[focus_filter])
+    except Exception:  # noqa: BLE001 - guidance must never break the response
+        logger.debug("Could not look for matches outside the process graph", exc_info=True)
+        return None
+    if not events:
+        return None
+
+    sources = sorted(
+        {
+            str(_nested_get(event, "artifact.type") or _nested_get(event, "event.type") or "").strip()
+            for event in events
+        }
+        - {""}
+    )
+    where = f" They appear in {', '.join(sources)} events." if sources else ""
+    return (
+        "This term matches events in the case, but none of them are process-creation "
+        f"records, so it has no node in the process graph.{where} "
+        "Search or the timeline will show them."
+    )
+
+
+def _node_built_from(node: dict, event_ids: set[str]) -> bool:
+    """True when this node was built from one of the events that matched."""
+    if str(node.get("source_event_id") or "") in event_ids:
+        return True
+    return any(str(item) in event_ids for item in (node.get("source_events") or []))
 
 
 def _node_name_haystack(node: dict) -> str:

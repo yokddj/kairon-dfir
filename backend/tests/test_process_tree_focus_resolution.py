@@ -242,3 +242,118 @@ def test_the_node_filter_still_returns_nothing_for_an_absent_process():
     graph = {"nodes": [node(id="a")], "edges": [], "summary": {}}
 
     assert _filter_process_graph(graph, process_name="notepad")["nodes"] == []
+
+
+# --- a search that matches evidence with no process node -------------------
+#
+# The process graph is built from process-creation records only. A script name
+# that appears solely in PowerShell script-block logs matches real events but
+# can never have a node, and "no nodes matched the focus filter" sent the
+# analyst hunting for a graph that cannot exist.
+
+
+class _StubContext:
+    pass
+
+
+def test_a_term_found_only_outside_the_graph_is_explained(monkeypatch):
+    import app.services.process_tree as pt
+
+    monkeypatch.setattr(
+        pt,
+        "_search_scope_events",
+        lambda context, size=1, extra_filters=None: (
+            [{"artifact": {"type": "powershell"}, "event": {"type": "script_block"}}],
+            None,
+            None,
+        ),
+    )
+
+    hint = pt.describe_matches_outside_the_process_graph(_StubContext(), {"bool": {}})
+
+    assert "none of them are process-creation records" in hint
+    assert "powershell" in hint
+    assert "Search or the timeline" in hint
+
+
+def test_no_hint_when_the_term_is_absent_everywhere(monkeypatch):
+    """A term genuinely not in the case must not be explained away."""
+    import app.services.process_tree as pt
+
+    monkeypatch.setattr(
+        pt, "_search_scope_events", lambda context, size=1, extra_filters=None: ([], None, None)
+    )
+
+    assert pt.describe_matches_outside_the_process_graph(_StubContext(), {"bool": {}}) is None
+
+
+def test_no_hint_without_a_focus_filter(monkeypatch):
+    import app.services.process_tree as pt
+
+    assert pt.describe_matches_outside_the_process_graph(_StubContext(), None) is None
+
+
+def test_a_failing_lookup_never_breaks_the_response(monkeypatch):
+    import app.services.process_tree as pt
+
+    def boom(context, size=1, extra_filters=None):
+        raise RuntimeError("index unavailable")
+
+    monkeypatch.setattr(pt, "_search_scope_events", boom)
+
+    assert pt.describe_matches_outside_the_process_graph(_StubContext(), {"bool": {}}) is None
+
+
+def test_the_hint_replaces_the_bare_focus_filter_warning():
+    from app.services.process_tree import _filter_process_graph
+
+    graph = {"nodes": [node(id="a", name="explorer.exe", path="", command_line="")], "edges": [], "summary": {}}
+
+    filtered = _filter_process_graph(
+        graph, process_name="somescript.ps1", outside_graph_hint="It lives in powershell events."
+    )
+
+    warnings = filtered["summary"]["warnings"]
+    assert "It lives in powershell events." in warnings
+    assert "No process graph nodes matched the selected focus filter." not in warnings
+
+
+def test_without_a_hint_the_original_warning_still_appears():
+    from app.services.process_tree import _filter_process_graph
+
+    graph = {"nodes": [node(id="a", name="explorer.exe", path="", command_line="")], "edges": [], "summary": {}}
+
+    filtered = _filter_process_graph(graph, process_name="somescript.ps1")
+
+    assert "No process graph nodes matched the selected focus filter." in filtered["summary"]["warnings"]
+
+
+def test_a_node_built_from_a_matched_event_survives_the_filter():
+    """The node's own summary may not carry the text the query matched."""
+    from app.services.process_tree import _filter_process_graph
+
+    graph = {
+        "nodes": [node(id="a", name="powershell.exe", path="", command_line="powershell.exe")],
+        "edges": [],
+        "summary": {},
+    }
+
+    filtered = _filter_process_graph(
+        graph, process_name="unrelated-name", matched_event_ids={"evt-1"}
+    )
+
+    assert [n["id"] for n in filtered["nodes"]] == ["a"]
+
+
+def test_matched_event_ids_do_not_keep_unrelated_nodes():
+    from app.services.process_tree import _filter_process_graph
+
+    graph = {
+        "nodes": [node(id="a", source_event_id="other", source_events=["other"])],
+        "edges": [],
+        "summary": {},
+    }
+
+    filtered = _filter_process_graph(graph, process_name="nope", matched_event_ids={"evt-1"})
+
+    assert filtered["nodes"] == []
