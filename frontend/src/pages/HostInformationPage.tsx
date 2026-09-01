@@ -572,7 +572,7 @@ function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostI
       </div>
       {users.length === 0 ? (
         <p className="mt-4 text-sm text-muted" data-testid="user-inventory-empty">
-          No local accounts have been identified for this host yet. This appears once evidence with a supported source (Linux passwd/shadow, or a Windows SAM hive) has been processed and assigned to this host.
+          No local accounts have been identified for this host yet. This is a gap in what was collected, not a finding: the inventory appears once evidence carrying a supported source (a Windows SAM hive, or Linux passwd/shadow) has been processed and assigned to this host. Use &ldquo;Complete host information&rdquo; above to check whether that evidence is present but not yet derived.
         </p>
       ) : (
         <div className="mt-4 overflow-x-auto">
@@ -727,10 +727,18 @@ export default function HostInformationPage() {
     mutationFn: () => api.rebuildCaseHostInformation(caseId!),
     onSuccess: (result) => {
       const found = result.host_facts_created + result.host_user_facts_created;
+      const thisHost = (result.hosts ?? []).find((row) => row.host_id === selectedHostId);
+      // A host that gained nothing needs to know which of the two it is:
+      // already complete, or missing the artifact that carries the answer.
+      // Reporting only a case-wide total reads as "the button did nothing".
+      const hostNote =
+        thisHost && !thisHost.has_identity_source
+          ? ` No SAM, ProfileList or Linux identity artifact has been ingested for ${thisHost.host}, so its local accounts cannot be listed until that evidence is collected.`
+          : "";
       setRebuildResult(
-        found > 0
+        (found > 0
           ? `Recovered ${result.host_user_facts_created} user and ${result.host_facts_created} host observations from ${result.scanned_events.toLocaleString()} events.`
-          : `Nothing to recover: the ${result.scanned_events.toLocaleString()} events checked already have everything they can produce.`,
+          : `Nothing to recover: the ${result.scanned_events.toLocaleString()} events checked already have everything they can produce.`) + hostNote,
       );
       for (const key of ["case-host-users", "case-host-unverified-profiles", "case-host-facts"]) {
         queryClient.invalidateQueries({ queryKey: [key, caseId, selectedHostId] });

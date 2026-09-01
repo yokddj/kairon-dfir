@@ -225,3 +225,81 @@ def test_a_failing_scan_returns_rather_than_raising(monkeypatch):
     result = repair.rebuild_host_information(FakeDb(), "case-1")
 
     assert result["scanned_events"] == 0
+
+
+class HostRow:
+    def __init__(self, host_id, display_name):
+        self.id = host_id
+        self.display_name = display_name
+        self.canonical_name = display_name
+
+
+class DbWithHosts(FakeDb):
+    """Answers the evidence query and the host query separately."""
+
+    def __init__(self, hosts):
+        super().__init__()
+        self._hosts = hosts
+        self._wants_hosts = False
+
+    def query(self, model=None, *_a, **_k):
+        self._wants_hosts = getattr(model, "__name__", "") == "CaseHost"
+        return self
+
+    def all(self):
+        return self._hosts if self._wants_hosts else []
+
+
+class CoverageClient(FakeClient):
+    def __init__(self, coverage_buckets):
+        super().__init__([])
+        self.coverage = coverage_buckets
+
+    def search(self, index=None, body=None, params=None, **kwargs):
+        self.bodies.append(body)
+        if "aggs" in (body or {}):
+            return {"hits": {"hits": []}, "aggregations": {"by_host": {"buckets": self.coverage}}}
+        return {"hits": {"hits": []}}
+
+
+def test_rebuild_reports_which_hosts_can_never_list_users(monkeypatch):
+    """Pressing the button on such a host must not look like it did nothing."""
+    client = CoverageClient([
+        {"key": "DC02", "by_type": {"buckets": [{"key": "windows_sam_identity", "doc_count": 4}]}},
+    ])
+    _patch(monkeypatch, client)
+    db = DbWithHosts([HostRow("h1", "WS01"), HostRow("h2", "DC02")])
+
+    coverage = {row["host"]: row for row in repair.rebuild_host_information(db, "case-1")["hosts"]}
+
+    assert coverage["WS01"]["has_identity_source"] is False
+    assert coverage["WS01"]["identity_sources"] == {}
+    assert coverage["DC02"]["has_identity_source"] is True
+    assert coverage["DC02"]["identity_sources"]["windows_sam_identity"] == 4
+
+
+def test_host_coverage_matching_ignores_case(monkeypatch):
+    client = CoverageClient([
+        {"key": "ws01", "by_type": {"buckets": [{"key": "windows_sam_identity", "doc_count": 1}]}},
+    ])
+    _patch(monkeypatch, client)
+    db = DbWithHosts([HostRow("h1", "WS01")])
+
+    coverage = repair.rebuild_host_information(db, "case-1")["hosts"]
+
+    assert coverage[0]["has_identity_source"] is True
+
+
+def test_a_failing_coverage_lookup_does_not_fail_the_rebuild(monkeypatch):
+    class PartlyBroken(FakeClient):
+        def search(self, index=None, body=None, params=None, **kwargs):
+            if "aggs" in (body or {}):
+                raise RuntimeError("aggregation unavailable")
+            return {"hits": {"hits": []}}
+
+    _patch(monkeypatch, PartlyBroken([]))
+    db = DbWithHosts([HostRow("h1", "WS01")])
+
+    result = repair.rebuild_host_information(db, "case-1")
+
+    assert result["hosts"][0]["has_identity_source"] is False
