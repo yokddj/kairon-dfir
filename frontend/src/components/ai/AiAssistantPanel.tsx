@@ -1,11 +1,49 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, Clock, Loader2, Plus, Search, Send, Square, Trash2, X } from "lucide-react";
+import {
+  Bot,
+  Clock,
+  Loader2,
+  Maximize2,
+  Minimize2,
+  Plus,
+  Search,
+  Send,
+  Square,
+  Trash2,
+  X,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamCaseAiChat, type AiChatMessage } from "../../api/client";
 import { useActiveCase } from "../../context/ActiveCaseContext";
-import { useHostContext } from "../../hooks/useHostContext";
+
+/**
+ * Panel sizes. The assistant quotes queries and event tables, which do not fit
+ * a chat bubble, so the analyst picks how much room it gets. The choice is kept
+ * per browser because it is a workspace preference, not case data.
+ */
+const SIZES = {
+  compact: "h-[min(60vh,480px)] w-[min(92vw,380px)]",
+  regular: "h-[min(78vh,620px)] w-[min(92vw,440px)]",
+  large: "h-[min(88vh,900px)] w-[min(96vw,720px)]",
+  full: "inset-4 h-auto w-auto",
+} as const;
+
+type PanelSize = keyof typeof SIZES;
+
+const SIZE_ORDER: PanelSize[] = ["compact", "regular", "large", "full"];
+const SIZE_STORAGE_KEY = "kairon.ai.panelSize";
+
+function loadSize(): PanelSize {
+  try {
+    const stored = localStorage.getItem(SIZE_STORAGE_KEY);
+    if (stored && stored in SIZES) return stored as PanelSize;
+  } catch {
+    // Private windows and blocked storage are fine; fall back to the default.
+  }
+  return "regular";
+}
 
 /** What the assistant looked up for one answer, shown above it. */
 type Lookup = { tool: string; detail: string };
@@ -71,11 +109,16 @@ function AnswerMarkdown({ content }: { content: string }) {
 }
 
 export default function AiAssistantPanel() {
-  const { activeCaseId, activeCase } = useActiveCase();
-  const { activeHost } = useHostContext();
+  // Read the selected host from context rather than useHostContext: that hook
+  // writes host_id/host into the URL, and a panel mounted on every page must
+  // not rewrite the address bar of screens that have nothing to do with hosts.
+  const { activeCaseId, activeCase, selectedHost } = useActiveCase();
+  const activeHost = selectedHost || "";
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
+  const [size, setSize] = useState<PanelSize>(loadSize);
   const [showHistory, setShowHistory] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -193,8 +236,19 @@ export default function AiAssistantPanel() {
     setShowHistory(false);
   };
 
+  const cycleSize = () => {
+    const next = SIZE_ORDER[(SIZE_ORDER.indexOf(size) + 1) % SIZE_ORDER.length];
+    setSize(next);
+    try {
+      localStorage.setItem(SIZE_STORAGE_KEY, next);
+    } catch {
+      // Not being able to remember the size is not worth failing over.
+    }
+  };
+
   const openConversation = async (id: string) => {
     abortRef.current?.abort();
+    setHistoryError(null);
     try {
       const detail = await api.getAiConversation(activeCaseId, id);
       setTurns(
@@ -209,18 +263,25 @@ export default function AiAssistantPanel() {
       );
       setConversationId(id);
       setShowHistory(false);
-    } catch {
-      // Leave the panel as it was; the thread list stays open to retry.
+    } catch (error) {
+      // Silence here reads as "the click did nothing", which is the worst
+      // possible feedback. Say what failed and leave the list open to retry.
+      setHistoryError(
+        error instanceof Error ? error.message : "That conversation could not be opened.",
+      );
     }
   };
 
   const removeConversation = async (id: string) => {
+    setHistoryError(null);
     try {
       await api.deleteAiConversation(activeCaseId, id);
       if (id === conversationId) startNewConversation();
       queryClient.invalidateQueries({ queryKey: ["ai-conversations", activeCaseId] });
-    } catch {
-      // Ignored: the list refreshes and will still show it if it survived.
+    } catch (error) {
+      setHistoryError(
+        error instanceof Error ? error.message : "That conversation could not be deleted.",
+      );
     }
   };
 
@@ -241,7 +302,9 @@ export default function AiAssistantPanel() {
     <aside
       role="complementary"
       aria-label="AI assistant"
-      className="fixed bottom-6 right-6 z-40 flex h-[min(78vh,620px)] w-[min(92vw,420px)] flex-col rounded-2xl border border-line bg-panel/95 shadow-panel backdrop-blur"
+      className={`fixed z-40 flex flex-col rounded-2xl border border-line bg-panel/95 shadow-panel backdrop-blur ${
+        size === "full" ? SIZES.full : `bottom-6 right-6 ${SIZES[size]}`
+      }`}
     >
       <header className="flex items-start justify-between gap-2 border-b border-line/80 px-4 py-3">
         <div className="min-w-0">
@@ -254,6 +317,15 @@ export default function AiAssistantPanel() {
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
+          <button
+            type="button"
+            onClick={cycleSize}
+            aria-label={`Resize the assistant (currently ${size})`}
+            title={`Size: ${size} — click to change`}
+            className="rounded-lg p-1 text-muted transition hover:text-ink"
+          >
+            {size === "full" ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
           <button
             type="button"
             onClick={startNewConversation}
@@ -293,6 +365,11 @@ export default function AiAssistantPanel() {
       {showHistory ? (
         <div className="flex-1 overflow-y-auto px-3 py-3">
           <p className="px-1 pb-2 text-[11px] uppercase tracking-wide text-muted">Past conversations</p>
+          {historyError ? (
+            <p role="alert" className="mb-2 rounded-xl border border-danger/40 bg-danger/5 px-2 py-1.5 text-[11px] text-danger">
+              {historyError}
+            </p>
+          ) : null}
           {historyQuery.isLoading ? (
             <p className="px-1 text-xs text-muted">Loading…</p>
           ) : (historyQuery.data?.conversations.length ?? 0) === 0 ? (
@@ -328,7 +405,12 @@ export default function AiAssistantPanel() {
           )}
         </div>
       ) : (
-      <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-3">
+      <div
+        ref={scrollRef}
+        className={`flex-1 space-y-3 overflow-y-auto px-4 py-3 ${
+          size === "large" || size === "full" ? "text-[13px]" : ""
+        }`}
+      >
         {turns.length === 0 ? (
           <div className="space-y-3">
             <p className="text-xs text-muted">

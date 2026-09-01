@@ -12,8 +12,11 @@ const streamCaseAiChatMock = vi.fn();
 const listAiConversationsMock = vi.fn();
 const getAiConversationMock = vi.fn();
 const deleteAiConversationMock = vi.fn();
-const activeCase = { activeCaseId: "case-1", activeCase: { id: "case-1", name: "Ransomware IR" } };
-const hostContext = { activeHost: "WS-01" };
+const activeCase = {
+  activeCaseId: "case-1",
+  activeCase: { id: "case-1", name: "Ransomware IR" },
+  selectedHost: "WS-01",
+};
 
 vi.mock("../../api/client", () => ({
   api: {
@@ -29,9 +32,7 @@ vi.mock("../../context/ActiveCaseContext", () => ({
   useActiveCase: () => activeCase,
 }));
 
-vi.mock("../../hooks/useHostContext", () => ({
-  useHostContext: () => hostContext,
-}));
+
 
 const LOCAL_STATUS: AiStatusResponse = {
   enabled: true,
@@ -54,7 +55,8 @@ function renderPanel() {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  hostContext.activeHost = "WS-01";
+  localStorage.clear();
+  activeCase.selectedHost = "WS-01";
   getAiStatusMock.mockResolvedValue(LOCAL_STATUS);
   listAiConversationsMock.mockResolvedValue({ conversations: [] });
   deleteAiConversationMock.mockResolvedValue({ deleted: true });
@@ -270,5 +272,83 @@ describe("AiAssistantPanel", () => {
     await user.click(await screen.findByRole("button", { name: /delete conversation: old thread/i }));
 
     await waitFor(() => expect(deleteAiConversationMock).toHaveBeenCalledWith("case-1", "c1"));
+  });
+
+  it("says so when a conversation cannot be opened", async () => {
+    // Swallowing this made the click look like it did nothing at all.
+    const user = userEvent.setup();
+    listAiConversationsMock.mockResolvedValue({
+      conversations: [
+        { id: "c1", title: "broken thread", provider: null, model: null, message_count: 2, created_at: null, updated_at: null },
+      ],
+    });
+    getAiConversationMock.mockRejectedValue(new Error("Conversation not found"));
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+    await user.click(screen.getByRole("button", { name: /past conversations/i }));
+    await user.click(await screen.findByText("broken thread"));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Conversation not found");
+    // The list stays open so the analyst can try another one.
+    expect(screen.getByText("broken thread")).toBeInTheDocument();
+  });
+
+  it("reports a failed delete instead of silently doing nothing", async () => {
+    const user = userEvent.setup();
+    listAiConversationsMock.mockResolvedValue({
+      conversations: [
+        { id: "c1", title: "stuck", provider: null, model: null, message_count: 1, created_at: null, updated_at: null },
+      ],
+    });
+    deleteAiConversationMock.mockRejectedValue(new Error("Access denied"));
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+    await user.click(screen.getByRole("button", { name: /past conversations/i }));
+    await user.click(await screen.findByRole("button", { name: /delete conversation: stuck/i }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Access denied");
+  });
+
+  it("cycles through panel sizes and remembers the choice", async () => {
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+    expect(screen.getByRole("button", { name: /currently regular/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /resize the assistant/i }));
+    expect(screen.getByRole("button", { name: /currently large/i })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /resize the assistant/i }));
+    expect(screen.getByRole("button", { name: /currently full/i })).toBeInTheDocument();
+
+    expect(localStorage.getItem("kairon.ai.panelSize")).toBe("full");
+  });
+
+  it("starts at the remembered size", async () => {
+    localStorage.setItem("kairon.ai.panelSize", "large");
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+
+    expect(screen.getByRole("button", { name: /currently large/i })).toBeInTheDocument();
+  });
+
+  it("works when the analyst has no host selected", async () => {
+    // The panel is mounted app-wide, including on screens with no host at all.
+    activeCase.selectedHost = "";
+    const user = userEvent.setup();
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+    await user.type(screen.getByLabelText(/question for the assistant/i), "hello");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => expect(streamCaseAiChatMock).toHaveBeenCalled());
+    expect(streamCaseAiChatMock.mock.calls[0][1].active_host).toBeNull();
+    expect(screen.queryByText(/Questions default to/)).not.toBeInTheDocument();
   });
 });

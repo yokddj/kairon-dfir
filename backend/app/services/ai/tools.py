@@ -14,11 +14,14 @@ Nothing here writes: the assistant can look, never touch.
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Callable
 
 from sqlalchemy.orm import Session
 
 from app.models.case_host import CaseHost
+
+logger = logging.getLogger(__name__)
 
 # A tool result is capped twice: by row count, so the model gets a sample rather
 # than a dump, and by serialized size, because one pathological event with a
@@ -31,6 +34,72 @@ MAX_RESULT_CHARS = 12000
 
 class ToolError(RuntimeError):
     """A tool could not answer. The message is shown to the model, so keep it useful."""
+
+
+def _resolve_host(db: Session, case_id: str, value: Any) -> CaseHost | None:
+    """Find the host a model meant, by id, name or alias.
+
+    Models pass whatever the analyst said -- "WS01", "this host", a UUID from a
+    previous result. Host ids are UUID columns, so feeding an arbitrary string
+    into a query aborts the transaction. Everything is resolved here, once, and
+    an unresolvable value becomes an error that names the real hosts instead of
+    a database exception.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+
+    hosts = db.query(CaseHost).filter(CaseHost.case_id == case_id).all()
+    if not hosts:
+        raise ToolError("This case has no hosts recorded yet, so it cannot be filtered by host.")
+
+    # An exact id match first: unambiguous, and what list_hosts hands back.
+    for host in hosts:
+        if host.id == text:
+            return host
+
+    target = _normalize_host_name(text)
+    for host in hosts:
+        names = {_normalize_host_name(host.display_name), _normalize_host_name(host.canonical_name)}
+        if target in names - {""}:
+            return host
+
+    alias_host_id = _host_id_for_alias(db, case_id, target)
+    if alias_host_id:
+        for host in hosts:
+            if host.id == alias_host_id:
+                return host
+
+    available = ", ".join(sorted({h.display_name for h in hosts})[:20])
+    raise ToolError(
+        f"No host called '{text}' in this case. Known hosts: {available}. "
+        "Call list_hosts and use a name or host_id from it, or omit the host to search them all."
+    )
+
+
+def _normalize_host_name(value: Any) -> str:
+    name = str(value or "").strip().lower()
+    return name[:-6] if name.endswith(".local") else name
+
+
+def _host_id_for_alias(db: Session, case_id: str, normalized: str) -> str | None:
+    """Hosts are renamed and re-observed; aliases keep old names resolvable."""
+    try:
+        from app.models.case_host_alias import CaseHostAlias
+
+        row = (
+            db.query(CaseHostAlias)
+            .filter(
+                CaseHostAlias.case_id == case_id,
+                CaseHostAlias.normalized_alias == normalized,
+            )
+            .first()
+        )
+        return row.case_host_id if row else None
+    except Exception:  # noqa: BLE001 - aliases are a nicety, not a requirement
+        logger.debug("Alias lookup failed; falling back to direct host names", exc_info=True)
+        _recover_session(db)
+        return None
 
 
 def _clip(value: Any, limit: int = MAX_FIELD_CHARS) -> Any:
@@ -70,9 +139,10 @@ EVENT_KEYS = (
 def tool_search_events(db: Session, case_id: str, args: dict) -> dict:
     from app.services.search_service import build_search_v2_params, search_events_v2
 
+    host = _resolve_host(db, case_id, args.get("host_id") or args.get("host"))
     params = build_search_v2_params(
         q=str(args.get("query") or "").strip(),
-        host_id=str(args.get("host_id") or "").strip() or None,
+        host_id=host.id if host else None,
         time_from=args.get("time_from") or None,
         time_to=args.get("time_to") or None,
         risk_min=args.get("risk_min"),
@@ -124,11 +194,13 @@ def tool_list_persistence(db: Session, case_id: str, args: dict) -> dict:
     from app.services.startup_persistence import list_startup_persistence_items
 
     limit = _limit(args.get("limit"))
+    host = _resolve_host(db, case_id, args.get("host") or args.get("host_id"))
     result = list_startup_persistence_items(
         db,
         case_id,
         {
-            "host": [args["host"]] if args.get("host") else None,
+            # This service filters by name, so hand it the canonical one.
+            "host": [host.display_name] if host else None,
             "type": args.get("type") or None,
             "q": args.get("query") or None,
             "suspicious_only": bool(args.get("suspicious_only")),
@@ -206,9 +278,10 @@ def tool_get_timeline(db: Session, case_id: str, args: dict) -> dict:
     from app.services.timeline_service import build_lightweight_timeline_response
 
     limit = _limit(args.get("limit"))
+    host = _resolve_host(db, case_id, args.get("host_id") or args.get("host"))
     params = {
         "q": str(args.get("query") or "").strip(),
-        "host_id": str(args.get("host_id") or "").strip() or None,
+        "host_id": host.id if host else None,
         "time_from": args.get("time_from") or None,
         "time_to": args.get("time_to") or None,
         "page": 1,
@@ -263,7 +336,7 @@ TOOL_SPECS: list[dict] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Search query using the syntax above."},
-                "host_id": {"type": "string", "description": "Restrict to one host (from list_hosts)."},
+                "host_id": {"type": "string", "description": "Restrict to one host. A host name or a host_id from list_hosts both work."},
                 "time_from": {"type": "string", "description": "ISO 8601 lower bound."},
                 "time_to": {"type": "string", "description": "ISO 8601 upper bound."},
                 "risk_min": {"type": "integer", "description": "Only events at or above this risk score (0-100)."},
@@ -283,7 +356,7 @@ TOOL_SPECS: list[dict] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "host": {"type": "string", "description": "Restrict to one host name."},
+                "host": {"type": "string", "description": "Restrict to one host. A host name or a host_id from list_hosts both work."},
                 "query": {"type": "string", "description": "Free-text filter over name and command."},
                 "suspicious_only": {"type": "boolean", "description": "Only entries flagged suspicious."},
                 "risk_min": {"type": "integer", "description": "Minimum risk score, 0-100."},
@@ -319,7 +392,7 @@ TOOL_SPECS: list[dict] = [
             "type": "object",
             "properties": {
                 "query": {"type": "string", "description": "Optional filter, same syntax as search_events."},
-                "host_id": {"type": "string", "description": "Restrict to one host."},
+                "host_id": {"type": "string", "description": "Restrict to one host. A host name or a host_id from list_hosts both work."},
                 "time_from": {"type": "string", "description": "ISO 8601 lower bound."},
                 "time_to": {"type": "string", "description": "ISO 8601 upper bound."},
                 "limit": {"type": "integer", "description": f"Max entries, 1-{MAX_ROWS_HARD}."},
@@ -339,16 +412,40 @@ HANDLERS: dict[str, Callable[[Session, str, dict], dict]] = {
 
 
 def run_tool(db: Session, case_id: str, name: str, args: dict) -> dict:
-    """Execute one tool. Never raises: the model gets the error and can adapt."""
+    """Execute one tool. Never raises: the model gets the error and can adapt.
+
+    A failure always rolls the session back. Postgres marks a transaction as
+    aborted after any error, and every later statement on that connection then
+    fails too -- so without this, one bad argument would silently break every
+    remaining lookup in the conversation rather than just its own.
+    """
     handler = HANDLERS.get(name)
     if handler is None:
         return {"error": f"Unknown tool '{name}'. Available: {', '.join(sorted(HANDLERS))}."}
     try:
         result = handler(db, case_id, args if isinstance(args, dict) else {})
+    except ToolError as exc:
+        _recover_session(db)
+        return {"error": str(exc)}
     except Exception as exc:  # noqa: BLE001 - surfaced to the model, not swallowed
+        _recover_session(db)
         detail = getattr(exc, "detail", None)
-        return {"error": f"{name} failed: {detail or exc}"}
+        return {
+            "error": f"{name} failed: {detail or exc}",
+            "recoverable": True,
+            "hint": "The session was reset; you can safely try a different query.",
+        }
     return _enforce_size(result)
+
+
+def _recover_session(db: Session | None) -> None:
+    """Return the session to a usable state after a failed statement."""
+    if db is None:
+        return
+    try:
+        db.rollback()
+    except Exception:  # noqa: BLE001 - nothing useful left to do
+        logger.exception("Could not roll back the session after a tool failure")
 
 
 def _enforce_size(result: dict) -> dict:
