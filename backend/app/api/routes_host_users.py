@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.models.case import Case
+from app.services.host_information_repair import rebuild_host_information
 from app.services.host_users import resolve_host_users, resolve_unverified_host_profiles
 
 router = APIRouter()
@@ -58,3 +59,18 @@ def get_case_host_unverified_profiles(
     scope = {"host_id": host_id} if host_id else {"evidence_id": evidence_id}
     profiles = resolve_unverified_host_profiles(db, case_id=case_id, **scope)
     return {"case_id": case_id, "scope": "host" if host_id else "evidence", **scope, "profiles": profiles}
+
+
+@router.post("/api/cases/{case_id}/host-information/rebuild")
+def rebuild_case_host_information(
+    case_id: str,
+    db: Session = Depends(get_db),
+) -> dict:
+    """Re-derive Host Facts and Host User Facts from the events already indexed.
+
+    For a case ingested before these layers were harvested on every ingest path,
+    this recovers them without re-ingesting the evidence.
+    """
+    if not db.get(Case, case_id):
+        raise HTTPException(status_code=404, detail="Case not found")
+    return rebuild_host_information(db, case_id)
