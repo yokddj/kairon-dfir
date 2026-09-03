@@ -86,6 +86,12 @@ FIELD_SPECS: dict[str, FieldSpec] = {
     "@timestamp": FieldSpec("@timestamp", kind="date", wildcard=False),
     "case_id": FieldSpec("case_id"),
     "evidence_id": FieldSpec("evidence_id"),
+    # The literal OpenSearch document id (event_id at index time -- see
+    # bulk_index_events_with_report), distinct from stable_event_id, which is a
+    # separate deduplication fingerprint. This is what every "id" an analyst
+    # sees in the UI (a search result row, a citation, a copied reference)
+    # actually is, so it needs to be pastable back into a query verbatim.
+    "event_id": FieldSpec("event_id", wildcard=False),
     "stable_event_id": FieldSpec("stable_event_id"),
     "event_fingerprint": FieldSpec("event_fingerprint"),
     "host.name": FieldSpec("host.name"),
