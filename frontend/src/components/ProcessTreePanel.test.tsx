@@ -35,7 +35,7 @@ function LocationProbe() {
   return <div data-testid="location-probe">{`${location.pathname}${location.search}`}</div>;
 }
 
-function renderPanel(props: Partial<ComponentProps<typeof ProcessTreePanel>> = {}, path = "/cases/case-1/process-graph") {
+function renderPanel(props: Partial<ComponentProps<typeof ProcessTreePanel>> = {}, path = "/cases/case-1/w/execution/stories") {
   const queryClient = new QueryClient({
     defaultOptions: {
       queries: {
@@ -49,8 +49,14 @@ function renderPanel(props: Partial<ComponentProps<typeof ProcessTreePanel>> = {
     <MemoryRouter initialEntries={[path]}>
       <QueryClientProvider client={queryClient}>
         <Routes>
+          {/* The single real-app route for this panel (see App.tsx): building a
+              story navigates here with the same path pattern and only a new
+              query string, which React Router treats as a location update on
+              the same component rather than a route change -- so the panel is
+              never remounted mid-story the way it would be by giving the
+              story build its own distinct route pattern. */}
           <Route
-            path="/cases/:caseId/process-graph"
+            path="/cases/:caseId/w/execution/stories"
             element={
               <>
                 <LocationProbe />
@@ -625,13 +631,13 @@ describe("ProcessTreePanel", () => {
   });
 
   it("focused process route renders process focus chip", async () => {
-    renderPanel({ initialMode: "focused", initialHighlightedNodeIds: ["ps"], initialProcessName: "powershell.exe" }, "/cases/case-1/process-graph?mode=process_focus&process_node_id=ps");
+    renderPanel({ initialMode: "focused", initialHighlightedNodeIds: ["ps"], initialProcessName: "powershell.exe" }, "/cases/case-1/w/execution/stories?mode=process_focus&process_node_id=ps");
     expect(await screen.findByText(/Focused on process:/i)).toBeInTheDocument();
     expect(screen.getByTestId("process-graph-mode-banner")).toHaveTextContent(/Process search/i);
   });
 
   it("focused finding route renders finding focus chip", async () => {
-    renderPanel({ initialFindingId: "finding-1", initialMode: "focused", initialHighlightedNodeIds: ["ps"] }, "/cases/case-1/process-graph?mode=finding_focus&finding_id=finding-1&node_id=ps");
+    renderPanel({ initialFindingId: "finding-1", initialMode: "focused", initialHighlightedNodeIds: ["ps"] }, "/cases/case-1/w/execution/stories?mode=finding_focus&finding_id=finding-1&node_id=ps");
     expect(await screen.findByText(/Focused on finding:/i)).toBeInTheDocument();
   });
 
