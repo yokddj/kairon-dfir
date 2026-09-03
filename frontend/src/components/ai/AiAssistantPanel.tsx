@@ -19,6 +19,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamCaseAiChat, type AiChatMessage, type TimelineBookmark } from "../../api/client";
 import CreateFindingDialog from "../CreateFindingDialog";
+import Portal from "../Portal";
 import type { FindingPrefill } from "../../lib/findingPrefill";
 import { useActiveCase } from "../../context/ActiveCaseContext";
 import { useNotifications } from "../../context/NotificationsContext";
@@ -177,6 +178,7 @@ function AddKeyEventDialog({
   pending: boolean;
 }) {
   return (
+    <Portal>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-abyss/70 p-4 backdrop-blur-sm">
       <div className="w-full max-w-md rounded-[28px] border border-line bg-panel p-6 shadow-panel" role="dialog" aria-modal="true" aria-label="Add to timeline">
         <div className="flex items-start justify-between gap-4">
@@ -239,6 +241,7 @@ function AddKeyEventDialog({
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
 

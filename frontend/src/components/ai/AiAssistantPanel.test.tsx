@@ -599,5 +599,31 @@ describe("AiAssistantPanel", () => {
 
       expect(screen.queryByRole("button", { name: /^timeline:/i })).not.toBeInTheDocument();
     });
+
+    it("escapes the backdrop-blur panel that would otherwise clip its fixed positioning", async () => {
+      // The panel itself (role="complementary") is styled with backdrop-blur, which establishes
+      // a CSS containing block for any `position: fixed` descendant in modern browsers. Rendered
+      // inline, the dialog's own buttons would get clipped to the panel's small box instead of
+      // the viewport and become unreachable -- it portals to document.body to avoid that.
+      const user = userEvent.setup();
+      streamCaseAiChatMock.mockImplementation(
+        async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
+          onEvent({ type: "text", text: CITED_ANSWER });
+        },
+      );
+      renderPanel();
+
+      await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+      await user.type(screen.getByLabelText(/question for the assistant/i), "any downloads?");
+      await user.click(screen.getByRole("button", { name: "Send" }));
+      await screen.findByText(/downloaded from file.io/);
+      await user.click(screen.getByRole("button", { name: /timeline: factura\.iso/i }));
+
+      const panel = screen.getByRole("complementary", { name: /ai assistant/i });
+      const dialog = await screen.findByRole("dialog", { name: /add to timeline/i });
+
+      expect(panel.contains(dialog)).toBe(false);
+      expect(document.body.contains(dialog)).toBe(true);
+    });
   });
 });
