@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
   Clock,
+  FileWarning,
   Loader2,
   Maximize2,
   Minimize2,
@@ -16,7 +17,31 @@ import {
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api, streamCaseAiChat, type AiChatMessage } from "../../api/client";
+import CreateFindingDialog from "../CreateFindingDialog";
+import type { FindingPrefill } from "../../lib/findingPrefill";
 import { useActiveCase } from "../../context/ActiveCaseContext";
+
+/**
+ * Event ids the assistant actually cited, pulled from its own citation links
+ * rather than re-deriving them from tool calls: the model is instructed (see
+ * the system prompt) to cite by relaying a tool-provided open_in_search URL
+ * verbatim, so scraping that URL shape is the same information the analyst
+ * already sees rendered as a link -- not a separate, potentially divergent
+ * source of truth.
+ */
+const CITATION_EVENT_ID_PATTERN = /\/search\?q=event_id%3A([^&)\s]+)/g;
+
+function citedEventIds(markdown: string): string[] {
+  const ids = new Set<string>();
+  for (const match of markdown.matchAll(CITATION_EVENT_ID_PATTERN)) {
+    try {
+      ids.add(decodeURIComponent(match[1]));
+    } catch {
+      // A malformed percent-encoding here means a broken link, not a usable id.
+    }
+  }
+  return [...ids];
+}
 
 /**
  * Panel sizes. The assistant quotes queries and event tables, which do not fit
@@ -118,6 +143,7 @@ export default function AiAssistantPanel() {
   const [open, setOpen] = useState(false);
   const [size, setSize] = useState<PanelSize>(loadSize);
   const [showHistory, setShowHistory] = useState(false);
+  const [findingPrefill, setFindingPrefill] = useState<FindingPrefill | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -227,6 +253,33 @@ export default function AiAssistantPanel() {
       );
       queryClient.invalidateQueries({ queryKey: ["ai-conversations", activeCaseId] });
     }
+  };
+
+  const openFindingDialogFor = (turnIndex: number) => {
+    const turn = turns[turnIndex];
+    if (!turn?.content) return;
+    const question = [...turns.slice(0, turnIndex)].reverse().find((item) => item.role === "user")?.content ?? "";
+    const eventIds = citedEventIds(turn.content);
+    setFindingPrefill({
+      title: question ? `Investigate: ${question.slice(0, 150)}` : "Assistant finding",
+      body: turn.content,
+      severity: "medium",
+      status: "draft",
+      event_ids: eventIds,
+      source_view: "ai_assistant",
+      source_label: status?.label ?? status?.provider ?? "AI assistant",
+      // The question, not the answer, goes here: source_summary is meant to
+      // say what prompted the finding, while the answer is already the body.
+      source_summary: question ? question.slice(0, 4000) : undefined,
+      source_snapshot_json: {
+        conversation_id: conversationId,
+        provider: status?.provider ?? null,
+        model: status?.model ?? null,
+        question: question || null,
+        answer: turn.content.slice(0, 4000),
+        lookups: turn.lookups ?? [],
+      },
+    });
   };
 
   const startNewConversation = () => {
@@ -457,6 +510,15 @@ export default function AiAssistantPanel() {
               <Loader2 size={14} className="animate-spin text-muted" />
             ) : null}
             {turn.notice ? <span className="mt-1 block text-[11px] text-amber-300">{turn.notice}</span> : null}
+            {turn.role === "assistant" && !turn.error && turn.content && !(streaming && index === turns.length - 1) ? (
+              <button
+                type="button"
+                onClick={() => openFindingDialogFor(index)}
+                className="mt-2 flex items-center gap-1.5 rounded-lg border border-line/60 px-2 py-1 text-[11px] text-muted transition hover:border-accent/40 hover:text-ink"
+              >
+                <FileWarning size={12} /> Create finding from this answer
+              </button>
+            ) : null}
           </div>
         ))}
       </div>
@@ -508,6 +570,15 @@ export default function AiAssistantPanel() {
           Analysis support, not evidence. Verify every claim against the artifacts.
         </p>
       </form>
+      {activeCaseId ? (
+        <CreateFindingDialog
+          open={Boolean(findingPrefill)}
+          onClose={() => setFindingPrefill(null)}
+          caseId={activeCaseId}
+          prefill={findingPrefill}
+          onCreated={() => setFindingPrefill(null)}
+        />
+      ) : null}
     </aside>
   );
 }

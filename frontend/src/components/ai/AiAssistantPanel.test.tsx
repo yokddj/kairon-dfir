@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,6 +12,7 @@ const streamCaseAiChatMock = vi.fn();
 const listAiConversationsMock = vi.fn();
 const getAiConversationMock = vi.fn();
 const deleteAiConversationMock = vi.fn();
+const createFindingMock = vi.fn();
 const activeCase = {
   activeCaseId: "case-1",
   activeCase: { id: "case-1", name: "Ransomware IR" },
@@ -24,6 +25,7 @@ vi.mock("../../api/client", () => ({
     listAiConversations: (...args: unknown[]) => listAiConversationsMock(...args),
     getAiConversation: (...args: unknown[]) => getAiConversationMock(...args),
     deleteAiConversation: (...args: unknown[]) => deleteAiConversationMock(...args),
+    createFinding: (...args: unknown[]) => createFindingMock(...args),
   },
   streamCaseAiChat: (...args: unknown[]) => streamCaseAiChatMock(...args),
 }));
@@ -60,6 +62,7 @@ beforeEach(() => {
   getAiStatusMock.mockResolvedValue(LOCAL_STATUS);
   listAiConversationsMock.mockResolvedValue({ conversations: [] });
   deleteAiConversationMock.mockResolvedValue({ deleted: true });
+  createFindingMock.mockResolvedValue({ id: "finding-1", title: "Investigate", status: "draft" });
   streamCaseAiChatMock.mockImplementation(
     async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
       onEvent({ type: "meta", provider: "ollama", model: "llama-local" });
@@ -376,5 +379,106 @@ describe("AiAssistantPanel", () => {
     await waitFor(() => expect(streamCaseAiChatMock).toHaveBeenCalled());
     expect(streamCaseAiChatMock.mock.calls[0][1].active_host).toBeNull();
     expect(screen.queryByText(/Questions default to/)).not.toBeInTheDocument();
+  });
+
+  describe("creating a finding from an answer", () => {
+    it("prefills the dialog from the question, the answer, and its citations", async () => {
+      const user = userEvent.setup();
+      streamCaseAiChatMock.mockImplementation(
+        async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
+          onEvent({
+            type: "text",
+            text: "Found [factura.iso](/cases/case-1/search?q=event_id%3Aevt-1&selected=evt-1) downloaded from file.io.",
+          });
+        },
+      );
+      renderPanel();
+
+      await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+      await user.type(screen.getByLabelText(/question for the assistant/i), "any suspicious downloads?");
+      await user.click(screen.getByRole("button", { name: "Send" }));
+      await screen.findByText(/downloaded from file.io/);
+
+      await user.click(screen.getByRole("button", { name: /create finding from this answer/i }));
+
+      const dialog = await screen.findByRole("dialog", { name: /create finding from source/i });
+      expect(within(dialog).getByDisplayValue("Investigate: any suspicious downloads?")).toBeInTheDocument();
+      expect(within(dialog).getByText(/downloaded from file.io/)).toBeInTheDocument();
+
+      await user.click(within(dialog).getByRole("button", { name: "Create finding" }));
+
+      await waitFor(() => expect(createFindingMock).toHaveBeenCalled());
+      const [, payload] = createFindingMock.mock.calls[0];
+      expect(payload.event_ids).toEqual(["evt-1"]);
+      expect(payload.source_view).toBe("ai_assistant");
+      expect(payload.source_summary).toMatch(/any suspicious downloads\?/i);
+    });
+
+    it("does not offer the action while the answer is still streaming", async () => {
+      let resolveStream: () => void = () => {};
+      streamCaseAiChatMock.mockImplementation(
+        (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) =>
+          new Promise<void>((resolve) => {
+            onEvent({ type: "text", text: "Looking..." });
+            resolveStream = resolve;
+          }),
+      );
+      const user = userEvent.setup();
+      renderPanel();
+
+      await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+      await user.type(screen.getByLabelText(/question for the assistant/i), "q");
+      await user.click(screen.getByRole("button", { name: "Send" }));
+
+      await screen.findByText("Looking...");
+      expect(screen.queryByRole("button", { name: /create finding from this answer/i })).not.toBeInTheDocument();
+
+      await act(async () => {
+        resolveStream();
+        await Promise.resolve();
+      });
+    });
+
+    it("does not offer the action on an error turn", async () => {
+      streamCaseAiChatMock.mockRejectedValue(new Error("boom"));
+      const user = userEvent.setup();
+      renderPanel();
+
+      await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+      await user.type(screen.getByLabelText(/question for the assistant/i), "q");
+      await user.click(screen.getByRole("button", { name: "Send" }));
+
+      await screen.findByText("boom");
+      expect(screen.queryByRole("button", { name: /create finding from this answer/i })).not.toBeInTheDocument();
+    });
+
+    it("falls back to a generic title when there is no preceding question", async () => {
+      // Reachable defensively (e.g. a reopened conversation with only an
+      // assistant turn); must not crash or leave the title blank.
+      getAiConversationMock.mockResolvedValue({
+        id: "c1",
+        title: "old thread",
+        provider: "ollama",
+        model: "m",
+        created_at: null,
+        messages: [{ id: "m1", role: "assistant", content: "Some earlier answer.", lookups: [] }],
+      });
+      listAiConversationsMock.mockResolvedValue({
+        conversations: [
+          { id: "c1", title: "old thread", provider: null, model: null, message_count: 1, created_at: null, updated_at: null },
+        ],
+      });
+      const user = userEvent.setup();
+      renderPanel();
+
+      await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+      await user.click(screen.getByRole("button", { name: /past conversations/i }));
+      await user.click(await screen.findByText("old thread"));
+      await screen.findByText("Some earlier answer.");
+
+      await user.click(screen.getByRole("button", { name: /create finding from this answer/i }));
+
+      expect(await screen.findByDisplayValue("Assistant finding")).toBeInTheDocument();
+    });
   });
 });
