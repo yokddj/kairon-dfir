@@ -98,6 +98,32 @@ describe("AiAssistantPanel", () => {
     });
   });
 
+  it("renders a citation as a real link back into the app", async () => {
+    // Tools hand back a ready-made pivot URL (e.g. open_in_search); the model
+    // is instructed to relay it verbatim as a markdown link. This locks in
+    // that a relative in-app href survives react-markdown's link sanitising
+    // and opens in a new tab, so a future dependency bump can't silently
+    // strip it without a test noticing.
+    const user = userEvent.setup();
+    streamCaseAiChatMock.mockImplementation(
+      async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
+        onEvent({
+          type: "text",
+          text: "Found [factura.iso](/cases/case-1/search?q=event_id%3Aevt-1&selected=evt-1) downloaded from file.io.",
+        });
+      },
+    );
+    renderPanel();
+
+    await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+    await user.type(screen.getByLabelText(/question for the assistant/i), "any downloads?");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    const link = await screen.findByRole("link", { name: "factura.iso" });
+    expect(link).toHaveAttribute("href", "/cases/case-1/search?q=event_id%3Aevt-1&selected=evt-1");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
   it("shows an error in the transcript when the request fails", async () => {
     const user = userEvent.setup();
     streamCaseAiChatMock.mockRejectedValue(new Error("The API key was rejected (401)"));

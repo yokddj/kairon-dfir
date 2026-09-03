@@ -130,6 +130,31 @@ def _limit(value: Any) -> int:
 # Tools
 # --------------------------------------------------------------------------
 
+def _event_pivot_url(case_id: str, event_id: Any) -> str | None:
+    """Where the analyst can see this exact event in the app.
+
+    event_id is the OpenSearch document's own _id, which Search can now match
+    exactly (see app.search.query_syntax's event_id field). Building the link
+    here, rather than asking the model to construct one, means the URL is
+    always well-formed and always points at the event actually looked up.
+    """
+    if not event_id:
+        return None
+    from urllib.parse import quote
+
+    encoded = quote(str(event_id), safe="")
+    return f"/cases/{case_id}/search?q=event_id%3A{encoded}&selected={encoded}"
+
+
+def _with_pivots(case_id: str, rows: list[dict]) -> list[dict]:
+    """Attach an open_in_search link to every row that carries an event id."""
+    for row in rows:
+        url = _event_pivot_url(case_id, row.get("id"))
+        if url:
+            row["open_in_search"] = url
+    return rows
+
+
 EVENT_KEYS = (
     "id", "timestamp", "host", "user", "artifact_type", "parser",
     "event_type", "severity", "risk_score", "title", "summary",
@@ -162,7 +187,7 @@ def tool_search_events(db: Session, case_id: str, args: dict) -> dict:
         # search service computes facets per page. Naming it plainly stops the
         # model from reporting a sample count as if it described the case.
         "sample_breakdown": _compact_facets(facets),
-        "events": _rows(rows, EVENT_KEYS, limit),
+        "events": _with_pivots(case_id, _rows(rows, EVENT_KEYS, limit)),
         "warnings": warnings or [],
         "note": (
             f"{total} events matched this query; {returned} are shown below. "
@@ -316,7 +341,7 @@ def tool_get_timeline(db: Session, case_id: str, args: dict) -> dict:
     items = result.get("items") or result.get("events") or []
     return {
         "total": result.get("total"),
-        "entries": _rows(items, TIMELINE_KEYS, limit),
+        "entries": _with_pivots(case_id, _rows(items, TIMELINE_KEYS, limit)),
     }
 
 
@@ -434,7 +459,9 @@ def tool_list_downloads(db: Session, case_id: str, args: dict) -> dict:
             "browser_history": browser["total"],
         },
         "summary": result.get("summary") or {},
-        "downloads": (motw_rows + browser["rows"])[:limit],
+        # motw_rows carry no event id today (list_motw_items does not surface
+        # one), so only the browser-history rows get a pivot link.
+        "downloads": (motw_rows + _with_pivots(case_id, browser["rows"]))[:limit],
         "warnings": (result.get("warnings") or []) + browser["warnings"],
         "note": (
             "No download evidence was recovered from Mark of the Web or browser history. "
@@ -554,6 +581,7 @@ def tool_get_event_detail(db: Session, case_id: str, args: dict) -> dict:
         "event_id": event_id,
         "timestamp": raw.get("@timestamp"),
         "evidence_id": raw.get("evidence_id"),
+        "open_in_search": _event_pivot_url(case_id, event_id),
         "fields": fields,
         "related_findings": context.get("related_findings") or [],
         "related_detections": context.get("related_detections") or [],

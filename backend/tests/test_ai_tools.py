@@ -115,7 +115,8 @@ def test_search_events_projects_away_bulky_fields(monkeypatch):
 
     event = tools_module.tool_search_events(None, "case-1", {"query": "q"})["events"][0]
 
-    assert set(event) <= set(tools_module.EVENT_KEYS)
+    # open_in_search is deliberately added on top of the declared projection.
+    assert set(event) <= set(tools_module.EVENT_KEYS) | {"open_in_search"}
     assert "highlights" not in event
 
 
@@ -652,3 +653,85 @@ def test_get_event_detail_is_advertised_and_wired():
     spec = next(s for s in tools_module.TOOL_SPECS if s["name"] == "get_event_detail")
     assert "event_id" in spec["input_schema"]["properties"]
     assert spec["input_schema"]["required"] == ["event_id"]
+
+
+# --------------------------------------------------------------------------
+# Pivot links: the model must never construct its own URL. Every row that
+# carries an event id gets a ready-made link to open it in Search.
+# --------------------------------------------------------------------------
+
+
+def test_event_pivot_url_points_at_search_with_the_exact_id():
+    url = tools_module._event_pivot_url("case-1", "evt-abc")
+
+    assert url == "/cases/case-1/search?q=event_id%3Aevt-abc&selected=evt-abc"
+
+
+def test_no_pivot_url_without_an_event_id():
+    assert tools_module._event_pivot_url("case-1", None) is None
+    assert tools_module._event_pivot_url("case-1", "") is None
+
+
+def test_pivot_url_encodes_special_characters_safely():
+    url = tools_module._event_pivot_url("case-1", "evt with spaces&stuff")
+
+    assert " " not in url and "&stuff" not in url.split("selected=")[0].split("q=")[1]
+
+
+def test_search_events_rows_carry_a_pivot_link(monkeypatch):
+    rows = [{"id": "evt-1", "host": "WS01"}]
+    monkeypatch.setattr(
+        "app.services.search_service.search_events_v2",
+        lambda case_id, params, db=None: (1, rows, [], {}),
+    )
+    monkeypatch.setattr("app.services.search_service.build_search_v2_params", lambda **kw: dict(kw))
+
+    result = tools_module.tool_search_events(None, "case-1", {"query": "x"})
+
+    assert result["events"][0]["open_in_search"] == "/cases/case-1/search?q=event_id%3Aevt-1&selected=evt-1"
+
+
+def test_timeline_entries_carry_a_pivot_link(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.timeline_service.build_lightweight_timeline_response",
+        lambda db, case_id, params: {"total": 1, "items": [{"id": "evt-2", "host": "WS01"}]},
+    )
+
+    result = tools_module.tool_get_timeline(None, "case-1", {})
+
+    assert result["entries"][0]["open_in_search"] == "/cases/case-1/search?q=event_id%3Aevt-2&selected=evt-2"
+
+
+def test_get_event_detail_carries_a_pivot_link(monkeypatch):
+    monkeypatch.setattr("app.core.opensearch.fetch_event_by_id", lambda *a, **k: dict(RAW_EVENT))
+    monkeypatch.setattr(
+        "app.services.search_service.event_context",
+        lambda db, case_id, event_id: {"related_findings": [], "related_detections": [], "counts": {}},
+    )
+
+    result = tools_module.tool_get_event_detail(None, "case-1", {"event_id": "evt-1"})
+
+    assert result["open_in_search"] == "/cases/case-1/search?q=event_id%3Aevt-1&selected=evt-1"
+
+
+def test_browser_download_rows_carry_a_pivot_link_but_motw_rows_do_not(monkeypatch):
+    """list_motw_items rows carry no event id today, so they get no link --
+    inventing one would point at something that cannot resolve."""
+    monkeypatch.setattr(
+        "app.services.motw.list_motw_items",
+        lambda db, case_id, params: {
+            "total": 1, "summary": {}, "items": [{"file_name": "a.exe", "host": "WS01"}],
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.search_service.search_events_v2",
+        lambda case_id, params, db=None: (1, [{"id": "evt-3", "event_type": "file_downloaded"}], [], {}),
+    )
+    monkeypatch.setattr("app.services.search_service.build_search_v2_params", lambda **kw: dict(kw))
+    session = RecordingSession(hosts=[FakeHost("id-1", "WS01")])
+
+    result = tools_module.tool_list_downloads(session, "case-1", {"host": "WS01"})
+
+    motw_row, browser_row = result["downloads"]
+    assert "open_in_search" not in motw_row
+    assert browser_row["open_in_search"] == "/cases/case-1/search?q=event_id%3Aevt-3&selected=evt-3"
