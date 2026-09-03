@@ -1,3 +1,4 @@
+import re
 import logging
 
 from fastapi import FastAPI, Request
@@ -79,6 +80,21 @@ PUBLIC_PATH_PREFIXES = [
 PUBLIC_PATH_PREFIXES_SET = set(PUBLIC_PATH_PREFIXES)
 
 
+# Case-scoped requests are recognised by their path (every case route puts the
+# id first, /api/cases/<id>/...) or by a case_id query parameter, which a few
+# evidence and memory routes use instead.
+CASE_PATH_PATTERN = re.compile(r"^/api/cases/([^/?#]+)")
+
+
+def requested_case_id(path: str, query_params) -> str | None:
+    """The case a request is about, if it is about one."""
+    match = CASE_PATH_PATTERN.match(path)
+    if match and match.group(1):
+        return match.group(1)
+    value = (query_params.get("case_id") or "").strip()
+    return value or None
+
+
 class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         # Skip auth if disabled (e.g. during tests)
@@ -126,6 +142,21 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(status_code=401, content={"detail": "Not authenticated"})
             # Store user in request state for route handlers
             request.state.user = user
+
+            # Authorise the case centrally. There are 180 case-scoped endpoints
+            # across 27 route modules; enforcing this per route means the next
+            # one added forgets it, and the gap is invisible until someone sees
+            # another client's evidence. An admin is allowed everywhere, so
+            # deployments with only admins are unaffected.
+            case_id = requested_case_id(path, request.query_params)
+            if case_id and not user.is_admin:
+                from app.services.auth_dependencies import get_effective_case_role
+
+                if get_effective_case_role(user, case_id, db) is None:
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": "Access denied to this case"},
+                    )
         finally:
             db.close()
         
