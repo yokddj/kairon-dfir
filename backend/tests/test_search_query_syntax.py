@@ -161,6 +161,34 @@ def test_stable_event_id_query_is_supported(monkeypatch: pytest.MonkeyPatch):
     assert query == {"term": {"stable_event_id": "abc123"}}
 
 
+def test_event_id_query_is_supported(monkeypatch: pytest.MonkeyPatch):
+    """This is the literal OpenSearch document id -- what an "id" in the UI
+    (a search row, a citation) actually is -- distinct from stable_event_id,
+    a separate deduplication fingerprint. An analyst pasting one back in, or
+    a pivot link built from one, must resolve to exactly that document."""
+    client = _FakeClient([])
+    monkeypatch.setattr(search_service, "get_opensearch_client", lambda: client)
+    monkeypatch.setattr(search_service, "index_exists", lambda client, index: True)
+    monkeypatch.setattr(search_service, "get_events_index", lambda case_id: "dfir-events-case-1")
+
+    search_service.search_events_v2("case-1", search_service.build_search_v2_params(q="event_id:evt-abc123", page_size=10))
+    query = client.last_kwargs["body"]["query"]["bool"]["must"][0]
+    assert query == {"term": {"event_id": "evt-abc123"}}
+
+
+def test_event_id_does_not_accept_a_wildcard(monkeypatch: pytest.MonkeyPatch):
+    """An id is looked up exactly; a wildcard here almost certainly means the
+    id was mistyped or truncated, not that a broader match was intended."""
+    client = _FakeClient([])
+    monkeypatch.setattr(search_service, "get_opensearch_client", lambda: client)
+    monkeypatch.setattr(search_service, "index_exists", lambda client, index: True)
+    monkeypatch.setattr(search_service, "get_events_index", lambda case_id: "dfir-events-case-1")
+
+    with pytest.raises(Exception) as exc:
+        search_service.search_events_v2("case-1", search_service.build_search_v2_params(q="event_id:evt-*", page_size=10))
+    assert "wildcards are not supported" in str(exc.value.detail)
+
+
 def test_has_field_query(monkeypatch: pytest.MonkeyPatch):
     client = _FakeClient([])
     monkeypatch.setattr(search_service, "get_opensearch_client", lambda: client)
