@@ -68,6 +68,20 @@ def system_health() -> dict:
     return {"status": "ok"}
 
 
+@router.get("/api/system/schema-health")
+def system_schema_health() -> dict:
+    """Whether the database still matches the schema this build expects.
+
+    A deployment whose migrations did not run keeps serving until a request
+    touches the missing column, and then fails with an opaque database error.
+    This makes that visible before it happens.
+    """
+    from app.core.database import engine
+    from app.services.schema_health import check_schema_drift
+
+    return check_schema_drift(engine)
+
+
 def _resolve_docs_root() -> Path:
     here = Path(__file__).resolve()
     candidates = [

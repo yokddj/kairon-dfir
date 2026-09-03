@@ -84,6 +84,10 @@ def _init_db_unlocked() -> None:
     # pre-versioned deployment still gets the new columns.
     from app.core.migrations import run_migrations
     run_migrations(engine)
+    # Say so in the logs if the database still lacks something the models
+    # expect, rather than letting the first request that needs it fail.
+    from app.services.schema_health import log_schema_drift
+    log_schema_drift(engine)
 
 
 def _ensure_compatible_schema() -> None:
