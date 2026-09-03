@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import MemoryEvidencePage from "./MemoryEvidencePage";
+import { routeSegmentFromTab, type MemoryTab } from "../lib/memoryWorkspaceState";
 
 const getMemoryOverviewMock = vi.fn();
 const getMemoryBackendOverviewMock = vi.fn();
@@ -93,31 +94,46 @@ vi.mock("../context/ActiveCaseContext", () => ({
   useActiveCase: () => ({ setActiveCaseId: vi.fn() }),
 }));
 
-function renderPage(initialPath = "/cases/case-1/memory/ev-memory") {
+// Mirrors the single route App.tsx actually registers for this page. Tab
+// clicks navigate() to /cases/:caseId/m/:evidenceId/<routeSegment> (see
+// MemoryEvidencePage's memoryViewPath / canonicalRoutes.memoryEvidenceRoute),
+// which is a different path shape from the /memory/ this harness used to
+// mount at. Since that shape had no matching <Route>, every tab click hit
+// "no routes matched", unmounted the page, and left every downstream
+// assertion looking at an empty document -- 23 of this file's 40 tests
+// were failing for that one reason, not for anything the page itself does.
+// There is deliberately no tab-less /m/:evidenceId route in production
+// either (see the App.tsx comment on the memory routes), so entry here
+// always includes a tab segment, exactly as a real link would.
+function renderPage(initialPath = "/cases/case-1/m/ev-memory/overview") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <MemoryRouter initialEntries={[initialPath]}>
       <QueryClientProvider client={queryClient}>
         <Routes>
-          <Route path="/cases/:caseId/memory/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
-          <Route path="/cases/:caseId/memory/:evidenceId" element={<MemoryEvidencePage />} />
+          <Route path="/cases/:caseId/m/:evidenceId/:memoryTab" element={<MemoryEvidencePage />} />
         </Routes>
       </QueryClientProvider>
     </MemoryRouter>,
   );
 }
 
+// "artifacts" has no entry in MEMORY_TABS (it is not a clickable tab-bar
+// button) but is a registered route segment in its own right, identical to
+// its key -- see memoryWorkspaceState.ts.
 function renderLegacyArtifactsPage() {
-  return renderPage("/cases/case-1/memory/ev-memory?tab=artifacts");
+  return renderPage("/cases/case-1/m/ev-memory/artifacts");
 }
 
 // Drivers/Kernel Modules/Modules/Handles/Suspicious Memory are each their
 // own top-level MemoryWorkspace tab (the redundant internal Artifacts
 // subview switcher that used to let a single "artifacts" tab mount jump
 // between all of them was removed) -- reach a non-network family by
-// rendering its own tab directly, the same way the app navigates to it.
-function renderArtifactsFamilyPage(tab: string) {
-  return renderPage(`/cases/case-1/memory/ev-memory?tab=${tab}`);
+// rendering its own tab directly, the same way the app navigates to it:
+// via its route segment (routeSegmentFromTab), not the ?tab= query param
+// the route-based tab resolution replaced.
+function renderArtifactsFamilyPage(tab: MemoryTab) {
+  return renderPage(`/cases/case-1/m/ev-memory/${routeSegmentFromTab(tab)}`);
 }
 
 function overview() {
@@ -806,7 +822,7 @@ describe("Memory analysis UX fixes v1", () => {
   // network/modules/handles/drivers/kernel/suspicious are each reached
   // directly, not via an in-page pill switcher).
   it("lists every Artifacts subview as its own top-level tab", async () => {
-    renderPage("/cases/case-1/memory/ev-memory");
+    renderPage();
     await screen.findByTestId("memory-subview-tabs");
     for (const sv of ["network", "modules", "handles", "drivers", "kernel", "suspicious"]) {
       expect(screen.getByTestId(`memory-tab-${sv}`)).toBeInTheDocument();
