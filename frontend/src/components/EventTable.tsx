@@ -3,6 +3,8 @@ import EventSummary from "./EventSummary";
 import PivotValue from "./PivotValue";
 import TagPill from "./TagPill";
 import { useTimezonePreference } from "../context/TimezoneContext";
+import ColumnResizeHandle from "./table/ColumnResizeHandle";
+import { useResizableColumns } from "./table/useResizableColumns";
 import { copyToClipboard, formatTimestamp } from "../lib/time";
 import { compareValues, getNestedValue, nextSortDirection } from "../lib/sorting";
 import { isPresent, presentationProfileForItems, renderPresentationValue, type PresentationProfile } from "../lib/eventPresentationProfiles";
@@ -743,6 +745,24 @@ function hasProcessTreeContext(item: Record<string, unknown>): boolean {
   return Boolean(relatedProcessNodeIds.length || process.pid || process.name || process.entity_id || process.command_line);
 }
 
+/** Starting widths, in pixels. Anything unlisted falls back to the default. */
+const DEFAULT_EVENT_COLUMN_WIDTHS: Record<string, number> = {
+  timestamp: 190,
+  host: 150,
+  user: 140,
+  event_type: 170,
+  artifact_type: 150,
+  severity: 110,
+  risk_score: 110,
+  key_entity: 320,
+  command_preview: 420,
+  summary: 380,
+  title: 300,
+  file_name: 260,
+  file_path: 380,
+  process_name: 180,
+};
+
 export default function EventTable({ items, view = "generic", sortBy, sortOrder, onSortChange, selectedIds = [], onToggleSelect, onViewProcessTree, onCreateFinding, onAroundEvent, onFilterField, onExcludeField }: Props) {
   const { effectiveTimezone } = useTimezonePreference();
   const [openId, setOpenId] = useState<string | null>(null);
@@ -770,6 +790,21 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
     return output;
   }, [allColumns, items]);
   const columns = useMemo(() => allColumns.filter((column) => !hiddenColumns.includes(column.key)), [allColumns, hiddenColumns]);
+
+  // Widths are remembered per view, because the column that deserves the room
+  // in a PowerShell view is not the one that deserves it in a file view.
+  const resizableColumns = useMemo(
+    () => columns.map((column) => ({ key: column.key, defaultWidth: DEFAULT_EVENT_COLUMN_WIDTHS[column.key] })),
+    [columns],
+  );
+  const {
+    widths: columnWidths,
+    startResize,
+    nudge: nudgeColumn,
+    reset: resetColumnWidths,
+    resizingKey: resizingColumn,
+    isCustomised: columnsResized,
+  } = useResizableColumns(`events.${view}`, resizableColumns);
 
   const effectiveSortBy = sortBy ?? internalSortBy;
   const effectiveSortOrder = sortOrder ?? internalSortOrder;
@@ -817,17 +852,35 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                   </label>
                 ))}
               </div>
+              {columnsResized ? (
+                <button
+                  type="button"
+                  onClick={resetColumnWidths}
+                  className="mt-3 w-full rounded-xl border border-line px-3 py-1.5 text-xs text-muted transition hover:border-accent/50 hover:text-ink"
+                >
+                  Reset column widths
+                </button>
+              ) : null}
             </div>
           ) : null}
         </div>
       </div>
       <div className="overflow-x-auto">
-        <table className="min-w-full text-sm">
+        {/* Fixed layout is what actually holds a value inside its column: with
+            automatic layout the browser sizes columns from content, so one long
+            command line widens its column and pushes the next one's text over. */}
+        <table className="w-full table-fixed text-sm">
+          <colgroup>
+            {onToggleSelect ? <col style={{ width: 64 }} /> : null}
+            {columns.map((column) => (
+              <col key={column.key} style={{ width: columnWidths[column.key] }} />
+            ))}
+          </colgroup>
           <thead className="border-b border-line">
             <tr className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted">
               {onToggleSelect ? <th className="px-4 py-3 text-left">Select</th> : null}
               {columns.map((column) => (
-                <th key={column.key} className="px-4 py-3 text-left">
+                <th key={column.key} className="relative px-4 py-3 text-left">
                   {(column.sortField ?? sortFieldForColumn(column.key)) && onSortChange ? (
                     <button type="button" onClick={() => handleHeaderSort((column.sortField ?? sortFieldForColumn(column.key)) as SortField)} className="inline-flex items-center gap-2">
                       <span>{column.label}</span>
@@ -843,6 +896,14 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                       column.label
                     )
                   )}
+                  <ColumnResizeHandle
+                    columnKey={column.key}
+                    label={column.label}
+                    width={columnWidths[column.key]}
+                    onStart={startResize}
+                    onNudge={nudgeColumn}
+                    active={resizingColumn === column.key}
+                  />
                 </th>
               ))}
             </tr>
@@ -870,7 +931,7 @@ export default function EventTable({ items, view = "generic", sortBy, sortOrder,
                       const cellClassName = `block whitespace-pre-wrap break-words text-ink ${column.key === "key_entity" || column.key === "command_preview" ? "max-h-12 overflow-hidden font-mono text-xs leading-4" : ""}`;
                       const renderedValue = column.key === "timestamp" ? formatTimestamp(item["@timestamp"], effectiveTimezone) : column.render(item);
                       return (
-                        <td key={`${id}-${column.key}`} className="max-w-[320px] px-4 py-3 align-top">
+                        <td key={`${id}-${column.key}`} className="overflow-hidden px-4 py-3 align-top">
                           <div role="button" tabIndex={0} onClick={() => setOpenId(openId === id ? null : id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") setOpenId(openId === id ? null : id); }} className="w-full text-left">
                             {pivotField && (onFilterField || onExcludeField) ? (
                               <PivotValue

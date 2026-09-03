@@ -17,6 +17,42 @@ import { formatTimestamp } from "../lib/time";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 import { nextSortDirection } from "../lib/sorting";
 import { artifactEventView, artifactLabel as artifactViewLabel, artifactOptions, artifactOptionsForPlatforms, canonicalArtifactView } from "../lib/artifactRegistry";
+import ResizableTableHead, { type HeadColumn } from "../components/table/ResizableTableHead";
+
+const PERSISTENCE_COLUMNS: HeadColumn[] = [
+  { key: "host", label: "Host", defaultWidth: 150 },
+  { key: "type", label: "Type", defaultWidth: 150 },
+  { key: "name", label: "Name", defaultWidth: 220 },
+  { key: "command", label: "Command / Target", defaultWidth: 448 },
+  { key: "risk", label: "Risk", defaultWidth: 100 },
+  { key: "source", label: "Source", defaultWidth: 160 },
+  { key: "actions", label: "Actions", defaultWidth: 140 },
+];
+
+const MOTW_COLUMNS: HeadColumn[] = [
+  { key: "host", label: "Host", defaultWidth: 150 },
+  { key: "user", label: "User", defaultWidth: 140 },
+  { key: "file", label: "File", defaultWidth: 384 },
+  { key: "zone", label: "Zone", defaultWidth: 130 },
+  { key: "host_url", label: "HostUrl", defaultWidth: 288 },
+  { key: "referrer_url", label: "ReferrerUrl", defaultWidth: 288 },
+  { key: "risk", label: "Risk", defaultWidth: 100 },
+  { key: "source", label: "Source", defaultWidth: 160 },
+  { key: "actions", label: "Actions", defaultWidth: 140 },
+];
+
+const EMAIL_COLUMNS: HeadColumn[] = [
+  { key: "host", label: "Host", defaultWidth: 150 },
+  { key: "type", label: "Type", defaultWidth: 150 },
+  { key: "client", label: "Client", defaultWidth: 160 },
+  { key: "account_hint", label: "Account hint", defaultWidth: 200 },
+  { key: "path_url", label: "Path / URL", defaultWidth: 448 },
+  { key: "parsed", label: "Parsed", defaultWidth: 130 },
+  { key: "interest", label: "Interest", defaultWidth: 130 },
+  { key: "related", label: "Related", defaultWidth: 140 },
+  { key: "actions", label: "Actions", defaultWidth: 140 },
+];
+
 
 const USER_ACTIVITY_TABS = [
   { value: "shellbag", label: "Shellbags" },
@@ -174,18 +210,8 @@ function StartupPersistenceView({
         {!loading && !items.length ? <p className="p-5 text-sm text-muted">No startup or persistence items matched the current filters.</p> : null}
         {items.length ? (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-line text-sm">
-              <thead className="bg-abyss/70 text-left text-xs uppercase tracking-[0.14em] text-muted">
-                <tr>
-                  <th className="px-4 py-3">Host</th>
-                  <th className="px-4 py-3">Type</th>
-                  <th className="px-4 py-3">Name</th>
-                  <th className="px-4 py-3">Command / Target</th>
-                  <th className="px-4 py-3">Risk</th>
-                  <th className="px-4 py-3">Source</th>
-                  <th className="px-4 py-3">Actions</th>
-                </tr>
-              </thead>
+            <table className="w-full table-fixed divide-y divide-line text-sm">
+              <ResizableTableHead tableId="artifacts.persistence" columns={PERSISTENCE_COLUMNS} />
               <tbody className="divide-y divide-line">
                 {items.map((item) => {
                   const isOpen = selectedItem?.id === item.id;
@@ -320,20 +346,8 @@ function MotwArtifactView({
         {!loading && !items.length ? <p className="p-5 text-sm text-muted">No MOTW / Zone.Identifier items matched the current filters.</p> : null}
         {items.length ? (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-line text-sm">
-              <thead className="bg-abyss/70 text-left text-xs uppercase tracking-[0.14em] text-muted">
-                <tr>
-                  <th className="px-4 py-3">Host</th>
-                  <th className="px-4 py-3">User</th>
-                  <th className="px-4 py-3">File</th>
-                  <th className="px-4 py-3">Zone</th>
-                  <th className="px-4 py-3">HostUrl</th>
-                  <th className="px-4 py-3">ReferrerUrl</th>
-                  <th className="px-4 py-3">Risk</th>
-                  <th className="px-4 py-3">Source</th>
-                  <th className="px-4 py-3">Actions</th>
-                </tr>
-              </thead>
+            <table className="w-full table-fixed divide-y divide-line text-sm">
+              <ResizableTableHead tableId="artifacts.motw" columns={MOTW_COLUMNS} />
               <tbody className="divide-y divide-line">
                 {items.map((item) => (
                   <tr key={item.id} className={selectedItem?.id === item.id ? "bg-accent/10" : "bg-panel/20"}>
@@ -505,20 +519,8 @@ function EmailArtifactsView({
         {!loading && !items.length ? <p className="p-5 text-sm text-muted">No email artifacts matched the current filters. Attachment cache paths are treated as no data, not a parser failure.</p> : null}
         {items.length ? (
           <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-line text-sm">
-              <thead className="bg-abyss/70 text-left text-xs uppercase tracking-[0.14em] text-muted">
-                <tr>
-                  <th className="px-4 py-3">Host</th>
-                  <th className="px-4 py-3">Type</th>
-                  <th className="px-4 py-3">Client</th>
-                  <th className="px-4 py-3">Account hint</th>
-                  <th className="px-4 py-3">Path / URL</th>
-                  <th className="px-4 py-3">Parsed</th>
-                  <th className="px-4 py-3">Interest</th>
-                  <th className="px-4 py-3">Related</th>
-                  <th className="px-4 py-3">Actions</th>
-                </tr>
-              </thead>
+            <table className="w-full table-fixed divide-y divide-line text-sm">
+              <ResizableTableHead tableId="artifacts.email" columns={EMAIL_COLUMNS} />
               <tbody className="divide-y divide-line">
                 {items.map((item) => (
                   <tr key={item.id} className={selectedItem?.id === item.id ? "bg-accent/10" : "bg-panel/20"}>
