@@ -5789,6 +5789,20 @@ export const api = {
     }
     return request<CaseHostFactsResponse>(`/cases/${caseId}/host-facts${query.size ? `?${query.toString()}` : ""}`);
   },
+  rebuildCaseHostInformation: (caseId: string) =>
+    request<{
+      case_id: string;
+      scanned_events: number;
+      host_facts_created: number;
+      host_user_facts_created: number;
+      hosts: Array<{
+        host_id: string;
+        host: string;
+        identity_sources: Record<string, number>;
+        has_identity_source: boolean;
+      }>;
+      warnings: string[];
+    }>(`/cases/${caseId}/host-information/rebuild`, { method: "POST" }),
   getCaseHostUsers: (caseId: string, params: { host_id?: string; evidence_id?: string }) => {
     const query = new URLSearchParams();
     for (const [key, value] of Object.entries(params)) {

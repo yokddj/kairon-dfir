@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { Fingerprint, Network as NetworkIcon, Users as UsersIcon } from "lucide-react";
 
@@ -572,7 +572,7 @@ function UserInventorySection({ caseId, hostId, users }: { caseId: string; hostI
       </div>
       {users.length === 0 ? (
         <p className="mt-4 text-sm text-muted" data-testid="user-inventory-empty">
-          No local accounts have been identified for this host yet. This appears once evidence with a supported source (Linux passwd/shadow, or a Windows SAM hive) has been processed and assigned to this host.
+          No local accounts have been identified for this host yet. This is a gap in what was collected, not a finding: the inventory appears once evidence carrying a supported source (a Windows SAM hive, or Linux passwd/shadow) has been processed and assigned to this host. Use &ldquo;Complete host information&rdquo; above to check whether that evidence is present but not yet derived.
         </p>
       ) : (
         <div className="mt-4 overflow-x-auto">
@@ -717,6 +717,39 @@ export default function HostInformationPage() {
     staleTime: 60_000,
   });
 
+  const queryClient = useQueryClient();
+  const [rebuildResult, setRebuildResult] = useState<string | null>(null);
+
+  // Host Facts and Host User Facts are derived during ingest. A case ingested
+  // before they were harvested on every path can recover them from the events
+  // already indexed, which is far cheaper than re-ingesting the evidence.
+  const rebuildMutation = useMutation({
+    mutationFn: () => api.rebuildCaseHostInformation(caseId!),
+    onSuccess: (result) => {
+      const found = result.host_facts_created + result.host_user_facts_created;
+      const thisHost = (result.hosts ?? []).find((row) => row.host_id === selectedHostId);
+      // A host that gained nothing needs to know which of the two it is:
+      // already complete, or missing the artifact that carries the answer.
+      // Reporting only a case-wide total reads as "the button did nothing".
+      const hostNote =
+        thisHost && !thisHost.has_identity_source
+          ? ` No SAM, ProfileList or Linux identity artifact has been ingested for ${thisHost.host}, so its local accounts cannot be listed until that evidence is collected.`
+          : "";
+      setRebuildResult(
+        (found > 0
+          ? `Recovered ${result.host_user_facts_created} user and ${result.host_facts_created} host observations from ${result.scanned_events.toLocaleString()} events.`
+          : `Nothing to recover: the ${result.scanned_events.toLocaleString()} events checked already have everything they can produce.`) + hostNote,
+      );
+      for (const key of ["case-host-users", "case-host-unverified-profiles", "case-host-facts"]) {
+        queryClient.invalidateQueries({ queryKey: [key, caseId, selectedHostId] });
+      }
+    },
+    onError: (error: unknown) =>
+      setRebuildResult(
+        error instanceof Error ? error.message : "Host information could not be rebuilt.",
+      ),
+  });
+
   const networkQuery = useQuery({
     queryKey: ["case-host-network", caseId, selectedHostId],
     queryFn: () => api.getCaseHostNetwork(caseId, { host_id: selectedHostId }),
@@ -742,8 +775,25 @@ export default function HostInformationPage() {
               Consolidated identity aggregated from every artifact Kairon has parsed for this host -- not a raw artifact view. Every value below is traceable back to where it came from.
             </p>
           </div>
-          <Fingerprint size={32} className="shrink-0 text-accent/60" aria-hidden="true" />
+          <div className="flex shrink-0 items-center gap-3">
+            <button
+              type="button"
+              onClick={() => rebuildMutation.mutate()}
+              disabled={rebuildMutation.isPending || !caseId}
+              className="rounded-xl border border-line px-3 py-2 text-xs text-muted transition hover:border-accent/50 hover:text-ink disabled:opacity-50"
+              title="Re-derive users and host facts from the events already indexed, without re-ingesting the evidence"
+            >
+              {rebuildMutation.isPending ? "Completing…" : "Complete host information"}
+            </button>
+            <Fingerprint size={32} className="shrink-0 text-accent/60" aria-hidden="true" />
+          </div>
         </div>
+
+        {rebuildResult ? (
+          <p role="status" className="mt-4 rounded-2xl border border-line bg-abyss/50 px-4 py-2 text-xs text-muted">
+            {rebuildResult}
+          </p>
+        ) : null}
 
         {coverageForHost ? (
           <div data-testid="host-coverage" className="mt-5 rounded-2xl border border-line bg-abyss/50 p-4">
