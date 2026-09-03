@@ -2829,19 +2829,15 @@ def _process_parallel_evtx_artifact(
                 detection_warnings.append({"artifact": artifact_info["name"], "warning": warning})
             # Mirrors the sequential EVTX-native loop in ingest_evidence() --
             # see app.ingest.host_facts_extraction.
-            host_fact_documents = extract_host_fact_documents(batch_documents)
-            if host_fact_documents:
-                host_facts_warning = _safe_create_host_facts_isolated(
-                    case_id=str(evidence_ref["case_id"]),
-                    evidence_id=str(evidence_ref["id"]),
-                    artifact_id=artifact_id,
-                    host_id=evidence_ref.get("host_id"),
-                    observed_at=utc_now(),
-                    artifact_name=artifact_info["name"],
-                    documents=host_fact_documents,
-                )
-                if host_facts_warning:
-                    detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_facts: {host_facts_warning}"})
+            for derived_warning in _safe_create_derived_host_data_isolated(
+                case_id=str(evidence_ref["case_id"]),
+                evidence_id=str(evidence_ref["id"]),
+                artifact_id=artifact_id,
+                host_id=evidence_ref.get("host_id"),
+                artifact_name=artifact_info["name"],
+                documents=batch_documents,
+            ):
+                detection_warnings.append({"artifact": artifact_info["name"], "warning": derived_warning})
             docs_processed_in_artifact += len(batch_documents)
             with tracker_lock:
                 state = tracker.setdefault(artifact_id, {})
@@ -3078,19 +3074,15 @@ def _process_parallel_normalized_artifact(
                 detection_warnings.append({"artifact": artifact_info["name"], "warning": warning})
             # Mirrors the sequential normalize_file() branch in ingest_evidence()
             # -- see app.ingest.host_facts_extraction.
-            host_fact_documents = extract_host_fact_documents(batch_documents)
-            if host_fact_documents:
-                host_facts_warning = _safe_create_host_facts_isolated(
-                    case_id=str(evidence_ref["case_id"]),
-                    evidence_id=str(evidence_ref["id"]),
-                    artifact_id=artifact_id,
-                    host_id=evidence_ref.get("host_id"),
-                    observed_at=utc_now(),
-                    artifact_name=artifact_info["name"],
-                    documents=host_fact_documents,
-                )
-                if host_facts_warning:
-                    detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_facts: {host_facts_warning}"})
+            for derived_warning in _safe_create_derived_host_data_isolated(
+                case_id=str(evidence_ref["case_id"]),
+                evidence_id=str(evidence_ref["id"]),
+                artifact_id=artifact_id,
+                host_id=evidence_ref.get("host_id"),
+                artifact_name=artifact_info["name"],
+                documents=batch_documents,
+            ):
+                detection_warnings.append({"artifact": artifact_info["name"], "warning": derived_warning})
             docs_processed_in_artifact += len(batch_documents)
             with tracker_lock:
                 tracker.setdefault(artifact_id, {}).update(
@@ -4240,6 +4232,64 @@ def _safe_create_host_user_facts_isolated(
         return str(exc)
     finally:
         isolated_db.close()
+
+
+def _safe_create_derived_host_data_isolated(
+    *,
+    case_id: str,
+    evidence_id: str,
+    artifact_id: str,
+    host_id: str | None,
+    artifact_name: str,
+    documents: list[dict],
+) -> list[str]:
+    """Derive every Host Information layer from one artifact's documents.
+
+    Host Facts and Host User Facts are extracted from the same documents at the
+    same moment, so they are harvested together here rather than at each call
+    site. They used to be separate calls, and three of the four ingest paths
+    harvested Host Facts while silently dropping Host User Facts -- so whether a
+    machine's user inventory appeared depended on which path an artifact
+    happened to take, which is not something an analyst can see or predict.
+
+    Returns human-readable warnings; failures never interrupt ingest, since
+    these are derived convenience layers and the raw artifacts stay indexed.
+    """
+    warnings: list[str] = []
+    if not documents:
+        return warnings
+
+    observed_at = utc_now()
+
+    host_fact_documents = extract_host_fact_documents(documents)
+    if host_fact_documents:
+        warning = _safe_create_host_facts_isolated(
+            case_id=case_id,
+            evidence_id=evidence_id,
+            artifact_id=artifact_id,
+            host_id=host_id,
+            observed_at=observed_at,
+            artifact_name=artifact_name,
+            documents=host_fact_documents,
+        )
+        if warning:
+            warnings.append(f"host_facts: {warning}")
+
+    host_user_documents = extract_host_user_documents(documents)
+    if host_user_documents:
+        warning = _safe_create_host_user_facts_isolated(
+            case_id=case_id,
+            evidence_id=evidence_id,
+            artifact_id=artifact_id,
+            host_id=host_id,
+            observed_at=observed_at,
+            artifact_name=artifact_name,
+            documents=host_user_documents,
+        )
+        if warning:
+            warnings.append(f"host_user_facts: {warning}")
+
+    return warnings
 
 
 def _estimate_remaining_seconds(*, elapsed_seconds: float, progress_pct: int) -> float | None:
@@ -5794,19 +5844,15 @@ def ingest_evidence(evidence_id: str) -> None:
                                 # EvtxRawParser), so Host Facts extraction must run here
                                 # too, not only in the generic normalize_file() branch.
                                 # See app.ingest.host_facts_extraction.
-                                host_fact_documents = extract_host_fact_documents(batch_documents)
-                                if host_fact_documents:
-                                    host_facts_warning = _safe_create_host_facts_isolated(
-                                        case_id=evidence.case_id,
-                                        evidence_id=evidence.id,
-                                        artifact_id=artifact_id,
-                                        host_id=evidence.host_id,
-                                        observed_at=utc_now(),
-                                        artifact_name=artifact_info["name"],
-                                        documents=host_fact_documents,
-                                    )
-                                    if host_facts_warning:
-                                        detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_facts: {host_facts_warning}"})
+                                for derived_warning in _safe_create_derived_host_data_isolated(
+                                    case_id=evidence.case_id,
+                                    evidence_id=evidence.id,
+                                    artifact_id=artifact_id,
+                                    host_id=evidence.host_id,
+                                    artifact_name=artifact_info["name"],
+                                    documents=batch_documents,
+                                ):
+                                    detection_warnings.append({"artifact": artifact_info["name"], "warning": derived_warning})
                                 indexed_count += len(batch_documents)
                                 records_processed += len(batch_documents)
                                 docs_processed_in_artifact += len(batch_documents)
@@ -6046,47 +6092,20 @@ def ingest_evidence(evidence_id: str) -> None:
                         detection_count += created_count
                         if warning:
                             detection_warnings.append({"artifact": artifact_info["name"], "warning": warning})
-                    if documents:
-                        # Platform-agnostic: extract_host_fact_documents()
-                        # dispatches to every registered platform extractor
-                        # (Linux, Windows, ...) internally -- this call site
-                        # never needs a platform branch of its own, now or
-                        # when a future platform gains Host Facts support.
-                        # See app.ingest.host_facts_extraction.
-                        host_fact_documents = extract_host_fact_documents(documents)
-                        if host_fact_documents:
-                            host_facts_warning = _safe_create_host_facts_isolated(
-                                case_id=evidence.case_id,
-                                evidence_id=evidence.id,
-                                artifact_id=artifact_id,
-                                host_id=evidence.host_id,
-                                observed_at=utc_now(),
-                                artifact_name=artifact_info["name"],
-                                documents=host_fact_documents,
-                            )
-                            if host_facts_warning:
-                                detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_facts: {host_facts_warning}"})
-                    if documents:
-                        # Platform-agnostic: extract_host_user_documents()
-                        # dispatches to every registered platform extractor
-                        # (Linux, Windows SAM/ProfileList, ...) internally --
-                        # this call site never needs a platform branch of its
-                        # own, now or when a future platform/source gains
-                        # Host User Facts support. See
-                        # app.ingest.host_user_extraction.
-                        host_user_documents = extract_host_user_documents(documents)
-                        if host_user_documents:
-                            host_user_facts_warning = _safe_create_host_user_facts_isolated(
-                                case_id=evidence.case_id,
-                                evidence_id=evidence.id,
-                                artifact_id=artifact_id,
-                                host_id=evidence.host_id,
-                                observed_at=utc_now(),
-                                artifact_name=artifact_info["name"],
-                                documents=host_user_documents,
-                            )
-                            if host_user_facts_warning:
-                                detection_warnings.append({"artifact": artifact_info["name"], "warning": f"host_user_facts: {host_user_facts_warning}"})
+                    # Platform-agnostic: both extractors dispatch to every
+                    # registered platform (Linux, Windows SAM/ProfileList, ...)
+                    # internally, so no call site needs a platform branch of its
+                    # own. See app.ingest.host_facts_extraction and
+                    # app.ingest.host_user_extraction.
+                    for derived_warning in _safe_create_derived_host_data_isolated(
+                        case_id=evidence.case_id,
+                        evidence_id=evidence.id,
+                        artifact_id=artifact_id,
+                        host_id=evidence.host_id,
+                        artifact_name=artifact_info["name"],
+                        documents=documents,
+                    ):
+                        detection_warnings.append({"artifact": artifact_info["name"], "warning": derived_warning})
             except Exception as exc:  # noqa: BLE001
                 db.rollback()
                 is_fast_evtx_timeout = (
