@@ -14,7 +14,7 @@ vi.mock("../api/client", () => ({
   },
 }));
 
-function renderDialog(prefill: FindingPrefill) {
+function renderDialog(prefill: FindingPrefill, options?: { container?: HTMLElement }) {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
   const onClose = vi.fn();
   const onCreated = vi.fn();
@@ -22,6 +22,7 @@ function renderDialog(prefill: FindingPrefill) {
     <QueryClientProvider client={queryClient}>
       <CreateFindingDialog open caseId="case-1" prefill={prefill} onClose={onClose} onCreated={onCreated} />
     </QueryClientProvider>,
+    options,
   );
   return { onClose, onCreated };
 }
@@ -95,5 +96,23 @@ describe("CreateFindingDialog", () => {
       source_snapshot_json: expect.objectContaining({ family: "browser" }),
     }));
     await waitFor(() => expect(onCreated).toHaveBeenCalled());
+  });
+
+  it("escapes an ancestor that would otherwise clip its fixed positioning", () => {
+    // `filter`/`backdrop-filter`/`transform`/`will-change` on an ancestor create a new CSS
+    // containing block, so a `position: fixed` dialog rendered inline inside one of those (e.g. a
+    // panel styled with backdrop-blur) gets clipped to that ancestor's box instead of the
+    // viewport, pushing its action buttons out of the reachable area. The dialog portals to
+    // document.body specifically so this can't happen regardless of where it's mounted from.
+    const filteredAncestor = document.createElement("div");
+    filteredAncestor.setAttribute("data-testid", "filtered-ancestor");
+    filteredAncestor.style.backdropFilter = "blur(4px)";
+    document.body.appendChild(filteredAncestor);
+
+    renderDialog(longPrefill(), { container: filteredAncestor });
+
+    const dialog = screen.getByRole("dialog", { name: /create finding from source/i });
+    expect(filteredAncestor.contains(dialog)).toBe(false);
+    expect(document.body.contains(dialog)).toBe(true);
   });
 });
