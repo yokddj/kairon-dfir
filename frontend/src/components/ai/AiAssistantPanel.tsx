@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bot,
+  CalendarPlus,
   Clock,
   FileWarning,
   Loader2,
@@ -16,10 +17,11 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { api, streamCaseAiChat, type AiChatMessage } from "../../api/client";
+import { api, streamCaseAiChat, type AiChatMessage, type TimelineBookmark } from "../../api/client";
 import CreateFindingDialog from "../CreateFindingDialog";
 import type { FindingPrefill } from "../../lib/findingPrefill";
 import { useActiveCase } from "../../context/ActiveCaseContext";
+import { useNotifications } from "../../context/NotificationsContext";
 
 /**
  * Event ids the assistant actually cited, pulled from its own citation links
@@ -30,17 +32,29 @@ import { useActiveCase } from "../../context/ActiveCaseContext";
  * source of truth.
  */
 const CITATION_EVENT_ID_PATTERN = /\/search\?q=event_id%3A([^&)\s]+)/g;
+const CITATION_EVENT_ID_IN_URL = /\/search\?q=event_id%3A([^&)\s]+)/;
+const MARKDOWN_LINK_PATTERN = /\[([^\]]+)\]\(([^)]+)\)/g;
 
-function citedEventIds(markdown: string): string[] {
-  const ids = new Set<string>();
-  for (const match of markdown.matchAll(CITATION_EVENT_ID_PATTERN)) {
+type Citation = { id: string; label: string };
+
+/** Every distinct cited event, paired with the link text the analyst sees. */
+function citedEvents(markdown: string): Citation[] {
+  const seen = new Map<string, string>();
+  for (const [, label, url] of markdown.matchAll(MARKDOWN_LINK_PATTERN)) {
+    const match = url.match(CITATION_EVENT_ID_IN_URL);
+    if (!match) continue;
     try {
-      ids.add(decodeURIComponent(match[1]));
+      const id = decodeURIComponent(match[1]);
+      if (!seen.has(id)) seen.set(id, label);
     } catch {
       // A malformed percent-encoding here means a broken link, not a usable id.
     }
   }
-  return [...ids];
+  return [...seen.entries()].map(([id, label]) => ({ id, label }));
+}
+
+function citedEventIds(markdown: string): string[] {
+  return citedEvents(markdown).map((citation) => citation.id);
 }
 
 /**
@@ -133,17 +147,115 @@ function AnswerMarkdown({ content }: { content: string }) {
   );
 }
 
+/**
+ * Add-to-timeline draft, kept minimal and matching the same category/
+ * importance/note shape TimelinePage's own bookmark dialog already uses --
+ * this is not a new feature, just a second door into the one that exists.
+ * Deliberately no title/summary field: the backend always derives those from
+ * the real event (see create_key_event), so the entry is never the model's
+ * paraphrase, only the citation label shown while picking which one to add.
+ */
+type TimelineDraft = {
+  eventId: string;
+  label: string;
+  category: TimelineBookmark["category"];
+  importance: TimelineBookmark["importance"];
+  note: string;
+};
+
+function AddKeyEventDialog({
+  draft,
+  onChange,
+  onCancel,
+  onConfirm,
+  pending,
+}: {
+  draft: TimelineDraft;
+  onChange: (next: TimelineDraft) => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+  pending: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-abyss/70 p-4 backdrop-blur-sm">
+      <div className="w-full max-w-md rounded-[28px] border border-line bg-panel p-6 shadow-panel" role="dialog" aria-modal="true" aria-label="Add to timeline">
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <p className="font-mono text-xs uppercase tracking-[0.18em] text-accent">Add to timeline</p>
+            <h3 className="mt-2 truncate text-lg font-semibold" title={draft.label}>{draft.label}</h3>
+          </div>
+          <button type="button" onClick={onCancel} className="rounded-full border border-line bg-abyss/70 p-2 text-muted" aria-label="Cancel">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          <label className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Category</span>
+            <select
+              value={draft.category}
+              onChange={(event) => onChange({ ...draft, category: event.target.value as TimelineBookmark["category"] })}
+              className="w-full bg-transparent outline-none"
+            >
+              {(["execution", "download", "detection", "persistence", "network", "cleanup", "other"] as TimelineBookmark["category"][]).map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+          <label className="rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
+            <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Importance</span>
+            <select
+              value={draft.importance}
+              onChange={(event) => onChange({ ...draft, importance: event.target.value as TimelineBookmark["importance"] })}
+              className="w-full bg-transparent outline-none"
+            >
+              {(["low", "medium", "high", "critical"] as TimelineBookmark["importance"][]).map((value) => (
+                <option key={value} value={value}>{value}</option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label className="mt-3 block rounded-2xl border border-line bg-abyss/80 px-4 py-3 text-sm">
+          <span className="mb-2 block font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Note</span>
+          <textarea
+            value={draft.note}
+            onChange={(event) => onChange({ ...draft, note: event.target.value })}
+            rows={3}
+            placeholder="Why this belongs on the timeline"
+            className="w-full resize-none bg-transparent outline-none"
+          />
+        </label>
+        <div className="mt-4 flex justify-end gap-2">
+          <button type="button" onClick={onCancel} className="rounded-full border border-line bg-abyss/70 px-4 py-2 text-sm text-muted">
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={pending}
+            className="rounded-full border border-accent/40 bg-accent/15 px-4 py-2 text-sm text-accent transition hover:bg-accent/25 disabled:opacity-50"
+          >
+            {pending ? "Adding..." : "Add to timeline"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function AiAssistantPanel() {
   // Read the selected host from context rather than useHostContext: that hook
   // writes host_id/host into the URL, and a panel mounted on every page must
   // not rewrite the address bar of screens that have nothing to do with hosts.
   const { activeCaseId, activeCase, selectedHost } = useActiveCase();
+  const { notify } = useNotifications();
   const activeHost = selectedHost || "";
   const queryClient = useQueryClient();
   const [open, setOpen] = useState(false);
   const [size, setSize] = useState<PanelSize>(loadSize);
   const [showHistory, setShowHistory] = useState(false);
   const [findingPrefill, setFindingPrefill] = useState<FindingPrefill | null>(null);
+  const [timelineDraft, setTimelineDraft] = useState<TimelineDraft | null>(null);
+  const [addingToTimeline, setAddingToTimeline] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [turns, setTurns] = useState<Turn[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -280,6 +392,29 @@ export default function AiAssistantPanel() {
         lookups: turn.lookups ?? [],
       },
     });
+  };
+
+  const confirmAddToTimeline = async () => {
+    if (!timelineDraft || !activeCaseId) return;
+    setAddingToTimeline(true);
+    try {
+      await api.createTimelineKeyEvent(activeCaseId, {
+        event_id: timelineDraft.eventId,
+        category: timelineDraft.category,
+        importance: timelineDraft.importance,
+        note: timelineDraft.note.trim() || undefined,
+      });
+      notify({ title: "Added to timeline", description: timelineDraft.label, tone: "success" });
+      setTimelineDraft(null);
+    } catch (error) {
+      notify({
+        title: "Could not add to timeline",
+        description: error instanceof Error ? error.message : "The event could not be added.",
+        tone: "error",
+      });
+    } finally {
+      setAddingToTimeline(false);
+    }
   };
 
   const startNewConversation = () => {
@@ -511,13 +646,29 @@ export default function AiAssistantPanel() {
             ) : null}
             {turn.notice ? <span className="mt-1 block text-[11px] text-amber-300">{turn.notice}</span> : null}
             {turn.role === "assistant" && !turn.error && turn.content && !(streaming && index === turns.length - 1) ? (
-              <button
-                type="button"
-                onClick={() => openFindingDialogFor(index)}
-                className="mt-2 flex items-center gap-1.5 rounded-lg border border-line/60 px-2 py-1 text-[11px] text-muted transition hover:border-accent/40 hover:text-ink"
-              >
-                <FileWarning size={12} /> Create finding from this answer
-              </button>
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => openFindingDialogFor(index)}
+                  className="flex items-center gap-1.5 rounded-lg border border-line/60 px-2 py-1 text-[11px] text-muted transition hover:border-accent/40 hover:text-ink"
+                >
+                  <FileWarning size={12} /> Create finding from this answer
+                </button>
+                {citedEvents(turn.content).map((citation) => (
+                  <button
+                    key={citation.id}
+                    type="button"
+                    onClick={() =>
+                      setTimelineDraft({ eventId: citation.id, label: citation.label, category: "other", importance: "medium", note: "" })
+                    }
+                    title={`Add "${citation.label}" to the case timeline`}
+                    className="flex max-w-[220px] items-center gap-1.5 rounded-lg border border-line/60 px-2 py-1 text-[11px] text-muted transition hover:border-accent/40 hover:text-ink"
+                  >
+                    <CalendarPlus size={12} className="shrink-0" />
+                    <span className="truncate">Timeline: {citation.label}</span>
+                  </button>
+                ))}
+              </div>
             ) : null}
           </div>
         ))}
@@ -577,6 +728,15 @@ export default function AiAssistantPanel() {
           caseId={activeCaseId}
           prefill={findingPrefill}
           onCreated={() => setFindingPrefill(null)}
+        />
+      ) : null}
+      {timelineDraft ? (
+        <AddKeyEventDialog
+          draft={timelineDraft}
+          onChange={setTimelineDraft}
+          onCancel={() => setTimelineDraft(null)}
+          onConfirm={confirmAddToTimeline}
+          pending={addingToTimeline}
         />
       ) : null}
     </aside>

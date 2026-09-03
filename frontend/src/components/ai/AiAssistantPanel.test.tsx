@@ -13,6 +13,7 @@ const listAiConversationsMock = vi.fn();
 const getAiConversationMock = vi.fn();
 const deleteAiConversationMock = vi.fn();
 const createFindingMock = vi.fn();
+const createTimelineKeyEventMock = vi.fn();
 const activeCase = {
   activeCaseId: "case-1",
   activeCase: { id: "case-1", name: "Ransomware IR" },
@@ -26,12 +27,19 @@ vi.mock("../../api/client", () => ({
     getAiConversation: (...args: unknown[]) => getAiConversationMock(...args),
     deleteAiConversation: (...args: unknown[]) => deleteAiConversationMock(...args),
     createFinding: (...args: unknown[]) => createFindingMock(...args),
+    createTimelineKeyEvent: (...args: unknown[]) => createTimelineKeyEventMock(...args),
   },
   streamCaseAiChat: (...args: unknown[]) => streamCaseAiChatMock(...args),
 }));
 
 vi.mock("../../context/ActiveCaseContext", () => ({
   useActiveCase: () => activeCase,
+}));
+
+const notifyMock = vi.fn();
+
+vi.mock("../../context/NotificationsContext", () => ({
+  useNotifications: () => ({ notify: notifyMock, notifications: [], dismiss: vi.fn() }),
 }));
 
 
@@ -63,6 +71,7 @@ beforeEach(() => {
   listAiConversationsMock.mockResolvedValue({ conversations: [] });
   deleteAiConversationMock.mockResolvedValue({ deleted: true });
   createFindingMock.mockResolvedValue({ id: "finding-1", title: "Investigate", status: "draft" });
+  createTimelineKeyEventMock.mockResolvedValue({ id: "bookmark-1" });
   streamCaseAiChatMock.mockImplementation(
     async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
       onEvent({ type: "meta", provider: "ollama", model: "llama-local" });
@@ -479,6 +488,116 @@ describe("AiAssistantPanel", () => {
       await user.click(screen.getByRole("button", { name: /create finding from this answer/i }));
 
       expect(await screen.findByDisplayValue("Assistant finding")).toBeInTheDocument();
+    });
+  });
+
+  describe("adding a citation to the case timeline", () => {
+    const CITED_ANSWER =
+      "Found [factura.iso](/cases/case-1/search?q=event_id%3Aevt-1&selected=evt-1) downloaded from file.io.";
+
+    it("offers one button per distinct citation, not per mention", async () => {
+      const user = userEvent.setup();
+      streamCaseAiChatMock.mockImplementation(
+        async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
+          onEvent({ type: "text", text: `${CITED_ANSWER} See also [factura.iso](/cases/case-1/search?q=event_id%3Aevt-1&selected=evt-1) above.` });
+        },
+      );
+      renderPanel();
+
+      await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+      await user.type(screen.getByLabelText(/question for the assistant/i), "any downloads?");
+      await user.click(screen.getByRole("button", { name: "Send" }));
+      await screen.findByText(/downloaded from file.io/);
+
+      expect(screen.getAllByRole("button", { name: /timeline: factura\.iso/i })).toHaveLength(1);
+    });
+
+    it("adds the cited event with the chosen category, importance and note", async () => {
+      const user = userEvent.setup();
+      streamCaseAiChatMock.mockImplementation(
+        async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
+          onEvent({ type: "text", text: CITED_ANSWER });
+        },
+      );
+      renderPanel();
+
+      await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+      await user.type(screen.getByLabelText(/question for the assistant/i), "any downloads?");
+      await user.click(screen.getByRole("button", { name: "Send" }));
+      await screen.findByText(/downloaded from file.io/);
+
+      await user.click(screen.getByRole("button", { name: /timeline: factura\.iso/i }));
+      const dialog = await screen.findByRole("dialog", { name: /add to timeline/i });
+      expect(within(dialog).getByText("factura.iso")).toBeInTheDocument();
+
+      await user.selectOptions(within(dialog).getByText("Category").nextElementSibling as HTMLElement, "download");
+      await user.selectOptions(within(dialog).getByText("Importance").nextElementSibling as HTMLElement, "high");
+      await user.type(within(dialog).getByPlaceholderText(/why this belongs/i), "Anonymous download service");
+      await user.click(within(dialog).getByRole("button", { name: "Add to timeline" }));
+
+      await waitFor(() => expect(createTimelineKeyEventMock).toHaveBeenCalledWith("case-1", {
+        event_id: "evt-1",
+        category: "download",
+        importance: "high",
+        note: "Anonymous download service",
+      }));
+      expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ title: "Added to timeline", tone: "success" }));
+      expect(screen.queryByRole("dialog", { name: /add to timeline/i })).not.toBeInTheDocument();
+    });
+
+    it("never sends a title or summary: the backend derives those from the real event", async () => {
+      const user = userEvent.setup();
+      streamCaseAiChatMock.mockImplementation(
+        async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
+          onEvent({ type: "text", text: CITED_ANSWER });
+        },
+      );
+      renderPanel();
+
+      await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+      await user.type(screen.getByLabelText(/question for the assistant/i), "q");
+      await user.click(screen.getByRole("button", { name: "Send" }));
+      await screen.findByText(/downloaded from file.io/);
+      await user.click(screen.getByRole("button", { name: /timeline: factura\.iso/i }));
+      await user.click(await screen.findByRole("button", { name: "Add to timeline" }));
+
+      await waitFor(() => expect(createTimelineKeyEventMock).toHaveBeenCalled());
+      const [, payload] = createTimelineKeyEventMock.mock.calls[0];
+      expect(payload).not.toHaveProperty("title");
+      expect(payload).not.toHaveProperty("summary");
+    });
+
+    it("reports a failure instead of silently closing the dialog", async () => {
+      createTimelineKeyEventMock.mockRejectedValue(new Error("Event not found"));
+      const user = userEvent.setup();
+      streamCaseAiChatMock.mockImplementation(
+        async (_caseId: string, _payload: unknown, onEvent: (event: AiStreamEvent) => void) => {
+          onEvent({ type: "text", text: CITED_ANSWER });
+        },
+      );
+      renderPanel();
+
+      await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+      await user.type(screen.getByLabelText(/question for the assistant/i), "q");
+      await user.click(screen.getByRole("button", { name: "Send" }));
+      await screen.findByText(/downloaded from file.io/);
+      await user.click(screen.getByRole("button", { name: /timeline: factura\.iso/i }));
+      await user.click(await screen.findByRole("button", { name: "Add to timeline" }));
+
+      await waitFor(() => expect(notifyMock).toHaveBeenCalledWith(expect.objectContaining({ tone: "error" })));
+      expect(await screen.findByRole("dialog", { name: /add to timeline/i })).toBeInTheDocument();
+    });
+
+    it("offers no timeline button when the answer cites nothing", async () => {
+      const user = userEvent.setup();
+      renderPanel();
+
+      await user.click(await screen.findByRole("button", { name: /open the ai assistant/i }));
+      await user.type(screen.getByLabelText(/question for the assistant/i), "hi");
+      await user.click(screen.getByRole("button", { name: "Send" }));
+      await screen.findByText(/scheduled tasks/);
+
+      expect(screen.queryByRole("button", { name: /^timeline:/i })).not.toBeInTheDocument();
     });
   });
 });
