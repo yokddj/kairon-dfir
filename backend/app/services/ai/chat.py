@@ -66,7 +66,8 @@ this was never collected". The first is a finding; the second is a collection \
 gap, and saying so is far more useful to the analyst than a list of empty \
 searches. Check describe_case before you call anything absent.
 - Chain tools when it helps: find a suspicious moment with search_events, then \
-read around it with get_timeline.
+read around it with get_timeline, or pass its event id straight to \
+get_process_tree to see who launched it and what it launched.
 - Rows from search_events and list_downloads are summaries for finding an \
 event, not for quoting from. Before you state a specific field value -- a \
 registry path, a URL, a hash, a full command line -- as fact, call \
@@ -268,6 +269,7 @@ def _describe_lookup(name: str, args: dict) -> str:
         "get_event_detail": "Reading the full event before citing it",
         "list_downloads": "Looking for downloaded files (Mark of the Web)",
         "search_command_history": "Checking what was actually run on the host",
+        "get_process_tree": "Tracing who launched this process and what it launched",
         "list_hosts": "Listing the hosts in this case",
         "search_events": "Searching events",
         "list_persistence": "Checking persistence mechanisms",

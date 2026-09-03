@@ -411,6 +411,111 @@ def tool_search_command_history(db: Session, case_id: str, args: dict) -> dict:
     }
 
 
+PROCESS_NODE_KEYS = (
+    "id", "pid", "name", "path", "command_line", "user", "host",
+    "first_seen", "last_seen", "risk_score",
+)
+
+
+def _process_node_summary(node: dict | None) -> dict | None:
+    if not node:
+        return None
+    return {key: _clip(node.get(key)) for key in PROCESS_NODE_KEYS if node.get(key) not in (None, "", [], {})}
+
+
+def _process_node_list(nodes: Any, limit: int) -> list[dict]:
+    summaries = [_process_node_summary(node) for node in (nodes or [])[:limit]]
+    return [item for item in summaries if item]
+
+
+def tool_get_process_tree(db: Session, case_id: str, args: dict) -> dict:
+    """The parent/children of one process: who launched it, what it launched.
+
+    Resolves the same way the product's own Execution Story view does --
+    progressively relaxing from an exact event or ProcessGuid down to a name
+    match -- and reports how the match was made, so a relaxed match is never
+    presented as if it were exact. Give it whatever identity you have: a PID,
+    a ProcessGuid, a source event id from search_events, or a name/path; at
+    least one is required, since with none this would just repeat what
+    describe_case or search_events already show.
+    """
+    from app.models.case import Case
+    from app.models.evidence import Evidence
+    from app.services.process_tree import build_execution_story
+
+    pid_raw = args.get("pid")
+    pid: int | None = None
+    if pid_raw not in (None, ""):
+        try:
+            pid = int(pid_raw)
+        except (TypeError, ValueError):
+            raise ToolError(f"pid must be a whole number, got {pid_raw!r}.")
+
+    process_guid = str(args.get("process_guid") or "").strip() or None
+    source_event_id = str(args.get("source_event_id") or "").strip() or None
+    query = str(args.get("query") or "").strip() or None
+    if pid is None and not process_guid and not source_event_id and not query:
+        raise ToolError(
+            "get_process_tree needs at least one of pid, process_guid, source_event_id or "
+            "query to know which process to build a tree for."
+        )
+
+    case = db.get(Case, case_id)
+    if case is None:
+        raise ToolError("Case not found.")
+    host = _resolve_host(db, case_id, args.get("host") or args.get("host_id"))
+    evidences = db.query(Evidence).filter(Evidence.case_id == case_id).order_by(Evidence.created_at.asc()).all()
+
+    limit = _limit(args.get("limit"))
+    story = build_execution_story(
+        case,
+        evidences,
+        scope="case",
+        host=host.display_name if host else None,
+        pid=pid,
+        process_guid=process_guid,
+        source_event_id=source_event_id,
+        q=query,
+        max_nodes=min(limit * 4, 100),
+    )
+
+    quality = story.get("quality") or {}
+    identity = quality.get("identity_resolution") or {}
+    warnings = list(quality.get("warnings") or [])
+    target = story.get("target")
+    if not target:
+        # Two distinct "not found" shapes exist: a genuine miss (identity's own
+        # candidates), and a source_event_id that pointed at a real event which
+        # is simply not a process-creation record (candidate_processes, plus an
+        # explanation of which kind of event it actually was).
+        candidates = identity.get("candidates") or story.get("candidate_processes") or []
+        event_summary = story.get("event_summary")
+        return {
+            "found": False,
+            "warnings": warnings,
+            "note": (
+                f"source_event_id resolved to a {event_summary.get('source', 'non-process')} event, "
+                "not a process-creation record, so it has no place in a process tree."
+                if event_summary
+                else "No process matched. The closest processes by name are offered as candidates."
+            ),
+            "candidates": _process_node_list(candidates, limit),
+        }
+
+    return {
+        "found": True,
+        "match_method": identity.get("focus_match") or identity.get("method"),
+        "exact": bool(quality.get("exact_story")),
+        "match_explanation": identity.get("focus_match_explanation"),
+        "target": _process_node_summary(target),
+        "summary": (story.get("story") or {}).get("summary"),
+        "parents": _process_node_list(story.get("parents"), limit),
+        "children": _process_node_list(story.get("children"), limit),
+        "siblings": _process_node_list(story.get("siblings"), limit),
+        "warnings": warnings,
+    }
+
+
 def tool_describe_case(db: Session, case_id: str, args: dict) -> dict:
     """What data this case actually holds, counted over the whole index.
 
@@ -762,6 +867,29 @@ TOOL_SPECS: list[dict] = [
         },
     },
     {
+        "name": "get_process_tree",
+        "description": (
+            "Get one process's parent and children: who launched it, what it launched. "
+            "Resolves progressively from an exact event/ProcessGuid down to a name match, "
+            "and reports which happened -- a relaxed match is never presented as exact. "
+            "Give whatever identity you have (a PID, a ProcessGuid, a source_event_id from "
+            "search_events, or a name/path); at least one is required. When nothing matches "
+            "exactly, the closest candidates by name are returned instead of nothing."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "pid": {"type": "integer", "description": "The process id."},
+                "process_guid": {"type": "string", "description": "An exact ProcessGuid/entity id, if known."},
+                "source_event_id": {"type": "string", "description": "An event id from search_events or get_event_detail."},
+                "query": {"type": "string", "description": "A process name or path, e.g. powershell.exe."},
+                "host": {"type": "string", "description": "Restrict to one host. A name or a host_id both work."},
+                "limit": {"type": "integer", "description": f"Max parents/children/candidates each, 1-{MAX_ROWS_HARD}."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "list_hosts",
         "description": (
             "List the hosts in this case with their event and evidence counts. "
@@ -857,6 +985,7 @@ HANDLERS: dict[str, Callable[[Session, str, dict], dict]] = {
     "describe_case": tool_describe_case,
     "get_event_detail": tool_get_event_detail,
     "search_command_history": tool_search_command_history,
+    "get_process_tree": tool_get_process_tree,
     "list_downloads": tool_list_downloads,
     "list_hosts": tool_list_hosts,
     "search_events": tool_search_events,

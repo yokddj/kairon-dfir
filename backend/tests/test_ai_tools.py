@@ -910,3 +910,141 @@ def test_search_command_history_is_advertised_and_wired():
     assert "search_command_history" in tools_module.HANDLERS
     spec = next(s for s in tools_module.TOOL_SPECS if s["name"] == "search_command_history")
     assert set(spec["input_schema"]["properties"]) >= {"query", "host", "risk_min", "suspicious_only"}
+
+
+# --------------------------------------------------------------------------
+# The process tree: who launched this, what it launched. Resolves the same
+# way Execution Story does, and must never present a relaxed match as exact.
+# --------------------------------------------------------------------------
+
+
+def _node(**overrides) -> dict:
+    base = {
+        "id": "guid-1", "pid": 6996, "name": "powershell.exe",
+        "path": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "command_line": "powershell.exe -enc ABC", "user": "alex", "host": "WS01",
+        "risk_score": 40,
+    }
+    base.update(overrides)
+    return base
+
+
+def _case_row(case_id="case-1"):
+    return type("FakeCase", (), {"id": case_id})()
+
+
+def _patch_story(monkeypatch, story: dict, case_row=None):
+    import app.services.ai.tools as module
+
+    session = RecordingSession(hosts=[])
+    session.get = lambda model, ident: case_row if model.__name__ == "Case" else None
+    session.query = lambda model, *a, **k: session
+    session.filter = lambda *a, **k: session
+    session.order_by = lambda *a, **k: session
+    session.all = lambda: []
+    monkeypatch.setattr("app.services.process_tree.build_execution_story", lambda *a, **k: story)
+    return session
+
+
+def test_a_resolved_process_returns_its_family_and_how_it_was_matched(monkeypatch):
+    story = {
+        "target": _node(),
+        "story": {"summary": "This powershell.exe PID 6996 was launched by winword.exe."},
+        "parents": [_node(id="guid-parent", pid=100, name="winword.exe")],
+        "children": [_node(id="guid-child", pid=5528, name="powershell.exe")],
+        "siblings": [],
+        "quality": {
+            "exact_story": False,
+            "identity_resolution": {
+                "focus_match": "name",
+                "focus_match_explanation": "No node matched that PID or event, so this was matched by process name alone.",
+            },
+            "warnings": ["No parent process events were found for the selected process."],
+        },
+    }
+    session = _patch_story(monkeypatch, story, _case_row())
+
+    result = tools_module.tool_get_process_tree(session, "case-1", {"query": "powershell.exe"})
+
+    assert result["found"] is True
+    assert result["exact"] is False
+    assert result["match_method"] == "name"
+    assert "matched by process name alone" in result["match_explanation"]
+    assert result["target"]["pid"] == 6996
+    assert result["parents"][0]["name"] == "winword.exe"
+    assert result["children"][0]["pid"] == 5528
+
+
+def test_requires_at_least_one_identity_argument():
+    with pytest.raises(tools_module.ToolError):
+        tools_module.tool_get_process_tree(None, "case-1", {})
+
+
+def test_pid_must_be_numeric():
+    with pytest.raises(tools_module.ToolError):
+        tools_module.tool_get_process_tree(None, "case-1", {"pid": "not-a-number"})
+
+
+def test_an_unknown_case_is_reported(monkeypatch):
+    session = RecordingSession(hosts=[])
+    session.get = lambda model, ident: None
+    with pytest.raises(tools_module.ToolError):
+        tools_module.tool_get_process_tree(session, "case-1", {"pid": 123})
+
+
+def test_no_match_offers_the_nearest_candidates_by_name(monkeypatch):
+    story = {
+        "target": None,
+        "quality": {"identity_resolution": {"candidates": [_node(id="c1", name="powershell.exe")]}, "warnings": []},
+    }
+    session = _patch_story(monkeypatch, story, _case_row())
+
+    result = tools_module.tool_get_process_tree(session, "case-1", {"query": "powersh"})
+
+    assert result["found"] is False
+    assert result["candidates"][0]["name"] == "powershell.exe"
+    assert "closest processes" in result["note"]
+
+
+def test_a_non_process_creation_event_is_explained_not_just_reported_empty(monkeypatch):
+    """The lightweight-guidance shape: a real event, but not one that can
+    anchor a process tree -- must not read the same as "nothing found"."""
+    story = {
+        "target": None,
+        "event_summary": {"source": "PowerShell ScriptBlock"},
+        "candidate_processes": [_node(id="c2", name="powershell.exe")],
+        "quality": {"identity_resolution": {}, "warnings": ["This is not an exact process creation event."]},
+    }
+    session = _patch_story(monkeypatch, story, _case_row())
+
+    result = tools_module.tool_get_process_tree(session, "case-1", {"source_event_id": "evt-9"})
+
+    assert result["found"] is False
+    assert "PowerShell ScriptBlock" in result["note"]
+    assert result["candidates"][0]["name"] == "powershell.exe"
+
+
+def test_node_projection_drops_bulky_and_empty_fields():
+    node = _node(parent_link_status="linked", parent_fields={"a": 1}, source_events=["e1", "e2"])
+    node["path"] = ""
+
+    summary = tools_module._process_node_summary(node)
+
+    assert "parent_link_status" not in summary
+    assert "parent_fields" not in summary
+    assert "path" not in summary
+    assert summary["pid"] == 6996
+
+
+def test_node_projection_of_none_is_none():
+    assert tools_module._process_node_summary(None) is None
+    # An empty node is indistinguishable from "no node" and must not become a
+    # phantom entry in a parents/children list.
+    assert tools_module._process_node_summary({}) is None
+
+
+def test_get_process_tree_is_advertised_and_wired():
+    assert "get_process_tree" in tools_module.HANDLERS
+    spec = next(s for s in tools_module.TOOL_SPECS if s["name"] == "get_process_tree")
+    assert set(spec["input_schema"]["properties"]) >= {"pid", "process_guid", "source_event_id", "query", "host"}
+    assert spec["input_schema"]["required"] == []
