@@ -551,3 +551,104 @@ def test_a_failing_browser_lookup_does_not_hide_motw_results(monkeypatch):
     assert result["total_downloads"] == 1
     assert any("Browser history lookup failed" in w for w in result["warnings"])
     assert session.rolled_back == 1
+
+
+# --------------------------------------------------------------------------
+# Reading one event in full before citing it. Search rows are summaries; this
+# is the tool that must be called before quoting a specific field value.
+# --------------------------------------------------------------------------
+
+
+RAW_EVENT = {
+    "id": "evt-1",
+    "@timestamp": "2026-08-01T10:00:00Z",
+    "case_id": "case-1",
+    "evidence_id": "ev-1",
+    "host": {"name": "WS01"},
+    "user": {"name": "mshutter"},
+    "artifact": {"type": "browser", "parser": "browser_chromium_history"},
+    "event": {"type": "file_downloaded"},
+    "risk_score": 65,
+    "url": {"full": "https://file.io/abc", "domain": "file.io"},
+    "file": {"name": "factura.iso", "path": "C:\\Users\\mshutter\\Downloads\\factura.iso"},
+}
+
+
+def test_get_event_detail_returns_the_searchable_fields(monkeypatch):
+    monkeypatch.setattr("app.core.opensearch.fetch_event_by_id", lambda *a, **k: dict(RAW_EVENT))
+    monkeypatch.setattr(
+        "app.services.search_service.event_context",
+        lambda db, case_id, event_id: {"related_findings": [], "related_detections": [], "counts": {}},
+    )
+
+    result = tools_module.tool_get_event_detail(None, "case-1", {"event_id": "evt-1"})
+
+    assert result["found"] is True
+    assert result["fields"]["url.domain"] == "file.io"
+    assert result["fields"]["file.path"] == "C:\\Users\\mshutter\\Downloads\\factura.iso"
+    assert result["fields"]["host.name"] == "WS01"
+    assert result["note"] is None
+
+
+def test_get_event_detail_accepts_source_event_id_as_an_alias():
+    with pytest.raises(tools_module.ToolError):
+        tools_module.tool_get_event_detail(None, "case-1", {})
+
+
+def test_an_unknown_event_id_is_reported_not_raised(monkeypatch):
+    monkeypatch.setattr("app.core.opensearch.fetch_event_by_id", lambda *a, **k: None)
+
+    result = tools_module.tool_get_event_detail(None, "case-1", {"event_id": "does-not-exist"})
+
+    assert result["found"] is False
+    assert "re-run the search" in result["note"]
+
+
+def test_related_findings_and_detections_are_surfaced_with_a_warning(monkeypatch):
+    monkeypatch.setattr("app.core.opensearch.fetch_event_by_id", lambda *a, **k: dict(RAW_EVENT))
+    monkeypatch.setattr(
+        "app.services.search_service.event_context",
+        lambda db, case_id, event_id: {
+            "related_findings": [{"id": "f1", "title": "Suspicious download"}],
+            "related_detections": [],
+            "counts": {"related_findings": 1, "related_detections": 0},
+        },
+    )
+
+    result = tools_module.tool_get_event_detail(None, "case-1", {"event_id": "evt-1"})
+
+    assert result["related_findings"][0]["title"] == "Suspicious download"
+    assert "already recorded findings and/or detections" in result["note"]
+
+
+def test_empty_fields_are_dropped_not_shown_as_nulls(monkeypatch):
+    sparse = {"id": "evt-2", "host": {"name": "WS01"}}
+    monkeypatch.setattr("app.core.opensearch.fetch_event_by_id", lambda *a, **k: dict(sparse))
+    monkeypatch.setattr(
+        "app.services.search_service.event_context",
+        lambda db, case_id, event_id: {"related_findings": [], "related_detections": [], "counts": {}},
+    )
+
+    result = tools_module.tool_get_event_detail(None, "case-1", {"event_id": "evt-2"})
+
+    assert result["fields"] == {"host.name": "WS01"}
+
+
+def test_a_long_field_value_is_clipped(monkeypatch):
+    long_cmd = {"id": "evt-3", "process": {"command_line": "x" * 5000}}
+    monkeypatch.setattr("app.core.opensearch.fetch_event_by_id", lambda *a, **k: dict(long_cmd))
+    monkeypatch.setattr(
+        "app.services.search_service.event_context",
+        lambda db, case_id, event_id: {"related_findings": [], "related_detections": [], "counts": {}},
+    )
+
+    result = tools_module.tool_get_event_detail(None, "case-1", {"event_id": "evt-3"})
+
+    assert len(result["fields"]["process.command_line"]) <= tools_module.MAX_FIELD_CHARS
+
+
+def test_get_event_detail_is_advertised_and_wired():
+    assert "get_event_detail" in tools_module.HANDLERS
+    spec = next(s for s in tools_module.TOOL_SPECS if s["name"] == "get_event_detail")
+    assert "event_id" in spec["input_schema"]["properties"]
+    assert spec["input_schema"]["required"] == ["event_id"]

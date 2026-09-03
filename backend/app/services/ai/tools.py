@@ -476,6 +476,97 @@ def _browser_downloads(db: Session, case_id: str, host, limit: int) -> dict:
     }
 
 
+# The dotted paths worth surfacing on a single event, mirroring the fields
+# analysts can actually search on (app.search.query_syntax.FIELD_SPECS). Using
+# the same list means a value the model quotes from this tool is one an
+# analyst can paste straight back into Search to reproduce the citation.
+EVENT_DETAIL_FIELDS = (
+    "host.name", "user.name", "user.sid",
+    "artifact.type", "artifact.parser",
+    "event.type", "event.action",
+    "risk_score", "severity", "status",
+    "process.name", "process.path", "process.command_line",
+    "process.parent.name", "process.parent.path", "process.parent.command_line",
+    "file.name", "file.path", "file.extension", "file.size",
+    "folder.path",
+    "registry.key_path", "registry.value_name", "registry.value_data",
+    "dns.domain",
+    "url.full", "url.domain",
+    "source.ip", "destination.ip", "network.direction",
+    "email.message_id", "email.subject", "email.from.address",
+    "email.from.domain", "email.to.addresses", "email.attachments.file_name",
+    "ntfs.reason", "ntfs.zone_id", "ntfs.host_url", "ntfs.referrer_url",
+    "windows_search.indexed_path",
+    "notification.title", "notification.body_preview",
+    "office.alert_text", "office.document_path",
+    "rule.id", "rule.name", "rule.title",
+    "detection.source",
+)
+
+
+def _dotted_get(source: dict, dotted: str) -> Any:
+    node: Any = source
+    for part in dotted.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(part)
+    return node
+
+
+def tool_get_event_detail(db: Session, case_id: str, args: dict) -> dict:
+    """Read one event in full before citing specifics from it.
+
+    search_events and list_downloads return summarised rows -- enough to find
+    a candidate, not enough to responsibly quote a registry path or a URL from.
+    This is the tool that closes that gap: the full set of searchable fields
+    for one event, plus whether an analyst has already recorded a finding or
+    detection against it, so a citation points at something verified rather
+    than a row skimmed from a list.
+    """
+    from app.core.opensearch import fetch_event_by_id
+    from app.services.search_service import event_context
+
+    event_id = str(args.get("event_id") or args.get("source_event_id") or "").strip()
+    if not event_id:
+        raise ToolError("event_id is required.")
+
+    raw = fetch_event_by_id(case_id, event_id, event_index=None, opensearch_id=event_id) or fetch_event_by_id(
+        case_id, event_id, event_index=None, opensearch_id=None
+    )
+    if not raw:
+        return {
+            "found": False,
+            "event_id": event_id,
+            "note": "No event with this id was found in this case. It may belong to a different case, "
+            "or the id was misremembered -- re-run the search that produced it rather than guessing a fix.",
+        }
+
+    fields = {}
+    for dotted in EVENT_DETAIL_FIELDS:
+        value = _clip(_dotted_get(raw, dotted))
+        if value not in (None, "", [], {}):
+            fields[dotted] = value
+
+    context = event_context(db, case_id, event_id)
+
+    return {
+        "found": True,
+        "event_id": event_id,
+        "timestamp": raw.get("@timestamp"),
+        "evidence_id": raw.get("evidence_id"),
+        "fields": fields,
+        "related_findings": context.get("related_findings") or [],
+        "related_detections": context.get("related_detections") or [],
+        "note": (
+            "An analyst has already recorded findings and/or detections against this event -- "
+            "check them before drawing a new conclusion that might duplicate or contradict one."
+            if (context.get("counts") or {}).get("related_findings")
+            or (context.get("counts") or {}).get("related_detections")
+            else None
+        ),
+    }
+
+
 # --------------------------------------------------------------------------
 # Schemas advertised to the model
 # --------------------------------------------------------------------------
@@ -533,6 +624,24 @@ TOOL_SPECS: list[dict] = [
                 "limit": {"type": "integer", "description": f"Max entries, 1-{MAX_ROWS_HARD}."},
             },
             "required": [],
+        },
+    },
+    {
+        "name": "get_event_detail",
+        "description": (
+            "Read one event in full, by its id. Returns every searchable field the event has "
+            "(process, file, registry, url, dns, network, email fields as applicable) plus "
+            "whether an analyst has already recorded a finding or detection against it. Call "
+            "this before quoting a specific field value -- a path, a URL, a hash, a command "
+            "line -- that only appeared in a summarised row from search_events or "
+            "list_downloads; those rows are for finding the event, not for citing from."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "event_id": {"type": "string", "description": "The event's id, from a prior tool result."},
+            },
+            "required": ["event_id"],
         },
     },
     {
@@ -629,6 +738,7 @@ TOOL_SPECS: list[dict] = [
 
 HANDLERS: dict[str, Callable[[Session, str, dict], dict]] = {
     "describe_case": tool_describe_case,
+    "get_event_detail": tool_get_event_detail,
     "list_downloads": tool_list_downloads,
     "list_hosts": tool_list_hosts,
     "search_events": tool_search_events,

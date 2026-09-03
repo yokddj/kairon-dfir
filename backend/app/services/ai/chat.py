@@ -64,6 +64,13 @@ gap, and saying so is far more useful to the analyst than a list of empty \
 searches. Check describe_case before you call anything absent.
 - Chain tools when it helps: find a suspicious moment with search_events, then \
 read around it with get_timeline.
+- Rows from search_events and list_downloads are summaries for finding an \
+event, not for quoting from. Before you state a specific field value -- a \
+registry path, a URL, a hash, a full command line -- as fact, call \
+get_event_detail on that event's id and quote the value it returns. If \
+get_event_detail shows the event already has a recorded finding or detection, \
+say so rather than drawing an independent conclusion that might duplicate or \
+contradict it.
 - Prefer precise DFIR vocabulary: artifact names, event IDs, registry paths, \
 MITRE ATT&CK technique IDs where they apply.
 
@@ -251,6 +258,7 @@ def _describe_lookup(name: str, args: dict) -> str:
     detail = str(args.get("query") or args.get("host") or args.get("host_id") or "").strip()
     labels = {
         "describe_case": "Checking what data this case contains",
+        "get_event_detail": "Reading the full event before citing it",
         "list_downloads": "Looking for downloaded files (Mark of the Web)",
         "list_hosts": "Listing the hosts in this case",
         "search_events": "Searching events",
