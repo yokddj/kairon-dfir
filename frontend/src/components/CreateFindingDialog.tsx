@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 
 import { api, type Finding } from "../api/client";
 import type { FindingPrefill } from "../lib/findingPrefill";
+import Portal from "./Portal";
 
 type FindingSeverity = "info" | "low" | "medium" | "high" | "critical";
 
@@ -94,6 +95,7 @@ export default function CreateFindingDialog({
   if (!open) return null;
 
   return (
+    <Portal>
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-abyss/70 p-4 backdrop-blur-sm">
       <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-2xl flex-col overflow-hidden rounded-[28px] border border-line bg-panel shadow-panel" role="dialog" aria-modal="true" aria-label="Create finding from source">
         <div className="shrink-0 border-b border-line/70 p-6 pb-4">
@@ -190,5 +192,6 @@ export default function CreateFindingDialog({
         </div>
       </div>
     </div>
+    </Portal>
   );
 }
