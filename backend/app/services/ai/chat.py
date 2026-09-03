@@ -44,8 +44,11 @@ data that was never collected returns zero, and reporting that zero as absence \
 is the single worst mistake you can make here.
 - Then pick the artifact that actually answers the question, and prefer the \
 dedicated tool over a keyword guess: list_downloads for downloads (Mark of the \
-Web records the source URL), list_persistence for autoruns and services. \
-Guessing at file extensions or folder paths is a last resort, not a first move.
+Web records the source URL), list_persistence for autoruns and services, \
+search_command_history for what was actually run (PowerShell, cmd, scheduled \
+tasks, shell history) rather than search_events, which is generic and does \
+not de-duplicate or risk-score commands. Guessing at file extensions or folder \
+paths is a last resort, not a first move.
 - Finish the investigation before you reply. Run the searches yourself rather \
 than presenting the analyst with a menu of searches they could authorise. Ask a \
 question only when you genuinely cannot proceed without their answer -- not to \
@@ -264,6 +267,7 @@ def _describe_lookup(name: str, args: dict) -> str:
         "describe_case": "Checking what data this case contains",
         "get_event_detail": "Reading the full event before citing it",
         "list_downloads": "Looking for downloaded files (Mark of the Web)",
+        "search_command_history": "Checking what was actually run on the host",
         "list_hosts": "Listing the hosts in this case",
         "search_events": "Searching events",
         "list_persistence": "Checking persistence mechanisms",

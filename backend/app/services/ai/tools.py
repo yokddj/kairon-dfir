@@ -345,6 +345,72 @@ def tool_get_timeline(db: Session, case_id: str, args: dict) -> dict:
     }
 
 
+COMMAND_HISTORY_KEYS = (
+    "id", "timestamp", "host", "user", "command", "shell_family", "launcher",
+    "source_type", "risk_score", "risk_reasons", "confidence",
+)
+
+
+def tool_search_command_history(db: Session, case_id: str, args: dict) -> dict:
+    """Commands actually executed: PowerShell, cmd, scheduled tasks, shell history.
+
+    This is one merged view over several sources (Sysmon/4688 command lines,
+    PowerShell ScriptBlock/transcript logs, scheduled tasks, prefetch, Linux
+    shell history, and the same from a memory image) with a shared risk score
+    and classification -- the tool built for "what did someone actually run",
+    as distinct from search_events' broader event search.
+    """
+    from app.services.command_history import get_command_history
+
+    limit = _limit(args.get("limit"))
+    host = _resolve_host(db, case_id, args.get("host") or args.get("host_id"))
+    result = get_command_history(
+        case_id,
+        {
+            "host": host.display_name if host else None,
+            "q": args.get("query") or None,
+            "time_from": args.get("time_from") or None,
+            "time_to": args.get("time_to") or None,
+            "risk_min": args.get("risk_min"),
+            "only_suspicious": bool(args.get("suspicious_only")),
+            "page": 1,
+            "page_size": limit,
+        },
+    )
+    # source_event_id is the real OpenSearch document id for a disk-derived
+    # command, citable and pivotable; the row's own "id" is a synthetic hash of
+    # case+event+command used only for de-duplication. A command recovered from
+    # a memory image has no backing document at all -- investigation_memory.py
+    # mirrors its own synthetic key into source_event_id for shape consistency,
+    # not because one exists -- so those rows get no pivot rather than a link
+    # to nothing.
+    rows = []
+    memory_sourced = False
+    for item in result.get("items") or []:
+        from_memory = str(item.get("source_type") or "") == "memory"
+        memory_sourced = memory_sourced or from_memory
+        rows.append({**item, "id": None if from_memory else item.get("source_event_id")})
+    total = int(result.get("total") or 0)
+    projected = _rows(rows, COMMAND_HISTORY_KEYS, limit)
+    warnings = list(result.get("warnings") or [])
+    if memory_sourced:
+        warnings.append(
+            "Some commands were recovered from a memory image and have no document to link "
+            "to; those rows carry no open_in_search link."
+        )
+    return {
+        "total_matches": total,
+        # Covers the whole case (or host, if given), not just the sample below.
+        "summary": result.get("summary") or {},
+        "commands": _with_pivots(case_id, projected),
+        "warnings": warnings,
+        "note": (
+            f"{total} commands matched; {len(projected)} are shown below. Narrow by host, "
+            "a query term, or risk_min to see different ones."
+        ) if total > len(projected) else None,
+    }
+
+
 def tool_describe_case(db: Session, case_id: str, args: dict) -> dict:
     """What data this case actually holds, counted over the whole index.
 
@@ -673,6 +739,29 @@ TOOL_SPECS: list[dict] = [
         },
     },
     {
+        "name": "search_command_history",
+        "description": (
+            "Search commands that were actually executed on the case's hosts: PowerShell, "
+            "cmd, scheduled tasks, prefetch-inferred executions, Linux shell history, and the "
+            "same recovered from a memory image, merged into one risk-scored, de-duplicated "
+            "view. Use this for 'what did they run' questions instead of search_events, which "
+            "searches raw events generically and does not classify or de-duplicate commands."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Free-text filter over the command line and its context."},
+                "host": {"type": "string", "description": "Restrict to one host. A name or a host_id both work."},
+                "time_from": {"type": "string", "description": "ISO 8601 lower bound."},
+                "time_to": {"type": "string", "description": "ISO 8601 upper bound."},
+                "risk_min": {"type": "integer", "description": "Minimum risk score, 0-100."},
+                "suspicious_only": {"type": "boolean", "description": "Only commands already flagged suspicious (risk score 50+)."},
+                "limit": {"type": "integer", "description": f"Max commands, 1-{MAX_ROWS_HARD}."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "list_hosts",
         "description": (
             "List the hosts in this case with their event and evidence counts. "
@@ -767,6 +856,7 @@ TOOL_SPECS: list[dict] = [
 HANDLERS: dict[str, Callable[[Session, str, dict], dict]] = {
     "describe_case": tool_describe_case,
     "get_event_detail": tool_get_event_detail,
+    "search_command_history": tool_search_command_history,
     "list_downloads": tool_list_downloads,
     "list_hosts": tool_list_hosts,
     "search_events": tool_search_events,

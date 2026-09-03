@@ -735,3 +735,178 @@ def test_browser_download_rows_carry_a_pivot_link_but_motw_rows_do_not(monkeypat
     motw_row, browser_row = result["downloads"]
     assert "open_in_search" not in motw_row
     assert browser_row["open_in_search"] == "/cases/case-1/search?q=event_id%3Aevt-3&selected=evt-3"
+
+
+# --------------------------------------------------------------------------
+# Commands actually executed -- distinct from search_events, which is a
+# generic event search and does not de-duplicate or risk-score commands.
+# --------------------------------------------------------------------------
+
+
+COMMAND_ITEM = {
+    "id": "sha1-synthetic-dedupe-key",
+    "source_event_id": "evt-cmd-1",
+    "timestamp": "2026-08-01T10:00:00Z",
+    "host": "WS01",
+    "user": "mshutter",
+    "command": "powershell -ep bypass -nop -w hidden -File c:\\f\\p.ps1",
+    "shell_family": "powershell",
+    "launcher": "powershell.exe",
+    "source_type": "sysmon_1",
+    "risk_score": 70,
+    "risk_reasons": ["execution policy bypass", "hidden window"],
+    "confidence": "high",
+}
+
+
+def test_search_command_history_reports_totals_and_summary(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.command_history.get_command_history",
+        lambda case_id, params: {
+            "total": 42,
+            "items": [COMMAND_ITEM],
+            "summary": {"commands_total": 42, "suspicious_total": 5},
+            "warnings": [],
+        },
+    )
+
+    result = tools_module.tool_search_command_history(None, "case-1", {"query": "powershell"})
+
+    assert result["total_matches"] == 42
+    assert result["summary"]["suspicious_total"] == 5
+    assert len(result["commands"]) == 1
+    assert "42 commands matched" in result["note"]
+
+
+def test_search_command_history_uses_the_real_event_id_not_the_dedupe_hash(monkeypatch):
+    """The row's own "id" is a sha1 of case+event+command for de-duplication,
+    not a document id -- a pivot built from it would point at nothing."""
+    monkeypatch.setattr(
+        "app.services.command_history.get_command_history",
+        lambda case_id, params: {"total": 1, "items": [COMMAND_ITEM], "summary": {}, "warnings": []},
+    )
+
+    command = tools_module.tool_search_command_history(None, "case-1", {})["commands"][0]
+
+    assert command["id"] == "evt-cmd-1"
+    assert command["open_in_search"] == "/cases/case-1/search?q=event_id%3Aevt-cmd-1&selected=evt-cmd-1"
+
+
+def test_search_command_history_resolves_a_host_name_to_its_display_name(monkeypatch):
+    captured = {}
+
+    def fake(case_id, params):
+        captured.update(params)
+        return {"total": 0, "items": [], "summary": {}, "warnings": []}
+
+    monkeypatch.setattr("app.services.command_history.get_command_history", fake)
+    session = RecordingSession(hosts=[FakeHost("host-1", "WS01")])
+
+    tools_module.tool_search_command_history(session, "case-1", {"host": "host-1"})
+
+    assert captured["host"] == "WS01"
+
+
+def test_search_command_history_projects_away_process_and_raw_payload(monkeypatch):
+    """Only the summarised fields reach the model; get_event_detail is where
+    full process context and raw payloads belong."""
+    bulky = {
+        **COMMAND_ITEM,
+        "raw_payload": "x" * 9000,
+        "process": {"name": "powershell.exe", "pid": 4321, "command_line": "..."},
+        "parent_process": {"name": "explorer.exe"},
+    }
+    monkeypatch.setattr(
+        "app.services.command_history.get_command_history",
+        lambda case_id, params: {"total": 1, "items": [bulky], "summary": {}, "warnings": []},
+    )
+
+    command = tools_module.tool_search_command_history(None, "case-1", {})["commands"][0]
+
+    assert "raw_payload" not in command
+    assert "process" not in command
+    assert "parent_process" not in command
+
+
+def test_search_command_history_passes_through_suspicious_and_risk_filters(monkeypatch):
+    captured = {}
+
+    def fake(case_id, params):
+        captured.update(params)
+        return {"total": 0, "items": [], "summary": {}, "warnings": []}
+
+    monkeypatch.setattr("app.services.command_history.get_command_history", fake)
+
+    tools_module.tool_search_command_history(None, "case-1", {"suspicious_only": True, "risk_min": 60})
+
+    assert captured["only_suspicious"] is True
+    assert captured["risk_min"] == 60
+
+
+def test_no_note_when_every_match_was_returned(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.command_history.get_command_history",
+        lambda case_id, params: {"total": 1, "items": [COMMAND_ITEM], "summary": {}, "warnings": []},
+    )
+
+    result = tools_module.tool_search_command_history(None, "case-1", {})
+
+    assert result["note"] is None
+
+
+MEMORY_COMMAND_ITEM = {
+    **COMMAND_ITEM,
+    "id": "memory-command:ev-1:run-1:ent-1:4321",
+    "source_event_id": "memory-command:ev-1:run-1:ent-1:4321",
+    "source_type": "memory",
+}
+
+
+def test_a_memory_sourced_command_gets_no_pivot_link(monkeypatch):
+    """The reported failure: source_event_id mirrors a synthetic key with no
+    backing document for memory-recovered commands, and a link built from it
+    resolved to nothing."""
+    monkeypatch.setattr(
+        "app.services.command_history.get_command_history",
+        lambda case_id, params: {"total": 1, "items": [MEMORY_COMMAND_ITEM], "summary": {}, "warnings": []},
+    )
+
+    result = tools_module.tool_search_command_history(None, "case-1", {})
+    command = result["commands"][0]
+
+    assert "open_in_search" not in command
+    assert any("memory image" in warning for warning in result["warnings"])
+
+
+def test_a_disk_sourced_command_still_gets_its_pivot_link_alongside_a_memory_one(monkeypatch):
+    """Fixing the memory case must not cost the disk-sourced rows their links."""
+    monkeypatch.setattr(
+        "app.services.command_history.get_command_history",
+        lambda case_id, params: {
+            "total": 2, "items": [COMMAND_ITEM, MEMORY_COMMAND_ITEM], "summary": {}, "warnings": [],
+        },
+    )
+
+    commands = tools_module.tool_search_command_history(None, "case-1", {})["commands"]
+
+    disk_row = next(c for c in commands if c["id"] == "evt-cmd-1")
+    memory_row = next(c for c in commands if "open_in_search" not in c)
+    assert disk_row["open_in_search"] == "/cases/case-1/search?q=event_id%3Aevt-cmd-1&selected=evt-cmd-1"
+    assert memory_row["source_type"] == "memory"
+
+
+def test_no_memory_warning_when_every_row_is_disk_sourced(monkeypatch):
+    monkeypatch.setattr(
+        "app.services.command_history.get_command_history",
+        lambda case_id, params: {"total": 1, "items": [COMMAND_ITEM], "summary": {}, "warnings": []},
+    )
+
+    result = tools_module.tool_search_command_history(None, "case-1", {})
+
+    assert result["warnings"] == []
+
+
+def test_search_command_history_is_advertised_and_wired():
+    assert "search_command_history" in tools_module.HANDLERS
+    spec = next(s for s in tools_module.TOOL_SPECS if s["name"] == "search_command_history")
+    assert set(spec["input_schema"]["properties"]) >= {"query", "host", "risk_min", "suspicious_only"}
