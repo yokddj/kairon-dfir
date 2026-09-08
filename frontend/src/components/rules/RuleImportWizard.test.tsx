@@ -110,6 +110,40 @@ describe("RuleImportWizard", () => {
     expect(await screen.findByTestId("rule-wizard-error")).toHaveTextContent("rule store unavailable");
     expect(screen.queryByTestId("rule-wizard-review")).not.toBeInTheDocument();
   });
+
+  it("stays on the importing step while the backend is still parsing, then reflects the real count once it finishes", async () => {
+    // Regression: the wizard only recognised "queued"/"running"/"pending" as in-progress,
+    // none of which the backend ever sends -- so it flipped straight to the review step
+    // and showed "0 imported" the moment the upload response came back, before the
+    // background parse had even started.
+    importRuleArchiveMock.mockResolvedValue({ import_run_id: "run-1" });
+    getRuleImportMock
+      .mockResolvedValueOnce(
+        run({ status: "extracting", imported_count: 0, unsupported_count: 0, current_phase: "extracting", total_files: 3, processed_files: 0 }),
+      )
+      .mockResolvedValue(run({ status: "completed", imported_count: 120, unsupported_count: 42 }));
+
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
+    render(
+      <QueryClientProvider client={qc}>
+        <RuleImportWizard open onClose={() => {}} engine="sigma" />
+      </QueryClientProvider>,
+    );
+
+    const input = screen.getByTestId("rule-wizard-file-input") as HTMLInputElement;
+    await userEvent.upload(input, new File(["x"], "sigma-rules.zip", { type: "application/zip" }));
+    await userEvent.click(screen.getByTestId("rule-wizard-start"));
+
+    await waitFor(() => expect(screen.getByTestId("rule-wizard-importing")).toHaveTextContent("extracting"));
+    expect(screen.queryByTestId("rule-wizard-review")).not.toBeInTheDocument();
+
+    await waitFor(() => expect(screen.getByTestId("rule-wizard-imported")).toHaveTextContent("120"), { timeout: 4000 });
+    const rulesInvalidations = invalidateSpy.mock.calls.filter(
+      ([arg]) => (arg as { queryKey?: unknown[] } | undefined)?.queryKey?.[0] === "rules",
+    );
+    expect(rulesInvalidations).toHaveLength(2);
+  }, 8000);
 });
 
 describe("unsupportedBreakdown", () => {
