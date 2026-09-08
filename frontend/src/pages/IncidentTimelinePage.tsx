@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Download, ExternalLink, FileText, Filter, GitBranch, RefreshCw, Search, ShieldAlert, X } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
@@ -20,6 +20,7 @@ const BASE_SOURCE_OPTIONS = [
 const TIMELINE_TABS = [
   { id: "official", label: "Official Timeline" },
   { id: "candidates", label: "Suggested Candidates" },
+  { id: "dismissed", label: "Dismissed" },
   { id: "sources", label: "Sources / Provenance" },
 ];
 
@@ -144,6 +145,8 @@ export default function IncidentTimelinePage() {
   const [activeTab, setActiveTab] = useState("official");
   const [exportStatus, setExportStatus] = useState("");
   const [regenerateStatus, setRegenerateStatus] = useState("");
+  const [isRegenerating, setIsRegenerating] = useState(false);
+  const [regenerateElapsedSeconds, setRegenerateElapsedSeconds] = useState(0);
   const [storyBundleItem, setStoryBundleItem] = useState<IncidentTimelineItem | null>(null);
 
   useEffect(() => {
@@ -186,7 +189,7 @@ export default function IncidentTimelinePage() {
   const officialItems = items.filter((item) => (item.status || "candidate") === "accepted");
   const candidateItems = items.filter((item) => ["candidate", "needs_review"].includes(item.status || "candidate"));
   const dismissedItems = items.filter((item) => item.status === "dismissed");
-  const visibleItems = activeTab === "candidates" ? candidateItems : officialItems;
+  const visibleItems = activeTab === "candidates" ? candidateItems : activeTab === "dismissed" ? dismissedItems : officialItems;
   const grouped = groupItems(visibleItems, groupBy);
   const sourceSummary = useMemo(() => {
     const counts = new Map<string, number>();
@@ -214,9 +217,16 @@ export default function IncidentTimelinePage() {
     }
   }
 
+  const regenerateTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   async function regenerateDraft() {
-    if (!caseId) return;
-    setRegenerateStatus("Regenerating timeline...");
+    if (!caseId || isRegenerating) return;
+    setRegenerateStatus("");
+    setRegenerateElapsedSeconds(0);
+    setIsRegenerating(true);
+    regenerateTimerRef.current = setInterval(() => {
+      setRegenerateElapsedSeconds((current) => current + 1);
+    }, 1000);
     try {
       await api.regenerateIncidentTimelineDraft(caseId, {
         sources,
@@ -229,8 +239,20 @@ export default function IncidentTimelinePage() {
       setRegenerateStatus("Timeline regenerated.");
     } catch (error) {
       setRegenerateStatus(error instanceof Error ? error.message : "Timeline regeneration failed.");
+    } finally {
+      setIsRegenerating(false);
+      if (regenerateTimerRef.current) {
+        clearInterval(regenerateTimerRef.current);
+        regenerateTimerRef.current = null;
+      }
     }
   }
+
+  useEffect(() => {
+    return () => {
+      if (regenerateTimerRef.current) clearInterval(regenerateTimerRef.current);
+    };
+  }, []);
 
   async function updateItemStatus(item: IncidentTimelineItem, status: string) {
     const timelineId = draftQuery.data?.timeline_id || draftQuery.data?.cache?.timeline_id || draftQuery.data?.cache?.draft_id;
@@ -269,10 +291,11 @@ export default function IncidentTimelinePage() {
             <button
               type="button"
               onClick={regenerateDraft}
-              className="inline-flex items-center gap-2 rounded-xl border border-line bg-abyss px-3 py-2 text-sm text-ink hover:border-accent/60"
+              disabled={isRegenerating}
+              className="inline-flex items-center gap-2 rounded-xl border border-line bg-abyss px-3 py-2 text-sm text-ink hover:border-accent/60 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              <RefreshCw size={16} />
-              Regenerate
+              <RefreshCw size={16} className={isRegenerating ? "animate-spin" : ""} />
+              {isRegenerating ? `Regenerating… ${regenerateElapsedSeconds}s` : "Regenerate"}
             </button>
             <button
               type="button"
@@ -368,7 +391,7 @@ export default function IncidentTimelinePage() {
               <p>Draft items: {draftQuery.data?.total ?? 0}</p>
               <p>Official items: {officialItems.length}</p>
               <p>Suggested candidates: {candidateItems.length}</p>
-              <p>Dismissed locally: {dismissedItems.length}</p>
+              <p>Dismissed: {dismissedItems.length}</p>
               {(draftQuery.data?.warnings || []).slice(0, 5).map((warning) => (
                 <p key={warning} className="text-amber-200">{warning}</p>
               ))}
@@ -443,7 +466,19 @@ export default function IncidentTimelinePage() {
                   )}
                 </div>
               ) : null}
-              {regenerateStatus ? (
+              {isRegenerating ? (
+                <div className="flex items-center gap-2 rounded-2xl border border-line bg-panel/70 p-3 text-sm text-muted" data-testid="regenerate-progress">
+                  <RefreshCw size={14} className="animate-spin" />
+                  <span>
+                    Regenerating timeline… {regenerateElapsedSeconds}s elapsed.
+                    {typeof draftQuery.data?.cache?.generation_seconds === "number" ? (
+                      <span className="ml-1">Last build took {draftQuery.data.cache.generation_seconds.toFixed(0)}s -- this one runs the same collection and correlation work.</span>
+                    ) : (
+                      <span className="ml-1">Collecting findings, marked events, command history and detections, then correlating them -- larger cases take longer.</span>
+                    )}
+                  </span>
+                </div>
+              ) : regenerateStatus ? (
                 <div className="rounded-2xl border border-line bg-panel/70 p-3 text-sm text-muted">{regenerateStatus}</div>
               ) : null}
 
@@ -573,6 +608,14 @@ export default function IncidentTimelinePage() {
                                       Dismiss
                                     </button>
                                   </>
+                                ) : activeTab === "dismissed" ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => void updateItemStatus(item, "needs_review")}
+                                    className="inline-flex items-center gap-1 rounded-lg border border-accent/40 px-2 py-1 text-xs text-accent hover:bg-accent/10"
+                                  >
+                                    Restore
+                                  </button>
                                 ) : (
                                   <button
                                     type="button"
@@ -596,11 +639,13 @@ export default function IncidentTimelinePage() {
               {activeTab !== "sources" && !visibleItems.length ? (
                 <EmptyState
                   testId="incident-timeline-empty-state"
-                  title={activeTab === "official" ? "No official timeline yet" : "No suggested candidates"}
+                  title={activeTab === "official" ? "No official timeline yet" : activeTab === "dismissed" ? "Nothing dismissed" : "No suggested candidates"}
                   description={
                     activeTab === "official"
                       ? "The Incident Timeline is a curated, reportable chronology you build by hand — it starts empty for every case. Promote a marked event from Search or Timeline, create a finding, or review the Candidates tab for suggestions."
-                      : "Candidates are generated from key events, findings, and high-risk activity already indexed for this case. An empty list here usually means those source types have no data yet, or the selected sources/filters exclude them."
+                      : activeTab === "dismissed"
+                        ? "Items you dismiss from Candidates or remove from the official timeline show up here. Nothing is deleted -- restore any of them back into Candidates at any time."
+                        : "Candidates are generated from key events, findings, and high-risk activity already indexed for this case. An empty list here usually means those source types have no data yet, or the selected sources/filters exclude them."
                   }
                 />
               ) : null}
