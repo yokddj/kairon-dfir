@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, Bookmark, Clock3, ExternalLink, FileSearch, Filter, Network, RefreshCw, Search, ShieldAlert, UploadCloud, X } from "lucide-react";
+import { AlertTriangle, Bookmark, Clock3, Eye, EyeOff, ExternalLink, FileSearch, Filter, Network, RefreshCw, Search, ShieldAlert, UploadCloud, X } from "lucide-react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
-import { api, type SearchQuickFilter, type TimelineBookmark, type TimelineItem, type TimelineMode } from "../api/client";
+import { api, type EventMarking, type SearchQuickFilter, type TimelineBookmark, type TimelineItem, type TimelineMode } from "../api/client";
 import PaginationControls from "../components/PaginationControls";
 import ResponsiveDetailPanel from "../components/ResponsiveDetailPanel";
 import { useActiveCase } from "../context/ActiveCaseContext";
@@ -104,6 +104,8 @@ function TimelinePage() {
     importance: "medium",
   });
   const [cursorStack, setCursorStack] = useState<string[]>([]);
+  const [selectedRowIds, setSelectedRowIds] = useState<Set<string>>(new Set());
+  const [showHidden, setShowHidden] = useState(false);
   const focusedContextRef = useRef<string>("");
 
   useEffect(() => {
@@ -166,6 +168,49 @@ function TimelinePage() {
     enabled: Boolean(caseId),
     refetchOnWindowFocus: false,
   });
+  const hiddenMarkingsQuery = useQuery({
+    queryKey: ["timeline-hidden-markings", caseId],
+    queryFn: () => api.listEventMarkings(caseId!, { status: "not_relevant" }),
+    enabled: Boolean(caseId),
+    refetchOnWindowFocus: false,
+  });
+  const hiddenMarkingByEventId = useMemo(() => {
+    const map = new Map<string, EventMarking>();
+    for (const marking of hiddenMarkingsQuery.data ?? []) map.set(marking.event_id, marking);
+    return map;
+  }, [hiddenMarkingsQuery.data]);
+
+  const hideSelectedMutation = useMutation({
+    mutationFn: (items: TimelineItem[]) =>
+      api.bulkSetEventMarkingStatus(caseId!, {
+        status: "not_relevant",
+        items: items.map((item) => ({
+          event_id: item.id,
+          evidence_id: item.evidence_id ?? undefined,
+          artifact_type: item.artifact_type ?? undefined,
+          timestamp: item.timestamp ?? undefined,
+          host: item.host ?? undefined,
+        })),
+      }),
+    onSuccess: () => {
+      setSelectedRowIds(new Set());
+      void queryClient.invalidateQueries({ queryKey: ["timeline-hidden-markings", caseId] });
+    },
+  });
+  const unhideMutation = useMutation({
+    mutationFn: (markingId: string) => api.deleteEventMarking(markingId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["timeline-hidden-markings", caseId] });
+    },
+  });
+
+  function toggleRowSelection(id: string) {
+    setSelectedRowIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   const selectedItem = useMemo(
     () => timelineQuery.data?.items.find((item) => item.id === selectedId) ?? null,
@@ -277,10 +322,25 @@ function TimelinePage() {
       Select a timeline item to inspect details, pivot to Search, open a related finding or mark it as a key event.
     </div>
   );
-  const sortedTimelineItems = useMemo(() => {
+  const visibleTimelineItems = useMemo(() => {
     const items = timelineQuery.data?.items ?? [];
-    return [...items].sort((left, right) => compareValues(timelineSortValue(left, tableSortKey), timelineSortValue(right, tableSortKey), tableSortDirection));
-  }, [tableSortDirection, tableSortKey, timelineQuery.data?.items]);
+    if (showHidden) return items;
+    return items.filter((item) => item.kind !== "event" || !hiddenMarkingByEventId.has(item.id));
+  }, [timelineQuery.data?.items, showHidden, hiddenMarkingByEventId]);
+
+  const sortedTimelineItems = useMemo(() => {
+    return [...visibleTimelineItems].sort((left, right) => compareValues(timelineSortValue(left, tableSortKey), timelineSortValue(right, tableSortKey), tableSortDirection));
+  }, [tableSortDirection, tableSortKey, visibleTimelineItems]);
+
+  const selectableIds = useMemo(
+    () => sortedTimelineItems.filter((item) => item.kind === "event" && !hiddenMarkingByEventId.has(item.id)).map((item) => item.id),
+    [sortedTimelineItems, hiddenMarkingByEventId],
+  );
+  const allSelectableSelected = selectableIds.length > 0 && selectableIds.every((id) => selectedRowIds.has(id));
+
+  function toggleSelectAllVisible() {
+    setSelectedRowIds(allSelectableSelected ? new Set() : new Set(selectableIds));
+  }
 
   function handleTableSort(key: string) {
     setTableSortDirection((current) => nextSortDirection(tableSortKey, current, key));
@@ -552,16 +612,55 @@ function TimelinePage() {
 
       <div className="grid grid-cols-1 gap-5">
         <section className="min-w-0 space-y-3 rounded-[28px] border border-line bg-panel/70 p-4 shadow-panel">
-          <div className="flex flex-wrap gap-3 text-xs text-muted">
-            {timelineQuery.data?.groups?.map((group) => (
-              <span key={group.key} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">
-                {group.label} · {group.count} items · {group.high_risk_count} high
-              </span>
-            ))}
+          <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted">
+            <div className="flex flex-wrap gap-3">
+              {timelineQuery.data?.groups?.map((group) => (
+                <span key={group.key} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5">
+                  {group.label} · {group.count} items · {group.high_risk_count} high
+                </span>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowHidden((current) => !current)}
+              className={`flex items-center gap-2 rounded-full border px-3 py-1.5 ${showHidden ? "border-accent/50 bg-accent/10 text-accent" : "border-line bg-abyss/70 text-muted"}`}
+            >
+              {showHidden ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+              {showHidden ? "Showing hidden" : "Show hidden"}
+              {hiddenMarkingByEventId.size ? ` (${hiddenMarkingByEventId.size})` : ""}
+            </button>
           </div>
 
+          {selectedRowIds.size ? (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-accent" data-testid="timeline-bulk-bar">
+              <span>{selectedRowIds.size} selected</span>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setSelectedRowIds(new Set())} className="rounded-full border border-line bg-abyss/70 px-3 py-1.5 text-xs text-muted">
+                  Clear
+                </button>
+                <button
+                  type="button"
+                  disabled={hideSelectedMutation.isPending}
+                  onClick={() => hideSelectedMutation.mutate(sortedTimelineItems.filter((item) => selectedRowIds.has(item.id)))}
+                  className="flex items-center gap-2 rounded-full bg-accent px-3 py-1.5 text-xs font-semibold text-abyss disabled:opacity-50"
+                >
+                  <EyeOff className="h-3.5 w-3.5" />
+                  {hideSelectedMutation.isPending ? "Hiding…" : `Hide ${selectedRowIds.size}`}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           <div className="overflow-hidden rounded-[24px] border border-line">
-            <div className="grid grid-cols-[170px_70px_90px_110px_120px_110px_minmax(160px,1fr)_72px] gap-3 border-b border-line bg-abyss/70 px-4 py-3 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">
+            <div className="grid grid-cols-[28px_170px_70px_90px_110px_120px_110px_minmax(160px,1fr)_72px] gap-3 border-b border-line bg-abyss/70 px-4 py-3 font-mono text-[11px] uppercase tracking-[0.16em] text-muted">
+              <input
+                type="checkbox"
+                aria-label="Select all visible events"
+                checked={allSelectableSelected}
+                disabled={!selectableIds.length}
+                onChange={toggleSelectAllVisible}
+                className="h-3.5 w-3.5"
+              />
               <button type="button" onClick={() => handleTableSort("timestamp")} className="text-left">Timestamp {tableSortKey === "timestamp" ? (tableSortDirection === "asc" ? "↑" : "↓") : ""}</button>
               <button type="button" onClick={() => handleTableSort("risk")} className="text-left">Risk {tableSortKey === "risk" ? (tableSortDirection === "asc" ? "↑" : "↓") : ""}</button>
               <button type="button" onClick={() => handleTableSort("kind")} className="text-left">Kind {tableSortKey === "kind" ? (tableSortDirection === "asc" ? "↑" : "↓") : ""}</button>
@@ -577,24 +676,54 @@ function TimelinePage() {
               ) : timelineQuery.isError ? (
                 <div className="px-4 py-6 text-sm text-rose-200">{String((timelineQuery.error as Error)?.message || "Timeline failed")}</div>
               ) : sortedTimelineItems.length ? (
-                sortedTimelineItems.map((item) => (
-                  <div
-                    key={`${item.kind}-${item.id}`}
-                    className={`grid grid-cols-[170px_70px_90px_110px_120px_110px_minmax(160px,1fr)_72px] gap-3 px-4 py-3 text-sm ${selectedId === item.id ? "bg-accent/8" : "bg-transparent"} cursor-pointer hover:bg-white/5`}
-                    onClick={() => setSelectedId(item.id)}
-                  >
-                    <span className="truncate text-muted">{itemTimestamp(item, effectiveTimezone)}</span>
-                    <span className={`w-fit rounded-full border px-2 py-0.5 text-xs ${riskTone(Number(item.risk_score || 0))}`}>{item.risk_score || 0}</span>
-                    <span className="truncate text-muted">{item.kind}</span>
-                    <span className="truncate text-muted">{artifactLabel(item.artifact_type)}</span>
-                    <span className="truncate text-muted">{compact(item.event_type)}</span>
-                    <span className="truncate text-muted">{compact(item.host)}</span>
-                    <span className="truncate text-ink" title={item.summary || item.title}>{item.summary || item.title}</span>
-                    <button type="button" className="rounded-full border border-line bg-abyss/70 px-2 py-1 text-xs text-muted" onClick={(event) => { event.stopPropagation(); setSelectedId(item.id); }}>
-                      Open
-                    </button>
-                  </div>
-                ))
+                sortedTimelineItems.map((item) => {
+                  const hiddenMarking = item.kind === "event" ? hiddenMarkingByEventId.get(item.id) : undefined;
+                  return (
+                    <div
+                      key={`${item.kind}-${item.id}`}
+                      data-testid={hiddenMarking ? "timeline-row-hidden" : "timeline-row"}
+                      className={`grid grid-cols-[28px_170px_70px_90px_110px_120px_110px_minmax(160px,1fr)_72px] gap-3 px-4 py-3 text-sm ${selectedId === item.id ? "bg-accent/8" : "bg-transparent"} ${hiddenMarking ? "opacity-50" : ""} cursor-pointer hover:bg-white/5`}
+                      onClick={() => setSelectedId(item.id)}
+                    >
+                      {item.kind === "event" && !hiddenMarking ? (
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${item.title}`}
+                          checked={selectedRowIds.has(item.id)}
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={() => toggleRowSelection(item.id)}
+                          className="h-3.5 w-3.5"
+                        />
+                      ) : (
+                        <span />
+                      )}
+                      <span className="truncate text-muted">{itemTimestamp(item, effectiveTimezone)}</span>
+                      <span className={`w-fit rounded-full border px-2 py-0.5 text-xs ${riskTone(Number(item.risk_score || 0))}`}>{item.risk_score || 0}</span>
+                      <span className="truncate text-muted">{item.kind}</span>
+                      <span className="truncate text-muted">{artifactLabel(item.artifact_type)}</span>
+                      <span className="truncate text-muted">{compact(item.event_type)}</span>
+                      <span className="truncate text-muted">{compact(item.host)}</span>
+                      <span className="truncate text-ink" title={item.summary || item.title}>
+                        {hiddenMarking ? <span className="mr-2 rounded-full border border-line bg-abyss/70 px-2 py-0.5 text-[10px] uppercase text-muted">Hidden</span> : null}
+                        {item.summary || item.title}
+                      </span>
+                      {hiddenMarking ? (
+                        <button
+                          type="button"
+                          disabled={unhideMutation.isPending}
+                          className="rounded-full border border-line bg-abyss/70 px-2 py-1 text-xs text-muted disabled:opacity-50"
+                          onClick={(event) => { event.stopPropagation(); unhideMutation.mutate(hiddenMarking.id); }}
+                        >
+                          Unhide
+                        </button>
+                      ) : (
+                        <button type="button" className="rounded-full border border-line bg-abyss/70 px-2 py-1 text-xs text-muted" onClick={(event) => { event.stopPropagation(); setSelectedId(item.id); }}>
+                          Open
+                        </button>
+                      )}
+                    </div>
+                  );
+                })
               ) : (
                 <div className="px-4 py-6 text-sm text-muted">
                   <p className="font-medium text-ink">No timeline items match the current filters.</p>
