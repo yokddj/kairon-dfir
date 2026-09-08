@@ -390,4 +390,102 @@ describe("IncidentTimelinePage", () => {
     await waitFor(() => expect(regenerateIncidentTimelineDraftMock).toHaveBeenCalled());
     expect(regenerateIncidentTimelineDraftMock.mock.calls[0][1]).toMatchObject({ max_items: 80 });
   });
+
+  it("shows live progress while regenerating and disables the button until it finishes", async () => {
+    // Regenerating used to say "Regenerating timeline..." and nothing else -- no sense of
+    // whether it was about to finish or hung. Now it ticks elapsed time and, once available,
+    // compares against the last known build duration.
+    let resolveRegenerate: (value: unknown) => void = () => {};
+    regenerateIncidentTimelineDraftMock.mockImplementationOnce(
+      () => new Promise((resolve) => { resolveRegenerate = resolve; }),
+    );
+    renderPage();
+    await screen.findByText("Remote admin movement");
+
+    fireEvent.click(screen.getByRole("button", { name: /^Regenerate$/i }));
+
+    expect(await screen.findByTestId("regenerate-progress")).toHaveTextContent(/Regenerating timeline/i);
+    expect(screen.getByRole("button", { name: /Regenerating/i })).toBeDisabled();
+
+    resolveRegenerate({
+      case_id: "case-1",
+      timeline_id: "timeline-1",
+      query: {},
+      total: 0,
+      hosts: [],
+      phases: [],
+      groups: {},
+      warnings: [],
+      no_mft_flood_default: true,
+      available_sources: [],
+      phase_options: [],
+      items: [],
+      cache: { hit: false, persistent: true, status: "fresh" },
+    });
+
+    await waitFor(() => expect(screen.queryByTestId("regenerate-progress")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: /^Regenerate$/i })).not.toBeDisabled();
+  });
+
+  it("moves a dismissed candidate to the Dismissed tab, and Restore returns it to Candidates", async () => {
+    // Dismissing had no way back -- the item just vanished from every tab except a passive
+    // count in "Advanced details". It's a real status update, not a delete, so there must be
+    // a way to see and undo it.
+    // mockResolvedValue (not -Once): the component refetches the draft after every status
+    // change, and must keep seeing the same candidate -- only its status (applied client-side
+    // via statusOverrides) moves it between tabs.
+    getIncidentTimelineDraftMock.mockResolvedValue({
+      case_id: "case-1",
+      timeline_id: "timeline-1",
+      query: {},
+      total: 1,
+      hosts: ["HOSTA"],
+      phases: ["execution"],
+      groups: {},
+      warnings: [],
+      no_mft_flood_default: true,
+      available_sources: ["command_history"],
+      phase_options: ["execution", "unknown"],
+      items: [
+        {
+          id: "candidate-1",
+          timestamp: "2024-03-22T11:30:00Z",
+          host: "HOSTA",
+          phase: "execution",
+          title: "PowerShell candidate",
+          summary: "powershell -ep bypass",
+          source: "command_history",
+          source_type: "command_history",
+          status: "candidate",
+          confidence: "medium",
+          risk_score: 80,
+          story_target_type: "candidate_process",
+          story_target_reason: "event link exists but exact process identity is uncertain",
+          story_primary_action: "Choose related process",
+        },
+      ],
+    });
+    renderPage();
+    fireEvent.click(await screen.findByRole("button", { name: /Suggested Candidates/i }));
+    expect(await screen.findByText("PowerShell candidate")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /^Dismiss$/i }));
+    await waitFor(() => expect(screen.queryByText("PowerShell candidate")).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole("button", { name: /^Dismissed$/i }));
+    expect(await screen.findByText("PowerShell candidate")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Restore/i }));
+    await waitFor(() =>
+      expect(updateIncidentTimelineItemStatusMock).toHaveBeenCalledWith(
+        "case-1",
+        "timeline-1",
+        "candidate-1",
+        expect.objectContaining({ status: "needs_review" }),
+      ),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /Suggested Candidates/i }));
+    expect(await screen.findByText("PowerShell candidate")).toBeInTheDocument();
+  });
 });
