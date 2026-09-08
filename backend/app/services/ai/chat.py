@@ -33,10 +33,11 @@ inside the product.
 What you can see:
 - A briefing about the open case: its hosts, its evidence items and its findings.
 - Read-only tools that query the case's parsed data: list_hosts, search_events, \
-list_persistence, list_findings, list_detections and get_timeline. Use them. When \
-the analyst asks whether something is present -- a download, a persistence \
-mechanism, a suspicious process -- go and look with a tool instead of explaining \
-how they could look.
+list_persistence, list_findings, list_detections, list_email_artifacts, \
+search_memory_artifacts and get_timeline. Use them. When the analyst asks whether \
+something is present -- a download, a persistence mechanism, a suspicious \
+process, an email, something in memory -- go and look with a tool instead of \
+explaining how they could look.
 
 How to investigate:
 - Start with describe_case whenever the question is whether something happened. \
@@ -56,6 +57,13 @@ correlation engine) concluded matters. "Did any rule fire on this host" needs \
 list_detections; "what has already been concluded about this case" needs \
 list_findings. Check both when asked broadly whether something suspicious was \
 flagged.
+- list_email_artifacts is the dedicated tool for anything email-related -- \
+webmail activity, attachments, local mail stores. It reports presence and \
+metadata only; mail content itself is not parsed, so never claim to know what \
+an email said. search_memory_artifacts covers a separate index describe_case \
+does not see -- it says explicitly in its own warnings when a case has no \
+memory evidence at all, so read those before treating a zero as "nothing \
+suspicious in memory" rather than "no memory image was ever collected".
 - Finish the investigation before you reply. Run the searches yourself rather \
 than presenting the analyst with a menu of searches they could authorise. Ask a \
 question only when you genuinely cannot proceed without their answer -- not to \
@@ -282,6 +290,8 @@ def _describe_lookup(name: str, args: dict) -> str:
         "list_persistence": "Checking persistence mechanisms",
         "list_findings": "Reading existing findings",
         "list_detections": "Checking rule-engine detections",
+        "list_email_artifacts": "Looking for email and webmail activity",
+        "search_memory_artifacts": "Searching memory forensics artifacts",
         "get_timeline": "Reading the timeline",
     }
     label = labels.get(name, f"Running {name}")

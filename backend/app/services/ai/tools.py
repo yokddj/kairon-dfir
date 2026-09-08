@@ -370,6 +370,73 @@ def tool_list_detections(db: Session, case_id: str, args: dict) -> dict:
     }
 
 
+EMAIL_ARTIFACT_KEYS = (
+    "id", "host", "email_artifact_type", "client", "account_hint",
+    "file_path", "file_name", "url", "timestamp", "risk_score", "confidence",
+)
+
+
+def tool_list_email_artifacts(db: Session, case_id: str, args: dict) -> dict:
+    """Webmail activity and local mail-store presence -- Outlook OST/PST, .eml/.msg files, attachment caches, and browser/DNS traces of webmail."""
+    from app.services.email_artifacts import list_email_artifacts
+
+    limit = _limit(args.get("limit"))
+    host = _resolve_host(db, case_id, args.get("host") or args.get("host_id"))
+    result = list_email_artifacts(
+        db,
+        case_id,
+        {
+            "host": [host.display_name] if host else None,
+            "q": args.get("query") or None,
+            "artifact_type": args.get("email_artifact_type") or None,
+            "client": args.get("client") or None,
+            "risk_min": args.get("risk_min"),
+            "interesting_only": bool(args.get("interesting_only")),
+            "page_size": limit,
+        },
+    )
+    return {
+        "summary": result.get("summary") or {},
+        "items": _rows(result.get("items") or [], EMAIL_ARTIFACT_KEYS, limit),
+        "warnings": result.get("warnings") or [],
+        "limitations": result.get("limitations") or [],
+    }
+
+
+MEMORY_ARTIFACT_KEYS = (
+    "id", "timestamp", "title", "summary", "artifact_type", "artifact_family", "parser",
+)
+
+
+def tool_search_memory_artifacts(db: Session, case_id: str, args: dict) -> dict:
+    """Search memory-image artifacts: processes, network connections, loaded modules, command lines and suspicious findings recovered from a memory capture. Only returns results for cases with memory evidence -- an empty result with total_matches 0 means no memory image was collected, not that nothing suspicious ran."""
+    from app.services.investigation_memory import memory_evidences, memory_search_results
+
+    limit = _limit(args.get("limit"))
+    has_memory_evidence = bool(memory_evidences(db, case_id, args.get("evidence_id") or None))
+    result = memory_search_results(
+        db,
+        case_id,
+        {
+            "query": args.get("query") or None,
+            "artifact_family": args.get("artifact_family") or None,
+            "process_name": args.get("process_name") or None,
+            "pid": args.get("pid"),
+            "evidence_id": args.get("evidence_id") or None,
+            "page_size": limit,
+        },
+    )
+    warnings = list(result.get("warnings") or [])
+    if not has_memory_evidence:
+        warnings.append("No memory evidence has been collected for this case -- a zero result here proves nothing about what actually ran, only that there is no memory image to search.")
+    return {
+        "total_matches": result.get("total", 0),
+        "facets": result.get("facets") or {},
+        "items": _rows(result.get("results") or [], MEMORY_ARTIFACT_KEYS, limit),
+        "warnings": warnings,
+    }
+
+
 def tool_list_hosts(db: Session, case_id: str, args: dict) -> dict:
     """Which machines are in this case, and how much data each one has."""
     hosts = (
@@ -1062,6 +1129,51 @@ TOOL_SPECS: list[dict] = [
         },
     },
     {
+        "name": "list_email_artifacts",
+        "description": (
+            "Find webmail activity and local mail-store presence: Outlook OST/PST files, "
+            ".eml/.msg files, attachment caches, and browser or DNS traces of webmail "
+            "(Gmail, Outlook Web Access). Mail content itself is not parsed -- this reports "
+            "presence and metadata (account hints, client, timestamps), not message bodies. "
+            "Use this for any question about email, attachments received by email, or webmail use."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "string", "description": "Restrict to one host. A name or a host_id both work."},
+                "query": {"type": "string", "description": "Free-text filter over file names, paths and URLs."},
+                "email_artifact_type": {"type": "string", "description": "e.g. store, message_file, attachment_cache, webmail_activity."},
+                "client": {"type": "string", "description": "Mail client, e.g. outlook, thunderbird, gmail."},
+                "risk_min": {"type": "integer", "description": "Minimum risk score, 0-100."},
+                "interesting_only": {"type": "boolean", "description": "Only items already flagged as worth a look (risk score 30+)."},
+                "limit": {"type": "integer", "description": f"Max items, 1-{MAX_ROWS_HARD}."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "search_memory_artifacts",
+        "description": (
+            "Search artifacts recovered from a memory image: processes, network connections, "
+            "loaded modules, command lines and suspicious findings from memory-forensics analysis. "
+            "Memory artifacts live in a separate index from every other tool here, so describe_case "
+            "does not cover them. If this case has no memory evidence at all, the result says so "
+            "explicitly in its warnings -- read that before treating a zero as 'nothing suspicious'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Free-text filter."},
+                "artifact_family": {"type": "string", "description": "e.g. processes, network, modules, command_lines, suspicious, vads."},
+                "process_name": {"type": "string", "description": "Filter by process name."},
+                "pid": {"type": "integer", "description": "Filter by process id."},
+                "evidence_id": {"type": "string", "description": "Restrict to one memory evidence item."},
+                "limit": {"type": "integer", "description": f"Max items, 1-{MAX_ROWS_HARD}."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_timeline",
         "description": (
             "Read a window of the case timeline in chronological order. Use it to see what "
@@ -1092,6 +1204,8 @@ HANDLERS: dict[str, Callable[[Session, str, dict], dict]] = {
     "list_persistence": tool_list_persistence,
     "list_findings": tool_list_findings,
     "list_detections": tool_list_detections,
+    "list_email_artifacts": tool_list_email_artifacts,
+    "search_memory_artifacts": tool_search_memory_artifacts,
     "get_timeline": tool_get_timeline,
 }
 

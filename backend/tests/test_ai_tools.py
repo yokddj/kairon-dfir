@@ -1157,3 +1157,105 @@ def test_list_detections_is_advertised_and_wired():
     spec = next(s for s in TOOL_SPECS if s["name"] == "list_detections")
     assert set(spec["input_schema"]["properties"]) >= {"host", "severity", "status", "rule_name", "query", "limit"}
     assert spec["input_schema"]["required"] == []
+
+
+# --------------------------------------------------------------------------
+# list_email_artifacts: wraps the product's own email-artifact detector.
+# --------------------------------------------------------------------------
+
+
+def test_email_artifacts_tool_passes_the_host_filter_through_and_projects_rows(monkeypatch):
+    captured = {}
+
+    def fake(db, case_id, params):
+        captured.update(params)
+        return {
+            "items": [
+                {
+                    "id": "email-1",
+                    "host": "WS01",
+                    "email_artifact_type": "store",
+                    "client": "outlook",
+                    "account_hint": "alex@example.com",
+                    "file_path": "C:\\Users\\alex\\AppData\\Local\\Microsoft\\Outlook\\alex.ost",
+                    "file_name": "alex.ost",
+                    "url": "",
+                    "timestamp": "2026-05-15T10:00:00Z",
+                    "risk_score": 20,
+                    "confidence": "high",
+                    "raw": {"huge": "x" * 5000},
+                    "related_indicators": ["a", "b", "c"],
+                }
+            ],
+            "summary": {"total": 1},
+            "warnings": [],
+            "limitations": ["Mail content is not parsed."],
+        }
+
+    monkeypatch.setattr("app.services.email_artifacts.list_email_artifacts", fake)
+    session = RecordingSession(hosts=[FakeHost("id-1", "WS01")])
+
+    result = tools_module.tool_list_email_artifacts(session, "case-1", {"host": "WS01", "query": "outlook"})
+
+    assert captured["host"] == ["WS01"]
+    assert captured["q"] == "outlook"
+    assert result["summary"] == {"total": 1}
+    assert result["limitations"] == ["Mail content is not parsed."]
+    row = result["items"][0]
+    assert row["file_name"] == "alex.ost"
+    assert "raw" not in row
+    assert "related_indicators" not in row
+
+
+def test_list_email_artifacts_is_advertised_and_wired():
+    assert "list_email_artifacts" in tools_module.HANDLERS
+    spec = next(s for s in TOOL_SPECS if s["name"] == "list_email_artifacts")
+    assert set(spec["input_schema"]["properties"]) >= {"host", "query", "email_artifact_type", "client", "risk_min", "limit"}
+    assert spec["input_schema"]["required"] == []
+
+
+# --------------------------------------------------------------------------
+# search_memory_artifacts: a case with no memory evidence must say so, since
+# describe_case (the usual "does this case have X" check) does not cover the
+# memory index at all.
+# --------------------------------------------------------------------------
+
+
+def test_memory_artifacts_tool_reports_totals_and_facets(monkeypatch):
+    monkeypatch.setattr("app.services.investigation_memory.memory_evidences", lambda *a, **k: [object()])
+    monkeypatch.setattr(
+        "app.services.investigation_memory.memory_search_results",
+        lambda db, case_id, params: {
+            "total": 3,
+            "facets": {"artifact_family": {"processes": 3}},
+            "results": [{"id": "memory:1", "timestamp": "t", "title": "powershell.exe", "summary": "s", "artifact_type": "processes", "artifact_family": "processes", "parser": "volatility"}],
+            "warnings": [],
+        },
+    )
+
+    result = tools_module.tool_search_memory_artifacts(None, "case-1", {"artifact_family": "processes"})
+
+    assert result["total_matches"] == 3
+    assert result["facets"] == {"artifact_family": {"processes": 3}}
+    assert result["items"][0]["title"] == "powershell.exe"
+    assert not any("memory evidence" in warning for warning in result["warnings"])
+
+
+def test_memory_artifacts_tool_warns_when_the_case_has_no_memory_evidence(monkeypatch):
+    monkeypatch.setattr("app.services.investigation_memory.memory_evidences", lambda *a, **k: [])
+    monkeypatch.setattr(
+        "app.services.investigation_memory.memory_search_results",
+        lambda db, case_id, params: {"total": 0, "facets": {}, "results": [], "warnings": []},
+    )
+
+    result = tools_module.tool_search_memory_artifacts(None, "case-1", {})
+
+    assert result["total_matches"] == 0
+    assert any("no memory evidence" in warning.lower() for warning in result["warnings"])
+
+
+def test_search_memory_artifacts_is_advertised_and_wired():
+    assert "search_memory_artifacts" in tools_module.HANDLERS
+    spec = next(s for s in TOOL_SPECS if s["name"] == "search_memory_artifacts")
+    assert set(spec["input_schema"]["properties"]) >= {"query", "artifact_family", "process_name", "pid", "evidence_id", "limit"}
+    assert spec["input_schema"]["required"] == []
