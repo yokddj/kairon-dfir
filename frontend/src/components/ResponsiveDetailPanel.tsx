@@ -74,7 +74,7 @@ export default function ResponsiveDetailPanel({
   const shell = (
     <div
       data-testid={testId}
-      className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[28px] border border-line bg-panel/95 shadow-panel backdrop-blur ${contentClassName}`.trim()}
+      className={`flex min-h-0 min-w-0 flex-col overflow-hidden rounded-[28px] border border-line bg-panel/95 shadow-panel backdrop-blur ${mode === "drawer" ? "h-full" : ""} ${contentClassName}`.trim()}
     >
       <div className="sticky top-0 z-10 flex flex-wrap items-start justify-between gap-3 border-b border-line bg-panel/95 px-5 py-4 backdrop-blur">
         <div className="min-w-0 flex-1">
