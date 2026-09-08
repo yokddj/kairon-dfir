@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -315,6 +315,50 @@ describe("IncidentTimelinePage", () => {
     expect(screen.getByText("Needs Review")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: /Add to timeline/i }));
     fireEvent.click(screen.getByRole("button", { name: /Official Timeline/i }));
+    expect(await screen.findByText("PowerShell candidate")).toBeInTheDocument();
+  });
+
+  it("surfaces pending candidates with a badge and a shortcut into the tab", async () => {
+    // Suggested candidates were easy to miss -- nothing outside the tab itself hinted
+    // there was anything waiting to be reviewed. The tab now carries a count badge, and
+    // the summary card doubles as a shortcut into it.
+    getIncidentTimelineDraftMock.mockResolvedValueOnce({
+      case_id: "case-1",
+      timeline_id: "timeline-1",
+      query: {},
+      total: 1,
+      hosts: ["HOSTA"],
+      phases: ["execution"],
+      groups: {},
+      warnings: [],
+      no_mft_flood_default: true,
+      available_sources: ["command_history"],
+      phase_options: ["execution", "unknown"],
+      items: [
+        {
+          id: "candidate-1",
+          timestamp: "2024-03-22T11:30:00Z",
+          host: "HOSTA",
+          phase: "execution",
+          title: "PowerShell candidate",
+          summary: "powershell -ep bypass",
+          source: "command_history",
+          source_type: "command_history",
+          status: "candidate",
+          confidence: "medium",
+          risk_score: 80,
+          story_target_type: "candidate_process",
+          story_target_reason: "event link exists but exact process identity is uncertain",
+          story_primary_action: "Choose related process",
+        },
+      ],
+    });
+    renderPage();
+
+    const candidatesTab = await screen.findByRole("button", { name: /Suggested Candidates/i });
+    expect(within(candidatesTab).getByText("1")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Waiting to be promoted to the official timeline/i }));
     expect(await screen.findByText("PowerShell candidate")).toBeInTheDocument();
   });
 
