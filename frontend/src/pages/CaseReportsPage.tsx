@@ -118,7 +118,10 @@ export default function CaseReportsPage() {
         filters: {
           host: selectedHost || null,
           evidence_id: selectedEvidenceId || null,
-          include_statuses: ["confirmed", "reviewed", "new"],
+          // Only statuses an analyst has actually vetted -- "new" is whatever the
+          // correlation engine produced unreviewed, and "reviewed" is a retired
+          // status no longer reachable through the finding status transitions.
+          include_statuses: ["confirmed", "resolved"],
           detection_statuses: ["new", "reviewed", "confirmed"],
           detection_severities: ["medium", "high", "critical"],
           marking_statuses: ["suspicious", "important"],
