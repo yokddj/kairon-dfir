@@ -3,8 +3,8 @@ from sqlalchemy.orm import Session
 
 from app.core.database import get_db
 from app.core.opensearch import get_events_index, get_opensearch_client
-from app.schemas.event_marking import EventMarkingCreate, EventMarkingUpdate
-from app.services.event_markings import attach_marking_to_finding, delete_event_marking, list_event_markings, update_event_marking, upsert_event_marking
+from app.schemas.event_marking import EventMarkingBulkStatusUpdate, EventMarkingCreate, EventMarkingUpdate
+from app.services.event_markings import attach_marking_to_finding, bulk_set_marking_status, delete_event_marking, list_event_markings, update_event_marking, upsert_event_marking
 
 
 router = APIRouter(tags=["events"])
@@ -44,6 +44,11 @@ def clear_event_marking(marking_id: str, db: Session = Depends(get_db)) -> Respo
 @router.post("/api/event-markings/{marking_id}/attach-finding/{finding_id}")
 def attach_event_marking_to_finding(marking_id: str, finding_id: str, db: Session = Depends(get_db)) -> dict:
     return attach_marking_to_finding(db, marking_id, finding_id)
+
+
+@router.post("/api/cases/{case_id}/event-markings/bulk-status")
+def bulk_update_event_marking_status(case_id: str, payload: EventMarkingBulkStatusUpdate, db: Session = Depends(get_db)) -> list[dict]:
+    return bulk_set_marking_status(db, case_id, payload)
 
 
 @router.get("/api/cases/{case_id}/event-markings")

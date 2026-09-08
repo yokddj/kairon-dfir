@@ -2988,7 +2988,7 @@ export type SearchV2Result = {
   raw?: Record<string, unknown>;
 };
 
-export type EventMarkingStatus = "unreviewed" | "reviewed" | "suspicious" | "important" | "false_positive";
+export type EventMarkingStatus = "unreviewed" | "reviewed" | "suspicious" | "important" | "false_positive" | "not_relevant";
 
 export type EventMarking = {
   id: string;
@@ -7451,6 +7451,20 @@ export const api = {
   updateEventMarking: (markingId: string, payload: Partial<Pick<EventMarking, "status" | "labels" | "note" | "finding_id">>) =>
     request<EventMarking>(`/event-markings/${markingId}`, { method: "PATCH", body: JSON.stringify(payload) }),
   deleteEventMarking: (markingId: string) => request<void>(`/event-markings/${markingId}`, { method: "DELETE" }),
+  bulkSetEventMarkingStatus: (
+    caseId: string,
+    payload: {
+      status: EventMarkingStatus;
+      items: Array<{
+        event_id: string;
+        evidence_id?: string | null;
+        stable_event_id?: string | null;
+        artifact_type?: string | null;
+        timestamp?: string | null;
+        host?: string | null;
+      }>;
+    },
+  ) => request<EventMarking[]>(`/cases/${caseId}/event-markings/bulk-status`, { method: "POST", body: JSON.stringify(payload) }),
   listEventMarkings: (caseId: string, params?: { status?: string; has_note?: boolean; finding_id?: string }) => {
     const query = new URLSearchParams();
     if (params?.status) query.set("status", params.status);
