@@ -209,6 +209,24 @@ def test_create_draft_auto_selects_high_findings_and_key_events(monkeypatch: pyt
     assert report["selected_process_chain_ids"] == ["finding-1"]
 
 
+def test_default_filters_exclude_unreviewed_findings_from_reports(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A report built with no explicit filters (the "New report" default) must reflect
+    # only what an analyst has actually confirmed -- not whatever the correlation
+    # engine produced unreviewed ("new"), and not the retired "reviewed" status.
+    case = Case(id="case-1", name="Movistar", status="open")
+    findings = [
+        _finding("finding-1", title="Office spawned PowerShell", severity=FindingSeverity.high, status=FindingStatus.confirmed),
+        _finding("finding-2", title="Unreviewed correlation hit", severity=FindingSeverity.high, status=FindingStatus.new),
+    ]
+    db = _FakeDb(case=case, findings=findings, bookmarks=[])
+    monkeypatch.setattr(report_service, "fetch_event_by_id", lambda *args, **kwargs: _event_payload())
+
+    report = report_service.create_case_report_draft(db, "case-1", {"auto_select": True})
+
+    assert report["selected_finding_ids"] == ["finding-1"]
+    assert report["filters"]["include_statuses"] == ["confirmed", "resolved"]
+
+
 def test_create_draft_uses_generic_title_when_case_name_missing() -> None:
     case = Case(id="12345678-1234-4000-8000-abcdefabcdef", name="", status="open")
     db = _FakeDb(case=case, findings=[], bookmarks=[])
