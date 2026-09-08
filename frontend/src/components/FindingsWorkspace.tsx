@@ -1032,7 +1032,7 @@ export default function FindingsWorkspace({ caseId, evidenceId = "", host = "", 
       {filteredFindings.length ? <PaginationControls page={page} totalPages={findingsQuery.data?.total_pages ?? 0} total={findingsQuery.data?.total ?? filteredFindings.length} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={setPageSize} /> : null}
 
       {filteredFindings.length && selectedFinding ? (
-        <ResponsiveDetailPanel open mode="drawer" widthClass="h-full w-full sm:w-[88vw] xl:w-[82vw] 2xl:w-[78vw]" heading="Finding detail" subheading="Wide investigation detail aligned with Search, Timeline and Detections." onClose={() => setSelectedFindingId(null)}>
+        <ResponsiveDetailPanel open mode="stacked" heading="Finding detail" subheading="Wide investigation detail aligned with Search, Timeline and Detections." onClose={() => setSelectedFindingId(null)}>
           {findingDetailContent}
         </ResponsiveDetailPanel>
       ) : null}

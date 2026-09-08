@@ -1169,8 +1169,7 @@ export default function Detections() {
       {selectedDetection ? (
         <ResponsiveDetailPanel
           open
-          mode="drawer"
-          widthClass="h-full w-full sm:w-[88vw] xl:w-[82vw] 2xl:w-[78vw]"
+          mode="stacked"
           heading="Detection detail"
           subheading="Wide investigation detail aligned with Search, Findings and Timeline."
           onClose={() => setSelectedDetectionId(null)}
