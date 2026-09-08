@@ -38,13 +38,9 @@ def build_case_context(db: Session, case_id: str) -> str:
         lines.append(f"- Analyst notes: {_clip(case.case_notes, 800)}")
 
     lines += ["", "### Hosts"]
-    hosts = (
-        db.query(CaseHost)
-        .filter(CaseHost.case_id == case_id)
-        .order_by(CaseHost.event_count.desc())
-        .limit(MAX_HOSTS)
-        .all()
-    )
+    host_query = db.query(CaseHost).filter(CaseHost.case_id == case_id)
+    host_total = host_query.count()
+    hosts = host_query.order_by(CaseHost.event_count.desc()).limit(MAX_HOSTS).all()
     if hosts:
         for host in hosts:
             lines.append(
@@ -52,17 +48,23 @@ def build_case_context(db: Session, case_id: str) -> str:
                 f"evidence items: {host.evidence_count}, first seen: {host.first_seen or 'unknown'}, "
                 f"last seen: {host.last_seen or 'unknown'})"
             )
+        if host_total > len(hosts):
+            lines.append(_truncation_note(len(hosts), host_total, "hosts", "by event count"))
     else:
         lines.append("- No hosts identified yet.")
 
     lines += ["", "### Evidence"]
-    evidences = db.query(Evidence).filter(Evidence.case_id == case_id).limit(MAX_EVIDENCE).all()
+    evidence_query = db.query(Evidence).filter(Evidence.case_id == case_id)
+    evidence_total = evidence_query.count()
+    evidences = evidence_query.limit(MAX_EVIDENCE).all()
     if evidences:
         for item in evidences:
             lines.append(
                 f"- {item.original_filename} "
                 f"[type: {_enum_value(item.evidence_type)}, ingest: {_enum_value(item.ingest_status)}]"
             )
+        if evidence_total > len(evidences):
+            lines.append(_truncation_note(len(evidences), evidence_total, "evidence items", None))
     else:
         lines.append("- No evidence uploaded yet.")
 
@@ -70,23 +72,30 @@ def build_case_context(db: Session, case_id: str) -> str:
     lines.append(f"- Parsed artifacts in this case: {artifact_count}")
 
     lines += ["", "### Findings"]
-    findings = (
-        db.query(Finding)
-        .filter(Finding.case_id == case_id)
-        .order_by(Finding.created_at.desc())
-        .limit(MAX_FINDINGS)
-        .all()
-    )
+    finding_query = db.query(Finding).filter(Finding.case_id == case_id)
+    finding_total = finding_query.count()
+    findings = finding_query.order_by(Finding.created_at.desc()).limit(MAX_FINDINGS).all()
     if findings:
         for finding in findings:
             lines.append(
                 f"- [{_enum_value(finding.severity)}/{_enum_value(finding.status)}] {finding.title}"
                 + (f" — {_clip(finding.description, 200)}" if finding.description else "")
             )
+        if finding_total > len(findings):
+            lines.append(_truncation_note(len(findings), finding_total, "findings", "most recent"))
     else:
         lines.append("- No findings recorded yet.")
 
     return "\n".join(lines)
+
+
+def _truncation_note(shown: int, total: int, noun: str, ordering: str | None) -> str:
+    # The model must not present this briefing as complete case coverage when it
+    # isn't -- it should say so, and prefer a targeted tool call (e.g. searching
+    # for a specific host by name) over assuming an item absent from this list
+    # doesn't exist.
+    basis = f" ({ordering})" if ordering else ""
+    return f"- Note: showing {shown} of {total} {noun}{basis}. Others exist but are not listed here — ask about a specific one by name/id rather than assuming absence."
 
 
 def _enum_value(value: object) -> str:

@@ -5,7 +5,13 @@ from __future__ import annotations
 import json
 
 import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
+from app.core.database import Base
+from app.models.case import Case
+from app.models.case_host import CaseHost
+from app.models.detection_result import DetectionResult
 from app.services.ai import tools as tools_module
 from app.services.ai.tools import (
     MAX_RESULT_CHARS,
@@ -1047,4 +1053,107 @@ def test_get_process_tree_is_advertised_and_wired():
     assert "get_process_tree" in tools_module.HANDLERS
     spec = next(s for s in tools_module.TOOL_SPECS if s["name"] == "get_process_tree")
     assert set(spec["input_schema"]["properties"]) >= {"pid", "process_guid", "source_event_id", "query", "host"}
+    assert spec["input_schema"]["required"] == []
+
+
+# --------------------------------------------------------------------------
+# list_detections: raw rule-engine hits, distinct from list_findings (what an
+# analyst concluded). Uses a real in-memory session -- the tool builds its own
+# SQLAlchemy filters inline rather than delegating to a service, so a fake
+# query stub would just test the fake, not the filter logic.
+# --------------------------------------------------------------------------
+
+
+DETECTIONS_CASE_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+DETECTIONS_HOST_1_ID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+DETECTIONS_HOST_2_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+
+
+def _sqlite_session():
+    engine = create_engine("sqlite:///:memory:", future=True)
+    Base.metadata.create_all(bind=engine)
+    Session = sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False, future=True)
+    return Session()
+
+
+def _detection(**overrides) -> DetectionResult:
+    base = dict(
+        case_id=DETECTIONS_CASE_ID,
+        engine="sigma",
+        rule_name="Suspicious PowerShell Download",
+        severity="high",
+        status="new",
+        target_type="event",
+        host_name="WS01",
+        message="powershell.exe downloaded a file",
+        risk_score=80,
+    )
+    base.update(overrides)
+    return DetectionResult(**base)
+
+
+def test_list_detections_reports_totals_and_projects_rows():
+    db = _sqlite_session()
+    db.add(Case(id=DETECTIONS_CASE_ID, name="Case"))
+    db.add(_detection(rule_name="Rule A", severity="high"))
+    db.add(_detection(rule_name="Rule B", severity="medium"))
+    db.commit()
+
+    result = tools_module.tool_list_detections(db, DETECTIONS_CASE_ID, {})
+
+    assert result["total_matches"] == 2
+    assert result["by_severity_in_sample"] == {"high": 1, "medium": 1}
+    names = {row["rule_name"] for row in result["detections"]}
+    assert names == {"Rule A", "Rule B"}
+
+
+def test_list_detections_excludes_deleted_and_stale():
+    from datetime import UTC, datetime
+
+    db = _sqlite_session()
+    db.add(Case(id=DETECTIONS_CASE_ID, name="Case"))
+    db.add(_detection(rule_name="Live", status="new"))
+    db.add(_detection(rule_name="Stale", status="stale"))
+    db.add(_detection(rule_name="Deleted", deleted_at=datetime(2026, 1, 1, tzinfo=UTC)))
+    db.commit()
+
+    result = tools_module.tool_list_detections(db, DETECTIONS_CASE_ID, {})
+
+    assert result["total_matches"] == 1
+    assert result["detections"][0]["rule_name"] == "Live"
+
+
+def test_list_detections_filters_by_host_and_severity():
+    db = _sqlite_session()
+    db.add(Case(id=DETECTIONS_CASE_ID, name="Case"))
+    db.add(CaseHost(id=DETECTIONS_HOST_1_ID, case_id=DETECTIONS_CASE_ID, canonical_name="ws01", display_name="WS01"))
+    db.add(CaseHost(id=DETECTIONS_HOST_2_ID, case_id=DETECTIONS_CASE_ID, canonical_name="ws02", display_name="WS02"))
+    db.add(_detection(rule_name="On WS01", host_name="WS01", severity="critical"))
+    db.add(_detection(rule_name="On WS02", host_name="WS02", severity="critical"))
+    db.add(_detection(rule_name="Low severity on WS01", host_name="WS01", severity="low"))
+    db.commit()
+
+    result = tools_module.tool_list_detections(db, DETECTIONS_CASE_ID, {"host": "WS01", "severity": "critical"})
+
+    assert result["total_matches"] == 1
+    assert result["detections"][0]["rule_name"] == "On WS01"
+
+
+def test_list_detections_free_text_matches_message_and_rule_name():
+    db = _sqlite_session()
+    db.add(Case(id=DETECTIONS_CASE_ID, name="Case"))
+    db.add(_detection(rule_name="Encoded Command", message="base64 encoded payload"))
+    db.add(_detection(rule_name="Unrelated Rule", message="nothing notable"))
+    db.commit()
+
+    result = tools_module.tool_list_detections(db, DETECTIONS_CASE_ID, {"query": "encoded"})
+
+    assert result["total_matches"] == 1
+    assert result["detections"][0]["rule_name"] == "Encoded Command"
+
+
+def test_list_detections_is_advertised_and_wired():
+    assert "list_detections" in tools_module.HANDLERS
+    spec = next(s for s in TOOL_SPECS if s["name"] == "list_detections")
+    assert set(spec["input_schema"]["properties"]) >= {"host", "severity", "status", "rule_name", "query", "limit"}
     assert spec["input_schema"]["required"] == []

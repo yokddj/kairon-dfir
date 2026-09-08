@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Callable
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.case_host import CaseHost
@@ -289,6 +290,83 @@ def tool_list_findings(db: Session, case_id: str, args: dict) -> dict:
         "total_matches": total,
         "findings": _rows(rows, FINDING_KEYS, limit),
         "warnings": warnings or [],
+    }
+
+
+DETECTION_KEYS = (
+    "id", "rule_name", "rule_title", "severity", "status", "host_name",
+    "target_type", "target_path", "matched_at", "message", "risk_score",
+    "mitre", "related_finding_ids",
+)
+
+
+def _detection_row(item: Any) -> dict:
+    return {
+        "id": item.id,
+        "rule_name": item.rule_name,
+        "rule_title": item.rule_title,
+        "severity": item.severity,
+        "status": item.status,
+        "host_name": item.host_name,
+        "target_type": item.target_type,
+        "target_path": item.target_path,
+        "matched_at": item.matched_at,
+        "message": item.message,
+        "risk_score": item.risk_score,
+        "mitre": item.mitre,
+        "related_finding_ids": item.related_finding_ids,
+    }
+
+
+def tool_list_detections(db: Session, case_id: str, args: dict) -> dict:
+    """Sigma/rule-engine hits already computed for this case -- the product's own detector output.
+
+    Deliberately separate from list_findings: a detection is a raw rule match, before
+    any analyst has looked at it; a finding is what an analyst (or the correlation
+    engine, less directly) concluded matters. Use this to answer "did any rule fire
+    on X" -- use list_findings for "what has already been concluded".
+    """
+    from app.models.detection_result import DetectionResult
+
+    limit = _limit(args.get("limit"))
+    host = _resolve_host(db, case_id, args.get("host") or args.get("host_id"))
+    query = db.query(DetectionResult).filter(
+        DetectionResult.case_id == case_id,
+        DetectionResult.deleted_at.is_(None),
+        DetectionResult.status.notin_(["stale", "stale_event_link"]),
+    )
+    if host:
+        query = query.filter(DetectionResult.host_name == host.display_name)
+    severity = str(args.get("severity") or "").strip().lower()
+    if severity:
+        query = query.filter(DetectionResult.severity.ilike(severity))
+    status_filter = str(args.get("status") or "").strip().lower()
+    if status_filter:
+        query = query.filter(DetectionResult.status.ilike(status_filter))
+    rule_name = str(args.get("rule_name") or "").strip()
+    if rule_name:
+        query = query.filter(DetectionResult.rule_name.ilike(f"%{rule_name}%"))
+    text = str(args.get("query") or "").strip()
+    if text:
+        like = f"%{text}%"
+        query = query.filter(
+            or_(
+                DetectionResult.message.ilike(like),
+                DetectionResult.target_path.ilike(like),
+                DetectionResult.rule_name.ilike(like),
+            )
+        )
+
+    total = query.count()
+    rows = query.order_by(DetectionResult.risk_score.desc(), DetectionResult.created_at.desc()).limit(limit).all()
+    severity_counts: dict[str, int] = {}
+    for item in rows:
+        key = (item.severity or "unknown").lower()
+        severity_counts[key] = severity_counts.get(key, 0) + 1
+    return {
+        "total_matches": total,
+        "by_severity_in_sample": severity_counts,
+        "detections": _rows([_detection_row(item) for item in rows], DETECTION_KEYS, limit),
     }
 
 
@@ -962,6 +1040,28 @@ TOOL_SPECS: list[dict] = [
         },
     },
     {
+        "name": "list_detections",
+        "description": (
+            "List rule-engine detections (e.g. Sigma) already computed for this case -- raw "
+            "rule matches, before any analyst has reviewed them. Different from list_findings: "
+            "a detection is what a rule flagged; a finding is what an analyst (or the "
+            "correlation engine) concluded matters. Use this for 'did any rule fire on X', "
+            "and list_findings for 'what has already been concluded'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "host": {"type": "string", "description": "Restrict to one host. A name or a host_id both work."},
+                "severity": {"type": "string", "description": "critical, high, medium, low or info."},
+                "status": {"type": "string", "description": "Detection status filter, e.g. new, triaged, dismissed."},
+                "rule_name": {"type": "string", "description": "Filter by (part of) the rule's name."},
+                "query": {"type": "string", "description": "Free-text filter over the match message, target path and rule name."},
+                "limit": {"type": "integer", "description": f"Max detections, 1-{MAX_ROWS_HARD}."},
+            },
+            "required": [],
+        },
+    },
+    {
         "name": "get_timeline",
         "description": (
             "Read a window of the case timeline in chronological order. Use it to see what "
@@ -991,6 +1091,7 @@ HANDLERS: dict[str, Callable[[Session, str, dict], dict]] = {
     "search_events": tool_search_events,
     "list_persistence": tool_list_persistence,
     "list_findings": tool_list_findings,
+    "list_detections": tool_list_detections,
     "get_timeline": tool_get_timeline,
 }
 
