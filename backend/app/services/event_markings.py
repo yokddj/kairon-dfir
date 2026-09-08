@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from app.core.opensearch import fetch_event_by_id
 from app.models.event_marking import EventMarking
 from app.models.finding import Finding
-from app.schemas.event_marking import EVENT_MARKING_STATUSES, EventMarkingCreate, EventMarkingUpdate
+from app.schemas.event_marking import EVENT_MARKING_STATUSES, EventMarkingBulkStatusUpdate, EventMarkingCreate, EventMarkingUpdate
 
 
 def _parse_timestamp(value: object | None) -> datetime | None:
@@ -133,6 +133,45 @@ def update_event_marking(db: Session, marking_id: str, payload: EventMarkingUpda
         attach_marking_to_finding(db, marking.id, marking.finding_id)
         db.refresh(marking)
     return serialize_marking(marking)
+
+
+def bulk_set_marking_status(db: Session, case_id: str, payload: EventMarkingBulkStatusUpdate) -> list[dict[str, Any]]:
+    """Set the same status on many events in one transaction.
+
+    Unlike upsert_event_marking, this never calls out to OpenSearch: the
+    caller (the timeline table, which already has every field in memory from
+    the rows it just rendered) supplies host/artifact_type/timestamp/etc.
+    directly, so hiding a page of noisy rows doesn't cost one ES round trip
+    per row.
+    """
+    status = _validate_status(payload.status)
+    if not payload.items:
+        return []
+    event_ids = [item.event_id for item in payload.items]
+    existing = {
+        marking.event_id: marking
+        for marking in db.query(EventMarking).filter(EventMarking.case_id == case_id, EventMarking.event_id.in_(event_ids)).all()
+    }
+    created_by = str(payload.created_by or "analyst").strip() or "analyst"
+    touched: list[EventMarking] = []
+    for item in payload.items:
+        marking = existing.get(item.event_id)
+        if not marking:
+            marking = EventMarking(case_id=case_id, event_id=item.event_id)
+        marking.evidence_id = item.evidence_id or marking.evidence_id
+        marking.search_doc_id = marking.search_doc_id or item.event_id
+        marking.stable_event_id = item.stable_event_id or marking.stable_event_id
+        marking.artifact_type = item.artifact_type or marking.artifact_type
+        marking.timestamp = _parse_timestamp(item.timestamp) or marking.timestamp
+        marking.host = item.host or marking.host
+        marking.status = status
+        marking.created_by = marking.created_by or created_by
+        db.add(marking)
+        touched.append(marking)
+    db.commit()
+    for marking in touched:
+        db.refresh(marking)
+    return [serialize_marking(marking) for marking in touched]
 
 
 def delete_event_marking(db: Session, marking_id: str) -> None:
