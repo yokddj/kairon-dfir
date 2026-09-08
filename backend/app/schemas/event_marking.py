@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-EVENT_MARKING_STATUSES = {"unreviewed", "reviewed", "suspicious", "important", "false_positive"}
+EVENT_MARKING_STATUSES = {"unreviewed", "reviewed", "suspicious", "important", "false_positive", "not_relevant"}
 
 
 class EventMarkingCreate(BaseModel):
@@ -26,6 +26,21 @@ class EventMarkingUpdate(BaseModel):
     labels: list[str] | None = None
     note: str | None = None
     finding_id: str | None = None
+
+
+class EventMarkingBulkItem(BaseModel):
+    event_id: str
+    evidence_id: str | None = None
+    stable_event_id: str | None = None
+    artifact_type: str | None = None
+    timestamp: datetime | None = None
+    host: str | None = None
+
+
+class EventMarkingBulkStatusUpdate(BaseModel):
+    items: list[EventMarkingBulkItem]
+    status: str
+    created_by: str = "analyst"
 
 
 class EventMarkingRead(BaseModel):

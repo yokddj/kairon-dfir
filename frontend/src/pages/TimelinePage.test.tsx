@@ -11,6 +11,9 @@ const listTimelineKeyEventsMock = vi.fn();
 const createTimelineKeyEventMock = vi.fn();
 const getTimelineAroundEventMock = vi.fn();
 const getTimelineAroundFindingMock = vi.fn();
+const listEventMarkingsMock = vi.fn();
+const bulkSetEventMarkingStatusMock = vi.fn();
+const deleteEventMarkingMock = vi.fn();
 
 vi.mock("../api/client", () => ({
   api: {
@@ -21,6 +24,9 @@ vi.mock("../api/client", () => ({
     getTimelineAroundEvent: (...args: unknown[]) => getTimelineAroundEventMock(...args),
     getTimelineAroundFinding: (...args: unknown[]) => getTimelineAroundFindingMock(...args),
     exportTimelineKeyEventsMarkdown: vi.fn().mockResolvedValue("# export"),
+    listEventMarkings: (...args: unknown[]) => listEventMarkingsMock(...args),
+    bulkSetEventMarkingStatus: (...args: unknown[]) => bulkSetEventMarkingStatusMock(...args),
+    deleteEventMarking: (...args: unknown[]) => deleteEventMarkingMock(...args),
   },
 }));
 
@@ -110,6 +116,9 @@ describe("TimelinePage", () => {
       ],
     });
     listTimelineKeyEventsMock.mockResolvedValue([]);
+    listEventMarkingsMock.mockResolvedValue([]);
+    bulkSetEventMarkingStatusMock.mockResolvedValue([]);
+    deleteEventMarkingMock.mockResolvedValue(undefined);
     createTimelineKeyEventMock.mockResolvedValue({
       id: "bookmark-1",
       case_id: "case-1",
@@ -325,5 +334,45 @@ describe("TimelinePage", () => {
     renderPage("/cases/case-1/timeline?mode=investigation&finding_id=finding-1");
     await waitFor(() => expect(getTimelineAroundFindingMock).toHaveBeenCalledWith("case-1", "finding-1", expect.objectContaining({ window: "30m" })));
     expect(screen.getByTestId("timeline-focus-chips")).toHaveTextContent(/Around finding/i);
+  });
+
+  it("selects rows and hides them via a reversible marking, not a real delete", async () => {
+    // A page of noisy Prefetch/Amcache spam has no way to be cleared out of the
+    // way today -- selecting rows and hiding them (via a marking the analyst can
+    // undo, never a real delete of parsed evidence) is the fix.
+    renderPage();
+    await screen.findByText("WINWORD.EXE -> powershell.exe");
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /Select Process created/i }));
+    expect(await screen.findByTestId("timeline-bulk-bar")).toHaveTextContent("1 selected");
+
+    fireEvent.click(screen.getByRole("button", { name: /Hide 1/i }));
+    await waitFor(() =>
+      expect(bulkSetEventMarkingStatusMock).toHaveBeenCalledWith(
+        "case-1",
+        expect.objectContaining({ status: "not_relevant", items: [expect.objectContaining({ event_id: "evt-1" })] }),
+      ),
+    );
+    await waitFor(() => expect(screen.queryByTestId("timeline-bulk-bar")).not.toBeInTheDocument());
+  });
+
+  it("excludes an already-hidden event from the default view, and shows it back on demand", async () => {
+    listEventMarkingsMock.mockResolvedValue([{ id: "marking-1", case_id: "case-1", event_id: "evt-1", status: "not_relevant", labels: [] }]);
+    renderPage();
+    await screen.findByText("Correlated finding");
+    expect(screen.queryByText("WINWORD.EXE -> powershell.exe")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Show hidden/i }));
+    expect(await screen.findByText("WINWORD.EXE -> powershell.exe")).toBeInTheDocument();
+    expect(screen.getByTestId("timeline-row-hidden")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /Unhide/i }));
+    await waitFor(() => expect(deleteEventMarkingMock).toHaveBeenCalledWith("marking-1"));
+  });
+
+  it("does not offer a checkbox for non-event timeline rows", async () => {
+    renderPage();
+    await screen.findByText("Correlated finding");
+    expect(screen.queryByRole("checkbox", { name: /Select Office spawned PowerShell/i })).not.toBeInTheDocument();
   });
 });
