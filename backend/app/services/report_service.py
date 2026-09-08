@@ -92,7 +92,10 @@ DEFAULT_ANALYST_NOTES = {
 DEFAULT_FILTERS = {
     "host": None,
     "evidence_id": None,
-    "include_statuses": ["confirmed", "reviewed", "new"],
+    # Only statuses an analyst has actually vetted -- "new" is whatever the
+    # correlation engine produced unreviewed, and "reviewed" is a retired
+    # status no longer reachable through the finding status transitions.
+    "include_statuses": ["confirmed", "resolved"],
     "min_severity": "medium",
     "time_from": None,
     "time_to": None,
