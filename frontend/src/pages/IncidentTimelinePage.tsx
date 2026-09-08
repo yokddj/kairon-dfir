@@ -391,10 +391,19 @@ export default function IncidentTimelinePage() {
                   <p className="text-xs uppercase tracking-[0.18em] text-muted">Official</p>
                   <p className="mt-1 text-2xl font-semibold text-ink">{officialItems.length}</p>
                 </div>
-                <div className="rounded-2xl border border-line bg-panel/70 p-4">
-                  <p className="text-xs uppercase tracking-[0.18em] text-muted">Candidates</p>
-                  <p className="mt-1 text-2xl font-semibold text-ink">{candidateItems.length}</p>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setActiveTab("candidates")}
+                  className={`rounded-2xl border p-4 text-left transition-colors ${
+                    candidateItems.length > 0
+                      ? "border-amber-400/40 bg-amber-500/10 hover:bg-amber-500/15"
+                      : "border-line bg-panel/70"
+                  }`}
+                >
+                  <p className={`text-xs uppercase tracking-[0.18em] ${candidateItems.length > 0 ? "text-amber-100/80" : "text-muted"}`}>Candidates</p>
+                  <p className={`mt-1 text-2xl font-semibold ${candidateItems.length > 0 ? "text-amber-100" : "text-ink"}`}>{candidateItems.length}</p>
+                  {candidateItems.length > 0 ? <p className="mt-1 text-xs text-amber-100/80">Waiting to be promoted to the official timeline</p> : null}
+                </button>
                 <div className="rounded-2xl border border-line bg-panel/70 p-4">
                   <p className="text-xs uppercase tracking-[0.18em] text-muted">Needs review</p>
                   <p className="mt-1 text-2xl font-semibold text-ink">{items.filter((item) => item.status === "needs_review").length}</p>
@@ -410,9 +419,12 @@ export default function IncidentTimelinePage() {
                     key={tab.id}
                     type="button"
                     onClick={() => setActiveTab(tab.id)}
-                    className={`rounded-xl px-3 py-2 text-sm ${activeTab === tab.id ? "bg-accent/15 text-accent" : "text-muted hover:bg-abyss/70"}`}
+                    className={`flex items-center gap-2 rounded-xl px-3 py-2 text-sm ${activeTab === tab.id ? "bg-accent/15 text-accent" : "text-muted hover:bg-abyss/70"}`}
                   >
                     {tab.label}
+                    {tab.id === "candidates" && candidateItems.length > 0 ? (
+                      <span className="rounded-full bg-amber-500/20 px-2 py-0.5 text-xs font-semibold text-amber-100">{candidateItems.length}</span>
+                    ) : null}
                   </button>
                 ))}
               </div>
