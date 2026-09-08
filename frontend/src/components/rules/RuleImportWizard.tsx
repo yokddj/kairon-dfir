@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, type RuleImportRun } from "../../api/client";
@@ -15,7 +15,10 @@ import { api, type RuleImportRun } from "../../api/client";
  */
 
 const ARCHIVE_SUFFIXES = [".zip", ".7z", ".tar", ".gz", ".tgz", ".bz2", ".rar"];
-const ACTIVE_STATUSES = new Set(["queued", "running", "pending"]);
+// Must mirror every non-terminal value of the backend's RuleImportRunStatus enum
+// (backend/app/models/rule_import_run.py) -- the run stays "in progress" in this
+// wizard for exactly these statuses.
+const ACTIVE_STATUSES = new Set(["queued", "uploading", "extracting", "parsing", "validating", "compiling", "saving"]);
 
 type Step = "choose" | "importing" | "review";
 
@@ -100,6 +103,15 @@ export function RuleImportWizard({ open, onClose, engine = "sigma", namespace, c
   if (step === "importing" && finished) {
     setStep("review");
   }
+
+  // The rule count shown elsewhere (e.g. the rules panel) is only accurate once the
+  // background import actually finishes -- the earlier invalidation on upload fires
+  // before parsing has run and just reflects the pre-import total.
+  useEffect(() => {
+    if (finished && importRunId) {
+      void queryClient.invalidateQueries({ queryKey: ["rules"] });
+    }
+  }, [finished, importRunId, queryClient]);
 
   const breakdown = useMemo(() => unsupportedBreakdown(run), [run]);
   const evaluable = Math.max((run?.imported_count ?? 0) - (run?.unsupported_count ?? 0), 0);
