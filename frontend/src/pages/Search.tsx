@@ -15,6 +15,7 @@ import { NumberField, SelectField, TextField } from "../components/FilterField";
 import { buildFindingPrefillFromArtifact, type FindingPrefill } from "../lib/findingPrefill";
 import { artifactLabel } from "../lib/artifactRegistry";
 import EmptyState from "../components/EmptyState";
+import NaturalLanguageSearchToggle from "../components/ai/NaturalLanguageSearchToggle";
 
 type Scope = "events" | "findings" | "all";
 type SortValue = "timestamp_desc" | "timestamp_asc" | "risk_desc" | "risk_asc" | "relevance";
@@ -2250,6 +2251,17 @@ export default function Search() {
               </button>
               <span>Flags like -ep and -nop are treated as text. Field syntax is optional.</span>
             </div>
+            {resolvedCaseId ? (
+              <div className="mt-2">
+                <NaturalLanguageSearchToggle
+                  caseId={resolvedCaseId}
+                  // Same effect as if the analyst had typed it: goes through the existing
+                  // debounce (see debouncedQuery) so it doesn't race that effect's own
+                  // sync back to the URL.
+                  onTranslated={setQueryInput}
+                />
+              </div>
+            ) : null}
             {parsedSearchError?.inline ? (
               <div data-testid="search-query-error" className="mt-3 rounded-2xl border border-danger/40 bg-danger/10 p-3 text-sm text-danger">
                 <p>{parsedSearchError.message}</p>

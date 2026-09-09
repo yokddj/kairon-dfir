@@ -284,6 +284,72 @@ def test_chat_requires_an_existing_case(monkeypatch):
     assert response.status_code == 404
 
 
+# --- the nl-search route ---------------------------------------------------
+# A single completion, not a conversation: the analyst lands back in the
+# normal Search page with an editable query, so this is tested separately
+# from the chat/tool-loop machinery above.
+
+
+class NlSearchStubProvider:
+    def __init__(self, credentials):
+        self.credentials = credentials
+
+    def stream_chat(self, *, system, messages, tools=None):
+        NlSearchStubProvider.last_system = system
+        yield StreamEvent(type="text", text=NlSearchStubProvider.answer)
+
+    def list_models(self):
+        return ["stub-model"]
+
+    def tool_turn_messages(self, calls, results):
+        return []
+
+
+def _stub_nl_search(monkeypatch, answer: str, described: dict | None = None):
+    NlSearchStubProvider.answer = answer
+    monkeypatch.setattr("app.services.ai.nl_query.build_provider", lambda creds: NlSearchStubProvider(creds))
+    monkeypatch.setattr(
+        "app.services.ai.nl_query.tool_describe_case",
+        lambda db, case_id, args: described
+        if described is not None
+        else {"indexed": True, "artifact_types": {"process_execution": 3}, "hosts": {"WS01": 3}, "event_types": {}},
+    )
+
+
+def test_nl_search_translates_a_question_into_a_query(monkeypatch):
+    db = _configured_db(monkeypatch)
+    _stub_nl_search(monkeypatch, "process.name:powershell.exe host.name:WS01")
+
+    response = _client(db).post(
+        "/api/cases/case-1/ai/nl-search",
+        json={"question": "what did powershell do on WS01"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"query": "process.name:powershell.exe host.name:WS01"}
+
+
+def test_nl_search_does_not_persist_a_conversation(monkeypatch):
+    """Unlike /ai/chat, this never touches conversation history."""
+    db = _configured_db(monkeypatch)
+    _stub_nl_search(monkeypatch, "risk_score>=70")
+    _client(db).post("/api/cases/case-1/ai/nl-search", json={"question": "high risk activity"})
+    assert db.other == []
+
+
+def test_nl_search_is_rejected_when_the_assistant_is_disabled(monkeypatch):
+    db = _configured_db(monkeypatch)
+    ai_config.update_general(db, enabled=False)
+    response = _client(db).post("/api/cases/case-1/ai/nl-search", json={"question": "anything"})
+    assert response.status_code == 409
+
+
+def test_nl_search_requires_an_existing_case(monkeypatch):
+    db = _configured_db(monkeypatch)
+    response = _client(db).post("/api/cases/does-not-exist/ai/nl-search", json={"question": "anything"})
+    assert response.status_code == 404
+
+
 def test_status_endpoint_reports_hosting_mode(monkeypatch):
     db = _configured_db(monkeypatch)
     body = _client(db).get("/api/ai/status").json()

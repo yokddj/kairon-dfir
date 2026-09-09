@@ -36,3 +36,8 @@ class AIChatRequest(BaseModel):
     conversation_id: str | None = None
     # The host the analyst is looking at, so "this host" resolves without asking.
     active_host: str | None = None
+
+
+class AINaturalLanguageSearchRequest(BaseModel):
+    question: str
+    provider: str | None = None

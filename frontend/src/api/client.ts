@@ -5789,6 +5789,8 @@ export const api = {
   listAiProviderModels: (provider: string, payload: AiProviderProbe) =>
     request<AiProviderModelsResponse>(`/ai/providers/${provider}/models`, { method: "POST", body: JSON.stringify(payload) }),
   getAiStatus: () => request<AiStatusResponse>("/ai/status"),
+  translateNaturalLanguageSearch: (caseId: string, question: string, provider?: string | null) =>
+    request<{ query: string }>(`/cases/${caseId}/ai/nl-search`, { method: "POST", body: JSON.stringify({ question, provider: provider ?? null }) }),
   listCases: (params?: CaseListParams | { queryKey?: unknown }) => request<DfirCase[]>(buildArtifactQuery("/cases", params && "queryKey" in params ? undefined : params)),
   createCase: (payload: Partial<DfirCase>) => request<DfirCase>("/cases", { method: "POST", body: JSON.stringify(payload) }),
   getCase: (caseId: string) => request<DfirCase>(`/cases/${caseId}`),

@@ -15,7 +15,7 @@ from app.core.database import get_db
 from app.models.ai_conversation import AiConversation
 from app.models.case import Case
 from app.models.user import User
-from app.schemas.ai import AIChatRequest, AIGeneralUpdate, AIProviderProbe, AIProviderUpdate
+from app.schemas.ai import AIChatRequest, AIGeneralUpdate, AINaturalLanguageSearchRequest, AIProviderProbe, AIProviderUpdate
 from app.services.ai.chat import ChatValidationError, stream_answer
 from app.services.ai.config import (
     PROVIDERS,
@@ -29,6 +29,7 @@ from app.services.ai.config import (
 )
 from app.services.ai.config import delete_provider as delete_provider_config
 from app.services.ai.crypto import CredentialCryptoError, open_sealed
+from app.services.ai.nl_query import translate_natural_language_query
 from app.services.ai.history import (
     append_turn,
     delete_conversation,
@@ -289,6 +290,32 @@ def case_ai_chat(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.post("/api/cases/{case_id}/ai/nl-search")
+def case_ai_nl_search(
+    case_id: str,
+    payload: AINaturalLanguageSearchRequest,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+) -> dict:
+    """Translate a plain-English question into Search's own query syntax.
+
+    A single completion, not a conversation -- the analyst lands back in the
+    normal Search page with an editable query, so nothing here is persisted
+    as a chat turn.
+    """
+    _require_case_access(db, case_id, user)
+    config = load_config(db)
+    if not config.get("enabled"):
+        raise HTTPException(status_code=409, detail="The AI assistant is not enabled for this deployment")
+    try:
+        query = translate_natural_language_query(db, case_id, payload.question, provider=payload.provider)
+    except (AIConfigError, CredentialCryptoError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"query": query}
 
 
 @router.get("/api/cases/{case_id}/ai/conversations")
