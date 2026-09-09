@@ -145,6 +145,19 @@ function inspectionErrorMessage(error: unknown): string {
   return "Kairon could not inspect this evidence.";
 }
 
+/** DataTransferItem.webkitGetAsEntry() is the only reliable way to tell a dropped
+ * folder from a dropped file -- DataTransfer.files hands back a folder as an
+ * ordinary (empty/near-empty) File entry with no way to distinguish it after the
+ * fact. Supported by every current browser despite the "webkit" name. */
+function containsDroppedFolder(items: DataTransferItemList | null | undefined): boolean {
+  if (!items) return false;
+  return Array.from(items).some((item) => {
+    const getAsEntry = (item as DataTransferItem & { webkitGetAsEntry?: () => { isDirectory?: boolean } | null }).webkitGetAsEntry;
+    const entry = typeof getAsEntry === "function" ? getAsEntry.call(item) : null;
+    return Boolean(entry?.isDirectory);
+  });
+}
+
 function evidenceKindLabel(category: string | null | undefined): string {
   switch (category) {
     case "disk_image":
@@ -1298,6 +1311,16 @@ export default function EvidenceIngestionWizard({ open, caseId, resumeSessionId,
               onDragOver={(event) => event.preventDefault()}
               onDrop={(event) => {
                 event.preventDefault();
+                // dataTransfer.files silently hands back a folder as if it were an
+                // ordinary small/empty file -- it uploads and "Ready to process"
+                // fine, then fails deep inside indexing with a generic server
+                // error. Catching it here, before any upload starts, turns that
+                // into an immediate, actionable message instead.
+                if (containsDroppedFolder(event.dataTransfer.items)) {
+                  setInspectionState("failed");
+                  setInspectionError("That's a folder, not a file -- drag-and-drop here only accepts files. Compress the folder into a ZIP/7z/TAR, or use \"Select Folder\" below.");
+                  return;
+                }
                 selectEvidenceFiles(Array.from(event.dataTransfer.files ?? []));
               }}
               data-testid="evidence-dropzone"
