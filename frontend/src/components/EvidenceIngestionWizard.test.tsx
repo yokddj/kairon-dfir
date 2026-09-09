@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -335,6 +335,42 @@ describe("EvidenceIngestionWizard", () => {
 
     expect(createEvidenceUploadSessionMock).toHaveBeenCalledWith("case-1", { file }, expect.objectContaining({ declaredPlatform: "auto" }));
     expect(createEvidenceUploadSessionMock.mock.calls[0][2]).not.toHaveProperty("clientSha256");
+  });
+
+  it("rejects a dropped folder immediately instead of silently uploading it", async () => {
+    // dataTransfer.files hands back a dropped folder as an ordinary (near-empty)
+    // File, indistinguishable from a real file after the fact -- it used to upload
+    // fine, reach "Ready to process", and only fail deep inside indexing with a
+    // generic server error. webkitGetAsEntry() is the only reliable signal, and it
+    // has to be checked before selectEvidenceFiles/upload ever runs.
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+
+    fireEvent.drop(screen.getByTestId("evidence-dropzone"), {
+      dataTransfer: {
+        items: [{ webkitGetAsEntry: () => ({ isDirectory: true }) }],
+        files: [],
+      },
+    });
+
+    expect(await screen.findByText(/that's a folder, not a file/i)).toBeInTheDocument();
+    expect(createEvidenceUploadSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("still accepts an ordinary dropped file", async () => {
+    renderWizard();
+    await goToFileStep(/Artifact Collection/);
+
+    const file = new File(["zip-bytes"], "collection.zip", { type: "application/zip" });
+    fireEvent.drop(screen.getByTestId("evidence-dropzone"), {
+      dataTransfer: {
+        items: [{ webkitGetAsEntry: () => ({ isDirectory: false }) }],
+        files: [file],
+      },
+    });
+
+    expect(await screen.findByText("collection.zip")).toBeInTheDocument();
+    expect(screen.queryByText(/that's a folder, not a file/i)).not.toBeInTheDocument();
   });
 
   it("shows explicit upload and preflight stages instead of a generic inspecting state", async () => {
