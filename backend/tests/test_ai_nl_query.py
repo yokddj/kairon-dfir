@@ -47,6 +47,21 @@ def test_translates_a_question_into_a_query(monkeypatch):
     assert result == "process.name:powershell.exe host.name:WS01"
 
 
+def test_translates_a_question_asked_in_another_language(monkeypatch):
+    # The system prompt must not restrict this to English -- an analyst asking in
+    # Spanish (or any other language) should get the same English-syntax query out.
+    _stub(monkeypatch, "process.name:powershell.exe host.name:WS01")
+    result = nl_query.translate_natural_language_query(None, "case-1", "que hizo powershell en WS01")
+    assert result == "process.name:powershell.exe host.name:WS01"
+
+
+def test_system_prompt_does_not_restrict_the_question_to_english(monkeypatch):
+    _stub(monkeypatch, "risk_score>=70")
+    nl_query.translate_natural_language_query(None, "case-1", "actividad de alto riesgo")
+    assert "any other language" in StubProvider.last_system
+    assert "the query syntax itself" in StubProvider.last_system.lower()
+
+
 def test_grounds_the_prompt_with_this_case_s_real_facets(monkeypatch):
     _stub(
         monkeypatch,

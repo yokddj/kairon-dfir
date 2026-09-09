@@ -575,7 +575,7 @@ describe("Search page", () => {
     renderPage();
     await screen.findByTestId("results-table");
 
-    await userEvent.click(await screen.findByRole("button", { name: /Ask in plain English/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /Ask in plain language/i }));
     await userEvent.type(screen.getByPlaceholderText(/powershell downloads/i), "what did powershell do");
     await userEvent.click(screen.getByRole("button", { name: /^Translate$/i }));
 
@@ -584,10 +584,10 @@ describe("Search page", () => {
     await waitFor(() => expect(searchCaseMock).toHaveBeenLastCalledWith("case-1", expect.objectContaining({ q: "process.name:powershell.exe" })));
   });
 
-  it("does not offer plain-English search when no AI provider is configured", async () => {
+  it("does not offer plain-language search when no AI provider is configured", async () => {
     renderPage();
     await screen.findByTestId("results-table");
-    expect(screen.queryByRole("button", { name: /Ask in plain English/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Ask in plain language/i })).not.toBeInTheDocument();
   });
 
   it("supports unified investigation page sizes from URL", async () => {

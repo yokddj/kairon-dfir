@@ -37,7 +37,7 @@ describe("NaturalLanguageSearchToggle", () => {
     getAiStatusMock.mockResolvedValue({ enabled: false, provider: null, model: null, hosting: null });
     renderToggle();
     await waitFor(() => expect(getAiStatusMock).toHaveBeenCalled());
-    expect(screen.queryByRole("button", { name: /Ask in plain English/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Ask in plain language/i })).not.toBeInTheDocument();
   });
 
   it("translates a question and hands the query to the caller, not a results view of its own", async () => {
@@ -46,7 +46,7 @@ describe("NaturalLanguageSearchToggle", () => {
     const user = userEvent.setup();
     const { onTranslated } = renderToggle();
 
-    await user.click(await screen.findByRole("button", { name: /Ask in plain English/i }));
+    await user.click(await screen.findByRole("button", { name: /Ask in plain language/i }));
     await user.type(screen.getByPlaceholderText(/powershell downloads/i), "what did powershell do on WS01");
     await user.click(screen.getByRole("button", { name: /^Translate$/i }));
 
@@ -62,7 +62,7 @@ describe("NaturalLanguageSearchToggle", () => {
     const user = userEvent.setup();
     const { onTranslated } = renderToggle();
 
-    await user.click(await screen.findByRole("button", { name: /Ask in plain English/i }));
+    await user.click(await screen.findByRole("button", { name: /Ask in plain language/i }));
     await user.type(screen.getByPlaceholderText(/powershell downloads/i), "hello there");
     await user.click(screen.getByRole("button", { name: /^Translate$/i }));
 
@@ -77,7 +77,7 @@ describe("NaturalLanguageSearchToggle", () => {
     const user = userEvent.setup();
     renderToggle();
 
-    await user.click(await screen.findByRole("button", { name: /Ask in plain English/i }));
+    await user.click(await screen.findByRole("button", { name: /Ask in plain language/i }));
     await user.type(screen.getByPlaceholderText(/powershell downloads/i), "anything");
     await user.click(screen.getByRole("button", { name: /^Translate$/i }));
 

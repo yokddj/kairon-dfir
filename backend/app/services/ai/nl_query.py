@@ -1,4 +1,4 @@
-"""Translate a plain-English question into the query syntax Search's own box accepts.
+"""Translate a plain-language question into the query syntax Search's own box accepts.
 
 Deliberately a single completion, not the agentic tool loop chat.py runs: the analyst
 lands back in the normal Search page with an editable, rerunnable query -- not a prose
@@ -16,10 +16,15 @@ from app.services.ai.providers import build_provider
 from app.services.ai.tools import QUERY_HELP, tool_describe_case
 
 NL_QUERY_SYSTEM_PROMPT = (
-    "You translate an analyst's plain-English question into a single search query for "
-    "Kairon's event search box. Reply with ONLY the query string on one line -- no "
-    "explanation, no markdown formatting, no surrounding quotes. If the question is not "
-    "actually a request to find specific data, reply with an empty string.\n\n"
+    "You translate an analyst's question, asked in whatever language they used -- "
+    "English, Spanish, or any other language -- into a single search query for "
+    "Kairon's event search box. The query syntax itself (field names, operators) is "
+    "always in English regardless of the question's language; only the field VALUES "
+    "should reflect what the analyst actually typed (translated/transliterated only "
+    "if needed to match a real value from the case, e.g. a host name). Reply with "
+    "ONLY the query string on one line -- no explanation, no markdown formatting, no "
+    "surrounding quotes. If the question is not actually a request to find specific "
+    "data, reply with an empty string.\n\n"
     f"{QUERY_HELP}\n\n"
     "Ground field values in what this case actually contains, listed below -- do not "
     "invent an artifact.type or host.name absent from that list."
