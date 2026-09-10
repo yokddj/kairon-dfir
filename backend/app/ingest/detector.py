@@ -204,6 +204,32 @@ def detect_host_from_name(value: str | None) -> str | None:
     return candidate.upper()
 
 
+_JSON_SNIFF_MAX_BYTES = 5 * 1024 * 1024
+
+
+def _looks_like_json_content(path: Path) -> bool:
+    """Sniffs extensionless files for JSON content, e.g. Chrome/Edge's
+    "Preferences", "Secure Preferences" and "Local State" files, which carry
+    no file extension despite being plain JSON."""
+    try:
+        if path.stat().st_size > _JSON_SNIFF_MAX_BYTES:
+            return False
+        with path.open("rb") as handle:
+            data = handle.read()
+    except OSError:
+        return False
+    stripped = data.lstrip()
+    if not stripped or stripped[0] not in b"{[":
+        return False
+    try:
+        import json
+
+        json.loads(data.decode("utf-8"))
+        return True
+    except (UnicodeDecodeError, ValueError):
+        return False
+
+
 def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
     name = path.name
     lower_name = name.lower()
@@ -891,5 +917,7 @@ def classify_artifact(path: Path, headers: list[str] | None = None) -> dict:
     if any(token in header_blob for token in ["bagpath", "absolutepath", "shellitempath", "folderpath", "shelltype", "mruposition", "nodeslot", "lastinteracted", "lastwritetime", "extensionblock", "hivepath"]):
         return {"artifact_type": "shellbags", "profile": "file_folder_opening", "parser": "csv", "shellbag_artifact_type": "shellbag_generic"}
     if path.suffix.lower() == ".json":
+        return {"artifact_type": "generic_json", "profile": "unknown", "parser": "generic_json"}
+    if path.suffix == "" and _looks_like_json_content(path):
         return {"artifact_type": "generic_json", "profile": "unknown", "parser": "generic_json"}
     return {"artifact_type": "generic_csv", "profile": "unknown", "parser": "generic_csv"}
