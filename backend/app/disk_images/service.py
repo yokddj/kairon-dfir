@@ -287,10 +287,40 @@ def _exists(fs_info: pytsk3.FS_Info, path: str) -> bool:
         return False
 
 
+def _root_drive_letter_prefixes(fs_info: pytsk3.FS_Info) -> list[str]:
+    """Some capture/imaging tools store an entire drive's contents under a
+    top-level folder named after its drive letter (e.g. "C") instead of at the
+    volume's actual filesystem root -- seen on the CyberDefenders
+    "SpottedInTheWild" CTF image, whose NTFS volume has root entries "C",
+    alongside the usual $MFT/$Boot/etc. Checked in addition to the real root
+    so OS-installation detection works the same regardless of which layout a
+    particular capture used."""
+    try:
+        root = fs_info.open_dir(path="/")
+    except Exception:
+        return []
+    prefixes = []
+    for entry in root:
+        try:
+            name = entry.info.name.name.decode("utf-8", "replace")
+        except Exception:
+            continue
+        if len(name) == 1 and name.isalpha() and name.isupper():
+            prefixes.append(f"/{name}")
+    return prefixes
+
+
 def _detect_installations(fs_info: pytsk3.FS_Info, volume_id: str) -> list[dict[str, Any]]:
     installations: list[dict[str, Any]] = []
-    windows_markers = ["/Windows/System32", "/Windows/System32/config/SYSTEM", "/Windows/System32/config/SOFTWARE", "/Users", "/ProgramData"]
-    linux_markers = ["/etc/os-release", "/etc/passwd", "/var/log", "/var/lib/systemd", "/home", "/boot"]
+    for root_prefix in ("", *_root_drive_letter_prefixes(fs_info)):
+        installations.extend(_detect_installations_under(fs_info, root_prefix))
+    return installations
+
+
+def _detect_installations_under(fs_info: pytsk3.FS_Info, root_prefix: str) -> list[dict[str, Any]]:
+    installations: list[dict[str, Any]] = []
+    windows_markers = [f"{root_prefix}/Windows/System32", f"{root_prefix}/Windows/System32/config/SYSTEM", f"{root_prefix}/Windows/System32/config/SOFTWARE", f"{root_prefix}/Users", f"{root_prefix}/ProgramData"]
+    linux_markers = [f"{root_prefix}/etc/os-release", f"{root_prefix}/etc/passwd", f"{root_prefix}/var/log", f"{root_prefix}/var/lib/systemd", f"{root_prefix}/home", f"{root_prefix}/boot"]
     if sum(1 for marker in windows_markers if _exists(fs_info, marker)) >= 3:
         installations.append(
             {
@@ -298,13 +328,13 @@ def _detect_installations(fs_info: pytsk3.FS_Info, volume_id: str) -> list[dict[
                 "hostname": None,
                 "version": None,
                 "distro": None,
-                "root_path": "/",
+                "root_path": root_prefix or "/",
                 "confidence": "high",
                 "detection_reasons": windows_markers,
             }
         )
     release_markers = {
-        path: _read_small_file(fs_info, path)
+        path: _read_small_file(fs_info, f"{root_prefix}{path}")
         for path in (
             "/etc/os-release",
             "/usr/lib/os-release",
@@ -319,7 +349,7 @@ def _detect_installations(fs_info: pytsk3.FS_Info, volume_id: str) -> list[dict[
     }
     os_release = release_markers["/etc/os-release"] or release_markers["/usr/lib/os-release"]
     if os_release or sum(1 for marker in linux_markers if _exists(fs_info, marker)) >= 3:
-        hostname_content = _read_small_file(fs_info, "/etc/hostname", limit=4096)
+        hostname_content = _read_small_file(fs_info, f"{root_prefix}/etc/hostname", limit=4096)
         hostname = hostname_content.splitlines()[0].strip() if hostname_content else None
         release = detect_linux_release(release_markers)
         installations.append(
@@ -328,7 +358,7 @@ def _detect_installations(fs_info: pytsk3.FS_Info, volume_id: str) -> list[dict[
                 "hostname": hostname,
                 "version": release.version,
                 "distro": release.distribution,
-                "root_path": "/",
+                "root_path": root_prefix or "/",
                 "confidence": release.confidence if release.distribution else ("high" if os_release else "medium"),
                 "detection_reasons": release.reasons + [marker for marker in linux_markers if _exists(fs_info, marker)],
             }
@@ -1004,9 +1034,24 @@ def _open_persisted_volume_fs_info(image_reader: "_PytskFileReader", volume: Dis
             return image_reader.read(container_offset_bytes + offset, size)
 
         return _open_logical_volume_fs_info(read_physical, logical_volume_name)
-    if volume.partition_index != 0 or volume.offset_bytes:
-        return pytsk3.FS_Info(image_reader, offset=int(volume.offset_bytes))
-    return pytsk3.FS_Info(image_reader)
+    offset_bytes = int(volume.offset_bytes)
+    try:
+        if volume.partition_index != 0 or offset_bytes:
+            return pytsk3.FS_Info(image_reader, offset=offset_bytes)
+        return pytsk3.FS_Info(image_reader)
+    except Exception:
+        # Discovery may have opened this exact volume through the boot-sector
+        # repair path (see _discover_raw_volumes) -- that isn't persisted
+        # anywhere, so a volume recovered that way needs the same repair
+        # retried here, or materialization would silently skip it even though
+        # discovery already proved its data is readable.
+        if "ntfs_boot_sector_repaired" not in (volume.warnings_json or []):
+            raise
+        blob = _safe_reader_read(image_reader, offset_bytes)
+        repaired = _try_repair_ntfs_boot_sector(image_reader, offset_bytes, blob)
+        if repaired is None:
+            raise
+        return repaired
 
 
 def materialize_disk_image_sources(db: Session, evidence: Evidence, *, extract_dir: Path, image_path: Path | None = None, progress_cb=None) -> MaterializedDiskImage:
