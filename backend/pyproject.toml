@@ -31,6 +31,7 @@ dependencies = [
   "yara-python>=4.5.1",
   "pytsk3>=20260702",
   "libewf-python>=20240506",
+  "dissect.esedb>=3.18",
 ]
 
 [project.optional-dependencies]

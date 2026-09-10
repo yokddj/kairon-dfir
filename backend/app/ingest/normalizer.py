@@ -14,6 +14,7 @@ from app.ingest.browser.normalizer import normalize_browser_event
 from app.ingest.browser.parser import read_browser_records
 from app.ingest.browser.sqlite_chromium import parse_chromium_history_sqlite
 from app.ingest.browser.sqlite_firefox import parse_firefox_places_sqlite
+from app.ingest.browser.webcache_ese import looks_like_webcache_database, read_webcache_records
 from app.ingest.autoruns import (
     looks_like_autoruns_artifact,
     normalize_autoruns_row,
@@ -2432,6 +2433,9 @@ def normalize_file(case_id: str, evidence_id: str, artifact_id: str, path: Path,
             rows, sqlite_copies = parse_chromium_history_sqlite(path, source_path=str(artifact_meta.get("source_path") or path))
         elif parser in {"browser_firefox_places", "sqlite_firefox"} or path.name.lower() == "places.sqlite":
             rows, sqlite_copies = parse_firefox_places_sqlite(path, source_path=str(artifact_meta.get("source_path") or path))
+        elif parser == "webcache_ese" or looks_like_webcache_database(path):
+            rows = list(read_webcache_records(path))
+            sqlite_copies = []
         else:
             rows = read_browser_records(path)
             sqlite_copies = []
